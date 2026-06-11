@@ -19,7 +19,7 @@ function statusLabel(bookmark: Bookmark): string | null {
 export default function InboxScreen() {
   const palette = usePalette();
   const router = useRouter();
-  const { inbox } = useBookmarks();
+  const { inbox, isLoading } = useBookmarks();
 
   return (
     <View style={styles.container}>
@@ -34,7 +34,7 @@ export default function InboxScreen() {
         }
         ListEmptyComponent={
           <Text style={[styles.empty, { color: palette.textSecondary }]}>
-            Nothing saved yet. Add your first bookmark below.
+            {isLoading ? 'Loading your bookmarks…' : 'Nothing saved yet. Add your first bookmark below.'}
           </Text>
         }
         renderItem={({ item }) => {

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import {
@@ -10,15 +10,20 @@ import {
   mockUserId,
 } from '@/domain/mock-data';
 import { normalizeUrl } from '@/domain/urls';
-import type { AIEnrichment, Bookmark, Collection, Tag } from '@/domain/types';
+import type { AIEnrichment, Bookmark, Collection, LocalPendingBookmark, Tag } from '@/domain/types';
+import { repository } from '@/storage/repository';
 
 export type AddBookmarkResult =
   | { status: 'created' | 'duplicate'; bookmark: Bookmark }
   | { status: 'invalid'; error: string };
 
 interface BookmarksContextValue {
+  /** True until the durable store has been read on startup. */
+  isLoading: boolean;
   /** Active (non-archived) bookmarks, newest first. */
   inbox: Bookmark[];
+  /** Offline sync queue, oldest first — exposed for inspection until sync exists. */
+  queue: LocalPendingBookmark[];
   getBookmark: (id: string) => Bookmark | undefined;
   getTagsForBookmark: (id: string) => Tag[];
   getCollection: (id: string | null) => Collection | undefined;
@@ -33,13 +38,44 @@ function makeLocalId() {
   return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function logStorageError(operation: string, error: unknown) {
+  console.warn(`[stash] failed to persist ${operation}; state remains in memory`, error);
+}
+
 export function BookmarksProvider({ children }: { children: ReactNode }) {
-  // In-memory until Milestone 4 introduces the durable local store.
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>(mockBookmarks);
+  const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
+  const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await repository.init(mockBookmarks);
+        const [storedBookmarks, storedQueue] = await Promise.all([
+          repository.listBookmarks(),
+          repository.listQueue(),
+        ]);
+        if (!cancelled) {
+          setBookmarks(storedBookmarks);
+          setQueue(storedQueue);
+        }
+      } catch (error) {
+        logStorageError('startup load', error);
+        if (!cancelled) {
+          setBookmarks(mockBookmarks);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const loadedBookmarks = useMemo(() => bookmarks ?? [], [bookmarks]);
 
   const getBookmark = useCallback(
-    (id: string) => bookmarks.find((bookmark) => bookmark.id === id),
-    [bookmarks],
+    (id: string) => loadedBookmarks.find((bookmark) => bookmark.id === id),
+    [loadedBookmarks],
   );
 
   const getTagsForBookmark = useCallback((id: string) => {
@@ -70,19 +106,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         };
       }
 
+      const now = new Date().toISOString();
+
       // Idempotent saves: reuse the existing bookmark for the same URL.
-      const existing = bookmarks.find((bookmark) => bookmark.url_hash === normalized);
+      const existing = loadedBookmarks.find((bookmark) => bookmark.url_hash === normalized);
       if (existing) {
-        const now = new Date().toISOString();
+        const updated = { ...existing, last_saved_at: now };
         setBookmarks((current) =>
-          current.map((bookmark) =>
-            bookmark.id === existing.id ? { ...bookmark, last_saved_at: now } : bookmark,
-          ),
+          (current ?? []).map((bookmark) => (bookmark.id === existing.id ? updated : bookmark)),
         );
+        repository
+          .updateBookmark(updated)
+          .catch((error) => logStorageError('duplicate save', error));
         return { status: 'duplicate', bookmark: existing };
       }
 
-      const now = new Date().toISOString();
       const bookmark: Bookmark = {
         id: makeLocalId(),
         user_id: mockUserId,
@@ -107,24 +145,53 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         sync_status: 'pending',
       };
 
-      setBookmarks((current) => [bookmark, ...current]);
+      const queueEntry: LocalPendingBookmark = {
+        local_id: bookmark.id,
+        remote_id: null,
+        payload: { url: normalized, notes: bookmark.notes ?? undefined },
+        sync_status: 'pending',
+        retry_count: 0,
+        last_error: null,
+        created_at: now,
+        updated_at: now,
+      };
+
+      // Optimistic update first; persistence happens in the background so
+      // capture never waits on storage or (later) the network.
+      setBookmarks((current) => [bookmark, ...(current ?? [])]);
+      setQueue((current) => [...current, queueEntry]);
+      Promise.all([repository.insertBookmark(bookmark), repository.enqueue(queueEntry)]).catch(
+        (error) => logStorageError('new bookmark', error),
+      );
+
       return { status: 'created', bookmark };
     },
-    [bookmarks],
+    [loadedBookmarks],
   );
 
   const value = useMemo<BookmarksContextValue>(
     () => ({
-      inbox: bookmarks
+      isLoading: bookmarks === null,
+      inbox: loadedBookmarks
         .filter((bookmark) => !bookmark.is_archived)
         .sort((a, b) => b.created_at.localeCompare(a.created_at)),
+      queue,
       getBookmark,
       getTagsForBookmark,
       getCollection,
       getEnrichment,
       addBookmark,
     }),
-    [bookmarks, getBookmark, getTagsForBookmark, getCollection, getEnrichment, addBookmark],
+    [
+      bookmarks,
+      loadedBookmarks,
+      queue,
+      getBookmark,
+      getTagsForBookmark,
+      getCollection,
+      getEnrichment,
+      addBookmark,
+    ],
   );
 
   return <BookmarksContext.Provider value={value}>{children}</BookmarksContext.Provider>;
