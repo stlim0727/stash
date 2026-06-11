@@ -9,11 +9,14 @@
     "pnpm": ">=10 <11"
   },
   "scripts": {
-    "dev": "node scripts/placeholders.mjs dev",
+    "dev": "pnpm --filter mobile start",
+    "dev:android": "pnpm --filter mobile android",
+    "dev:ios": "pnpm --filter mobile ios",
+    "dev:web": "pnpm --filter mobile web",
     "format": "node scripts/format.mjs --write",
     "format:check": "node scripts/format.mjs --check",
     "lint": "pnpm format:check",
     "test": "node scripts/placeholders.mjs test",
-    "typecheck": "node scripts/placeholders.mjs typecheck"
+    "typecheck": "pnpm --filter mobile typecheck"
   }
 }
