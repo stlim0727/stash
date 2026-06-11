@@ -2,29 +2,29 @@ import { Link, useRouter } from 'expo-router';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { useBookmarks } from '@/store/bookmarks';
+import type { Bookmark } from '@/domain/types';
 
-// Static placeholders until Milestone 2 introduces domain types and mock data.
-const placeholderBookmarks = [
-  {
-    id: 'placeholder-1',
-    title: 'Welcome to Stash',
-    url: 'https://example.com/welcome',
-  },
-  {
-    id: 'placeholder-2',
-    title: 'Save links from any app',
-    url: 'https://example.com/share-intake',
-  },
-];
+function statusLabel(bookmark: Bookmark): string | null {
+  const parts: string[] = [];
+  if (bookmark.sync_status !== 'synced') {
+    parts.push(`sync ${bookmark.sync_status}`);
+  }
+  if (bookmark.metadata_status === 'pending') {
+    parts.push('metadata pending');
+  }
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
 
 export default function InboxScreen() {
   const palette = usePalette();
   const router = useRouter();
+  const { inbox } = useBookmarks();
 
   return (
     <View style={styles.container}>
       <FlatList
-        data={placeholderBookmarks}
+        data={inbox}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
@@ -32,17 +32,32 @@ export default function InboxScreen() {
             Recently saved
           </Text>
         }
-        renderItem={({ item }) => (
-          <Pressable
-            style={[styles.card, { backgroundColor: palette.card }]}
-            onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
-          >
-            <Text style={[styles.cardTitle, { color: palette.text }]}>{item.title}</Text>
-            <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
-              {item.url}
-            </Text>
-          </Pressable>
-        )}
+        ListEmptyComponent={
+          <Text style={[styles.empty, { color: palette.textSecondary }]}>
+            Nothing saved yet. Add your first bookmark below.
+          </Text>
+        }
+        renderItem={({ item }) => {
+          const status = statusLabel(item);
+          return (
+            <Pressable
+              style={[styles.card, { backgroundColor: palette.card }]}
+              onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
+            >
+              <Text style={[styles.cardTitle, { color: palette.text }]}>
+                {item.title ?? item.url ?? 'Untitled'}
+              </Text>
+              {item.url ? (
+                <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
+                  {item.url}
+                </Text>
+              ) : null}
+              {status ? (
+                <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
+              ) : null}
+            </Pressable>
+          );
+        }}
       />
       <View style={[styles.footer, { borderTopColor: palette.border }]}>
         <Link href="/add" asChild>
@@ -75,6 +90,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 4,
   },
+  empty: {
+    fontSize: 15,
+    textAlign: 'center',
+    paddingVertical: 32,
+  },
   card: {
     borderRadius: 12,
     padding: 16,
@@ -86,6 +106,10 @@ const styles = StyleSheet.create({
   },
   cardUrl: {
     fontSize: 13,
+  },
+  cardStatus: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   footer: {
     flexDirection: 'row',

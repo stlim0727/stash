@@ -2,21 +2,49 @@ import { useLocalSearchParams } from 'expo-router';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { useBookmarks } from '@/store/bookmarks';
 
 export default function BookmarkDetailScreen() {
   const palette = usePalette();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { getBookmark, getTagsForBookmark, getCollection, getEnrichment } = useBookmarks();
+
+  const bookmark = id ? getBookmark(id) : undefined;
+
+  if (!bookmark) {
+    return (
+      <View style={styles.missing}>
+        <Text style={[styles.missingText, { color: palette.textSecondary }]}>
+          This bookmark could not be found.
+        </Text>
+      </View>
+    );
+  }
+
+  const tags = getTagsForBookmark(bookmark.id);
+  const collection = getCollection(bookmark.collection_id);
+  const enrichment = getEnrichment(bookmark.id);
 
   const fields = [
-    { label: 'URL', value: 'https://example.com/welcome' },
-    { label: 'Title', value: 'Welcome to Stash' },
-    { label: 'Description', value: 'Placeholder description until metadata enrichment exists.' },
-    { label: 'Notes', value: 'Placeholder note field.' },
-    { label: 'Tags', value: 'None yet' },
-    { label: 'Collection', value: 'Inbox' },
-    { label: 'Metadata status', value: 'pending' },
-    { label: 'Bookmark ID', value: id ?? 'unknown' },
+    { label: 'URL', value: bookmark.url ?? 'No URL (text-only share)' },
+    { label: 'Title', value: bookmark.title ?? 'Untitled — metadata pending' },
+    { label: 'Description', value: bookmark.description ?? 'No description yet' },
+    { label: 'Notes', value: bookmark.notes ?? 'No notes' },
+    {
+      label: 'Tags',
+      value: tags.length > 0 ? tags.map((tag) => tag.name).join(', ') : 'None yet',
+    },
+    { label: 'Collection', value: collection?.name ?? 'Inbox (no collection)' },
+    { label: 'Site', value: bookmark.site_name ?? 'Unknown' },
+    { label: 'Saved from', value: bookmark.source_app ?? 'Manual entry' },
+    { label: 'Metadata status', value: bookmark.metadata_status },
+    { label: 'Sync status', value: bookmark.sync_status },
+    { label: 'Saved at', value: new Date(bookmark.created_at).toLocaleString() },
   ];
+
+  if (enrichment?.summary) {
+    fields.push({ label: 'AI summary', value: enrichment.summary });
+  }
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -39,6 +67,16 @@ const styles = StyleSheet.create({
   container: {
     padding: 16,
     gap: 12,
+  },
+  missing: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+  },
+  missingText: {
+    fontSize: 15,
+    textAlign: 'center',
   },
   field: {
     borderRadius: 12,

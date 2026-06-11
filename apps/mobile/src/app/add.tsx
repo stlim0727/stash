@@ -3,12 +3,26 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { useBookmarks } from '@/store/bookmarks';
 
 export default function AddBookmarkScreen() {
   const palette = usePalette();
   const router = useRouter();
+  const { addBookmark } = useBookmarks();
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  function handleSave() {
+    const result = addBookmark({ url, notes: note });
+    if (result.status === 'invalid') {
+      setError(result.error);
+      return;
+    }
+    // Created or duplicate: the bookmark is already visible in Inbox,
+    // so capture stays fast and non-blocking.
+    router.back();
+  }
 
   return (
     <View style={styles.container}>
@@ -19,13 +33,25 @@ export default function AddBookmarkScreen() {
         placeholderTextColor={palette.textSecondary}
         autoCapitalize="none"
         autoCorrect={false}
+        autoFocus
         keyboardType="url"
         value={url}
-        onChangeText={setUrl}
+        onChangeText={(value) => {
+          setUrl(value);
+          if (error) {
+            setError(null);
+          }
+        }}
+        onSubmitEditing={handleSave}
       />
+      {error ? <Text style={styles.error}>{error}</Text> : null}
       <Text style={[styles.label, { color: palette.textSecondary }]}>Note (optional)</Text>
       <TextInput
-        style={[styles.input, styles.noteInput, { backgroundColor: palette.card, color: palette.text }]}
+        style={[
+          styles.input,
+          styles.noteInput,
+          { backgroundColor: palette.card, color: palette.text },
+        ]}
         placeholder="Why are you saving this?"
         placeholderTextColor={palette.textSecondary}
         multiline
@@ -34,12 +60,12 @@ export default function AddBookmarkScreen() {
       />
       <Pressable
         style={[styles.saveButton, { backgroundColor: palette.accent }]}
-        onPress={() => router.back()}
+        onPress={handleSave}
       >
         <Text style={styles.saveButtonLabel}>Save</Text>
       </Pressable>
       <Text style={[styles.hint, { color: palette.textSecondary }]}>
-        Saving is a placeholder for now. Local-first bookmark creation arrives in Milestone 3.
+        Saves are local-only for now. Durable storage and cloud sync arrive in later milestones.
       </Text>
     </View>
   );
@@ -66,6 +92,10 @@ const styles = StyleSheet.create({
   noteInput: {
     minHeight: 96,
     textAlignVertical: 'top',
+  },
+  error: {
+    color: '#d93636',
+    fontSize: 13,
   },
   saveButton: {
     borderRadius: 12,
