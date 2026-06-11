@@ -1,20 +1,22 @@
 # Agent Handoff — Stash
 
-This file captures the project state and working conventions so any agent (Codex, Claude, or a human) can continue development without re-deriving context. Last updated after PR #3 merged (2026-06-11).
+This file captures the project state and working conventions so any agent (Codex, Claude, or a human) can continue development without re-deriving context. Last updated after Milestone 6 API scaffolding (2026-06-11).
 
 ## Current state
 
-Milestones 0–4 from `docs/development/milestones.md` are **complete** and merged to `main` (PR #1, #2, #3):
+Milestones 0–4 from `docs/development/milestones.md` are **complete** and merged to `main` (PR #1, #2, #3). Milestone 5 is scaffolded but still needs real Supabase project credentials before acceptance criteria can be verified. Milestone 6 API code is scaffolded on top of that unverified Supabase bootstrap:
 
 - **M0** — repo tooling: pnpm workspace, Node 22 policy, root scripts, docs.
 - **M1** — Expo SDK 56 app under `apps/mobile` (TypeScript, expo-router). Launches into Inbox; Add Bookmark (modal), Settings, and Bookmark Detail (`bookmark/[id]`) screens exist.
 - **M2** — domain types in `apps/mobile/src/domain/types.ts` mirror the snake_case schema in `docs/architecture/data-model.md` 1:1 (intentional, for later Supabase row mapping). Mock data in `src/domain/mock-data.ts`.
 - **M3** — local-first manual bookmark creation: `src/store/bookmarks.tsx` (React context). URL validation/normalization in `src/domain/urls.ts`. Saves are optimistic; duplicates reuse the existing bookmark (idempotent, per `docs/api/bookmarks.md`).
 - **M4** — durable storage behind the `BookmarkRepository` interface (`src/storage/types.ts`): `repository.native.ts` (SQLite via expo-sqlite) on iOS/Android, `repository.ts` (localStorage, memory during SSR) on web, resolved by Metro platform extensions. New bookmarks enqueue a `local_pending_bookmarks` entry (sync status, retry count, last error); the queue is visible in Settings. All background writes await a shared repository-ready promise, and the startup load merges into optimistic state instead of replacing it (fixes a save-during-load race found in PR #3 review).
+- **M5 scaffold** — Supabase env template and setup docs are in place; the app has a lightweight Supabase auth wrapper that restores or creates an anonymous session when `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` are available; Settings reports config/auth state; initial SQL migration creates bookmarks/tags/bookmark_tags/collections/ai_enrichments with owner-scoped RLS policies.
+- **M6 scaffold** — `apps/mobile/src/api/bookmarks.ts` implements the documented bookmark API surface against Supabase REST: `createBookmark`, `listBookmarks`, `getBookmark`, `updateBookmark`, `deleteBookmark`, `addTags`, `removeTags`, `updateAIEnrichment`, and `applyAISuggestions`. It scopes every request to the authenticated session user, maps remote rows back to local domain types, archives by default for deletes, keeps AI enrichment separate, and handles URL/tag duplicate conflicts where possible.
 
-## Next step: Milestone 5 — Supabase bootstrap
+## Next step: verify M5/M6 against Supabase, then Milestone 7
 
-See `docs/development/milestones.md`. Deliverables: Supabase client wrapper, env config (template in `.env.example`; client-safe values use the `EXPO_PUBLIC_` prefix), initial migrations for bookmarks/tags/bookmark_tags/collections/ai_enrichments, draft RLS policies, anonymous-first auth. **Blocked on a Supabase project + credentials** — code/SQL can be scaffolded without them, but acceptance criteria can't be verified. Then M6 (bookmark API), M7 (sync service) per the milestones doc.
+Provide a Supabase project URL/key, enable anonymous sign-ins, apply `supabase/migrations/20260611000000_initial_schema.sql`, and verify anonymous session creation/restoration plus RLS-scoped table access and API behavior. After that, proceed to M7 (sync service) per the milestones doc.
 
 ## Conventions and commands
 

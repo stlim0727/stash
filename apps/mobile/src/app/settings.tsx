@@ -2,22 +2,33 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
 import { useBookmarks } from '@/store/bookmarks';
+import { useSupabaseAuth } from '@/supabase/auth-provider';
 
 export default function SettingsScreen() {
   const palette = usePalette();
   const { queue } = useBookmarks();
+  const auth = useSupabaseAuth();
 
   const settingsRows = [
     {
       label: 'Account',
-      value: 'Anonymous (sign-in arrives with Supabase auth in Milestone 5)',
+      value:
+        auth.status === 'anonymous'
+          ? `Anonymous Supabase user ${auth.userId}`
+          : auth.message,
     },
     {
       label: 'Sync status',
       value:
         queue.length === 0
-          ? 'Local only — nothing waiting to sync'
-          : `Local only — ${queue.length} item(s) queued for future sync`,
+          ? auth.status === 'anonymous'
+            ? 'Ready for cloud sync — nothing waiting to sync'
+            : 'Local only — nothing waiting to sync'
+          : `${auth.status === 'anonymous' ? 'Ready for cloud sync' : 'Local only'} — ${queue.length} item(s) queued for future sync`,
+    },
+    {
+      label: 'Supabase auth',
+      value: auth.status,
     },
   ];
 
