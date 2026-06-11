@@ -1,0 +1,19 @@
+{
+  "name": "stash",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Mobile bookmark app planning and implementation workspace.",
+  "packageManager": "pnpm@10.28.1",
+  "engines": {
+    "node": ">=22 <25",
+    "pnpm": ">=10 <11"
+  },
+  "scripts": {
+    "dev": "node scripts/placeholders.mjs dev",
+    "format": "node scripts/format.mjs --write",
+    "format:check": "node scripts/format.mjs --check",
+    "lint": "pnpm format:check",
+    "test": "node scripts/placeholders.mjs test",
+    "typecheck": "node scripts/placeholders.mjs typecheck"
+  }
+}
