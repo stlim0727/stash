@@ -42,6 +42,22 @@ function logStorageError(operation: string, error: unknown) {
   console.warn(`[stash] failed to persist ${operation}; state remains in memory`, error);
 }
 
+// Single shared init so background writes can never race ahead of table
+// creation/seeding, even for saves made before the startup load finishes.
+let repositoryReady: Promise<void> | null = null;
+function ensureRepositoryReady(): Promise<void> {
+  if (!repositoryReady) {
+    repositoryReady = repository.init(mockBookmarks);
+  }
+  return repositoryReady;
+}
+
+/** Append items from `loaded` that aren't already present (by key). */
+function mergeById<T>(current: T[], loaded: T[], key: (item: T) => string): T[] {
+  const seen = new Set(current.map(key));
+  return [...current, ...loaded.filter((item) => !seen.has(key(item)))];
+}
+
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
   const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
@@ -50,19 +66,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        await repository.init(mockBookmarks);
+        await ensureRepositoryReady();
         const [storedBookmarks, storedQueue] = await Promise.all([
           repository.listBookmarks(),
           repository.listQueue(),
         ]);
         if (!cancelled) {
-          setBookmarks(storedBookmarks);
-          setQueue(storedQueue);
+          // Merge instead of replace: saves made while loading must survive.
+          setBookmarks((current) =>
+            current === null
+              ? storedBookmarks
+              : mergeById(current, storedBookmarks, (bookmark) => bookmark.id),
+          );
+          setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
         }
       } catch (error) {
         logStorageError('startup load', error);
         if (!cancelled) {
-          setBookmarks(mockBookmarks);
+          setBookmarks((current) =>
+            current === null
+              ? mockBookmarks
+              : mergeById(current, mockBookmarks, (bookmark) => bookmark.id),
+          );
         }
       }
     })();
@@ -115,8 +140,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setBookmarks((current) =>
           (current ?? []).map((bookmark) => (bookmark.id === existing.id ? updated : bookmark)),
         );
-        repository
-          .updateBookmark(updated)
+        ensureRepositoryReady()
+          .then(() => repository.updateBookmark(updated))
           .catch((error) => logStorageError('duplicate save', error));
         return { status: 'duplicate', bookmark: existing };
       }
@@ -160,9 +185,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // capture never waits on storage or (later) the network.
       setBookmarks((current) => [bookmark, ...(current ?? [])]);
       setQueue((current) => [...current, queueEntry]);
-      Promise.all([repository.insertBookmark(bookmark), repository.enqueue(queueEntry)]).catch(
-        (error) => logStorageError('new bookmark', error),
-      );
+      ensureRepositoryReady()
+        .then(() =>
+          Promise.all([repository.insertBookmark(bookmark), repository.enqueue(queueEntry)]),
+        )
+        .catch((error) => logStorageError('new bookmark', error));
 
       return { status: 'created', bookmark };
     },
