@@ -1,18 +1,18 @@
 # Development Setup
 
-This guide describes the baseline development environment for Stash. The repository currently contains product and architecture documentation plus root-level tooling. The Expo mobile app will be added in the next milestone.
+This guide describes the baseline development environment for Stash. The repository contains product and architecture documentation, root-level tooling, and the Expo mobile app under `apps/mobile`.
 
 ## Required now
 
 - Git.
 - Node.js matching the repository policy in `.node-version` and `package.json`.
 - pnpm through Corepack or a standalone pnpm install.
+- Expo CLI, available through `pnpm exec expo` or the package scripts — no global install needed.
 
 ## Required later
 
-These tools are not required for the current docs/tooling milestone, but they will be needed as the mobile app and backend are added.
+These tools are not required yet, but they will be needed as native builds and the backend are added.
 
-- Expo CLI, preferably through `pnpm exec expo` or package scripts rather than a global install.
 - EAS CLI for cloud builds and native development builds.
 - Supabase CLI for local database work, migrations, and Edge Functions.
 - Android Studio and Android platform tools for Android emulator/device testing.
@@ -27,7 +27,10 @@ pnpm install
 ## Common commands
 
 ```bash
-pnpm dev
+pnpm dev          # start the Expo dev server for apps/mobile
+pnpm dev:android  # start and open on an Android emulator/device
+pnpm dev:ios      # start and open on an iOS simulator/device (macOS)
+pnpm dev:web      # start and open in a web browser
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -35,7 +38,7 @@ pnpm format
 pnpm format:check
 ```
 
-Until the Expo app is added, `dev`, `typecheck`, and `test` are intentional placeholders that explain the missing implementation rather than failing.
+`pnpm dev` starts the Expo dev server; press `a`, `i`, or `w` in the terminal (or scan the QR code with Expo Go) to open the app. `test` remains an intentional placeholder until automated tests are added alongside app features.
 
 ## Environment variables
 
