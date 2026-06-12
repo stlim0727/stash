@@ -18,6 +18,7 @@ import {
   mockUserId,
 } from '@/domain/mock-data';
 import { normalizeUrl } from '@/domain/urls';
+import { enrichBookmark } from '@/domain/enrichment';
 import type { AIEnrichment, Bookmark, Collection, LocalPendingBookmark, Tag } from '@/domain/types';
 import { repository } from '@/storage/repository';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
@@ -78,6 +79,51 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const syncInFlight = useRef(false);
+  // Bookmark IDs currently being enriched, so concurrent passes (startup +
+  // a fresh save) never double-process the same item.
+  const enriching = useRef(new Set<string>());
+
+  // Fire-and-forget metadata enrichment. Runs off the save path so capture is
+  // never blocked, only fills generated fields, and a failure just records a
+  // failed status — it never affects bookmark creation.
+  const enrichInBackground = useCallback((bookmark: Bookmark) => {
+    if (bookmark.metadata_status !== 'pending' || enriching.current.has(bookmark.id)) {
+      return;
+    }
+    enriching.current.add(bookmark.id);
+    (async () => {
+      const { patch, metadata_status } = await enrichBookmark(bookmark);
+      // Re-read the latest row so we merge onto current state, not the stale
+      // snapshot captured when enrichment started.
+      let updated: Bookmark | null = null;
+      setBookmarks((current) => {
+        if (current === null) {
+          return current;
+        }
+        return current.map((item) => {
+          if (item.id !== bookmark.id) {
+            return item;
+          }
+          updated = {
+            ...item,
+            ...patch,
+            metadata_status,
+            updated_at: new Date().toISOString(),
+          };
+          return updated;
+        });
+      });
+      if (updated) {
+        try {
+          await ensureRepositoryReady();
+          await repository.updateBookmark(updated);
+        } catch (error) {
+          logStorageError('metadata enrichment', error);
+        }
+      }
+      enriching.current.delete(bookmark.id);
+    })();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,9 +254,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         )
         .catch((error) => logStorageError('new bookmark', error));
 
+      // Enrich after the bookmark is already visible and persisted.
+      enrichInBackground(bookmark);
+
       return { status: 'created', bookmark };
     },
-    [loadedBookmarks],
+    [loadedBookmarks, enrichInBackground],
   );
 
   const syncNow = useCallback(async () => {
@@ -269,6 +318,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setIsSyncing(false);
     }
   }, [auth, queue, loadedBookmarks]);
+
+  // Background enrichment: once local data is loaded, enrich any bookmark
+  // whose metadata is still pending (seeded items, or saves from a previous
+  // session that closed before enrichment finished).
+  useEffect(() => {
+    if (bookmarks === null) {
+      return;
+    }
+    for (const bookmark of bookmarks) {
+      if (bookmark.metadata_status === 'pending') {
+        enrichInBackground(bookmark);
+      }
+    }
+  }, [bookmarks, enrichInBackground]);
 
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the

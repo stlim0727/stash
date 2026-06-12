@@ -1,5 +1,5 @@
 import { useLocalSearchParams } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
 import { useBookmarks } from '@/store/bookmarks';
@@ -48,6 +48,21 @@ export default function BookmarkDetailScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
+      {bookmark.preview_image_url ? (
+        <Image
+          source={{ uri: bookmark.preview_image_url }}
+          style={styles.preview}
+          resizeMode="cover"
+        />
+      ) : null}
+      <View style={styles.header}>
+        {bookmark.favicon_url ? (
+          <Image source={{ uri: bookmark.favicon_url }} style={styles.favicon} />
+        ) : null}
+        <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={2}>
+          {bookmark.title ?? bookmark.url ?? 'Untitled'}
+        </Text>
+      </View>
       {fields.map((field) => (
         <View key={field.label} style={[styles.field, { backgroundColor: palette.card }]}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{field.label}</Text>
@@ -67,6 +82,26 @@ const styles = StyleSheet.create({
   container: {
     padding: 16,
     gap: 12,
+  },
+  preview: {
+    width: '100%',
+    height: 180,
+    borderRadius: 12,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  favicon: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+  },
+  headerTitle: {
+    flex: 1,
+    fontSize: 20,
+    fontWeight: '700',
   },
   missing: {
     flex: 1,
