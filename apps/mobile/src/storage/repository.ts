@@ -37,7 +37,11 @@ class WebBookmarkRepository implements BookmarkRepository {
   async init(seed: Bookmark[]): Promise<void> {
     const seeded = storageAvailable() && localStorage.getItem(SEEDED_KEY) === '1';
     this.bookmarks = this.read<Bookmark[]>(BOOKMARKS_KEY, []);
-    this.queue = this.read<LocalPendingBookmark[]>(QUEUE_KEY, []);
+    // Entries persisted before mutation sync lack the operation field.
+    this.queue = this.read<LocalPendingBookmark[]>(QUEUE_KEY, []).map((entry) => ({
+      ...entry,
+      operation: entry.operation ?? 'create',
+    }));
     if (!seeded) {
       this.bookmarks = [...seed];
       this.write(BOOKMARKS_KEY, this.bookmarks);
