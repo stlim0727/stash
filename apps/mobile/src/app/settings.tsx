@@ -91,7 +91,7 @@ export default function SettingsScreen() {
               {entry.payload.url ?? entry.payload.shared_text ?? entry.local_id}
             </Text>
             <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
-              {`status ${entry.sync_status} · retries ${entry.retry_count}`}
+              {`${entry.operation} · status ${entry.sync_status} · retries ${entry.retry_count}`}
               {entry.last_error ? `\nlast error: ${entry.last_error}` : ''}
             </Text>
           </View>

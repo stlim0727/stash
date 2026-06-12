@@ -22,7 +22,14 @@ import { enrichBookmark } from '@/domain/enrichment';
 import type { AIEnrichment, Bookmark, Collection, LocalPendingBookmark, Tag } from '@/domain/types';
 import { repository } from '@/storage/repository';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
-import { createSyncApi, isSyncable, syncQueueEntry } from '@/sync/sync-bookmarks';
+import {
+  createSyncApi,
+  hasRemoteIdentity,
+  isSyncable,
+  makeMutationEntry,
+  removeQueueEntryIfNotSuperseded,
+  syncQueueEntry,
+} from '@/sync/sync-bookmarks';
 
 export type AddBookmarkResult =
   | { status: 'created' | 'duplicate'; bookmark: Bookmark }
@@ -95,6 +102,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // snapshot, so a delete that lands mid-run must be visible to it — both
   // before uploading an entry and before applying an upload's result.
   const deletedIds = useRef(new Set<string>());
+  // Mirror of the bookmarks state so async loops can read the LATEST rows
+  // instead of the stale closure captured when they started.
+  const bookmarksRef = useRef<Bookmark[] | null>(null);
+  useEffect(() => {
+    bookmarksRef.current = bookmarks;
+  }, [bookmarks]);
 
   // Fire-and-forget metadata enrichment. Runs off the save path so capture is
   // never blocked, only fills generated fields, and a failure just records a
@@ -250,6 +263,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const queueEntry: LocalPendingBookmark = {
         local_id: bookmark.id,
         remote_id: null,
+        operation: 'create',
         payload: { url: normalized, notes: bookmark.notes ?? undefined },
         sync_status: 'pending',
         retry_count: 0,
@@ -276,36 +290,71 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [loadedBookmarks, enrichInBackground],
   );
 
-  const archiveBookmark = useCallback((id: string, archived: boolean) => {
-    let updated: Bookmark | null = null;
-    setBookmarks((current) => {
-      if (current === null) {
-        return current;
-      }
-      return current.map((bookmark) => {
-        if (bookmark.id !== id) {
-          return bookmark;
-        }
-        updated = { ...bookmark, is_archived: archived, updated_at: new Date().toISOString() };
-        return updated;
-      });
-    });
-    if (updated) {
-      ensureRepositoryReady()
-        .then(() => repository.updateBookmark(updated as Bookmark))
-        .catch((error) => logStorageError('archive bookmark', error));
-    }
+  // Queue a remote mutation for a bookmark that already exists on the server.
+  // One entry per bookmark: a newer mutation supersedes an older one.
+  const enqueueMutation = useCallback((bookmarkId: string, operation: 'update' | 'delete') => {
+    const entry = makeMutationEntry(bookmarkId, operation);
+    setQueue((current) => [...current.filter((queued) => queued.local_id !== bookmarkId), entry]);
+    ensureRepositoryReady()
+      .then(() => repository.enqueue(entry))
+      .catch((error) => logStorageError(`${operation} mutation enqueue`, error));
   }, []);
 
-  const deleteBookmark = useCallback((id: string) => {
-    deletedIds.current.add(id);
-    setBookmarks((current) => (current === null ? current : current.filter((b) => b.id !== id)));
-    // Drop any pending queue entry so a deleted local bookmark is never synced.
-    setQueue((current) => current.filter((entry) => entry.local_id !== id));
-    ensureRepositoryReady()
-      .then(() => Promise.all([repository.deleteBookmark(id), repository.removeQueueEntry(id)]))
-      .catch((error) => logStorageError('delete bookmark', error));
-  }, []);
+  const archiveBookmark = useCallback(
+    (id: string, archived: boolean) => {
+      const syncsRemotely = hasRemoteIdentity(id);
+      let updated: Bookmark | null = null;
+      setBookmarks((current) => {
+        if (current === null) {
+          return current;
+        }
+        return current.map((bookmark) => {
+          if (bookmark.id !== id) {
+            return bookmark;
+          }
+          updated = {
+            ...bookmark,
+            is_archived: archived,
+            // Show as pending until the mutation reaches Supabase.
+            sync_status: syncsRemotely ? 'pending' : bookmark.sync_status,
+            updated_at: new Date().toISOString(),
+          };
+          return updated;
+        });
+      });
+      if (updated) {
+        ensureRepositoryReady()
+          .then(() => repository.updateBookmark(updated as Bookmark))
+          .catch((error) => logStorageError('archive bookmark', error));
+        if (syncsRemotely) {
+          enqueueMutation(id, 'update');
+        }
+      }
+    },
+    [enqueueMutation],
+  );
+
+  const deleteBookmark = useCallback(
+    (id: string) => {
+      deletedIds.current.add(id);
+      setBookmarks((current) => (current === null ? current : current.filter((b) => b.id !== id)));
+      if (hasRemoteIdentity(id)) {
+        // The row exists remotely: replace any queued work with a durable
+        // delete mutation so the removal reaches Supabase even after restart.
+        ensureRepositoryReady()
+          .then(() => repository.deleteBookmark(id))
+          .catch((error) => logStorageError('delete bookmark', error));
+        enqueueMutation(id, 'delete');
+        return;
+      }
+      // Local-only: drop any pending queue entry so it is never created remotely.
+      setQueue((current) => current.filter((entry) => entry.local_id !== id));
+      ensureRepositoryReady()
+        .then(() => Promise.all([repository.deleteBookmark(id), repository.removeQueueEntry(id)]))
+        .catch((error) => logStorageError('delete bookmark', error));
+    },
+    [enqueueMutation],
+  );
 
   const syncNow = useCallback(async () => {
     if (syncInFlight.current) {
@@ -328,13 +377,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // against a stale bearer token until restart.
       const session = (await auth.ensureAnonymousSession()) ?? auth.session;
       const api = createSyncApi(session);
-      // Lookup snapshot: replacements only touch the entry being synced, so
-      // other entries' local IDs stay valid for the duration of the loop.
-      const bookmarksSnapshot = loadedBookmarks;
+      const getLatestBookmark = (id: string) =>
+        bookmarksRef.current?.find((bookmark) => bookmark.id === id);
 
       for (const entry of syncable) {
-        // Deleted while this run was queued up: skip the upload entirely.
-        if (deletedIds.current.has(entry.local_id)) {
+        // Deleted while this run was queued up: skip creates/updates for it.
+        // Delete entries are exactly how that deletion reaches the server,
+        // so they must still run.
+        if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
           continue;
         }
 
@@ -344,21 +394,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           ),
         );
 
-        const localBookmark = bookmarksSnapshot.find(
-          (bookmark) => bookmark.id === entry.local_id,
-        );
-        const result = await syncQueueEntry(api, repository, entry, localBookmark);
+        const result = await syncQueueEntry(api, repository, entry, getLatestBookmark);
 
-        // Deleted while the upload was in flight: don't resurrect it. Undo the
-        // rows syncQueueEntry just persisted and best-effort delete the remote
-        // copy so the user's delete wins end to end.
-        if (deletedIds.current.has(entry.local_id)) {
+        // Deleted while a create/update was in flight: don't resurrect it.
+        // Undo the rows syncQueueEntry just persisted and best-effort delete
+        // the remote copy so the user's delete wins end to end.
+        if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
           const replacementId = result.bookmarkReplacement?.bookmark.id;
           ensureRepositoryReady()
             .then(() =>
               Promise.all([
                 replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
-                repository.removeQueueEntry(entry.local_id),
+                // Superseded-aware: a durable delete entry enqueued for this
+                // bookmark while we were uploading must NOT be removed here.
+                removeQueueEntryIfNotSuperseded(repository, entry),
               ]),
             )
             .catch((error) => logStorageError('post-delete sync cleanup', error));
@@ -371,7 +420,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
 
         setQueue((current) =>
-          current.map((queued) => (queued.local_id === entry.local_id ? result.entry : queued)),
+          result.removeEntry
+            ? current.filter((queued) => queued.local_id !== entry.local_id)
+            : current.map((queued) =>
+                queued.local_id === entry.local_id ? result.entry : queued,
+              ),
         );
         if (result.bookmarkReplacement) {
           const { previousId, bookmark: replacement } = result.bookmarkReplacement;
@@ -397,10 +450,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (merged) {
             // replaceBookmark (not update) so a concurrent enrichment persist
             // that resurrected the old local-ID row gets cleaned up too.
-            const persisted = merged;
+            const persisted: Bookmark = merged;
             ensureRepositoryReady()
               .then(() => repository.replaceBookmark(previousId, persisted))
               .catch((error) => logStorageError('post-sync merge', error));
+            // Archived while the create was uploading: the remote row was
+            // created unarchived, so queue an update to reconcile it.
+            if (entry.operation === 'create' && persisted.is_archived) {
+              enqueueMutation(persisted.id, 'update');
+            }
           }
         }
       }
@@ -410,7 +468,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncInFlight.current = false;
       setIsSyncing(false);
     }
-  }, [auth, queue, loadedBookmarks]);
+  }, [auth, queue, enqueueMutation]);
 
   // Background enrichment: once local data is loaded, enrich any bookmark
   // whose metadata is still pending (seeded items, or saves from a previous

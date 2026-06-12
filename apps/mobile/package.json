@@ -31,7 +31,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --no-warnings --experimental-strip-types --test \"src/**/*.test.ts\""
+    "test": "node --no-warnings --experimental-transform-types --import ../../scripts/register-alias.mjs --test \"src/**/*.test.ts\""
   },
   "private": true
 }

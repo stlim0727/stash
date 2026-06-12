@@ -100,6 +100,7 @@ The mobile app should maintain a local queue for share intake and offline operat
 | --- | --- |
 | local_id | Generated on device. |
 | remote_id | Supabase bookmark ID after sync. |
+| operation | `create`, `update`, or `delete` — the remote work this entry represents. |
 | payload | Normalized shared payload. |
 | sync_status | `pending`, `syncing`, `synced`, or `failed`. |
 | retry_count | Number of failed sync attempts. |

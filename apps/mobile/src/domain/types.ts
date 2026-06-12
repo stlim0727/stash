@@ -102,11 +102,16 @@ export interface CreateBookmarkInput {
   shared_text?: string;
 }
 
+/** What a queue entry asks the sync service to do remotely. */
+export type QueueOperation = 'create' | 'update' | 'delete';
+
 export interface LocalPendingBookmark {
   /** Generated on device. */
   local_id: string;
   /** Supabase bookmark ID after sync. */
   remote_id: string | null;
+  /** Remote operation to perform. */
+  operation: QueueOperation;
   /** Normalized shared payload. */
   payload: CreateBookmarkInput;
   sync_status: SyncStatus;

@@ -25,18 +25,19 @@ This file captures the project state and working conventions so any agent (Codex
 
 ## Post-MVP work completed
 
-- **Test runner** — `pnpm test` runs Node 22's built-in runner with type stripping over `src/**/*.test.ts` (no new runtime deps). Suites cover URL handling, enrichment behavior, and the page-metadata parser. Note: modules under test must use relative `.ts` imports for anything they import at runtime (Node cannot resolve the `@/` alias); Metro handles explicit `.ts` paths fine.
+- **Test runner** — `pnpm test` runs Node 22's built-in runner (`--experimental-transform-types` + the `@/` alias resolver in `scripts/alias-loader.mjs`, preloaded via `--import`) over `src/**/*.test.ts` — no new runtime deps. Suites cover URL handling, enrichment, the page-metadata parser, and the sync service (with fake API/repository).
+- **CI** — `.github/workflows/ci.yml` runs lint, typecheck, and tests on pushes to main and on every PR.
+- **Mutation sync** — queue entries carry an `operation` (`create`/`update`/`delete`). Archiving a synced bookmark enqueues an `update` (the sync service re-sends the LATEST user-editable fields — last write wins); deleting one enqueues a durable `delete` (permanent remote removal, survives restart). One queue entry per bookmark: newer mutations supersede older ones. A bookmark archived while its create was uploading gets reconciled with a follow-up update. SQLite migration: `ALTER TABLE ... ADD COLUMN operation` guarded by try/catch for pre-existing databases.
 - **Real OpenGraph fetch** — `src/domain/page-metadata.ts` fetches a page (AbortController timeout, HTML-only, size-capped) and parses og:/twitter: meta, `<title>`, and favicon links; `enrichBookmark` prefers fetched values and falls back to URL-derived ones, with the fetcher injectable for offline tests.
 - **Archived view** — `/archived` lists archived bookmarks (restorable via detail's Unarchive); reachable from Settings' Library row.
 
 ## Possible future work (beyond the current milestone list)
 
-- Sync archive/delete/update mutations to Supabase (the sync service currently only uploads new bookmarks via `createBookmark`; the remote delete on the delete-vs-sync race is the only mutation sent today).
 - Tags/collections/AI enrichment are still static mock data in the UI layer (`mock-data.ts`); wire them to the API.
-
-**M5–M7 need Supabase** — provide a project URL/key, enable anonymous sign-ins, apply `supabase/migrations/20260611000000_initial_schema.sql`, and verify anonymous session creation/restoration/refresh, RLS-scoped table access, API behavior, and end-to-end queue upload (save offline → entry syncs → bookmark gets remote ID and synced status).
-
-**Next milestone: M10** (MVP polish and internal release readiness) — empty/loading/error states, finish Settings, archive/delete flows, EAS build config, release docs. M9's enrichment is URL-derived only; a future pass can fetch real OpenGraph metadata in `deriveMetadata`.
+- Download remote bookmarks on startup (sync is upload-only today; a second device starts empty).
+- Push enrichment results (title/site/preview) to the remote row; enriched metadata currently stays device-local unless an archive happens to trigger an update.
+- Edit UI for title/notes after capture, and client-side search.
+- Replace the template Expo icons/splash with real branding before any public release.
 
 ## Conventions and commands
 
@@ -44,7 +45,7 @@ This file captures the project state and working conventions so any agent (Codex
   - `pnpm dev` / `dev:android` / `dev:ios` / `dev:web` — Expo dev server.
   - `pnpm lint` — wraps `scripts/format.mjs --check` (trailing whitespace + final newline only; there is no ESLint config yet).
   - `pnpm typecheck` — `tsc --noEmit` in apps/mobile.
-  - `pnpm test` — intentional placeholder; no test runner is set up yet.
+  - `pnpm test` — Node's built-in test runner over `apps/mobile/src/**/*.test.ts`.
 - Headless build verification (no emulator needed): `cd apps/mobile && CI=1 pnpm exec expo install --check || true; CI=1 pnpm exec expo export --platform web` (also `--platform ios` to compile the native/Hermes path, which exercises the expo-sqlite code). Delete `dist/` afterwards; it is gitignored.
 - Keep user-authored fields separate from generated/AI metadata (core product principle; see `docs/api/bookmarks.md`).
 
@@ -53,9 +54,7 @@ This file captures the project state and working conventions so any agent (Codex
 - `expo install <pkg>` may fail offline against the Expo versions API. Get the SDK-pinned version locally instead: `node -e "console.log(require('./apps/mobile/node_modules/expo/bundledNativeModules.json')['<pkg>'])"`, then `pnpm add <pkg>@<that version>`.
 - `pnpm install` reports two benign peer-dependency warnings (react-native-worklets, @react-native/metro-config).
 
-## Known gaps / follow-ups
+## Known minor gaps
 
-- SQLite persistence has not been smoke-tested on a real device/emulator (only compile-verified via the iOS Hermes export). Worth doing once: save a bookmark, restart, confirm it survives.
 - Duplicate detection only checks in-memory state; a save made while the startup load is in flight could miss a stored duplicate (cosmetic: creates a second entry rather than losing data).
-- Tags, collections, and AI enrichments are still static mock data (`mock-data.ts`); they become real in M5/M6.
-- `bookmarks` SQLite table stores the full record as a JSON column plus `created_at`/`is_archived` columns; promote fields to real columns when M6 query needs grow.
+- `bookmarks` SQLite table stores the full record as a JSON column plus `created_at`/`is_archived` columns; promote fields to real columns when query needs grow.

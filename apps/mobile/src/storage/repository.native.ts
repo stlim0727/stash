@@ -13,6 +13,7 @@ interface BookmarkRow {
 interface QueueRow {
   local_id: string;
   remote_id: string | null;
+  operation: string;
   payload: string;
   sync_status: string;
   retry_count: number;
@@ -54,6 +55,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       CREATE TABLE IF NOT EXISTS local_pending_bookmarks (
         local_id TEXT PRIMARY KEY,
         remote_id TEXT,
+        operation TEXT NOT NULL DEFAULT 'create',
         payload TEXT NOT NULL,
         sync_status TEXT NOT NULL DEFAULT 'pending',
         retry_count INTEGER NOT NULL DEFAULT 0,
@@ -62,6 +64,15 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         updated_at TEXT NOT NULL
       );
     `);
+
+    // Databases created before mutation sync lack the operation column.
+    try {
+      await db.execAsync(
+        "ALTER TABLE local_pending_bookmarks ADD COLUMN operation TEXT NOT NULL DEFAULT 'create'",
+      );
+    } catch {
+      // Column already exists.
+    }
 
     const seeded = await db.getFirstAsync<{ value: string }>(
       "SELECT value FROM meta WHERE key = 'seeded'",
@@ -118,6 +129,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     return rows.map((row) => ({
       local_id: row.local_id,
       remote_id: row.remote_id,
+      operation: (row.operation ?? 'create') as LocalPendingBookmark['operation'],
       payload: JSON.parse(row.payload),
       sync_status: row.sync_status as LocalPendingBookmark['sync_status'],
       retry_count: row.retry_count,
@@ -131,11 +143,12 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     const db = await this.open();
     await db.runAsync(
       `INSERT OR REPLACE INTO local_pending_bookmarks
-        (local_id, remote_id, payload, sync_status, retry_count, last_error, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         entry.local_id,
         entry.remote_id,
+        entry.operation,
         JSON.stringify(entry.payload),
         entry.sync_status,
         entry.retry_count,
