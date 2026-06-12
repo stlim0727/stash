@@ -64,6 +64,13 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(BOOKMARKS_KEY, this.bookmarks);
   }
 
+  async replaceBookmark(previousId: string, bookmark: Bookmark): Promise<void> {
+    this.bookmarks = this.bookmarks.map((existing) =>
+      existing.id === previousId ? bookmark : existing,
+    );
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+  }
+
   async listQueue(): Promise<LocalPendingBookmark[]> {
     return [...this.queue];
   }

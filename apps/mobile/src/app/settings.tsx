@@ -1,4 +1,4 @@
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
 import { useBookmarks } from '@/store/bookmarks';
@@ -6,8 +6,23 @@ import { useSupabaseAuth } from '@/supabase/auth-provider';
 
 export default function SettingsScreen() {
   const palette = usePalette();
-  const { queue } = useBookmarks();
+  const { queue, isSyncing, syncNow } = useBookmarks();
   const auth = useSupabaseAuth();
+
+  const waiting = queue.filter(
+    (entry) => entry.sync_status === 'pending' || entry.sync_status === 'failed',
+  ).length;
+  const canSync = auth.status === 'anonymous' && waiting > 0 && !isSyncing;
+
+  const syncValue = isSyncing
+    ? `Syncing ${waiting} item(s)…`
+    : waiting === 0
+      ? auth.status === 'anonymous'
+        ? 'Synced — nothing waiting to upload'
+        : 'Local only — nothing waiting to sync'
+      : auth.status === 'anonymous'
+        ? `${waiting} item(s) waiting to upload`
+        : `Local only — ${waiting} item(s) queued until Supabase is available`;
 
   const settingsRows = [
     {
@@ -19,12 +34,7 @@ export default function SettingsScreen() {
     },
     {
       label: 'Sync status',
-      value:
-        queue.length === 0
-          ? auth.status === 'anonymous'
-            ? 'Ready for cloud sync — nothing waiting to sync'
-            : 'Local only — nothing waiting to sync'
-          : `${auth.status === 'anonymous' ? 'Ready for cloud sync' : 'Local only'} — ${queue.length} item(s) queued for future sync`,
+      value: syncValue,
     },
     {
       label: 'Supabase auth',
@@ -40,6 +50,15 @@ export default function SettingsScreen() {
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>{row.value}</Text>
         </View>
       ))}
+
+      {canSync ? (
+        <Pressable
+          style={[styles.syncButton, { backgroundColor: palette.accent }]}
+          onPress={() => void syncNow()}
+        >
+          <Text style={styles.syncButtonLabel}>Sync now</Text>
+        </Pressable>
+      ) : null}
 
       <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
         Pending sync queue
@@ -91,5 +110,15 @@ const styles = StyleSheet.create({
   },
   emptyQueue: {
     fontSize: 14,
+  },
+  syncButton: {
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  syncButtonLabel: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
