@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { Link } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
@@ -7,7 +8,7 @@ import { useSupabaseAuth } from '@/supabase/auth-provider';
 
 export default function SettingsScreen() {
   const palette = usePalette();
-  const { queue, isSyncing, syncNow, inbox, archivedCount } = useBookmarks();
+  const { queue, isSyncing, syncNow, inbox, archived } = useBookmarks();
   const auth = useSupabaseAuth();
 
   const waiting = queue.filter(
@@ -42,10 +43,6 @@ export default function SettingsScreen() {
       value: auth.status,
     },
     {
-      label: 'Library',
-      value: `${inbox.length} in inbox · ${archivedCount} archived`,
-    },
-    {
       label: 'App version',
       value: `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
         Constants.expoConfig?.sdkVersion ?? '56'
@@ -61,6 +58,15 @@ export default function SettingsScreen() {
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>{row.value}</Text>
         </View>
       ))}
+
+      <Link href="/archived" asChild>
+        <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
+          <Text style={[styles.rowLabel, { color: palette.text }]}>Library</Text>
+          <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
+            {`${inbox.length} in inbox · ${archived.length} archived — view archived ›`}
+          </Text>
+        </Pressable>
+      </Link>
 
       {canSync ? (
         <Pressable

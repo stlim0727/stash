@@ -35,8 +35,8 @@ interface BookmarksContextValue {
   loadError: boolean;
   /** Active (non-archived) bookmarks, newest first. */
   inbox: Bookmark[];
-  /** Number of archived bookmarks. */
-  archivedCount: number;
+  /** Archived bookmarks, most recently archived (updated) first. */
+  archived: Bookmark[];
   /** Offline sync queue, oldest first — exposed for inspection until sync exists. */
   queue: LocalPendingBookmark[];
   getBookmark: (id: string) => Bookmark | undefined;
@@ -425,7 +425,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       inbox: loadedBookmarks
         .filter((bookmark) => !bookmark.is_archived)
         .sort((a, b) => b.created_at.localeCompare(a.created_at)),
-      archivedCount: loadedBookmarks.filter((bookmark) => bookmark.is_archived).length,
+      archived: loadedBookmarks
+        .filter((bookmark) => bookmark.is_archived)
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
       queue,
       getBookmark,
       getTagsForBookmark,

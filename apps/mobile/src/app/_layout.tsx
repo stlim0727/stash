@@ -23,6 +23,7 @@ export default function RootLayout() {
                 options={{ title: 'Add Bookmark', presentation: 'modal' }}
               />
               <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+              <Stack.Screen name="archived" options={{ title: 'Archived' }} />
               <Stack.Screen name="bookmark/[id]" options={{ title: 'Bookmark' }} />
             </Stack>
             <StatusBar style="auto" />
