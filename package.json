@@ -16,7 +16,7 @@
     "format": "node scripts/format.mjs --write",
     "format:check": "node scripts/format.mjs --check",
     "lint": "pnpm format:check",
-    "test": "node scripts/placeholders.mjs test",
+    "test": "pnpm --filter mobile test",
     "typecheck": "pnpm --filter mobile typecheck"
   }
 }
