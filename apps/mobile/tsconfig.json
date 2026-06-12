@@ -13,7 +13,8 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "types": [
-      "node"
+      "node",
+      "jest"
     ]
   },
   "include": [

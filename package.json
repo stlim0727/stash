@@ -18,6 +18,7 @@
     "lint": "pnpm format:check",
     "test": "pnpm --filter mobile test",
     "typecheck": "pnpm --filter mobile typecheck",
-    "verify:supabase": "node --no-warnings --experimental-transform-types scripts/verify-supabase.mjs"
+    "verify:supabase": "node --no-warnings --experimental-transform-types scripts/verify-supabase.mjs",
+    "test:components": "pnpm --filter mobile test:components"
   }
 }
