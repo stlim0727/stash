@@ -14,7 +14,9 @@ export default function SettingsScreen() {
   const waiting = queue.filter(
     (entry) => entry.sync_status === 'pending' || entry.sync_status === 'failed',
   ).length;
-  const canSync = auth.status === 'anonymous' && waiting > 0 && !isSyncing;
+  // Sync is upload-then-pull, so it is useful even with nothing to upload
+  // (another device or cloud AI enrichment may have changed data).
+  const canSync = auth.status === 'anonymous' && !isSyncing;
 
   const syncValue = isSyncing
     ? `Syncing ${waiting} item(s)…`
