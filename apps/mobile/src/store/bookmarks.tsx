@@ -375,11 +375,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         );
         if (result.bookmarkReplacement) {
           const { previousId, bookmark: replacement } = result.bookmarkReplacement;
+          // The replacement was built from a snapshot taken before the upload.
+          // Enrichment may have completed in the meantime, so apply only the
+          // sync-owned fields (identity + status) onto the LATEST row instead
+          // of writing the stale snapshot back.
+          let merged: Bookmark | null = null;
           setBookmarks((current) =>
-            (current ?? []).map((bookmark) =>
-              bookmark.id === previousId ? replacement : bookmark,
-            ),
+            (current ?? []).map((bookmark) => {
+              if (bookmark.id !== previousId) {
+                return bookmark;
+              }
+              merged = {
+                ...bookmark,
+                id: replacement.id,
+                sync_status: replacement.sync_status,
+                updated_at: replacement.updated_at,
+              };
+              return merged;
+            }),
           );
+          if (merged) {
+            // replaceBookmark (not update) so a concurrent enrichment persist
+            // that resurrected the old local-ID row gets cleaned up too.
+            const persisted = merged;
+            ensureRepositoryReady()
+              .then(() => repository.replaceBookmark(previousId, persisted))
+              .catch((error) => logStorageError('post-sync merge', error));
+          }
         }
       }
     } catch (error) {
