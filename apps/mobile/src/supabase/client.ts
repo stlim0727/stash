@@ -59,9 +59,19 @@ function toSession(response: SupabaseAuthResponse): SupabaseAuthSession {
     refresh_token: response.refresh_token,
     token_type: response.token_type,
     expires_in: response.expires_in,
-    expires_at: response.expires_at,
+    // Always know when the token dies so restoreSession can refresh in time.
+    expires_at: response.expires_at ?? Math.floor(Date.now() / 1000) + response.expires_in,
     user: response.user,
   };
+}
+
+const EXPIRY_MARGIN_SECONDS = 60;
+
+function isSessionExpired(session: SupabaseAuthSession): boolean {
+  if (!session.expires_at) {
+    return true;
+  }
+  return session.expires_at <= Math.floor(Date.now() / 1000) + EXPIRY_MARGIN_SECONDS;
 }
 
 async function parseResponse(response: Response): Promise<unknown> {
@@ -110,8 +120,42 @@ export class StashSupabaseClient {
     return session;
   }
 
+  async refreshSession(refreshToken: string): Promise<SupabaseAuthSession> {
+    const payload = (await this.request('/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST',
+      body: { refresh_token: refreshToken },
+    })) as SupabaseAuthResponse;
+    const session = toSession(payload);
+    await writeSupabaseSession(session);
+    return session;
+  }
+
+  /**
+   * Returns a usable session: the stored one while its access token is still
+   * valid, a refreshed one when it is about to expire, or null when no
+   * recoverable session exists. Network/server failures during refresh are
+   * rethrown so callers do not silently mint a second anonymous user (which
+   * would orphan the original user's data).
+   */
   async restoreSession(): Promise<SupabaseAuthSession | null> {
-    return readSupabaseSession();
+    const stored = await readSupabaseSession();
+    if (!stored) {
+      return null;
+    }
+    if (!isSessionExpired(stored)) {
+      return stored;
+    }
+
+    try {
+      return await this.refreshSession(stored.refresh_token);
+    } catch (error) {
+      if (error instanceof SupabaseRequestError && error.status >= 400 && error.status < 500) {
+        // The refresh token was rejected — this session is unrecoverable.
+        await clearSupabaseSession();
+        return null;
+      }
+      throw error;
+    }
   }
 
   async clearSession(): Promise<void> {

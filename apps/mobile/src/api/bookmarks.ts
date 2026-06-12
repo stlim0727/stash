@@ -513,7 +513,9 @@ export class BookmarkApi {
       query.set(cursorColumn, `${cursorOperator}.${params.cursor}`);
     }
     if (params.query?.trim()) {
-      const term = params.query.trim().replaceAll('%', '').replaceAll('*', '');
+      // Strip characters with meaning inside a PostgREST or=() expression so
+      // user input cannot corrupt the filter.
+      const term = params.query.trim().replace(/[%*,()]/g, '');
       query.set('or', `(title.ilike.*${term}*,description.ilike.*${term}*,notes.ilike.*${term}*,url.ilike.*${term}*)`);
     }
 

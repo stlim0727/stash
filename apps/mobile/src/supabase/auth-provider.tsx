@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 
 import { describeSupabaseConfig, getSupabaseConfigState } from '@/supabase/config';
@@ -29,34 +37,49 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SupabaseAuthSession | null>(null);
   const [message, setMessage] = useState(() => describeSupabaseConfig(configState));
 
-  const ensureAnonymousSession = useCallback(async (): Promise<SupabaseAuthSession | null> => {
+  // Single-flight: concurrent callers (e.g. React StrictMode double-running
+  // the mount effect) must not race past the restore check and create two
+  // anonymous users.
+  const inFlight = useRef<Promise<SupabaseAuthSession | null> | null>(null);
+
+  const ensureAnonymousSession = useCallback((): Promise<SupabaseAuthSession | null> => {
     if (configState.status === 'missing') {
       setStatus('not_configured');
       setMessage(describeSupabaseConfig(configState));
-      return null;
+      return Promise.resolve(null);
+    }
+
+    if (inFlight.current) {
+      return inFlight.current;
     }
 
     setStatus('loading');
     const client = createSupabaseClient();
-    try {
-      const restored = await client.restoreSession();
-      if (restored) {
-        setSession(restored);
-        setStatus('anonymous');
-        setMessage('Restored anonymous Supabase session.');
-        return restored;
-      }
+    const run = (async (): Promise<SupabaseAuthSession | null> => {
+      try {
+        const restored = await client.restoreSession();
+        if (restored) {
+          setSession(restored);
+          setStatus('anonymous');
+          setMessage('Restored anonymous Supabase session.');
+          return restored;
+        }
 
-      const created = await client.signInAnonymously();
-      setSession(created);
-      setStatus('anonymous');
-      setMessage('Created anonymous Supabase session.');
-      return created;
-    } catch (error) {
-      setStatus('error');
-      setMessage(formatError(error));
-      return null;
-    }
+        const created = await client.signInAnonymously();
+        setSession(created);
+        setStatus('anonymous');
+        setMessage('Created anonymous Supabase session.');
+        return created;
+      } catch (error) {
+        setStatus('error');
+        setMessage(formatError(error));
+        return null;
+      } finally {
+        inFlight.current = null;
+      }
+    })();
+    inFlight.current = run;
+    return run;
   }, [configState]);
 
   useEffect(() => {
