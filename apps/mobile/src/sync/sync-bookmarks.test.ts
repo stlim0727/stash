@@ -78,6 +78,8 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
     setMeta: async () => {},
     listEnrichments: async () => [],
     upsertEnrichments: async () => {},
+    listTagData: async () => ({ tags: [], bookmarkTags: [], collections: [] }),
+    replaceTagData: async () => {},
   };
   return { calls, repository };
 }

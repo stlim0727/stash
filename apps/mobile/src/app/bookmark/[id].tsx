@@ -1,15 +1,43 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import {
+  Alert,
+  Image,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { usePalette } from '@/theme';
 import { useBookmarks } from '@/store/bookmarks';
+import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
 export default function BookmarkDetailScreen() {
   const palette = usePalette();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getBookmark, getTagsForBookmark, getCollection, getEnrichment, archiveBookmark, deleteBookmark } =
-    useBookmarks();
+  const {
+    getBookmark,
+    getTagsForBookmark,
+    getCollection,
+    getEnrichment,
+    archiveBookmark,
+    deleteBookmark,
+    collections,
+    addTagsToBookmark,
+    removeTagFromBookmark,
+    assignCollection,
+    createCollection,
+  } = useBookmarks();
+
+  const [tagInput, setTagInput] = useState('');
+  const [newCollectionName, setNewCollectionName] = useState('');
+  const [organizeError, setOrganizeError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const bookmark = id ? getBookmark(id) : undefined;
 
@@ -26,17 +54,13 @@ export default function BookmarkDetailScreen() {
   const tags = getTagsForBookmark(bookmark.id);
   const collection = getCollection(bookmark.collection_id);
   const enrichment = getEnrichment(bookmark.id);
+  const canOrganizeRemotely = hasRemoteIdentity(bookmark.id);
 
   const fields = [
     { label: 'URL', value: bookmark.url ?? 'No URL (text-only share)' },
     { label: 'Title', value: bookmark.title ?? 'Untitled — metadata pending' },
     { label: 'Description', value: bookmark.description ?? 'No description yet' },
     { label: 'Notes', value: bookmark.notes ?? 'No notes' },
-    {
-      label: 'Tags',
-      value: tags.length > 0 ? tags.map((tag) => tag.name).join(', ') : 'None yet',
-    },
-    { label: 'Collection', value: collection?.name ?? 'Inbox (no collection)' },
     { label: 'Site', value: bookmark.site_name ?? 'Unknown' },
     { label: 'Saved from', value: bookmark.source_app ?? 'Manual entry' },
     { label: 'Metadata status', value: bookmark.metadata_status },
@@ -47,6 +71,42 @@ export default function BookmarkDetailScreen() {
   if (enrichment?.summary) {
     fields.push({ label: 'AI summary', value: enrichment.summary });
   }
+
+  const runOrganizeAction = async (action: () => Promise<string | null>) => {
+    setBusy(true);
+    setOrganizeError(null);
+    const error = await action();
+    setOrganizeError(error);
+    setBusy(false);
+    return error === null;
+  };
+
+  const handleAddTag = async () => {
+    const name = tagInput.trim();
+    if (!name) {
+      return;
+    }
+    const ok = await runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
+    if (ok) {
+      setTagInput('');
+    }
+  };
+
+  const handleCreateCollection = async () => {
+    const name = newCollectionName.trim();
+    if (!name) {
+      return;
+    }
+    await runOrganizeAction(async () => {
+      const result = await createCollection(name);
+      if (result.collection) {
+        assignCollection(bookmark.id, result.collection.id);
+        setNewCollectionName('');
+        return null;
+      }
+      return result.error ?? 'Could not create the collection.';
+    });
+  };
 
   const handleDelete = () => {
     const remove = () => {
@@ -89,6 +149,109 @@ export default function BookmarkDetailScreen() {
           <Text style={[styles.fieldValue, { color: palette.text }]}>{field.value}</Text>
         </View>
       ))}
+
+      <View style={[styles.field, { backgroundColor: palette.card }]}>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
+        {tags.length > 0 ? (
+          <View style={styles.chipRow}>
+            {tags.map((tag) => (
+              <Pressable
+                key={tag.id}
+                disabled={busy || !canOrganizeRemotely}
+                style={[styles.chip, { borderColor: palette.border }]}
+                onPress={() => void runOrganizeAction(() => removeTagFromBookmark(bookmark.id, tag.name))}
+              >
+                <Text style={[styles.chipLabel, { color: palette.text }]}>
+                  {tag.name}
+                  {canOrganizeRemotely ? '  ×' : ''}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <Text style={[styles.fieldValue, { color: palette.textSecondary }]}>None yet</Text>
+        )}
+        {canOrganizeRemotely ? (
+          <View style={styles.inlineForm}>
+            <TextInput
+              style={[styles.inlineInput, { color: palette.text, borderColor: palette.border }]}
+              placeholder="Add a tag"
+              placeholderTextColor={palette.textSecondary}
+              autoCapitalize="none"
+              value={tagInput}
+              onChangeText={setTagInput}
+              onSubmitEditing={() => void handleAddTag()}
+            />
+            <Pressable
+              disabled={busy}
+              style={[styles.inlineButton, { backgroundColor: palette.accent }]}
+              onPress={() => void handleAddTag()}
+            >
+              <Text style={styles.inlineButtonLabel}>Add</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            Tags can be edited once this bookmark has synced.
+          </Text>
+        )}
+      </View>
+
+      <View style={[styles.field, { backgroundColor: palette.card }]}>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Collection</Text>
+        <View style={styles.chipRow}>
+          <Pressable
+            disabled={busy}
+            style={[
+              styles.chip,
+              { borderColor: palette.border },
+              bookmark.collection_id === null && { backgroundColor: palette.border },
+            ]}
+            onPress={() => assignCollection(bookmark.id, null)}
+          >
+            <Text style={[styles.chipLabel, { color: palette.text }]}>Inbox (none)</Text>
+          </Pressable>
+          {collections.map((item) => (
+            <Pressable
+              key={item.id}
+              disabled={busy}
+              style={[
+                styles.chip,
+                { borderColor: palette.border },
+                bookmark.collection_id === item.id && { backgroundColor: palette.border },
+              ]}
+              onPress={() => assignCollection(bookmark.id, item.id)}
+            >
+              <Text style={[styles.chipLabel, { color: palette.text }]}>{item.name}</Text>
+            </Pressable>
+          ))}
+        </View>
+        {collection && !collections.some((item) => item.id === collection.id) ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            Currently in: {collection.name}
+          </Text>
+        ) : null}
+        <View style={styles.inlineForm}>
+          <TextInput
+            style={[styles.inlineInput, { color: palette.text, borderColor: palette.border }]}
+            placeholder="New collection"
+            placeholderTextColor={palette.textSecondary}
+            value={newCollectionName}
+            onChangeText={setNewCollectionName}
+            onSubmitEditing={() => void handleCreateCollection()}
+          />
+          <Pressable
+            disabled={busy}
+            style={[styles.inlineButton, { backgroundColor: palette.accent }]}
+            onPress={() => void handleCreateCollection()}
+          >
+            <Text style={styles.inlineButtonLabel}>Create</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
+
       <View style={styles.actions}>
         <Pressable
           style={[styles.actionButton, { borderColor: palette.border }]}
@@ -147,7 +310,7 @@ const styles = StyleSheet.create({
   field: {
     borderRadius: 12,
     padding: 16,
-    gap: 4,
+    gap: 8,
   },
   fieldLabel: {
     fontSize: 13,
@@ -157,6 +320,52 @@ const styles = StyleSheet.create({
   },
   fieldValue: {
     fontSize: 15,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  chip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  chipLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  inlineForm: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  inlineInput: {
+    flex: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    fontSize: 15,
+  },
+  inlineButton: {
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+  },
+  inlineButtonLabel: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  hint: {
+    fontSize: 13,
+  },
+  error: {
+    color: '#d93636',
+    fontSize: 13,
+    textAlign: 'center',
   },
   actions: {
     flexDirection: 'row',

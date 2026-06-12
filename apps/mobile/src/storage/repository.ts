@@ -1,5 +1,5 @@
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
-import type { BookmarkRepository } from '@/storage/types';
+import type { BookmarkRepository, TagData } from '@/storage/types';
 
 /**
  * Web/dev fallback store. Uses localStorage when available so bookmarks
@@ -13,6 +13,9 @@ const QUEUE_KEY = 'stash.queue';
 const SEEDED_KEY = 'stash.seeded';
 const META_KEY = 'stash.meta';
 const ENRICHMENTS_KEY = 'stash.enrichments';
+const TAG_DATA_KEY = 'stash.tagData';
+
+const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
 
 function storageAvailable(): boolean {
   return typeof localStorage !== 'undefined';
@@ -23,6 +26,7 @@ class WebBookmarkRepository implements BookmarkRepository {
   private queue: LocalPendingBookmark[] = [];
   private meta: Record<string, string> = {};
   private enrichments: AIEnrichment[] = [];
+  private tagData: TagData = EMPTY_TAG_DATA;
 
   private read<T>(key: string, fallback: T): T {
     if (!storageAvailable()) {
@@ -48,6 +52,7 @@ class WebBookmarkRepository implements BookmarkRepository {
     }));
     this.meta = this.read<Record<string, string>>(META_KEY, {});
     this.enrichments = this.read<AIEnrichment[]>(ENRICHMENTS_KEY, []);
+    this.tagData = this.read<TagData>(TAG_DATA_KEY, EMPTY_TAG_DATA);
     if (!seeded) {
       this.bookmarks = [...seed];
       this.write(BOOKMARKS_KEY, this.bookmarks);
@@ -124,6 +129,15 @@ class WebBookmarkRepository implements BookmarkRepository {
       ...enrichments,
     ];
     this.write(ENRICHMENTS_KEY, this.enrichments);
+  }
+
+  async listTagData(): Promise<TagData> {
+    return this.tagData;
+  }
+
+  async replaceTagData(data: TagData): Promise<void> {
+    this.tagData = data;
+    this.write(TAG_DATA_KEY, this.tagData);
   }
 }
 

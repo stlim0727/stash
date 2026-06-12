@@ -81,6 +81,10 @@ function fakeRepository(meta: Record<string, string> = {}) {
     upsertEnrichments: async (enrichments) => {
       calls.push(`upsertEnrichments:${enrichments.length}`);
     },
+    listTagData: async () => ({ tags: [], bookmarkTags: [], collections: [] }),
+    replaceTagData: async (data) => {
+      calls.push(`replaceTagData:${data.tags.length}:${data.collections.length}`);
+    },
   };
   return { calls, meta, repository };
 }
@@ -90,6 +94,9 @@ function fakeApi(overrides: Partial<PullApi> = {}): PullApi {
     listBookmarksUpdatedSince: async () => [],
     listBookmarkIds: async () => [],
     listEnrichmentsUpdatedSince: async () => [],
+    listTags: async () => [],
+    listBookmarkTags: async () => [],
+    listCollections: async () => [],
     ...overrides,
   };
 }
@@ -173,6 +180,38 @@ test('pull refreshes the enrichment cache', async () => {
 
   assert.deepEqual(result.enrichments, [enrichment]);
   assert.ok(calls.includes('upsertEnrichments:1'));
+});
+
+test('pull replaces the tag-data snapshot wholesale', async () => {
+  const { calls, repository } = fakeRepository();
+  const api = fakeApi({
+    listTags: async () => [
+      {
+        id: 'tag-1',
+        user_id: 'user-test',
+        name: 'design',
+        slug: 'design',
+        source: 'user',
+        created_at: '2026-06-12T00:00:00.000Z',
+      },
+    ],
+    listCollections: async () => [
+      {
+        id: 'col-1',
+        user_id: 'user-test',
+        name: 'Research',
+        description: null,
+        created_at: '2026-06-12T00:00:00.000Z',
+        updated_at: '2026-06-12T00:00:00.000Z',
+      },
+    ],
+  });
+
+  const result = await pullRemoteChanges(api, repository, () => [], () => false);
+
+  assert.equal(result.tagData.tags.length, 1);
+  assert.equal(result.tagData.collections.length, 1);
+  assert.ok(calls.includes('replaceTagData:1:1'));
 });
 
 test('pull overlaps the stored watermark for clock skew', async () => {

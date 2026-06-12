@@ -1,7 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
-import type { BookmarkRepository } from '@/storage/types';
+import type { BookmarkRepository, TagData } from '@/storage/types';
 
 interface BookmarkRow {
   id: string;
@@ -52,6 +52,10 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         is_archived INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_bookmarks_created_at ON bookmarks (created_at);
+      CREATE TABLE IF NOT EXISTS tag_data (
+        kind TEXT PRIMARY KEY,
+        data TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS enrichments (
         id TEXT PRIMARY KEY,
         bookmark_id TEXT NOT NULL,
@@ -202,6 +206,29 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         [enrichment.id, enrichment.bookmark_id, JSON.stringify(enrichment), enrichment.updated_at],
       );
     }
+  }
+
+  async listTagData(): Promise<TagData> {
+    const db = await this.open();
+    const rows = await db.getAllAsync<{ kind: string; data: string }>('SELECT * FROM tag_data');
+    const byKind = new Map(rows.map((row) => [row.kind, row.data]));
+    return {
+      tags: JSON.parse(byKind.get('tags') ?? '[]'),
+      bookmarkTags: JSON.parse(byKind.get('bookmarkTags') ?? '[]'),
+      collections: JSON.parse(byKind.get('collections') ?? '[]'),
+    };
+  }
+
+  async replaceTagData(data: TagData): Promise<void> {
+    const db = await this.open();
+    await db.withTransactionAsync(async () => {
+      for (const kind of ['tags', 'bookmarkTags', 'collections'] as const) {
+        await db.runAsync('INSERT OR REPLACE INTO tag_data (kind, data) VALUES (?, ?)', [
+          kind,
+          JSON.stringify(data[kind]),
+        ]);
+      }
+    });
   }
 }
 

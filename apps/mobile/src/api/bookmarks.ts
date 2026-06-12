@@ -302,6 +302,50 @@ export class BookmarkApi {
     return rows.map(enrichmentFromRemote);
   }
 
+  /** All of the user's tags. */
+  async listTags(): Promise<Tag[]> {
+    return this.fetchAllPages<Tag>('/rest/v1/tags', (query) => {
+      query.set('order', 'name.asc,id.asc');
+    });
+  }
+
+  /** All tag links for the user's bookmarks (RLS scopes them to the owner). */
+  async listBookmarkTags(): Promise<BookmarkTag[]> {
+    return this.fetchAllPages<BookmarkTag>('/rest/v1/bookmark_tags', (query) => {
+      // bookmark_tags has no user_id column; RLS scopes rows to the owner.
+      query.delete('user_id');
+      query.set('order', 'bookmark_id.asc,tag_id.asc');
+    });
+  }
+
+  /** All of the user's collections. */
+  async listCollections(): Promise<Collection[]> {
+    return this.fetchAllPages<Collection>('/rest/v1/collections', (query) => {
+      query.set('order', 'name.asc,id.asc');
+    });
+  }
+
+  async createCollection(name: string, description?: string): Promise<Collection> {
+    const timestamp = nowIso();
+    const rows = await this.client.request<Collection[]>('/rest/v1/collections', {
+      method: 'POST',
+      accessToken: this.session.access_token,
+      headers: { Prefer: 'return=representation' },
+      body: {
+        user_id: this.session.user.id,
+        name: normalizeText(name),
+        description: description?.trim() || null,
+        created_at: timestamp,
+        updated_at: timestamp,
+      },
+    });
+    const created = rows[0];
+    if (!created) {
+      throw new Error('Supabase did not return the created collection.');
+    }
+    return created;
+  }
+
   private async fetchAllPages<T>(
     path: string,
     configure: (query: URLSearchParams) => void,
