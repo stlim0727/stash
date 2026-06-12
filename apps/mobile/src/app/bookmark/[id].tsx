@@ -26,6 +26,7 @@ export default function BookmarkDetailScreen() {
     getCollection,
     getEnrichment,
     archiveBookmark,
+    updateBookmarkFields,
     deleteBookmark,
     collections,
     addTagsToBookmark,
@@ -38,6 +39,9 @@ export default function BookmarkDetailScreen() {
   const [newCollectionName, setNewCollectionName] = useState('');
   const [organizeError, setOrganizeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // null = not editing; the live bookmark value shows until the user types.
+  const [draftTitle, setDraftTitle] = useState<string | null>(null);
+  const [draftNotes, setDraftNotes] = useState<string | null>(null);
 
   const bookmark = id ? getBookmark(id) : undefined;
 
@@ -56,11 +60,24 @@ export default function BookmarkDetailScreen() {
   const enrichment = getEnrichment(bookmark.id);
   const canOrganizeRemotely = hasRemoteIdentity(bookmark.id);
 
+  const titleValue = draftTitle ?? bookmark.title ?? '';
+  const notesValue = draftNotes ?? bookmark.notes ?? '';
+  const editsDirty =
+    (draftTitle !== null && draftTitle !== (bookmark.title ?? '')) ||
+    (draftNotes !== null && draftNotes !== (bookmark.notes ?? ''));
+
+  const handleSaveEdits = () => {
+    updateBookmarkFields(bookmark.id, {
+      ...(draftTitle !== null ? { title: draftTitle } : {}),
+      ...(draftNotes !== null ? { notes: draftNotes } : {}),
+    });
+    setDraftTitle(null);
+    setDraftNotes(null);
+  };
+
   const fields = [
     { label: 'URL', value: bookmark.url ?? 'No URL (text-only share)' },
-    { label: 'Title', value: bookmark.title ?? 'Untitled — metadata pending' },
     { label: 'Description', value: bookmark.description ?? 'No description yet' },
-    { label: 'Notes', value: bookmark.notes ?? 'No notes' },
     { label: 'Site', value: bookmark.site_name ?? 'Unknown' },
     { label: 'Saved from', value: bookmark.source_app ?? 'Manual entry' },
     { label: 'Metadata status', value: bookmark.metadata_status },
@@ -143,6 +160,42 @@ export default function BookmarkDetailScreen() {
           {bookmark.title ?? bookmark.url ?? 'Untitled'}
         </Text>
       </View>
+      <View style={[styles.field, { backgroundColor: palette.card }]}>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Title</Text>
+        <TextInput
+          style={[styles.editInput, { color: palette.text, borderColor: palette.border }]}
+          placeholder="Untitled — metadata pending"
+          placeholderTextColor={palette.textSecondary}
+          value={titleValue}
+          onChangeText={setDraftTitle}
+        />
+      </View>
+
+      <View style={[styles.field, { backgroundColor: palette.card }]}>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Notes</Text>
+        <TextInput
+          style={[
+            styles.editInput,
+            styles.notesInput,
+            { color: palette.text, borderColor: palette.border },
+          ]}
+          placeholder="No notes"
+          placeholderTextColor={palette.textSecondary}
+          multiline
+          value={notesValue}
+          onChangeText={setDraftNotes}
+        />
+      </View>
+
+      {editsDirty ? (
+        <Pressable
+          style={[styles.saveButton, { backgroundColor: palette.accent }]}
+          onPress={handleSaveEdits}
+        >
+          <Text style={styles.saveButtonLabel}>Save changes</Text>
+        </Pressable>
+      ) : null}
+
       {fields.map((field) => (
         <View key={field.label} style={[styles.field, { backgroundColor: palette.card }]}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{field.label}</Text>
@@ -361,6 +414,27 @@ const styles = StyleSheet.create({
   },
   hint: {
     fontSize: 13,
+  },
+  editInput: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    fontSize: 15,
+  },
+  notesInput: {
+    minHeight: 72,
+    textAlignVertical: 'top',
+  },
+  saveButton: {
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  saveButtonLabel: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '600',
   },
   error: {
     color: '#d93636',

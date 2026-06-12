@@ -52,7 +52,7 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Archive/Unarchive toggles immediately (optimistic) and persists.
 - ✅ Delete asks for confirmation, permanently removes the bookmark, and
   returns to the previous screen.
-- ⬜ Edit title/notes after capture.
+- ✅ Edit title/notes after capture (see §11).
 
 ## 4. Archive
 
@@ -150,10 +150,15 @@ upload queue drains — local pending work always wins until uploaded.
 - 🔶 Live verification of the tag/collection queries was added to
   `pnpm verify:supabase` and awaits a re-run from a network-capable session.
 
-## 11. Search and editing (target spec)
+## 11. Search and editing
 
-- ⬜ Client-side search over title/description/notes/URL from the Inbox.
-- ⬜ Edit title and notes from Bookmark Detail (API support exists).
+- ✅ Client-side search from the Inbox: case-insensitive over
+  title/description/notes/URL; multiple terms AND together; live match count
+  and a distinct "no matches" empty state.
+- ✅ Edit title and notes from Bookmark Detail: inline inputs with a "Save
+  changes" button when dirty. Local-first — saves apply immediately, persist,
+  and queue an update mutation for synced bookmarks; clearing a field stores
+  null (an emptied title becomes eligible for enrichment again).
 
 ## 12. Release readiness
 

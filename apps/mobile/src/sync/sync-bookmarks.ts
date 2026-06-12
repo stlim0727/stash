@@ -1,6 +1,6 @@
 import { createBookmarkApi } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
-import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
@@ -10,6 +10,8 @@ export interface EntrySyncResult {
   bookmarkReplacement?: { previousId: string; bookmark: Bookmark };
   /** True when the entry's work is finished and it can leave the queue. */
   removeEntry?: boolean;
+  /** For creates: what was actually sent, so callers can reconcile later edits. */
+  uploadedPayload?: CreateBookmarkInput;
 }
 
 function errorMessage(error: unknown): string {
@@ -111,8 +113,18 @@ export async function syncQueueEntry(
   }
 
   // operation === 'create'
+  // Send the LATEST user-authored fields, not the payload captured at save
+  // time: the user may have edited title/notes before this upload ran.
+  const latestAtUpload = getBookmark(entry.local_id);
+  const payload: CreateBookmarkInput = latestAtUpload
+    ? {
+        ...entry.payload,
+        title: latestAtUpload.title ?? undefined,
+        notes: latestAtUpload.notes ?? undefined,
+      }
+    : entry.payload;
   try {
-    const result = await api.createBookmark(entry.payload);
+    const result = await api.createBookmark(payload);
     const syncedEntry: LocalPendingBookmark = {
       ...entry,
       remote_id: result.bookmark_id,
@@ -134,10 +146,11 @@ export async function syncQueueEntry(
       return {
         entry: syncedEntry,
         bookmarkReplacement: { previousId: localBookmark.id, bookmark: syncedBookmark },
+        uploadedPayload: payload,
       };
     }
 
-    return { entry: syncedEntry };
+    return { entry: syncedEntry, uploadedPayload: payload };
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
     const localBookmark = getBookmark(entry.local_id);

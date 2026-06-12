@@ -32,6 +32,7 @@ This file captures the project state and working conventions so any agent (Codex
 - **Archived view** — `/archived` lists archived bookmarks (restorable via detail's Unarchive); reachable from Settings' Library row.
 - **Pull sync** — `src/sync/pull-bookmarks.ts` implements `docs/design/ux-spec.md` §9: upload-then-pull on startup and "Sync now"; incremental by `updated_at` watermark (5-minute overlap for clock skew, stored in the repository meta store); last-write-wins except rows with queued local work; remote deletions via ID-list diff; AI enrichments cached durably (new `enrichments` table / storage key) and read by Detail in place of mock data. Settings shows the last pull time.
 - **Tags & collections** (ux-spec §10) — each pull also replaces a local snapshot of tags/links/collections (`repository.listTagData`/`replaceTagData`). Detail has a tag editor (add/remove via `api.addTags`/`removeTags`, online + synced bookmarks only) and a collection chip picker (local-first via the existing update mutation; `api.createCollection` for new ones).
+- **Search & editing** (ux-spec §11) — Inbox search (`src/domain/search.ts`, AND-of-terms over title/description/notes/URL) and inline title/notes editing on Detail via `updateBookmarkFields`, which shares the local-first `applyBookmarkUpdate` path with archive and collection assignment.
 
 ## Possible future work (beyond the current milestone list)
 
