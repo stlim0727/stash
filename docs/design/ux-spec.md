@@ -1,0 +1,150 @@
+# UX Specification and Status Checklist
+
+The exact, testable behavior of every user-facing flow. Each item carries a
+status:
+
+- ✅ implemented and verified (tests / live backend / static render)
+- 🔶 implemented, awaiting on-device verification (needs a dev build)
+- ⬜ specified but not implemented yet
+
+This document is the source of truth for behavior; `docs/development/milestones.md`
+records how we got here. When implementing a ⬜ item, update its status.
+
+## 1. Capture
+
+### 1.1 Manual add (Add Bookmark modal)
+
+- ✅ URL field is auto-focused; keyboard submit saves.
+- ✅ Scheme-less input is normalized (`raindrop.io` → `https://raindrop.io/`).
+- ✅ Invalid input shows the inline error "Enter a valid web address…" and never
+  blocks or clears the form; the error clears on the next keystroke.
+- ✅ A valid save returns to Inbox immediately; the bookmark is already visible
+  with `sync pending · metadata pending` badges. Saving never waits on network.
+- ✅ Saving an already-saved URL reuses the existing bookmark (no duplicate row,
+  `last_saved_at` updated) and returns to Inbox.
+- ✅ An optional note is stored as the user's private `notes`.
+
+### 1.2 Share intake (OS share sheet)
+
+- 🔶 Sharing a URL (or text containing one) from any app saves it without
+  opening an editor; the app shows Inbox plus a ~2s toast "Saved to Stash" /
+  "Already in Stash" / "No link found to stash".
+- 🔶 The shared page title (when provided by the source app) is used as the
+  initial note title metadata.
+- ✅ Capture never waits on cloud sync; the payload is persisted locally first.
+
+## 2. Inbox
+
+- ✅ Lists active (non-archived) bookmarks, newest first.
+- ✅ Each card: title (falls back to URL), URL, and status badges — sync state
+  shown unless `synced`, plus `metadata pending` while enrichment runs.
+- ✅ Loading state ("Loading your bookmarks…"), empty state ("Nothing saved
+  yet…"), and a storage-failure banner (sample data shown, saves may not
+  persist) are all distinct.
+- ✅ Footer: Add Bookmark (primary), Settings.
+
+## 3. Bookmark detail
+
+- ✅ Shows preview image and favicon when present; title header; URL, title,
+  description, notes, tags, collection, site, source app, metadata status,
+  sync status, saved-at; AI summary when one exists.
+- ✅ Archive/Unarchive toggles immediately (optimistic) and persists.
+- ✅ Delete asks for confirmation, permanently removes the bookmark, and
+  returns to the previous screen.
+- ⬜ Edit title/notes after capture.
+
+## 4. Archive
+
+- ✅ Archived bookmarks leave the Inbox but remain in the durable store.
+- ✅ The Archived screen (Settings → Library) lists them, most recently
+  archived first; tapping opens detail where Unarchive restores them.
+- ✅ Archiving a cloud-synced bookmark propagates to Supabase (update
+  mutation, last write wins); the bookmark shows `sync pending` until it does.
+
+## 5. Delete
+
+- ✅ Deleting a local-only bookmark cancels any pending upload — it never
+  reaches the cloud, even if its upload is mid-flight (tombstones).
+- ✅ Deleting a cloud-synced bookmark enqueues a durable delete that survives
+  restarts and permanently removes the remote row; a delete enqueued while
+  another sync for the same bookmark is in flight always survives.
+
+## 6. Metadata enrichment
+
+- ✅ After a save is visible, the page is fetched in the background and the
+  bookmark gains real title / site name / favicon / preview image
+  (OpenGraph/Twitter/`<title>`); URL-derived values fill anything the fetch
+  could not provide (offline saves still get a sensible title).
+- ✅ Enrichment never overwrites user-entered values, never blocks or fails a
+  save; status transitions `pending → complete | failed | skipped`.
+- ✅ Bookmarks left `pending` by a previous session are enriched on next launch.
+
+## 7. Account and sync (Settings)
+
+- ✅ Anonymous Supabase account is created silently on first launch when the
+  app is configured, restored thereafter, and access tokens refresh
+  automatically near expiry (including right before each sync run).
+- ✅ Settings shows: account state, sync status (counts of items waiting),
+  Supabase auth state, library counts (link to Archived), app version, the
+  pending queue (per-entry operation, status, retries, last error), and a
+  "Sync now" button whenever there is syncable work.
+- ✅ Without Supabase configuration the app is fully usable local-only and
+  says so.
+
+## 8. Cloud sync — upload (implemented)
+
+- ✅ New bookmarks, archive changes, and deletes upload automatically when
+  auth and local data are ready, and on every new save; failures are
+  retryable with recorded errors; retries cannot create duplicate remote
+  rows (server-side URL dedupe).
+- ✅ Verified end-to-end against the live project (`pnpm verify:supabase`,
+  16 checks, including RLS isolation between users).
+
+## 9. Cloud sync — download / pull (target spec)
+
+The other half of sync: remote changes reach the device. Runs after the
+upload queue drains — local pending work always wins until uploaded.
+
+- ⬜ **Pull trigger**: on app start (once auth and local load are ready), and
+  on "Sync now". Never blocks the UI; Inbox updates in place when rows land.
+- ⬜ **Incremental pull**: fetch remote bookmarks with
+  `updated_at > last_pulled_at` (a persisted watermark). New rows are
+  inserted locally with `sync_status: synced`; existing rows merge by ID.
+- ⬜ **Conflict policy**: row-level last-write-wins by `updated_at`, with one
+  exception — a local row with queued (unsynced) mutations is never
+  overwritten; its queued upload will re-assert it.
+- ⬜ **Remote deletions**: each pull also fetches the remote ID list and
+  removes local synced rows that no longer exist remotely (permanent deletes
+  elsewhere propagate). Local-only rows are untouched.
+- ⬜ **AI enrichment refresh**: the same pull fetches `ai_enrichments`
+  changed since the watermark for owned bookmarks and caches them in the
+  durable store; Bookmark Detail reads the cached enrichment (replacing mock
+  data), so a summary generated or updated in the cloud appears on device on
+  the next pull.
+- ⬜ **Watermark**: stored in the repository meta store; reset clears trigger
+  a full pull. Clock skew is tolerated by overlapping the watermark by a few
+  minutes (idempotent merges make re-pulls harmless).
+- ⬜ **Settings**: shows last successful pull time; "Sync now" performs
+  upload-then-pull.
+
+## 10. Tags and collections (target spec)
+
+- ⬜ Pull the user's tags, bookmark_tags, and collections so Detail shows real
+  data (replacing the remaining mock data).
+- ⬜ Add/remove tags from Bookmark Detail (API `addTags`/`removeTags` is
+  implemented and verified; UI is not).
+- ⬜ Assign a bookmark to a collection from Detail.
+
+## 11. Search and editing (target spec)
+
+- ⬜ Client-side search over title/description/notes/URL from the Inbox.
+- ⬜ Edit title and notes from Bookmark Detail (API support exists).
+
+## 12. Release readiness
+
+- ✅ CI runs lint, typecheck, and the test suite on every PR and push to main.
+- ✅ EAS build profiles (development/preview/production) and release docs.
+- 🔶 On-device smoke test: the 7-step checklist in
+  `docs/development/releasing.md` (save, restart-persistence, share intake,
+  archive/delete, sync) has not yet been run on a real device.
+- ⬜ Real app icons and splash (currently Expo template assets).
