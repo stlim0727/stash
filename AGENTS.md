@@ -1,10 +1,10 @@
 # Agent Handoff — Stash
 
-This file captures the project state and working conventions so any agent (Codex, Claude, or a human) can continue development without re-deriving context. Last updated after Milestone 6 API scaffolding (2026-06-11).
+This file captures the project state and working conventions so any agent (Codex, Claude, or a human) can continue development without re-deriving context. Last updated after Milestone 10 (2026-06-12).
 
 ## Current state
 
-Milestones 0–4 from `docs/development/milestones.md` are **complete** and merged to `main` (PR #1, #2, #3). Milestone 5 is scaffolded but still needs real Supabase project credentials before acceptance criteria can be verified. Milestone 6 API code is scaffolded on top of that unverified Supabase bootstrap:
+**All milestones M0–M10 in `docs/development/milestones.md` are implemented.** M0–M4 are merged to `main` (PR #1–#3) and verified; M5–M10 are code-complete and verified by typecheck/lint/web+iOS bundle/`expo prebuild`, but two kinds of verification can only happen outside this sandbox (see "Remaining verification"):
 
 - **M0** — repo tooling: pnpm workspace, Node 22 policy, root scripts, docs.
 - **M1** — Expo SDK 56 app under `apps/mobile` (TypeScript, expo-router). Launches into Inbox; Add Bookmark (modal), Settings, and Bookmark Detail (`bookmark/[id]`) screens exist.
@@ -14,10 +14,26 @@ Milestones 0–4 from `docs/development/milestones.md` are **complete** and merg
 - **M5 scaffold** — Supabase env template and setup docs are in place; the app has a lightweight Supabase auth wrapper (hand-rolled REST, no supabase-js dependency) that restores, refreshes (via `grant_type=refresh_token` when the access token nears expiry), or creates an anonymous session when `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` are available. Session creation is single-flighted so concurrent callers cannot mint two anonymous users. Settings reports config/auth state; initial SQL migration creates bookmarks/tags/bookmark_tags/collections/ai_enrichments with owner-scoped RLS policies.
 - **M6 scaffold** — `apps/mobile/src/api/bookmarks.ts` implements the documented bookmark API surface against Supabase REST: `createBookmark`, `listBookmarks`, `getBookmark`, `updateBookmark`, `deleteBookmark`, `addTags`, `removeTags`, `updateAIEnrichment`, and `applyAISuggestions`. It scopes every request to the authenticated session user, maps remote rows back to local domain types, archives by default for deletes, keeps AI enrichment separate, and handles URL/tag duplicate conflicts where possible.
 - **M7 scaffold** — sync service: `src/sync/sync-bookmarks.ts` uploads queue entries through `createBookmark` (idempotent server-side, so retries cannot duplicate remote rows); the local bookmark row adopts the remote ID via `repository.replaceBookmark`. The store auto-syncs when auth and local data are ready or a new pending entry appears; failed entries record retry count/last error and are retried on the next save or the manual "Sync now" action in Settings, which also shows live sync status.
+- **M8 scaffold** — share intake via `expo-share-intent@7` (SDK 56). The `expo-share-intent` config plugin is registered in `app.json` (default text/URL filters; uses the existing `stash` scheme). `src/share/share-intent-handler.tsx` consumes `useShareIntentContext`, extracts a URL from the shared payload (`extractFirstUrl` in `domain/urls.ts` handles text that wraps a link), saves it via the existing `addBookmark` (persist-then-queue, never blocks on network), routes to Inbox, and shows a short non-blocking toast — no full editor. `ShareIntentProvider` wraps the root layout. The native module is a no-op on web.
+- **M9** — metadata enrichment placeholder. `src/domain/enrichment.ts` derives title/site_name/favicon_url from the URL (no network, deterministic; a real OpenGraph fetch drops into `deriveMetadata` later). The store runs `enrichInBackground` after each save and over any still-`pending` bookmarks on startup: it is fire-and-forget (capture never blocks), only fills generated fields that are still null (user-typed titles are preserved), and records a `failed`/`skipped` status on error or text-only shares instead of throwing — so enrichment can never break bookmark creation. `metadata_status` transitions pending → complete/failed/skipped. The Detail screen renders the favicon and preview image when present.
+- **M10** — MVP polish + release readiness. Archive/unarchive and permanent delete on the Detail screen (store `archiveBookmark`/`deleteBookmark`; repository gained `deleteBookmark`/`removeQueueEntry`; deleting also drops the pending queue entry so it never syncs). Inbox shows loading/empty/error states (`loadError` surfaces a storage-failure banner). Settings shows library counts and app version. Explicit bundle IDs (`com.stash.app`) in `app.json`; `apps/mobile/eas.json` defines development/preview/production build profiles; `docs/development/releasing.md` documents the build/release flow and an internal-build smoke-test checklist.
 
-## Next step: verify M5–M7 against Supabase
+## Remaining verification (requires resources outside this sandbox)
 
-Provide a Supabase project URL/key, enable anonymous sign-ins, apply `supabase/migrations/20260611000000_initial_schema.sql`, and verify: anonymous session creation/restoration/refresh, RLS-scoped table access, API behavior, and end-to-end queue upload (save offline → entry syncs → bookmark gets remote ID and synced status). After that, proceed to M8 (share intake prototype) per the milestones doc.
+1. **Native build / on-device (M4 SQLite, M8 share intake)** — the SQLite and share modules cannot run in Expo Go. `pnpm --filter mobile android`/`ios` run `expo run:*` (need Android Studio / Xcode), or use EAS (`eas build --profile preview ...`). `expo prebuild` is validated in CI for both platforms: Android gets the `SEND`/`text/*` intent filter; iOS generates a Share Extension target with app group `group.com.stash.app` (set an Apple DEVELOPMENT_TEAM in Xcode). Smoke-test checklist is in `docs/development/releasing.md`. Android is the lower-friction platform to verify first.
+2. **Supabase (M5–M7)** — provide a project URL/key, enable anonymous sign-ins, apply `supabase/migrations/20260611000000_initial_schema.sql`, then verify anonymous session creation/restoration/refresh, RLS-scoped access, API behavior, and end-to-end queue upload (save → entry syncs → bookmark gets remote ID + synced status).
+
+## Possible future work (beyond the current milestone list)
+
+- Real OpenGraph/Twitter-card fetch in `deriveMetadata` (currently URL-derived only).
+- Browse/restore archived bookmarks (archive/unarchive exists, but archived items are only reachable from their detail screen, not yet listed anywhere).
+- Sync archive/delete/update mutations to Supabase (the sync service currently only uploads new bookmarks via `createBookmark`).
+- Tags/collections/AI enrichment are still static mock data in the UI layer (`mock-data.ts`); wire them to the API.
+- Add a real test runner (the `pnpm test` placeholder); `enrichment.ts` and `urls.ts` are pure and good first targets.
+
+**M5–M7 need Supabase** — provide a project URL/key, enable anonymous sign-ins, apply `supabase/migrations/20260611000000_initial_schema.sql`, and verify anonymous session creation/restoration/refresh, RLS-scoped table access, API behavior, and end-to-end queue upload (save offline → entry syncs → bookmark gets remote ID and synced status).
+
+**Next milestone: M10** (MVP polish and internal release readiness) — empty/loading/error states, finish Settings, archive/delete flows, EAS build config, release docs. M9's enrichment is URL-derived only; a future pass can fetch real OpenGraph metadata in `deriveMetadata`.
 
 ## Conventions and commands
 

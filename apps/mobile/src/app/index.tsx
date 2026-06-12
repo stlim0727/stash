@@ -19,10 +19,15 @@ function statusLabel(bookmark: Bookmark): string | null {
 export default function InboxScreen() {
   const palette = usePalette();
   const router = useRouter();
-  const { inbox, isLoading } = useBookmarks();
+  const { inbox, isLoading, loadError } = useBookmarks();
 
   return (
     <View style={styles.container}>
+      {loadError ? (
+        <Text style={[styles.errorBanner, { color: '#d93636', backgroundColor: palette.card }]}>
+          Couldn’t open local storage — showing sample data. Your saves this session may not persist.
+        </Text>
+      ) : null}
       <FlatList
         data={inbox}
         keyExtractor={(item) => item.id}
@@ -34,7 +39,9 @@ export default function InboxScreen() {
         }
         ListEmptyComponent={
           <Text style={[styles.empty, { color: palette.textSecondary }]}>
-            {isLoading ? 'Loading your bookmarks…' : 'Nothing saved yet. Add your first bookmark below.'}
+            {isLoading
+              ? 'Loading your bookmarks…'
+              : 'Nothing saved yet. Add your first bookmark below.'}
           </Text>
         }
         renderItem={({ item }) => {
@@ -94,6 +101,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: 'center',
     paddingVertical: 32,
+  },
+  errorBanner: {
+    fontSize: 13,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    textAlign: 'center',
   },
   card: {
     borderRadius: 12,

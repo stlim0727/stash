@@ -1,0 +1,88 @@
+import type { Bookmark, MetadataStatus } from '@/domain/types';
+
+/**
+ * Generated (non-user-authored) metadata fields. Keeping this set explicit
+ * ensures enrichment never touches user-owned fields like `notes` or a title
+ * the user typed themselves.
+ */
+export interface DerivedMetadata {
+  title: string | null;
+  site_name: string | null;
+  favicon_url: string | null;
+  preview_image_url: string | null;
+}
+
+function titleCaseFromSlug(slug: string): string | null {
+  const words = decodeURIComponent(slug)
+    .replace(/\.[a-z0-9]+$/i, '') // drop a trailing file extension
+    .replace(/[-_+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!words) {
+    return null;
+  }
+  return words
+    .split(' ')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/**
+ * Best-effort metadata derived purely from the URL — no network, so it is
+ * deterministic and safe to run anywhere. A real implementation would fetch
+ * the page and parse OpenGraph/Twitter tags here; the return shape stays the
+ * same so it can drop in without touching callers.
+ */
+export function deriveMetadata(rawUrl: string): DerivedMetadata {
+  const url = new URL(rawUrl);
+  const host = url.hostname.replace(/^www\./, '');
+
+  const lastSegment = url.pathname.split('/').filter(Boolean).pop();
+  const title = lastSegment ? titleCaseFromSlug(lastSegment) : host;
+
+  return {
+    title: title ?? host,
+    site_name: host,
+    favicon_url: `${url.origin}/favicon.ico`,
+    preview_image_url: null,
+  };
+}
+
+/** The generated patch plus the resulting status, ready to merge onto a bookmark. */
+export interface EnrichmentResult {
+  patch: Partial<Bookmark>;
+  metadata_status: MetadataStatus;
+}
+
+/**
+ * Produces an enrichment patch for a bookmark. Only fills generated fields
+ * that are still empty, so a user-provided title/description is never
+ * overwritten. Resolves to a `failed` status on any error rather than
+ * throwing, so enrichment can never break the save path.
+ */
+export async function enrichBookmark(bookmark: Bookmark): Promise<EnrichmentResult> {
+  if (!bookmark.url) {
+    // Nothing to derive from a text-only share; mark as skipped.
+    return { patch: {}, metadata_status: 'skipped' };
+  }
+
+  try {
+    const derived = deriveMetadata(bookmark.url);
+    const patch: Partial<Bookmark> = {};
+    if (bookmark.title == null) {
+      patch.title = derived.title;
+    }
+    if (bookmark.site_name == null) {
+      patch.site_name = derived.site_name;
+    }
+    if (bookmark.favicon_url == null) {
+      patch.favicon_url = derived.favicon_url;
+    }
+    if (bookmark.preview_image_url == null && derived.preview_image_url != null) {
+      patch.preview_image_url = derived.preview_image_url;
+    }
+    return { patch, metadata_status: 'complete' };
+  } catch {
+    return { patch: {}, metadata_status: 'failed' };
+  }
+}

@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
@@ -6,7 +7,7 @@ import { useSupabaseAuth } from '@/supabase/auth-provider';
 
 export default function SettingsScreen() {
   const palette = usePalette();
-  const { queue, isSyncing, syncNow } = useBookmarks();
+  const { queue, isSyncing, syncNow, inbox, archivedCount } = useBookmarks();
   const auth = useSupabaseAuth();
 
   const waiting = queue.filter(
@@ -39,6 +40,16 @@ export default function SettingsScreen() {
     {
       label: 'Supabase auth',
       value: auth.status,
+    },
+    {
+      label: 'Library',
+      value: `${inbox.length} in inbox · ${archivedCount} archived`,
+    },
+    {
+      label: 'App version',
+      value: `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
+        Constants.expoConfig?.sdkVersion ?? '56'
+      })`,
     },
   ];
 

@@ -105,6 +105,11 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     });
   }
 
+  async deleteBookmark(id: string): Promise<void> {
+    const db = await this.open();
+    await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]);
+  }
+
   async listQueue(): Promise<LocalPendingBookmark[]> {
     const db = await this.open();
     const rows = await db.getAllAsync<QueueRow>(
@@ -143,6 +148,11 @@ class SqliteBookmarkRepository implements BookmarkRepository {
 
   async updateQueueEntry(entry: LocalPendingBookmark): Promise<void> {
     await this.enqueue(entry);
+  }
+
+  async removeQueueEntry(localId: string): Promise<void> {
+    const db = await this.open();
+    await db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [localId]);
   }
 }
 
