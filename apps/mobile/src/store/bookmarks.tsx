@@ -91,6 +91,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Bookmark IDs currently being enriched, so concurrent passes (startup +
   // a fresh save) never double-process the same item.
   const enriching = useRef(new Set<string>());
+  // Tombstones for deleted local bookmarks. The sync loop iterates over a
+  // snapshot, so a delete that lands mid-run must be visible to it — both
+  // before uploading an entry and before applying an upload's result.
+  const deletedIds = useRef(new Set<string>());
 
   // Fire-and-forget metadata enrichment. Runs off the save path so capture is
   // never blocked, only fills generated fields, and a failure just records a
@@ -294,6 +298,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const deleteBookmark = useCallback((id: string) => {
+    deletedIds.current.add(id);
     setBookmarks((current) => (current === null ? current : current.filter((b) => b.id !== id)));
     // Drop any pending queue entry so a deleted local bookmark is never synced.
     setQueue((current) => current.filter((entry) => entry.local_id !== id));
@@ -328,6 +333,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const bookmarksSnapshot = loadedBookmarks;
 
       for (const entry of syncable) {
+        // Deleted while this run was queued up: skip the upload entirely.
+        if (deletedIds.current.has(entry.local_id)) {
+          continue;
+        }
+
         setQueue((current) =>
           current.map((queued) =>
             queued.local_id === entry.local_id ? { ...queued, sync_status: 'syncing' } : queued,
@@ -338,6 +348,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           (bookmark) => bookmark.id === entry.local_id,
         );
         const result = await syncQueueEntry(api, repository, entry, localBookmark);
+
+        // Deleted while the upload was in flight: don't resurrect it. Undo the
+        // rows syncQueueEntry just persisted and best-effort delete the remote
+        // copy so the user's delete wins end to end.
+        if (deletedIds.current.has(entry.local_id)) {
+          const replacementId = result.bookmarkReplacement?.bookmark.id;
+          ensureRepositoryReady()
+            .then(() =>
+              Promise.all([
+                replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
+                repository.removeQueueEntry(entry.local_id),
+              ]),
+            )
+            .catch((error) => logStorageError('post-delete sync cleanup', error));
+          if (result.entry.remote_id) {
+            api.deleteBookmark(result.entry.remote_id, true).catch(() => {
+              // Remote cleanup is best-effort; the row is owner-scoped either way.
+            });
+          }
+          continue;
+        }
 
         setQueue((current) =>
           current.map((queued) => (queued.local_id === entry.local_id ? result.entry : queued)),
