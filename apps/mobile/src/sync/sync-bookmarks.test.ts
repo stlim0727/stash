@@ -110,6 +110,32 @@ test('create: bookmark adopts the remote ID and synced status', async () => {
   assert.ok(calls.includes('replaceBookmark:local-abc->remote-1'));
 });
 
+test('create: uploads the LATEST title/notes, not the payload captured at save', async () => {
+  const { repository } = fakeRepository();
+  const sent: unknown[] = [];
+  const api = fakeApi({
+    createBookmark: async (input: unknown) => {
+      sent.push(input);
+      return { bookmark_id: 'remote-1', status: 'created', metadata_status: 'pending' };
+    },
+  });
+  const editedSinceSave = makeBookmark({ title: 'Edited title', notes: 'edited notes' });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { url: 'https://example.com/a', notes: 'original' } }),
+    () => editedSinceSave,
+  );
+
+  assert.deepEqual(sent[0], {
+    url: 'https://example.com/a',
+    title: 'Edited title',
+    notes: 'edited notes',
+  });
+  assert.equal(result.uploadedPayload?.title, 'Edited title');
+});
+
 test('create: failure stays retryable with the error recorded', async () => {
   const { repository } = fakeRepository();
   const api = fakeApi({

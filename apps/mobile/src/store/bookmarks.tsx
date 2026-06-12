@@ -175,9 +175,26 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (item.id !== bookmark.id) {
             return item;
           }
+          // The patch was computed from a pre-fetch snapshot; the user may
+          // have edited fields while the fetch ran. Re-check against the
+          // LATEST row and fill only fields that are still empty, so a
+          // user-authored title is never overwritten by generated metadata.
+          const safePatch: Partial<Bookmark> = {};
+          if (patch.title !== undefined && item.title === null) {
+            safePatch.title = patch.title;
+          }
+          if (patch.site_name !== undefined && item.site_name === null) {
+            safePatch.site_name = patch.site_name;
+          }
+          if (patch.favicon_url !== undefined && item.favicon_url === null) {
+            safePatch.favicon_url = patch.favicon_url;
+          }
+          if (patch.preview_image_url !== undefined && item.preview_image_url === null) {
+            safePatch.preview_image_url = patch.preview_image_url;
+          }
           updated = {
             ...item,
-            ...patch,
+            ...safePatch,
             metadata_status,
             updated_at: new Date().toISOString(),
           };
@@ -657,12 +674,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ensureRepositoryReady()
               .then(() => repository.replaceBookmark(previousId, persisted))
               .catch((error) => logStorageError('post-sync merge', error));
-            // Archived or filed into a collection while the create was
-            // uploading: the remote row lacks those, so reconcile with an
-            // update.
+            // Archived, filed into a collection, or edited while the create
+            // was uploading: the remote row lacks those changes, so
+            // reconcile with an update.
             if (
               entry.operation === 'create' &&
-              (persisted.is_archived || persisted.collection_id !== null)
+              (persisted.is_archived ||
+                persisted.collection_id !== null ||
+                persisted.title !== (result.uploadedPayload?.title ?? null) ||
+                persisted.notes !== (result.uploadedPayload?.notes ?? null))
             ) {
               enqueueMutation(persisted.id, 'update');
             }
