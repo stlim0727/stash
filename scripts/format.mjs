@@ -32,7 +32,13 @@ const files = stdout.split("\n").filter(Boolean);
 const changed = [];
 
 for (const file of files) {
-  const original = await readFile(file, "utf8");
+  let original;
+  try {
+    original = await readFile(file, "utf8");
+  } catch {
+    // Tracked but deleted from the working tree (e.g. unstaged deletion).
+    continue;
+  }
   const formatted = original
     .split("\n")
     .map((line) => line.trimEnd())

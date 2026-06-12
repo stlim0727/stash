@@ -167,4 +167,6 @@ upload queue drains — local pending work always wins until uploaded.
 - 🔶 On-device smoke test: the 7-step checklist in
   `docs/development/releasing.md` (save, restart-persistence, share intake,
   archive/delete, sync) has not yet been run on a real device.
-- ⬜ Real app icons and splash (currently Expo template assets).
+- ✅ App icons and splash: Stash bookmark-ribbon mark on the brand blue
+  (#208AEF) — main icon, Android adaptive foreground/background/monochrome,
+  splash glyph, and web favicon (generated; see `apps/mobile/assets/images`).
