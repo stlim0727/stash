@@ -17,6 +17,7 @@
     "format:check": "node scripts/format.mjs --check",
     "lint": "pnpm format:check",
     "test": "pnpm --filter mobile test",
-    "typecheck": "pnpm --filter mobile typecheck"
+    "typecheck": "pnpm --filter mobile typecheck",
+    "verify:supabase": "node --no-warnings --experimental-transform-types scripts/verify-supabase.mjs"
   }
 }

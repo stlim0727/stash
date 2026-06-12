@@ -80,7 +80,28 @@ async function parseResponse(response: Response): Promise<unknown> {
     return null;
   }
 
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Proxies and gateways can answer with plain text or HTML; surface it
+    // as the error message instead of crashing on invalid JSON.
+    return text;
+  }
+}
+
+function errorMessageFrom(payload: unknown, status: number): string {
+  if (typeof payload === 'object' && payload !== null) {
+    for (const key of ['msg', 'message', 'error_description'] as const) {
+      const value = (payload as Record<string, unknown>)[key];
+      if (typeof value === 'string' && value) {
+        return value;
+      }
+    }
+  }
+  if (typeof payload === 'string' && payload.trim()) {
+    return payload.trim().slice(0, 200);
+  }
+  return `Supabase request failed with HTTP ${status}`;
 }
 
 export class StashSupabaseClient {
@@ -100,11 +121,7 @@ export class StashSupabaseClient {
 
     const payload = await parseResponse(response);
     if (!response.ok) {
-      const message =
-        typeof payload === 'object' && payload !== null && 'msg' in payload
-          ? String(payload.msg)
-          : `Supabase request failed with HTTP ${response.status}`;
-      throw new SupabaseRequestError(message, response.status);
+      throw new SupabaseRequestError(errorMessageFrom(payload, response.status), response.status);
     }
 
     return payload as T;
