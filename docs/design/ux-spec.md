@@ -162,7 +162,9 @@ upload queue drains — local pending work always wins until uploaded.
 
 ## 12. Release readiness
 
-- ✅ CI runs lint, typecheck, and the test suite on every PR and push to main.
+- ✅ CI runs lint, typecheck, the logic test suite (Node test runner), and the
+  component test suite (jest-expo + React Native Testing Library) on every PR
+  and push to main.
 - ✅ EAS build profiles (development/preview/production) and release docs.
 - 🔶 On-device smoke test: the 7-step checklist in
   `docs/development/releasing.md` (save, restart-persistence, share intake,
