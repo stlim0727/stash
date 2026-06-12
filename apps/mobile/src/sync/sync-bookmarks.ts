@@ -16,6 +16,23 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Sync failed.';
 }
 
+/**
+ * Removes a finished entry's queue row — unless a newer mutation (e.g. a
+ * durable delete enqueued while this entry was in flight) has replaced the
+ * row at the same key, in which case that newer work must survive.
+ */
+export async function removeQueueEntryIfNotSuperseded(
+  repository: BookmarkRepository,
+  entry: LocalPendingBookmark,
+): Promise<void> {
+  const stored = (await repository.listQueue()).find(
+    (queued) => queued.local_id === entry.local_id,
+  );
+  if (!stored || stored.operation === entry.operation) {
+    await repository.removeQueueEntry(entry.local_id);
+  }
+}
+
 async function failEntry(
   repository: BookmarkRepository,
   entry: LocalPendingBookmark,
@@ -54,8 +71,9 @@ export async function syncQueueEntry(
   if (entry.operation === 'update') {
     const bookmark = getBookmark(entry.local_id);
     if (!bookmark) {
-      // The bookmark is gone locally; nothing left to update remotely.
-      await repository.removeQueueEntry(entry.local_id);
+      // The bookmark is gone locally; nothing left to update remotely. A
+      // durable delete may have replaced this row — leave that intact.
+      await removeQueueEntryIfNotSuperseded(repository, entry);
       return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
     }
     try {
@@ -66,7 +84,7 @@ export async function syncQueueEntry(
         collection_id: bookmark.collection_id,
         is_archived: bookmark.is_archived,
       });
-      await repository.removeQueueEntry(entry.local_id);
+      await removeQueueEntryIfNotSuperseded(repository, entry);
       if (bookmark.sync_status !== 'synced') {
         const syncedBookmark: Bookmark = { ...bookmark, sync_status: 'synced', updated_at: now };
         await repository.updateBookmark(syncedBookmark);
@@ -85,7 +103,7 @@ export async function syncQueueEntry(
   if (entry.operation === 'delete') {
     try {
       await api.deleteBookmark(entry.remote_id ?? entry.local_id, true);
-      await repository.removeQueueEntry(entry.local_id);
+      await removeQueueEntryIfNotSuperseded(repository, entry);
       return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
     } catch (error) {
       return { entry: await failEntry(repository, entry, error, now) };
@@ -155,9 +173,16 @@ export function makeMutationEntry(
   };
 }
 
-/** True once a bookmark's id refers to a remote row rather than a device-local one. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * True once a bookmark's id refers to a remote row rather than a device-local
+ * one. Remote IDs are Supabase-generated UUIDs; device-local IDs (`local-…`)
+ * and seeded sample IDs (`bookmark-…`) are not, and must never be targeted by
+ * remote mutations.
+ */
 export function hasRemoteIdentity(bookmarkId: string): boolean {
-  return !bookmarkId.startsWith('local-');
+  return UUID_PATTERN.test(bookmarkId);
 }
 
 export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {

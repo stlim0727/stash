@@ -49,7 +49,7 @@ function makeCreateEntry(overrides: Partial<LocalPendingBookmark> = {}): LocalPe
   };
 }
 
-function fakeRepository() {
+function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
   const calls: string[] = [];
   const repository: BookmarkRepository = {
     init: async () => {},
@@ -64,7 +64,7 @@ function fakeRepository() {
     deleteBookmark: async (id) => {
       calls.push(`deleteBookmark:${id}`);
     },
-    listQueue: async () => [],
+    listQueue: async () => storedQueue,
     enqueue: async (entry) => {
       calls.push(`enqueue:${entry.local_id}`);
     },
@@ -223,9 +223,37 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.entry.last_error, 'timeout');
 });
 
-test('hasRemoteIdentity distinguishes device-local IDs', () => {
+test('hasRemoteIdentity accepts only Supabase UUIDs', () => {
   assert.equal(hasRemoteIdentity('local-m1abc-xyz'), false);
+  // Seeded sample IDs are not remote rows and must never receive mutations.
+  assert.equal(hasRemoteIdentity('bookmark-local-first'), false);
   assert.equal(hasRemoteIdentity('7e64cf1e-0000-4000-8000-000000000000'), true);
+});
+
+test('update success does not remove a delete entry that superseded it', async () => {
+  const supersedingDelete = makeMutationEntry('remote-1', 'delete');
+  const { calls, repository } = fakeRepository([supersedingDelete]);
+
+  const entry = makeMutationEntry('remote-1', 'update');
+  const result = await syncQueueEntry(fakeApi(), repository, entry, () =>
+    makeBookmark({ id: 'remote-1', sync_status: 'synced' }),
+  );
+
+  assert.equal(result.removeEntry, true);
+  // The durable delete row must survive so the deletion still happens
+  // after a restart.
+  assert.equal(calls.includes('removeQueueEntry:remote-1'), false);
+});
+
+test('update of a missing bookmark preserves a superseding delete entry', async () => {
+  const supersedingDelete = makeMutationEntry('remote-1', 'delete');
+  const { calls, repository } = fakeRepository([supersedingDelete]);
+
+  const entry = makeMutationEntry('remote-1', 'update');
+  const result = await syncQueueEntry(fakeApi(), repository, entry, () => undefined);
+
+  assert.equal(result.removeEntry, true);
+  assert.equal(calls.includes('removeQueueEntry:remote-1'), false);
 });
 
 test('makeMutationEntry targets the bookmark with a pending status', () => {

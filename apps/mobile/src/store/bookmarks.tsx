@@ -27,6 +27,7 @@ import {
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
+  removeQueueEntryIfNotSuperseded,
   syncQueueEntry,
 } from '@/sync/sync-bookmarks';
 
@@ -404,7 +405,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             .then(() =>
               Promise.all([
                 replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
-                repository.removeQueueEntry(entry.local_id),
+                // Superseded-aware: a durable delete entry enqueued for this
+                // bookmark while we were uploading must NOT be removed here.
+                removeQueueEntryIfNotSuperseded(repository, entry),
               ]),
             )
             .catch((error) => logStorageError('post-delete sync cleanup', error));
