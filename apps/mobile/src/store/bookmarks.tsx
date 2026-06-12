@@ -229,7 +229,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     setIsSyncing(true);
     try {
       await ensureRepositoryReady();
-      const api = createSyncApi(auth.session);
+      // Re-ensure the session so a token that expired while the app stayed
+      // open is refreshed before we sync; otherwise every entry would fail
+      // against a stale bearer token until restart.
+      const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+      const api = createSyncApi(session);
       // Lookup snapshot: replacements only touch the entry being synced, so
       // other entries' local IDs stay valid for the duration of the loop.
       const bookmarksSnapshot = loadedBookmarks;
@@ -264,7 +268,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncInFlight.current = false;
       setIsSyncing(false);
     }
-  }, [auth.status, auth.session, queue, loadedBookmarks]);
+  }, [auth, queue, loadedBookmarks]);
 
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the

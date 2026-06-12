@@ -175,11 +175,18 @@ create policy "Users can update tags attached to their bookmarks"
     where bookmarks.id = bookmark_tags.bookmark_id
       and bookmarks.user_id = auth.uid()
   ))
-  with check (exists (
-    select 1 from public.bookmarks
-    where bookmarks.id = bookmark_tags.bookmark_id
-      and bookmarks.user_id = auth.uid()
-  ));
+  with check (
+    exists (
+      select 1 from public.bookmarks
+      where bookmarks.id = bookmark_tags.bookmark_id
+        and bookmarks.user_id = auth.uid()
+    )
+    and exists (
+      select 1 from public.tags
+      where tags.id = bookmark_tags.tag_id
+        and tags.user_id = auth.uid()
+    )
+  );
 create policy "Users can remove tags from their bookmarks"
   on public.bookmark_tags for delete
   using (exists (
