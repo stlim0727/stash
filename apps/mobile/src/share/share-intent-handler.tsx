@@ -36,7 +36,7 @@ export function ShareIntentHandler() {
 
     const url = shareIntent.webUrl ?? extractFirstUrl(shareIntent.text);
     if (url) {
-      const result = addBookmark({ url, notes: shareIntent.meta?.title ?? undefined });
+      const result = addBookmark({ url, title: shareIntent.meta?.title ?? undefined });
       setMessage(result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash');
       // Land on Inbox so the freshly stashed item is visible; this is not a
       // full editor, matching the fast-capture requirement.
