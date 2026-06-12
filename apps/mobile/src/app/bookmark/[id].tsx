@@ -1,13 +1,15 @@
-import { useLocalSearchParams } from 'expo-router';
-import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
 import { useBookmarks } from '@/store/bookmarks';
 
 export default function BookmarkDetailScreen() {
   const palette = usePalette();
+  const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { getBookmark, getTagsForBookmark, getCollection, getEnrichment } = useBookmarks();
+  const { getBookmark, getTagsForBookmark, getCollection, getEnrichment, archiveBookmark, deleteBookmark } =
+    useBookmarks();
 
   const bookmark = id ? getBookmark(id) : undefined;
 
@@ -46,6 +48,24 @@ export default function BookmarkDetailScreen() {
     fields.push({ label: 'AI summary', value: enrichment.summary });
   }
 
+  const handleDelete = () => {
+    const remove = () => {
+      deleteBookmark(bookmark.id);
+      router.back();
+    };
+    if (Platform.OS === 'web') {
+      // Alert.alert has no button support on web.
+      if (typeof confirm === 'undefined' || confirm('Delete this bookmark permanently?')) {
+        remove();
+      }
+      return;
+    }
+    Alert.alert('Delete bookmark', 'This permanently removes the bookmark from this device.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: remove },
+    ]);
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       {bookmark.preview_image_url ? (
@@ -70,9 +90,20 @@ export default function BookmarkDetailScreen() {
         </View>
       ))}
       <View style={styles.actions}>
-        <Text style={[styles.actionPlaceholder, { color: palette.textSecondary }]}>
-          Archive and delete actions arrive in Milestone 10.
-        </Text>
+        <Pressable
+          style={[styles.actionButton, { borderColor: palette.border }]}
+          onPress={() => archiveBookmark(bookmark.id, !bookmark.is_archived)}
+        >
+          <Text style={[styles.actionLabel, { color: palette.accent }]}>
+            {bookmark.is_archived ? 'Unarchive' : 'Archive'}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.actionButton, { borderColor: palette.border }]}
+          onPress={handleDelete}
+        >
+          <Text style={[styles.actionLabel, { color: '#d93636' }]}>Delete</Text>
+        </Pressable>
       </View>
     </ScrollView>
   );
@@ -128,10 +159,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   actions: {
+    flexDirection: 'row',
+    gap: 12,
     paddingVertical: 8,
   },
-  actionPlaceholder: {
-    fontSize: 13,
-    textAlign: 'center',
+  actionButton: {
+    flex: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  actionLabel: {
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

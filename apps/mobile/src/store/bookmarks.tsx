@@ -31,8 +31,12 @@ export type AddBookmarkResult =
 interface BookmarksContextValue {
   /** True until the durable store has been read on startup. */
   isLoading: boolean;
+  /** Set when the durable store failed to load and in-memory fallback is used. */
+  loadError: boolean;
   /** Active (non-archived) bookmarks, newest first. */
   inbox: Bookmark[];
+  /** Number of archived bookmarks. */
+  archivedCount: number;
   /** Offline sync queue, oldest first — exposed for inspection until sync exists. */
   queue: LocalPendingBookmark[];
   getBookmark: (id: string) => Bookmark | undefined;
@@ -41,6 +45,10 @@ interface BookmarksContextValue {
   getEnrichment: (bookmarkId: string) => AIEnrichment | undefined;
   /** Local-first creation: the bookmark is visible immediately with pending states. */
   addBookmark: (input: { url: string; notes?: string }) => AddBookmarkResult;
+  /** Archive or unarchive a bookmark (preferred over permanent deletion). */
+  archiveBookmark: (id: string, archived: boolean) => void;
+  /** Permanently remove a bookmark and any pending queue entry for it. */
+  deleteBookmark: (id: string) => void;
   /** True while the background sync service is uploading queue entries. */
   isSyncing: boolean;
   /** Upload pending/failed queue entries to Supabase. No-op without auth. */
@@ -78,6 +86,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
   const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
   // Bookmark IDs currently being enriched, so concurrent passes (startup +
   // a fresh save) never double-process the same item.
@@ -146,6 +155,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       } catch (error) {
         logStorageError('startup load', error);
         if (!cancelled) {
+          setLoadError(true);
           setBookmarks((current) =>
             current === null
               ? mockBookmarks
@@ -262,6 +272,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [loadedBookmarks, enrichInBackground],
   );
 
+  const archiveBookmark = useCallback((id: string, archived: boolean) => {
+    let updated: Bookmark | null = null;
+    setBookmarks((current) => {
+      if (current === null) {
+        return current;
+      }
+      return current.map((bookmark) => {
+        if (bookmark.id !== id) {
+          return bookmark;
+        }
+        updated = { ...bookmark, is_archived: archived, updated_at: new Date().toISOString() };
+        return updated;
+      });
+    });
+    if (updated) {
+      ensureRepositoryReady()
+        .then(() => repository.updateBookmark(updated as Bookmark))
+        .catch((error) => logStorageError('archive bookmark', error));
+    }
+  }, []);
+
+  const deleteBookmark = useCallback((id: string) => {
+    setBookmarks((current) => (current === null ? current : current.filter((b) => b.id !== id)));
+    // Drop any pending queue entry so a deleted local bookmark is never synced.
+    setQueue((current) => current.filter((entry) => entry.local_id !== id));
+    ensureRepositoryReady()
+      .then(() => Promise.all([repository.deleteBookmark(id), repository.removeQueueEntry(id)]))
+      .catch((error) => logStorageError('delete bookmark', error));
+  }, []);
+
   const syncNow = useCallback(async () => {
     if (syncInFlight.current) {
       return;
@@ -350,20 +390,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const value = useMemo<BookmarksContextValue>(
     () => ({
       isLoading: bookmarks === null,
+      loadError,
       inbox: loadedBookmarks
         .filter((bookmark) => !bookmark.is_archived)
         .sort((a, b) => b.created_at.localeCompare(a.created_at)),
+      archivedCount: loadedBookmarks.filter((bookmark) => bookmark.is_archived).length,
       queue,
       getBookmark,
       getTagsForBookmark,
       getCollection,
       getEnrichment,
       addBookmark,
+      archiveBookmark,
+      deleteBookmark,
       isSyncing,
       syncNow,
     }),
     [
       bookmarks,
+      loadError,
       loadedBookmarks,
       queue,
       getBookmark,
@@ -371,6 +416,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getCollection,
       getEnrichment,
       addBookmark,
+      archiveBookmark,
+      deleteBookmark,
       isSyncing,
       syncNow,
     ],

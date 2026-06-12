@@ -71,6 +71,11 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(BOOKMARKS_KEY, this.bookmarks);
   }
 
+  async deleteBookmark(id: string): Promise<void> {
+    this.bookmarks = this.bookmarks.filter((existing) => existing.id !== id);
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+  }
+
   async listQueue(): Promise<LocalPendingBookmark[]> {
     return [...this.queue];
   }
@@ -82,6 +87,11 @@ class WebBookmarkRepository implements BookmarkRepository {
 
   async updateQueueEntry(entry: LocalPendingBookmark): Promise<void> {
     await this.enqueue(entry);
+  }
+
+  async removeQueueEntry(localId: string): Promise<void> {
+    this.queue = this.queue.filter((existing) => existing.local_id !== localId);
+    this.write(QUEUE_KEY, this.queue);
   }
 }
 
