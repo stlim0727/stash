@@ -1,3 +1,6 @@
+// Relative .ts import (not the @ alias) so Node's test runner can resolve it.
+import { fetchPageMetadata } from './page-metadata.ts';
+import type { FetchedMetadata } from './page-metadata.ts';
 import type { Bookmark, MetadataStatus } from '@/domain/types';
 
 /**
@@ -54,20 +57,34 @@ export interface EnrichmentResult {
   metadata_status: MetadataStatus;
 }
 
+export type MetadataFetcher = (url: string) => Promise<FetchedMetadata | null>;
+
 /**
  * Produces an enrichment patch for a bookmark. Only fills generated fields
  * that are still empty, so a user-provided title/description is never
- * overwritten. Resolves to a `failed` status on any error rather than
- * throwing, so enrichment can never break the save path.
+ * overwritten. Real page metadata (OpenGraph/title/favicon) is preferred;
+ * URL-derived values fill whatever the fetch could not provide, so a dead
+ * network still yields usable metadata. Resolves to a `failed` status on any
+ * error rather than throwing, so enrichment can never break the save path.
  */
-export async function enrichBookmark(bookmark: Bookmark): Promise<EnrichmentResult> {
+export async function enrichBookmark(
+  bookmark: Bookmark,
+  fetchMetadata: MetadataFetcher = fetchPageMetadata,
+): Promise<EnrichmentResult> {
   if (!bookmark.url) {
     // Nothing to derive from a text-only share; mark as skipped.
     return { patch: {}, metadata_status: 'skipped' };
   }
 
   try {
-    const derived = deriveMetadata(bookmark.url);
+    const fetched = (await fetchMetadata(bookmark.url).catch(() => null)) ?? {};
+    const fallback = deriveMetadata(bookmark.url);
+    const derived: DerivedMetadata = {
+      title: fetched.title ?? fallback.title,
+      site_name: fetched.site_name ?? fallback.site_name,
+      favicon_url: fetched.favicon_url ?? fallback.favicon_url,
+      preview_image_url: fetched.preview_image_url ?? fallback.preview_image_url,
+    };
     const patch: Partial<Bookmark> = {};
     if (bookmark.title == null) {
       patch.title = derived.title;

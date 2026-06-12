@@ -23,13 +23,16 @@ This file captures the project state and working conventions so any agent (Codex
 1. **Native build / on-device (M4 SQLite, M8 share intake)** — the SQLite and share modules cannot run in Expo Go. `pnpm --filter mobile android`/`ios` run `expo run:*` (need Android Studio / Xcode), or use EAS (`eas build --profile preview ...`). `expo prebuild` is validated in CI for both platforms: Android gets the `SEND`/`text/*` intent filter; iOS generates a Share Extension target with app group `group.com.stash.app` (set an Apple DEVELOPMENT_TEAM in Xcode). Smoke-test checklist is in `docs/development/releasing.md`. Android is the lower-friction platform to verify first.
 2. **Supabase (M5–M7)** — provide a project URL/key, enable anonymous sign-ins, apply `supabase/migrations/20260611000000_initial_schema.sql`, then verify anonymous session creation/restoration/refresh, RLS-scoped access, API behavior, and end-to-end queue upload (save → entry syncs → bookmark gets remote ID + synced status).
 
+## Post-MVP work completed
+
+- **Test runner** — `pnpm test` runs Node 22's built-in runner with type stripping over `src/**/*.test.ts` (no new runtime deps). Suites cover URL handling, enrichment behavior, and the page-metadata parser. Note: modules under test must use relative `.ts` imports for anything they import at runtime (Node cannot resolve the `@/` alias); Metro handles explicit `.ts` paths fine.
+- **Real OpenGraph fetch** — `src/domain/page-metadata.ts` fetches a page (AbortController timeout, HTML-only, size-capped) and parses og:/twitter: meta, `<title>`, and favicon links; `enrichBookmark` prefers fetched values and falls back to URL-derived ones, with the fetcher injectable for offline tests.
+- **Archived view** — `/archived` lists archived bookmarks (restorable via detail's Unarchive); reachable from Settings' Library row.
+
 ## Possible future work (beyond the current milestone list)
 
-- Real OpenGraph/Twitter-card fetch in `deriveMetadata` (currently URL-derived only).
-- Browse/restore archived bookmarks (archive/unarchive exists, but archived items are only reachable from their detail screen, not yet listed anywhere).
-- Sync archive/delete/update mutations to Supabase (the sync service currently only uploads new bookmarks via `createBookmark`).
+- Sync archive/delete/update mutations to Supabase (the sync service currently only uploads new bookmarks via `createBookmark`; the remote delete on the delete-vs-sync race is the only mutation sent today).
 - Tags/collections/AI enrichment are still static mock data in the UI layer (`mock-data.ts`); wire them to the API.
-- Add a real test runner (the `pnpm test` placeholder); `enrichment.ts` and `urls.ts` are pure and good first targets.
 
 **M5–M7 need Supabase** — provide a project URL/key, enable anonymous sign-ins, apply `supabase/migrations/20260611000000_initial_schema.sql`, and verify anonymous session creation/restoration/refresh, RLS-scoped table access, API behavior, and end-to-end queue upload (save offline → entry syncs → bookmark gets remote ID and synced status).
 
