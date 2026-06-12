@@ -180,6 +180,28 @@ try {
   });
   ok('applyAISuggestions');
 
+  // --- tags/collections pull + collection creation ---
+  const allTags = await api.listTags();
+  if (!tags.every((tag) => allTags.some((row) => row.id === tag.id))) {
+    fail('listTags', 'created tags missing from full tag list');
+  }
+  const allLinks = await api.listBookmarkTags();
+  if (!allLinks.some((link) => link.bookmark_id === created.bookmark_id)) {
+    fail('listBookmarkTags', 'bookmark tag links missing');
+  }
+  const newCollection = await api.createCollection(`Verify ${Date.now()}`);
+  cleanups.push(() =>
+    client.request(`/rest/v1/collections?id=eq.${newCollection.id}`, {
+      method: 'DELETE',
+      accessToken: session.access_token,
+    }),
+  );
+  const allCollections = await api.listCollections();
+  if (!allCollections.some((row) => row.id === newCollection.id)) {
+    fail('listCollections', 'created collection missing from list');
+  }
+  ok('tag/collection pull + createCollection');
+
   // --- M7+ pull queries ---
   const pulledBookmarks = await api.listBookmarksUpdatedSince(null);
   if (!pulledBookmarks.some((bookmark) => bookmark.id === created.bookmark_id)) {

@@ -1,4 +1,18 @@
-import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type {
+  AIEnrichment,
+  Bookmark,
+  BookmarkTag,
+  Collection,
+  LocalPendingBookmark,
+  Tag,
+} from '@/domain/types';
+
+/** Snapshot of the user's organizational data, refreshed by pull sync. */
+export interface TagData {
+  tags: Tag[];
+  bookmarkTags: BookmarkTag[];
+  collections: Collection[];
+}
 
 /**
  * Durable local storage contract for bookmarks and the offline sync queue.
@@ -27,4 +41,7 @@ export interface BookmarkRepository {
   /** Local cache of cloud AI enrichments, refreshed by pull sync. */
   listEnrichments(): Promise<AIEnrichment[]>;
   upsertEnrichments(enrichments: AIEnrichment[]): Promise<void>;
+  /** Local cache of tags/links/collections; replaced wholesale by pull sync. */
+  listTagData(): Promise<TagData>;
+  replaceTagData(data: TagData): Promise<void>;
 }

@@ -19,8 +19,16 @@ import {
 } from '@/domain/mock-data';
 import { normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
-import type { AIEnrichment, Bookmark, Collection, LocalPendingBookmark, Tag } from '@/domain/types';
+import type {
+  AIEnrichment,
+  Bookmark,
+  BookmarkTag,
+  Collection,
+  LocalPendingBookmark,
+  Tag,
+} from '@/domain/types';
 import { repository } from '@/storage/repository';
+import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { LAST_PULLED_AT_KEY, pullRemoteChanges } from '@/sync/pull-bookmarks';
 import {
@@ -63,7 +71,19 @@ interface BookmarksContextValue {
   syncNow: () => Promise<void>;
   /** When the last successful pull from Supabase completed, if ever. */
   lastPulledAt: string | null;
+  /** The user's cloud collections (assignable; refreshed by pull sync). */
+  collections: Collection[];
+  /** Add tags to a synced bookmark. Resolves to an error message, or null. */
+  addTagsToBookmark: (bookmarkId: string, names: string[]) => Promise<string | null>;
+  /** Remove a tag from a synced bookmark. Resolves to an error message, or null. */
+  removeTagFromBookmark: (bookmarkId: string, tagName: string) => Promise<string | null>;
+  /** Move a bookmark into a collection (or out, with null). Local-first. */
+  assignCollection: (bookmarkId: string, collectionId: string | null) => void;
+  /** Create a cloud collection. Resolves to the collection or an error message. */
+  createCollection: (name: string) => Promise<{ collection?: Collection; error?: string }>;
 }
+
+const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
 
 const BookmarksContext = createContext<BookmarksContextValue | null>(null);
 
@@ -96,6 +116,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
   const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
   const [enrichments, setEnrichments] = useState<AIEnrichment[]>([]);
+  const [tagData, setTagData] = useState<TagData>(EMPTY_TAG_DATA);
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -118,6 +139,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
+  const tagDataRef = useRef<TagData>(EMPTY_TAG_DATA);
+  useEffect(() => {
+    tagDataRef.current = tagData;
+  }, [tagData]);
+
+  // Apply + persist a new tag-data snapshot in one step.
+  const applyTagData = useCallback((next: TagData) => {
+    setTagData(next);
+    ensureRepositoryReady()
+      .then(() => repository.replaceTagData(next))
+      .catch((error) => logStorageError('tag data', error));
+  }, []);
 
   // Fire-and-forget metadata enrichment. Runs off the save path so capture is
   // never blocked, only fills generated fields, and a failure just records a
@@ -166,11 +199,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         await ensureRepositoryReady();
-        const [storedBookmarks, storedQueue, storedEnrichments, storedPulledAt] =
+        const [storedBookmarks, storedQueue, storedEnrichments, storedTagData, storedPulledAt] =
           await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
             repository.listEnrichments(),
+            repository.listTagData(),
             repository.getMeta(LAST_PULLED_AT_KEY),
           ]);
         if (!cancelled) {
@@ -182,6 +216,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           );
           setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
           setEnrichments(storedEnrichments);
+          setTagData(storedTagData);
           setLastPulledAt(storedPulledAt);
         }
       } catch (error) {
@@ -208,16 +243,30 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [loadedBookmarks],
   );
 
-  const getTagsForBookmark = useCallback((id: string) => {
-    const tagIds = mockBookmarkTags
-      .filter((link) => link.bookmark_id === id)
-      .map((link) => link.tag_id);
-    return mockTags.filter((tag) => tagIds.includes(tag.id));
-  }, []);
+  const getTagsForBookmark = useCallback(
+    (id: string) => {
+      // Cloud tag links (refreshed by pull sync) win over seeded samples.
+      const cloudTagIds = new Set(
+        tagData.bookmarkTags.filter((link) => link.bookmark_id === id).map((link) => link.tag_id),
+      );
+      if (cloudTagIds.size > 0) {
+        return tagData.tags.filter((tag) => cloudTagIds.has(tag.id));
+      }
+      const mockTagIds = mockBookmarkTags
+        .filter((link) => link.bookmark_id === id)
+        .map((link) => link.tag_id);
+      return mockTags.filter((tag) => mockTagIds.includes(tag.id));
+    },
+    [tagData],
+  );
 
   const getCollection = useCallback(
-    (id: string | null) => mockCollections.find((collection) => collection.id === id),
-    [],
+    (id: string | null) =>
+      id === null
+        ? undefined
+        : (tagData.collections.find((collection) => collection.id === id) ??
+          mockCollections.find((collection) => collection.id === id)),
+    [tagData],
   );
 
   const getEnrichment = useCallback(
@@ -384,6 +433,137 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [enqueueMutation],
   );
 
+  const addTagsToBookmark = useCallback(
+    async (bookmarkId: string, names: string[]): Promise<string | null> => {
+      if (auth.status !== 'anonymous' || !auth.session) {
+        return 'Tags need the cloud — Supabase is not available right now.';
+      }
+      if (!hasRemoteIdentity(bookmarkId)) {
+        return 'Tags can be added once this bookmark has synced.';
+      }
+      try {
+        const api = createSyncApi(auth.session);
+        const ensured = await api.addTags({ bookmark_id: bookmarkId, tags: names, source: 'user' });
+        if (ensured.length === 0) {
+          return 'Enter a tag name.';
+        }
+        const now = new Date().toISOString();
+        const current = tagDataRef.current;
+        const knownTagIds = new Set(current.tags.map((tag) => tag.id));
+        const linkedTagIds = new Set(
+          current.bookmarkTags
+            .filter((link) => link.bookmark_id === bookmarkId)
+            .map((link) => link.tag_id),
+        );
+        const newLinks: BookmarkTag[] = ensured
+          .filter((tag) => !linkedTagIds.has(tag.id))
+          .map((tag) => ({
+            bookmark_id: bookmarkId,
+            tag_id: tag.id,
+            source: 'user',
+            confidence: null,
+            created_at: now,
+          }));
+        applyTagData({
+          ...current,
+          tags: [...current.tags, ...ensured.filter((tag) => !knownTagIds.has(tag.id))],
+          bookmarkTags: [...current.bookmarkTags, ...newLinks],
+        });
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : 'Could not add tags.';
+      }
+    },
+    [auth, applyTagData],
+  );
+
+  const removeTagFromBookmark = useCallback(
+    async (bookmarkId: string, tagName: string): Promise<string | null> => {
+      if (auth.status !== 'anonymous' || !auth.session) {
+        return 'Tags need the cloud — Supabase is not available right now.';
+      }
+      if (!hasRemoteIdentity(bookmarkId)) {
+        return 'Seeded sample tags cannot be edited.';
+      }
+      try {
+        const api = createSyncApi(auth.session);
+        await api.removeTags({ bookmark_id: bookmarkId, tags: [tagName] });
+        const current = tagDataRef.current;
+        const removedTagIds = new Set(
+          current.tags
+            .filter((tag) => tag.name.toLowerCase() === tagName.toLowerCase())
+            .map((tag) => tag.id),
+        );
+        applyTagData({
+          ...current,
+          bookmarkTags: current.bookmarkTags.filter(
+            (link) => !(link.bookmark_id === bookmarkId && removedTagIds.has(link.tag_id)),
+          ),
+        });
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : 'Could not remove the tag.';
+      }
+    },
+    [auth, applyTagData],
+  );
+
+  const assignCollection = useCallback(
+    (bookmarkId: string, collectionId: string | null) => {
+      const syncsRemotely = hasRemoteIdentity(bookmarkId);
+      let updated: Bookmark | null = null;
+      setBookmarks((current) => {
+        if (current === null) {
+          return current;
+        }
+        return current.map((bookmark) => {
+          if (bookmark.id !== bookmarkId) {
+            return bookmark;
+          }
+          updated = {
+            ...bookmark,
+            collection_id: collectionId,
+            sync_status: syncsRemotely ? 'pending' : bookmark.sync_status,
+            updated_at: new Date().toISOString(),
+          };
+          return updated;
+        });
+      });
+      if (updated) {
+        ensureRepositoryReady()
+          .then(() => repository.updateBookmark(updated as Bookmark))
+          .catch((error) => logStorageError('assign collection', error));
+        if (syncsRemotely) {
+          enqueueMutation(bookmarkId, 'update');
+        }
+      }
+    },
+    [enqueueMutation],
+  );
+
+  const createCollection = useCallback(
+    async (name: string): Promise<{ collection?: Collection; error?: string }> => {
+      if (auth.status !== 'anonymous' || !auth.session) {
+        return { error: 'Collections need the cloud — Supabase is not available right now.' };
+      }
+      if (!name.trim()) {
+        return { error: 'Enter a collection name.' };
+      }
+      try {
+        const api = createSyncApi(auth.session);
+        const created = await api.createCollection(name);
+        const current = tagDataRef.current;
+        applyTagData({ ...current, collections: [...current.collections, created] });
+        return { collection: created };
+      } catch (error) {
+        return {
+          error: error instanceof Error ? error.message : 'Could not create the collection.',
+        };
+      }
+    },
+    [auth, applyTagData],
+  );
+
   const syncNow = useCallback(async () => {
     if (syncInFlight.current) {
       return;
@@ -482,9 +662,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ensureRepositoryReady()
               .then(() => repository.replaceBookmark(previousId, persisted))
               .catch((error) => logStorageError('post-sync merge', error));
-            // Archived while the create was uploading: the remote row was
-            // created unarchived, so queue an update to reconcile it.
-            if (entry.operation === 'create' && persisted.is_archived) {
+            // Archived or filed into a collection while the create was
+            // uploading: the remote row lacks those, so reconcile with an
+            // update.
+            if (
+              entry.operation === 'create' &&
+              (persisted.is_archived || persisted.collection_id !== null)
+            ) {
               enqueueMutation(persisted.id, 'update');
             }
           }
@@ -523,6 +707,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ),
           );
         }
+        setTagData(result.tagData);
         setLastPulledAt(result.pulledAt);
       } catch (error) {
         logStorageError('pull', error);
@@ -594,6 +779,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isSyncing,
       syncNow,
       lastPulledAt,
+      collections: tagData.collections,
+      addTagsToBookmark,
+      removeTagFromBookmark,
+      assignCollection,
+      createCollection,
     }),
     [
       bookmarks,
@@ -610,6 +800,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isSyncing,
       syncNow,
       lastPulledAt,
+      tagData.collections,
+      addTagsToBookmark,
+      removeTagFromBookmark,
+      assignCollection,
+      createCollection,
     ],
   );
 

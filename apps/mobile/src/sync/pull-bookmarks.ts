@@ -1,5 +1,5 @@
-import type { AIEnrichment, Bookmark } from '@/domain/types';
-import type { BookmarkRepository } from '@/storage/types';
+import type { AIEnrichment, Bookmark, BookmarkTag, Collection, Tag } from '@/domain/types';
+import type { BookmarkRepository, TagData } from '@/storage/types';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
 export const LAST_PULLED_AT_KEY = 'last_pulled_at';
@@ -12,6 +12,9 @@ export interface PullApi {
   listBookmarksUpdatedSince(since: string | null): Promise<Bookmark[]>;
   listBookmarkIds(): Promise<string[]>;
   listEnrichmentsUpdatedSince(since: string | null): Promise<AIEnrichment[]>;
+  listTags(): Promise<Tag[]>;
+  listBookmarkTags(): Promise<BookmarkTag[]>;
+  listCollections(): Promise<Collection[]>;
 }
 
 export interface PullResult {
@@ -21,6 +24,8 @@ export interface PullResult {
   deletions: string[];
   /** Refreshed enrichments (already persisted to the cache). */
   enrichments: AIEnrichment[];
+  /** Authoritative snapshot of tags/links/collections (already persisted). */
+  tagData: TagData;
   /** The new watermark (already persisted). */
   pulledAt: string;
 }
@@ -48,11 +53,15 @@ export async function pullRemoteChanges(
     : null;
   const pulledAt = new Date().toISOString();
 
-  const [remoteRows, remoteIds, enrichments] = await Promise.all([
+  const [remoteRows, remoteIds, enrichments, tags, bookmarkTags, collections] = await Promise.all([
     api.listBookmarksUpdatedSince(since),
     api.listBookmarkIds(),
     api.listEnrichmentsUpdatedSince(since),
+    api.listTags(),
+    api.listBookmarkTags(),
+    api.listCollections(),
   ]);
+  const tagData: TagData = { tags, bookmarkTags, collections };
 
   const locals = getLocalBookmarks();
   const localById = new Map(locals.map((bookmark) => [bookmark.id, bookmark]));
@@ -88,7 +97,8 @@ export async function pullRemoteChanges(
   if (enrichments.length > 0) {
     await repository.upsertEnrichments(enrichments);
   }
+  await repository.replaceTagData(tagData);
   await repository.setMeta(LAST_PULLED_AT_KEY, pulledAt);
 
-  return { upserts, deletions, enrichments, pulledAt };
+  return { upserts, deletions, enrichments, tagData, pulledAt };
 }

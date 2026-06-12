@@ -133,13 +133,22 @@ upload queue drains — local pending work always wins until uploaded.
 - 🔶 Merge/deletion logic is unit-tested; the pull queries were added to
   `pnpm verify:supabase` and await a re-run from a network-capable session.
 
-## 10. Tags and collections (target spec)
+## 10. Tags and collections
 
-- ⬜ Pull the user's tags, bookmark_tags, and collections so Detail shows real
-  data (replacing the remaining mock data).
-- ⬜ Add/remove tags from Bookmark Detail (API `addTags`/`removeTags` is
-  implemented and verified; UI is not).
-- ⬜ Assign a bookmark to a collection from Detail.
+- ✅ Each pull refreshes an authoritative local snapshot of the user's tags,
+  tag links, and collections; Detail shows real data (cloud rows win over the
+  seeded samples).
+- ✅ Add/remove tags from Bookmark Detail: tap a chip's × to remove, type to
+  add (creates the tag when new). Requires the cloud connection and a synced
+  bookmark; otherwise a hint explains why editing is unavailable.
+- ✅ Assign a bookmark to a collection from Detail (chip picker, "Inbox
+  (none)" to clear) — local-first: the change applies immediately and queues
+  an update mutation. Creating a new collection (and filing the bookmark into
+  it) requires the cloud connection.
+- ✅ A bookmark filed into a collection while its first upload was in flight
+  is reconciled with a follow-up update.
+- 🔶 Live verification of the tag/collection queries was added to
+  `pnpm verify:supabase` and awaits a re-run from a network-capable session.
 
 ## 11. Search and editing (target spec)
 
