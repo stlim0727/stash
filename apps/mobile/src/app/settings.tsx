@@ -8,7 +8,7 @@ import { useSupabaseAuth } from '@/supabase/auth-provider';
 
 export default function SettingsScreen() {
   const palette = usePalette();
-  const { queue, isSyncing, syncNow, inbox, archived } = useBookmarks();
+  const { queue, isSyncing, syncNow, inbox, archived, lastPulledAt } = useBookmarks();
   const auth = useSupabaseAuth();
 
   const waiting = queue.filter(
@@ -41,6 +41,12 @@ export default function SettingsScreen() {
     {
       label: 'Supabase auth',
       value: auth.status,
+    },
+    {
+      label: 'Last pulled',
+      value: lastPulledAt
+        ? new Date(lastPulledAt).toLocaleString()
+        : 'Never — remote changes arrive on the next sync',
     },
     {
       label: 'App version',

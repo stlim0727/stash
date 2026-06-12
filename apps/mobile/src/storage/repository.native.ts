@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
-import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
 
 interface BookmarkRow {
@@ -52,6 +52,13 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         is_archived INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_bookmarks_created_at ON bookmarks (created_at);
+      CREATE TABLE IF NOT EXISTS enrichments (
+        id TEXT PRIMARY KEY,
+        bookmark_id TEXT NOT NULL,
+        data TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_enrichments_bookmark_id ON enrichments (bookmark_id);
       CREATE TABLE IF NOT EXISTS local_pending_bookmarks (
         local_id TEXT PRIMARY KEY,
         remote_id TEXT,
@@ -166,6 +173,35 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   async removeQueueEntry(localId: string): Promise<void> {
     const db = await this.open();
     await db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [localId]);
+  }
+
+  async getMeta(key: string): Promise<string | null> {
+    const db = await this.open();
+    const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM meta WHERE key = ?', [
+      key,
+    ]);
+    return row?.value ?? null;
+  }
+
+  async setMeta(key: string, value: string): Promise<void> {
+    const db = await this.open();
+    await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [key, value]);
+  }
+
+  async listEnrichments(): Promise<AIEnrichment[]> {
+    const db = await this.open();
+    const rows = await db.getAllAsync<{ data: string }>('SELECT data FROM enrichments');
+    return rows.map((row) => JSON.parse(row.data) as AIEnrichment);
+  }
+
+  async upsertEnrichments(enrichments: AIEnrichment[]): Promise<void> {
+    const db = await this.open();
+    for (const enrichment of enrichments) {
+      await db.runAsync(
+        'INSERT OR REPLACE INTO enrichments (id, bookmark_id, data, updated_at) VALUES (?, ?, ?, ?)',
+        [enrichment.id, enrichment.bookmark_id, JSON.stringify(enrichment), enrichment.updated_at],
+      );
+    }
   }
 }
 

@@ -74,6 +74,10 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
     removeQueueEntry: async (id) => {
       calls.push(`removeQueueEntry:${id}`);
     },
+    getMeta: async () => null,
+    setMeta: async () => {},
+    listEnrichments: async () => [],
+    upsertEnrichments: async () => {},
   };
   return { calls, repository };
 }

@@ -22,6 +22,7 @@ import { enrichBookmark } from '@/domain/enrichment';
 import type { AIEnrichment, Bookmark, Collection, LocalPendingBookmark, Tag } from '@/domain/types';
 import { repository } from '@/storage/repository';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
+import { LAST_PULLED_AT_KEY, pullRemoteChanges } from '@/sync/pull-bookmarks';
 import {
   createSyncApi,
   hasRemoteIdentity,
@@ -60,6 +61,8 @@ interface BookmarksContextValue {
   isSyncing: boolean;
   /** Upload pending/failed queue entries to Supabase. No-op without auth. */
   syncNow: () => Promise<void>;
+  /** When the last successful pull from Supabase completed, if ever. */
+  lastPulledAt: string | null;
 }
 
 const BookmarksContext = createContext<BookmarksContextValue | null>(null);
@@ -92,9 +95,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
   const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
   const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
+  const [enrichments, setEnrichments] = useState<AIEnrichment[]>([]);
+  const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
+  const initialPullDone = useRef(false);
   // Bookmark IDs currently being enriched, so concurrent passes (startup +
   // a fresh save) never double-process the same item.
   const enriching = useRef(new Set<string>());
@@ -108,6 +114,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     bookmarksRef.current = bookmarks;
   }, [bookmarks]);
+  const queueRef = useRef<LocalPendingBookmark[]>([]);
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
 
   // Fire-and-forget metadata enrichment. Runs off the save path so capture is
   // never blocked, only fills generated fields, and a failure just records a
@@ -156,10 +166,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         await ensureRepositoryReady();
-        const [storedBookmarks, storedQueue] = await Promise.all([
-          repository.listBookmarks(),
-          repository.listQueue(),
-        ]);
+        const [storedBookmarks, storedQueue, storedEnrichments, storedPulledAt] =
+          await Promise.all([
+            repository.listBookmarks(),
+            repository.listQueue(),
+            repository.listEnrichments(),
+            repository.getMeta(LAST_PULLED_AT_KEY),
+          ]);
         if (!cancelled) {
           // Merge instead of replace: saves made while loading must survive.
           setBookmarks((current) =>
@@ -168,6 +181,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               : mergeById(current, storedBookmarks, (bookmark) => bookmark.id),
           );
           setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
+          setEnrichments(storedEnrichments);
+          setLastPulledAt(storedPulledAt);
         }
       } catch (error) {
         logStorageError('startup load', error);
@@ -206,9 +221,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const getEnrichment = useCallback(
-    (bookmarkId: string) =>
-      mockEnrichments.find((enrichment) => enrichment.bookmark_id === bookmarkId),
-    [],
+    (bookmarkId: string) => {
+      // Cloud enrichments (refreshed by pull sync) win over seeded samples.
+      const cached = enrichments
+        .filter((enrichment) => enrichment.bookmark_id === bookmarkId)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+      return (
+        cached ?? mockEnrichments.find((enrichment) => enrichment.bookmark_id === bookmarkId)
+      );
+    },
+    [enrichments],
   );
 
   const addBookmark = useCallback(
@@ -369,10 +391,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (auth.status !== 'anonymous' || !auth.session) {
       return;
     }
+    // Upload-then-pull: even with nothing to upload, the pull still runs.
     const syncable = queue.filter(isSyncable);
-    if (syncable.length === 0) {
-      return;
-    }
 
     syncInFlight.current = true;
     setIsSyncing(true);
@@ -470,6 +490,43 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           }
         }
       }
+
+      // Pull phase: bring down remote changes (other devices, cloud AI
+      // enrichment). Local rows with queued work are never overwritten.
+      try {
+        const result = await pullRemoteChanges(
+          api,
+          repository,
+          () => bookmarksRef.current ?? [],
+          (bookmarkId) =>
+            deletedIds.current.has(bookmarkId) ||
+            queueRef.current.some(
+              (queued) => queued.local_id === bookmarkId && queued.sync_status !== 'synced',
+            ),
+        );
+        if (result.upserts.length > 0 || result.deletions.length > 0) {
+          const upsertIds = new Set(result.upserts.map((bookmark) => bookmark.id));
+          const removed = new Set(result.deletions);
+          setBookmarks((current) => [
+            ...(current ?? []).filter(
+              (bookmark) => !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
+            ),
+            ...result.upserts,
+          ]);
+        }
+        if (result.enrichments.length > 0) {
+          setEnrichments((current) =>
+            mergeById(
+              result.enrichments,
+              current,
+              (enrichment) => enrichment.id,
+            ),
+          );
+        }
+        setLastPulledAt(result.pulledAt);
+      } catch (error) {
+        logStorageError('pull', error);
+      }
     } catch (error) {
       logStorageError('sync run', error);
     } finally {
@@ -506,6 +563,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
   }, [bookmarks, auth.status, queue, isSyncing, syncNow]);
 
+  // Startup pull: once auth and local data are ready, run one sync pass even
+  // with an empty queue so remote changes (other devices, cloud AI
+  // enrichment) reach this device.
+  useEffect(() => {
+    if (!initialPullDone.current && bookmarks !== null && auth.status === 'anonymous') {
+      initialPullDone.current = true;
+      void syncNow();
+    }
+  }, [bookmarks, auth.status, syncNow]);
+
   const value = useMemo<BookmarksContextValue>(
     () => ({
       isLoading: bookmarks === null,
@@ -526,6 +593,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       deleteBookmark,
       isSyncing,
       syncNow,
+      lastPulledAt,
     }),
     [
       bookmarks,
@@ -541,6 +609,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       deleteBookmark,
       isSyncing,
       syncNow,
+      lastPulledAt,
     ],
   );
 

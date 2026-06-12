@@ -271,6 +271,60 @@ export class BookmarkApi {
     return rows.map(remoteToBookmark);
   }
 
+  /** All bookmarks changed after `since` (all of them when null), oldest first. */
+  async listBookmarksUpdatedSince(since: string | null): Promise<Bookmark[]> {
+    const rows = await this.fetchAllPages<RemoteBookmark>('/rest/v1/bookmarks', (query) => {
+      query.set('order', 'updated_at.asc,id.asc');
+      if (since) {
+        query.set('updated_at', `gt.${since}`);
+      }
+    });
+    return rows.map(remoteToBookmark);
+  }
+
+  /** Every bookmark ID the user owns — used to detect remote deletions. */
+  async listBookmarkIds(): Promise<string[]> {
+    const rows = await this.fetchAllPages<{ id: string }>('/rest/v1/bookmarks', (query) => {
+      query.set('select', 'id');
+      query.set('order', 'id.asc');
+    });
+    return rows.map((row) => row.id);
+  }
+
+  /** AI enrichments changed after `since` (all of them when null), oldest first. */
+  async listEnrichmentsUpdatedSince(since: string | null): Promise<AIEnrichment[]> {
+    const rows = await this.fetchAllPages<RemoteAIEnrichment>('/rest/v1/ai_enrichments', (query) => {
+      query.set('order', 'updated_at.asc,id.asc');
+      if (since) {
+        query.set('updated_at', `gt.${since}`);
+      }
+    });
+    return rows.map(enrichmentFromRemote);
+  }
+
+  private async fetchAllPages<T>(
+    path: string,
+    configure: (query: URLSearchParams) => void,
+  ): Promise<T[]> {
+    const all: T[] = [];
+    for (let offset = 0; ; offset += MAX_PAGE_SIZE) {
+      const query = new URLSearchParams({
+        select: '*',
+        user_id: `eq.${this.session.user.id}`,
+        limit: String(MAX_PAGE_SIZE),
+        offset: String(offset),
+      });
+      configure(query);
+      const page = await this.client.request<T[]>(appendSearchParams(path, query), {
+        accessToken: this.session.access_token,
+      });
+      all.push(...page);
+      if (page.length < MAX_PAGE_SIZE) {
+        return all;
+      }
+    }
+  }
+
   async getBookmark(bookmarkId: string): Promise<BookmarkDetail | null> {
     const bookmarkRows = await this.client.request<RemoteBookmark[]>(
       appendSearchParams(
