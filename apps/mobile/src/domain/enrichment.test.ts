@@ -44,21 +44,46 @@ test('deriveMetadata falls back to the host for bare domains', () => {
   assert.equal(derived.site_name, 'raindrop.io');
 });
 
-test('enrichBookmark fills only empty generated fields', async () => {
-  const result = await enrichBookmark(makeBookmark());
+// Offline fetcher: forces the URL-derived fallback, keeping tests off the network.
+const offline = async () => null;
+
+test('enrichBookmark falls back to URL-derived metadata when the fetch fails', async () => {
+  const result = await enrichBookmark(makeBookmark(), offline);
   assert.equal(result.metadata_status, 'complete');
   assert.equal(result.patch.title, 'Introduction');
   assert.equal(result.patch.site_name, 'docs.expo.dev');
 });
 
+test('enrichBookmark prefers fetched page metadata over URL-derived values', async () => {
+  const result = await enrichBookmark(makeBookmark(), async () => ({
+    title: 'Introduction to Expo Router',
+    site_name: 'Expo Documentation',
+    preview_image_url: 'https://docs.expo.dev/og.png',
+  }));
+  assert.equal(result.metadata_status, 'complete');
+  assert.equal(result.patch.title, 'Introduction to Expo Router');
+  assert.equal(result.patch.site_name, 'Expo Documentation');
+  assert.equal(result.patch.preview_image_url, 'https://docs.expo.dev/og.png');
+  // Not provided by the fetch — filled from the URL instead.
+  assert.equal(result.patch.favicon_url, 'https://docs.expo.dev/favicon.ico');
+});
+
 test('enrichBookmark never overwrites a user-provided title', async () => {
-  const result = await enrichBookmark(makeBookmark({ title: 'My own title' }));
+  const result = await enrichBookmark(makeBookmark({ title: 'My own title' }), offline);
   assert.equal(result.metadata_status, 'complete');
   assert.equal('title' in result.patch, false);
 });
 
+test('enrichBookmark survives a fetcher that throws', async () => {
+  const result = await enrichBookmark(makeBookmark(), async () => {
+    throw new Error('network down');
+  });
+  assert.equal(result.metadata_status, 'complete');
+  assert.equal(result.patch.title, 'Introduction');
+});
+
 test('enrichBookmark skips text-only bookmarks', async () => {
-  const result = await enrichBookmark(makeBookmark({ url: null }));
+  const result = await enrichBookmark(makeBookmark({ url: null }), offline);
   assert.equal(result.metadata_status, 'skipped');
   assert.deepEqual(result.patch, {});
 });
