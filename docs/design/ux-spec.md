@@ -29,8 +29,9 @@ records how we got here. When implementing a ⬜ item, update its status.
 - 🔶 Sharing a URL (or text containing one) from any app saves it without
   opening an editor; the app shows Inbox plus a ~2s toast "Saved to Stash" /
   "Already in Stash" / "No link found to stash".
-- 🔶 The shared page title (when provided by the source app) is used as the
-  initial note title metadata.
+- 🔶 The shared page title (when provided by the source app) becomes the
+  bookmark's initial title; enrichment fills the title only when none was
+  provided.
 - ✅ Capture never waits on cloud sync; the payload is persisted locally first.
 
 ## 2. Inbox
@@ -63,8 +64,10 @@ records how we got here. When implementing a ⬜ item, update its status.
 
 ## 5. Delete
 
-- ✅ Deleting a local-only bookmark cancels any pending upload — it never
-  reaches the cloud, even if its upload is mid-flight (tombstones).
+- ✅ Deleting a local-only bookmark cancels any pending upload (tombstones).
+  If its upload had already created a remote row mid-flight, a durable delete
+  is enqueued for that row, so the removal still reaches the cloud even after
+  an app exit or a failed request.
 - ✅ Deleting a cloud-synced bookmark enqueues a durable delete that survives
   restarts and permanently removes the remote row; a delete enqueued while
   another sync for the same bookmark is in flight always survives.

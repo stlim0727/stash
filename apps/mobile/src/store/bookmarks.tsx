@@ -51,7 +51,7 @@ interface BookmarksContextValue {
   getCollection: (id: string | null) => Collection | undefined;
   getEnrichment: (bookmarkId: string) => AIEnrichment | undefined;
   /** Local-first creation: the bookmark is visible immediately with pending states. */
-  addBookmark: (input: { url: string; notes?: string }) => AddBookmarkResult;
+  addBookmark: (input: { url: string; title?: string; notes?: string }) => AddBookmarkResult;
   /** Archive or unarchive a bookmark (preferred over permanent deletion). */
   archiveBookmark: (id: string, archived: boolean) => void;
   /** Permanently remove a bookmark and any pending queue entry for it. */
@@ -212,7 +212,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const addBookmark = useCallback(
-    ({ url, notes }: { url: string; notes?: string }): AddBookmarkResult => {
+    ({ url, title, notes }: { url: string; title?: string; notes?: string }): AddBookmarkResult => {
       const normalized = normalizeUrl(url);
       if (!normalized) {
         return {
@@ -243,7 +243,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         canonical_url: null,
         // Placeholder dedupe key until real canonicalization and hashing exist.
         url_hash: normalized,
-        title: null,
+        // A title provided at capture (e.g. from the share payload) counts as
+        // user-authored; enrichment only fills it when still null.
+        title: title?.trim() ? title.trim() : null,
         description: null,
         notes: notes?.trim() ? notes.trim() : null,
         source_app: null,
@@ -264,7 +266,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         local_id: bookmark.id,
         remote_id: null,
         operation: 'create',
-        payload: { url: normalized, notes: bookmark.notes ?? undefined },
+        payload: {
+          url: normalized,
+          title: bookmark.title ?? undefined,
+          notes: bookmark.notes ?? undefined,
+        },
         sync_status: 'pending',
         retry_count: 0,
         last_error: null,
@@ -411,10 +417,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               ]),
             )
             .catch((error) => logStorageError('post-delete sync cleanup', error));
-          if (result.entry.remote_id) {
-            api.deleteBookmark(result.entry.remote_id, true).catch(() => {
-              // Remote cleanup is best-effort; the row is owner-scoped either way.
-            });
+          if (result.entry.remote_id && result.entry.remote_id !== entry.local_id) {
+            // The upload created a remote row for a bookmark the user already
+            // deleted. Enqueue a durable delete (not a best-effort request) so
+            // the removal survives app exit and request failures; the next
+            // sync pass processes it.
+            enqueueMutation(result.entry.remote_id, 'delete');
           }
           continue;
         }
