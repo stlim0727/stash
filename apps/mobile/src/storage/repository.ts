@@ -1,4 +1,4 @@
-import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
 
 /**
@@ -11,6 +11,8 @@ import type { BookmarkRepository } from '@/storage/types';
 const BOOKMARKS_KEY = 'stash.bookmarks';
 const QUEUE_KEY = 'stash.queue';
 const SEEDED_KEY = 'stash.seeded';
+const META_KEY = 'stash.meta';
+const ENRICHMENTS_KEY = 'stash.enrichments';
 
 function storageAvailable(): boolean {
   return typeof localStorage !== 'undefined';
@@ -19,6 +21,8 @@ function storageAvailable(): boolean {
 class WebBookmarkRepository implements BookmarkRepository {
   private bookmarks: Bookmark[] = [];
   private queue: LocalPendingBookmark[] = [];
+  private meta: Record<string, string> = {};
+  private enrichments: AIEnrichment[] = [];
 
   private read<T>(key: string, fallback: T): T {
     if (!storageAvailable()) {
@@ -42,6 +46,8 @@ class WebBookmarkRepository implements BookmarkRepository {
       ...entry,
       operation: entry.operation ?? 'create',
     }));
+    this.meta = this.read<Record<string, string>>(META_KEY, {});
+    this.enrichments = this.read<AIEnrichment[]>(ENRICHMENTS_KEY, []);
     if (!seeded) {
       this.bookmarks = [...seed];
       this.write(BOOKMARKS_KEY, this.bookmarks);
@@ -96,6 +102,28 @@ class WebBookmarkRepository implements BookmarkRepository {
   async removeQueueEntry(localId: string): Promise<void> {
     this.queue = this.queue.filter((existing) => existing.local_id !== localId);
     this.write(QUEUE_KEY, this.queue);
+  }
+
+  async getMeta(key: string): Promise<string | null> {
+    return this.meta[key] ?? null;
+  }
+
+  async setMeta(key: string, value: string): Promise<void> {
+    this.meta = { ...this.meta, [key]: value };
+    this.write(META_KEY, this.meta);
+  }
+
+  async listEnrichments(): Promise<AIEnrichment[]> {
+    return [...this.enrichments];
+  }
+
+  async upsertEnrichments(enrichments: AIEnrichment[]): Promise<void> {
+    const incoming = new Set(enrichments.map((enrichment) => enrichment.id));
+    this.enrichments = [
+      ...this.enrichments.filter((existing) => !incoming.has(existing.id)),
+      ...enrichments,
+    ];
+    this.write(ENRICHMENTS_KEY, this.enrichments);
   }
 }
 

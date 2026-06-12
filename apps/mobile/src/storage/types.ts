@@ -1,4 +1,4 @@
-import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
 
 /**
  * Durable local storage contract for bookmarks and the offline sync queue.
@@ -21,4 +21,10 @@ export interface BookmarkRepository {
   enqueue(entry: LocalPendingBookmark): Promise<void>;
   updateQueueEntry(entry: LocalPendingBookmark): Promise<void>;
   removeQueueEntry(localId: string): Promise<void>;
+  /** Small durable key/value store (e.g. the pull watermark). */
+  getMeta(key: string): Promise<string | null>;
+  setMeta(key: string, value: string): Promise<void>;
+  /** Local cache of cloud AI enrichments, refreshed by pull sync. */
+  listEnrichments(): Promise<AIEnrichment[]>;
+  upsertEnrichments(enrichments: AIEnrichment[]): Promise<void>;
 }

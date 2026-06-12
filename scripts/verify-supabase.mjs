@@ -180,6 +180,26 @@ try {
   });
   ok('applyAISuggestions');
 
+  // --- M7+ pull queries ---
+  const pulledBookmarks = await api.listBookmarksUpdatedSince(null);
+  if (!pulledBookmarks.some((bookmark) => bookmark.id === created.bookmark_id)) {
+    fail('pull: listBookmarksUpdatedSince', 'created bookmark missing from full pull');
+  }
+  const pulledIds = await api.listBookmarkIds();
+  if (!pulledIds.includes(created.bookmark_id)) {
+    fail('pull: listBookmarkIds', 'created bookmark missing from ID list');
+  }
+  const pulledEnrichments = await api.listEnrichmentsUpdatedSince(null);
+  if (!pulledEnrichments.some((row) => row.id === enrichment.id)) {
+    fail('pull: listEnrichmentsUpdatedSince', 'enrichment missing from full pull');
+  }
+  const future = new Date(Date.now() + 60_000).toISOString();
+  const noneSinceFuture = await api.listBookmarksUpdatedSince(future);
+  if (noneSinceFuture.length !== 0) {
+    fail('pull: incremental filter', `expected 0 rows since the future, got ${noneSinceFuture.length}`);
+  }
+  ok('pull queries (full, IDs, enrichments, incremental filter)');
+
   const archived = await api.deleteBookmark(created.bookmark_id);
   void archived;
   const detailAfterArchive = await api.getBookmark(created.bookmark_id);

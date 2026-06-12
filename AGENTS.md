@@ -30,12 +30,13 @@ This file captures the project state and working conventions so any agent (Codex
 - **Mutation sync** — queue entries carry an `operation` (`create`/`update`/`delete`). Archiving a synced bookmark enqueues an `update` (the sync service re-sends the LATEST user-editable fields — last write wins); deleting one enqueues a durable `delete` (permanent remote removal, survives restart). One queue entry per bookmark: newer mutations supersede older ones. A bookmark archived while its create was uploading gets reconciled with a follow-up update. SQLite migration: `ALTER TABLE ... ADD COLUMN operation` guarded by try/catch for pre-existing databases.
 - **Real OpenGraph fetch** — `src/domain/page-metadata.ts` fetches a page (AbortController timeout, HTML-only, size-capped) and parses og:/twitter: meta, `<title>`, and favicon links; `enrichBookmark` prefers fetched values and falls back to URL-derived ones, with the fetcher injectable for offline tests.
 - **Archived view** — `/archived` lists archived bookmarks (restorable via detail's Unarchive); reachable from Settings' Library row.
+- **Pull sync** — `src/sync/pull-bookmarks.ts` implements `docs/design/ux-spec.md` §9: upload-then-pull on startup and "Sync now"; incremental by `updated_at` watermark (5-minute overlap for clock skew, stored in the repository meta store); last-write-wins except rows with queued local work; remote deletions via ID-list diff; AI enrichments cached durably (new `enrichments` table / storage key) and read by Detail in place of mock data. Settings shows the last pull time.
 
 ## Possible future work (beyond the current milestone list)
 
 - Tags/collections/AI enrichment are still static mock data in the UI layer (`mock-data.ts`); wire them to the API.
-- Download remote bookmarks on startup (sync is upload-only today; a second device starts empty).
 - Push enrichment results (title/site/preview) to the remote row; enriched metadata currently stays device-local unless an archive happens to trigger an update.
+- Re-run `pnpm verify:supabase` from a network-capable session — it now also covers the pull queries added with pull sync (see `docs/design/ux-spec.md` §9).
 - Edit UI for title/notes after capture, and client-side search.
 - Replace the template Expo icons/splash with real branding before any public release.
 

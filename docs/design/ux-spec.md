@@ -103,32 +103,35 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Verified end-to-end against the live project (`pnpm verify:supabase`,
   16 checks, including RLS isolation between users).
 
-## 9. Cloud sync — download / pull (target spec)
+## 9. Cloud sync — download / pull
 
 The other half of sync: remote changes reach the device. Runs after the
 upload queue drains — local pending work always wins until uploaded.
 
-- ⬜ **Pull trigger**: on app start (once auth and local load are ready), and
+- ✅ **Pull trigger**: on app start (once auth and local load are ready), and
   on "Sync now". Never blocks the UI; Inbox updates in place when rows land.
-- ⬜ **Incremental pull**: fetch remote bookmarks with
+- ✅ **Incremental pull**: fetch remote bookmarks with
   `updated_at > last_pulled_at` (a persisted watermark). New rows are
   inserted locally with `sync_status: synced`; existing rows merge by ID.
-- ⬜ **Conflict policy**: row-level last-write-wins by `updated_at`, with one
+- ✅ **Conflict policy**: row-level last-write-wins by `updated_at`, with one
   exception — a local row with queued (unsynced) mutations is never
   overwritten; its queued upload will re-assert it.
-- ⬜ **Remote deletions**: each pull also fetches the remote ID list and
+- ✅ **Remote deletions**: each pull also fetches the remote ID list and
   removes local synced rows that no longer exist remotely (permanent deletes
   elsewhere propagate). Local-only rows are untouched.
-- ⬜ **AI enrichment refresh**: the same pull fetches `ai_enrichments`
+- ✅ **AI enrichment refresh**: the same pull fetches `ai_enrichments`
   changed since the watermark for owned bookmarks and caches them in the
-  durable store; Bookmark Detail reads the cached enrichment (replacing mock
-  data), so a summary generated or updated in the cloud appears on device on
-  the next pull.
-- ⬜ **Watermark**: stored in the repository meta store; reset clears trigger
-  a full pull. Clock skew is tolerated by overlapping the watermark by a few
-  minutes (idempotent merges make re-pulls harmless).
-- ⬜ **Settings**: shows last successful pull time; "Sync now" performs
+  durable store; Bookmark Detail reads the cached enrichment (cloud rows win
+  over seeded samples), so a summary generated or updated in the cloud
+  appears on device on the next pull.
+- ✅ **Watermark**: stored in the repository meta store; clock skew is
+  tolerated by overlapping the watermark by five minutes (idempotent merges
+  make re-pulls harmless). The watermark is captured before fetching so
+  changes landing mid-pull are re-fetched next time.
+- ✅ **Settings**: shows last successful pull time; "Sync now" performs
   upload-then-pull.
+- 🔶 Merge/deletion logic is unit-tested; the pull queries were added to
+  `pnpm verify:supabase` and await a re-run from a network-capable session.
 
 ## 10. Tags and collections (target spec)
 
