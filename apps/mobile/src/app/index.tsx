@@ -1,7 +1,9 @@
 import { Link, useRouter } from 'expo-router';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useMemo, useState } from 'react';
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { filterBookmarks } from '@/domain/search';
 import { useBookmarks } from '@/store/bookmarks';
 import type { Bookmark } from '@/domain/types';
 
@@ -20,6 +22,9 @@ export default function InboxScreen() {
   const palette = usePalette();
   const router = useRouter();
   const { inbox, isLoading, loadError } = useBookmarks();
+  const [query, setQuery] = useState('');
+  const visible = useMemo(() => filterBookmarks(inbox, query), [inbox, query]);
+  const searching = query.trim().length > 0;
 
   return (
     <View style={styles.container}>
@@ -28,20 +33,37 @@ export default function InboxScreen() {
           Couldn’t open local storage — showing sample data. Your saves this session may not persist.
         </Text>
       ) : null}
+      <View style={styles.searchWrap}>
+        <TextInput
+          style={[
+            styles.searchInput,
+            { backgroundColor: palette.card, color: palette.text },
+          ]}
+          placeholder="Search title, notes, or URL"
+          placeholderTextColor={palette.textSecondary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          value={query}
+          onChangeText={setQuery}
+          clearButtonMode="while-editing"
+        />
+      </View>
       <FlatList
-        data={inbox}
+        data={visible}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-            Recently saved
+            {searching ? `Matches (${visible.length})` : 'Recently saved'}
           </Text>
         }
         ListEmptyComponent={
           <Text style={[styles.empty, { color: palette.textSecondary }]}>
             {isLoading
               ? 'Loading your bookmarks…'
-              : 'Nothing saved yet. Add your first bookmark below.'}
+              : searching
+                ? 'No bookmarks match your search.'
+                : 'Nothing saved yet. Add your first bookmark below.'}
           </Text>
         }
         renderItem={({ item }) => {
@@ -107,6 +129,16 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     textAlign: 'center',
+  },
+  searchWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  searchInput: {
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    fontSize: 15,
   },
   card: {
     borderRadius: 12,

@@ -63,6 +63,8 @@ interface BookmarksContextValue {
   addBookmark: (input: { url: string; title?: string; notes?: string }) => AddBookmarkResult;
   /** Archive or unarchive a bookmark (preferred over permanent deletion). */
   archiveBookmark: (id: string, archived: boolean) => void;
+  /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
+  updateBookmarkFields: (id: string, fields: { title?: string; notes?: string }) => void;
   /** Permanently remove a bookmark and any pending queue entry for it. */
   deleteBookmark: (id: string) => void;
   /** True while the background sync service is uploading queue entries. */
@@ -377,8 +379,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .catch((error) => logStorageError(`${operation} mutation enqueue`, error));
   }, []);
 
-  const archiveBookmark = useCallback(
-    (id: string, archived: boolean) => {
+  // Local-first edit of user-editable fields: apply + persist immediately,
+  // show as sync-pending, and queue an update mutation for synced bookmarks.
+  const applyBookmarkUpdate = useCallback(
+    (id: string, patch: Partial<Bookmark>) => {
       const syncsRemotely = hasRemoteIdentity(id);
       let updated: Bookmark | null = null;
       setBookmarks((current) => {
@@ -391,8 +395,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           }
           updated = {
             ...bookmark,
-            is_archived: archived,
-            // Show as pending until the mutation reaches Supabase.
+            ...patch,
             sync_status: syncsRemotely ? 'pending' : bookmark.sync_status,
             updated_at: new Date().toISOString(),
           };
@@ -402,13 +405,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (updated) {
         ensureRepositoryReady()
           .then(() => repository.updateBookmark(updated as Bookmark))
-          .catch((error) => logStorageError('archive bookmark', error));
+          .catch((error) => logStorageError('bookmark update', error));
         if (syncsRemotely) {
           enqueueMutation(id, 'update');
         }
       }
     },
     [enqueueMutation],
+  );
+
+  const archiveBookmark = useCallback(
+    (id: string, archived: boolean) => applyBookmarkUpdate(id, { is_archived: archived }),
+    [applyBookmarkUpdate],
+  );
+
+  const updateBookmarkFields = useCallback(
+    (id: string, fields: { title?: string; notes?: string }) => {
+      const patch: Partial<Bookmark> = {};
+      if (fields.title !== undefined) {
+        patch.title = fields.title.trim() || null;
+      }
+      if (fields.notes !== undefined) {
+        patch.notes = fields.notes.trim() || null;
+      }
+      applyBookmarkUpdate(id, patch);
+    },
+    [applyBookmarkUpdate],
   );
 
   const deleteBookmark = useCallback(
@@ -509,36 +531,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const assignCollection = useCallback(
-    (bookmarkId: string, collectionId: string | null) => {
-      const syncsRemotely = hasRemoteIdentity(bookmarkId);
-      let updated: Bookmark | null = null;
-      setBookmarks((current) => {
-        if (current === null) {
-          return current;
-        }
-        return current.map((bookmark) => {
-          if (bookmark.id !== bookmarkId) {
-            return bookmark;
-          }
-          updated = {
-            ...bookmark,
-            collection_id: collectionId,
-            sync_status: syncsRemotely ? 'pending' : bookmark.sync_status,
-            updated_at: new Date().toISOString(),
-          };
-          return updated;
-        });
-      });
-      if (updated) {
-        ensureRepositoryReady()
-          .then(() => repository.updateBookmark(updated as Bookmark))
-          .catch((error) => logStorageError('assign collection', error));
-        if (syncsRemotely) {
-          enqueueMutation(bookmarkId, 'update');
-        }
-      }
-    },
-    [enqueueMutation],
+    (bookmarkId: string, collectionId: string | null) =>
+      applyBookmarkUpdate(bookmarkId, { collection_id: collectionId }),
+    [applyBookmarkUpdate],
   );
 
   const createCollection = useCallback(
@@ -775,6 +770,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getEnrichment,
       addBookmark,
       archiveBookmark,
+      updateBookmarkFields,
       deleteBookmark,
       isSyncing,
       syncNow,
@@ -796,6 +792,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getEnrichment,
       addBookmark,
       archiveBookmark,
+      updateBookmarkFields,
       deleteBookmark,
       isSyncing,
       syncNow,
