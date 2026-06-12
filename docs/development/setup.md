@@ -53,3 +53,12 @@ Do not commit real secrets or project-specific private keys. Expo public values 
 ## Current environment audit
 
 The current container has Git, Node.js, npm, npx, Yarn, pnpm, and Java available. Expo CLI, EAS CLI, Supabase CLI, Xcode, CocoaPods, and Android Debug Bridge were not globally available during the initial audit. That is acceptable for Milestone 0, but mobile and backend milestones should add install instructions or package scripts as those tools become necessary.
+
+## Supabase environment
+
+Milestone 5 introduces the client-side Supabase bootstrap. Copy `.env.example` to `.env.local` (or provide the variables in your Expo environment) and set:
+
+- `EXPO_PUBLIC_SUPABASE_URL` — your Supabase project URL.
+- `EXPO_PUBLIC_SUPABASE_ANON_KEY` — your client-safe anon/publishable key.
+
+Anonymous sign-ins must also be enabled in the Supabase Auth provider settings. Without real project credentials the app stays local-first and reports the missing configuration from Settings.

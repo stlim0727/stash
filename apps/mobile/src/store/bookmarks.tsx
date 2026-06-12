@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 
 import {
@@ -12,6 +20,8 @@ import {
 import { normalizeUrl } from '@/domain/urls';
 import type { AIEnrichment, Bookmark, Collection, LocalPendingBookmark, Tag } from '@/domain/types';
 import { repository } from '@/storage/repository';
+import { useSupabaseAuth } from '@/supabase/auth-provider';
+import { createSyncApi, isSyncable, syncQueueEntry } from '@/sync/sync-bookmarks';
 
 export type AddBookmarkResult =
   | { status: 'created' | 'duplicate'; bookmark: Bookmark }
@@ -30,6 +40,10 @@ interface BookmarksContextValue {
   getEnrichment: (bookmarkId: string) => AIEnrichment | undefined;
   /** Local-first creation: the bookmark is visible immediately with pending states. */
   addBookmark: (input: { url: string; notes?: string }) => AddBookmarkResult;
+  /** True while the background sync service is uploading queue entries. */
+  isSyncing: boolean;
+  /** Upload pending/failed queue entries to Supabase. No-op without auth. */
+  syncNow: () => Promise<void>;
 }
 
 const BookmarksContext = createContext<BookmarksContextValue | null>(null);
@@ -59,8 +73,11 @@ function mergeById<T>(current: T[], loaded: T[], key: (item: T) => string): T[] 
 }
 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
+  const auth = useSupabaseAuth();
   const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
   const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const syncInFlight = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -196,6 +213,77 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [loadedBookmarks],
   );
 
+  const syncNow = useCallback(async () => {
+    if (syncInFlight.current) {
+      return;
+    }
+    if (auth.status !== 'anonymous' || !auth.session) {
+      return;
+    }
+    const syncable = queue.filter(isSyncable);
+    if (syncable.length === 0) {
+      return;
+    }
+
+    syncInFlight.current = true;
+    setIsSyncing(true);
+    try {
+      await ensureRepositoryReady();
+      // Re-ensure the session so a token that expired while the app stayed
+      // open is refreshed before we sync; otherwise every entry would fail
+      // against a stale bearer token until restart.
+      const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+      const api = createSyncApi(session);
+      // Lookup snapshot: replacements only touch the entry being synced, so
+      // other entries' local IDs stay valid for the duration of the loop.
+      const bookmarksSnapshot = loadedBookmarks;
+
+      for (const entry of syncable) {
+        setQueue((current) =>
+          current.map((queued) =>
+            queued.local_id === entry.local_id ? { ...queued, sync_status: 'syncing' } : queued,
+          ),
+        );
+
+        const localBookmark = bookmarksSnapshot.find(
+          (bookmark) => bookmark.id === entry.local_id,
+        );
+        const result = await syncQueueEntry(api, repository, entry, localBookmark);
+
+        setQueue((current) =>
+          current.map((queued) => (queued.local_id === entry.local_id ? result.entry : queued)),
+        );
+        if (result.bookmarkReplacement) {
+          const { previousId, bookmark: replacement } = result.bookmarkReplacement;
+          setBookmarks((current) =>
+            (current ?? []).map((bookmark) =>
+              bookmark.id === previousId ? replacement : bookmark,
+            ),
+          );
+        }
+      }
+    } catch (error) {
+      logStorageError('sync run', error);
+    } finally {
+      syncInFlight.current = false;
+      setIsSyncing(false);
+    }
+  }, [auth, queue, loadedBookmarks]);
+
+  // Background sync: upload as soon as auth and local data are ready, and
+  // whenever a new pending entry appears. Failed entries are retried on the
+  // next save or via the manual Sync now action, not in a hot loop.
+  useEffect(() => {
+    if (
+      !isSyncing &&
+      bookmarks !== null &&
+      auth.status === 'anonymous' &&
+      queue.some((entry) => entry.sync_status === 'pending')
+    ) {
+      void syncNow();
+    }
+  }, [bookmarks, auth.status, queue, isSyncing, syncNow]);
+
   const value = useMemo<BookmarksContextValue>(
     () => ({
       isLoading: bookmarks === null,
@@ -208,6 +296,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getCollection,
       getEnrichment,
       addBookmark,
+      isSyncing,
+      syncNow,
     }),
     [
       bookmarks,
@@ -218,6 +308,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getCollection,
       getEnrichment,
       addBookmark,
+      isSyncing,
+      syncNow,
     ],
   );
 

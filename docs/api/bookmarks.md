@@ -142,3 +142,7 @@ Expected sequence:
 - Duplicate saves should return the existing bookmark ID.
 - Invalid payloads should fail fast with a non-blocking toast.
 - Authorization failures should pause sync and prompt account recovery in the main app.
+
+## Current implementation status
+
+The first client-side implementation lives in `apps/mobile/src/api/bookmarks.ts`. It maps this contract to Supabase REST calls using the anonymous session created by the Milestone 5 bootstrap. The implementation is intentionally not yet wired into the local offline queue; Milestone 7 should call this API from the sync service and update local queue state after remote success/failure.

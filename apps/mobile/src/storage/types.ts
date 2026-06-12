@@ -14,6 +14,8 @@ export interface BookmarkRepository {
   listBookmarks(): Promise<Bookmark[]>;
   insertBookmark(bookmark: Bookmark): Promise<void>;
   updateBookmark(bookmark: Bookmark): Promise<void>;
+  /** Atomically swap a row's identity, e.g. local ID -> remote ID after sync. */
+  replaceBookmark(previousId: string, bookmark: Bookmark): Promise<void>;
   listQueue(): Promise<LocalPendingBookmark[]>;
   enqueue(entry: LocalPendingBookmark): Promise<void>;
   updateQueueEntry(entry: LocalPendingBookmark): Promise<void>;
