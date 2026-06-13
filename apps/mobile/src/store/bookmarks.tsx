@@ -679,15 +679,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ensureRepositoryReady()
               .then(() => repository.replaceBookmark(previousId, persisted))
               .catch((error) => logStorageError('post-sync merge', error));
-            // Archived, filed into a collection, or edited while the create
-            // was uploading: the remote row lacks those changes, so
-            // reconcile with an update.
+            // The create payload only carries url/title/notes, and the remote
+            // row defaults to no generated metadata + pending status. If the
+            // local row has since diverged — archived, filed into a collection,
+            // edited, or enriched while the create was uploading — reconcile
+            // with a follow-up update so those changes reach the cloud.
             if (
               entry.operation === 'create' &&
               (persisted.is_archived ||
                 persisted.collection_id !== null ||
                 persisted.title !== (result.uploadedPayload?.title ?? null) ||
-                persisted.notes !== (result.uploadedPayload?.notes ?? null))
+                persisted.notes !== (result.uploadedPayload?.notes ?? null) ||
+                persisted.metadata_status !== 'pending' ||
+                persisted.site_name !== null ||
+                persisted.favicon_url !== null ||
+                persisted.preview_image_url !== null)
             ) {
               enqueueMutation(persisted.id, 'update');
             }
