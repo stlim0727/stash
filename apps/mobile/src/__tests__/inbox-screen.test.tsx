@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
+import { Linking } from 'react-native';
 
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
@@ -83,6 +84,25 @@ test('search filters the list and shows the match count', async () => {
   expect(screen.getByText('Matches (1)')).toBeTruthy();
   expect(screen.getByText('Local-first software')).toBeTruthy();
   expect(screen.queryByText('Raindrop review')).toBeNull();
+});
+
+test('the card Open action opens the bookmark URL in the system browser', async () => {
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Open link'));
+
+  expect(openURL).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
+  openURL.mockRestore();
 });
 
 test('shows the no-matches empty state for an unmatched search', async () => {

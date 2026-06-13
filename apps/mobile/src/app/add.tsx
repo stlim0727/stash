@@ -65,7 +65,8 @@ export default function AddBookmarkScreen() {
         <Text style={styles.saveButtonLabel}>Save</Text>
       </Pressable>
       <Text style={[styles.hint, { color: palette.textSecondary }]}>
-        Saves are local-only for now. Durable storage and cloud sync arrive in later milestones.
+        Saved instantly to your device and synced to the cloud in the background — capture never
+        waits on the network.
       </Text>
     </View>
   );

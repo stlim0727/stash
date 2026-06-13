@@ -1,6 +1,6 @@
 import { Link, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { FlatList, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { usePalette } from '@/theme';
 import { filterBookmarks } from '@/domain/search';
@@ -69,22 +69,39 @@ export default function InboxScreen() {
         renderItem={({ item }) => {
           const status = statusLabel(item);
           return (
-            <Pressable
-              style={[styles.card, { backgroundColor: palette.card }]}
-              onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
-            >
-              <Text style={[styles.cardTitle, { color: palette.text }]}>
-                {item.title ?? item.url ?? 'Untitled'}
-              </Text>
-              {item.url ? (
-                <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
-                  {item.url}
+            <View style={[styles.card, { backgroundColor: palette.card }]}>
+              <Pressable
+                style={styles.cardBody}
+                onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
+              >
+                <Text style={[styles.cardTitle, { color: palette.text }]}>
+                  {item.title ?? item.url ?? 'Untitled'}
                 </Text>
+                {item.url ? (
+                  <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
+                    {item.url}
+                  </Text>
+                ) : null}
+                {status ? (
+                  <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
+                ) : null}
+              </Pressable>
+              {item.url ? (
+                <Pressable
+                  accessibilityRole="link"
+                  accessibilityLabel="Open link"
+                  hitSlop={8}
+                  style={styles.cardOpen}
+                  onPress={() => {
+                    if (item.url) {
+                      void Linking.openURL(item.url).catch(() => {});
+                    }
+                  }}
+                >
+                  <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>Open ↗</Text>
+                </Pressable>
               ) : null}
-              {status ? (
-                <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
-              ) : null}
-            </Pressable>
+            </View>
           );
         }}
       />
@@ -142,8 +159,24 @@ const styles = StyleSheet.create({
   },
   card: {
     borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cardBody: {
+    flex: 1,
     padding: 16,
     gap: 4,
+  },
+  cardOpen: {
+    paddingVertical: 16,
+    paddingRight: 16,
+    paddingLeft: 8,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+  },
+  cardOpenLabel: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   cardTitle: {
     fontSize: 16,

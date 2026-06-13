@@ -3,6 +3,7 @@ import { useState } from 'react';
 import {
   Alert,
   Image,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -125,6 +126,14 @@ export default function BookmarkDetailScreen() {
     });
   };
 
+  const handleOpenLink = () => {
+    if (bookmark.url) {
+      void Linking.openURL(bookmark.url).catch(() => {
+        setOrganizeError('Could not open this link.');
+      });
+    }
+  };
+
   const handleDelete = () => {
     const remove = () => {
       deleteBookmark(bookmark.id);
@@ -160,6 +169,16 @@ export default function BookmarkDetailScreen() {
           {bookmark.title ?? bookmark.url ?? 'Untitled'}
         </Text>
       </View>
+      {bookmark.url ? (
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel="Open link"
+          style={[styles.openButton, { backgroundColor: palette.accent }]}
+          onPress={handleOpenLink}
+        >
+          <Text style={styles.openButtonLabel}>Open link ↗</Text>
+        </Pressable>
+      ) : null}
       <View style={[styles.field, { backgroundColor: palette.card }]}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Title</Text>
         <TextInput
@@ -425,6 +444,16 @@ const styles = StyleSheet.create({
   notesInput: {
     minHeight: 72,
     textAlignVertical: 'top',
+  },
+  openButton: {
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  openButtonLabel: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   saveButton: {
     borderRadius: 12,
