@@ -18,9 +18,11 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+let mockParams: Record<string, string> = {};
 jest.mock('expo-router', () => ({
   Link: ({ children }: { children: ReactNode }) => children,
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+  useLocalSearchParams: () => mockParams,
 }));
 
 import InboxScreen from '@/app/index';
@@ -48,6 +50,10 @@ function renderInbox() {
     </BookmarksProvider>,
   );
 }
+
+beforeEach(() => {
+  mockParams = {};
+});
 
 test('renders stored bookmarks with their titles', async () => {
   fakeRepo.__reset([
@@ -171,6 +177,31 @@ test('the tag chip filters the Inbox to bookmarks with that tag', async () => {
 
   expect(screen.getByText('Design system')).toBeTruthy();
   expect(screen.queryByText('Unrelated note')).toBeNull();
+});
+
+test('a tag route param filters the Inbox to that tag on load', async () => {
+  const tagged = '7e64cf1e-0000-4000-8000-00000000000e';
+  const untagged = '7e64cf1e-0000-4000-8000-00000000000f';
+  mockParams = { tag: 't-design' };
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: tagged, title: 'Design system' }),
+      makeStoredBookmark({ id: untagged, title: 'Unrelated note' }),
+    ],
+    {
+      tags: [makeTag('t-design', 'design')],
+      bookmarkTags: [
+        { bookmark_id: tagged, tag_id: 't-design', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
+
+  expect(screen.queryByText('Unrelated note')).toBeNull();
+  expect(screen.getByText('#design · 1')).toBeTruthy();
 });
 
 test('shows the no-matches empty state for an unmatched search', async () => {
