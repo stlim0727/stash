@@ -166,6 +166,9 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
     sync_status: 'pending',
     is_archived: true,
     notes: 'edited after enqueue',
+    site_name: 'example.com',
+    favicon_url: 'https://example.com/favicon.ico',
+    metadata_status: 'complete',
   });
 
   const entry = makeMutationEntry('remote-1', 'update');
@@ -180,6 +183,11 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
       notes: 'edited after enqueue',
       collection_id: null,
       is_archived: true,
+      // Generated metadata rides along so enrichment reaches the cloud.
+      site_name: 'example.com',
+      favicon_url: 'https://example.com/favicon.ico',
+      preview_image_url: null,
+      metadata_status: 'complete',
     },
   ]);
   assert.equal(result.bookmarkReplacement?.bookmark.sync_status, 'synced');

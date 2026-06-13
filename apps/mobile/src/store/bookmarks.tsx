@@ -154,6 +154,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .catch((error) => logStorageError('tag data', error));
   }, []);
 
+  // Queue a remote mutation for a bookmark that already exists on the server.
+  // One entry per bookmark: a newer mutation supersedes an older one.
+  const enqueueMutation = useCallback((bookmarkId: string, operation: 'update' | 'delete') => {
+    const entry = makeMutationEntry(bookmarkId, operation);
+    setQueue((current) => [...current.filter((queued) => queued.local_id !== bookmarkId), entry]);
+    ensureRepositoryReady()
+      .then(() => repository.enqueue(entry))
+      .catch((error) => logStorageError(`${operation} mutation enqueue`, error));
+  }, []);
+
   // Fire-and-forget metadata enrichment. Runs off the save path so capture is
   // never blocked, only fills generated fields, and a failure just records a
   // failed status — it never affects bookmark creation.
@@ -163,55 +173,60 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
     enriching.current.add(bookmark.id);
     (async () => {
-      const { patch, metadata_status } = await enrichBookmark(bookmark);
-      // Re-read the latest row so we merge onto current state, not the stale
-      // snapshot captured when enrichment started.
-      let updated: Bookmark | null = null;
-      setBookmarks((current) => {
-        if (current === null) {
-          return current;
+      try {
+        const { patch, metadata_status } = await enrichBookmark(bookmark);
+        if (deletedIds.current.has(bookmark.id)) {
+          return; // deleted while the fetch was in flight
         }
-        return current.map((item) => {
-          if (item.id !== bookmark.id) {
-            return item;
-          }
-          // The patch was computed from a pre-fetch snapshot; the user may
-          // have edited fields while the fetch ran. Re-check against the
-          // LATEST row and fill only fields that are still empty, so a
-          // user-authored title is never overwritten by generated metadata.
-          const safePatch: Partial<Bookmark> = {};
-          if (patch.title !== undefined && item.title === null) {
-            safePatch.title = patch.title;
-          }
-          if (patch.site_name !== undefined && item.site_name === null) {
-            safePatch.site_name = patch.site_name;
-          }
-          if (patch.favicon_url !== undefined && item.favicon_url === null) {
-            safePatch.favicon_url = patch.favicon_url;
-          }
-          if (patch.preview_image_url !== undefined && item.preview_image_url === null) {
-            safePatch.preview_image_url = patch.preview_image_url;
-          }
-          updated = {
-            ...item,
-            ...safePatch,
-            metadata_status,
-            updated_at: new Date().toISOString(),
-          };
-          return updated;
-        });
-      });
-      if (updated) {
+        // Merge onto the LATEST committed row (via the ref), not the pre-fetch
+        // snapshot, so a user edit made while the fetch ran is preserved. The
+        // ref can briefly lag for a just-created bookmark, so fall back to the
+        // snapshot it was invoked with.
+        const latest = bookmarksRef.current?.find((item) => item.id === bookmark.id) ?? bookmark;
+        // Fill only generated fields that are still empty, so a user-authored
+        // title is never overwritten by generated metadata.
+        const safePatch: Partial<Bookmark> = {};
+        if (patch.title !== undefined && latest.title === null) {
+          safePatch.title = patch.title;
+        }
+        if (patch.site_name !== undefined && latest.site_name === null) {
+          safePatch.site_name = patch.site_name;
+        }
+        if (patch.favicon_url !== undefined && latest.favicon_url === null) {
+          safePatch.favicon_url = patch.favicon_url;
+        }
+        if (patch.preview_image_url !== undefined && latest.preview_image_url === null) {
+          safePatch.preview_image_url = patch.preview_image_url;
+        }
+        const updated: Bookmark = {
+          ...latest,
+          ...safePatch,
+          metadata_status,
+          updated_at: new Date().toISOString(),
+        };
+
+        setBookmarks((current) =>
+          current === null
+            ? current
+            : current.map((item) => (item.id === updated.id ? updated : item)),
+        );
         try {
           await ensureRepositoryReady();
           await repository.updateBookmark(updated);
         } catch (error) {
           logStorageError('metadata enrichment', error);
         }
+        // Push the freshly fetched metadata to the cloud so other devices see
+        // it on their next pull. Only for already-synced bookmarks: a local
+        // bookmark's create upload already sends its latest fields.
+        if (hasRemoteIdentity(updated.id)) {
+          enqueueMutation(updated.id, 'update');
+        }
+      } finally {
+        enriching.current.delete(bookmark.id);
       }
-      enriching.current.delete(bookmark.id);
     })();
-  }, []);
+  }, [enqueueMutation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -385,16 +400,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [loadedBookmarks, enrichInBackground],
   );
-
-  // Queue a remote mutation for a bookmark that already exists on the server.
-  // One entry per bookmark: a newer mutation supersedes an older one.
-  const enqueueMutation = useCallback((bookmarkId: string, operation: 'update' | 'delete') => {
-    const entry = makeMutationEntry(bookmarkId, operation);
-    setQueue((current) => [...current.filter((queued) => queued.local_id !== bookmarkId), entry]);
-    ensureRepositoryReady()
-      .then(() => repository.enqueue(entry))
-      .catch((error) => logStorageError(`${operation} mutation enqueue`, error));
-  }, []);
 
   // Local-first edit of user-editable fields: apply + persist immediately,
   // show as sync-pending, and queue an update mutation for synced bookmarks.
@@ -674,15 +679,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ensureRepositoryReady()
               .then(() => repository.replaceBookmark(previousId, persisted))
               .catch((error) => logStorageError('post-sync merge', error));
-            // Archived, filed into a collection, or edited while the create
-            // was uploading: the remote row lacks those changes, so
-            // reconcile with an update.
+            // The create payload only carries url/title/notes, and the remote
+            // row defaults to no generated metadata + pending status. If the
+            // local row has since diverged — archived, filed into a collection,
+            // edited, or enriched while the create was uploading — reconcile
+            // with a follow-up update so those changes reach the cloud.
             if (
               entry.operation === 'create' &&
               (persisted.is_archived ||
                 persisted.collection_id !== null ||
                 persisted.title !== (result.uploadedPayload?.title ?? null) ||
-                persisted.notes !== (result.uploadedPayload?.notes ?? null))
+                persisted.notes !== (result.uploadedPayload?.notes ?? null) ||
+                persisted.metadata_status !== 'pending' ||
+                persisted.site_name !== null ||
+                persisted.favicon_url !== null ||
+                persisted.preview_image_url !== null)
             ) {
               enqueueMutation(persisted.id, 'update');
             }

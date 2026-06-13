@@ -81,6 +81,10 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Enrichment never overwrites user-entered values, never blocks or fails a
   save; status transitions `pending → complete | failed | skipped`.
 - ✅ Bookmarks left `pending` by a previous session are enriched on next launch.
+- ✅ Once enrichment completes for a cloud-synced bookmark, the generated
+  metadata is pushed to Supabase (via an update mutation), so other devices
+  receive the enriched title/site/favicon on their next pull rather than the
+  bare create-time payload.
 
 ## 7. Account and sync (Settings)
 
