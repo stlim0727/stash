@@ -147,3 +147,17 @@ test('bookmarks stored from a previous session load on startup', async () => {
   expect(result.current.inbox).toHaveLength(1);
   expect(result.current.inbox[0]?.title).toBe('From last session');
 });
+
+test('enriching a synced bookmark queues an update so metadata reaches the cloud', async () => {
+  const { makeStoredBookmark } = require('./helpers/fake-repository');
+  // A cloud-synced bookmark whose metadata has not been enriched yet.
+  fakeRepo.__reset([makeStoredBookmark({ metadata_status: 'pending' })]);
+
+  await renderStore();
+
+  // The startup enrichment pass completes it and queues a metadata update.
+  await waitFor(() => {
+    const entry = fakeRepo.__queue().find((q) => q.operation === 'update');
+    expect(entry).toBeTruthy();
+  });
+});

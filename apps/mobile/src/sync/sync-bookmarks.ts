@@ -85,6 +85,12 @@ export async function syncQueueEntry(
         notes: bookmark.notes,
         collection_id: bookmark.collection_id,
         is_archived: bookmark.is_archived,
+        // Push generated metadata so enrichment done on this device reaches
+        // the cloud (and, via pull, other devices).
+        site_name: bookmark.site_name,
+        favicon_url: bookmark.favicon_url,
+        preview_image_url: bookmark.preview_image_url,
+        metadata_status: bookmark.metadata_status,
       });
       await removeQueueEntryIfNotSuperseded(repository, entry);
       if (bookmark.sync_status !== 'synced') {

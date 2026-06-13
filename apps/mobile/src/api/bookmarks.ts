@@ -46,6 +46,13 @@ export interface UpdateBookmarkInput {
   notes?: string | null;
   collection_id?: string | null;
   is_archived?: boolean;
+  // Generated metadata, pushed by sync once on-device enrichment completes so
+  // other devices see the enriched title/site/favicon rather than the bare
+  // create-time payload.
+  site_name?: string | null;
+  favicon_url?: string | null;
+  preview_image_url?: string | null;
+  metadata_status?: MetadataStatus;
 }
 
 export interface AddTagsInput {
