@@ -39,6 +39,9 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Lists active (non-archived) bookmarks, newest first.
 - ✅ Each card: title (falls back to URL), URL, and status badges — sync state
   shown unless `synced`, plus `metadata pending` while enrichment runs.
+- ✅ Each card with a URL has an "Open ↗" action that opens the page in the
+  system browser without leaving the Inbox; tapping the card body still opens
+  Bookmark Detail.
 - ✅ Loading state ("Loading your bookmarks…"), empty state ("Nothing saved
   yet…"), and a storage-failure banner (sample data shown, saves may not
   persist) are all distinct.
@@ -49,6 +52,8 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Shows preview image and favicon when present; title header; URL, title,
   description, notes, tags, collection, site, source app, metadata status,
   sync status, saved-at; AI summary when one exists.
+- ✅ When the bookmark has a URL, an "Open link ↗" button opens the page in
+  the system browser; a failure to open surfaces a non-blocking inline error.
 - ✅ Archive/Unarchive toggles immediately (optimistic) and persists.
 - ✅ Delete asks for confirmation, permanently removes the bookmark, and
   returns to the previous screen.
