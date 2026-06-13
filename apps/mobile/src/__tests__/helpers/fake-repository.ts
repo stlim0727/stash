@@ -3,8 +3,8 @@ import type { BookmarkRepository, TagData } from '@/storage/types';
 
 export interface FakeRepositoryModule {
   repository: BookmarkRepository;
-  /** Test hook: reset state, optionally pre-seeding stored bookmarks. */
-  __reset: (rows?: Bookmark[]) => void;
+  /** Test hook: reset state, optionally pre-seeding stored bookmarks/tag data. */
+  __reset: (rows?: Bookmark[], seedTagData?: TagData) => void;
   __queue: () => LocalPendingBookmark[];
 }
 
@@ -61,11 +61,11 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
 
   return {
     repository,
-    __reset: (rows: Bookmark[] = []) => {
+    __reset: (rows: Bookmark[] = [], seedTagData?: TagData) => {
       bookmarks = [...rows];
       queue = [];
       enrichments = [];
-      tagData = { tags: [], bookmarkTags: [], collections: [] };
+      tagData = seedTagData ?? { tags: [], bookmarkTags: [], collections: [] };
       meta = {};
     },
     __queue: () => [...queue],

@@ -42,9 +42,17 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Each card with a URL has an "Open ↗" action that opens the page in the
   system browser without leaving the Inbox; tapping the card body still opens
   Bookmark Detail.
+- ✅ Browse facets: a horizontal chip bar (shown only when the Inbox holds at
+  least one collection or tag) filters the list in place — `All`, `No
+  collection`, one chip per collection present, and one `#tag` chip per tag
+  present. Chips are derived from current Inbox content, so each leads to at
+  least one bookmark; the section header reflects the active facet and count,
+  and selecting a facet composes with search. If the active facet's last
+  member leaves the Inbox, the filter falls back to `All`.
 - ✅ Loading state ("Loading your bookmarks…"), empty state ("Nothing saved
-  yet…"), and a storage-failure banner (sample data shown, saves may not
-  persist) are all distinct.
+  yet…"), a filtered-but-empty state ("Nothing in this view yet."), and a
+  storage-failure banner (sample data shown, saves may not persist) are all
+  distinct.
 - ✅ Footer: Add Bookmark (primary), Settings.
 
 ## 3. Bookmark detail
@@ -147,6 +155,9 @@ upload queue drains — local pending work always wins until uploaded.
 - ✅ Each pull refreshes an authoritative local snapshot of the user's tags,
   tag links, and collections; Detail shows real data (cloud rows win over the
   seeded samples).
+- ✅ Browse: tags and collections are a navigation dimension, not just
+  per-bookmark labels — the Inbox facet bar (see §2) filters the list to a
+  chosen collection or tag, client-side over the local snapshot.
 - ✅ Add/remove tags from Bookmark Detail: tap a chip's × to remove, type to
   add (creates the tag when new). Requires the cloud connection and a synced
   bookmark; otherwise a hint explains why editing is unavailable.

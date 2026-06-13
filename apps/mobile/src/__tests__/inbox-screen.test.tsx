@@ -25,8 +25,19 @@ jest.mock('expo-router', () => ({
 
 import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
+import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeStoredBookmark } from './helpers/fake-repository';
+
+function makeCollection(id: string, name: string): Collection {
+  const now = '2026-06-12T00:00:00.000Z';
+  return { id, user_id: 'user-test', name, description: null, created_at: now, updated_at: now };
+}
+
+function makeTag(id: string, name: string): Tag {
+  const now = '2026-06-12T00:00:00.000Z';
+  return { id, user_id: 'user-test', name, slug: name, source: 'user', created_at: now };
+}
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 
@@ -103,6 +114,63 @@ test('the card Open action opens the bookmark URL in the system browser', async 
 
   expect(openURL).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
   openURL.mockRestore();
+});
+
+test('the collection chip filters the Inbox to that collection', async () => {
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-00000000000a',
+        title: 'Work doc',
+        collection_id: 'col-work',
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-00000000000b',
+        title: 'Loose link',
+        collection_id: null,
+      }),
+    ],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
+  expect(screen.getByText('Loose link')).toBeTruthy();
+
+  await fireEvent.press(screen.getByText('Work'));
+
+  expect(screen.getByText('Work doc')).toBeTruthy();
+  expect(screen.queryByText('Loose link')).toBeNull();
+
+  await fireEvent.press(screen.getByText('No collection'));
+  expect(screen.getByText('Loose link')).toBeTruthy();
+  expect(screen.queryByText('Work doc')).toBeNull();
+});
+
+test('the tag chip filters the Inbox to bookmarks with that tag', async () => {
+  const tagged = '7e64cf1e-0000-4000-8000-00000000000c';
+  const untagged = '7e64cf1e-0000-4000-8000-00000000000d';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: tagged, title: 'Design system' }),
+      makeStoredBookmark({ id: untagged, title: 'Unrelated note' }),
+    ],
+    {
+      tags: [makeTag('t-design', 'design')],
+      bookmarkTags: [
+        { bookmark_id: tagged, tag_id: 't-design', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
+
+  await fireEvent.press(screen.getByText('#design'));
+
+  expect(screen.getByText('Design system')).toBeTruthy();
+  expect(screen.queryByText('Unrelated note')).toBeNull();
 });
 
 test('shows the no-matches empty state for an unmatched search', async () => {

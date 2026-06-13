@@ -1,9 +1,19 @@
 import { Link, useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { FlatList, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  FlatList,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { usePalette } from '@/theme';
 import { filterBookmarks } from '@/domain/search';
+import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
 import { useBookmarks } from '@/store/bookmarks';
 import type { Bookmark } from '@/domain/types';
 
@@ -18,13 +28,104 @@ function statusLabel(bookmark: Bookmark): string | null {
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
+interface FacetChip {
+  key: string;
+  label: string;
+  filter: InboxFilter;
+}
+
 export default function InboxScreen() {
   const palette = usePalette();
   const router = useRouter();
-  const { inbox, isLoading, loadError } = useBookmarks();
+  const { inbox, isLoading, loadError, getTagsForBookmark, getCollection } = useBookmarks();
   const [query, setQuery] = useState('');
-  const visible = useMemo(() => filterBookmarks(inbox, query), [inbox, query]);
+  const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
+
+  const tagIdsFor = useCallback(
+    (id: string) => getTagsForBookmark(id).map((tag) => tag.id),
+    [getTagsForBookmark],
+  );
+
+  // Browse facets derived from what is actually in the Inbox, so every chip
+  // leads to at least one bookmark and the bar stays empty for fresh installs.
+  const { chips, hasUncollected } = useMemo(() => {
+    const collectionIds = new Set<string>();
+    const tagsById = new Map<string, string>();
+    let uncollected = false;
+    for (const bookmark of inbox) {
+      if (bookmark.collection_id === null) {
+        uncollected = true;
+      } else {
+        collectionIds.add(bookmark.collection_id);
+      }
+      for (const tag of getTagsForBookmark(bookmark.id)) {
+        tagsById.set(tag.id, tag.name);
+      }
+    }
+    const collectionChips: FacetChip[] = [...collectionIds]
+      .map((id) => ({ id, name: getCollection(id)?.name }))
+      .filter((entry): entry is { id: string; name: string } => Boolean(entry.name))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(({ id, name }) => ({ key: `c:${id}`, label: name, filter: { kind: 'collection', id } }));
+    const tagChips: FacetChip[] = [...tagsById.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([id, name]) => ({ key: `t:${id}`, label: `#${name}`, filter: { kind: 'tag', id } }));
+    return { chips: [...collectionChips, ...tagChips], hasUncollected: uncollected };
+  }, [inbox, getTagsForBookmark, getCollection]);
+
+  // If the active facet disappears (last member removed/unfiled), fall back to
+  // All rather than stranding the user on an empty filtered view.
+  useEffect(() => {
+    if (filter.kind === 'all') {
+      return;
+    }
+    if (filter.kind === 'uncollected') {
+      if (!hasUncollected) {
+        setFilter(ALL_FILTER);
+      }
+      return;
+    }
+    if (!chips.some((chip) => sameFilter(chip.filter, filter))) {
+      setFilter(ALL_FILTER);
+    }
+  }, [filter, chips, hasUncollected]);
+
+  const facetFiltered = useMemo(
+    () => filterByFacet(inbox, filter, tagIdsFor),
+    [inbox, filter, tagIdsFor],
+  );
+  const visible = useMemo(() => filterBookmarks(facetFiltered, query), [facetFiltered, query]);
   const searching = query.trim().length > 0;
+  const showShelf = chips.length > 0;
+
+  const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
+  const sectionLabel = searching
+    ? `Matches (${visible.length})`
+    : filter.kind === 'uncollected'
+      ? `No collection · ${visible.length}`
+      : activeChip
+        ? `${activeChip.label} · ${visible.length}`
+        : 'Recently saved';
+
+  const renderChip = (key: string, label: string, target: InboxFilter) => {
+    const active = sameFilter(target, filter);
+    return (
+      <Pressable
+        key={key}
+        accessibilityRole="button"
+        accessibilityState={{ selected: active }}
+        onPress={() => setFilter(target)}
+        style={[
+          styles.chip,
+          { backgroundColor: active ? palette.accent : palette.card, borderColor: palette.border },
+        ]}
+      >
+        <Text style={[styles.chipLabel, { color: active ? '#ffffff' : palette.text }]}>
+          {label}
+        </Text>
+      </Pressable>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -35,10 +136,7 @@ export default function InboxScreen() {
       ) : null}
       <View style={styles.searchWrap}>
         <TextInput
-          style={[
-            styles.searchInput,
-            { backgroundColor: palette.card, color: palette.text },
-          ]}
+          style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
           placeholder="Search title, notes, or URL"
           placeholderTextColor={palette.textSecondary}
           autoCapitalize="none"
@@ -48,13 +146,25 @@ export default function InboxScreen() {
           clearButtonMode="while-editing"
         />
       </View>
+      {showShelf ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.shelf}
+          contentContainerStyle={styles.shelfContent}
+        >
+          {renderChip('all', 'All', ALL_FILTER)}
+          {hasUncollected ? renderChip('uncollected', 'No collection', { kind: 'uncollected' }) : null}
+          {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter))}
+        </ScrollView>
+      ) : null}
       <FlatList
         data={visible}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-            {searching ? `Matches (${visible.length})` : 'Recently saved'}
+            {sectionLabel}
           </Text>
         }
         ListEmptyComponent={
@@ -63,7 +173,9 @@ export default function InboxScreen() {
               ? 'Loading your bookmarks…'
               : searching
                 ? 'No bookmarks match your search.'
-                : 'Nothing saved yet. Add your first bookmark below.'}
+                : filter.kind !== 'all'
+                  ? 'Nothing in this view yet.'
+                  : 'Nothing saved yet. Add your first bookmark below.'}
           </Text>
         }
         renderItem={({ item }) => {
@@ -156,6 +268,24 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
     fontSize: 15,
+  },
+  shelf: {
+    flexGrow: 0,
+    paddingTop: 10,
+  },
+  shelfContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  chip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+  },
+  chipLabel: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   card: {
     borderRadius: 12,
