@@ -9,6 +9,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 
+import { setSentryUser } from '@/observability/sentry';
 import { describeSupabaseConfig, getSupabaseConfigState } from '@/supabase/config';
 import { createSupabaseClient } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
@@ -86,15 +87,22 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     void ensureAnonymousSession();
   }, [ensureAnonymousSession]);
 
+  // Tag crash/error reports with the anonymous user id (opaque — no PII) so
+  // events can be grouped per device. No-op until Sentry is configured.
+  const userId = session?.user.id ?? null;
+  useEffect(() => {
+    setSentryUser(userId);
+  }, [userId]);
+
   const value = useMemo<SupabaseAuthContextValue>(
     () => ({
       status,
       session,
-      userId: session?.user.id ?? null,
+      userId,
       message,
       ensureAnonymousSession,
     }),
-    [status, session, message, ensureAnonymousSession],
+    [status, session, userId, message, ensureAnonymousSession],
   );
 
   return <SupabaseAuthContext.Provider value={value}>{children}</SupabaseAuthContext.Provider>;
