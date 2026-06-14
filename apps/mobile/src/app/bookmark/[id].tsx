@@ -14,6 +14,8 @@ import {
 } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { pendingSuggestions } from '@/domain/ai-suggestions';
+import type { SuggestedTag } from '@/domain/types';
 import { useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
@@ -65,13 +67,12 @@ export default function BookmarkDetailScreen() {
   const enrichment = getEnrichment(bookmark.id);
   const canOrganizeRemotely = hasRemoteIdentity(bookmark.id);
 
-  // AI suggestions: surface only tags not already applied or dismissed, and a
-  // collection that differs from where the bookmark currently lives.
+  // AI suggestions: surface only high-confidence tags not already applied
+  // (centralized in @/domain/ai-suggestions) and not dismissed this session,
+  // plus a collection that differs from where the bookmark currently lives.
   const appliedTagNames = new Set(tags.map((tag) => tag.name.toLowerCase()));
-  const pendingSuggestions = (enrichment?.suggested_tags ?? []).filter(
-    (suggestion) =>
-      !appliedTagNames.has(suggestion.name.toLowerCase()) &&
-      !dismissed.has(suggestion.name.toLowerCase()),
+  const pending = pendingSuggestions(enrichment, appliedTagNames).filter(
+    (suggestion) => !dismissed.has(suggestion.name.toLowerCase()),
   );
   const suggestedCollection = getCollection(enrichment?.suggested_collection_id ?? null);
   const showCollectionSuggestion =
@@ -124,7 +125,7 @@ export default function BookmarkDetailScreen() {
 
   const handleSuggestAi = () => runOrganizeAction(() => requestAiEnrichment(bookmark.id));
 
-  const handleAcceptTags = (items: typeof pendingSuggestions) =>
+  const handleAcceptTags = (items: SuggestedTag[]) =>
     runOrganizeAction(() => acceptSuggestedTags(bookmark.id, items));
 
   const handleDismissTag = (name: string) =>
@@ -260,14 +261,21 @@ export default function BookmarkDetailScreen() {
           ) : null}
         </View>
 
+        {enrichment?.status === 'stale' ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            These suggestions may be out of date since you edited this bookmark — refresh to update
+            them.
+          </Text>
+        ) : null}
+
         {enrichment?.summary ? (
           <Text style={[styles.fieldValue, { color: palette.text }]}>{enrichment.summary}</Text>
         ) : null}
 
-        {pendingSuggestions.length > 0 ? (
+        {pending.length > 0 ? (
           <>
             <View style={styles.chipRow}>
-              {pendingSuggestions.map((suggestion) => (
+              {pending.map((suggestion) => (
                 <View
                   key={suggestion.name}
                   style={[styles.chip, styles.tagChip, { borderColor: palette.accent }]}
@@ -296,8 +304,8 @@ export default function BookmarkDetailScreen() {
                 </View>
               ))}
             </View>
-            {pendingSuggestions.length > 1 ? (
-              <Pressable disabled={busy} onPress={() => void handleAcceptTags(pendingSuggestions)}>
+            {pending.length > 1 ? (
+              <Pressable disabled={busy} onPress={() => void handleAcceptTags(pending)}>
                 <Text style={[styles.link, { color: palette.accent }]}>Accept all tags</Text>
               </Pressable>
             ) : null}
@@ -334,7 +342,7 @@ export default function BookmarkDetailScreen() {
           </Text>
         )}
 
-        {enrichment && pendingSuggestions.length === 0 && !showCollectionSuggestion ? (
+        {enrichment && pending.length === 0 && !showCollectionSuggestion ? (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>
             No new suggestions right now.
           </Text>

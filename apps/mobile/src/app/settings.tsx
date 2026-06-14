@@ -3,13 +3,29 @@ import { Link } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 
 export default function SettingsScreen() {
   const palette = usePalette();
-  const { queue, isSyncing, syncNow, inbox, archived, lastPulledAt } = useBookmarks();
+  const {
+    queue,
+    isSyncing,
+    syncNow,
+    inbox,
+    archived,
+    lastPulledAt,
+    getTagsForBookmark,
+    getEnrichment,
+  } = useBookmarks();
   const auth = useSupabaseAuth();
+
+  // Total high-confidence, un-applied suggestions waiting in the review queue.
+  const pendingSuggestionCount = inbox.reduce((total, bookmark) => {
+    const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
+    return total + pendingSuggestions(getEnrichment(bookmark.id), applied).length;
+  }, 0);
 
   const waiting = queue.filter(
     (entry) => entry.sync_status === 'pending' || entry.sync_status === 'failed',
@@ -67,11 +83,31 @@ export default function SettingsScreen() {
         </View>
       ))}
 
+      <Link href="/review" asChild>
+        <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
+          <Text style={[styles.rowLabel, { color: palette.text }]}>Review AI suggestions</Text>
+          <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
+            {pendingSuggestionCount > 0
+              ? `${pendingSuggestionCount} suggestion${pendingSuggestionCount > 1 ? 's' : ''} to review ›`
+              : 'Nothing to review right now ›'}
+          </Text>
+        </Pressable>
+      </Link>
+
       <Link href="/archived" asChild>
         <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
           <Text style={[styles.rowLabel, { color: palette.text }]}>Library</Text>
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
             {`${inbox.length} in inbox · ${archived.length} archived — view archived ›`}
+          </Text>
+        </Pressable>
+      </Link>
+
+      <Link href="/report" asChild>
+        <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
+          <Text style={[styles.rowLabel, { color: palette.text }]}>Report a problem</Text>
+          <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
+            Send a bug or idea with diagnostic context ›
           </Text>
         </Pressable>
       </Link>

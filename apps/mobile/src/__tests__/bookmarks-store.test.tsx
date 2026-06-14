@@ -138,6 +138,54 @@ test('updateBookmarkFields edits the title and clears it back to null', async ()
   expect(result.current.inbox[0]?.title).toBeNull();
 });
 
+test('editing title/notes marks a complete enrichment stale (locally + persisted)', async () => {
+  const {
+    makeStoredBookmark,
+    makeEnrichment,
+  } = require('./helpers/fake-repository');
+  const SYNCED_ID = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'Original title' })],
+    undefined,
+    [makeEnrichment({ bookmark_id: SYNCED_ID, status: 'complete' })],
+  );
+
+  const { result } = await renderStore();
+  expect(result.current.getEnrichment(SYNCED_ID)?.status).toBe('complete');
+
+  await act(async () => {
+    result.current.updateBookmarkFields(SYNCED_ID, { title: 'A new title' });
+  });
+
+  expect(result.current.getEnrichment(SYNCED_ID)?.status).toBe('stale');
+  await waitFor(() =>
+    expect(fakeRepo.repository.listEnrichments()).resolves.toEqual([
+      expect.objectContaining({ bookmark_id: SYNCED_ID, status: 'stale' }),
+    ]),
+  );
+});
+
+test('a no-op edit (no real text change) does not mark the enrichment stale', async () => {
+  const {
+    makeStoredBookmark,
+    makeEnrichment,
+  } = require('./helpers/fake-repository');
+  const SYNCED_ID = '7e64cf1e-0000-4000-8000-000000000001';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'Unchanged' })],
+    undefined,
+    [makeEnrichment({ bookmark_id: SYNCED_ID, status: 'complete' })],
+  );
+
+  const { result } = await renderStore();
+
+  await act(async () => {
+    result.current.updateBookmarkFields(SYNCED_ID, { title: 'Unchanged' });
+  });
+
+  expect(result.current.getEnrichment(SYNCED_ID)?.status).toBe('complete');
+});
+
 test('bookmarks stored from a previous session load on startup', async () => {
   const { makeStoredBookmark } = require('./helpers/fake-repository');
   fakeRepo.__reset([makeStoredBookmark({ title: 'From last session' })]);
