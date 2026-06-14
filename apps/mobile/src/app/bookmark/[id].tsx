@@ -32,6 +32,8 @@ export default function BookmarkDetailScreen() {
     collections,
     addTagsToBookmark,
     removeTagFromBookmark,
+    requestAiEnrichment,
+    acceptSuggestedTags,
     assignCollection,
     createCollection,
   } = useBookmarks();
@@ -40,6 +42,8 @@ export default function BookmarkDetailScreen() {
   const [newCollectionName, setNewCollectionName] = useState('');
   const [organizeError, setOrganizeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Suggested tag names the user dismissed this session (local-only).
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   // null = not editing; the live bookmark value shows until the user types.
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
@@ -60,6 +64,18 @@ export default function BookmarkDetailScreen() {
   const collection = getCollection(bookmark.collection_id);
   const enrichment = getEnrichment(bookmark.id);
   const canOrganizeRemotely = hasRemoteIdentity(bookmark.id);
+
+  // AI suggestions: surface only tags not already applied or dismissed, and a
+  // collection that differs from where the bookmark currently lives.
+  const appliedTagNames = new Set(tags.map((tag) => tag.name.toLowerCase()));
+  const pendingSuggestions = (enrichment?.suggested_tags ?? []).filter(
+    (suggestion) =>
+      !appliedTagNames.has(suggestion.name.toLowerCase()) &&
+      !dismissed.has(suggestion.name.toLowerCase()),
+  );
+  const suggestedCollection = getCollection(enrichment?.suggested_collection_id ?? null);
+  const showCollectionSuggestion =
+    !!suggestedCollection && bookmark.collection_id !== suggestedCollection.id;
 
   const titleValue = draftTitle ?? bookmark.title ?? '';
   const notesValue = draftNotes ?? bookmark.notes ?? '';
@@ -86,10 +102,6 @@ export default function BookmarkDetailScreen() {
     { label: 'Saved at', value: new Date(bookmark.created_at).toLocaleString() },
   ];
 
-  if (enrichment?.summary) {
-    fields.push({ label: 'AI summary', value: enrichment.summary });
-  }
-
   const runOrganizeAction = async (action: () => Promise<string | null>) => {
     setBusy(true);
     setOrganizeError(null);
@@ -107,6 +119,20 @@ export default function BookmarkDetailScreen() {
     const ok = await runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
     if (ok) {
       setTagInput('');
+    }
+  };
+
+  const handleSuggestAi = () => runOrganizeAction(() => requestAiEnrichment(bookmark.id));
+
+  const handleAcceptTags = (items: typeof pendingSuggestions) =>
+    runOrganizeAction(() => acceptSuggestedTags(bookmark.id, items));
+
+  const handleDismissTag = (name: string) =>
+    setDismissed((prev) => new Set(prev).add(name.toLowerCase()));
+
+  const handleAcceptCollection = () => {
+    if (suggestedCollection) {
+      assignCollection(bookmark.id, suggestedCollection.id);
     }
   };
 
@@ -221,6 +247,99 @@ export default function BookmarkDetailScreen() {
           <Text style={[styles.fieldValue, { color: palette.text }]}>{field.value}</Text>
         </View>
       ))}
+
+      <View style={[styles.field, { backgroundColor: palette.card }]}>
+        <View style={styles.suggestHeader}>
+          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>AI suggestions</Text>
+          {enrichment?.model ? (
+            <View style={[styles.aiBadge, { borderColor: palette.border }]}>
+              <Text style={[styles.aiBadgeLabel, { color: palette.textSecondary }]}>
+                {enrichment.model}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {enrichment?.summary ? (
+          <Text style={[styles.fieldValue, { color: palette.text }]}>{enrichment.summary}</Text>
+        ) : null}
+
+        {pendingSuggestions.length > 0 ? (
+          <>
+            <View style={styles.chipRow}>
+              {pendingSuggestions.map((suggestion) => (
+                <View
+                  key={suggestion.name}
+                  style={[styles.chip, styles.tagChip, { borderColor: palette.accent }]}
+                >
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Accept suggested tag ${suggestion.name}`}
+                    disabled={busy}
+                    onPress={() => void handleAcceptTags([suggestion])}
+                  >
+                    <Text style={[styles.chipLabel, { color: palette.accent }]}>
+                      ＋ {suggestion.name}
+                    </Text>
+                  </Pressable>
+                  <Text style={[styles.confidence, { color: palette.textSecondary }]}>
+                    {Math.round(suggestion.confidence * 100)}%
+                  </Text>
+                  <Pressable
+                    accessibilityLabel={`Dismiss suggested tag ${suggestion.name}`}
+                    disabled={busy}
+                    hitSlop={6}
+                    onPress={() => handleDismissTag(suggestion.name)}
+                  >
+                    <Text style={[styles.chipRemove, { color: palette.textSecondary }]}>×</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+            {pendingSuggestions.length > 1 ? (
+              <Pressable disabled={busy} onPress={() => void handleAcceptTags(pendingSuggestions)}>
+                <Text style={[styles.link, { color: palette.accent }]}>Accept all tags</Text>
+              </Pressable>
+            ) : null}
+          </>
+        ) : null}
+
+        {suggestedCollection && bookmark.collection_id !== suggestedCollection.id ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`File into ${suggestedCollection.name}`}
+            disabled={busy}
+            onPress={handleAcceptCollection}
+          >
+            <Text style={[styles.link, { color: palette.accent }]}>
+              Suggested collection: file into “{suggestedCollection.name}”
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {canOrganizeRemotely ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={busy}
+            style={[styles.suggestButton, { borderColor: palette.border }]}
+            onPress={() => void handleSuggestAi()}
+          >
+            <Text style={[styles.actionLabel, { color: palette.accent }]}>
+              {enrichment ? 'Refresh AI suggestions' : 'Suggest with AI'}
+            </Text>
+          </Pressable>
+        ) : (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            AI suggestions are available once this bookmark has synced.
+          </Text>
+        )}
+
+        {enrichment && pendingSuggestions.length === 0 && !showCollectionSuggestion ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            No new suggestions right now.
+          </Text>
+        ) : null}
+      </View>
 
       <View style={[styles.field, { backgroundColor: palette.card }]}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
@@ -410,6 +529,35 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  suggestHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  aiBadge: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 8,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+  },
+  aiBadgeLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  confidence: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  link: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  suggestButton: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
   },
   chip: {
     borderWidth: StyleSheet.hairlineWidth,

@@ -16,7 +16,8 @@
     "format": "node scripts/format.mjs --write",
     "format:check": "node scripts/format.mjs --check",
     "lint": "pnpm format:check",
-    "test": "pnpm --filter mobile test",
+    "test": "pnpm --filter mobile test && pnpm test:functions",
+    "test:functions": "node --no-warnings --experimental-transform-types --test \"supabase/functions/**/*.test.ts\"",
     "typecheck": "pnpm --filter mobile typecheck",
     "verify:supabase": "node --no-warnings --experimental-transform-types scripts/verify-supabase.mjs",
     "test:components": "pnpm --filter mobile test:components"

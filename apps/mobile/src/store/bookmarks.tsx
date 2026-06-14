@@ -25,6 +25,7 @@ import type {
   BookmarkTag,
   Collection,
   LocalPendingBookmark,
+  SuggestedTag,
   Tag,
 } from '@/domain/types';
 import { repository } from '@/storage/repository';
@@ -79,6 +80,10 @@ interface BookmarksContextValue {
   addTagsToBookmark: (bookmarkId: string, names: string[]) => Promise<string | null>;
   /** Remove a tag from a synced bookmark. Resolves to an error message, or null. */
   removeTagFromBookmark: (bookmarkId: string, tagName: string) => Promise<string | null>;
+  /** Generate AI suggestions for a synced bookmark. Resolves to an error, or null. */
+  requestAiEnrichment: (bookmarkId: string) => Promise<string | null>;
+  /** Accept AI-suggested tags (linked with source 'ai'). Resolves to an error, or null. */
+  acceptSuggestedTags: (bookmarkId: string, suggestions: SuggestedTag[]) => Promise<string | null>;
   /** Move a bookmark into a collection (or out, with null). Local-first. */
   assignCollection: (bookmarkId: string, collectionId: string | null) => void;
   /** Create a cloud collection. Resolves to the collection or an error message. */
@@ -127,6 +132,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Bookmark IDs currently being enriched, so concurrent passes (startup +
   // a fresh save) never double-process the same item.
   const enriching = useRef(new Set<string>());
+  // Bookmark IDs with an AI enrichment request in flight, so an auto-trigger
+  // and a manual "Suggest with AI" tap never fire duplicate requests.
+  const aiEnriching = useRef(new Set<string>());
   // Tombstones for deleted local bookmarks. The sync loop iterates over a
   // snapshot, so a delete that lands mid-run must be visible to it — both
   // before uploading an entry and before applying an upload's result.
@@ -552,6 +560,96 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [auth, applyTagData],
   );
 
+  // Ask the backend to (re)generate AI suggestions for a synced bookmark. The
+  // edge function writes the enrichment and returns it, so we surface results
+  // immediately rather than waiting for the next pull. Fire-and-forget safe:
+  // failures (e.g. the function isn't deployed yet) just return a message.
+  const requestAiEnrichment = useCallback(
+    async (bookmarkId: string): Promise<string | null> => {
+      if (auth.status !== 'anonymous' || !auth.session) {
+        return 'AI suggestions need the cloud — Supabase is not available right now.';
+      }
+      if (!hasRemoteIdentity(bookmarkId)) {
+        return 'AI suggestions are available once this bookmark has synced.';
+      }
+      if (aiEnriching.current.has(bookmarkId)) {
+        return null;
+      }
+      aiEnriching.current.add(bookmarkId);
+      try {
+        const api = createSyncApi(auth.session);
+        const enrichment = await api.requestEnrichment(bookmarkId);
+        // Newest enrichment for this bookmark wins (getEnrichment sorts too).
+        setEnrichments((current) => [
+          enrichment,
+          ...current.filter((item) => item.bookmark_id !== bookmarkId),
+        ]);
+        try {
+          await ensureRepositoryReady();
+          await repository.upsertEnrichments([enrichment]);
+        } catch (error) {
+          logStorageError('ai enrichment', error);
+        }
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
+      } finally {
+        aiEnriching.current.delete(bookmarkId);
+      }
+    },
+    [auth],
+  );
+
+  // Accept AI-suggested tags: ensure + link them with `source: 'ai'` so their
+  // provenance and confidence are preserved (vs. user-typed tags).
+  const acceptSuggestedTags = useCallback(
+    async (bookmarkId: string, suggestions: SuggestedTag[]): Promise<string | null> => {
+      if (auth.status !== 'anonymous' || !auth.session) {
+        return 'Tags need the cloud — Supabase is not available right now.';
+      }
+      if (!hasRemoteIdentity(bookmarkId)) {
+        return 'Tags can be added once this bookmark has synced.';
+      }
+      const names = suggestions.map((suggestion) => suggestion.name);
+      if (names.length === 0) {
+        return null;
+      }
+      try {
+        const api = createSyncApi(auth.session);
+        const ensured = await api.addTags({ bookmark_id: bookmarkId, tags: names, source: 'ai' });
+        const now = new Date().toISOString();
+        const current = tagDataRef.current;
+        const knownTagIds = new Set(current.tags.map((tag) => tag.id));
+        const linkedTagIds = new Set(
+          current.bookmarkTags
+            .filter((link) => link.bookmark_id === bookmarkId)
+            .map((link) => link.tag_id),
+        );
+        const confidenceByName = new Map(
+          suggestions.map((suggestion) => [suggestion.name.toLowerCase(), suggestion.confidence]),
+        );
+        const newLinks: BookmarkTag[] = ensured
+          .filter((tag) => !linkedTagIds.has(tag.id))
+          .map((tag) => ({
+            bookmark_id: bookmarkId,
+            tag_id: tag.id,
+            source: 'ai',
+            confidence: confidenceByName.get(tag.name.toLowerCase()) ?? null,
+            created_at: now,
+          }));
+        applyTagData({
+          ...current,
+          tags: [...current.tags, ...ensured.filter((tag) => !knownTagIds.has(tag.id))],
+          bookmarkTags: [...current.bookmarkTags, ...newLinks],
+        });
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : 'Could not add tags.';
+      }
+    },
+    [auth, applyTagData],
+  );
+
   const assignCollection = useCallback(
     (bookmarkId: string, collectionId: string | null) =>
       applyBookmarkUpdate(bookmarkId, { collection_id: collectionId }),
@@ -697,6 +795,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ) {
               enqueueMutation(persisted.id, 'update');
             }
+            // A brand-new bookmark just gained a remote identity: kick off AI
+            // suggestions once, in the background. Failures are swallowed.
+            if (entry.operation === 'create') {
+              void requestAiEnrichment(persisted.id);
+            }
           }
         }
       }
@@ -744,7 +847,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncInFlight.current = false;
       setIsSyncing(false);
     }
-  }, [auth, queue, enqueueMutation]);
+  }, [auth, queue, enqueueMutation, requestAiEnrichment]);
 
   // Background enrichment: once local data is loaded, enrich any bookmark
   // whose metadata is still pending (seeded items, or saves from a previous
@@ -809,6 +912,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       collections: tagData.collections,
       addTagsToBookmark,
       removeTagFromBookmark,
+      requestAiEnrichment,
+      acceptSuggestedTags,
       assignCollection,
       createCollection,
     }),
@@ -831,6 +936,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       tagData.collections,
       addTagsToBookmark,
       removeTagFromBookmark,
+      requestAiEnrichment,
+      acceptSuggestedTags,
       assignCollection,
       createCollection,
     ],
