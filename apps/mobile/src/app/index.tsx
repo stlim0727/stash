@@ -1,4 +1,4 @@
-import { Link, useRouter } from 'expo-router';
+import { Link, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
@@ -41,6 +41,21 @@ export default function InboxScreen() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
 
+  // Browse facet handed in by another screen (e.g. tapping a tag in Bookmark
+  // Detail). Applying it on param change lets in-app links jump to a view.
+  const params = useLocalSearchParams<{ tag?: string | string[]; collection?: string | string[] }>();
+  const paramTag = Array.isArray(params.tag) ? params.tag[0] : params.tag;
+  const paramCollection = Array.isArray(params.collection)
+    ? params.collection[0]
+    : params.collection;
+  useEffect(() => {
+    if (paramTag) {
+      setFilter({ kind: 'tag', id: paramTag });
+    } else if (paramCollection) {
+      setFilter({ kind: 'collection', id: paramCollection });
+    }
+  }, [paramTag, paramCollection]);
+
   const tagIdsFor = useCallback(
     (id: string) => getTagsForBookmark(id).map((tag) => tag.id),
     [getTagsForBookmark],
@@ -76,7 +91,9 @@ export default function InboxScreen() {
   // If the active facet disappears (last member removed/unfiled), fall back to
   // All rather than stranding the user on an empty filtered view.
   useEffect(() => {
-    if (filter.kind === 'all') {
+    // Wait for the durable load: facets are empty mid-load, which would
+    // wrongly reset a filter handed in via route param (deep-link to a tag).
+    if (isLoading || filter.kind === 'all') {
       return;
     }
     if (filter.kind === 'uncollected') {
@@ -88,7 +105,7 @@ export default function InboxScreen() {
     if (!chips.some((chip) => sameFilter(chip.filter, filter))) {
       setFilter(ALL_FILTER);
     }
-  }, [filter, chips, hasUncollected]);
+  }, [filter, chips, hasUncollected, isLoading]);
 
   const facetFiltered = useMemo(
     () => filterByFacet(inbox, filter, tagIdsFor),

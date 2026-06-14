@@ -157,10 +157,14 @@ upload queue drains — local pending work always wins until uploaded.
   seeded samples).
 - ✅ Browse: tags and collections are a navigation dimension, not just
   per-bookmark labels — the Inbox facet bar (see §2) filters the list to a
-  chosen collection or tag, client-side over the local snapshot.
-- ✅ Add/remove tags from Bookmark Detail: tap a chip's × to remove, type to
-  add (creates the tag when new). Requires the cloud connection and a synced
-  bookmark; otherwise a hint explains why editing is unavailable.
+  chosen collection or tag, client-side over the local snapshot. Tapping a tag
+  chip in Bookmark Detail also jumps to the Inbox filtered by that tag (via a
+  route param); deep-linking survives the load (the facet is not reset before
+  the durable store finishes loading).
+- ✅ Add/remove tags from Bookmark Detail: tap a tag chip to browse it; tap its
+  × to remove; type to add (creates the tag when new). The × and add affordance
+  require the cloud connection and a synced bookmark; otherwise a hint explains
+  why editing is unavailable (browsing still works).
 - ✅ Assign a bookmark to a collection from Detail (chip picker, "Inbox
   (none)" to clear) — local-first: the change applies immediately and queues
   an update mutation. Creating a new collection (and filing the bookmark into

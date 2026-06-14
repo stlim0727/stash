@@ -227,17 +227,30 @@ export default function BookmarkDetailScreen() {
         {tags.length > 0 ? (
           <View style={styles.chipRow}>
             {tags.map((tag) => (
-              <Pressable
+              <View
                 key={tag.id}
-                disabled={busy || !canOrganizeRemotely}
-                style={[styles.chip, { borderColor: palette.border }]}
-                onPress={() => void runOrganizeAction(() => removeTagFromBookmark(bookmark.id, tag.name))}
+                style={[styles.chip, styles.tagChip, { borderColor: palette.border }]}
               >
-                <Text style={[styles.chipLabel, { color: palette.text }]}>
-                  {tag.name}
-                  {canOrganizeRemotely ? '  ×' : ''}
-                </Text>
-              </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Browse #${tag.name}`}
+                  onPress={() => router.navigate({ pathname: '/', params: { tag: tag.id } })}
+                >
+                  <Text style={[styles.chipLabel, { color: palette.text }]}>{tag.name}</Text>
+                </Pressable>
+                {canOrganizeRemotely ? (
+                  <Pressable
+                    accessibilityLabel={`Remove tag ${tag.name}`}
+                    disabled={busy}
+                    hitSlop={6}
+                    onPress={() =>
+                      void runOrganizeAction(() => removeTagFromBookmark(bookmark.id, tag.name))
+                    }
+                  >
+                    <Text style={[styles.chipRemove, { color: palette.textSecondary }]}>×</Text>
+                  </Pressable>
+                ) : null}
+              </View>
             ))}
           </View>
         ) : (
@@ -403,6 +416,15 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingVertical: 6,
     paddingHorizontal: 12,
+  },
+  tagChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  chipRemove: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   chipLabel: {
     fontSize: 14,
