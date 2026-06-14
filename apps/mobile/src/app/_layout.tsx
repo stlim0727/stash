@@ -24,6 +24,7 @@ export default function RootLayout() {
               />
               <Stack.Screen name="settings" options={{ title: 'Settings' }} />
               <Stack.Screen name="review" options={{ title: 'Review AI suggestions' }} />
+              <Stack.Screen name="report" options={{ title: 'Report a problem' }} />
               <Stack.Screen name="archived" options={{ title: 'Archived' }} />
               <Stack.Screen name="bookmark/[id]" options={{ title: 'Bookmark' }} />
             </Stack>

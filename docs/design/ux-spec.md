@@ -234,7 +234,33 @@ upload queue drains — local pending work always wins until uploaded.
   and queue an update mutation for synced bookmarks; clearing a field stores
   null (an emptied title becomes eligible for enrichment again).
 
-## 13. Release readiness
+## 13. Feedback / issue reporting
+
+In-app, context-aware problem reporting so users can flag bugs and ideas
+without leaving the app, with enough diagnostic context to act on.
+
+- ✅ **Entry point**: Settings has a "Report a problem" row that opens the
+  report screen (`/report`).
+- ✅ **Form**: a category selector (Bug / Idea / Other), a multiline
+  description, and a Submit button that stays disabled until the description is
+  non-empty.
+- ✅ **Diagnostic context preview**: a read-only JSON preview of exactly what
+  will be attached — app version, platform, current route, auth status, sync
+  queue depth, sync-in-flight, last pull time, and the last operational error.
+  Built by a pure, dependency-free helper (`@/domain/diagnostics`) that is
+  redacted by default: it never includes bookmark contents (URLs, titles,
+  notes). A privacy note states "No bookmark contents are included."
+- ✅ **Guarded like other cloud features**: needs an anonymous Supabase
+  session; when Supabase is `not_configured` the screen explains reporting is
+  unavailable while the rest of the app keeps working offline.
+- ✅ **Storage**: submitting inserts a row into `public.feedback_reports`
+  (RLS: a user may insert and read only their own rows). Success and error
+  states are surfaced inline.
+- 🔶 **MVP scope**: online submit only — no offline queue (a failed submit is
+  retried by the user, not durably queued). Reports are stored in Supabase
+  only; there is no GitHub-issue bridge yet. Both are tracked follow-ups.
+
+## 14. Release readiness
 
 - ✅ CI runs lint, typecheck, the logic test suite (Node test runner), and the
   component test suite (jest-expo + React Native Testing Library) on every PR
