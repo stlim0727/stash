@@ -62,6 +62,43 @@ pnpm --filter mobile ios       # expo run:ios (macOS)
 `expo prebuild` generates the native `ios/` and `android/` projects on demand;
 both are gitignored and regenerated from `app.json` + config plugins.
 
+## Crash & error monitoring (Sentry)
+
+Unhandled JS/native errors are reported to [Sentry](https://sentry.io) via
+`@sentry/react-native`. The wiring is split the same way as the rest of the app:
+
+- `src/observability/sentry-config.ts` — pure, unit-tested config (reads env, no SDK).
+- `src/observability/sentry.ts` — thin SDK shell (`initSentry`, `wrapWithSentry`).
+- `src/app/_layout.tsx` — calls `initSentry()` at boot and wraps the root.
+- `app.json` — the `@sentry/react-native/expo` config plugin (native setup +
+  source-map upload during EAS Build).
+
+**Monitoring is off until a DSN is set**, so local and preview builds never
+report by accident. Configure the client with Expo public env vars (e.g. in
+`.env`, EAS build env, or `eas.json`):
+
+| Variable                                | Purpose                                                       |
+| --------------------------------------- | ------------------------------------------------------------- |
+| `EXPO_PUBLIC_SENTRY_DSN`                | Sentry DSN. Unset ⇒ monitoring disabled.                      |
+| `EXPO_PUBLIC_SENTRY_ENVIRONMENT`        | `development` (default) / `preview` / `production`.           |
+| `EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` | 0..1 performance trace sample rate; `0` (off) by default.     |
+
+Privacy: `sendDefaultPii` is `false` (no IP/cookies); only an opaque user id is
+attached if you call `setSentryUser`.
+
+### Source maps + releases
+
+Two pieces make stack traces readable and trackable:
+
+1. **Source maps** are uploaded automatically during **EAS Build** by the Expo
+   config plugin when these build-time secrets are present:
+   `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` (set via
+   `eas secret:create` / the EAS dashboard).
+2. **Release + commit association** is created by the
+   `.github/workflows/sentry-release.yml` workflow when a `v*` tag is pushed
+   (or via manual dispatch). It needs the same three values as **repository
+   secrets**; the job skips cleanly if `SENTRY_AUTH_TOKEN` is unset.
+
 ## Smoke test checklist for an internal build
 
 1. Launch → lands on Inbox (sample data on first run).

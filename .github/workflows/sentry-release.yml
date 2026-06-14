@@ -1,0 +1,41 @@
+name: Sentry Release
+
+# Creates a Sentry release and associates commits with it when a version tag is
+# pushed (or on manual dispatch). This gives Sentry the release → commit mapping
+# behind suspect-commit detection and regression tracking.
+#
+# Source map upload for the React Native bundle is NOT done here — it happens
+# during the EAS Build via the `@sentry/react-native/expo` config plugin, which
+# has the bundled JS + maps. This workflow only marks the release.
+#
+# Required repository secrets (the job skips cleanly if SENTRY_AUTH_TOKEN is unset):
+#   SENTRY_AUTH_TOKEN, SENTRY_ORG, SENTRY_PROJECT
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (defaults to the pushed tag name)
+        required: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the action can associate commits with the release.
+          fetch-depth: 0
+      - name: Create Sentry release
+        if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
+        uses: getsentry/action-release@v3
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        with:
+          environment: production
+          version: ${{ github.event.inputs.version || github.ref_name }}
