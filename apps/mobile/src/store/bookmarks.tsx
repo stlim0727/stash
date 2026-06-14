@@ -153,6 +153,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     tagDataRef.current = tagData;
   }, [tagData]);
+  // Mirror of the enrichments state so the edit path can read the LATEST rows
+  // synchronously when deciding whether to mark suggestions stale.
+  const enrichmentsRef = useRef<AIEnrichment[]>([]);
+  useEffect(() => {
+    enrichmentsRef.current = enrichments;
+  }, [enrichments]);
 
   // Apply + persist a new tag-data snapshot in one step.
   const applyTagData = useCallback((next: TagData) => {
@@ -449,8 +455,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [applyBookmarkUpdate],
   );
 
+  // Mark a bookmark's newest 'complete' enrichment as stale when the user edits
+  // its title/notes, so Bookmark Detail can flag the suggestions as out of date
+  // until "Refresh AI suggestions" regenerates them. Local-first: never calls
+  // the network here, just updates + persists the status.
+  const markEnrichmentStale = useCallback((bookmarkId: string) => {
+    const current = enrichmentsRef.current
+      .filter((enrichment) => enrichment.bookmark_id === bookmarkId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    if (!current || current.status !== 'complete') {
+      return;
+    }
+    const stale: AIEnrichment = { ...current, status: 'stale', updated_at: new Date().toISOString() };
+    setEnrichments((rows) => rows.map((row) => (row.id === stale.id ? stale : row)));
+    ensureRepositoryReady()
+      .then(() => repository.upsertEnrichments([stale]))
+      .catch((error) => logStorageError('enrichment staleness', error));
+  }, []);
+
   const updateBookmarkFields = useCallback(
     (id: string, fields: { title?: string; notes?: string }) => {
+      const before = bookmarksRef.current?.find((bookmark) => bookmark.id === id);
       const patch: Partial<Bookmark> = {};
       if (fields.title !== undefined) {
         patch.title = fields.title.trim() || null;
@@ -458,9 +483,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (fields.notes !== undefined) {
         patch.notes = fields.notes.trim() || null;
       }
+      // Only stale on a real change to user-editable text; a no-op save (or a
+      // collection/archive change, which never routes through here) must not.
+      const textChanged =
+        (patch.title !== undefined && patch.title !== (before?.title ?? null)) ||
+        (patch.notes !== undefined && patch.notes !== (before?.notes ?? null));
       applyBookmarkUpdate(id, patch);
+      if (textChanged) {
+        markEnrichmentStale(id);
+      }
     },
-    [applyBookmarkUpdate],
+    [applyBookmarkUpdate, markEnrichmentStale],
   );
 
   const deleteBookmark = useCallback(

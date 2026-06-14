@@ -260,6 +260,13 @@ export default function BookmarkDetailScreen() {
           ) : null}
         </View>
 
+        {enrichment?.status === 'stale' ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            These suggestions may be out of date since you edited this bookmark — refresh to update
+            them.
+          </Text>
+        ) : null}
+
         {enrichment?.summary ? (
           <Text style={[styles.fieldValue, { color: palette.text }]}>{enrichment.summary}</Text>
         ) : null}

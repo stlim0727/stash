@@ -126,6 +126,13 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Accepting a suggested tag links it with `source: 'ai'` and its confidence;
   accepting a suggested collection files the bookmark there. Dismissals are
   session-local. Suggestions already applied are hidden.
+- ✅ **Staleness:** editing a bookmark's user-editable text (title/notes) after a
+  `complete` enrichment exists flips that enrichment to `status: 'stale'`
+  (locally and persisted) — it never triggers the network. Bookmark Detail then
+  shows an "out of date since you edited this bookmark — refresh to update them"
+  hint above the suggestions; the existing **Refresh AI suggestions** button
+  regenerates them (status returns to `complete`). Collection/archive changes do
+  **not** mark suggestions stale, since they don't alter the enriched text.
 
 ## 8. Account and sync (Settings)
 
