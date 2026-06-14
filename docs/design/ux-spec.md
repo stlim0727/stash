@@ -133,6 +133,20 @@ records how we got here. When implementing a ⬜ item, update its status.
   hint above the suggestions; the existing **Refresh AI suggestions** button
   regenerates them (status returns to `complete`). Collection/archive changes do
   **not** mark suggestions stale, since they don't alter the enriched text.
+- ✅ **Confidence threshold**: only suggested tags with confidence
+  `>= 0.6` (`SUGGESTION_MIN_CONFIDENCE` in `apps/mobile/src/domain/ai-suggestions.ts`)
+  are surfaced — lower-confidence suggestions are treated as noise and hidden to
+  reduce overload. The rule (threshold + applied-name filter, case-insensitive)
+  is centralized in `pendingSuggestions(enrichment, appliedTagNames)`, shared by
+  the Inbox "✨ N" badge, the Detail card, the Settings count, and the review
+  queue. High-confidence suggestions are never auto-accepted — the user stays in
+  control.
+- ✅ **Review queue** (`/review`, reached from Settings → "Review AI
+  suggestions", which shows the total pending count): lists every Inbox bookmark
+  with at least one pending suggestion; each row shows the title and its
+  suggested-tag chips with per-tag Accept and an "Accept all" for that bookmark.
+  A distinct empty state ("No suggestions to review.") shows when nothing is
+  pending.
 
 ## 8. Account and sync (Settings)
 
@@ -140,9 +154,10 @@ records how we got here. When implementing a ⬜ item, update its status.
   app is configured, restored thereafter, and access tokens refresh
   automatically near expiry (including right before each sync run).
 - ✅ Settings shows: account state, sync status (counts of items waiting),
-  Supabase auth state, library counts (link to Archived), app version, the
-  pending queue (per-entry operation, status, retries, last error), and a
-  "Sync now" button whenever there is syncable work.
+  Supabase auth state, a "Review AI suggestions" row (with the total pending
+  count, links to `/review` — see §7), library counts (link to Archived), app
+  version, the pending queue (per-entry operation, status, retries, last error),
+  and a "Sync now" button whenever there is syncable work.
 - ✅ Without Supabase configuration the app is fully usable local-only and
   says so.
 

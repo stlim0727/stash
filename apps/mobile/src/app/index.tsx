@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
 import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
 import { useBookmarks } from '@/store/bookmarks';
@@ -201,11 +202,13 @@ export default function InboxScreen() {
           const status = statusLabel(item);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
-          // Pending AI suggestions = suggested tags not yet applied, surfaced so
-          // they're reviewable from the list rather than buried in Detail.
+          // Pending AI suggestions = high-confidence suggested tags not yet
+          // applied (see @/domain/ai-suggestions), surfaced so they're
+          // reviewable from the list rather than buried in Detail.
           const appliedNames = new Set(cardTags.map((tag) => tag.name.toLowerCase()));
-          const suggestionCount = (getEnrichment(item.id)?.suggested_tags ?? []).filter(
-            (suggestion) => !appliedNames.has(suggestion.name.toLowerCase()),
+          const suggestionCount = pendingSuggestions(
+            getEnrichment(item.id),
+            appliedNames,
           ).length;
           const metaParts = [
             ...(collectionName ? [`in ${collectionName}`] : []),
