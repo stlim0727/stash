@@ -1,0 +1,138 @@
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import type { ReactNode } from 'react';
+
+jest.mock('@/storage/repository', () =>
+  require('./helpers/fake-repository').createFakeRepositoryModule(),
+);
+
+const mockSession = {
+  access_token: 'token',
+  refresh_token: 'refresh',
+  token_type: 'bearer',
+  expires_at: Math.floor(Date.now() / 1000) + 3600,
+  user: { id: 'user-test' },
+};
+
+let mockAuth = {
+  status: 'anonymous' as 'anonymous' | 'not_configured',
+  session: mockSession as typeof mockSession | null,
+  userId: 'user-test' as string | null,
+  message: null as string | null,
+  ensureAnonymousSession: async () => mockSession,
+};
+
+jest.mock('@/supabase/auth-provider', () => ({
+  useSupabaseAuth: () => mockAuth,
+  SupabaseAuthProvider: ({ children }: { children: ReactNode }) => children,
+}));
+
+jest.mock('@/domain/enrichment', () => ({
+  enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
+}));
+
+// Keep the store's pull-sync inert so mounting the provider does no network.
+jest.mock('@/api/bookmarks', () => {
+  const empty = async () => [];
+  return {
+    createBookmarkApi: () => ({
+      listBookmarksUpdatedSince: empty,
+      listBookmarkIds: empty,
+      listEnrichmentsUpdatedSince: empty,
+      listTags: empty,
+      listBookmarkTags: empty,
+      listCollections: empty,
+    }),
+  };
+});
+
+jest.mock('expo-router', () => ({
+  usePathname: () => '/report',
+}));
+
+import ReportScreen from '@/app/report';
+import { BookmarksProvider } from '@/store/bookmarks';
+import type { FakeRepositoryModule } from './helpers/fake-repository';
+
+const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
+
+function renderReport(createApi?: Parameters<typeof ReportScreen>[0]) {
+  return render(
+    <BookmarksProvider>
+      <ReportScreen {...(createApi ?? {})} />
+    </BookmarksProvider>,
+  );
+}
+
+beforeEach(() => {
+  fakeRepo.__reset([]);
+  mockAuth = {
+    status: 'anonymous',
+    session: mockSession,
+    userId: 'user-test',
+    message: null,
+    ensureAnonymousSession: async () => mockSession,
+  };
+});
+
+test('renders the form and shows the privacy note', async () => {
+  const screen = await renderReport();
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  expect(screen.getByText('No bookmark contents are included.')).toBeTruthy();
+  expect(screen.getByLabelText('Diagnostic context preview')).toBeTruthy();
+});
+
+test('Submit is disabled until a description is entered', async () => {
+  const screen = await renderReport();
+
+  const submit = await waitFor(() => screen.getByLabelText('Submit report'));
+  expect(submit.props.accessibilityState?.disabled).toBe(true);
+
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'It crashed on launch');
+
+  expect(screen.getByLabelText('Submit report').props.accessibilityState?.disabled).toBe(false);
+});
+
+test('submitting calls the feedback api with the message and redacted context', async () => {
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Sync seems stuck');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  expect(createApi).toHaveBeenCalledWith(mockSession);
+  expect(submitReport).toHaveBeenCalledTimes(1);
+  const arg = submitReport.mock.calls[0]![0] as {
+    category: string;
+    message: string;
+    context: Record<string, unknown>;
+  };
+  expect(arg.message).toBe('Sync seems stuck');
+  expect(arg.category).toBe('bug');
+  // Redaction: the diagnostic context only carries operational keys.
+  expect(Object.keys(arg.context)).not.toContain('notes');
+  expect(arg.context.route).toBe('/report');
+
+  expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
+});
+
+test('shows a friendly message when Supabase is not configured', async () => {
+  mockAuth = {
+    status: 'not_configured',
+    session: null,
+    userId: null,
+    message: 'not configured',
+    ensureAnonymousSession: async () => null as never,
+  } as typeof mockAuth;
+
+  const screen = await renderReport();
+
+  await waitFor(() => expect(screen.getByText('Reporting unavailable')).toBeTruthy());
+  expect(screen.queryByLabelText('Submit report')).toBeNull();
+});

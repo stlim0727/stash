@@ -103,6 +103,15 @@ export default function SettingsScreen() {
         </Pressable>
       </Link>
 
+      <Link href="/report" asChild>
+        <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
+          <Text style={[styles.rowLabel, { color: palette.text }]}>Report a problem</Text>
+          <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
+            Send a bug or idea with diagnostic context ›
+          </Text>
+        </Pressable>
+      </Link>
+
       {canSync ? (
         <Pressable
           style={[styles.syncButton, { backgroundColor: palette.accent }]}
