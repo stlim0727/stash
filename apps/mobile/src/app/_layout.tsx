@@ -3,11 +3,16 @@ import { StatusBar } from 'expo-status-bar';
 import { ShareIntentProvider } from 'expo-share-intent';
 import { useColorScheme } from 'react-native';
 
+import { initSentry, wrapWithSentry } from '@/observability/sentry';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
 
-export default function RootLayout() {
+// Start crash & error monitoring as early as possible — a no-op until a DSN is
+// configured (see observability/sentry-config).
+initSentry();
+
+function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
@@ -35,3 +40,6 @@ export default function RootLayout() {
     </ShareIntentProvider>
   );
 }
+
+// Wrap the root so unhandled errors anywhere in the tree are captured.
+export default wrapWithSentry(RootLayout);

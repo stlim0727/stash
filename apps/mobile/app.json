@@ -36,7 +36,8 @@
           }
         }
       ],
-      "expo-share-intent"
+      "expo-share-intent",
+      "@sentry/react-native/expo"
     ],
     "experiments": {
       "typedRoutes": true,
