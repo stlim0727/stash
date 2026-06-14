@@ -29,7 +29,7 @@ import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
-import { makeStoredBookmark } from './helpers/fake-repository';
+import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
 function makeCollection(id: string, name: string): Collection {
   const now = '2026-06-12T00:00:00.000Z';
@@ -75,6 +75,28 @@ test('renders stored bookmarks with their titles', async () => {
 
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
   expect(screen.getByText('Raindrop review')).toBeTruthy();
+});
+
+test('shows an AI suggestion badge for pending (un-applied) suggested tags', async () => {
+  const id = '7e64cf1e-0000-4000-8000-00000000000c';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'A bookmark with suggestions' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        suggested_tags: [
+          { name: 'design', confidence: 0.8 },
+          { name: 'video', confidence: 0.6 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('A bookmark with suggestions')).toBeTruthy());
+  expect(screen.getByLabelText('2 AI suggestions')).toBeTruthy();
 });
 
 test('search filters the list and shows the match count', async () => {

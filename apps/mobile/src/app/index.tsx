@@ -38,7 +38,8 @@ interface FacetChip {
 export default function InboxScreen() {
   const palette = usePalette();
   const router = useRouter();
-  const { inbox, isLoading, loadError, getTagsForBookmark, getCollection } = useBookmarks();
+  const { inbox, isLoading, loadError, getTagsForBookmark, getCollection, getEnrichment } =
+    useBookmarks();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
 
@@ -200,6 +201,12 @@ export default function InboxScreen() {
           const status = statusLabel(item);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
+          // Pending AI suggestions = suggested tags not yet applied, surfaced so
+          // they're reviewable from the list rather than buried in Detail.
+          const appliedNames = new Set(cardTags.map((tag) => tag.name.toLowerCase()));
+          const suggestionCount = (getEnrichment(item.id)?.suggested_tags ?? []).filter(
+            (suggestion) => !appliedNames.has(suggestion.name.toLowerCase()),
+          ).length;
           const metaParts = [
             ...(collectionName ? [`in ${collectionName}`] : []),
             ...cardTags.slice(0, 3).map((tag) => `#${tag.name}`),
@@ -220,6 +227,16 @@ export default function InboxScreen() {
                   >
                     {item.title ?? item.url ?? 'Untitled'}
                   </Text>
+                  {suggestionCount > 0 ? (
+                    <View
+                      accessibilityLabel={`${suggestionCount} AI suggestion${suggestionCount > 1 ? 's' : ''}`}
+                      style={[styles.suggestBadge, { borderColor: palette.accent }]}
+                    >
+                      <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
+                        ✨ {suggestionCount}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
                 {item.url ? (
                   <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
@@ -359,6 +376,16 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     fontWeight: '600',
+  },
+  suggestBadge: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+  },
+  suggestBadgeLabel: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   cardUrl: {
     fontSize: 13,
