@@ -563,6 +563,20 @@ export class BookmarkApi {
     return enrichmentFromRemote(updated);
   }
 
+  /**
+   * Ask the backend `ai-enrich` edge function to (re)generate suggestions for a
+   * bookmark. The function writes the `ai_enrichments` row and returns it, so
+   * the caller can surface results without waiting for the next pull sync.
+   */
+  async requestEnrichment(bookmarkId: string): Promise<AIEnrichment> {
+    const row = await this.client.request<RemoteAIEnrichment>('/functions/v1/ai-enrich', {
+      method: 'POST',
+      accessToken: this.session.access_token,
+      body: { bookmark_id: bookmarkId },
+    });
+    return enrichmentFromRemote(row);
+  }
+
   async applyAISuggestions(input: ApplyAISuggestionsInput): Promise<BookmarkDetail | null> {
     if (input.tag_names && input.tag_names.length > 0) {
       await this.addTags({

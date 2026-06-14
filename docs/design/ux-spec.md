@@ -62,13 +62,18 @@ records how we got here. When implementing a ⬜ item, update its status.
 
 - ✅ Shows preview image and favicon when present; title header; URL, title,
   description, notes, tags, collection, site, source app, metadata status,
-  sync status, saved-at; AI summary when one exists.
+  sync status, saved-at.
+- ✅ **AI suggestions** (see §7): a card shows the enrichment summary, the
+  model badge, suggested tags (with confidence) that aren't already applied —
+  each acceptable (`＋`, linked with `source: 'ai'`) or dismissable (`×`) — and
+  a suggested collection to file into. A "Suggest with AI" / "Refresh AI
+  suggestions" action regenerates them on demand for synced bookmarks.
 - ✅ When the bookmark has a URL, an "Open link ↗" button opens the page in
   the system browser; a failure to open surfaces a non-blocking inline error.
 - ✅ Archive/Unarchive toggles immediately (optimistic) and persists.
 - ✅ Delete asks for confirmation, permanently removes the bookmark, and
   returns to the previous screen.
-- ✅ Edit title/notes after capture (see §11).
+- ✅ Edit title/notes after capture (see §12).
 
 ## 4. Archive
 
@@ -102,7 +107,27 @@ records how we got here. When implementing a ⬜ item, update its status.
   receive the enriched title/site/favicon on their next pull rather than the
   bare create-time payload.
 
-## 7. Account and sync (Settings)
+## 7. AI suggestions (auto-tagging)
+
+- ✅ AI enrichment is produced **server-side** by the `ai-enrich` Supabase Edge
+  Function: the app POSTs a bookmark id, the function runs the configured
+  `EnrichmentProvider`, writes an `ai_enrichments` row (summary, topics,
+  suggested tags + confidence, suggested collection, `model`, `status`), and
+  returns it. The caller's JWT is forwarded to PostgREST, so RLS scopes every
+  read/write to the owner.
+- ✅ The provider is a swappable seam. A `DummyProvider` (`model: 'dummy-v0'`)
+  ships now — deterministic keyword heuristics, no network — so the whole
+  pipeline works before a real model is wired in. Swapping to a model-backed
+  provider is a one-line change in the function; schema, sync, and UI are
+  unchanged.
+- ✅ The app requests enrichment automatically once a new bookmark first syncs,
+  and on demand from Bookmark Detail. Results surface immediately from the
+  response and again on the next pull.
+- ✅ Accepting a suggested tag links it with `source: 'ai'` and its confidence;
+  accepting a suggested collection files the bookmark there. Dismissals are
+  session-local. Suggestions already applied are hidden.
+
+## 8. Account and sync (Settings)
 
 - ✅ Anonymous Supabase account is created silently on first launch when the
   app is configured, restored thereafter, and access tokens refresh
@@ -114,7 +139,7 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Without Supabase configuration the app is fully usable local-only and
   says so.
 
-## 8. Cloud sync — upload (implemented)
+## 9. Cloud sync — upload (implemented)
 
 - ✅ New bookmarks, archive changes, and deletes upload automatically when
   auth and local data are ready, and on every new save; failures are
@@ -123,7 +148,7 @@ records how we got here. When implementing a ⬜ item, update its status.
 - ✅ Verified end-to-end against the live project (`pnpm verify:supabase`,
   16 checks, including RLS isolation between users).
 
-## 9. Cloud sync — download / pull
+## 10. Cloud sync — download / pull
 
 The other half of sync: remote changes reach the device. Runs after the
 upload queue drains — local pending work always wins until uploaded.
@@ -153,7 +178,7 @@ upload queue drains — local pending work always wins until uploaded.
 - 🔶 Merge/deletion logic is unit-tested; the pull queries were added to
   `pnpm verify:supabase` and await a re-run from a network-capable session.
 
-## 10. Tags and collections
+## 11. Tags and collections
 
 - ✅ Each pull refreshes an authoritative local snapshot of the user's tags,
   tag links, and collections; Detail shows real data (cloud rows win over the
@@ -177,7 +202,7 @@ upload queue drains — local pending work always wins until uploaded.
 - 🔶 Live verification of the tag/collection queries was added to
   `pnpm verify:supabase` and awaits a re-run from a network-capable session.
 
-## 11. Search and editing
+## 12. Search and editing
 
 - ✅ Client-side search from the Inbox: case-insensitive over
   title/description/notes/URL; multiple terms AND together; live match count
@@ -187,7 +212,7 @@ upload queue drains — local pending work always wins until uploaded.
   and queue an update mutation for synced bookmarks; clearing a field stores
   null (an emptied title becomes eligible for enrichment again).
 
-## 12. Release readiness
+## 13. Release readiness
 
 - ✅ CI runs lint, typecheck, the logic test suite (Node test runner), and the
   component test suite (jest-expo + React Native Testing Library) on every PR

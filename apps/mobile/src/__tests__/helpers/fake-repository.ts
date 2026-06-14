@@ -3,8 +3,8 @@ import type { BookmarkRepository, TagData } from '@/storage/types';
 
 export interface FakeRepositoryModule {
   repository: BookmarkRepository;
-  /** Test hook: reset state, optionally pre-seeding stored bookmarks/tag data. */
-  __reset: (rows?: Bookmark[], seedTagData?: TagData) => void;
+  /** Test hook: reset state, optionally pre-seeding stored bookmarks/tag data/enrichments. */
+  __reset: (rows?: Bookmark[], seedTagData?: TagData, seedEnrichments?: AIEnrichment[]) => void;
   __queue: () => LocalPendingBookmark[];
 }
 
@@ -61,14 +61,33 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
 
   return {
     repository,
-    __reset: (rows: Bookmark[] = [], seedTagData?: TagData) => {
+    __reset: (rows: Bookmark[] = [], seedTagData?: TagData, seedEnrichments: AIEnrichment[] = []) => {
       bookmarks = [...rows];
       queue = [];
-      enrichments = [];
+      enrichments = [...seedEnrichments];
       tagData = seedTagData ?? { tags: [], bookmarkTags: [], collections: [] };
       meta = {};
     },
     __queue: () => [...queue],
+  };
+}
+
+export function makeEnrichment(overrides: Partial<AIEnrichment> = {}): AIEnrichment {
+  const now = '2026-06-12T00:00:00.000Z';
+  return {
+    id: 'enrichment-test-1',
+    bookmark_id: '7e64cf1e-0000-4000-8000-000000000001',
+    user_id: 'user-test',
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection_id: null,
+    model: 'dummy-v0',
+    status: 'complete',
+    confidence: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
   };
 }
 
