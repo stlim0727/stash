@@ -37,8 +37,11 @@ records how we got here. When implementing a ⬜ item, update its status.
 ## 2. Inbox
 
 - ✅ Lists active (non-archived) bookmarks, newest first.
-- ✅ Each card: title (falls back to URL), URL, and status badges — sync state
-  shown unless `synced`, plus `metadata pending` while enrichment runs.
+- ✅ Each card: favicon (when enrichment has one) beside the title (falls back
+  to URL), URL, an inline metadata line (`in <collection>` when filed, plus up
+  to three `#tag`s) so categorization is visible without opening Detail, and
+  status badges — sync state shown unless `synced`, plus `metadata pending`
+  while enrichment runs.
 - ✅ Each card with a URL has an "Open ↗" action that opens the page in the
   system browser without leaving the Inbox; tapping the card body still opens
   Bookmark Detail.
