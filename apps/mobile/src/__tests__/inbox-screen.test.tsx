@@ -173,7 +173,8 @@ test('the tag chip filters the Inbox to bookmarks with that tag', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-  await fireEvent.press(screen.getByText('#design'));
+  // The facet chip (a button) — disambiguated from the card's inline #design meta.
+  await fireEvent.press(screen.getByRole('button', { name: '#design' }));
 
   expect(screen.getByText('Design system')).toBeTruthy();
   expect(screen.queryByText('Unrelated note')).toBeNull();
@@ -202,6 +203,25 @@ test('a tag route param filters the Inbox to that tag on load', async () => {
 
   expect(screen.queryByText('Unrelated note')).toBeNull();
   expect(screen.getByText('#design · 1')).toBeTruthy();
+});
+
+test('cards show inline collection and tag metadata', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000010';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Design system', collection_id: 'col-work' })],
+    {
+      tags: [makeTag('t-design', 'design')],
+      bookmarkTags: [
+        { bookmark_id: id, tag_id: 't-design', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [makeCollection('col-work', 'Work')],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
+
+  expect(screen.getByText('in Work   ·   #design')).toBeTruthy();
 });
 
 test('shows the no-matches empty state for an unmatched search', async () => {

@@ -2,6 +2,7 @@ import { Link, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
+  Image,
   Linking,
   Pressable,
   ScrollView,
@@ -197,18 +198,37 @@ export default function InboxScreen() {
         }
         renderItem={({ item }) => {
           const status = statusLabel(item);
+          const collectionName = getCollection(item.collection_id)?.name ?? null;
+          const cardTags = getTagsForBookmark(item.id);
+          const metaParts = [
+            ...(collectionName ? [`in ${collectionName}`] : []),
+            ...cardTags.slice(0, 3).map((tag) => `#${tag.name}`),
+          ];
           return (
             <View style={[styles.card, { backgroundColor: palette.card }]}>
               <Pressable
                 style={styles.cardBody}
                 onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
               >
-                <Text style={[styles.cardTitle, { color: palette.text }]}>
-                  {item.title ?? item.url ?? 'Untitled'}
-                </Text>
+                <View style={styles.cardTitleRow}>
+                  {item.favicon_url ? (
+                    <Image source={{ uri: item.favicon_url }} style={styles.cardFavicon} />
+                  ) : null}
+                  <Text
+                    style={[styles.cardTitle, { color: palette.text }]}
+                    numberOfLines={1}
+                  >
+                    {item.title ?? item.url ?? 'Untitled'}
+                  </Text>
+                </View>
                 {item.url ? (
                   <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
                     {item.url}
+                  </Text>
+                ) : null}
+                {metaParts.length > 0 ? (
+                  <Text style={[styles.cardMeta, { color: palette.textSecondary }]} numberOfLines={1}>
+                    {metaParts.join('   ·   ')}
                   </Text>
                 ) : null}
                 {status ? (
@@ -325,12 +345,26 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cardFavicon: {
+    width: 16,
+    height: 16,
+    borderRadius: 4,
+  },
   cardTitle: {
+    flex: 1,
     fontSize: 16,
     fontWeight: '600',
   },
   cardUrl: {
     fontSize: 13,
+  },
+  cardMeta: {
+    fontSize: 12,
   },
   cardStatus: {
     fontSize: 12,
