@@ -63,12 +63,19 @@ states. Each screen links to the section that specifies its behavior; see
 
 ## 2. Inbox
 
-- ✅ Lists active (non-archived) bookmarks, newest first.
-- ✅ Each card: favicon (when enrichment has one) beside the title (falls back
-  to URL), URL, an inline metadata line (`in <collection>` when filed, plus up
-  to three `#tag`s) so categorization is visible without opening Detail, and
-  status badges — sync state shown unless `synced`, plus `metadata pending`
-  while enrichment runs.
+- ✅ Lists active (non-archived) bookmarks, newest first by default.
+- ✅ **Sort control**: a header row toggles the order — field (`Date` / `Name`)
+  and direction (`↑ Asc` / `↓ Desc`). Date sorts by save time; Name is
+  case-insensitive over the title (falling back to URL). The choice persists
+  across launches and composes with search and facets. (Logic in
+  `@/domain/sort`.)
+- ✅ Each card: a leading icon beside the title — the favicon when enrichment
+  has one, otherwise a deterministic domain-letter monogram (stable per-site
+  color) so no item has a blank slot (`@/domain/item-icon`). Title falls back to
+  URL; an inline metadata line (`in <collection>` when filed, plus up to three
+  `#tag`s) shows categorization without opening Detail, with status badges —
+  sync state shown unless `synced`, plus `metadata pending` while enrichment
+  runs.
 - ✅ Each card with a URL has an "Open ↗" action that opens the page in the
   system browser without leaving the Inbox; tapping the card body still opens
   Bookmark Detail.
@@ -283,9 +290,12 @@ without leaving the app, with enough diagnostic context to act on.
 - ✅ **Storage**: submitting inserts a row into `public.feedback_reports`
   (RLS: a user may insert and read only their own rows). Success and error
   states are surfaced inline.
+- ✅ **Delivery bridge**: a `feedback_reports` INSERT webhook drives the
+  `feedback-bridge` edge function, which forwards each report to Sentry through
+  a swappable `ReportSink` (see §15). Reports stay durably in the private table
+  regardless of delivery outcome.
 - 🔶 **MVP scope**: online submit only — no offline queue (a failed submit is
-  retried by the user, not durably queued). Reports are stored in Supabase
-  only; there is no GitHub-issue bridge yet. Both are tracked follow-ups.
+  retried by the user, not durably queued). A tracked follow-up.
 
 ## 14. Release readiness
 
@@ -299,3 +309,30 @@ without leaving the app, with enough diagnostic context to act on.
 - ✅ App icons and splash: Stash bookmark-ribbon mark on the brand blue
   (#208AEF) — main icon, Android adaptive foreground/background/monochrome,
   splash glyph, and web favicon (generated; see `apps/mobile/assets/images`).
+
+## 15. Observability (crash & error monitoring)
+
+Automatic telemetry so failures surface without waiting for a user to report
+them. Wired the same way as the rest of the app: pure config + a thin SDK shell.
+See [use-cases.md](use-cases.md) §7 for the diagrammed flows.
+
+- ✅ **Client crash capture**: `@sentry/react-native` is initialized at boot and
+  wraps the root component, so unhandled JS/native errors and render crashes are
+  reported automatically. Decision logic is the pure, unit-tested
+  `@/observability/sentry-config`; the SDK call lives in the thin
+  `@/observability/sentry` shell.
+- ✅ **Off until configured**: nothing is sent unless `EXPO_PUBLIC_SENTRY_DSN`
+  is set, so local/preview builds never report by accident. `sendDefaultPii` is
+  `false`; only the opaque anonymous Supabase user id is attached
+  (`setSentryUser`), so crashes can be grouped per device without PII.
+- ✅ **Feedback → Sentry bridge** (server): the `feedback-bridge` edge function
+  delivers in-app reports (§13) to Sentry via a swappable `ReportSink`
+  (`SentrySink` today; the HTTP transport is injected so it's testable without
+  the network). The DSN/secret live server-side, off-device.
+- ✅ **Release tooling**: `.github/workflows/sentry-release.yml` creates a Sentry
+  release and associates commits on `v*` tags (skips cleanly without secrets).
+  Source maps upload during EAS Build via the `@sentry/react-native/expo`
+  config plugin.
+- 🔶 **Configuration pending**: live reporting, native crash capture, EAS
+  source-map upload, and the tagged release workflow need the Sentry
+  DSN/org/project/auth-token set; not yet exercised against a live project.
