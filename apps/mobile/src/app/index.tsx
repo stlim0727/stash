@@ -15,6 +15,7 @@ import {
 import { usePalette } from '@/theme';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
+import { MONOGRAM_COLORS, itemIcon } from '@/domain/item-icon';
 import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
 import {
   DEFAULT_SORT,
@@ -281,9 +282,23 @@ export default function InboxScreen() {
                 onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
               >
                 <View style={styles.cardTitleRow}>
-                  {item.favicon_url ? (
-                    <Image source={{ uri: item.favicon_url }} style={styles.cardFavicon} />
-                  ) : null}
+                  {(() => {
+                    const icon = itemIcon(item);
+                    return icon.kind === 'favicon' ? (
+                      <Image source={{ uri: icon.uri }} style={styles.cardIcon} />
+                    ) : (
+                      <View
+                        testID="inbox-card-monogram"
+                        style={[
+                          styles.cardIcon,
+                          styles.cardMonogram,
+                          { backgroundColor: MONOGRAM_COLORS[icon.colorIndex] },
+                        ]}
+                      >
+                        <Text style={styles.cardMonogramLetter}>{icon.letter}</Text>
+                      </View>
+                    );
+                  })()}
                   <Text
                     testID="inbox-card-title"
                     style={[styles.cardTitle, { color: palette.text }]}
@@ -454,10 +469,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  cardFavicon: {
-    width: 16,
-    height: 16,
-    borderRadius: 4,
+  cardIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+  },
+  cardMonogram: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardMonogramLetter: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   cardTitle: {
     flex: 1,
