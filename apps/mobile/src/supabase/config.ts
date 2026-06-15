@@ -1,4 +1,4 @@
-declare const process: { env?: Record<string, string | undefined> };
+declare const process: { env: Record<string, string | undefined> };
 
 export interface SupabaseConfig {
   url: string;
@@ -12,13 +12,12 @@ export type SupabaseConfigState =
 const SUPABASE_URL_ENV = 'EXPO_PUBLIC_SUPABASE_URL';
 const SUPABASE_ANON_KEY_ENV = 'EXPO_PUBLIC_SUPABASE_ANON_KEY';
 
-function readPublicEnv(key: string): string {
-  return process.env?.[key]?.trim() ?? '';
-}
-
 export function getSupabaseConfigState(): SupabaseConfigState {
-  const url = readPublicEnv(SUPABASE_URL_ENV);
-  const anonKey = readPublicEnv(SUPABASE_ANON_KEY_ENV);
+  // Read via STATIC `process.env.EXPO_PUBLIC_*` so Expo inlines the values into
+  // the release bundle. A computed `process.env[key]` is NOT inlined and reads
+  // empty in production — which is why config wrongly looked "missing" on device.
+  const url = (process.env.EXPO_PUBLIC_SUPABASE_URL ?? '').trim();
+  const anonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '').trim();
   const missing: Array<keyof SupabaseConfig> = [];
 
   if (!url) {
