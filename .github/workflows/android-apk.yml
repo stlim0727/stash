@@ -60,7 +60,10 @@ jobs:
 
       - name: Give Gradle more heap
         working-directory: apps/mobile/android
-        run: echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
+        # Leading/trailing newlines so this lands on its own line even if the
+        # generated gradle.properties has no trailing newline (a later duplicate
+        # key overrides the template's value).
+        run: printf '\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n' >> gradle.properties
 
       - name: Build release APK
         working-directory: apps/mobile/android
@@ -68,7 +71,9 @@ jobs:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.EXPO_PUBLIC_SENTRY_DSN }}
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+        # Build only the arm64-v8a ABI — every modern Android phone — to keep
+        # the cold-cache native (NDK) compile fast and the APK small.
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace -PreactNativeArchitectures=arm64-v8a
 
       - name: Stage the APK
         run: |
