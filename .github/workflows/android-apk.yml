@@ -54,6 +54,29 @@ jobs:
           echo "node-linker=hoisted" >> .npmrc
           pnpm install --no-frozen-lockfile
 
+      # Cache Gradle deps/transforms + the local build cache across runs.
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # Cache the C++ compiler outputs (ccache). `expo prebuild` regenerates the
+      # android/ dir each run, so the NDK build can't be cached in-tree — but
+      # ccache lives outside it and turns the slow reanimated/folly/fabric
+      # recompiles into cache hits on subsequent builds.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
       - name: Prebuild Android project
         working-directory: apps/mobile
         run: npx expo prebuild --platform android --no-install
@@ -63,7 +86,9 @@ jobs:
         # Leading/trailing newlines so this lands on its own line even if the
         # generated gradle.properties has no trailing newline (a later duplicate
         # key overrides the template's value).
-        run: printf '\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n' >> gradle.properties
+        # org.gradle.caching enables the local build cache (persisted via the
+        # ~/.gradle cache above), so unchanged module compiles are reused.
+        run: printf '\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\norg.gradle.caching=true\n' >> gradle.properties
 
       - name: Build release APK
         working-directory: apps/mobile/android
@@ -71,9 +96,13 @@ jobs:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.EXPO_PUBLIC_SENTRY_DSN }}
+          # Route NDK C++ compiles through ccache (cached across runs above).
+          USE_CCACHE: '1'
+          CCACHE_DIR: /home/runner/.ccache
+          CCACHE_MAXSIZE: 3G
         # Build only the arm64-v8a ABI — every modern Android phone — to keep
         # the cold-cache native (NDK) compile fast and the APK small.
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace -PreactNativeArchitectures=arm64-v8a
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=arm64-v8a
 
       - name: Stage the APK
         run: |
