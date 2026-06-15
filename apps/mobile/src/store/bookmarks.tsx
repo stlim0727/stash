@@ -17,7 +17,7 @@ import {
   mockTags,
   mockUserId,
 } from '@/domain/mock-data';
-import { normalizeUrl } from '@/domain/urls';
+import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
 import type {
   AIEnrichment,
@@ -342,8 +342,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
       const now = new Date().toISOString();
 
-      // Idempotent saves: reuse the existing bookmark for the same URL.
-      const existing = loadedBookmarks.find((bookmark) => bookmark.url_hash === normalized);
+      // Idempotent saves: reuse the existing bookmark for the same URL. Dedupe
+      // on the canonical form so tracking params / fragments don't create dupes.
+      const dedupeKey = canonicalizeUrl(normalized);
+      const existing = loadedBookmarks.find((bookmark) => bookmark.url_hash === dedupeKey);
       if (existing) {
         const updated = { ...existing, last_saved_at: now };
         setBookmarks((current) =>
@@ -360,8 +362,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         user_id: mockUserId,
         url: normalized,
         canonical_url: null,
-        // Placeholder dedupe key until real canonicalization and hashing exist.
-        url_hash: normalized,
+        // Canonical dedupe key (tracking params/fragment stripped). canonical_url
+        // stays null until enrichment resolves a real rel=canonical / og:url.
+        url_hash: dedupeKey,
         // A title provided at capture (e.g. from the share payload) counts as
         // user-authored; enrichment only fills it when still null.
         title: title?.trim() ? title.trim() : null,

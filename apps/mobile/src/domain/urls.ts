@@ -47,3 +47,70 @@ export function extractFirstUrl(input: string | null | undefined): string | null
   const match = input.match(/https?:\/\/[^\s]+/i);
   return match ? normalizeUrl(match[0]) : null;
 }
+
+/**
+ * Known tracking/analytics query parameters that don't identify content, so
+ * stripping them lets `?utm_source=x` and the clean URL dedupe to one bookmark.
+ * Any `utm_*` param is also dropped (prefix match below).
+ */
+const TRACKING_PARAMS = new Set([
+  'fbclid',
+  'gclid',
+  'gbraid',
+  'wbraid',
+  'dclid',
+  'yclid',
+  'msclkid',
+  'mc_eid',
+  'mc_cid',
+  'igshid',
+  'igsh',
+  'mkt_tok',
+  'vero_id',
+  '_hsenc',
+  '_hsmi',
+  'oly_anon_id',
+  'oly_enc_id',
+  'ref',
+  'ref_src',
+  'ref_url',
+  'spm',
+  'scm',
+]);
+
+/**
+ * Best-effort canonical form for deduplication. Conservative on purpose — only
+ * changes that are safe across the web: drop the fragment and known tracking
+ * params, sort the remaining query, and trim a trailing slash on non-root
+ * paths. Host/scheme casing is already normalized by `URL`. Returns the input
+ * unchanged if it can't be parsed. Does NOT strip `www.` (can be a different
+ * host) — that's left to enrichment resolving a real canonical URL.
+ */
+export function canonicalizeUrl(input: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(input);
+  } catch {
+    return input;
+  }
+
+  parsed.hash = '';
+
+  const drop: string[] = [];
+  parsed.searchParams.forEach((_value, key) => {
+    const lower = key.toLowerCase();
+    if (lower.startsWith('utm_') || TRACKING_PARAMS.has(lower)) {
+      drop.push(key);
+    }
+  });
+  for (const key of drop) {
+    parsed.searchParams.delete(key);
+  }
+  parsed.searchParams.sort();
+
+  if (parsed.pathname.length > 1 && parsed.pathname.endsWith('/')) {
+    parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  }
+
+  return parsed.toString();
+}

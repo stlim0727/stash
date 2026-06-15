@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { extractFirstUrl, normalizeUrl } from './urls.ts';
+import { canonicalizeUrl, extractFirstUrl, normalizeUrl } from './urls.ts';
 
 test('normalizeUrl accepts scheme-less domains', () => {
   assert.equal(normalizeUrl('example.com'), 'https://example.com/');
@@ -37,4 +37,39 @@ test('extractFirstUrl returns null when no link exists', () => {
   assert.equal(extractFirstUrl(''), null);
   assert.equal(extractFirstUrl(null), null);
   assert.equal(extractFirstUrl(undefined), null);
+});
+
+test('canonicalizeUrl strips utm_* and known tracking params', () => {
+  assert.equal(
+    canonicalizeUrl('https://example.com/a?utm_source=fb&utm_medium=cpc&id=2'),
+    'https://example.com/a?id=2',
+  );
+  assert.equal(canonicalizeUrl('https://example.com/p?fbclid=abc'), 'https://example.com/p');
+  assert.equal(canonicalizeUrl('https://example.com/p?gclid=x&q=hi'), 'https://example.com/p?q=hi');
+});
+
+test('canonicalizeUrl drops the fragment and sorts the query', () => {
+  assert.equal(canonicalizeUrl('https://example.com/a#section'), 'https://example.com/a');
+  assert.equal(canonicalizeUrl('https://example.com/a?b=2&a=1'), 'https://example.com/a?a=1&b=2');
+});
+
+test('canonicalizeUrl trims a trailing slash on non-root paths only', () => {
+  assert.equal(canonicalizeUrl('https://example.com/a/'), 'https://example.com/a');
+  assert.equal(canonicalizeUrl('https://example.com/'), 'https://example.com/');
+});
+
+test('canonicalizeUrl keeps content-bearing params and is idempotent', () => {
+  const once = canonicalizeUrl('https://example.com/watch?v=123&utm_source=t');
+  assert.equal(once, 'https://example.com/watch?v=123');
+  assert.equal(canonicalizeUrl(once), once);
+});
+
+test('canonicalizeUrl maps tracking variants of one page to the same key', () => {
+  const clean = canonicalizeUrl('https://example.com/post');
+  assert.equal(canonicalizeUrl('https://example.com/post?utm_campaign=spring'), clean);
+  assert.equal(canonicalizeUrl('https://example.com/post#top'), clean);
+});
+
+test('canonicalizeUrl returns unparsable input unchanged', () => {
+  assert.equal(canonicalizeUrl('not a url'), 'not a url');
 });
