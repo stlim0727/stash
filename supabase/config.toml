@@ -1,0 +1,14 @@
+# Supabase project config (CLI + GitHub integration).
+# The GitHub integration deploys the migrations under supabase/migrations/ to
+# the linked project when changes land on the production branch. `project_id`
+# is just a local identifier (defaults to the directory name); the actual
+# remote project is determined by the dashboard link / `supabase link`.
+project_id = "stash"
+
+[db]
+# Postgres major version used for local dev (`supabase start`).
+major_version = 15
+
+[auth]
+# Stash is anonymous-first: the app creates an anonymous session on first launch.
+enable_anonymous_sign_ins = true
