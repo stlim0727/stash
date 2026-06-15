@@ -1,5 +1,5 @@
 import { Link, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Image,
@@ -16,6 +16,15 @@ import { usePalette } from '@/theme';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
 import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
+import {
+  DEFAULT_SORT,
+  INBOX_SORT_PREF_KEY,
+  parseSort,
+  serializeSort,
+  sortBookmarks,
+  type SortOption,
+} from '@/domain/sort';
+import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import type { Bookmark } from '@/domain/types';
 
@@ -43,6 +52,33 @@ export default function InboxScreen() {
     useBookmarks();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
+  const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
+
+  // Load the saved sort once, then persist any change. The guard stops the
+  // initial default from clobbering the stored value before it has loaded.
+  const sortLoaded = useRef(false);
+  useEffect(() => {
+    let active = true;
+    getPreference(INBOX_SORT_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setSort(parseSort(raw));
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        sortLoaded.current = true;
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!sortLoaded.current) {
+      return;
+    }
+    void setPreference(INBOX_SORT_PREF_KEY, serializeSort(sort)).catch(() => {});
+  }, [sort]);
 
   // Browse facet handed in by another screen (e.g. tapping a tag in Bookmark
   // Detail). Applying it on param change lets in-app links jump to a view.
@@ -114,7 +150,8 @@ export default function InboxScreen() {
     () => filterByFacet(inbox, filter, tagIdsFor),
     [inbox, filter, tagIdsFor],
   );
-  const visible = useMemo(() => filterBookmarks(facetFiltered, query), [facetFiltered, query]);
+  const filtered = useMemo(() => filterBookmarks(facetFiltered, query), [facetFiltered, query]);
+  const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
   const searching = query.trim().length > 0;
   const showShelf = chips.length > 0;
 
@@ -165,6 +202,29 @@ export default function InboxScreen() {
           onChangeText={setQuery}
           clearButtonMode="while-editing"
         />
+      </View>
+      <View style={styles.sortRow}>
+        <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>Sort</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Sort field: ${sort.field === 'date' ? 'Date' : 'Name'}`}
+          onPress={() => setSort((s) => ({ ...s, field: s.field === 'date' ? 'name' : 'date' }))}
+          style={[styles.sortPill, { backgroundColor: palette.card, borderColor: palette.border }]}
+        >
+          <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+            {sort.field === 'date' ? 'Date' : 'Name'}
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Sort direction: ${sort.dir === 'asc' ? 'ascending' : 'descending'}`}
+          onPress={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
+          style={[styles.sortPill, { backgroundColor: palette.card, borderColor: palette.border }]}
+        >
+          <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+            {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
+          </Text>
+        </Pressable>
       </View>
       {showShelf ? (
         <ScrollView
@@ -225,6 +285,7 @@ export default function InboxScreen() {
                     <Image source={{ uri: item.favicon_url }} style={styles.cardFavicon} />
                   ) : null}
                   <Text
+                    testID="inbox-card-title"
                     style={[styles.cardTitle, { color: palette.text }]}
                     numberOfLines={1}
                   >
@@ -325,6 +386,29 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
     fontSize: 15,
+  },
+  sortRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+  },
+  sortCaption: {
+    fontSize: 13,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  sortPill: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  sortPillLabel: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   shelf: {
     flexGrow: 0,
