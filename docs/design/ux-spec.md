@@ -10,6 +10,33 @@ status:
 This document is the source of truth for behavior; `docs/development/milestones.md`
 records how we got here. When implementing a ⬜ item, update its status.
 
+## Screens
+
+Captured from the Expo **web** build with seeded sample data
+(`expo export -p web`). This capture runs **local-only** — no Supabase is
+configured — so the cloud-gated screens honestly show their offline/empty
+states. Each screen links to the section that specifies its behavior; see
+[use-cases.md](use-cases.md) for the diagrammed flows.
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="assets/screens/inbox.png" width="240" alt="Inbox"><br><b>Inbox</b> — search, facet chips, cards with sync/tag metadata (<a href="#2-inbox">§2</a>)</td>
+<td align="center" width="33%"><img src="assets/screens/add.png" width="240" alt="Add Bookmark"><br><b>Add Bookmark</b> — URL + optional note, instant local save (<a href="#11-manual-add-add-bookmark-modal">§1.1</a>)</td>
+<td align="center" width="33%"><img src="assets/screens/bookmark-detail.png" width="240" alt="Bookmark Detail"><br><b>Bookmark Detail</b> — open, edit title/notes, metadata, sync state (<a href="#3-bookmark-detail">§3</a>, <a href="#12-search-and-editing">§12</a>)</td>
+</tr>
+<tr>
+<td align="center" width="33%"><img src="assets/screens/settings.png" width="240" alt="Settings"><br><b>Settings</b> — account, sync, library, app version (here in local-only mode) (<a href="#8-account-and-sync-settings">§8</a>)</td>
+<td align="center" width="33%"><img src="assets/screens/archived.png" width="240" alt="Archived"><br><b>Archived</b> — bookmarks kept out of the Inbox (<a href="#4-archive">§4</a>)</td>
+<td align="center" width="33%"><img src="assets/screens/review.png" width="240" alt="Review AI suggestions"><br><b>Review AI suggestions</b> — batch accept queue (empty here, no cloud) (<a href="#7-ai-suggestions-auto-tagging">§7</a>)</td>
+</tr>
+<tr>
+<td align="center" width="33%"><img src="assets/screens/report.png" width="240" alt="Report a problem"><br><b>Report a problem</b> — cloud-gated, so shows the offline notice here (<a href="#13-feedback--issue-reporting">§13</a>)</td>
+<td width="33%"></td>
+<td width="33%"></td>
+</tr>
+</table>
+
+
 ## 1. Capture
 
 ### 1.1 Manual add (Add Bookmark modal)
