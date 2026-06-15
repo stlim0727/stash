@@ -16,6 +16,7 @@ Stash is a planned mobile bookmark app inspired by Raindrop.io, with a simpler i
 
 - [Product spec](docs/design/product-spec.md)
 - [Use cases (visual)](docs/design/use-cases.md) — diagrammed end-to-end flows
+- [Screen gallery](docs/design/ux-spec.md#screens) — screenshots of every screen
 - [UX spec and status checklist](docs/design/ux-spec.md)
 - [Architecture overview](docs/architecture/overview.md)
 - [Data model](docs/architecture/data-model.md)
