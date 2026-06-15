@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { parsePageMetadata } from './page-metadata.ts';
+import { oembedEndpoint, parseOembed, parsePageMetadata, youtubeVideoId } from './page-metadata.ts';
 
 const sampleHtml = `
 <!DOCTYPE html>
@@ -47,5 +47,42 @@ test('parsePageMetadata returns undefined fields for empty documents', () => {
   assert.equal(meta.title, undefined);
   assert.equal(meta.site_name, undefined);
   assert.equal(meta.favicon_url, undefined);
+  assert.equal(meta.preview_image_url, undefined);
+});
+
+test('youtubeVideoId extracts the id from every YouTube URL shape', () => {
+  assert.equal(youtubeVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
+  assert.equal(youtubeVideoId('https://youtu.be/dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
+  assert.equal(youtubeVideoId('https://www.youtube.com/shorts/MufIgnqP1vk'), 'MufIgnqP1vk');
+  assert.equal(youtubeVideoId('https://m.youtube.com/watch?v=abc123'), 'abc123');
+  assert.equal(youtubeVideoId('https://www.youtube.com/embed/xyz789'), 'xyz789');
+  assert.equal(youtubeVideoId('https://example.com/watch?v=nope'), null);
+  assert.equal(youtubeVideoId('not a url'), null);
+});
+
+test('oembedEndpoint builds a canonical YouTube oEmbed URL (shorts → watch)', () => {
+  assert.equal(
+    oembedEndpoint('https://www.youtube.com/shorts/MufIgnqP1vk'),
+    'https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DMufIgnqP1vk',
+  );
+  assert.equal(oembedEndpoint('https://example.com/article'), null);
+});
+
+test('parseOembed maps title, provider, and thumbnail', () => {
+  const meta = parseOembed({
+    title: 'Never Gonna Give You Up',
+    provider_name: 'YouTube',
+    thumbnail_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+  });
+  assert.equal(meta.title, 'Never Gonna Give You Up');
+  assert.equal(meta.site_name, 'YouTube');
+  assert.equal(meta.preview_image_url, 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+  assert.equal(meta.favicon_url, undefined);
+});
+
+test('parseOembed ignores blank/non-string fields', () => {
+  const meta = parseOembed({ title: '  ', provider_name: 123, thumbnail_url: undefined });
+  assert.equal(meta.title, undefined);
+  assert.equal(meta.site_name, undefined);
   assert.equal(meta.preview_image_url, undefined);
 });
