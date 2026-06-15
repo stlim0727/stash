@@ -15,6 +15,11 @@ name: Android APK
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to publish a Release at (e.g. v0.1.0). Blank = artifact only.'
+        required: false
+        default: ''
   push:
     tags:
       - 'v*'
@@ -68,8 +73,9 @@ jobs:
       - name: Stage the APK
         run: |
           mkdir -p dist
+          NAME="${{ inputs.version || github.ref_name }}"
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
-             "dist/stash-${GITHUB_REF_NAME//\//-}-android.apk"
+             "dist/stash-${NAME//\//-}-android.apk"
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -78,12 +84,17 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
+      # Publish a Release when a vX.Y.Z tag is pushed, OR when dispatched with a
+      # version input. On dispatch the action creates the tag at this commit
+      # (avoids needing to push a tag from a constrained environment).
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+        if: ${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.version != '') }}
         uses: softprops/action-gh-release@v2
         with:
           prerelease: true
-          name: Stash ${{ github.ref_name }}
+          tag_name: ${{ inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Stash ${{ inputs.version || github.ref_name }}
           files: dist/*.apk
           body: |
             Standalone debug-signed Android APK built in CI.
