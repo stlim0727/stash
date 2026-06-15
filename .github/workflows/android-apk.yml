@@ -112,6 +112,31 @@ jobs:
              "dist/stash-${NAME//\//-}-android.apk"
           ls -la dist
 
+      # When Supabase is configured, verify Expo actually inlined the URL into
+      # the release bundle. Catches the "dynamic process.env reads empty in
+      # production" class of bug that unit tests can't see.
+      - name: Assert EXPO_PUBLIC_SUPABASE_URL inlined (when configured)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+        run: |
+          if [ -z "$EXPO_PUBLIC_SUPABASE_URL" ]; then
+            echo "No Supabase URL secret — local-only build; skipping inline assertion."
+            exit 0
+          fi
+          APK=$(ls dist/stash-*-android.apk | head -1)
+          rm -rf /tmp/apkassets && unzip -o -q "$APK" 'assets/*' -d /tmp/apkassets || true
+          BUNDLE=$(find /tmp/apkassets -name '*.bundle' | head -1)
+          if [ -z "$BUNDLE" ]; then
+            echo "::warning::No JS bundle found in the APK to verify; skipping."
+            exit 0
+          fi
+          if grep -aqF ".supabase.co" "$BUNDLE"; then
+            echo "✓ Supabase URL inlined into the release bundle."
+          else
+            echo "::error::EXPO_PUBLIC_SUPABASE_URL was set but '.supabase.co' is absent from the release bundle — Expo did not inline it (likely dynamic process.env access)."
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: stash-android-apk
