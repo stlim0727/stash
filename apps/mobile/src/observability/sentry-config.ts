@@ -10,7 +10,7 @@
  * preview environments never report by accident.
  */
 
-declare const process: { env?: Record<string, string | undefined> };
+declare const process: { env: Record<string, string | undefined> };
 
 export interface SentryConfig {
   dsn: string;
@@ -24,14 +24,8 @@ export type SentryConfigState =
   | { status: 'disabled'; reason: string };
 
 const DSN_ENV = 'EXPO_PUBLIC_SENTRY_DSN';
-const ENVIRONMENT_ENV = 'EXPO_PUBLIC_SENTRY_ENVIRONMENT';
-const TRACES_SAMPLE_RATE_ENV = 'EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE';
 
 const DEFAULT_ENVIRONMENT = 'development';
-
-function readPublicEnv(key: string): string {
-  return process.env?.[key]?.trim() ?? '';
-}
 
 /** Parse a 0..1 sample rate; anything missing or out of range disables tracing. */
 export function parseSampleRate(raw: string): number {
@@ -43,7 +37,9 @@ export function parseSampleRate(raw: string): number {
 }
 
 export function getSentryConfigState(): SentryConfigState {
-  const dsn = readPublicEnv(DSN_ENV);
+  // Static `process.env.EXPO_PUBLIC_*` reads so Expo inlines them into the
+  // release bundle (a computed `process.env[key]` is not inlined).
+  const dsn = (process.env.EXPO_PUBLIC_SENTRY_DSN ?? '').trim();
   if (!dsn) {
     return { status: 'disabled', reason: `Missing ${DSN_ENV}` };
   }
@@ -51,8 +47,10 @@ export function getSentryConfigState(): SentryConfigState {
     status: 'enabled',
     config: {
       dsn,
-      environment: readPublicEnv(ENVIRONMENT_ENV) || DEFAULT_ENVIRONMENT,
-      tracesSampleRate: parseSampleRate(readPublicEnv(TRACES_SAMPLE_RATE_ENV)),
+      environment: (process.env.EXPO_PUBLIC_SENTRY_ENVIRONMENT ?? '').trim() || DEFAULT_ENVIRONMENT,
+      tracesSampleRate: parseSampleRate(
+        (process.env.EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE ?? '').trim(),
+      ),
     },
   };
 }
