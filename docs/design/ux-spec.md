@@ -20,7 +20,7 @@ states. Each screen links to the section that specifies its behavior; see
 
 <table>
 <tr>
-<td align="center" width="33%"><img src="assets/screens/inbox.png" width="240" alt="Inbox"><br><b>Inbox</b> — search, facet chips, cards with sync/tag metadata (<a href="#2-inbox">§2</a>)</td>
+<td align="center" width="33%"><img src="assets/screens/inbox.png" width="240" alt="Inbox"><br><b>Inbox</b> — per-item icon (favicon or domain monogram), sort control, search, facet chips, sync/tag metadata (<a href="#2-inbox">§2</a>)</td>
 <td align="center" width="33%"><img src="assets/screens/add.png" width="240" alt="Add Bookmark"><br><b>Add Bookmark</b> — URL + optional note, instant local save (<a href="#11-manual-add-add-bookmark-modal">§1.1</a>)</td>
 <td align="center" width="33%"><img src="assets/screens/bookmark-detail.png" width="240" alt="Bookmark Detail"><br><b>Bookmark Detail</b> — open, edit title/notes, metadata, sync state (<a href="#3-bookmark-detail">§3</a>, <a href="#12-search-and-editing">§12</a>)</td>
 </tr>
