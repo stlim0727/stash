@@ -12,6 +12,8 @@ import {
   View,
 } from 'react-native';
 
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { usePalette } from '@/theme';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
@@ -48,6 +50,7 @@ interface FacetChip {
 
 export default function InboxScreen() {
   const palette = usePalette();
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const { inbox, isLoading, loadError, getTagsForBookmark, getCollection, getEnrichment } =
     useBookmarks();
@@ -350,7 +353,12 @@ export default function InboxScreen() {
           );
         }}
       />
-      <View style={[styles.footer, { borderTopColor: palette.border }]}>
+      <View
+        style={[
+          styles.footer,
+          { borderTopColor: palette.border, paddingBottom: 16 + insets.bottom },
+        ]}
+      >
         <Link href="/add" asChild>
           <Pressable style={[styles.primaryButton, { backgroundColor: palette.accent }]}>
             <Text style={styles.primaryButtonLabel}>Add Bookmark</Text>
