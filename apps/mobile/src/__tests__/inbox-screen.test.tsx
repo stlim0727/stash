@@ -280,6 +280,31 @@ test('the sort control reorders the Inbox by date and name', async () => {
   expect(titles()).toEqual(['apple', 'Zebra']);
 });
 
+test('every card shows an icon — favicon when present, else a domain monogram', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000031',
+      title: 'Has favicon',
+      favicon_url: 'https://cdn.example/icon.png',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000032',
+      title: 'No favicon',
+      favicon_url: null,
+      url: 'https://www.raindrop.io/',
+      url_hash: 'https://www.raindrop.io/',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('No favicon')).toBeTruthy());
+
+  // The favicon-less card falls back to a monogram of its domain (raindrop.io → R).
+  const monograms = screen.getAllByTestId('inbox-card-monogram');
+  expect(monograms).toHaveLength(1);
+  expect(screen.getByText('R')).toBeTruthy();
+});
+
 test('shows the no-matches empty state for an unmatched search', async () => {
   fakeRepo.__reset([makeStoredBookmark({ title: 'Only one' })]);
 
