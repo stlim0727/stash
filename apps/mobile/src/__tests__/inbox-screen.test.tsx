@@ -246,6 +246,40 @@ test('cards show inline collection and tag metadata', async () => {
   expect(screen.getByText('in Work   ·   #design')).toBeTruthy();
 });
 
+test('the sort control reorders the Inbox by date and name', async () => {
+  // Title order disagrees with date order so each toggle is observable:
+  // 'apple' is the newest, 'Zebra' is the oldest.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000021',
+      title: 'apple',
+      created_at: '2026-01-03T00:00:00.000Z',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000022',
+      title: 'Zebra',
+      created_at: '2026-01-01T00:00:00.000Z',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('apple')).toBeTruthy());
+
+  const titles = () =>
+    screen.getAllByTestId('inbox-card-title').map((node) => node.props.children);
+
+  // Default: newest-first by date → apple (Jan 3) before Zebra (Jan 1).
+  expect(titles()).toEqual(['apple', 'Zebra']);
+
+  // Flip direction → oldest-first by date → Zebra before apple.
+  await fireEvent.press(screen.getByText('↓ Desc'));
+  expect(titles()).toEqual(['Zebra', 'apple']);
+
+  // Switch field to Name (still ascending) → case-insensitive A–Z.
+  await fireEvent.press(screen.getByText('Date'));
+  expect(titles()).toEqual(['apple', 'Zebra']);
+});
+
 test('shows the no-matches empty state for an unmatched search', async () => {
   fakeRepo.__reset([makeStoredBookmark({ title: 'Only one' })]);
 
