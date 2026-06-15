@@ -1,0 +1,106 @@
+name: Android APK
+
+# Builds a standalone, installable Android APK in CI (no EAS account needed):
+# expo prebuild → Gradle assembleRelease. The RN/Expo template signs the
+# `release` build type with the debug keystore and bundles the JS, so the APK
+# installs and runs on a device on its own.
+#
+# - workflow_dispatch: build + upload the APK as a run artifact (no release).
+# - push a `vX.Y.Z` tag: build + publish a GitHub Release with the APK attached.
+#   (A tag containing a hyphen, e.g. v0.1.0-test1, builds the artifact but does
+#    NOT publish a release — handy for validating the build first.)
+#
+# Optional build-time config via repo secrets (absent ⇒ local-only build):
+#   EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, EXPO_PUBLIC_SENTRY_DSN
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag to publish a Release at (e.g. v0.1.0). Blank = artifact only.'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      # A hoisted (npm-like) layout is friendliest for React Native Gradle
+      # autolinking; pnpm's default isolated symlinks can confuse it.
+      - name: Install dependencies (hoisted)
+        run: |
+          echo "node-linker=hoisted" >> .npmrc
+          pnpm install --no-frozen-lockfile
+
+      - name: Prebuild Android project
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Give Gradle more heap
+        working-directory: apps/mobile/android
+        run: echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
+
+      - name: Build release APK
+        working-directory: apps/mobile/android
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+          EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.EXPO_PUBLIC_SENTRY_DSN }}
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Stage the APK
+        run: |
+          mkdir -p dist
+          NAME="${{ inputs.version || github.ref_name }}"
+          cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
+             "dist/stash-${NAME//\//-}-android.apk"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stash-android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+
+      # Publish a Release when a vX.Y.Z tag is pushed, OR when dispatched with a
+      # version input. On dispatch the action creates the tag at this commit
+      # (avoids needing to push a tag from a constrained environment).
+      - name: Publish GitHub Release
+        if: ${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.version != '') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          tag_name: ${{ inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Stash ${{ inputs.version || github.ref_name }}
+          files: dist/*.apk
+          body: |
+            Standalone debug-signed Android APK built in CI.
+
+            Install: download the `.apk`, open it on your Android phone, and allow
+            "install unknown apps" for your browser/file manager when prompted.
+
+            Local-only unless the repo's `EXPO_PUBLIC_SUPABASE_*` secrets were set
+            at build time.
