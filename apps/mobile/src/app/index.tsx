@@ -713,11 +713,12 @@ const styles = StyleSheet.create({
   shelf: {
     flexGrow: 0,
     // A horizontal ScrollView on Android can collapse its viewport onto the
-    // content and clip the chips' bottom edge. An explicit height reserves
-    // enough room for a chip (paddingVertical 7*2 + lineHeight 18 ≈ 32) so the
-    // viewport can't shrink below it; chips are vertically centred via
+    // content and clip the chips' bottom edge. minHeight (NOT a fixed height)
+    // reserves a floor so the viewport can't shrink below a default chip, while
+    // still GROWING when the chips get taller at larger OS font/display sizes —
+    // a fixed height would clip them again. Chips are vertically centred via
     // shelfContent.alignItems.
-    height: 38,
+    minHeight: 38,
     // Spacing above/below the chips must be MARGIN, not padding: vertical
     // padding (on style OR contentContainerStyle) clips the chips' bottom edge
     // on Android. Margin lives outside the scroll box and can't clip.
