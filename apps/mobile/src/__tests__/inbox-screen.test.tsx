@@ -122,7 +122,7 @@ test('search filters the list and shows the match count', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search title, notes, or URL'), 'local-first');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search your stash'), 'local-first');
 
   expect(screen.getByText('Matches (1)')).toBeTruthy();
   expect(screen.getByText('Local-first software')).toBeTruthy();
@@ -247,7 +247,8 @@ test('cards show inline collection and tag metadata', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-  expect(screen.getByText('in Work   ·   #design')).toBeTruthy();
+  expect(screen.getByText('in Work')).toBeTruthy();
+  expect(screen.getAllByText('#design').length).toBeGreaterThan(0);
 });
 
 test('the sort control reorders the Inbox by date and name', async () => {
@@ -280,7 +281,7 @@ test('the sort control reorders the Inbox by date and name', async () => {
   expect(titles()).toEqual(['Zebra', 'apple']);
 
   // Switch field to Name (still ascending) → case-insensitive A–Z.
-  await fireEvent.press(screen.getByText('Date'));
+  await fireEvent.press(screen.getByText('Newest'));
   expect(titles()).toEqual(['apple', 'Zebra']);
 });
 
@@ -315,7 +316,7 @@ test('shows the no-matches empty state for an unmatched search', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search title, notes, or URL'), 'zzz');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search your stash'), 'zzz');
 
   expect(screen.getByText('No bookmarks match your search.')).toBeTruthy();
 });

@@ -1,8 +1,10 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { Button } from '@/ui/Button';
+import { Card } from '@/ui/Card';
 import { useBookmarks } from '@/store/bookmarks';
 
 export default function AddBookmarkScreen() {
@@ -25,45 +27,48 @@ export default function AddBookmarkScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={[styles.label, { color: palette.textSecondary }]}>URL</Text>
-      <TextInput
-        style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
-        placeholder="https://"
-        placeholderTextColor={palette.textSecondary}
-        autoCapitalize="none"
-        autoCorrect={false}
-        autoFocus
-        keyboardType="url"
-        value={url}
-        onChangeText={(value) => {
-          setUrl(value);
-          if (error) {
-            setError(null);
-          }
-        }}
-        onSubmitEditing={handleSave}
-      />
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      <Text style={[styles.label, { color: palette.textSecondary }]}>Note (optional)</Text>
-      <TextInput
-        style={[
-          styles.input,
-          styles.noteInput,
-          { backgroundColor: palette.card, color: palette.text },
-        ]}
-        placeholder="Why are you saving this?"
-        placeholderTextColor={palette.textSecondary}
-        multiline
-        value={note}
-        onChangeText={setNote}
-      />
-      <Pressable
-        style={[styles.saveButton, { backgroundColor: palette.accent }]}
-        onPress={handleSave}
-      >
-        <Text style={styles.saveButtonLabel}>Save</Text>
-      </Pressable>
+    <View style={[styles.container, { backgroundColor: palette.background }]}>
+      <View style={styles.hero}>
+        <Text style={[styles.heroTitle, { color: palette.text }]}>Quick save</Text>
+        <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
+          Drop in a link and Stash will enrich it in the background.
+        </Text>
+      </View>
+      <Card elevated={false} style={styles.captureCard}>
+        <Text style={[styles.label, { color: palette.textSecondary }]}>URL</Text>
+        <TextInput
+          style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
+          placeholder="https://"
+          placeholderTextColor={palette.textSecondary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoFocus
+          keyboardType="url"
+          value={url}
+          onChangeText={(value) => {
+            setUrl(value);
+            if (error) {
+              setError(null);
+            }
+          }}
+          onSubmitEditing={handleSave}
+        />
+        {error ? <Text style={styles.error}>{error}</Text> : null}
+        <Text style={[styles.label, { color: palette.textSecondary }]}>Note (optional)</Text>
+        <TextInput
+          style={[
+            styles.input,
+            styles.noteInput,
+            { backgroundColor: palette.card, color: palette.text },
+          ]}
+          placeholder="Why are you saving this?"
+          placeholderTextColor={palette.textSecondary}
+          multiline
+          value={note}
+          onChangeText={setNote}
+        />
+      </Card>
+      <Button size="lg" onPress={handleSave}>Save bookmark</Button>
       <Text style={[styles.hint, { color: palette.textSecondary }]}>
         Saved instantly to your device and synced to the cloud in the background — capture never
         waits on the network.
@@ -76,7 +81,24 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
-    gap: 8,
+    gap: 14,
+  },
+  hero: {
+    paddingVertical: 8,
+  },
+  heroTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+  },
+  heroSubtitle: {
+    fontSize: 15,
+    marginTop: 4,
+  },
+  captureCard: {
+    borderRadius: 24,
+    padding: 18,
+    gap: 10,
   },
   label: {
     fontSize: 13,
@@ -86,7 +108,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   input: {
-    borderRadius: 12,
+    borderRadius: 18,
     padding: 14,
     fontSize: 16,
   },
@@ -97,17 +119,6 @@ const styles = StyleSheet.create({
   error: {
     color: '#d93636',
     fontSize: 13,
-  },
-  saveButton: {
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  saveButtonLabel: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
   },
   hint: {
     fontSize: 13,

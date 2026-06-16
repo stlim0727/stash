@@ -3,6 +3,8 @@ import { Link } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { Button } from '@/ui/Button';
+import { Card } from '@/ui/Card';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
@@ -75,16 +77,22 @@ export default function SettingsScreen() {
   ];
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView style={{ backgroundColor: palette.background }} contentContainerStyle={styles.container}>
+      <View style={styles.hero}>
+        <Text style={[styles.heroTitle, { color: palette.text }]}>Settings</Text>
+        <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
+          Manage your library, sync, and support options.
+        </Text>
+      </View>
       {settingsRows.map((row) => (
-        <View key={row.label} style={[styles.row, { backgroundColor: palette.card }]}>
+        <Card key={row.label} style={styles.row}>
           <Text style={[styles.rowLabel, { color: palette.text }]}>{row.label}</Text>
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>{row.value}</Text>
-        </View>
+        </Card>
       ))}
 
       <Link href="/review" asChild>
-        <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
+        <Pressable style={({ pressed }) => [styles.row, { backgroundColor: palette.surfaceElevated, borderColor: palette.border, opacity: pressed ? 0.78 : 1 }, palette.shadow.soft]}>
           <Text style={[styles.rowLabel, { color: palette.text }]}>Review AI suggestions</Text>
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
             {pendingSuggestionCount > 0
@@ -95,7 +103,7 @@ export default function SettingsScreen() {
       </Link>
 
       <Link href="/archived" asChild>
-        <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
+        <Pressable style={({ pressed }) => [styles.row, { backgroundColor: palette.surfaceElevated, borderColor: palette.border, opacity: pressed ? 0.78 : 1 }, palette.shadow.soft]}>
           <Text style={[styles.rowLabel, { color: palette.text }]}>Library</Text>
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
             {`${inbox.length} in inbox · ${archived.length} archived — view archived ›`}
@@ -104,7 +112,7 @@ export default function SettingsScreen() {
       </Link>
 
       <Link href="/report" asChild>
-        <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
+        <Pressable style={({ pressed }) => [styles.row, { backgroundColor: palette.surfaceElevated, borderColor: palette.border, opacity: pressed ? 0.78 : 1 }, palette.shadow.soft]}>
           <Text style={[styles.rowLabel, { color: palette.text }]}>Report a problem</Text>
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
             Send a bug or idea with diagnostic context ›
@@ -113,12 +121,7 @@ export default function SettingsScreen() {
       </Link>
 
       {canSync ? (
-        <Pressable
-          style={[styles.syncButton, { backgroundColor: palette.accent }]}
-          onPress={() => void syncNow()}
-        >
-          <Text style={styles.syncButtonLabel}>Sync now</Text>
-        </Pressable>
+        <Button size="lg" onPress={() => void syncNow()}>Sync now</Button>
       ) : null}
 
       <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
@@ -130,7 +133,7 @@ export default function SettingsScreen() {
         </Text>
       ) : (
         queue.map((entry) => (
-          <View key={entry.local_id} style={[styles.row, { backgroundColor: palette.card }]}>
+          <Card key={entry.local_id} style={styles.row}>
             <Text style={[styles.rowLabel, { color: palette.text }]} numberOfLines={1}>
               {entry.payload.url ?? entry.payload.shared_text ?? entry.local_id}
             </Text>
@@ -138,7 +141,7 @@ export default function SettingsScreen() {
               {`${entry.operation} · status ${entry.sync_status} · retries ${entry.retry_count}`}
               {entry.last_error ? `\nlast error: ${entry.last_error}` : ''}
             </Text>
-          </View>
+          </Card>
         ))
       )}
     </ScrollView>
@@ -148,12 +151,25 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     padding: 16,
-    gap: 12,
+    gap: 14,
+  },
+  hero: {
+    paddingVertical: 8,
+  },
+  heroTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+  },
+  heroSubtitle: {
+    fontSize: 15,
+    marginTop: 4,
   },
   row: {
-    borderRadius: 12,
-    padding: 16,
-    gap: 4,
+    borderRadius: 22,
+    padding: 18,
+    gap: 5,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   rowLabel: {
     fontSize: 16,
