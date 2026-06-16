@@ -690,13 +690,16 @@ const styles = StyleSheet.create({
   },
   shelf: {
     flexGrow: 0,
+    // Spacing above/below the chips must be MARGIN, not padding: a horizontal
+    // ScrollView on Android doesn't grow its viewport for vertical padding
+    // (on style OR contentContainerStyle), so any padding here clips the chips'
+    // bottom edge. Margin lives outside the scroll box and can't clip.
+    marginTop: 10,
+    marginBottom: 2,
   },
   shelfContent: {
-    // Vertical padding belongs on the content container, not the ScrollView
-    // style — on Android the latter clips the chips' bottom edge.
     paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 2,
+    alignItems: 'center',
     gap: 8,
   },
   card: {
