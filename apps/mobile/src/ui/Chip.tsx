@@ -44,6 +44,9 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 14,
+    // Explicit lineHeight: without it Android under-measures bold text and
+    // clips the glyph descenders inside the chip.
+    lineHeight: 18,
     fontWeight: '700',
   },
 });
