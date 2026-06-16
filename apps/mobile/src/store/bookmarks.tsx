@@ -749,11 +749,37 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     setIsSyncing(true);
     try {
       await ensureRepositoryReady();
-      // Drop terminal 'synced' leftovers a prior run failed to remove (e.g. the
-      // app exited between the upload and the queue delete), so they don't
-      // linger forever in the visible queue.
+      // Drain terminal 'synced' leftovers a prior run persisted but never
+      // removed, so they don't linger forever in the visible queue. A create
+      // marks its queue row 'synced' (with the new remote_id) BEFORE swapping
+      // the local bookmark from its local-* id to that remote id; if the app
+      // was killed between those two writes, the local row is still under the
+      // old id. Finish that swap before dropping the row — otherwise the only
+      // record of the remote id is deleted and the local-* bookmark is stranded
+      // as a permanent duplicate of the remote row once the pull brings it down.
       const syncedLeftovers = queue.filter((entry) => entry.sync_status === 'synced');
       if (syncedLeftovers.length > 0) {
+        for (const leftover of syncedLeftovers) {
+          const remoteId = leftover.remote_id;
+          if (!remoteId || remoteId === leftover.local_id) {
+            continue; // update/delete leftover, or already reconciled.
+          }
+          const localRow = bookmarksRef.current?.find(
+            (bookmark) => bookmark.id === leftover.local_id,
+          );
+          if (!localRow) {
+            continue; // Swap already completed (row is under the remote id).
+          }
+          const reconciled: Bookmark = { ...localRow, id: remoteId, sync_status: 'synced' };
+          setBookmarks((current) =>
+            (current ?? []).map((bookmark) =>
+              bookmark.id === leftover.local_id ? reconciled : bookmark,
+            ),
+          );
+          void repository
+            .replaceBookmark(leftover.local_id, reconciled)
+            .catch((error) => logStorageError('synced leftover reconcile', error));
+        }
         setQueue((current) => current.filter((entry) => entry.sync_status !== 'synced'));
         void Promise.all(
           syncedLeftovers.map((entry) => repository.removeQueueEntry(entry.local_id)),
