@@ -39,22 +39,24 @@ const styles = StyleSheet.create({
   base: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
+    // Android clips a rounded, background-filled View to its outline, so the
+    // PILL itself shaves the chip text if it's sized tight to the label. Bold
+    // text also renders a few px past its measured line box. Give the pill a
+    // real floor and centre the label so there's always slack below the glyphs.
+    // (This — not the ScrollView height — was the actual clip the earlier
+    // passes #58/#60/#62 never reached.)
+    minHeight: 36,
     paddingVertical: 7,
     paddingHorizontal: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   label: {
     fontSize: 14,
-    // Bold glyphs (incl. CJK) clip at the bottom on Android unless the line box
-    // is both tall enough AND free of the default font padding:
-    //   - lineHeight 20 (~1.43x) leaves room for descenders above fontSize 14.
-    //   - includeFontPadding:false drops Android's extra top/bottom padding,
-    //     which otherwise inflates the measured line past lineHeight and slices
-    //     the descenders inside the Text view itself (the bug #58/#60/#62 kept
-    //     half-fixing — earlier passes set lineHeight but never this flag).
-    //   - textAlignVertical:center keeps the glyph centred in that line box.
+    // Keep Android's default font padding (do NOT set includeFontPadding:false)
+    // — it reserves descender room; removing it tightened the box and clipped.
+    // A generous lineHeight leaves vertical room for bold glyphs.
     lineHeight: 20,
-    includeFontPadding: false,
-    textAlignVertical: 'center',
     fontWeight: '700',
   },
 });
