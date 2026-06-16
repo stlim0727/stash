@@ -289,20 +289,31 @@ export default function BookmarkDetailScreen() {
         <ActionButton icon="trash" label="Delete" tint={palette.danger} onPress={handleDelete} />
       </View>
 
-      {/* Notes — borderless, label-less, auto-saved on blur. */}
-      <TextInput
-        accessibilityLabel="Notes"
+      {/* Notes — a pencil affordance + filled field so it reads as editable
+          (an unlabeled box alone looked like a divider on the dark theme). */}
+      <View
         style={[
-          styles.notesInput,
-          { color: palette.text, backgroundColor: palette.surface, borderColor: palette.border },
+          styles.notesBox,
+          { backgroundColor: palette.surfaceElevated, borderColor: palette.border },
         ]}
-        placeholder="Add a note…"
-        placeholderTextColor={palette.textSecondary}
-        multiline
-        value={notesValue}
-        onChangeText={setDraftNotes}
-        onBlur={commitNotes}
-      />
+      >
+        <Ionicons
+          name="create-outline"
+          size={16}
+          color={palette.textSecondary}
+          style={styles.notesIcon}
+        />
+        <TextInput
+          accessibilityLabel="Notes"
+          style={[styles.notesInput, { color: palette.text }]}
+          placeholder="Add a note…"
+          placeholderTextColor={palette.textSecondary}
+          multiline
+          value={notesValue}
+          onChangeText={setDraftNotes}
+          onBlur={commitNotes}
+        />
+      </View>
 
       <Card elevated={false} style={styles.field}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
@@ -668,13 +679,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 15,
   },
-  notesInput: {
-    borderWidth: StyleSheet.hairlineWidth,
+  notesBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontSize: 15,
     minHeight: 64,
+  },
+  notesIcon: {
+    marginTop: 3,
+  },
+  notesInput: {
+    flex: 1,
+    fontSize: 15,
+    padding: 0,
+    minHeight: 40,
     textAlignVertical: 'top',
   },
   error: {
