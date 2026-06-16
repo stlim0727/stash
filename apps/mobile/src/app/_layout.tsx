@@ -31,6 +31,7 @@ function RootLayout() {
               <ShareIntentHandler />
               <Stack>
                 <Stack.Screen name="index" options={{ headerShown: false }} />
+                <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
                 <Stack.Screen
                   name="add"
                   options={{ title: 'Add Bookmark', presentation: 'modal' }}
