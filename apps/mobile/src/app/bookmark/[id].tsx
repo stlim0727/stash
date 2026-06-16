@@ -1,5 +1,6 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
   Alert,
   Image,
@@ -13,13 +14,14 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
-import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
+import { CollectionPicker } from '@/ui/CollectionPicker';
+import { TagField } from '@/ui/TagField';
 import { hostFromUrl } from '@/domain/item-icon';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
-import type { SuggestedTag } from '@/domain/types';
 import { useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
@@ -44,15 +46,25 @@ export default function BookmarkDetailScreen() {
     createCollection,
   } = useBookmarks();
 
-  const [tagInput, setTagInput] = useState('');
-  const [newCollectionName, setNewCollectionName] = useState('');
   const [organizeError, setOrganizeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Suggested tag names the user dismissed this session (local-only).
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  // null = not editing; the live bookmark value shows until the user types.
+  // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const insets = useSafeAreaInsets();
+
+  // Auto-save drafts even when the screen is dismissed via the system back
+  // button, which unmounts before a TextInput's onBlur fires. Refs hold the
+  // latest values; the unmount effect flushes them to the store (no setState).
+  const draftTitleRef = useRef<string | null>(null);
+  const draftNotesRef = useRef<string | null>(null);
+  draftTitleRef.current = draftTitle;
+  draftNotesRef.current = draftNotes;
+  const flushRef = useRef<() => void>(() => {});
+  useEffect(() => () => flushRef.current(), []);
 
   const bookmark = id ? getBookmark(id) : undefined;
 
@@ -65,6 +77,22 @@ export default function BookmarkDetailScreen() {
       </View>
     );
   }
+
+  // Commit unsaved drafts on unmount (back button) without touching state.
+  flushRef.current = () => {
+    const dt = draftTitleRef.current;
+    const dn = draftNotesRef.current;
+    const fields: { title?: string; notes?: string } = {};
+    if (dt !== null && dt.trim() !== (bookmark.title ?? '')) {
+      fields.title = dt.trim();
+    }
+    if (dn !== null && dn !== (bookmark.notes ?? '')) {
+      fields.notes = dn;
+    }
+    if (fields.title !== undefined || fields.notes !== undefined) {
+      updateBookmarkFields(bookmark.id, fields);
+    }
+  };
 
   const tags = getTagsForBookmark(bookmark.id);
   const collection = getCollection(bookmark.collection_id);
@@ -82,18 +110,19 @@ export default function BookmarkDetailScreen() {
   const showCollectionSuggestion =
     !!suggestedCollection && bookmark.collection_id !== suggestedCollection.id;
 
-  const titleValue = draftTitle ?? bookmark.title ?? '';
   const notesValue = draftNotes ?? bookmark.notes ?? '';
-  const editsDirty =
-    (draftTitle !== null && draftTitle !== (bookmark.title ?? '')) ||
-    (draftNotes !== null && draftNotes !== (bookmark.notes ?? ''));
 
-  const handleSaveEdits = () => {
-    updateBookmarkFields(bookmark.id, {
-      ...(draftTitle !== null ? { title: draftTitle } : {}),
-      ...(draftNotes !== null ? { notes: draftNotes } : {}),
-    });
+  // Auto-save on blur: edit in place, no explicit "Save" button.
+  const commitTitle = () => {
+    if (draftTitle !== null && draftTitle.trim() !== (bookmark.title ?? '')) {
+      updateBookmarkFields(bookmark.id, { title: draftTitle.trim() });
+    }
     setDraftTitle(null);
+  };
+  const commitNotes = () => {
+    if (draftNotes !== null && draftNotes !== (bookmark.notes ?? '')) {
+      updateBookmarkFields(bookmark.id, { notes: draftNotes });
+    }
     setDraftNotes(null);
   };
 
@@ -123,11 +152,13 @@ export default function BookmarkDetailScreen() {
     if (!bookmark.url) {
       return;
     }
-    void Share.share({ message: bookmark.url, url: bookmark.url, title: bookmark.title ?? undefined }).catch(
-      () => {
-        setOrganizeError('Could not open the share sheet.');
-      },
-    );
+    void Share.share({
+      message: bookmark.url,
+      url: bookmark.url,
+      title: bookmark.title ?? undefined,
+    }).catch(() => {
+      setOrganizeError('Could not open the share sheet.');
+    });
   };
 
   const runOrganizeAction = async (action: () => Promise<string | null>) => {
@@ -139,24 +170,20 @@ export default function BookmarkDetailScreen() {
     return error === null;
   };
 
-  const handleAddTag = async () => {
-    const name = tagInput.trim();
-    if (!name) {
-      return;
-    }
-    const ok = await runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
-    if (ok) {
-      setTagInput('');
+  const handleAddTag = (name: string) =>
+    runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
+  const handleRemoveTag = (name: string) =>
+    void runOrganizeAction(() => removeTagFromBookmark(bookmark.id, name));
+  const handleAcceptSuggestion = (name: string) => {
+    const match = pending.find((suggestion) => suggestion.name === name);
+    if (match) {
+      void runOrganizeAction(() => acceptSuggestedTags(bookmark.id, [match]));
     }
   };
-
-  const handleSuggestAi = () => runOrganizeAction(() => requestAiEnrichment(bookmark.id));
-
-  const handleAcceptTags = (items: SuggestedTag[]) =>
-    runOrganizeAction(() => acceptSuggestedTags(bookmark.id, items));
-
   const handleDismissTag = (name: string) =>
     setDismissed((prev) => new Set(prev).add(name.toLowerCase()));
+
+  const handleSuggestAi = () => void runOrganizeAction(() => requestAiEnrichment(bookmark.id));
 
   const handleAcceptCollection = () => {
     if (suggestedCollection) {
@@ -164,21 +191,15 @@ export default function BookmarkDetailScreen() {
     }
   };
 
-  const handleCreateCollection = async () => {
-    const name = newCollectionName.trim();
-    if (!name) {
-      return;
-    }
-    await runOrganizeAction(async () => {
+  const handleCreateCollection = (name: string) =>
+    runOrganizeAction(async () => {
       const result = await createCollection(name);
       if (result.collection) {
         assignCollection(bookmark.id, result.collection.id);
-        setNewCollectionName('');
         return null;
       }
       return result.error ?? 'Could not create the collection.';
     });
-  };
 
   const handleOpenLink = () => {
     if (bookmark.url) {
@@ -207,7 +228,10 @@ export default function BookmarkDetailScreen() {
   };
 
   return (
-    <ScrollView style={{ backgroundColor: palette.background }} contentContainerStyle={styles.container}>
+    <ScrollView
+      style={{ backgroundColor: palette.background }}
+      contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 32 }]}
+    >
       {bookmark.preview_image_url ? (
         <Image
           source={{ uri: bookmark.preview_image_url }}
@@ -215,96 +239,118 @@ export default function BookmarkDetailScreen() {
           resizeMode="cover"
         />
       ) : null}
-      <Card style={styles.header}>
-        <View style={styles.headerTop}>
-          {bookmark.favicon_url ? (
-            <View style={[styles.faviconTile, { borderColor: palette.border }]}>
-              <Image source={{ uri: bookmark.favicon_url }} style={styles.favicon} resizeMode="contain" />
-            </View>
-          ) : null}
-          <View style={styles.headerText}>
-            <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={3}>
-              {bookmark.title ?? bookmark.url ?? 'Untitled'}
-            </Text>
-            {host ? (
-              <Text style={[styles.headerHost, { color: palette.textSecondary }]} numberOfLines={1}>
-                {host}
-              </Text>
-            ) : null}
-          </View>
-        </View>
-        {statusChips.length > 0 ? (
-          <View style={styles.statusRow}>
-            {statusChips.map((label) => (
-              <View key={label} style={[styles.statusChip, { backgroundColor: palette.mutedSurface }]}>
-                <Text style={[styles.statusChipLabel, { color: palette.textSecondary }]}>{label}</Text>
-              </View>
-            ))}
+      {/* Compact byline: favicon · host · status, instead of a header card. */}
+      <View style={styles.byline}>
+        {bookmark.favicon_url ? (
+          <View style={[styles.bylineFavTile, { borderColor: palette.border }]}>
+            <Image source={{ uri: bookmark.favicon_url }} style={styles.bylineFav} resizeMode="contain" />
           </View>
         ) : null}
-      </Card>
+        <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
+          {host ?? 'Saved'}
+          {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
+        </Text>
+      </View>
+
+      {/* Title — tap to edit in place, auto-saved on blur. */}
+      {draftTitle === null ? (
+        <Pressable accessibilityRole="button" onPress={() => setDraftTitle(bookmark.title ?? '')}>
+          <Text style={[styles.title, { color: palette.text }]}>
+            {bookmark.title ?? bookmark.url ?? 'Untitled'}
+          </Text>
+        </Pressable>
+      ) : (
+        <TextInput
+          accessibilityLabel="Edit title"
+          autoFocus
+          multiline
+          style={[styles.title, styles.titleInput, { color: palette.text, borderColor: palette.border }]}
+          placeholder="Untitled — metadata pending"
+          placeholderTextColor={palette.textSecondary}
+          value={draftTitle}
+          onChangeText={setDraftTitle}
+          onBlur={commitTitle}
+        />
+      )}
 
       <View style={styles.actionBar}>
         {bookmark.url ? (
-          <ActionButton glyph="↗" label="Open" tint={palette.accent} onPress={handleOpenLink} />
+          <ActionButton icon="open-outline" label="Open" tint={palette.accent} onPress={handleOpenLink} />
         ) : null}
         {bookmark.url ? (
-          <ActionButton glyph="⇪" label="Share" tint={palette.text} onPress={handleShare} />
+          <ActionButton icon="share-social" label="Share" tint={palette.text} onPress={handleShare} />
         ) : null}
         <ActionButton
-          glyph={bookmark.is_archived ? '↩' : '▾'}
+          icon={bookmark.is_archived ? 'arrow-undo' : 'archive'}
           label={bookmark.is_archived ? 'Unarchive' : 'Archive'}
           tint={palette.text}
           onPress={() => archiveBookmark(bookmark.id, !bookmark.is_archived)}
         />
-        <ActionButton glyph="✕" label="Delete" tint={palette.danger} onPress={handleDelete} />
+        <ActionButton icon="trash" label="Delete" tint={palette.danger} onPress={handleDelete} />
       </View>
 
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Title</Text>
-        <TextInput
-          style={[styles.editInput, { color: palette.text, borderColor: palette.border }]}
-          placeholder="Untitled — metadata pending"
-          placeholderTextColor={palette.textSecondary}
-          value={titleValue}
-          onChangeText={setDraftTitle}
+      {/* Notes — a pencil affordance + filled field so it reads as editable
+          (an unlabeled box alone looked like a divider on the dark theme). */}
+      <View
+        style={[
+          styles.notesBox,
+          { backgroundColor: palette.surfaceElevated, borderColor: palette.border },
+        ]}
+      >
+        <Ionicons
+          name="create-outline"
+          size={16}
+          color={palette.textSecondary}
+          style={styles.notesIcon}
         />
-      </Card>
-
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Notes</Text>
         <TextInput
-          style={[
-            styles.editInput,
-            styles.notesInput,
-            { color: palette.text, borderColor: palette.border },
-          ]}
-          placeholder="No notes"
+          accessibilityLabel="Notes"
+          style={[styles.notesInput, { color: palette.text }]}
+          placeholder="Add a note…"
           placeholderTextColor={palette.textSecondary}
           multiline
           value={notesValue}
           onChangeText={setDraftNotes}
+          onBlur={commitNotes}
+        />
+      </View>
+
+      <Card elevated={false} style={styles.field}>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
+        <TagField
+          tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
+          suggestions={pending.map((suggestion) => ({
+            name: suggestion.name,
+            confidence: suggestion.confidence,
+          }))}
+          editable={canOrganizeRemotely}
+          busy={busy}
+          onAdd={handleAddTag}
+          onRemove={handleRemoveTag}
+          onBrowse={(tagId) => router.navigate({ pathname: '/', params: { tag: tagId } })}
+          onAcceptSuggestion={handleAcceptSuggestion}
+          onDismissSuggestion={handleDismissTag}
+          disabledHint={
+            canOrganizeRemotely ? undefined : 'Tags can be edited once this bookmark has synced.'
+          }
         />
       </Card>
 
-      {editsDirty ? <Button onPress={handleSaveEdits}>Save changes</Button> : null}
-
       <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Details</Text>
-        {details.map((row, index) => (
-          <View
-            key={row.label}
-            style={[
-              styles.detailRow,
-              index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border } : null,
-            ]}
-          >
-            <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
-            <Text style={[styles.detailValue, { color: palette.text }]} selectable>
-              {row.value}
-            </Text>
-          </View>
-        ))}
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Collection</Text>
+        <CollectionPicker
+          collections={collections.map((item) => ({ id: item.id, name: item.name }))}
+          currentId={bookmark.collection_id}
+          currentName={collection?.name ?? null}
+          busy={busy}
+          onSelect={(value) => assignCollection(bookmark.id, value)}
+          onCreate={handleCreateCollection}
+        />
+        {collection && !collections.some((item) => item.id === collection.id) ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            Currently in: {collection.name}
+          </Text>
+        ) : null}
       </Card>
 
       <Card elevated={false} style={styles.field}>
@@ -331,54 +377,20 @@ export default function BookmarkDetailScreen() {
         ) : null}
 
         {pending.length > 0 ? (
-          <>
-            <View style={styles.chipRow}>
-              {pending.map((suggestion) => (
-                <View
-                  key={suggestion.name}
-                  style={[styles.chip, styles.tagChip, { borderColor: palette.accent }]}
-                >
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Accept suggested tag ${suggestion.name}`}
-                    disabled={busy}
-                    onPress={() => void handleAcceptTags([suggestion])}
-                  >
-                    <Text style={[styles.chipLabel, { color: palette.accent }]}>
-                      ＋ {suggestion.name}
-                    </Text>
-                  </Pressable>
-                  <Text style={[styles.confidence, { color: palette.textSecondary }]}>
-                    {Math.round(suggestion.confidence * 100)}%
-                  </Text>
-                  <Pressable
-                    accessibilityLabel={`Dismiss suggested tag ${suggestion.name}`}
-                    disabled={busy}
-                    hitSlop={6}
-                    onPress={() => handleDismissTag(suggestion.name)}
-                  >
-                    <Text style={[styles.chipRemove, { color: palette.textSecondary }]}>×</Text>
-                  </Pressable>
-                </View>
-              ))}
-            </View>
-            {pending.length > 1 ? (
-              <Pressable disabled={busy} onPress={() => void handleAcceptTags(pending)}>
-                <Text style={[styles.link, { color: palette.accent }]}>Accept all tags</Text>
-              </Pressable>
-            ) : null}
-          </>
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            Suggested tags are in the Tags field above — tap a “＋” chip to add.
+          </Text>
         ) : null}
 
-        {suggestedCollection && bookmark.collection_id !== suggestedCollection.id ? (
+        {showCollectionSuggestion ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`File into ${suggestedCollection.name}`}
+            accessibilityLabel={`File into ${suggestedCollection!.name}`}
             disabled={busy}
             onPress={handleAcceptCollection}
           >
             <Text style={[styles.link, { color: palette.accent }]}>
-              Suggested collection: file into “{suggestedCollection.name}”
+              Suggested collection: file into “{suggestedCollection!.name}”
             </Text>
           </Pressable>
         ) : null}
@@ -407,132 +419,52 @@ export default function BookmarkDetailScreen() {
         ) : null}
       </Card>
 
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
-        {tags.length > 0 ? (
-          <View style={styles.chipRow}>
-            {tags.map((tag) => (
+      <View style={styles.detailsSection}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Toggle details"
+          onPress={() => setShowDetails((value) => !value)}
+          style={styles.detailsToggle}
+        >
+          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+            {showDetails ? '▾  Details' : '▸  Details'}
+          </Text>
+        </Pressable>
+        {showDetails ? (
+          <Card elevated={false} style={styles.field}>
+            {details.map((row, index) => (
               <View
-                key={tag.id}
-                style={[styles.chip, styles.tagChip, { borderColor: palette.border }]}
+                key={row.label}
+                style={[
+                  styles.detailRow,
+                  index > 0
+                    ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border }
+                    : null,
+                ]}
               >
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Browse #${tag.name}`}
-                  onPress={() => router.navigate({ pathname: '/', params: { tag: tag.id } })}
-                >
-                  <Text style={[styles.chipLabel, { color: palette.text }]}>{tag.name}</Text>
-                </Pressable>
-                {canOrganizeRemotely ? (
-                  <Pressable
-                    accessibilityLabel={`Remove tag ${tag.name}`}
-                    disabled={busy}
-                    hitSlop={6}
-                    onPress={() =>
-                      void runOrganizeAction(() => removeTagFromBookmark(bookmark.id, tag.name))
-                    }
-                  >
-                    <Text style={[styles.chipRemove, { color: palette.textSecondary }]}>×</Text>
-                  </Pressable>
-                ) : null}
+                <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
+                <Text style={[styles.detailValue, { color: palette.text }]} selectable>
+                  {row.value}
+                </Text>
               </View>
             ))}
-          </View>
-        ) : (
-          <Text style={[styles.fieldValue, { color: palette.textSecondary }]}>None yet</Text>
-        )}
-        {canOrganizeRemotely ? (
-          <View style={styles.inlineForm}>
-            <TextInput
-              style={[styles.inlineInput, { color: palette.text, borderColor: palette.border }]}
-              placeholder="Add a tag"
-              placeholderTextColor={palette.textSecondary}
-              autoCapitalize="none"
-              value={tagInput}
-              onChangeText={setTagInput}
-              onSubmitEditing={() => void handleAddTag()}
-            />
-            <Pressable
-              disabled={busy}
-              style={[styles.inlineButton, { backgroundColor: palette.accent }]}
-              onPress={() => void handleAddTag()}
-            >
-              <Text style={styles.inlineButtonLabel}>Add</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            Tags can be edited once this bookmark has synced.
-          </Text>
-        )}
-      </Card>
-
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Collection</Text>
-        <View style={styles.chipRow}>
-          <Pressable
-            disabled={busy}
-            style={[
-              styles.chip,
-              { borderColor: palette.border },
-              bookmark.collection_id === null && { backgroundColor: palette.border },
-            ]}
-            onPress={() => assignCollection(bookmark.id, null)}
-          >
-            <Text style={[styles.chipLabel, { color: palette.text }]}>Inbox (none)</Text>
-          </Pressable>
-          {collections.map((item) => (
-            <Pressable
-              key={item.id}
-              disabled={busy}
-              style={[
-                styles.chip,
-                { borderColor: palette.border },
-                bookmark.collection_id === item.id && { backgroundColor: palette.border },
-              ]}
-              onPress={() => assignCollection(bookmark.id, item.id)}
-            >
-              <Text style={[styles.chipLabel, { color: palette.text }]}>{item.name}</Text>
-            </Pressable>
-          ))}
-        </View>
-        {collection && !collections.some((item) => item.id === collection.id) ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            Currently in: {collection.name}
-          </Text>
+          </Card>
         ) : null}
-        <View style={styles.inlineForm}>
-          <TextInput
-            style={[styles.inlineInput, { color: palette.text, borderColor: palette.border }]}
-            placeholder="New collection"
-            placeholderTextColor={palette.textSecondary}
-            value={newCollectionName}
-            onChangeText={setNewCollectionName}
-            onSubmitEditing={() => void handleCreateCollection()}
-          />
-          <Pressable
-            disabled={busy}
-            style={[styles.inlineButton, { backgroundColor: palette.accent }]}
-            onPress={() => void handleCreateCollection()}
-          >
-            <Text style={styles.inlineButtonLabel}>Create</Text>
-          </Pressable>
-        </View>
-      </Card>
+      </View>
 
       {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
     </ScrollView>
   );
 }
 
-/** One item in the detail action bar: a glyph above a small label. */
+/** One item in the detail action bar: a vector icon above a small label. */
 function ActionButton({
-  glyph,
+  icon,
   label,
   tint,
   onPress,
 }: {
-  glyph: string;
+  icon: ComponentProps<typeof Ionicons>['name'];
   label: string;
   tint: string;
   onPress: () => void;
@@ -548,7 +480,7 @@ function ActionButton({
         { backgroundColor: palette.card, borderColor: palette.border, opacity: pressed ? 0.7 : 1 },
       ]}
     >
-      <Text style={[styles.actionGlyph, { color: tint }]}>{glyph}</Text>
+      <Ionicons name={icon} size={22} color={tint} />
       <Text style={[styles.actionBtnLabel, { color: tint }]} numberOfLines={1}>
         {label}
       </Text>
@@ -565,6 +497,48 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 220,
     borderRadius: 28,
+  },
+  byline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  bylineFavTile: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  bylineFav: {
+    width: '72%',
+    height: '72%',
+  },
+  bylineText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  title: {
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    lineHeight: 32,
+  },
+  titleInput: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  detailsSection: {
+    gap: 8,
+  },
+  detailsToggle: {
+    paddingVertical: 4,
   },
   header: {
     gap: 12,
@@ -629,11 +603,6 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  actionGlyph: {
-    fontSize: 20,
-    lineHeight: 24,
-    fontWeight: '600',
-  },
   actionBtnLabel: {
     fontSize: 12,
     fontWeight: '600',
@@ -675,11 +644,6 @@ const styles = StyleSheet.create({
   fieldValue: {
     fontSize: 15,
   },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
   suggestHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -695,10 +659,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
-  confidence: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
   link: {
     fontSize: 14,
     fontWeight: '600',
@@ -708,48 +668,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
-  },
-  chip: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-  },
-  tagChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  chipRemove: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  chipLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  inlineForm: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  inlineInput: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    fontSize: 15,
-  },
-  inlineButton: {
-    borderRadius: 10,
-    paddingVertical: 9,
-    paddingHorizontal: 16,
-  },
-  inlineButtonLabel: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
   },
   hint: {
     fontSize: 13,
@@ -761,8 +679,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 15,
   },
+  notesBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 64,
+  },
+  notesIcon: {
+    marginTop: 3,
+  },
   notesInput: {
-    minHeight: 72,
+    flex: 1,
+    fontSize: 15,
+    padding: 0,
+    minHeight: 40,
     textAlignVertical: 'top',
   },
   error: {

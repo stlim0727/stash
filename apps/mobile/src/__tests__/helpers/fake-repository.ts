@@ -6,6 +6,7 @@ export interface FakeRepositoryModule {
   /** Test hook: reset state, optionally pre-seeding stored bookmarks/tag data/enrichments. */
   __reset: (rows?: Bookmark[], seedTagData?: TagData, seedEnrichments?: AIEnrichment[]) => void;
   __queue: () => LocalPendingBookmark[];
+  __meta: (key: string) => string | null;
 }
 
 /**
@@ -69,6 +70,7 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
       meta = {};
     },
     __queue: () => [...queue],
+    __meta: (key: string) => meta[key] ?? null,
   };
 }
 

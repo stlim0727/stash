@@ -3,6 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
     "@sentry/react-native": "^8.14.0",
     "@zxing/text-encoding": "^0.9.0",
     "expo": "~56.0.11",

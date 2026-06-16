@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -41,7 +42,7 @@ import {
 import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
-import { accountInitials } from '@/domain/account';
+import { Avatar } from '@/ui/Avatar';
 import type { Bookmark } from '@/domain/types';
 
 function statusLabel(bookmark: Bookmark): string | null {
@@ -291,8 +292,8 @@ export default function InboxScreen() {
             style={styles.accountButton}
             onPress={() => router.push('/settings')}
           >
-            <View style={[styles.avatar, { borderColor: palette.border }]}>
-              <Text style={styles.avatarGlyph}>⚙︎</Text>
+            <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+              <Ionicons name="settings-sharp" size={20} color={palette.text} />
             </View>
             <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
           </Pressable>
@@ -304,22 +305,7 @@ export default function InboxScreen() {
               style={styles.accountButton}
               onPress={() => router.push('/account')}
             >
-              <View
-                style={[
-                  styles.avatar,
-                  isAuthed
-                    ? { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft }
-                    : { borderColor: palette.border },
-                ]}
-              >
-                {isAuthed ? (
-                  <Text style={[styles.avatarInitials, { color: palette.accentText }]}>
-                    {accountInitials(auth.email)}
-                  </Text>
-                ) : (
-                  <Text style={styles.avatarGlyph}>👤</Text>
-                )}
-              </View>
+              <Avatar size={44} uri={auth.avatarUrl} email={auth.email} authed={isAuthed} />
               <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
                 {isAuthed ? 'Account' : 'Sign in'}
               </Text>
@@ -391,6 +377,7 @@ export default function InboxScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          testID="browse-shelf"
           style={styles.shelf}
           contentContainerStyle={styles.shelfContent}
         >
@@ -574,7 +561,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
         ]}
       >
-        <Text style={styles.fabIcon}>＋</Text>
+        <Ionicons name="add" size={34} color="#ffffff" />
       </Pressable>
     </View>
   );
@@ -633,13 +620,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  avatarInitials: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  avatarGlyph: {
-    fontSize: 20,
   },
   accountCaption: {
     fontSize: 11,
@@ -869,11 +849,5 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
-  },
-  fabIcon: {
-    color: '#ffffff',
-    fontSize: 30,
-    fontWeight: '600',
-    lineHeight: 34,
   },
 });
