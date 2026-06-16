@@ -749,6 +749,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     setIsSyncing(true);
     try {
       await ensureRepositoryReady();
+      // Drop terminal 'synced' leftovers a prior run failed to remove (e.g. the
+      // app exited between the upload and the queue delete), so they don't
+      // linger forever in the visible queue.
+      const syncedLeftovers = queue.filter((entry) => entry.sync_status === 'synced');
+      if (syncedLeftovers.length > 0) {
+        setQueue((current) => current.filter((entry) => entry.sync_status !== 'synced'));
+        void Promise.all(
+          syncedLeftovers.map((entry) => repository.removeQueueEntry(entry.local_id)),
+        ).catch((error) => logStorageError('synced leftover cleanup', error));
+      }
       // Re-ensure the session so a token that expired while the app stayed
       // open is refreshed before we sync; otherwise every entry would fail
       // against a stale bearer token until restart.
@@ -765,98 +775,118 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           continue;
         }
 
-        setQueue((current) =>
-          current.map((queued) =>
-            queued.local_id === entry.local_id ? { ...queued, sync_status: 'syncing' } : queued,
-          ),
-        );
-
-        const result = await syncQueueEntry(api, repository, entry, getLatestBookmark);
-
-        // Deleted while a create/update was in flight: don't resurrect it.
-        // Undo the rows syncQueueEntry just persisted and best-effort delete
-        // the remote copy so the user's delete wins end to end.
-        if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
-          const replacementId = result.bookmarkReplacement?.bookmark.id;
-          ensureRepositoryReady()
-            .then(() =>
-              Promise.all([
-                replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
-                // Superseded-aware: a durable delete entry enqueued for this
-                // bookmark while we were uploading must NOT be removed here.
-                removeQueueEntryIfNotSuperseded(repository, entry),
-              ]),
-            )
-            .catch((error) => logStorageError('post-delete sync cleanup', error));
-          if (result.entry.remote_id && result.entry.remote_id !== entry.local_id) {
-            // The upload created a remote row for a bookmark the user already
-            // deleted. Enqueue a durable delete (not a best-effort request) so
-            // the removal survives app exit and request failures; the next
-            // sync pass processes it.
-            enqueueMutation(result.entry.remote_id, 'delete');
-          }
-          continue;
-        }
-
-        setQueue((current) =>
-          result.removeEntry
-            ? current.filter((queued) => queued.local_id !== entry.local_id)
-            : current.map((queued) =>
-                queued.local_id === entry.local_id ? result.entry : queued,
-              ),
-        );
-        if (result.bookmarkReplacement) {
-          const { previousId, bookmark: replacement } = result.bookmarkReplacement;
-          // The replacement was built from a snapshot taken before the upload.
-          // Enrichment may have completed in the meantime, so apply only the
-          // sync-owned fields (identity + status) onto the LATEST row instead
-          // of writing the stale snapshot back.
-          let merged: Bookmark | null = null;
-          setBookmarks((current) =>
-            (current ?? []).map((bookmark) => {
-              if (bookmark.id !== previousId) {
-                return bookmark;
-              }
-              merged = {
-                ...bookmark,
-                id: replacement.id,
-                sync_status: replacement.sync_status,
-                updated_at: replacement.updated_at,
-              };
-              return merged;
-            }),
+        // A storage/repository failure on one entry must not abort the whole
+        // run and strand this (and every later) entry at 'syncing' forever.
+        // Mark just this entry failed so the next pass retries it.
+        try {
+          setQueue((current) =>
+            current.map((queued) =>
+              queued.local_id === entry.local_id ? { ...queued, sync_status: 'syncing' } : queued,
+            ),
           );
-          if (merged) {
-            // replaceBookmark (not update) so a concurrent enrichment persist
-            // that resurrected the old local-ID row gets cleaned up too.
-            const persisted: Bookmark = merged;
+
+          const result = await syncQueueEntry(api, repository, entry, getLatestBookmark);
+
+          // Deleted while a create/update was in flight: don't resurrect it.
+          // Undo the rows syncQueueEntry just persisted and best-effort delete
+          // the remote copy so the user's delete wins end to end.
+          if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
+            const replacementId = result.bookmarkReplacement?.bookmark.id;
             ensureRepositoryReady()
-              .then(() => repository.replaceBookmark(previousId, persisted))
-              .catch((error) => logStorageError('post-sync merge', error));
-            // The create payload only carries url/title/notes, and the remote
-            // row defaults to no generated metadata + pending status. If the
-            // local row has since diverged — archived, filed into a collection,
-            // edited, or enriched while the create was uploading — reconcile
-            // with a follow-up update so those changes reach the cloud.
-            if (
-              entry.operation === 'create' &&
-              (persisted.is_archived ||
-                persisted.collection_id !== null ||
-                persisted.title !== (result.uploadedPayload?.title ?? null) ||
-                persisted.notes !== (result.uploadedPayload?.notes ?? null) ||
-                persisted.metadata_status !== 'pending' ||
-                persisted.site_name !== null ||
-                persisted.favicon_url !== null ||
-                persisted.preview_image_url !== null)
-            ) {
-              enqueueMutation(persisted.id, 'update');
+              .then(() =>
+                Promise.all([
+                  replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
+                  // Superseded-aware: a durable delete entry enqueued for this
+                  // bookmark while we were uploading must NOT be removed here.
+                  removeQueueEntryIfNotSuperseded(repository, entry),
+                ]),
+              )
+              .catch((error) => logStorageError('post-delete sync cleanup', error));
+            if (result.entry.remote_id && result.entry.remote_id !== entry.local_id) {
+              // The upload created a remote row for a bookmark the user already
+              // deleted. Enqueue a durable delete (not a best-effort request) so
+              // the removal survives app exit and request failures; the next
+              // sync pass processes it.
+              enqueueMutation(result.entry.remote_id, 'delete');
             }
-            // A brand-new bookmark just gained a remote identity: kick off AI
-            // suggestions once, in the background. Failures are swallowed.
-            if (entry.operation === 'create') {
-              void requestAiEnrichment(persisted.id);
+            continue;
+          }
+
+          setQueue((current) =>
+            result.removeEntry
+              ? current.filter((queued) => queued.local_id !== entry.local_id)
+              : current.map((queued) =>
+                  queued.local_id === entry.local_id ? result.entry : queued,
+                ),
+          );
+          if (result.bookmarkReplacement) {
+            const { previousId, bookmark: replacement } = result.bookmarkReplacement;
+            // The replacement was built from a snapshot taken before the upload.
+            // Enrichment may have completed in the meantime, so apply only the
+            // sync-owned fields (identity + status) onto the LATEST row instead
+            // of writing the stale snapshot back.
+            let merged: Bookmark | null = null;
+            setBookmarks((current) =>
+              (current ?? []).map((bookmark) => {
+                if (bookmark.id !== previousId) {
+                  return bookmark;
+                }
+                merged = {
+                  ...bookmark,
+                  id: replacement.id,
+                  sync_status: replacement.sync_status,
+                  updated_at: replacement.updated_at,
+                };
+                return merged;
+              }),
+            );
+            if (merged) {
+              // replaceBookmark (not update) so a concurrent enrichment persist
+              // that resurrected the old local-ID row gets cleaned up too.
+              const persisted: Bookmark = merged;
+              ensureRepositoryReady()
+                .then(() => repository.replaceBookmark(previousId, persisted))
+                .catch((error) => logStorageError('post-sync merge', error));
+              // The create payload only carries url/title/notes, and the remote
+              // row defaults to no generated metadata + pending status. If the
+              // local row has since diverged — archived, filed into a collection,
+              // edited, or enriched while the create was uploading — reconcile
+              // with a follow-up update so those changes reach the cloud.
+              if (
+                entry.operation === 'create' &&
+                (persisted.is_archived ||
+                  persisted.collection_id !== null ||
+                  persisted.title !== (result.uploadedPayload?.title ?? null) ||
+                  persisted.notes !== (result.uploadedPayload?.notes ?? null) ||
+                  persisted.metadata_status !== 'pending' ||
+                  persisted.site_name !== null ||
+                  persisted.favicon_url !== null ||
+                  persisted.preview_image_url !== null)
+              ) {
+                enqueueMutation(persisted.id, 'update');
+              }
+              // A brand-new bookmark just gained a remote identity: kick off AI
+              // suggestions once, in the background. Failures are swallowed.
+              if (entry.operation === 'create') {
+                void requestAiEnrichment(persisted.id);
+              }
             }
           }
+        } catch (error) {
+          logStorageError('sync entry', error);
+          const failed: LocalPendingBookmark = {
+            ...entry,
+            sync_status: 'failed',
+            retry_count: entry.retry_count + 1,
+            last_error: error instanceof Error ? error.message : 'Sync failed.',
+            updated_at: new Date().toISOString(),
+          };
+          setQueue((current) =>
+            current.map((queued) => (queued.local_id === entry.local_id ? failed : queued)),
+          );
+          ensureRepositoryReady()
+            .then(() => repository.updateQueueEntry(failed))
+            .catch((persistError) => logStorageError('sync entry fail-persist', persistError));
         }
       }
 
@@ -927,7 +957,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       !isSyncing &&
       bookmarks !== null &&
       (auth.status === 'anonymous' || auth.status === 'authenticated') &&
-      queue.some((entry) => entry.sync_status === 'pending')
+      // 'syncing' is included so an entry an interrupted run stranded in-flight
+      // is re-driven automatically; failed entries wait for a save / Sync now.
+      queue.some(
+        (entry) => entry.sync_status === 'pending' || entry.sync_status === 'syncing',
+      )
     ) {
       void syncNow();
     }

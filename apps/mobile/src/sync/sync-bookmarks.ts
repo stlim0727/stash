@@ -209,5 +209,8 @@ export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
 }
 
 export function isSyncable(entry: LocalPendingBookmark): boolean {
-  return entry.sync_status === 'pending' || entry.sync_status === 'failed';
+  // Anything not yet 'synced' is eligible. 'syncing' is included so an entry
+  // that an interrupted run left in-flight (e.g. the app was backgrounded or a
+  // storage write threw mid-upload) is retried rather than orphaned forever.
+  return entry.sync_status !== 'synced';
 }

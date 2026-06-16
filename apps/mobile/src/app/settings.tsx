@@ -32,9 +32,7 @@ export default function SettingsScreen() {
     return total + pendingSuggestions(getEnrichment(bookmark.id), applied).length;
   }, 0);
 
-  const waiting = queue.filter(
-    (entry) => entry.sync_status === 'pending' || entry.sync_status === 'failed',
-  ).length;
+  const waiting = queue.filter((entry) => entry.sync_status !== 'synced').length;
   // Sync is upload-then-pull, so it is useful even with nothing to upload
   // (another device or cloud AI enrichment may have changed data).
   const canSync = auth.isSignedIn && !isSyncing;
