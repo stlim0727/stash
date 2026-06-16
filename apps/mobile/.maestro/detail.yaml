@@ -5,5 +5,5 @@ appId: com.stash.app
 - launchApp:
     clearState: true
 - tapOn: 'Local-first software'
-- assertVisible: 'Details'
+- assertVisible: 'Title'
 - takeScreenshot: detail
