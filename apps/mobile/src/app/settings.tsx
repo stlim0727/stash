@@ -1,18 +1,38 @@
+import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import { Link } from 'expo-router';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 
 import { usePalette } from '@/theme';
-import { AccountControls } from '@/ui/AccountControls';
+import { Avatar } from '@/ui/Avatar';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 
+const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
+
+type AppPalette = ReturnType<typeof usePalette>;
+
 export default function SettingsScreen() {
   const palette = usePalette();
+  const styles = makeStyles(palette);
+  const router = useRouter();
   const {
     queue,
     isSyncing,
@@ -25,6 +45,33 @@ export default function SettingsScreen() {
   } = useBookmarks();
   const auth = useSupabaseAuth();
 
+  // Developer mode hides diagnostics behind an opt-in so the everyday screen
+  // stays compact. Persisted so it survives app restarts.
+  const [developerMode, setDeveloperMode] = useState(false);
+  const devLoaded = useRef(false);
+  useEffect(() => {
+    let active = true;
+    getPreference(DEVELOPER_MODE_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setDeveloperMode(raw === 'true');
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        devLoaded.current = true;
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!devLoaded.current) {
+      return;
+    }
+    void setPreference(DEVELOPER_MODE_PREF_KEY, developerMode ? 'true' : 'false').catch(() => {});
+  }, [developerMode]);
+
   // Total high-confidence, un-applied suggestions waiting in the review queue.
   const pendingSuggestionCount = inbox.reduce((total, bookmark) => {
     const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
@@ -36,175 +83,412 @@ export default function SettingsScreen() {
   // (another device or cloud AI enrichment may have changed data).
   const canSync = auth.isSignedIn && !isSyncing;
 
-  const syncValue = isSyncing
-    ? `Syncing ${waiting} item(s)…`
-    : waiting === 0
-      ? auth.isSignedIn
-        ? 'Synced — nothing waiting to upload'
-        : 'Local only — nothing waiting to sync'
-      : auth.isSignedIn
-        ? `${waiting} item(s) waiting to upload`
-        : `Local only — ${waiting} item(s) queued until Supabase is available`;
-
   const isAuthenticated = auth.status === 'authenticated';
 
-  const accountValue = isAuthenticated
-    ? `Signed in${auth.email ? ` as ${auth.email}` : ''}`
-    : auth.status === 'anonymous'
-      ? `Anonymous Supabase user ${auth.userId}`
-      : auth.message;
+  const syncSummary = isSyncing
+    ? `Syncing ${waiting} item${waiting === 1 ? '' : 's'}…`
+    : waiting === 0
+      ? auth.isSignedIn
+        ? 'Up to date'
+        : 'Local only'
+      : auth.isSignedIn
+        ? `${waiting} item${waiting === 1 ? '' : 's'} waiting to upload`
+        : `${waiting} queued — offline`;
 
   const build = getBuildInfo();
-
-  const settingsRows = [
-    {
-      label: 'Account',
-      value: accountValue,
-    },
-    {
-      label: 'Sync status',
-      value: syncValue,
-    },
-    {
-      label: 'Supabase auth',
-      value: auth.status,
-    },
-    {
-      label: 'Last pulled',
-      value: lastPulledAt
-        ? new Date(lastPulledAt).toLocaleString()
-        : 'Never — remote changes arrive on the next sync',
-    },
-    {
-      label: 'App version',
-      value: `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
-        Constants.expoConfig?.sdkVersion ?? '56'
-      })`,
-    },
-  ];
+  const appVersion = `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
+    Constants.expoConfig?.sdkVersion ?? '56'
+  })`;
 
   return (
-    <ScrollView style={{ backgroundColor: palette.background }} contentContainerStyle={styles.container}>
-      {settingsRows.map((row) => (
-        <Card key={row.label} style={styles.row}>
-          <Text style={[styles.rowLabel, { color: palette.text }]}>{row.label}</Text>
-          <Text style={[styles.rowValue, { color: palette.textSecondary }]}>{row.value}</Text>
-        </Card>
-      ))}
-
-      <Pressable
-        accessibilityRole={build.commitUrl ? 'link' : 'text'}
-        accessibilityLabel="Build commit"
-        disabled={!build.commitUrl}
-        onPress={() => {
-          if (build.commitUrl) {
-            void Linking.openURL(build.commitUrl);
-          }
-        }}
-        style={({ pressed }) => [
-          styles.row,
-          {
-            backgroundColor: palette.surfaceElevated,
-            borderColor: palette.border,
-            opacity: pressed && build.commitUrl ? 0.78 : 1,
-          },
-          palette.shadow.soft,
-        ]}
-      >
-        <Text style={[styles.rowLabel, { color: palette.text }]}>Build</Text>
-        <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
-          {describeBuild(build)}
-          {build.commitUrl ? ' — view commit ›' : ''}
-        </Text>
-      </Pressable>
-
-      <Card style={styles.row}>
-        <AccountControls />
+    <ScrollView
+      style={{ backgroundColor: palette.background }}
+      contentContainerStyle={styles.container}
+    >
+      {/* Account header */}
+      <Card style={styles.accountCard}>
+        <Avatar size={56} uri={auth.avatarUrl} email={auth.email} authed={isAuthenticated} />
+        <View style={styles.accountText}>
+          <Text style={styles.accountName} numberOfLines={1}>
+            {isAuthenticated
+              ? (auth.displayName ?? auth.email ?? 'Signed in')
+              : auth.status === 'not_configured'
+                ? 'Cloud sync unavailable'
+                : 'Not signed in'}
+          </Text>
+          <Text style={styles.accountMeta} numberOfLines={1}>
+            {isAuthenticated
+              ? (auth.displayName && auth.email ? auth.email : 'Synced across your devices')
+              : auth.status === 'not_configured'
+                ? 'Stash works fully offline'
+                : 'Sign in to back up & sync'}
+          </Text>
+        </View>
+        {auth.status !== 'not_configured' ? (
+          <Button
+            variant={isAuthenticated ? 'ghost' : 'primary'}
+            size="sm"
+            onPress={() => router.push('/account')}
+          >
+            {isAuthenticated ? 'Manage' : 'Sign in'}
+          </Button>
+        ) : null}
       </Card>
 
-      <Link href="/review" asChild>
-        <Pressable style={({ pressed }) => [styles.row, { backgroundColor: palette.surfaceElevated, borderColor: palette.border, opacity: pressed ? 0.78 : 1 }, palette.shadow.soft]}>
-          <Text style={[styles.rowLabel, { color: palette.text }]}>Review AI suggestions</Text>
-          <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
-            {pendingSuggestionCount > 0
-              ? `${pendingSuggestionCount} suggestion${pendingSuggestionCount > 1 ? 's' : ''} to review ›`
-              : 'Nothing to review right now ›'}
-          </Text>
-        </Pressable>
-      </Link>
+      {/* Sync */}
+      <Group styles={styles}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="sync"
+          label="Sync"
+          value={syncSummary}
+          last={!canSync}
+          right={
+            isSyncing ? <ActivityIndicator color={palette.textSecondary} /> : undefined
+          }
+        />
+        {canSync ? (
+          <Row
+            styles={styles}
+            palette={palette}
+            icon="cloud-upload-outline"
+            label="Sync now"
+            accent
+            last
+            onPress={() => void syncNow()}
+          />
+        ) : null}
+      </Group>
 
-      <Link href="/archived" asChild>
-        <Pressable style={({ pressed }) => [styles.row, { backgroundColor: palette.surfaceElevated, borderColor: palette.border, opacity: pressed ? 0.78 : 1 }, palette.shadow.soft]}>
-          <Text style={[styles.rowLabel, { color: palette.text }]}>Library</Text>
-          <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
-            {`${inbox.length} in inbox · ${archived.length} archived — view archived ›`}
-          </Text>
-        </Pressable>
-      </Link>
+      {/* Library & tools */}
+      <Group styles={styles}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="sparkles-outline"
+          label="Review AI suggestions"
+          value={
+            pendingSuggestionCount > 0
+              ? `${pendingSuggestionCount} to review`
+              : 'Nothing to review'
+          }
+          badge={pendingSuggestionCount > 0 ? pendingSuggestionCount : undefined}
+          onPress={() => router.push('/review')}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="library-outline"
+          label="Library"
+          value={`${inbox.length} in inbox · ${archived.length} archived`}
+          onPress={() => router.push('/archived')}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="chatbubble-ellipses-outline"
+          label="Report a problem"
+          value="Send a bug or idea"
+          last
+          onPress={() => router.push('/report')}
+        />
+      </Group>
 
-      <Link href="/report" asChild>
-        <Pressable style={({ pressed }) => [styles.row, { backgroundColor: palette.surfaceElevated, borderColor: palette.border, opacity: pressed ? 0.78 : 1 }, palette.shadow.soft]}>
-          <Text style={[styles.rowLabel, { color: palette.text }]}>Report a problem</Text>
-          <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
-            Send a bug or idea with diagnostic context ›
-          </Text>
-        </Pressable>
-      </Link>
+      {/* Developer mode toggle */}
+      <Group styles={styles}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="construct-outline"
+          label="Developer mode"
+          value="Diagnostics, build info & sync queue"
+          last
+          right={
+            <Switch
+              value={developerMode}
+              onValueChange={setDeveloperMode}
+              trackColor={{ true: palette.accent, false: palette.border }}
+              thumbColor="#ffffff"
+            />
+          }
+        />
+      </Group>
 
-      {canSync ? (
-        <Button size="lg" onPress={() => void syncNow()}>Sync now</Button>
+      {developerMode ? (
+        <>
+          <Text style={styles.sectionLabel}>Diagnostics</Text>
+          <Group styles={styles}>
+            <InfoRow styles={styles} label="Supabase auth" value={auth.status} />
+            <InfoRow
+              styles={styles}
+              label="Last pulled"
+              value={
+                lastPulledAt
+                  ? new Date(lastPulledAt).toLocaleString()
+                  : 'Never — arrives on next sync'
+              }
+            />
+            <InfoRow styles={styles} label="App version" value={appVersion} />
+            <Row
+              styles={styles}
+              palette={palette}
+              icon="git-commit-outline"
+              label="Build"
+              value={describeBuild(build)}
+              last
+              onPress={
+                build.commitUrl ? () => void Linking.openURL(build.commitUrl!) : undefined
+              }
+            />
+          </Group>
+
+          <Text style={styles.sectionLabel}>Pending sync queue</Text>
+          {queue.length === 0 ? (
+            <Text style={styles.emptyQueue}>The offline queue is empty.</Text>
+          ) : (
+            <Group styles={styles}>
+              {queue.map((entry, index) => (
+                <View
+                  key={entry.local_id}
+                  style={[styles.queueRow, index < queue.length - 1 && styles.divider]}
+                >
+                  <Text style={styles.queueTitle} numberOfLines={1}>
+                    {entry.payload.url ?? entry.payload.shared_text ?? entry.local_id}
+                  </Text>
+                  <Text style={styles.queueMeta}>
+                    {`${entry.operation} · ${entry.sync_status} · retries ${entry.retry_count}`}
+                    {entry.last_error ? `\nlast error: ${entry.last_error}` : ''}
+                  </Text>
+                </View>
+              ))}
+            </Group>
+          )}
+        </>
       ) : null}
-
-      <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-        Pending sync queue
-      </Text>
-      {queue.length === 0 ? (
-        <Text style={[styles.emptyQueue, { color: palette.textSecondary }]}>
-          The offline queue is empty.
-        </Text>
-      ) : (
-        queue.map((entry) => (
-          <Card key={entry.local_id} style={styles.row}>
-            <Text style={[styles.rowLabel, { color: palette.text }]} numberOfLines={1}>
-              {entry.payload.url ?? entry.payload.shared_text ?? entry.local_id}
-            </Text>
-            <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
-              {`${entry.operation} · status ${entry.sync_status} · retries ${entry.retry_count}`}
-              {entry.last_error ? `\nlast error: ${entry.last_error}` : ''}
-            </Text>
-          </Card>
-        ))
-      )}
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    padding: 16,
-    gap: 14,
-  },
-  row: {
-    borderRadius: 22,
-    padding: 18,
-    gap: 5,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  rowLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  rowValue: {
-    fontSize: 14,
-  },
-  sectionLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginTop: 12,
-  },
-  emptyQueue: {
-    fontSize: 14,
-  },
-});
+/** Rounded card that groups settings rows with hairline dividers. */
+function Group({
+  children,
+  styles,
+}: {
+  children: React.ReactNode;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  return (
+    <Card style={styles.group} elevated={false}>
+      {children}
+    </Card>
+  );
+}
+
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+
+/** A tappable (or static) settings row: icon · label/value · trailing element. */
+function Row({
+  styles,
+  palette,
+  icon,
+  label,
+  value,
+  onPress,
+  right,
+  badge,
+  accent,
+  last,
+}: {
+  styles: ReturnType<typeof makeStyles>;
+  palette: AppPalette;
+  icon: IoniconName;
+  label: string;
+  value?: string;
+  onPress?: () => void;
+  right?: React.ReactNode;
+  badge?: number;
+  accent?: boolean;
+  last?: boolean;
+}) {
+  const rowStyle: StyleProp<ViewStyle> = [styles.row, !last && styles.divider];
+  const labelColor = accent ? palette.accent : palette.text;
+
+  const content = (
+    <>
+      <View style={[styles.iconWrap, accent && { backgroundColor: palette.accentSoft }]}>
+        <Ionicons name={icon} size={18} color={accent ? palette.accentText : palette.text} />
+      </View>
+      <View style={styles.rowText}>
+        <Text style={[styles.rowLabel, { color: labelColor }]} numberOfLines={1}>
+          {label}
+        </Text>
+        {value ? (
+          <Text style={styles.rowValue} numberOfLines={2}>
+            {value}
+          </Text>
+        ) : null}
+      </View>
+      {badge ? (
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{badge}</Text>
+        </View>
+      ) : null}
+      {right ?? (onPress ? (
+        <Ionicons name="chevron-forward" size={18} color={palette.textSecondary} />
+      ) : null)}
+    </>
+  );
+
+  if (!onPress) {
+    return <View style={rowStyle}>{content}</View>;
+  }
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [rowStyle, pressed && { opacity: 0.6 }]}
+    >
+      {content}
+    </Pressable>
+  );
+}
+
+/** Compact label/value row used for read-only diagnostics. */
+function InfoRow({
+  styles,
+  label,
+  value,
+}: {
+  styles: ReturnType<typeof makeStyles>;
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={[styles.infoRow, styles.divider]}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={styles.infoValue} numberOfLines={2}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+const makeStyles = (palette: AppPalette) =>
+  StyleSheet.create({
+    container: {
+      padding: 16,
+      gap: 18,
+    },
+    accountCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 14,
+      padding: 16,
+    },
+    accountText: {
+      flex: 1,
+      gap: 2,
+    },
+    accountName: {
+      fontSize: 17,
+      fontWeight: '700',
+      color: palette.text,
+    },
+    accountMeta: {
+      fontSize: 13,
+      color: palette.textSecondary,
+    },
+    group: {
+      paddingHorizontal: 0,
+      paddingVertical: 0,
+      overflow: 'hidden',
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 13,
+    },
+    iconWrap: {
+      width: 32,
+      height: 32,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: palette.mutedSurface,
+    },
+    rowText: {
+      flex: 1,
+      gap: 2,
+    },
+    rowLabel: {
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    rowValue: {
+      fontSize: 13,
+      color: palette.textSecondary,
+    },
+    divider: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: palette.border,
+    },
+    badge: {
+      minWidth: 22,
+      height: 22,
+      borderRadius: 11,
+      paddingHorizontal: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: palette.accent,
+    },
+    badgeText: {
+      color: '#ffffff',
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    infoRow: {
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      gap: 3,
+    },
+    infoLabel: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: palette.text,
+    },
+    infoValue: {
+      fontSize: 13,
+      color: palette.textSecondary,
+    },
+    sectionLabel: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: palette.textSecondary,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: -8,
+      marginLeft: 4,
+    },
+    queueRow: {
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      gap: 3,
+    },
+    queueTitle: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: palette.text,
+    },
+    queueMeta: {
+      fontSize: 12,
+      color: palette.textSecondary,
+    },
+    emptyQueue: {
+      fontSize: 14,
+      color: palette.textSecondary,
+      marginLeft: 4,
+    },
+  });
