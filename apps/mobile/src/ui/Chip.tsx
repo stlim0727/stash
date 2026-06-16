@@ -44,9 +44,17 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 14,
-    // Explicit lineHeight: without it Android under-measures bold text and
-    // clips the glyph descenders inside the chip.
-    lineHeight: 18,
+    // Bold glyphs (incl. CJK) clip at the bottom on Android unless the line box
+    // is both tall enough AND free of the default font padding:
+    //   - lineHeight 20 (~1.43x) leaves room for descenders above fontSize 14.
+    //   - includeFontPadding:false drops Android's extra top/bottom padding,
+    //     which otherwise inflates the measured line past lineHeight and slices
+    //     the descenders inside the Text view itself (the bug #58/#60/#62 kept
+    //     half-fixing — earlier passes set lineHeight but never this flag).
+    //   - textAlignVertical:center keeps the glyph centred in that line box.
+    lineHeight: 20,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
     fontWeight: '700',
   },
 });
