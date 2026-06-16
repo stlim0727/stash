@@ -692,12 +692,13 @@ const styles = StyleSheet.create({
   },
   shelf: {
     flexGrow: 0,
-    // minHeight (not a fixed height): floors the viewport so a horizontal
+    // minHeight (NOT a fixed height): floors the viewport so a horizontal
     // ScrollView can't collapse onto its content on Android, while still letting
-    // the row GROW to a taller pill. A fixed height shorter than the device's
-    // real pill — taller under the Samsung system font — was shaving the rounded
-    // edge even when the text inside rendered intact. Spacing is margin (outside
-    // the scroll box, so it can't clip).
+    // the row GROW to a taller pill (larger OS font/display sizes, or the taller
+    // Samsung system font). A fixed height shorter than the real pill was
+    // shaving the rounded edge even when the text inside rendered intact. Chips
+    // are vertically centred via shelfContent.alignItems. Spacing is margin
+    // (outside the scroll box, so it can't clip).
     minHeight: 42,
     marginTop: 8,
     marginBottom: 0,

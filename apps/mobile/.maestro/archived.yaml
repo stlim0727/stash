@@ -1,0 +1,12 @@
+# Archived / Library — reached from Settings. Scroll the row into view first.
+appId: com.stash.app
+---
+- launchApp:
+    clearState: true
+- tapOn: 'Settings'
+- scrollUntilVisible:
+    element:
+      text: 'Library'
+    direction: DOWN
+- tapOn: 'Library'
+- takeScreenshot: archived

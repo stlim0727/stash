@@ -42,7 +42,11 @@ class WebBookmarkRepository implements BookmarkRepository {
     }
   }
 
-  async init(seed: Bookmark[]): Promise<void> {
+  async init(
+    seed: Bookmark[],
+    seedTagData?: TagData,
+    seedEnrichments?: AIEnrichment[],
+  ): Promise<void> {
     const seeded = storageAvailable() && localStorage.getItem(SEEDED_KEY) === '1';
     this.bookmarks = this.read<Bookmark[]>(BOOKMARKS_KEY, []);
     // Entries persisted before mutation sync lack the operation field.
@@ -56,6 +60,14 @@ class WebBookmarkRepository implements BookmarkRepository {
     if (!seeded) {
       this.bookmarks = [...seed];
       this.write(BOOKMARKS_KEY, this.bookmarks);
+      if (seedTagData) {
+        this.tagData = seedTagData;
+        this.write(TAG_DATA_KEY, this.tagData);
+      }
+      if (seedEnrichments && seedEnrichments.length > 0) {
+        this.enrichments = [...seedEnrichments];
+        this.write(ENRICHMENTS_KEY, this.enrichments);
+      }
       this.write(SEEDED_KEY, '1');
     }
   }
