@@ -27,7 +27,10 @@ for scale in "${SCALES[@]}"; do
   adb shell settings put system font_scale "$scale"
   # Don't abort the whole matrix if one flow fails — collect what we got and
   # remember to fail at the end, so partial screenshots still upload.
-  maestro test "$FLOWS_DIR" || overall=1
+  # Retry the batch once: a freshly booted emulator can flake on the first
+  # Maestro driver init and report every element as "not found". A second
+  # attempt re-inits the driver and almost always succeeds.
+  maestro test "$FLOWS_DIR" || maestro test "$FLOWS_DIR" || overall=1
   # Maestro writes <name>.png to the cwd (workspace root). Move + label per scale.
   for png in "$GITHUB_WORKSPACE"/*.png; do
     [ -e "$png" ] || continue
