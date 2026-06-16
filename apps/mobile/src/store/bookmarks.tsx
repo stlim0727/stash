@@ -28,6 +28,7 @@ import type {
   SuggestedTag,
   Tag,
 } from '@/domain/types';
+import { sanitizeTagData } from '@/domain/tag-data';
 import { repository } from '@/storage/repository';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
@@ -276,7 +277,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             );
             setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
             setEnrichments(storedEnrichments);
-            setTagData(storedTagData);
+            // One-time cleanup: purge blank-named tags/collections (and orphaned
+            // links) a prior version may have stored, so they stop showing as
+            // empty Browse chips. Persist the cleaned set back when it changed.
+            const { tagData: cleanTagData, changed } = sanitizeTagData(storedTagData);
+            setTagData(cleanTagData);
+            if (changed) {
+              void repository
+                .replaceTagData(cleanTagData)
+                .catch((error) => logStorageError('blank-tag cleanup', error));
+            }
             setLastPulledAt(storedPulledAt);
             setLoadError(false);
           }

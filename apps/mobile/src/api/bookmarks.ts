@@ -1,3 +1,4 @@
+import { normalizeText, slugify } from '@/domain/tag-normalize';
 import { normalizeUrl } from '@/domain/urls';
 import type {
   AIEnrichment,
@@ -95,17 +96,6 @@ const MAX_PAGE_SIZE = 100;
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function normalizeText(value: string): string {
-  return value.trim().replace(/\s+/g, ' ');
-}
-
-function slugify(value: string): string {
-  return normalizeText(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 }
 
 function uniqueNormalizedTags(tags: string[]): Array<{ name: string; slug: string }> {
