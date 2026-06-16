@@ -14,6 +14,8 @@ import {
 } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { Button } from '@/ui/Button';
+import { Card } from '@/ui/Card';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import type { SuggestedTag } from '@/domain/types';
 import { useBookmarks } from '@/store/bookmarks';
@@ -180,7 +182,7 @@ export default function BookmarkDetailScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView style={{ backgroundColor: palette.background }} contentContainerStyle={styles.container}>
       {bookmark.preview_image_url ? (
         <Image
           source={{ uri: bookmark.preview_image_url }}
@@ -188,25 +190,18 @@ export default function BookmarkDetailScreen() {
           resizeMode="cover"
         />
       ) : null}
-      <View style={styles.header}>
+      <Card style={styles.header}>
         {bookmark.favicon_url ? (
           <Image source={{ uri: bookmark.favicon_url }} style={styles.favicon} />
         ) : null}
         <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={2}>
           {bookmark.title ?? bookmark.url ?? 'Untitled'}
         </Text>
-      </View>
+      </Card>
       {bookmark.url ? (
-        <Pressable
-          accessibilityRole="link"
-          accessibilityLabel="Open link"
-          style={[styles.openButton, { backgroundColor: palette.accent }]}
-          onPress={handleOpenLink}
-        >
-          <Text style={styles.openButtonLabel}>Open link ↗</Text>
-        </Pressable>
+        <Button size="lg" onPress={handleOpenLink}>Open link ↗</Button>
       ) : null}
-      <View style={[styles.field, { backgroundColor: palette.card }]}>
+      <Card elevated={false} style={styles.field}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Title</Text>
         <TextInput
           style={[styles.editInput, { color: palette.text, borderColor: palette.border }]}
@@ -215,9 +210,9 @@ export default function BookmarkDetailScreen() {
           value={titleValue}
           onChangeText={setDraftTitle}
         />
-      </View>
+      </Card>
 
-      <View style={[styles.field, { backgroundColor: palette.card }]}>
+      <Card elevated={false} style={styles.field}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Notes</Text>
         <TextInput
           style={[
@@ -231,25 +226,18 @@ export default function BookmarkDetailScreen() {
           value={notesValue}
           onChangeText={setDraftNotes}
         />
-      </View>
+      </Card>
 
-      {editsDirty ? (
-        <Pressable
-          style={[styles.saveButton, { backgroundColor: palette.accent }]}
-          onPress={handleSaveEdits}
-        >
-          <Text style={styles.saveButtonLabel}>Save changes</Text>
-        </Pressable>
-      ) : null}
+      {editsDirty ? <Button onPress={handleSaveEdits}>Save changes</Button> : null}
 
       {fields.map((field) => (
-        <View key={field.label} style={[styles.field, { backgroundColor: palette.card }]}>
+        <Card key={field.label} elevated={false} style={styles.field}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{field.label}</Text>
           <Text style={[styles.fieldValue, { color: palette.text }]}>{field.value}</Text>
-        </View>
+        </Card>
       ))}
 
-      <View style={[styles.field, { backgroundColor: palette.card }]}>
+      <Card elevated={false} style={styles.field}>
         <View style={styles.suggestHeader}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>AI suggestions</Text>
           {enrichment?.model ? (
@@ -347,9 +335,9 @@ export default function BookmarkDetailScreen() {
             No new suggestions right now.
           </Text>
         ) : null}
-      </View>
+      </Card>
 
-      <View style={[styles.field, { backgroundColor: palette.card }]}>
+      <Card elevated={false} style={styles.field}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
         {tags.length > 0 ? (
           <View style={styles.chipRow}>
@@ -407,9 +395,9 @@ export default function BookmarkDetailScreen() {
             Tags can be edited once this bookmark has synced.
           </Text>
         )}
-      </View>
+      </Card>
 
-      <View style={[styles.field, { backgroundColor: palette.card }]}>
+      <Card elevated={false} style={styles.field}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Collection</Text>
         <View style={styles.chipRow}>
           <Pressable
@@ -460,25 +448,21 @@ export default function BookmarkDetailScreen() {
             <Text style={styles.inlineButtonLabel}>Create</Text>
           </Pressable>
         </View>
-      </View>
+      </Card>
 
       {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
 
       <View style={styles.actions}>
-        <Pressable
-          style={[styles.actionButton, { borderColor: palette.border }]}
+        <Button
+          variant="secondary"
+          style={styles.actionButton}
           onPress={() => archiveBookmark(bookmark.id, !bookmark.is_archived)}
         >
-          <Text style={[styles.actionLabel, { color: palette.accent }]}>
-            {bookmark.is_archived ? 'Unarchive' : 'Archive'}
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.actionButton, { borderColor: palette.border }]}
-          onPress={handleDelete}
-        >
-          <Text style={[styles.actionLabel, { color: '#d93636' }]}>Delete</Text>
-        </Pressable>
+          {bookmark.is_archived ? 'Unarchive' : 'Archive'}
+        </Button>
+        <Button variant="danger" style={styles.actionButton} onPress={handleDelete}>
+          Delete
+        </Button>
       </View>
     </ScrollView>
   );
@@ -487,17 +471,19 @@ export default function BookmarkDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     padding: 16,
-    gap: 12,
+    gap: 14,
   },
   preview: {
     width: '100%',
-    height: 180,
-    borderRadius: 12,
+    height: 220,
+    borderRadius: 28,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 14,
+    padding: 18,
+    borderRadius: 24,
   },
   favicon: {
     width: 24,
@@ -506,8 +492,9 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     flex: 1,
-    fontSize: 20,
-    fontWeight: '700',
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: -0.4,
   },
   missing: {
     flex: 1,
@@ -520,9 +507,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   field: {
-    borderRadius: 12,
-    padding: 16,
-    gap: 8,
+    borderRadius: 22,
+    padding: 18,
+    gap: 10,
   },
   fieldLabel: {
     fontSize: 13,

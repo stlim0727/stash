@@ -15,6 +15,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { Button } from '@/ui/Button';
+import { Card } from '@/ui/Card';
+import { Chip } from '@/ui/Chip';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
 import { MONOGRAM_COLORS, itemIcon } from '@/domain/item-icon';
@@ -171,25 +174,33 @@ export default function InboxScreen() {
   const renderChip = (key: string, label: string, target: InboxFilter) => {
     const active = sameFilter(target, filter);
     return (
-      <Pressable
+      <Chip
         key={key}
         accessibilityRole="button"
         accessibilityState={{ selected: active }}
         onPress={() => setFilter(target)}
-        style={[
-          styles.chip,
-          { backgroundColor: active ? palette.accent : palette.card, borderColor: palette.border },
-        ]}
+        variant={active ? 'selected' : 'default'}
       >
-        <Text style={[styles.chipLabel, { color: active ? '#ffffff' : palette.text }]}>
-          {label}
-        </Text>
-      </Pressable>
+        {label}
+      </Chip>
     );
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: palette.background }]}>
+      <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
+        <View>
+          <Text style={[styles.heroTitle, { color: palette.text }]}>Stash</Text>
+          <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
+            Save now. Organize later.
+          </Text>
+        </View>
+        <View style={[styles.heroCount, { backgroundColor: palette.accentSoft }]}>
+          <Text style={[styles.heroCountLabel, { color: palette.accentText }]}>
+            {inbox.length} saved
+          </Text>
+        </View>
+      </View>
       {loadError ? (
         <Text style={[styles.errorBanner, { color: '#d93636', backgroundColor: palette.card }]}>
           Couldn’t open local storage — showing sample data. Your saves this session may not persist.
@@ -198,7 +209,7 @@ export default function InboxScreen() {
       <View style={styles.searchWrap}>
         <TextInput
           style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
-          placeholder="Search title, notes, or URL"
+          placeholder="Search your stash"
           placeholderTextColor={palette.textSecondary}
           autoCapitalize="none"
           autoCorrect={false}
@@ -208,22 +219,22 @@ export default function InboxScreen() {
         />
       </View>
       <View style={styles.sortRow}>
-        <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>Sort</Text>
+        <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>Browse</Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Sort field: ${sort.field === 'date' ? 'Date' : 'Name'}`}
           onPress={() => setSort((s) => ({ ...s, field: s.field === 'date' ? 'name' : 'date' }))}
-          style={[styles.sortPill, { backgroundColor: palette.card, borderColor: palette.border }]}
+          style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
         >
           <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-            {sort.field === 'date' ? 'Date' : 'Name'}
+            {sort.field === 'date' ? 'Newest' : 'Name'}
           </Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Sort direction: ${sort.dir === 'asc' ? 'ascending' : 'descending'}`}
           onPress={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
-          style={[styles.sortPill, { backgroundColor: palette.card, borderColor: palette.border }]}
+          style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
         >
           <Text style={[styles.sortPillLabel, { color: palette.text }]}>
             {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
@@ -279,7 +290,10 @@ export default function InboxScreen() {
             ...cardTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
           return (
-            <View style={[styles.card, { backgroundColor: palette.card }]}>
+            <Card style={styles.card}>
+              {item.preview_image_url ? (
+                <Image source={{ uri: item.preview_image_url }} style={styles.cardPreview} />
+              ) : null}
               <Pressable
                 style={styles.cardBody}
                 onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
@@ -326,9 +340,15 @@ export default function InboxScreen() {
                   </Text>
                 ) : null}
                 {metaParts.length > 0 ? (
-                  <Text style={[styles.cardMeta, { color: palette.textSecondary }]} numberOfLines={1}>
-                    {metaParts.join('   ·   ')}
-                  </Text>
+                  <View style={styles.metaChipRow}>
+                    {metaParts.slice(0, 3).map((part) => (
+                      <View key={part} style={[styles.metaChip, { backgroundColor: palette.mutedSurface }]}>
+                        <Text style={[styles.metaChipLabel, { color: palette.accentText }]} numberOfLines={1}>
+                          {part}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
                 ) : null}
                 {status ? (
                   <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
@@ -339,7 +359,7 @@ export default function InboxScreen() {
                   accessibilityRole="link"
                   accessibilityLabel="Open link"
                   hitSlop={8}
-                  style={styles.cardOpen}
+                  style={[styles.cardOpen, { backgroundColor: palette.accentSoft }]}
                   onPress={() => {
                     if (item.url) {
                       void Linking.openURL(item.url).catch(() => {});
@@ -349,7 +369,7 @@ export default function InboxScreen() {
                   <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>Open ↗</Text>
                 </Pressable>
               ) : null}
-            </View>
+            </Card>
           );
         }}
       />
@@ -360,14 +380,10 @@ export default function InboxScreen() {
         ]}
       >
         <Link href="/add" asChild>
-          <Pressable style={[styles.primaryButton, { backgroundColor: palette.accent }]}>
-            <Text style={styles.primaryButtonLabel}>Add Bookmark</Text>
-          </Pressable>
+          <Button size="lg" style={styles.primaryButton}>Add Bookmark</Button>
         </Link>
         <Link href="/settings" asChild>
-          <Pressable style={styles.secondaryButton}>
-            <Text style={[styles.secondaryButtonLabel, { color: palette.accent }]}>Settings</Text>
-          </Pressable>
+          <Button variant="ghost" size="lg" style={styles.secondaryButton}>Settings</Button>
         </Link>
       </View>
     </View>
@@ -380,7 +396,33 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: 16,
-    gap: 12,
+    gap: 16,
+  },
+  hero: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 8,
+  },
+  heroTitle: {
+    fontSize: 34,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+  },
+  heroSubtitle: {
+    fontSize: 15,
+    marginTop: 2,
+  },
+  heroCount: {
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  heroCountLabel: {
+    fontSize: 13,
+    fontWeight: '800',
   },
   sectionLabel: {
     fontSize: 13,
@@ -405,10 +447,10 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
   searchInput: {
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    fontSize: 15,
+    borderRadius: 20,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    fontSize: 16,
   },
   sortRow: {
     flexDirection: 'row',
@@ -425,9 +467,9 @@ const styles = StyleSheet.create({
   },
   sortPill: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    borderRadius: 999,
+    paddingVertical: 7,
+    paddingHorizontal: 13,
   },
   sortPillLabel: {
     fontSize: 14,
@@ -441,32 +483,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     gap: 8,
   },
-  chip: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-  },
-  chipLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
   card: {
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  cardPreview: {
+    width: '100%',
+    height: 132,
   },
   cardBody: {
-    flex: 1,
-    padding: 16,
-    gap: 4,
+    padding: 18,
+    gap: 7,
   },
   cardOpen: {
-    paddingVertical: 16,
-    paddingRight: 16,
-    paddingLeft: 8,
-    alignSelf: 'stretch',
-    justifyContent: 'center',
+    position: 'absolute',
+    right: 14,
+    bottom: 14,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
   },
   cardOpenLabel: {
     fontSize: 14,
@@ -478,9 +513,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cardIcon: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
+    width: 34,
+    height: 34,
+    borderRadius: 10,
   },
   cardMonogram: {
     alignItems: 'center',
@@ -493,8 +528,9 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     flex: 1,
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.2,
   },
   suggestBadge: {
     borderWidth: StyleSheet.hairlineWidth,
@@ -509,8 +545,20 @@ const styles = StyleSheet.create({
   cardUrl: {
     fontSize: 13,
   },
-  cardMeta: {
+  metaChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingRight: 72,
+  },
+  metaChip: {
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 9,
+  },
+  metaChipLabel: {
     fontSize: 12,
+    fontWeight: '700',
   },
   cardStatus: {
     fontSize: 12,
@@ -524,23 +572,8 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     flex: 1,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  primaryButtonLabel: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
   },
   secondaryButton: {
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  secondaryButtonLabel: {
-    fontSize: 16,
-    fontWeight: '600',
+    minWidth: 112,
   },
 });
