@@ -7,6 +7,7 @@ import {
   hostFromUrl,
   itemIcon,
   monogramColorIndex,
+  monogramIcon,
 } from './item-icon.ts';
 
 function make(overrides: Partial<Bookmark> = {}): Bookmark {
@@ -44,6 +45,14 @@ test('uses the favicon when present', () => {
 test('blank favicon is ignored (falls back to monogram)', () => {
   const icon = itemIcon(make({ favicon_url: '   ' }));
   assert.equal(icon.kind, 'monogram');
+});
+
+test('monogramIcon ignores any favicon — the on-device load-error fallback', () => {
+  // Even with a favicon present, monogramIcon yields the colored-letter variant
+  // so a 404'd favicon can fall back to it without leaving a blank tile.
+  const icon = monogramIcon(make({ favicon_url: 'https://cdn/f.png', site_name: 'Raindrop' }));
+  assert.equal(icon.kind, 'monogram');
+  assert.equal(icon.letter, 'R');
 });
 
 test('hostFromUrl strips www and handles bad input', () => {
