@@ -42,7 +42,7 @@ import {
 import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
-import { accountInitials } from '@/domain/account';
+import { Avatar } from '@/ui/Avatar';
 import type { Bookmark } from '@/domain/types';
 
 function statusLabel(bookmark: Bookmark): string | null {
@@ -305,22 +305,7 @@ export default function InboxScreen() {
               style={styles.accountButton}
               onPress={() => router.push('/account')}
             >
-              <View
-                style={[
-                  styles.avatar,
-                  isAuthed
-                    ? { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft }
-                    : { borderColor: palette.border },
-                ]}
-              >
-                {isAuthed ? (
-                  <Text style={[styles.avatarInitials, { color: palette.accentText }]}>
-                    {accountInitials(auth.email)}
-                  </Text>
-                ) : (
-                  <Text style={styles.avatarGlyph}>👤</Text>
-                )}
-              </View>
+              <Avatar size={44} uri={auth.avatarUrl} email={auth.email} authed={isAuthed} />
               <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
                 {isAuthed ? 'Account' : 'Sign in'}
               </Text>
@@ -634,13 +619,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  avatarInitials: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  avatarGlyph: {
-    fontSize: 20,
   },
   accountCaption: {
     fontSize: 11,

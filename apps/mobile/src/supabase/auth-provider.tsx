@@ -28,6 +28,10 @@ interface SupabaseAuthContextValue {
   userId: string | null;
   /** Email of the signed-in (non-anonymous) user, if any. */
   email: string | null;
+  /** Display name from the OAuth profile, if the provider shared one. */
+  displayName: string | null;
+  /** Avatar image URL from the OAuth profile, if the provider shared one. */
+  avatarUrl: string | null;
   /** True when a usable session exists (anonymous OR authenticated). */
   isSignedIn: boolean;
   message: string;
@@ -169,6 +173,9 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   }, [userId]);
 
   const email = session?.user.email ?? null;
+  const metadata = session?.user.user_metadata;
+  const displayName = metadata?.full_name ?? metadata?.name ?? null;
+  const avatarUrl = metadata?.avatar_url ?? metadata?.picture ?? null;
   const isSignedIn = session !== null && (status === 'anonymous' || status === 'authenticated');
 
   const value = useMemo<SupabaseAuthContextValue>(
@@ -177,13 +184,27 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       session,
       userId,
       email,
+      displayName,
+      avatarUrl,
       isSignedIn,
       message,
       ensureAnonymousSession,
       signIn,
       signOut,
     }),
-    [status, session, userId, email, isSignedIn, message, ensureAnonymousSession, signIn, signOut],
+    [
+      status,
+      session,
+      userId,
+      email,
+      displayName,
+      avatarUrl,
+      isSignedIn,
+      message,
+      ensureAnonymousSession,
+      signIn,
+      signOut,
+    ],
   );
 
   return <SupabaseAuthContext.Provider value={value}>{children}</SupabaseAuthContext.Provider>;

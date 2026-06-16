@@ -9,6 +9,16 @@ export interface SupabaseAuthUser {
   is_anonymous?: boolean;
   /** Linked identity providers, e.g. `[{ provider: 'google' }]`. */
   app_metadata?: { provider?: string; providers?: string[] };
+  /**
+   * Profile fields the OAuth provider hands back (Google/Apple). Keys vary by
+   * provider, so we read the common aliases when surfacing an avatar / name.
+   */
+  user_metadata?: {
+    avatar_url?: string | null;
+    picture?: string | null;
+    full_name?: string | null;
+    name?: string | null;
+  };
   created_at?: string;
 }
 
