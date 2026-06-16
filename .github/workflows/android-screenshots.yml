@@ -29,6 +29,9 @@ concurrency:
 jobs:
   screenshots:
     runs-on: ubuntu-latest
+    # A full run is ~12-15 min; cap well above that so a hung emulator can't
+    # silently burn Actions minutes (the default job timeout is 6 hours).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
