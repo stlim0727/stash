@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
+import { recordLog } from '@/observability/log-buffer';
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository, TagData } from '@/storage/types';
 
@@ -38,12 +39,22 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         // instead of failing every read on a stale handle.
         await this.db.getFirstAsync('SELECT 1');
         return this.db;
-      } catch {
+      } catch (error) {
+        // Stale handle (app was backgrounded). Record it — repeated reopens are
+        // a useful signal — then drop it so we reopen below.
+        recordLog('warn', `sqlite handle stale, reopening: ${String(error)}`);
         this.db = null;
       }
     }
-    this.db = await SQLite.openDatabaseAsync('stash.db');
-    return this.db;
+    try {
+      this.db = await SQLite.openDatabaseAsync('stash.db');
+      return this.db;
+    } catch (error) {
+      // The precise native open error is otherwise swallowed by callers and
+      // only surfaces as the generic "Couldn't open local storage" banner.
+      recordLog('error', `sqlite open failed: ${String(error)}`);
+      throw error;
+    }
   }
 
   async init(seed: Bookmark[]): Promise<void> {

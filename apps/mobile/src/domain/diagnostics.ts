@@ -37,6 +37,10 @@ export interface DiagnosticsInput {
   lastPulledAt?: string | null;
   /** Last error message surfaced to the user, if any (operational, not content). */
   lastError?: string | null;
+  /** Build identity, e.g. `main @ 7b6e2a9` (from build-info). */
+  build?: string | null;
+  /** Recent technical log lines to aid debugging (already formatted). */
+  logs?: string[] | null;
 }
 
 export interface DiagnosticsContext {
@@ -49,6 +53,9 @@ export interface DiagnosticsContext {
   isSyncing: boolean;
   lastPulledAt: string | null;
   lastError?: string;
+  build?: string;
+  /** Recent technical log lines (capped). Present only when captured. */
+  logs?: string[];
   capturedAt: string;
 }
 
@@ -110,5 +117,32 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
     context.lastError = lastError.slice(0, MAX_ERROR_LENGTH);
   }
 
+  const build = cleanString(input.build);
+  if (build) {
+    context.build = build;
+  }
+
+  if (input.logs && input.logs.length > 0) {
+    context.logs = input.logs.filter((line) => typeof line === 'string' && line.length > 0);
+  }
+
   return context;
+}
+
+/**
+ * Render a diagnostics context as a shareable, human-readable text block —
+ * what the "Share diagnostics" action hands to the OS share sheet so a user can
+ * paste it into an issue, email, or chat. Logs are appended verbatim at the end.
+ */
+export function formatDiagnosticsReport(context: DiagnosticsContext): string {
+  const { logs, ...summary } = context;
+  const lines = [
+    `Stash diagnostics — ${context.build ?? context.appVersion}`,
+    '',
+    JSON.stringify(summary, null, 2),
+  ];
+  if (logs && logs.length > 0) {
+    lines.push('', `Recent logs (${logs.length}):`, logs.join('\n'));
+  }
+  return lines.join('\n');
 }

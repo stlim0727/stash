@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { buildDiagnosticsContext } from './diagnostics.ts';
+import { buildDiagnosticsContext, formatDiagnosticsReport } from './diagnostics.ts';
 
 test('buildDiagnosticsContext includes the expected operational fields', () => {
   const context = buildDiagnosticsContext({
@@ -72,11 +72,36 @@ test('buildDiagnosticsContext excludes user content — it only keeps known keys
     'isSyncing',
     'lastPulledAt',
     'lastError',
+    'build',
+    'logs',
     'capturedAt',
   ];
   for (const key of Object.keys(context)) {
     assert.ok(allowedKeys.includes(key), `unexpected key in context: ${key}`);
   }
+});
+
+test('build and logs are included when provided and formatted for sharing', () => {
+  const context = buildDiagnosticsContext({
+    appVersion: '1.0.0',
+    platform: 'android',
+    build: 'main @ d0ae427',
+    logs: ['2026-06-16T05:00:00Z [error] sqlite open failed: boom', '', 'kept'],
+  });
+
+  assert.equal(context.build, 'main @ d0ae427');
+  // Empty lines are dropped.
+  assert.deepEqual(context.logs, [
+    '2026-06-16T05:00:00Z [error] sqlite open failed: boom',
+    'kept',
+  ]);
+
+  const report = formatDiagnosticsReport(context);
+  assert.match(report, /Stash diagnostics — main @ d0ae427/);
+  assert.match(report, /Recent logs \(2\):/);
+  assert.match(report, /sqlite open failed: boom/);
+  // The logs array is rendered as a trailing block, not inside the JSON summary.
+  assert.ok(!report.includes('"logs"'));
 });
 
 test('buildDiagnosticsContext normalizes invalid queue depth and truncates long errors', () => {

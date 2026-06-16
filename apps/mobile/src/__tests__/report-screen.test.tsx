@@ -86,8 +86,9 @@ test('renders the form and shows the privacy note', async () => {
   const screen = await renderReport();
 
   await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
-  expect(screen.getByText('No bookmark contents are included.')).toBeTruthy();
+  expect(screen.getByText(/not your bookmark list/)).toBeTruthy();
   expect(screen.getByLabelText('Diagnostic context preview')).toBeTruthy();
+  expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
 });
 
 test('Submit is disabled until a description is entered', async () => {
@@ -145,6 +146,8 @@ test('shows a friendly message when Supabase is not configured', async () => {
 
   const screen = await renderReport();
 
-  await waitFor(() => expect(screen.getByText('Reporting unavailable')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('Cloud reporting unavailable')).toBeTruthy());
   expect(screen.queryByLabelText('Submit report')).toBeNull();
+  // Even without the cloud, diagnostics can still be shared.
+  expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
 });

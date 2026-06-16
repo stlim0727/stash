@@ -1,14 +1,33 @@
 import Constants from 'expo-constants';
 import { usePathname } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { createFeedbackApi } from '@/api/feedback';
 import type { FeedbackApi, FeedbackCategory } from '@/api/feedback';
-import { buildDiagnosticsContext } from '@/domain/diagnostics';
+import { buildDiagnosticsContext, formatDiagnosticsReport } from '@/domain/diagnostics';
+import type { DiagnosticsContext } from '@/domain/diagnostics';
+import { describeBuild, getBuildInfo } from '@/domain/build-info';
+import { getLogEntries } from '@/observability/log-buffer';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { usePalette } from '@/theme';
+
+/** Most recent log lines, formatted for the diagnostics payload. */
+function recentLogLines(limit = 80): string[] {
+  return getLogEntries()
+    .slice(-limit)
+    .map((entry) => `${entry.t} [${entry.level}] ${entry.message}`);
+}
 
 const CATEGORIES: Array<{ value: FeedbackCategory; label: string }> = [
   { value: 'bug', label: 'Bug' },
@@ -49,8 +68,12 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const lastError =
     queue.find((entry) => entry.last_error)?.last_error ?? undefined;
 
-  const context = useMemo(
-    () =>
+  const buildLabel = describeBuild(getBuildInfo());
+
+  // Build the diagnostics fresh on demand so submit/share capture the latest
+  // logs (the storage error is recorded at startup, before this screen mounts).
+  const collectContext = useCallback(
+    (): DiagnosticsContext =>
       buildDiagnosticsContext({
         appVersion,
         platform,
@@ -61,13 +84,33 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         isSyncing,
         lastPulledAt,
         lastError,
+        build: buildLabel,
+        logs: recentLogLines(),
       }),
-    // capturedAt changes on every render otherwise; recompute only on inputs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [appVersion, platform, pathname, auth.status, queueDepth, isSyncing, lastPulledAt, lastError],
+    [
+      appVersion,
+      platform,
+      pathname,
+      auth.status,
+      queueDepth,
+      isSyncing,
+      lastPulledAt,
+      lastError,
+      buildLabel,
+    ],
   );
 
+  const context = useMemo(collectContext, [collectContext]);
   const contextPreview = useMemo(() => JSON.stringify(context, null, 2), [context]);
+  const logCount = context.logs?.length ?? 0;
+
+  const handleShare = async () => {
+    try {
+      await Share.share({ message: formatDiagnosticsReport(collectContext()) });
+    } catch {
+      // User dismissed the share sheet, or it is unavailable — nothing to do.
+    }
+  };
 
   const trimmed = message.trim();
   const canSubmit = trimmed.length > 0 && auth.isSignedIn && submit.status !== 'submitting';
@@ -83,7 +126,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       await api.submitReport({
         category,
         message: trimmed,
-        context,
+        context: collectContext(),
         app_version: appVersion,
         platform,
       });
@@ -102,13 +145,29 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       <ScrollView contentContainerStyle={styles.container}>
         <View style={[styles.field, { backgroundColor: palette.card }]}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-            Reporting unavailable
+            Cloud reporting unavailable
           </Text>
           <Text style={[styles.fieldValue, { color: palette.text }]}>
-            Problem reports are sent to the cloud, which is not configured on this build. You can
-            still use Stash fully offline.
+            Submitting to the cloud isn’t configured on this build, but you can still share a
+            diagnostics report (including recent logs) to send manually.
           </Text>
         </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Share diagnostics"
+          style={[styles.secondaryButton, { borderColor: palette.border }]}
+          onPress={() => void handleShare()}
+        >
+          <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+            {`Share diagnostics & logs (${logCount})`}
+          </Text>
+        </Pressable>
+        <Text
+          accessibilityLabel="Diagnostic context preview"
+          style={[styles.code, { color: palette.text, borderColor: palette.border }]}
+        >
+          {contextPreview}
+        </Text>
       </ScrollView>
     );
   }
@@ -163,7 +222,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           Diagnostic context
         </Text>
         <Text style={[styles.privacyNote, { color: palette.textSecondary }]}>
-          No bookmark contents are included.
+          {`Includes app diagnostics and ${logCount} recent log line(s) to aid debugging — not your bookmark list.`}
         </Text>
         <Text
           accessibilityLabel="Diagnostic context preview"
@@ -171,6 +230,16 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         >
           {contextPreview}
         </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Share diagnostics"
+          style={[styles.secondaryButton, { borderColor: palette.border }]}
+          onPress={() => void handleShare()}
+        >
+          <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+            Share diagnostics &amp; logs
+          </Text>
+        </Pressable>
       </View>
 
       {submit.status === 'success' ? (
@@ -276,6 +345,16 @@ const styles = StyleSheet.create({
   submitButtonLabel: {
     color: '#ffffff',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  secondaryButton: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  secondaryButtonLabel: {
+    fontSize: 15,
     fontWeight: '600',
   },
 });
