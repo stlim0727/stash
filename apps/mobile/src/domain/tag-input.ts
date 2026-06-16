@@ -31,6 +31,11 @@ export function normalizeTag(name: string): string {
   return name.trim().toLowerCase();
 }
 
+/** Stable per-name key used for local tag identity and matching server tags. */
+export function tagSlug(name: string): string {
+  return normalizeTag(name).replace(/\s+/g, '-');
+}
+
 /** True when `name` is already present in `existing` (case-insensitive). */
 export function isDuplicateTag(name: string, existing: readonly string[]): boolean {
   const key = normalizeTag(name);
