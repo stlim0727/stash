@@ -23,8 +23,13 @@ export interface TagData {
  *   static rendering.
  */
 export interface BookmarkRepository {
-  /** Prepare storage and seed sample data exactly once on first run. */
-  init(seed: Bookmark[]): Promise<void>;
+  /**
+   * Prepare storage and seed sample data exactly once on first run. The
+   * optional tag-data and enrichment seeds let the sample bookmarks demo as
+   * fully-synced cloud rows (collection assignable, AI summary present) rather
+   * than relying on in-memory fallbacks.
+   */
+  init(seed: Bookmark[], seedTagData?: TagData, seedEnrichments?: AIEnrichment[]): Promise<void>;
   listBookmarks(): Promise<Bookmark[]>;
   insertBookmark(bookmark: Bookmark): Promise<void>;
   updateBookmark(bookmark: Bookmark): Promise<void>;

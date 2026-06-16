@@ -265,7 +265,8 @@ test('delete: failure stays retryable', async () => {
 
 test('hasRemoteIdentity accepts only Supabase UUIDs', () => {
   assert.equal(hasRemoteIdentity('local-m1abc-xyz'), false);
-  // Seeded sample IDs are not remote rows and must never receive mutations.
+  // Non-UUID IDs (device-local rows, never-synced samples) are not remote rows
+  // and must never receive mutations.
   assert.equal(hasRemoteIdentity('bookmark-local-first'), false);
   assert.equal(hasRemoteIdentity('7e64cf1e-0000-4000-8000-000000000000'), true);
 });
