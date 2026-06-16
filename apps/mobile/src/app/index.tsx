@@ -76,10 +76,19 @@ function ItemIcon({
   compact?: boolean;
   testID?: string;
 }) {
+  const palette = usePalette();
   const icon = itemIcon(item);
   const sizeStyle = compact ? styles.listIcon : styles.cardIcon;
   if (icon.kind === 'favicon') {
-    return <Image source={{ uri: icon.uri }} style={sizeStyle} />;
+    // Frame the favicon on a clean white rounded tile: many sites only expose a
+    // tiny /favicon.ico, and transparent ones would otherwise show the card
+    // through their edges (the "irregular boundary"). `contain` keeps odd
+    // aspect ratios from stretching.
+    return (
+      <View style={[sizeStyle, styles.faviconTile, { borderColor: palette.border }]}>
+        <Image source={{ uri: icon.uri }} style={styles.faviconImage} resizeMode="contain" />
+      </View>
+    );
   }
   return (
     <View
@@ -736,6 +745,17 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 10,
+  },
+  faviconTile: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: '#ffffff',
+  },
+  faviconImage: {
+    width: '72%',
+    height: '72%',
   },
   cardMonogram: {
     alignItems: 'center',
