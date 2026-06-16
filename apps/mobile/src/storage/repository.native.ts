@@ -31,9 +31,18 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   private db: SQLite.SQLiteDatabase | null = null;
 
   private async open(): Promise<SQLite.SQLiteDatabase> {
-    if (!this.db) {
-      this.db = await SQLite.openDatabaseAsync('stash.db');
+    if (this.db) {
+      try {
+        // Liveness probe: a handle invalidated while the app was backgrounded
+        // (common on a warm relaunch from recents/home) throws here. Reopen
+        // instead of failing every read on a stale handle.
+        await this.db.getFirstAsync('SELECT 1');
+        return this.db;
+      } catch {
+        this.db = null;
+      }
     }
+    this.db = await SQLite.openDatabaseAsync('stash.db');
     return this.db;
   }
 
