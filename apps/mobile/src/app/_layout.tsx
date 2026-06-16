@@ -30,6 +30,10 @@ function RootLayout() {
                   options={{ title: 'Add Bookmark', presentation: 'modal' }}
                 />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+                <Stack.Screen
+                  name="account"
+                  options={{ title: 'Account', presentation: 'modal' }}
+                />
                 <Stack.Screen name="review" options={{ title: 'Review AI suggestions' }} />
                 <Stack.Screen name="report" options={{ title: 'Report a problem' }} />
                 <Stack.Screen name="archived" options={{ title: 'Archived' }} />

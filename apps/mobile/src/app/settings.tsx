@@ -1,29 +1,18 @@
 import Constants from 'expo-constants';
 import { Link } from 'expo-router';
-import { useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Linking,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { AccountControls } from '@/ui/AccountControls';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
-import type { OAuthProvider } from '@/supabase/types';
 
 export default function SettingsScreen() {
   const palette = usePalette();
-  const [authBusy, setAuthBusy] = useState<OAuthProvider | 'signout' | null>(null);
   const {
     queue,
     isSyncing,
@@ -68,29 +57,6 @@ export default function SettingsScreen() {
       : auth.message;
 
   const build = getBuildInfo();
-
-  const handleSignIn = async (provider: OAuthProvider) => {
-    setAuthBusy(provider);
-    try {
-      await auth.signIn(provider);
-    } catch (error) {
-      Alert.alert(
-        'Sign in failed',
-        error instanceof Error ? error.message : 'Could not complete sign in.',
-      );
-    } finally {
-      setAuthBusy(null);
-    }
-  };
-
-  const handleSignOut = async () => {
-    setAuthBusy('signout');
-    try {
-      await auth.signOut();
-    } finally {
-      setAuthBusy(null);
-    }
-  };
 
   const settingsRows = [
     {
@@ -154,47 +120,9 @@ export default function SettingsScreen() {
         </Text>
       </Pressable>
 
-      {auth.status === 'not_configured' ? null : isAuthenticated ? (
-        <Pressable
-          accessibilityRole="button"
-          disabled={authBusy !== null}
-          style={[styles.authButton, { borderColor: palette.border, opacity: authBusy ? 0.6 : 1 }]}
-          onPress={() => void handleSignOut()}
-        >
-          {authBusy === 'signout' ? (
-            <ActivityIndicator color={palette.text} />
-          ) : (
-            <Text style={[styles.authButtonLabel, { color: palette.text }]}>Sign out</Text>
-          )}
-        </Pressable>
-      ) : (
-        <View style={styles.authGroup}>
-          <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-            Sign in to sync across devices
-          </Text>
-          {(['apple', 'google'] as const).map((provider) => (
-            <Pressable
-              key={provider}
-              accessibilityRole="button"
-              accessibilityLabel={`Sign in with ${provider === 'apple' ? 'Apple' : 'Google'}`}
-              disabled={authBusy !== null}
-              style={[
-                styles.authButton,
-                { borderColor: palette.border, opacity: authBusy ? 0.6 : 1 },
-              ]}
-              onPress={() => void handleSignIn(provider)}
-            >
-              {authBusy === provider ? (
-                <ActivityIndicator color={palette.text} />
-              ) : (
-                <Text style={[styles.authButtonLabel, { color: palette.text }]}>
-                  {provider === 'apple' ? 'Sign in with Apple' : 'Sign in with Google'}
-                </Text>
-              )}
-            </Pressable>
-          ))}
-        </View>
-      )}
+      <Card style={styles.row}>
+        <AccountControls />
+      </Card>
 
       <Link href="/review" asChild>
         <Pressable style={({ pressed }) => [styles.row, { backgroundColor: palette.surfaceElevated, borderColor: palette.border, opacity: pressed ? 0.78 : 1 }, palette.shadow.soft]}>
@@ -280,28 +208,5 @@ const styles = StyleSheet.create({
   },
   emptyQueue: {
     fontSize: 14,
-  },
-  syncButton: {
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  syncButtonLabel: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  authGroup: {
-    gap: 12,
-  },
-  authButton: {
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  authButtonLabel: {
-    fontSize: 16,
-    fontWeight: '600',
   },
 });

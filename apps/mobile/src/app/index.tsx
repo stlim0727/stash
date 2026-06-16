@@ -32,6 +32,8 @@ import {
 } from '@/domain/sort';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
+import { useSupabaseAuth } from '@/supabase/auth-provider';
+import { accountInitials } from '@/domain/account';
 import type { Bookmark } from '@/domain/types';
 
 function statusLabel(bookmark: Bookmark): string | null {
@@ -57,6 +59,11 @@ export default function InboxScreen() {
   const router = useRouter();
   const { inbox, isLoading, loadError, getTagsForBookmark, getCollection, getEnrichment } =
     useBookmarks();
+  const auth = useSupabaseAuth();
+  // Account avatar is only meaningful when the cloud is configured; otherwise
+  // there is nothing to sign in to and the hero stays clean.
+  const showAccount = auth.status !== 'not_configured';
+  const isAuthed = auth.status === 'authenticated';
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
@@ -189,17 +196,44 @@ export default function InboxScreen() {
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
       <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
-        <View>
+        <View style={styles.heroTitleBlock}>
           <Text style={[styles.heroTitle, { color: palette.text }]}>Stash</Text>
           <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
             Save now. Organize later.
           </Text>
-        </View>
-        <View style={[styles.heroCount, { backgroundColor: palette.accentSoft }]}>
-          <Text style={[styles.heroCountLabel, { color: palette.accentText }]}>
+          <Text style={[styles.heroCountText, { color: palette.textSecondary }]}>
             {inbox.length} saved
           </Text>
         </View>
+        {showAccount ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={isAuthed ? 'Account' : 'Sign in'}
+            hitSlop={8}
+            style={styles.accountButton}
+            onPress={() => router.push('/account')}
+          >
+            <View
+              style={[
+                styles.avatar,
+                isAuthed
+                  ? { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft }
+                  : { borderColor: palette.border },
+              ]}
+            >
+              {isAuthed ? (
+                <Text style={[styles.avatarInitials, { color: palette.accentText }]}>
+                  {accountInitials(auth.email)}
+                </Text>
+              ) : (
+                <Text style={styles.avatarGlyph}>👤</Text>
+              )}
+            </View>
+            <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
+              {isAuthed ? 'Account' : 'Sign in'}
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
       {loadError ? (
         <Text style={[styles.errorBanner, { color: '#d93636', backgroundColor: palette.card }]}>
@@ -401,10 +435,13 @@ const styles = StyleSheet.create({
   hero: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 8,
+  },
+  heroTitleBlock: {
+    flex: 1,
   },
   heroTitle: {
     fontSize: 34,
@@ -415,14 +452,34 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginTop: 2,
   },
-  heroCount: {
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  heroCountLabel: {
+  heroCountText: {
     fontSize: 13,
+    fontWeight: '600',
+    marginTop: 6,
+  },
+  accountButton: {
+    alignItems: 'center',
+    marginLeft: 12,
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarInitials: {
+    fontSize: 15,
     fontWeight: '800',
+  },
+  avatarGlyph: {
+    fontSize: 20,
+  },
+  accountCaption: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 4,
   },
   sectionLabel: {
     fontSize: 13,
