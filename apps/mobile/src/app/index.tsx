@@ -15,7 +15,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
-import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
@@ -284,35 +283,49 @@ export default function InboxScreen() {
             {inbox.length} saved
           </Text>
         </View>
-        {showAccount ? (
+        <View style={styles.headerActions}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={isAuthed ? 'Account' : 'Sign in'}
+            accessibilityLabel="Settings"
             hitSlop={8}
             style={styles.accountButton}
-            onPress={() => router.push('/account')}
+            onPress={() => router.push('/settings')}
           >
-            <View
-              style={[
-                styles.avatar,
-                isAuthed
-                  ? { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft }
-                  : { borderColor: palette.border },
-              ]}
-            >
-              {isAuthed ? (
-                <Text style={[styles.avatarInitials, { color: palette.accentText }]}>
-                  {accountInitials(auth.email)}
-                </Text>
-              ) : (
-                <Text style={styles.avatarGlyph}>👤</Text>
-              )}
+            <View style={[styles.avatar, { borderColor: palette.border }]}>
+              <Text style={styles.avatarGlyph}>⚙︎</Text>
             </View>
-            <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
-              {isAuthed ? 'Account' : 'Sign in'}
-            </Text>
+            <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
           </Pressable>
-        ) : null}
+          {showAccount ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isAuthed ? 'Account' : 'Sign in'}
+              hitSlop={8}
+              style={styles.accountButton}
+              onPress={() => router.push('/account')}
+            >
+              <View
+                style={[
+                  styles.avatar,
+                  isAuthed
+                    ? { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft }
+                    : { borderColor: palette.border },
+                ]}
+              >
+                {isAuthed ? (
+                  <Text style={[styles.avatarInitials, { color: palette.accentText }]}>
+                    {accountInitials(auth.email)}
+                  </Text>
+                ) : (
+                  <Text style={styles.avatarGlyph}>👤</Text>
+                )}
+              </View>
+              <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
+                {isAuthed ? 'Account' : 'Sign in'}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
       {loadError ? (
         <Pressable
@@ -389,7 +402,12 @@ export default function InboxScreen() {
       <FlatList
         data={visible}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={[styles.list, viewMode === 'list' ? styles.listModeList : null]}
+        contentContainerStyle={[
+          styles.list,
+          viewMode === 'list' ? styles.listModeList : null,
+          // Clear the floating Add button so it never covers the last row.
+          { paddingBottom: insets.bottom + 96 },
+        ]}
         ListHeaderComponent={
           <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
             {sectionLabel}
@@ -547,19 +565,18 @@ export default function InboxScreen() {
           );
         }}
       />
-      <View
-        style={[
-          styles.footer,
-          { borderTopColor: palette.border, paddingBottom: 16 + insets.bottom },
-        ]}
-      >
-        <Link href="/add" asChild>
-          <Button size="lg" style={styles.primaryButton}>Add Bookmark</Button>
-        </Link>
-        <Link href="/settings" asChild>
-          <Button variant="secondary" size="lg" style={styles.secondaryButton}>Settings</Button>
-        </Link>
-      </View>
+      <Link href="/add" asChild>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Add bookmark"
+          style={({ pressed }) => [
+            styles.fab,
+            { backgroundColor: palette.accent, bottom: 24 + insets.bottom, opacity: pressed ? 0.9 : 1 },
+          ]}
+        >
+          <Text style={styles.fabIcon}>＋</Text>
+        </Pressable>
+      </Link>
     </View>
   );
 }
@@ -585,6 +602,12 @@ const styles = StyleSheet.create({
   },
   heroTitleBlock: {
     flex: 1,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginLeft: 12,
   },
   heroTitle: {
     fontSize: 34,
@@ -827,16 +850,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  footer: {
-    flexDirection: 'row',
-    gap: 12,
-    padding: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
+  fab: {
+    position: 'absolute',
+    right: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Float above the list with a soft shadow so it reads as the primary action.
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
   },
-  primaryButton: {
-    flex: 1,
-  },
-  secondaryButton: {
-    minWidth: 112,
+  fabIcon: {
+    color: '#ffffff',
+    fontSize: 30,
+    fontWeight: '600',
+    lineHeight: 34,
   },
 });

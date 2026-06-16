@@ -7,6 +7,7 @@ import {
   Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +17,7 @@ import {
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
+import { hostFromUrl } from '@/domain/item-icon';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import type { SuggestedTag } from '@/domain/types';
 import { useBookmarks } from '@/store/bookmarks';
@@ -95,15 +97,38 @@ export default function BookmarkDetailScreen() {
     setDraftNotes(null);
   };
 
-  const fields = [
-    { label: 'URL', value: bookmark.url ?? 'No URL (text-only share)' },
-    { label: 'Description', value: bookmark.description ?? 'No description yet' },
-    { label: 'Site', value: bookmark.site_name ?? 'Unknown' },
-    { label: 'Saved from', value: bookmark.source_app ?? 'Manual entry' },
-    { label: 'Metadata status', value: bookmark.metadata_status },
-    { label: 'Sync status', value: bookmark.sync_status },
-    { label: 'Saved at', value: new Date(bookmark.created_at).toLocaleString() },
-  ];
+  // One tidy "Details" section instead of a card per field. Only rows with a
+  // real value show, so a sparse bookmark doesn't render mostly-empty cards.
+  const details = [
+    bookmark.url ? { label: 'URL', value: bookmark.url } : null,
+    bookmark.site_name ? { label: 'Site', value: bookmark.site_name } : null,
+    bookmark.description ? { label: 'Description', value: bookmark.description } : null,
+    { label: 'Saved', value: new Date(bookmark.created_at).toLocaleString() },
+    bookmark.source_app ? { label: 'From', value: bookmark.source_app } : null,
+  ].filter((row): row is { label: string; value: string } => row !== null);
+
+  // Sync/metadata are de-emphasized: only surfaced as small chips when they
+  // are noteworthy (not yet synced / still enriching), never as full cards.
+  const statusChips: string[] = [];
+  if (bookmark.sync_status !== 'synced') {
+    statusChips.push(`sync ${bookmark.sync_status}`);
+  }
+  if (bookmark.metadata_status !== 'complete') {
+    statusChips.push(`metadata ${bookmark.metadata_status}`);
+  }
+
+  const host = hostFromUrl(bookmark.url);
+
+  const handleShare = () => {
+    if (!bookmark.url) {
+      return;
+    }
+    void Share.share({ message: bookmark.url, url: bookmark.url, title: bookmark.title ?? undefined }).catch(
+      () => {
+        setOrganizeError('Could not open the share sheet.');
+      },
+    );
+  };
 
   const runOrganizeAction = async (action: () => Promise<string | null>) => {
     setBusy(true);
@@ -191,16 +216,50 @@ export default function BookmarkDetailScreen() {
         />
       ) : null}
       <Card style={styles.header}>
-        {bookmark.favicon_url ? (
-          <Image source={{ uri: bookmark.favicon_url }} style={styles.favicon} />
+        <View style={styles.headerTop}>
+          {bookmark.favicon_url ? (
+            <View style={[styles.faviconTile, { borderColor: palette.border }]}>
+              <Image source={{ uri: bookmark.favicon_url }} style={styles.favicon} resizeMode="contain" />
+            </View>
+          ) : null}
+          <View style={styles.headerText}>
+            <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={3}>
+              {bookmark.title ?? bookmark.url ?? 'Untitled'}
+            </Text>
+            {host ? (
+              <Text style={[styles.headerHost, { color: palette.textSecondary }]} numberOfLines={1}>
+                {host}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+        {statusChips.length > 0 ? (
+          <View style={styles.statusRow}>
+            {statusChips.map((label) => (
+              <View key={label} style={[styles.statusChip, { backgroundColor: palette.mutedSurface }]}>
+                <Text style={[styles.statusChipLabel, { color: palette.textSecondary }]}>{label}</Text>
+              </View>
+            ))}
+          </View>
         ) : null}
-        <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={2}>
-          {bookmark.title ?? bookmark.url ?? 'Untitled'}
-        </Text>
       </Card>
-      {bookmark.url ? (
-        <Button size="lg" onPress={handleOpenLink}>Open link ↗</Button>
-      ) : null}
+
+      <View style={styles.actionBar}>
+        {bookmark.url ? (
+          <ActionButton glyph="↗" label="Open" tint={palette.accent} onPress={handleOpenLink} />
+        ) : null}
+        {bookmark.url ? (
+          <ActionButton glyph="⇪" label="Share" tint={palette.text} onPress={handleShare} />
+        ) : null}
+        <ActionButton
+          glyph={bookmark.is_archived ? '↩' : '▾'}
+          label={bookmark.is_archived ? 'Unarchive' : 'Archive'}
+          tint={palette.text}
+          onPress={() => archiveBookmark(bookmark.id, !bookmark.is_archived)}
+        />
+        <ActionButton glyph="✕" label="Delete" tint={palette.danger} onPress={handleDelete} />
+      </View>
+
       <Card elevated={false} style={styles.field}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Title</Text>
         <TextInput
@@ -230,12 +289,23 @@ export default function BookmarkDetailScreen() {
 
       {editsDirty ? <Button onPress={handleSaveEdits}>Save changes</Button> : null}
 
-      {fields.map((field) => (
-        <Card key={field.label} elevated={false} style={styles.field}>
-          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{field.label}</Text>
-          <Text style={[styles.fieldValue, { color: palette.text }]}>{field.value}</Text>
-        </Card>
-      ))}
+      <Card elevated={false} style={styles.field}>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Details</Text>
+        {details.map((row, index) => (
+          <View
+            key={row.label}
+            style={[
+              styles.detailRow,
+              index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border } : null,
+            ]}
+          >
+            <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
+            <Text style={[styles.detailValue, { color: palette.text }]} selectable>
+              {row.value}
+            </Text>
+          </View>
+        ))}
+      </Card>
 
       <Card elevated={false} style={styles.field}>
         <View style={styles.suggestHeader}>
@@ -451,20 +521,38 @@ export default function BookmarkDetailScreen() {
       </Card>
 
       {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
-
-      <View style={styles.actions}>
-        <Button
-          variant="secondary"
-          style={styles.actionButton}
-          onPress={() => archiveBookmark(bookmark.id, !bookmark.is_archived)}
-        >
-          {bookmark.is_archived ? 'Unarchive' : 'Archive'}
-        </Button>
-        <Button variant="danger" style={styles.actionButton} onPress={handleDelete}>
-          Delete
-        </Button>
-      </View>
     </ScrollView>
+  );
+}
+
+/** One item in the detail action bar: a glyph above a small label. */
+function ActionButton({
+  glyph,
+  label,
+  tint,
+  onPress,
+}: {
+  glyph: string;
+  label: string;
+  tint: string;
+  onPress: () => void;
+}) {
+  const palette = usePalette();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.action,
+        { backgroundColor: palette.card, borderColor: palette.border, opacity: pressed ? 0.7 : 1 },
+      ]}
+    >
+      <Text style={[styles.actionGlyph, { color: tint }]}>{glyph}</Text>
+      <Text style={[styles.actionBtnLabel, { color: tint }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -479,22 +567,89 @@ const styles = StyleSheet.create({
     borderRadius: 28,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
+    gap: 12,
     padding: 18,
     borderRadius: 24,
   },
+  headerTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  headerText: {
+    flex: 1,
+    gap: 2,
+  },
+  faviconTile: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
   favicon: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
+    width: '70%',
+    height: '70%',
   },
   headerTitle: {
-    flex: 1,
     fontSize: 24,
     fontWeight: '800',
     letterSpacing: -0.4,
+  },
+  headerHost: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  statusChip: {
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  statusChipLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  actionBar: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  action: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  actionGlyph: {
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '600',
+  },
+  actionBtnLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  detailRow: {
+    paddingVertical: 10,
+    gap: 2,
+  },
+  detailLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  detailValue: {
+    fontSize: 15,
   },
   missing: {
     flex: 1,
@@ -610,42 +765,10 @@ const styles = StyleSheet.create({
     minHeight: 72,
     textAlignVertical: 'top',
   },
-  openButton: {
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  openButtonLabel: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  saveButton: {
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  saveButtonLabel: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
   error: {
     color: '#d93636',
     fontSize: 13,
     textAlign: 'center',
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingVertical: 8,
-  },
-  actionButton: {
-    flex: 1,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
   },
   actionLabel: {
     fontSize: 16,
