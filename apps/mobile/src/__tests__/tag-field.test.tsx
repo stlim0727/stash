@@ -35,6 +35,18 @@ test('duplicate tags are ignored (case-insensitive)', async () => {
   expect(onAdd).not.toHaveBeenCalled();
 });
 
+test('keeps the typed text when the add fails so it can be retried', async () => {
+  const onAdd = jest.fn(async () => false);
+  const { screen } = await setup({ onAdd });
+  const input = screen.getByLabelText('Add a tag');
+
+  await fireEvent.changeText(input, 'korean ');
+
+  expect(onAdd).toHaveBeenCalledWith('korean');
+  // The text is restored instead of being lost.
+  expect(input.props.value).toBe('korean');
+});
+
 test('a suggestion chip accepts via its accessible label', async () => {
   const { screen, onAcceptSuggestion } = await setup();
   await fireEvent.press(screen.getByLabelText('Accept suggested tag dinner'));
