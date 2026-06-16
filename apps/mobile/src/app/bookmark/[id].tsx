@@ -142,7 +142,7 @@ export default function BookmarkDetailScreen() {
   };
 
   const handleAddTag = (name: string) =>
-    void runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
+    runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
   const handleRemoveTag = (name: string) =>
     void runOrganizeAction(() => removeTagFromBookmark(bookmark.id, name));
   const handleAcceptSuggestion = (name: string) => {
@@ -163,7 +163,7 @@ export default function BookmarkDetailScreen() {
   };
 
   const handleCreateCollection = (name: string) =>
-    void runOrganizeAction(async () => {
+    runOrganizeAction(async () => {
       const result = await createCollection(name);
       if (result.collection) {
         assignCollection(bookmark.id, result.collection.id);

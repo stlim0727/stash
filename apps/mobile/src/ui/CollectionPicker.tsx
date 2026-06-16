@@ -15,8 +15,11 @@ interface CollectionPickerProps {
   currentName: string | null;
   busy: boolean;
   onSelect: (id: string | null) => void;
-  /** Create a new collection by name and file the bookmark into it. */
-  onCreate: (name: string) => void;
+  /**
+   * Create a new collection by name and file the bookmark into it. Returns
+   * false to indicate failure, so the picker stays open with the query intact.
+   */
+  onCreate: (name: string) => boolean | void | Promise<boolean | void>;
 }
 
 /**
@@ -116,9 +119,13 @@ export function CollectionPicker({
               accessibilityRole="button"
               accessibilityLabel={`Create collection ${trimmed}`}
               disabled={busy}
-              onPress={() => {
-                onCreate(trimmed);
-                close();
+              onPress={async () => {
+                // Only collapse/clear once the create succeeds; on failure keep
+                // the picker open with the typed name so the user can retry.
+                const result = await onCreate(trimmed);
+                if (result !== false) {
+                  close();
+                }
               }}
               style={styles.option}
             >

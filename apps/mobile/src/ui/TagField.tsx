@@ -20,7 +20,8 @@ interface TagFieldProps {
   /** False when the bookmark can't be organized yet (e.g. not synced). */
   editable: boolean;
   busy: boolean;
-  onAdd: (name: string) => void;
+  /** Returns false to indicate the add failed, so the typed text is kept. */
+  onAdd: (name: string) => boolean | void | Promise<boolean | void>;
   onRemove: (name: string) => void;
   onBrowse: (tagId: string) => void;
   onAcceptSuggestion: (name: string) => void;
@@ -50,20 +51,25 @@ export function TagField({
   const palette = usePalette();
   const [value, setValue] = useState('');
 
-  const commit = (raw: string) => {
+  const commit = async (raw: string) => {
     const name = raw.trim();
     if (!name || isDuplicateTag(name, tags.map((tag) => tag.name))) {
       return;
     }
-    onAdd(name);
+    // Keep the typed text if the add fails (e.g. offline / sync error) so the
+    // user doesn't lose it and can retry, rather than clearing optimistically.
+    const result = await onAdd(name);
+    if (result === false) {
+      setValue((current) => (current.length === 0 ? name : current));
+    }
   };
 
   const handleChange = (text: string) => {
     const { commit: committed, rest } = readTagInput(text);
-    if (committed !== null) {
-      commit(committed);
-    }
     setValue(rest);
+    if (committed !== null) {
+      void commit(committed);
+    }
   };
 
   const handleKeyPress = (key: string) => {
@@ -114,8 +120,9 @@ export function TagField({
             onChangeText={handleChange}
             onKeyPress={(event) => handleKeyPress(event.nativeEvent.key)}
             onSubmitEditing={() => {
-              commit(value);
+              const token = value;
               setValue('');
+              void commit(token);
             }}
             blurOnSubmit={false}
             returnKeyType="done"
