@@ -148,7 +148,15 @@ function logStorageError(operation: string, error: unknown) {
 let repositoryReady: Promise<void> | null = null;
 function ensureRepositoryReady(): Promise<void> {
   if (!repositoryReady) {
-    repositoryReady = repository.init(mockBookmarks);
+    // Seed the sample tags/links/collections and enrichments alongside the
+    // bookmarks so the synced samples behave like real cloud rows (e.g. their
+    // collection is assignable, not just a label) instead of leaning on the
+    // in-memory fallbacks in getCollection/getTagsForBookmark/getEnrichment.
+    repositoryReady = repository.init(
+      mockBookmarks,
+      { tags: mockTags, bookmarkTags: mockBookmarkTags, collections: mockCollections },
+      mockEnrichments,
+    );
     // A failed init must not poison the whole session — clear the cached
     // rejection so the next call retries (e.g. after a transient warm-start
     // open failure).

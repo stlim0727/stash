@@ -7,6 +7,14 @@ import type { AIEnrichment, Bookmark, BookmarkTag, Collection, Tag } from '@/dom
 
 export const mockUserId = 'mock-user-1';
 
+// Seeded bookmarks that represent already-synced cloud rows use real-looking
+// UUIDs, so the app treats them as having a remote identity: tags and AI
+// suggestions are editable, with no "once this bookmark has synced" gating
+// (see hasRemoteIdentity in sync/sync-bookmarks). Pending/never-synced samples
+// keep readable non-UUID IDs on purpose, to exercise the not-yet-synced state.
+const syncedLocalFirstId = '0a1b2c3d-4e5f-4a6b-8c7d-000000000001';
+const syncedExpoRouterId = '0a1b2c3d-4e5f-4a6b-8c7d-000000000002';
+
 export const mockCollections: Collection[] = [
   {
     id: 'collection-research',
@@ -47,7 +55,7 @@ export const mockTags: Tag[] = [
 
 export const mockBookmarks: Bookmark[] = [
   {
-    id: 'bookmark-local-first',
+    id: syncedLocalFirstId,
     user_id: mockUserId,
     url: 'https://www.inkandswitch.com/local-first/',
     canonical_url: 'https://www.inkandswitch.com/local-first/',
@@ -91,7 +99,7 @@ export const mockBookmarks: Bookmark[] = [
     sync_status: 'pending',
   },
   {
-    id: 'bookmark-expo-router',
+    id: syncedExpoRouterId,
     user_id: mockUserId,
     url: 'https://docs.expo.dev/router/introduction/',
     canonical_url: 'https://docs.expo.dev/router/introduction/',
@@ -116,14 +124,14 @@ export const mockBookmarks: Bookmark[] = [
 
 export const mockBookmarkTags: BookmarkTag[] = [
   {
-    bookmark_id: 'bookmark-local-first',
+    bookmark_id: syncedLocalFirstId,
     tag_id: 'tag-read-later',
     source: 'user',
     confidence: null,
     created_at: '2026-06-02T18:25:00.000Z',
   },
   {
-    bookmark_id: 'bookmark-local-first',
+    bookmark_id: syncedLocalFirstId,
     tag_id: 'tag-local-first',
     source: 'ai',
     confidence: 0.93,
@@ -141,7 +149,7 @@ export const mockBookmarkTags: BookmarkTag[] = [
 export const mockEnrichments: AIEnrichment[] = [
   {
     id: 'enrichment-local-first',
-    bookmark_id: 'bookmark-local-first',
+    bookmark_id: syncedLocalFirstId,
     user_id: mockUserId,
     summary:
       'Argues for software that keeps data on-device while still supporting collaboration and sync.',

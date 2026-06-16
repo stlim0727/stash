@@ -76,7 +76,11 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     return this.opening;
   }
 
-  async init(seed: Bookmark[]): Promise<void> {
+  async init(
+    seed: Bookmark[],
+    seedTagData?: TagData,
+    seedEnrichments?: AIEnrichment[],
+  ): Promise<void> {
     const db = await this.open();
     await db.execAsync(`
       PRAGMA journal_mode = WAL;
@@ -130,6 +134,12 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     if (!seeded) {
       for (const bookmark of seed) {
         await this.insertBookmark(bookmark);
+      }
+      if (seedTagData) {
+        await this.replaceTagData(seedTagData);
+      }
+      if (seedEnrichments && seedEnrichments.length > 0) {
+        await this.upsertEnrichments(seedEnrichments);
       }
       await db.runAsync("INSERT INTO meta (key, value) VALUES ('seeded', '1')");
     }
