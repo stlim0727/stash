@@ -5,9 +5,15 @@ import { useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { initSentry, wrapWithSentry } from '@/observability/sentry';
+import { installConsoleCapture } from '@/observability/log-buffer';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
+
+// Capture console output into an in-memory buffer so the "Report a problem"
+// screen can attach real logs. Install before anything else so early errors
+// (storage open, auth bootstrap) are recorded.
+installConsoleCapture();
 
 // Start crash & error monitoring as early as possible — a no-op until a DSN is
 // configured (see observability/sentry-config).

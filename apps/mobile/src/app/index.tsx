@@ -297,9 +297,17 @@ export default function InboxScreen() {
         ) : null}
       </View>
       {loadError ? (
-        <Text style={[styles.errorBanner, { color: '#d93636', backgroundColor: palette.card }]}>
-          Couldn’t open local storage — showing sample data. Your saves this session may not persist.
-        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Report storage problem"
+          onPress={() => router.push('/report')}
+          style={({ pressed }) => [styles.errorBanner, { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 }]}
+        >
+          <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
+            Couldn’t open local storage — showing sample data. Your saves this session may not
+            persist. Tap to report ›
+          </Text>
+        </Pressable>
       ) : null}
       <View style={styles.searchWrap}>
         <TextInput
