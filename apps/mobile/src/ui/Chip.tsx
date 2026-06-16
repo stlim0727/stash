@@ -45,9 +45,5 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 14,
     fontWeight: '700',
-    // Explicit line height + no extra font padding so bold glyphs aren't
-    // clipped at the bottom inside the pill on Android.
-    lineHeight: 18,
-    includeFontPadding: false,
   },
 });
