@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState, type ComponentProps } from 'react';
+import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
   Alert,
   Image,
@@ -14,6 +14,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
@@ -53,6 +54,17 @@ export default function BookmarkDetailScreen() {
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const insets = useSafeAreaInsets();
+
+  // Auto-save drafts even when the screen is dismissed via the system back
+  // button, which unmounts before a TextInput's onBlur fires. Refs hold the
+  // latest values; the unmount effect flushes them to the store (no setState).
+  const draftTitleRef = useRef<string | null>(null);
+  const draftNotesRef = useRef<string | null>(null);
+  draftTitleRef.current = draftTitle;
+  draftNotesRef.current = draftNotes;
+  const flushRef = useRef<() => void>(() => {});
+  useEffect(() => () => flushRef.current(), []);
 
   const bookmark = id ? getBookmark(id) : undefined;
 
@@ -65,6 +77,22 @@ export default function BookmarkDetailScreen() {
       </View>
     );
   }
+
+  // Commit unsaved drafts on unmount (back button) without touching state.
+  flushRef.current = () => {
+    const dt = draftTitleRef.current;
+    const dn = draftNotesRef.current;
+    const fields: { title?: string; notes?: string } = {};
+    if (dt !== null && dt.trim() !== (bookmark.title ?? '')) {
+      fields.title = dt.trim();
+    }
+    if (dn !== null && dn !== (bookmark.notes ?? '')) {
+      fields.notes = dn;
+    }
+    if (fields.title !== undefined || fields.notes !== undefined) {
+      updateBookmarkFields(bookmark.id, fields);
+    }
+  };
 
   const tags = getTagsForBookmark(bookmark.id);
   const collection = getCollection(bookmark.collection_id);
@@ -200,7 +228,10 @@ export default function BookmarkDetailScreen() {
   };
 
   return (
-    <ScrollView style={{ backgroundColor: palette.background }} contentContainerStyle={styles.container}>
+    <ScrollView
+      style={{ backgroundColor: palette.background }}
+      contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 32 }]}
+    >
       {bookmark.preview_image_url ? (
         <Image
           source={{ uri: bookmark.preview_image_url }}
