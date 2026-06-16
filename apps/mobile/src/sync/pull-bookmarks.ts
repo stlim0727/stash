@@ -1,9 +1,19 @@
 import { sanitizeTagData } from '@/domain/tag-data';
+import { recordLog } from '@/observability/log-buffer';
 import type { AIEnrichment, Bookmark, BookmarkTag, Collection, Tag } from '@/domain/types';
 import type { BookmarkRepository, TagData } from '@/storage/types';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
 export const LAST_PULLED_AT_KEY = 'last_pulled_at';
+/** The Supabase user id the local cache was last synced against. */
+export const SYNCED_USER_ID_KEY = 'synced_user_id';
+/** Whether that last-synced user was anonymous ('true' / 'false'). */
+export const SYNCED_USER_ANON_KEY = 'synced_user_is_anonymous';
+
+export interface PullUser {
+  id: string;
+  isAnonymous: boolean;
+}
 
 /** Re-fetch a little history each pull; idempotent merges make this harmless. */
 const WATERMARK_OVERLAP_MS = 5 * 60 * 1000;
@@ -29,6 +39,8 @@ export interface PullResult {
   tagData: TagData;
   /** The new watermark (already persisted). */
   pulledAt: string;
+  /** True when the signed-in user differed from the last-synced one. */
+  userChanged: boolean;
 }
 
 /**
@@ -41,18 +53,36 @@ export interface PullResult {
  * are removed. The watermark is captured before fetching so changes that
  * land mid-pull are re-fetched next time, and each pull overlaps the
  * previous watermark to tolerate clock skew.
+ *
+ * When `currentUser` is supplied and differs from the last-synced user, this is
+ * an account switch: the remote-deletion diff is SKIPPED (the previous account's
+ * rows must never be deleted just because they are absent from this account —
+ * the data-loss guard) and the watermark is reset for a full refresh. Re-homing
+ * or dropping those rows is the caller's job (see account-transition.ts).
  */
 export async function pullRemoteChanges(
   api: PullApi,
   repository: BookmarkRepository,
   getLocalBookmarks: () => Bookmark[],
   hasQueuedWork: (bookmarkId: string) => boolean,
+  currentUser?: PullUser | null,
 ): Promise<PullResult> {
-  const watermark = await repository.getMeta(LAST_PULLED_AT_KEY);
+  const previousUserId = currentUser ? await repository.getMeta(SYNCED_USER_ID_KEY) : null;
+  const userChanged =
+    currentUser != null && previousUserId != null && previousUserId !== currentUser.id;
+
+  const watermark = userChanged ? null : await repository.getMeta(LAST_PULLED_AT_KEY);
   const since = watermark
     ? new Date(Date.parse(watermark) - WATERMARK_OVERLAP_MS).toISOString()
     : null;
   const pulledAt = new Date().toISOString();
+
+  if (userChanged) {
+    recordLog(
+      'warn',
+      `pull: signed-in user changed (${previousUserId} → ${currentUser!.id}); full refresh, deletions skipped`,
+    );
+  }
 
   const [remoteRows, remoteIds, enrichments, tags, bookmarkTags, collections] = await Promise.all([
     api.listBookmarksUpdatedSince(since),
@@ -81,15 +111,24 @@ export async function pullRemoteChanges(
   }
 
   const remoteIdSet = new Set(remoteIds);
-  const deletions = locals
-    .filter(
-      (bookmark) =>
-        hasRemoteIdentity(bookmark.id) &&
-        bookmark.sync_status === 'synced' &&
-        !remoteIdSet.has(bookmark.id) &&
-        !hasQueuedWork(bookmark.id),
-    )
-    .map((bookmark) => bookmark.id);
+  // Guard: on an account switch, never treat the previous account's rows as
+  // remote deletions. Same-account deletions (a row removed on another device)
+  // still reconcile normally.
+  const deletions = userChanged
+    ? []
+    : locals
+        .filter(
+          (bookmark) =>
+            hasRemoteIdentity(bookmark.id) &&
+            bookmark.sync_status === 'synced' &&
+            !remoteIdSet.has(bookmark.id) &&
+            !hasQueuedWork(bookmark.id),
+        )
+        .map((bookmark) => bookmark.id);
+
+  if (deletions.length > 0) {
+    recordLog('info', `pull: removing ${deletions.length} row(s) deleted on another device`);
+  }
 
   for (const bookmark of upserts) {
     await repository.insertBookmark(bookmark);
@@ -102,6 +141,10 @@ export async function pullRemoteChanges(
   }
   await repository.replaceTagData(tagData);
   await repository.setMeta(LAST_PULLED_AT_KEY, pulledAt);
+  if (currentUser) {
+    await repository.setMeta(SYNCED_USER_ID_KEY, currentUser.id);
+    await repository.setMeta(SYNCED_USER_ANON_KEY, String(currentUser.isAnonymous));
+  }
 
-  return { upserts, deletions, enrichments, tagData, pulledAt };
+  return { upserts, deletions, enrichments, tagData, pulledAt, userChanged };
 }
