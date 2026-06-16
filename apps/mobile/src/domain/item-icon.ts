@@ -66,15 +66,23 @@ export function monogramColorIndex(seed: string): number {
   return hash % MONOGRAM_COLORS.length;
 }
 
-export function itemIcon(bookmark: Bookmark): ItemIcon {
-  const favicon = bookmark.favicon_url?.trim();
-  if (favicon) {
-    return { kind: 'favicon', uri: favicon };
-  }
+/**
+ * The colored letter fallback for a bookmark — used when there's no favicon, or
+ * when a favicon URL is present but fails to load on-device.
+ */
+export function monogramIcon(bookmark: Bookmark): MonogramIcon {
   const host = hostFromUrl(bookmark.url);
   // Letter prefers the human site name, then the domain, then the title.
   const label = bookmark.site_name?.trim() || host || bookmark.title?.trim() || '#';
   // Color seed prefers the stable domain so the same site is always one color.
   const seed = host ?? label;
   return { kind: 'monogram', letter: firstLetter(label), colorIndex: monogramColorIndex(seed) };
+}
+
+export function itemIcon(bookmark: Bookmark): ItemIcon {
+  const favicon = bookmark.favicon_url?.trim();
+  if (favicon) {
+    return { kind: 'favicon', uri: favicon };
+  }
+  return monogramIcon(bookmark);
 }

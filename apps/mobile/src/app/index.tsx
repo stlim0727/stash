@@ -20,7 +20,7 @@ import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
-import { MONOGRAM_COLORS, itemIcon } from '@/domain/item-icon';
+import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
 import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
 import {
   DEFAULT_SORT,
@@ -77,7 +77,11 @@ function ItemIcon({
   testID?: string;
 }) {
   const palette = usePalette();
-  const icon = itemIcon(item);
+  // A favicon URL can still 404 or be undecodable on-device; when it does, fall
+  // back to the monogram instead of leaving a blank white tile.
+  const [faviconFailed, setFaviconFailed] = useState(false);
+  const base = itemIcon(item);
+  const icon = base.kind === 'favicon' && faviconFailed ? monogramIcon(item) : base;
   const sizeStyle = compact ? styles.listIcon : styles.cardIcon;
   if (icon.kind === 'favicon') {
     // Frame the favicon on a clean white rounded tile: many sites only expose a
@@ -86,7 +90,12 @@ function ItemIcon({
     // aspect ratios from stretching.
     return (
       <View style={[sizeStyle, styles.faviconTile, { borderColor: palette.border }]}>
-        <Image source={{ uri: icon.uri }} style={styles.faviconImage} resizeMode="contain" />
+        <Image
+          source={{ uri: icon.uri }}
+          style={styles.faviconImage}
+          resizeMode="contain"
+          onError={() => setFaviconFailed(true)}
+        />
       </View>
     );
   }
@@ -681,10 +690,13 @@ const styles = StyleSheet.create({
   },
   shelf: {
     flexGrow: 0,
-    paddingTop: 10,
   },
   shelfContent: {
+    // Vertical padding belongs on the content container, not the ScrollView
+    // style — on Android the latter clips the chips' bottom edge.
     paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 2,
     gap: 8,
   },
   card: {
