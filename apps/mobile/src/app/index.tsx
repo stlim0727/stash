@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -292,7 +293,7 @@ export default function InboxScreen() {
             onPress={() => router.push('/settings')}
           >
             <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-              <Text style={[styles.avatarGlyph, { color: palette.text }]}>⚙︎</Text>
+              <Ionicons name="settings-sharp" size={20} color={palette.text} />
             </View>
             <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
           </Pressable>
@@ -574,7 +575,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
         ]}
       >
-        <Text style={styles.fabIcon}>＋</Text>
+        <Ionicons name="add" size={34} color="#ffffff" />
       </Pressable>
     </View>
   );
@@ -868,11 +869,5 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
-  },
-  fabIcon: {
-    color: '#ffffff',
-    fontSize: 30,
-    fontWeight: '600',
-    lineHeight: 34,
   },
 });

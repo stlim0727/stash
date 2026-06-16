@@ -1,5 +1,6 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useState, type ComponentProps } from 'react';
 import {
   Alert,
   Image,
@@ -238,18 +239,18 @@ export default function BookmarkDetailScreen() {
 
       <View style={styles.actionBar}>
         {bookmark.url ? (
-          <ActionButton glyph="↗" label="Open" tint={palette.accent} onPress={handleOpenLink} />
+          <ActionButton icon="open-outline" label="Open" tint={palette.accent} onPress={handleOpenLink} />
         ) : null}
         {bookmark.url ? (
-          <ActionButton glyph="⇪" label="Share" tint={palette.text} onPress={handleShare} />
+          <ActionButton icon="share-social" label="Share" tint={palette.text} onPress={handleShare} />
         ) : null}
         <ActionButton
-          glyph={bookmark.is_archived ? '↩' : '▾'}
+          icon={bookmark.is_archived ? 'arrow-undo' : 'archive'}
           label={bookmark.is_archived ? 'Unarchive' : 'Archive'}
           tint={palette.text}
           onPress={() => archiveBookmark(bookmark.id, !bookmark.is_archived)}
         />
-        <ActionButton glyph="✕" label="Delete" tint={palette.danger} onPress={handleDelete} />
+        <ActionButton icon="trash" label="Delete" tint={palette.danger} onPress={handleDelete} />
       </View>
 
       <Card elevated={false} style={styles.field}>
@@ -408,14 +409,14 @@ export default function BookmarkDetailScreen() {
   );
 }
 
-/** One item in the detail action bar: a glyph above a small label. */
+/** One item in the detail action bar: a vector icon above a small label. */
 function ActionButton({
-  glyph,
+  icon,
   label,
   tint,
   onPress,
 }: {
-  glyph: string;
+  icon: ComponentProps<typeof Ionicons>['name'];
   label: string;
   tint: string;
   onPress: () => void;
@@ -431,7 +432,7 @@ function ActionButton({
         { backgroundColor: palette.card, borderColor: palette.border, opacity: pressed ? 0.7 : 1 },
       ]}
     >
-      <Text style={[styles.actionGlyph, { color: tint }]}>{glyph}</Text>
+      <Ionicons name={icon} size={22} color={tint} />
       <Text style={[styles.actionBtnLabel, { color: tint }]} numberOfLines={1}>
         {label}
       </Text>
@@ -511,11 +512,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-  },
-  actionGlyph: {
-    fontSize: 20,
-    lineHeight: 24,
-    fontWeight: '600',
   },
   actionBtnLabel: {
     fontSize: 12,
