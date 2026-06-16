@@ -1,4 +1,4 @@
-import { Link, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
@@ -565,18 +565,17 @@ export default function InboxScreen() {
           );
         }}
       />
-      <Link href="/add" asChild>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Add bookmark"
-          style={({ pressed }) => [
-            styles.fab,
-            { backgroundColor: palette.accent, bottom: 24 + insets.bottom, opacity: pressed ? 0.9 : 1 },
-          ]}
-        >
-          <Text style={styles.fabIcon}>＋</Text>
-        </Pressable>
-      </Link>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Add bookmark"
+        onPress={() => router.push('/add')}
+        style={({ pressed }) => [
+          styles.fab,
+          { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
+        ]}
+      >
+        <Text style={styles.fabIcon}>＋</Text>
+      </Pressable>
     </View>
   );
 }
