@@ -52,6 +52,7 @@ export default function BookmarkDetailScreen() {
   // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   const bookmark = id ? getBookmark(id) : undefined;
 
@@ -81,7 +82,6 @@ export default function BookmarkDetailScreen() {
   const showCollectionSuggestion =
     !!suggestedCollection && bookmark.collection_id !== suggestedCollection.id;
 
-  const titleValue = draftTitle ?? bookmark.title ?? '';
   const notesValue = draftNotes ?? bookmark.notes ?? '';
 
   // Auto-save on blur: edit in place, no explicit "Save" button.
@@ -208,34 +208,39 @@ export default function BookmarkDetailScreen() {
           resizeMode="cover"
         />
       ) : null}
-      <Card style={styles.header}>
-        <View style={styles.headerTop}>
-          {bookmark.favicon_url ? (
-            <View style={[styles.faviconTile, { borderColor: palette.border }]}>
-              <Image source={{ uri: bookmark.favicon_url }} style={styles.favicon} resizeMode="contain" />
-            </View>
-          ) : null}
-          <View style={styles.headerText}>
-            <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={3}>
-              {bookmark.title ?? bookmark.url ?? 'Untitled'}
-            </Text>
-            {host ? (
-              <Text style={[styles.headerHost, { color: palette.textSecondary }]} numberOfLines={1}>
-                {host}
-              </Text>
-            ) : null}
-          </View>
-        </View>
-        {statusChips.length > 0 ? (
-          <View style={styles.statusRow}>
-            {statusChips.map((label) => (
-              <View key={label} style={[styles.statusChip, { backgroundColor: palette.mutedSurface }]}>
-                <Text style={[styles.statusChipLabel, { color: palette.textSecondary }]}>{label}</Text>
-              </View>
-            ))}
+      {/* Compact byline: favicon · host · status, instead of a header card. */}
+      <View style={styles.byline}>
+        {bookmark.favicon_url ? (
+          <View style={[styles.bylineFavTile, { borderColor: palette.border }]}>
+            <Image source={{ uri: bookmark.favicon_url }} style={styles.bylineFav} resizeMode="contain" />
           </View>
         ) : null}
-      </Card>
+        <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
+          {host ?? 'Saved'}
+          {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
+        </Text>
+      </View>
+
+      {/* Title — tap to edit in place, auto-saved on blur. */}
+      {draftTitle === null ? (
+        <Pressable accessibilityRole="button" onPress={() => setDraftTitle(bookmark.title ?? '')}>
+          <Text style={[styles.title, { color: palette.text }]}>
+            {bookmark.title ?? bookmark.url ?? 'Untitled'}
+          </Text>
+        </Pressable>
+      ) : (
+        <TextInput
+          accessibilityLabel="Edit title"
+          autoFocus
+          multiline
+          style={[styles.title, styles.titleInput, { color: palette.text, borderColor: palette.border }]}
+          placeholder="Untitled — metadata pending"
+          placeholderTextColor={palette.textSecondary}
+          value={draftTitle}
+          onChangeText={setDraftTitle}
+          onBlur={commitTitle}
+        />
+      )}
 
       <View style={styles.actionBar}>
         {bookmark.url ? (
@@ -253,34 +258,20 @@ export default function BookmarkDetailScreen() {
         <ActionButton icon="trash" label="Delete" tint={palette.danger} onPress={handleDelete} />
       </View>
 
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Title</Text>
-        <TextInput
-          style={[styles.editInput, { color: palette.text, borderColor: palette.border }]}
-          placeholder="Untitled — metadata pending"
-          placeholderTextColor={palette.textSecondary}
-          value={titleValue}
-          onChangeText={setDraftTitle}
-          onBlur={commitTitle}
-        />
-      </Card>
-
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Notes</Text>
-        <TextInput
-          style={[
-            styles.editInput,
-            styles.notesInput,
-            { color: palette.text, borderColor: palette.border },
-          ]}
-          placeholder="Add a note…"
-          placeholderTextColor={palette.textSecondary}
-          multiline
-          value={notesValue}
-          onChangeText={setDraftNotes}
-          onBlur={commitNotes}
-        />
-      </Card>
+      {/* Notes — borderless, label-less, auto-saved on blur. */}
+      <TextInput
+        accessibilityLabel="Notes"
+        style={[
+          styles.notesInput,
+          { color: palette.text, backgroundColor: palette.surface, borderColor: palette.border },
+        ]}
+        placeholder="Add a note…"
+        placeholderTextColor={palette.textSecondary}
+        multiline
+        value={notesValue}
+        onChangeText={setDraftNotes}
+        onBlur={commitNotes}
+      />
 
       <Card elevated={false} style={styles.field}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
@@ -386,23 +377,38 @@ export default function BookmarkDetailScreen() {
         ) : null}
       </Card>
 
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Details</Text>
-        {details.map((row, index) => (
-          <View
-            key={row.label}
-            style={[
-              styles.detailRow,
-              index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border } : null,
-            ]}
-          >
-            <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
-            <Text style={[styles.detailValue, { color: palette.text }]} selectable>
-              {row.value}
-            </Text>
-          </View>
-        ))}
-      </Card>
+      <View style={styles.detailsSection}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Toggle details"
+          onPress={() => setShowDetails((value) => !value)}
+          style={styles.detailsToggle}
+        >
+          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+            {showDetails ? '▾  Details' : '▸  Details'}
+          </Text>
+        </Pressable>
+        {showDetails ? (
+          <Card elevated={false} style={styles.field}>
+            {details.map((row, index) => (
+              <View
+                key={row.label}
+                style={[
+                  styles.detailRow,
+                  index > 0
+                    ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border }
+                    : null,
+                ]}
+              >
+                <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
+                <Text style={[styles.detailValue, { color: palette.text }]} selectable>
+                  {row.value}
+                </Text>
+              </View>
+            ))}
+          </Card>
+        ) : null}
+      </View>
 
       {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
     </ScrollView>
@@ -449,6 +455,48 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 220,
     borderRadius: 28,
+  },
+  byline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  bylineFavTile: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  bylineFav: {
+    width: '72%',
+    height: '72%',
+  },
+  bylineText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  title: {
+    fontSize: 26,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    lineHeight: 32,
+  },
+  titleInput: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  detailsSection: {
+    gap: 8,
+  },
+  detailsToggle: {
+    paddingVertical: 4,
   },
   header: {
     gap: 12,
@@ -590,7 +638,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   notesInput: {
-    minHeight: 72,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    minHeight: 64,
     textAlignVertical: 'top',
   },
   error: {
