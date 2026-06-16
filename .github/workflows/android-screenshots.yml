@@ -122,12 +122,12 @@ jobs:
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: |
             adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
-            mkdir -p screenshots
-            # Maestro writes <name>.png to its working directory; run it from the
-            # screenshots dir so the PNGs land there. The flow path is absolute.
-            cd screenshots
             maestro test "$GITHUB_WORKSPACE/apps/mobile/.maestro/inbox.yaml"
-            ls -la
+            # Maestro writes <name>.png next to the process cwd (the workspace
+            # root here), not into a dir we cd into, so collect them explicitly.
+            mkdir -p "$GITHUB_WORKSPACE/screenshots"
+            find "$GITHUB_WORKSPACE" -maxdepth 1 -name '*.png' -exec mv {} "$GITHUB_WORKSPACE/screenshots/" \;
+            ls -la "$GITHUB_WORKSPACE/screenshots"
 
       - uses: actions/upload-artifact@v4
         # Upload even on failure: a screenshot of the broken state is exactly
@@ -136,4 +136,6 @@ jobs:
         with:
           name: android-screenshots
           path: screenshots/*.png
-          if-no-files-found: warn
+          # Fail loudly if no screenshot was produced — otherwise a flow that
+          # silently stops capturing would pass as a false green.
+          if-no-files-found: error
