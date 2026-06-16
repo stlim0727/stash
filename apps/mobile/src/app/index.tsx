@@ -692,22 +692,24 @@ const styles = StyleSheet.create({
   },
   shelf: {
     flexGrow: 0,
-    // A horizontal ScrollView on Android can collapse its viewport onto the
-    // content and clip the chips' bottom edge. minHeight (NOT a fixed height)
-    // reserves a floor so the viewport can't shrink below a default chip, while
-    // still GROWING when the chips get taller at larger OS font/display sizes —
-    // a fixed height would clip them again. Chips are vertically centred via
-    // shelfContent.alignItems.
-    minHeight: 38,
-    // Spacing above/below the chips must be MARGIN, not padding: vertical
-    // padding (on style OR contentContainerStyle) clips the chips' bottom edge
-    // on Android. Margin lives outside the scroll box and can't clip.
-    marginTop: 10,
-    marginBottom: 2,
+    // minHeight (NOT a fixed height): floors the viewport so a horizontal
+    // ScrollView can't collapse onto its content on Android, while still letting
+    // the row GROW to a taller pill (larger OS font/display sizes, or the taller
+    // Samsung system font). A fixed height shorter than the real pill was
+    // shaving the rounded edge even when the text inside rendered intact. Chips
+    // are vertically centred via shelfContent.alignItems. Spacing is margin
+    // (outside the scroll box, so it can't clip).
+    minHeight: 42,
+    marginTop: 8,
+    marginBottom: 0,
   },
   shelfContent: {
     paddingHorizontal: 16,
     alignItems: 'center',
+    // Match the shelf floor so the pill is centred in the row (and the row grows
+    // to fit a taller pill rather than cropping it). No vertical padding here —
+    // that would clip the chips' bottom edge on Android.
+    minHeight: 42,
     gap: 8,
   },
   card: {

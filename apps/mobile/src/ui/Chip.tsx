@@ -12,10 +12,12 @@ interface ChipProps extends Omit<PressableProps, 'style'> {
 }
 
 const LABEL_FONT_SIZE = 14;
-// Line box as a ratio of the font size. 1.4 leaves comfortable room for bold
-// glyph descenders, which Android otherwise clips when the line box hugs the
-// text too tightly.
-const LABEL_LINE_RATIO = 1.4;
+// Line box as a ratio of the font size. ~1.57 makes the default-scale line box
+// 22px — the value verified on-device to clear the taller Samsung One UI bold
+// metrics (1.4 ≈ 20px still marginally clipped the glyphs). Deriving lineHeight
+// from this ratio keeps the box proportional to the rendered text at every OS
+// font/display size.
+const LABEL_LINE_RATIO = 1.57;
 
 export function Chip({ children, variant = 'default', disabled, style, ...props }: ChipProps) {
   const palette = usePalette();
@@ -52,11 +54,23 @@ const styles = StyleSheet.create({
   base: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
-    paddingVertical: 7,
+    // The clip only reproduces on real Samsung One UI devices, never on the
+    // emulator's Roboto: Samsung's default system font renders bold text with
+    // TALLER metrics. The fix that actually clears it is the label's roomy
+    // lineHeight (below) — it gives that taller ink space inside the text box.
+    // The pill itself only needs to be a touch taller than that line box, so
+    // keep it compact: padding 6 + lineHeight 22 = 34.
+    minHeight: 34,
+    paddingVertical: 6,
     paddingHorizontal: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   label: {
     fontSize: LABEL_FONT_SIZE,
+    // lineHeight is applied inline (scaled by getFontScale) — see the component.
+    // Keep Android's default font padding (do NOT set includeFontPadding:false,
+    // which tightened the box and made it clip).
     fontWeight: '700',
   },
 });
