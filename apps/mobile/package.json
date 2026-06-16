@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@sentry/react-native": "^8.14.0",
+    "@zxing/text-encoding": "^0.9.0",
     "expo": "~56.0.11",
     "expo-constants": "~56.0.18",
     "expo-linking": "~56.0.14",
