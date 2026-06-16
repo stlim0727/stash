@@ -29,6 +29,15 @@ import type {
   Tag,
 } from '@/domain/types';
 import { sanitizeTagData } from '@/domain/tag-data';
+import { normalizeTag } from '@/domain/tag-input';
+import {
+  applyPendingTagOps,
+  applyTagOp,
+  dequeueTagOp,
+  enqueueTagOp,
+  reconcileSyncedAdd,
+  type PendingTagOp,
+} from '@/domain/pending-tags';
 import { recordLog } from '@/observability/log-buffer';
 import { repository } from '@/storage/repository';
 import type { TagData } from '@/storage/types';
@@ -100,10 +109,34 @@ interface BookmarksContextValue {
 
 const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
 
+/** Durable key for the local-first tag operation queue (JSON in meta). */
+const PENDING_TAG_OPS_KEY = 'pending_tag_ops';
+
 const BookmarksContext = createContext<BookmarksContextValue | null>(null);
 
 function makeLocalId() {
   return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/** Parse the persisted tag-op queue, tolerating absent/corrupt values. */
+function parseTagOps(raw: string | null): PendingTagOp[] {
+  if (!raw) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (op): op is PendingTagOp =>
+            !!op &&
+            typeof op.bookmark_id === 'string' &&
+            typeof op.tag_name === 'string' &&
+            (op.op === 'add' || op.op === 'remove'),
+        )
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function logStorageError(operation: string, error: unknown) {
@@ -138,6 +171,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
   const [enrichments, setEnrichments] = useState<AIEnrichment[]>([]);
   const [tagData, setTagData] = useState<TagData>(EMPTY_TAG_DATA);
+  // Local-first tag add/remove operations awaiting upload. The displayed
+  // tagData is the server snapshot with these layered on top.
+  const [pendingTagOps, setPendingTagOps] = useState<PendingTagOp[]>([]);
+  const pendingTagOpsRef = useRef<PendingTagOp[]>([]);
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -174,12 +211,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     enrichmentsRef.current = enrichments;
   }, [enrichments]);
 
-  // Apply + persist a new tag-data snapshot in one step.
+  // Apply + persist a new tag-data snapshot in one step. The ref is updated
+  // synchronously so a follow-up tag op in the same tick reads the latest.
   const applyTagData = useCallback((next: TagData) => {
+    tagDataRef.current = next;
     setTagData(next);
     ensureRepositoryReady()
       .then(() => repository.replaceTagData(next))
       .catch((error) => logStorageError('tag data', error));
+  }, []);
+
+  // Persist the local-first tag-op queue (ref updated synchronously).
+  const applyTagOps = useCallback((next: PendingTagOp[]) => {
+    pendingTagOpsRef.current = next;
+    setPendingTagOps(next);
+    ensureRepositoryReady()
+      .then(() => repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)))
+      .catch((error) => logStorageError('tag ops', error));
   }, []);
 
   // Queue a remote mutation for a bookmark that already exists on the server.
@@ -267,14 +315,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
         try {
           await ensureRepositoryReady();
-          const [storedBookmarks, storedQueue, storedEnrichments, storedTagData, storedPulledAt] =
-            await Promise.all([
-              repository.listBookmarks(),
-              repository.listQueue(),
-              repository.listEnrichments(),
-              repository.listTagData(),
-              repository.getMeta(LAST_PULLED_AT_KEY),
-            ]);
+          const [
+            storedBookmarks,
+            storedQueue,
+            storedEnrichments,
+            storedTagData,
+            storedPulledAt,
+            storedTagOpsRaw,
+          ] = await Promise.all([
+            repository.listBookmarks(),
+            repository.listQueue(),
+            repository.listEnrichments(),
+            repository.listTagData(),
+            repository.getMeta(LAST_PULLED_AT_KEY),
+            repository.getMeta(PENDING_TAG_OPS_KEY),
+          ]);
           if (!cancelled) {
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
@@ -288,12 +343,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // links) a prior version may have stored, so they stop showing as
             // empty Browse chips. Persist the cleaned set back when it changed.
             const { tagData: cleanTagData, changed } = sanitizeTagData(storedTagData);
-            setTagData(cleanTagData);
             if (changed) {
               void repository
                 .replaceTagData(cleanTagData)
                 .catch((error) => logStorageError('blank-tag cleanup', error));
             }
+            // Layer not-yet-synced local tag ops on top of the cached snapshot.
+            const storedOps = parseTagOps(storedTagOpsRaw);
+            pendingTagOpsRef.current = storedOps;
+            setPendingTagOps(storedOps);
+            tagDataRef.current = applyPendingTagOps(cleanTagData, storedOps, mockUserId);
+            setTagData(tagDataRef.current);
             setLastPulledAt(storedPulledAt);
             setLoadError(false);
           }
@@ -558,79 +618,103 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [enqueueMutation],
   );
 
+  // Push queued tag ops to the server when online: ensure tags exist, reconcile
+  // the optimistic local tag id to the server one, and drop the op on success.
+  // Failures stay queued for the next sync.
+  const syncTagOps = useCallback(async () => {
+    if (!auth.session) {
+      return;
+    }
+    const ops = pendingTagOpsRef.current;
+    if (ops.length === 0) {
+      return;
+    }
+    const api = createSyncApi(auth.session);
+    for (const op of ops) {
+      // The bookmark must exist remotely before its tags can be linked.
+      if (!hasRemoteIdentity(op.bookmark_id)) {
+        continue;
+      }
+      try {
+        if (op.op === 'add') {
+          const ensured = await api.addTags({
+            bookmark_id: op.bookmark_id,
+            tags: [op.tag_name],
+            source: op.source,
+          });
+          const serverTag =
+            ensured.find((tag) => normalizeTag(tag.name) === normalizeTag(op.tag_name)) ??
+            ensured[0];
+          if (serverTag) {
+            applyTagData(reconcileSyncedAdd(tagDataRef.current, op.tag_name, serverTag));
+          }
+        } else {
+          await api.removeTags({ bookmark_id: op.bookmark_id, tags: [op.tag_name] });
+        }
+        applyTagOps(dequeueTagOp(pendingTagOpsRef.current, op.bookmark_id, op.tag_name));
+      } catch (error) {
+        // Keep the op queued; the next sync retries it.
+        recordLog('warn', `tag sync failed (${op.op} ${op.tag_name}): ${String(error)}`);
+      }
+    }
+  }, [auth.session, applyTagData, applyTagOps]);
+
+  // Local-first: apply the tag immediately and queue the upload. Works offline
+  // and the moment a bookmark has synced; the queued op uploads on the next sync.
   const addTagsToBookmark = useCallback(
     async (bookmarkId: string, names: string[]): Promise<string | null> => {
-      if (!auth.session) {
-        return 'Tags need the cloud — Supabase is not available right now.';
-      }
       if (!hasRemoteIdentity(bookmarkId)) {
         return 'Tags can be added once this bookmark has synced.';
       }
-      try {
-        const api = createSyncApi(auth.session);
-        const ensured = await api.addTags({ bookmark_id: bookmarkId, tags: names, source: 'user' });
-        if (ensured.length === 0) {
-          return 'Enter a tag name.';
-        }
-        const now = new Date().toISOString();
-        const current = tagDataRef.current;
-        const knownTagIds = new Set(current.tags.map((tag) => tag.id));
-        const linkedTagIds = new Set(
-          current.bookmarkTags
-            .filter((link) => link.bookmark_id === bookmarkId)
-            .map((link) => link.tag_id),
-        );
-        const newLinks: BookmarkTag[] = ensured
-          .filter((tag) => !linkedTagIds.has(tag.id))
-          .map((tag) => ({
-            bookmark_id: bookmarkId,
-            tag_id: tag.id,
-            source: 'user',
-            confidence: null,
-            created_at: now,
-          }));
-        applyTagData({
-          ...current,
-          tags: [...current.tags, ...ensured.filter((tag) => !knownTagIds.has(tag.id))],
-          bookmarkTags: [...current.bookmarkTags, ...newLinks],
-        });
-        return null;
-      } catch (error) {
-        return error instanceof Error ? error.message : 'Could not add tags.';
+      const cleaned = names.map((name) => name.trim()).filter((name) => name.length > 0);
+      if (cleaned.length === 0) {
+        return 'Enter a tag name.';
       }
+      const userId = auth.userId ?? mockUserId;
+      const now = new Date().toISOString();
+      let nextData = tagDataRef.current;
+      let nextOps = pendingTagOpsRef.current;
+      for (const name of cleaned) {
+        const op: PendingTagOp = {
+          id: makeLocalId(),
+          bookmark_id: bookmarkId,
+          tag_name: name,
+          op: 'add',
+          source: 'user',
+          confidence: null,
+          created_at: now,
+        };
+        nextData = applyTagOp(nextData, op, userId);
+        nextOps = enqueueTagOp(nextOps, op);
+      }
+      applyTagData(nextData);
+      applyTagOps(nextOps);
+      void syncTagOps();
+      return null;
     },
-    [auth, applyTagData],
+    [auth.userId, applyTagData, applyTagOps, syncTagOps],
   );
 
   const removeTagFromBookmark = useCallback(
     async (bookmarkId: string, tagName: string): Promise<string | null> => {
-      if (!auth.session) {
-        return 'Tags need the cloud — Supabase is not available right now.';
-      }
       if (!hasRemoteIdentity(bookmarkId)) {
         return 'Seeded sample tags cannot be edited.';
       }
-      try {
-        const api = createSyncApi(auth.session);
-        await api.removeTags({ bookmark_id: bookmarkId, tags: [tagName] });
-        const current = tagDataRef.current;
-        const removedTagIds = new Set(
-          current.tags
-            .filter((tag) => tag.name.toLowerCase() === tagName.toLowerCase())
-            .map((tag) => tag.id),
-        );
-        applyTagData({
-          ...current,
-          bookmarkTags: current.bookmarkTags.filter(
-            (link) => !(link.bookmark_id === bookmarkId && removedTagIds.has(link.tag_id)),
-          ),
-        });
-        return null;
-      } catch (error) {
-        return error instanceof Error ? error.message : 'Could not remove the tag.';
-      }
+      const op: PendingTagOp = {
+        id: makeLocalId(),
+        bookmark_id: bookmarkId,
+        tag_name: tagName,
+        op: 'remove',
+        source: 'user',
+        confidence: null,
+        created_at: new Date().toISOString(),
+      };
+      applyTagData(applyTagOp(tagDataRef.current, op, auth.userId ?? mockUserId));
+      applyTagOps(enqueueTagOp(pendingTagOpsRef.current, op));
+      void syncTagOps();
+      return null;
     },
-    [auth, applyTagData],
+    [auth.userId, applyTagData, applyTagOps, syncTagOps],
   );
 
   // Ask the backend to (re)generate AI suggestions for a synced bookmark. The
@@ -677,50 +761,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // provenance and confidence are preserved (vs. user-typed tags).
   const acceptSuggestedTags = useCallback(
     async (bookmarkId: string, suggestions: SuggestedTag[]): Promise<string | null> => {
-      if (!auth.session) {
-        return 'Tags need the cloud — Supabase is not available right now.';
-      }
       if (!hasRemoteIdentity(bookmarkId)) {
         return 'Tags can be added once this bookmark has synced.';
       }
-      const names = suggestions.map((suggestion) => suggestion.name);
-      if (names.length === 0) {
+      const valid = suggestions.filter((suggestion) => suggestion.name.trim().length > 0);
+      if (valid.length === 0) {
         return null;
       }
-      try {
-        const api = createSyncApi(auth.session);
-        const ensured = await api.addTags({ bookmark_id: bookmarkId, tags: names, source: 'ai' });
-        const now = new Date().toISOString();
-        const current = tagDataRef.current;
-        const knownTagIds = new Set(current.tags.map((tag) => tag.id));
-        const linkedTagIds = new Set(
-          current.bookmarkTags
-            .filter((link) => link.bookmark_id === bookmarkId)
-            .map((link) => link.tag_id),
-        );
-        const confidenceByName = new Map(
-          suggestions.map((suggestion) => [suggestion.name.toLowerCase(), suggestion.confidence]),
-        );
-        const newLinks: BookmarkTag[] = ensured
-          .filter((tag) => !linkedTagIds.has(tag.id))
-          .map((tag) => ({
-            bookmark_id: bookmarkId,
-            tag_id: tag.id,
-            source: 'ai',
-            confidence: confidenceByName.get(tag.name.toLowerCase()) ?? null,
-            created_at: now,
-          }));
-        applyTagData({
-          ...current,
-          tags: [...current.tags, ...ensured.filter((tag) => !knownTagIds.has(tag.id))],
-          bookmarkTags: [...current.bookmarkTags, ...newLinks],
-        });
-        return null;
-      } catch (error) {
-        return error instanceof Error ? error.message : 'Could not add tags.';
+      const userId = auth.userId ?? mockUserId;
+      const now = new Date().toISOString();
+      let nextData = tagDataRef.current;
+      let nextOps = pendingTagOpsRef.current;
+      for (const suggestion of valid) {
+        const op: PendingTagOp = {
+          id: makeLocalId(),
+          bookmark_id: bookmarkId,
+          tag_name: suggestion.name,
+          op: 'add',
+          source: 'ai',
+          confidence: suggestion.confidence,
+          created_at: now,
+        };
+        nextData = applyTagOp(nextData, op, userId);
+        nextOps = enqueueTagOp(nextOps, op);
       }
+      applyTagData(nextData);
+      applyTagOps(nextOps);
+      void syncTagOps();
+      return null;
     },
-    [auth, applyTagData],
+    [auth.userId, applyTagData, applyTagOps, syncTagOps],
   );
 
   const assignCollection = useCallback(
@@ -997,6 +1067,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         logStorageError('account transition', error);
       }
 
+      // Upload any queued local-first tag ops before pulling, so the pull's
+      // server snapshot already reflects them.
+      await syncTagOps();
+
       // Pull phase: bring down remote changes (other devices, cloud AI
       // enrichment). Local rows with queued work are never overwritten.
       try {
@@ -1030,7 +1104,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ),
           );
         }
-        setTagData(result.tagData);
+        // Re-layer any still-unsynced local tag ops over the fresh server
+        // snapshot so optimistic tags aren't dropped by the wholesale replace.
+        const mergedTagData = applyPendingTagOps(
+          result.tagData,
+          pendingTagOpsRef.current,
+          auth.userId ?? mockUserId,
+        );
+        tagDataRef.current = mergedTagData;
+        setTagData(mergedTagData);
         setLastPulledAt(result.pulledAt);
       } catch (error) {
         logStorageError('pull', error);
@@ -1041,7 +1123,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncInFlight.current = false;
       setIsSyncing(false);
     }
-  }, [auth, queue, enqueueMutation, requestAiEnrichment]);
+  }, [auth, queue, enqueueMutation, requestAiEnrichment, syncTagOps]);
 
   // Background enrichment: once local data is loaded, enrich any bookmark
   // whose metadata is still pending (seeded items, or saves from a previous
