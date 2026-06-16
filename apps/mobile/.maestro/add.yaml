@@ -1,0 +1,8 @@
+# Add Bookmark — opened from the Inbox FAB (accessibility label "Add bookmark").
+appId: com.stash.app
+---
+- launchApp:
+    clearState: true
+- tapOn: 'Add bookmark'
+- assertVisible: 'Save bookmark'
+- takeScreenshot: add

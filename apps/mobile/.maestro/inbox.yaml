@@ -1,0 +1,17 @@
+# Smoke + screenshot flow for the Inbox screen and its Browse facet shelf.
+# Runs on a CI Android emulator (see .github/workflows/android-screenshots.yml).
+#
+# This is the layer that can catch Android-native layout bugs (e.g. the Browse
+# chip clipping) that unit tests and the web export cannot reproduce, because it
+# renders on a real Android surface.
+appId: com.stash.app
+---
+- launchApp:
+    # Wipe app data so we render the deterministic first-run seed (mock
+    # bookmarks/collections/tags), which is what populates the Browse shelf.
+    clearState: true
+- assertVisible: 'Stash'
+# The Browse facet shelf is the horizontal chip row that was clipping. "All" is
+# the always-present facet chip, so its visibility proves the shelf rendered.
+- assertVisible: 'All'
+- takeScreenshot: inbox

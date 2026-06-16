@@ -1,0 +1,16 @@
+# Report a problem — reached from Settings. Scroll the row into view first since
+# it can sit below the fold at larger font sizes.
+appId: com.stash.app
+---
+- launchApp:
+    clearState: true
+- tapOn: 'Settings'
+- scrollUntilVisible:
+    element:
+      text: 'Report a problem'
+    direction: DOWN
+- tapOn: 'Report a problem'
+# This build has no cloud configured, so Report renders its "share a diagnostics
+# report" variant (not the Category form). Assert on that branch's button.
+- assertVisible: 'Share diagnostics'
+- takeScreenshot: report
