@@ -18,6 +18,9 @@ FLOWS_DIR="apps/mobile/.maestro"
 SCALES=(1.0 1.5)
 OUT="$GITHUB_WORKSPACE/screenshots"
 mkdir -p "$OUT"
+# Start clean: the workflow may invoke this script twice (job-level retry on a
+# fresh emulator), and we don't want stale screenshots from a failed attempt.
+rm -f "$OUT"/*.png
 
 adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
 
@@ -26,11 +29,10 @@ for scale in "${SCALES[@]}"; do
   echo "::group::Screenshots at font_scale=$scale"
   adb shell settings put system font_scale "$scale"
   # Don't abort the whole matrix if one flow fails — collect what we got and
-  # remember to fail at the end, so partial screenshots still upload.
-  # Retry the batch once: a freshly booted emulator can flake on the first
-  # Maestro driver init and report every element as "not found". A second
-  # attempt re-inits the driver and almost always succeeds.
-  maestro test "$FLOWS_DIR" || maestro test "$FLOWS_DIR" || overall=1
+  # remember to fail at the end, so partial screenshots still upload. A broken
+  # emulator session (all elements "not found") can't be recovered by retrying
+  # in-process, so that retry lives at the job level on a fresh emulator.
+  maestro test "$FLOWS_DIR" || overall=1
   # Maestro writes <name>.png to the cwd (workspace root). Move + label per scale.
   for png in "$GITHUB_WORKSPACE"/*.png; do
     [ -e "$png" ] || continue

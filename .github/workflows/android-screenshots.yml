@@ -112,12 +112,19 @@ jobs:
           CCACHE_MAXSIZE: 3G
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=x86_64
 
+      # Attempt 1. ~1 in 3 CI emulators boot with a broken UiAutomator layer
+      # (every element reads as "not found" for the whole session), and retrying
+      # inside that dead emulator can't recover it — so retry at the JOB level on
+      # a fresh emulator (attempt 2) instead. `default` (AOSP) images avoid the
+      # Google Play Services dialogs that can steal the foreground.
       - name: Run Maestro flows on emulator
+        id: emu1
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           arch: x86_64
-          target: google_apis
+          target: default
           profile: pixel_5
           disable-animations: true
           # Headless, accelerated, no extras that slow boot or destabilise the
@@ -125,6 +132,19 @@ jobs:
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           # android-emulator-runner runs `script` line-by-line (each line is its
           # own `sh -c`), so loops/cd/vars must live in a real script file.
+          script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
+
+      # Attempt 2 on a brand-new emulator, only if attempt 1 failed.
+      - name: Run Maestro flows on emulator (retry, fresh emulator)
+        if: steps.emu1.outcome == 'failure'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          profile: pixel_5
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
 
       - uses: actions/upload-artifact@v4
