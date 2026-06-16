@@ -1,0 +1,9 @@
+# Settings screen — reached from the Inbox via the gear (accessibility label
+# "Settings"). Captured across font scales by the screenshots workflow.
+appId: com.stash.app
+---
+- launchApp:
+    clearState: true
+- tapOn: 'Settings'
+- assertVisible: 'App version'
+- takeScreenshot: settings

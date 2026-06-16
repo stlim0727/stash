@@ -1,0 +1,9 @@
+# Bookmark Detail — open the deterministic seed bookmark "Local-first software"
+# (id bookmark-local-first) from the Inbox list.
+appId: com.stash.app
+---
+- launchApp:
+    clearState: true
+- tapOn: 'Local-first software'
+- assertVisible: 'Details'
+- takeScreenshot: detail

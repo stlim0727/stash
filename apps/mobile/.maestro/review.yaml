@@ -1,0 +1,12 @@
+# Review AI suggestions — reached from Settings. Scroll the row into view first.
+appId: com.stash.app
+---
+- launchApp:
+    clearState: true
+- tapOn: 'Settings'
+- scrollUntilVisible:
+    element:
+      text: 'Review AI suggestions'
+    direction: DOWN
+- tapOn: 'Review AI suggestions'
+- takeScreenshot: review

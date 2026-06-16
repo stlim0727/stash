@@ -120,22 +120,9 @@ jobs:
           # Headless, accelerated, no extras that slow boot or destabilise the
           # system server on CI.
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-            adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
-            mkdir -p "$GITHUB_WORKSPACE/screenshots"
-            # Capture at several OS font scales. Layout clipping (e.g. the Browse
-            # chips) only shows up once the system font is enlarged, so a single
-            # 1.0 screenshot can hide it — exactly how it slipped through before.
-            # The flow relaunches with clearState, so the app picks up each scale.
-            for scale in 1.0 1.3 1.5; do
-              adb shell settings put system font_scale "$scale"
-              maestro test "$GITHUB_WORKSPACE/apps/mobile/.maestro/inbox.yaml"
-              # Maestro writes inbox.png next to the process cwd (the workspace
-              # root), not a dir we cd into, so move + label it per scale.
-              mv "$GITHUB_WORKSPACE/inbox.png" "$GITHUB_WORKSPACE/screenshots/inbox-font-$scale.png"
-            done
-            adb shell settings put system font_scale 1.0
-            ls -la "$GITHUB_WORKSPACE/screenshots"
+          # android-emulator-runner runs `script` line-by-line (each line is its
+          # own `sh -c`), so loops/cd/vars must live in a real script file.
+          script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
 
       - uses: actions/upload-artifact@v4
         # Upload even on failure: a screenshot of the broken state is exactly
