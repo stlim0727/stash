@@ -391,6 +391,7 @@ export default function InboxScreen() {
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          testID="browse-shelf"
           style={styles.shelf}
           contentContainerStyle={styles.shelfContent}
         >
