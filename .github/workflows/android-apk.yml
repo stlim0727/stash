@@ -96,6 +96,11 @@ jobs:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           EXPO_PUBLIC_SENTRY_DSN: ${{ secrets.EXPO_PUBLIC_SENTRY_DSN }}
+          # Build provenance — inlined into the bundle and shown in Settings so
+          # any installed APK self-identifies which commit it was built from.
+          EXPO_PUBLIC_GIT_SHA: ${{ github.sha }}
+          EXPO_PUBLIC_GIT_REF: ${{ github.ref_name }}
+          EXPO_PUBLIC_COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
           # Route NDK C++ compiles through ccache (cached across runs above).
           USE_CCACHE: '1'
           CCACHE_DIR: /home/runner/.ccache
@@ -108,8 +113,9 @@ jobs:
         run: |
           mkdir -p dist
           NAME="${{ inputs.version || github.ref_name }}"
+          SHA_SHORT="${GITHUB_SHA:0:7}"
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
-             "dist/stash-${NAME//\//-}-android.apk"
+             "dist/stash-${NAME//\//-}-${SHA_SHORT}-android.apk"
           ls -la dist
 
       # When Supabase is configured, verify Expo actually inlined the URL into

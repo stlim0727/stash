@@ -1,11 +1,21 @@
 import Constants from 'expo-constants';
 import { Link } from 'expo-router';
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
+import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
@@ -56,6 +66,8 @@ export default function SettingsScreen() {
     : auth.status === 'anonymous'
       ? `Anonymous Supabase user ${auth.userId}`
       : auth.message;
+
+  const build = getBuildInfo();
 
   const handleSignIn = async (provider: OAuthProvider) => {
     setAuthBusy(provider);
@@ -115,6 +127,32 @@ export default function SettingsScreen() {
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>{row.value}</Text>
         </Card>
       ))}
+
+      <Pressable
+        accessibilityRole={build.commitUrl ? 'link' : 'text'}
+        accessibilityLabel="Build commit"
+        disabled={!build.commitUrl}
+        onPress={() => {
+          if (build.commitUrl) {
+            void Linking.openURL(build.commitUrl);
+          }
+        }}
+        style={({ pressed }) => [
+          styles.row,
+          {
+            backgroundColor: palette.surfaceElevated,
+            borderColor: palette.border,
+            opacity: pressed && build.commitUrl ? 0.78 : 1,
+          },
+          palette.shadow.soft,
+        ]}
+      >
+        <Text style={[styles.rowLabel, { color: palette.text }]}>Build</Text>
+        <Text style={[styles.rowValue, { color: palette.textSecondary }]}>
+          {describeBuild(build)}
+          {build.commitUrl ? ' — view commit ›' : ''}
+        </Text>
+      </Pressable>
 
       {auth.status === 'not_configured' ? null : isAuthenticated ? (
         <Pressable
