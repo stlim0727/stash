@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { oembedEndpoint, parseOembed, parsePageMetadata, youtubeVideoId } from './page-metadata.ts';
+import {
+  detectCharset,
+  normalizeCharsetLabel,
+  oembedEndpoint,
+  parseOembed,
+  parsePageMetadata,
+  youtubeVideoId,
+} from './page-metadata.ts';
+
+function bytes(str: string): Uint8Array {
+  return new Uint8Array([...str].map((ch) => ch.charCodeAt(0)));
+}
 
 const sampleHtml = `
 <!DOCTYPE html>
@@ -85,4 +96,34 @@ test('parseOembed ignores blank/non-string fields', () => {
   assert.equal(meta.title, undefined);
   assert.equal(meta.site_name, undefined);
   assert.equal(meta.preview_image_url, undefined);
+});
+
+test('detectCharset prefers the Content-Type header', () => {
+  assert.equal(detectCharset('text/html; charset=EUC-KR', bytes('')), 'euc-kr');
+  assert.equal(detectCharset('text/html; charset=utf-8', bytes('<meta charset=euc-kr>')), 'utf-8');
+});
+
+test('detectCharset sniffs a <meta charset> when the header omits it', () => {
+  assert.equal(detectCharset('text/html', bytes('<meta charset="euc-kr">')), 'euc-kr');
+  assert.equal(
+    detectCharset(
+      'text/html',
+      bytes('<meta http-equiv="Content-Type" content="text/html; charset=cp949">'),
+    ),
+    'euc-kr',
+  );
+});
+
+test('detectCharset defaults to utf-8', () => {
+  assert.equal(detectCharset('text/html', bytes('<html><head></head>')), 'utf-8');
+  assert.equal(detectCharset(null, bytes('')), 'utf-8');
+});
+
+test('normalizeCharsetLabel maps common aliases to WHATWG labels', () => {
+  assert.equal(normalizeCharsetLabel('CP949'), 'euc-kr');
+  assert.equal(normalizeCharsetLabel('ks_c_5601-1987'), 'euc-kr');
+  assert.equal(normalizeCharsetLabel('Shift-JIS'), 'shift_jis');
+  assert.equal(normalizeCharsetLabel('gb2312'), 'gbk');
+  assert.equal(normalizeCharsetLabel('UTF-8'), 'utf-8');
+  assert.equal(normalizeCharsetLabel('windows-1252'), 'windows-1252');
 });

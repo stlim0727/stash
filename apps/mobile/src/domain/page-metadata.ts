@@ -122,7 +122,13 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
     if (!contentType.includes('html')) {
       return null;
     }
-    const html = await response.text();
+    // Read raw bytes and decode with the page's real charset. Many Korean/CJK
+    // sites serve legacy encodings (EUC-KR, Shift_JIS, …), often declared only
+    // in a <meta> tag, so decoding as UTF-8 produces mojibake.
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const charset = detectCharset(contentType, bytes);
+    const { decodeBytes } = await import('./legacy-decoder');
+    const html = decodeBytes(bytes, charset);
     // Redirects may have moved us; resolve relative URLs against the final URL.
     return parsePageMetadata(html, response.url || url);
   } catch {
@@ -130,6 +136,69 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Determine a page's charset from the HTTP Content-Type header, falling back to
+ * a `<meta charset>` / `<meta http-equiv>` declaration sniffed from the first
+ * bytes (which are ASCII-compatible across these encodings). Returns a WHATWG
+ * label suitable for the decoder; defaults to utf-8.
+ */
+export function detectCharset(
+  contentType: string | null | undefined,
+  headBytes: Uint8Array,
+): string {
+  const fromHeader = contentType?.match(/charset\s*=\s*["']?([^"';,\s]+)/i)?.[1];
+  if (fromHeader) {
+    return normalizeCharsetLabel(fromHeader);
+  }
+  let ascii = '';
+  const limit = Math.min(headBytes.length, 2048);
+  for (let i = 0; i < limit; i += 1) {
+    ascii += String.fromCharCode(headBytes[i]);
+  }
+  const meta =
+    ascii.match(/<meta[^>]+charset\s*=\s*["']?([\w:-]+)/i)?.[1] ??
+    ascii.match(/charset\s*=\s*["']?([\w:-]+)/i)?.[1];
+  return normalizeCharsetLabel(meta ?? 'utf-8');
+}
+
+/** Map common charset aliases to the WHATWG label the decoder understands. */
+export function normalizeCharsetLabel(label: string): string {
+  const c = label.trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    'euc-kr': 'euc-kr',
+    euckr: 'euc-kr',
+    cp949: 'euc-kr',
+    uhc: 'euc-kr',
+    ms949: 'euc-kr',
+    'windows-949': 'euc-kr',
+    'x-windows-949': 'euc-kr',
+    'ks_c_5601-1987': 'euc-kr',
+    ksc5601: 'euc-kr',
+    korean: 'euc-kr',
+    shift_jis: 'shift_jis',
+    'shift-jis': 'shift_jis',
+    sjis: 'shift_jis',
+    'x-sjis': 'shift_jis',
+    cp932: 'shift_jis',
+    ms932: 'shift_jis',
+    'windows-31j': 'shift_jis',
+    'euc-jp': 'euc-jp',
+    eucjp: 'euc-jp',
+    gb2312: 'gbk',
+    gbk: 'gbk',
+    cp936: 'gbk',
+    ms936: 'gbk',
+    gb18030: 'gb18030',
+    big5: 'big5',
+    cp950: 'big5',
+    'iso-8859-1': 'windows-1252',
+    latin1: 'windows-1252',
+    'windows-1252': 'windows-1252',
+    cp1252: 'windows-1252',
+  };
+  return aliases[c] ?? (c || 'utf-8');
 }
 
 /**
