@@ -1,8 +1,14 @@
+/** OAuth identity providers wired up for account sign-in / linking. */
+export type OAuthProvider = 'apple' | 'google';
+
 export interface SupabaseAuthUser {
   id: string;
   aud?: string;
   role?: string;
+  email?: string | null;
   is_anonymous?: boolean;
+  /** Linked identity providers, e.g. `[{ provider: 'google' }]`. */
+  app_metadata?: { provider?: string; providers?: string[] };
   created_at?: string;
 }
 

@@ -62,3 +62,18 @@ Milestone 5 introduces the client-side Supabase bootstrap. Copy `.env.example` t
 - `EXPO_PUBLIC_SUPABASE_ANON_KEY` — your client-safe anon/publishable key.
 
 Anonymous sign-ins must also be enabled in the Supabase Auth provider settings. Without real project credentials the app stays local-first and reports the missing configuration from Settings.
+
+### OAuth sign-in (Apple / Google)
+
+Settings offers "Sign in with Apple / Google", which upgrades the anonymous account to a permanent one. The client uses a browser-based PKCE flow against GoTrue (`/auth/v1/authorize` → `grant_type=pkce`), so no `supabase-js` dependency or custom backend is needed. To enable it on a project:
+
+1. **Enable the providers** under Authentication → Sign In / Up → Auth Providers (Apple and/or Google), supplying each provider's client ID/secret from the Apple Developer / Google Cloud consoles.
+2. **Allow the redirect URLs** under Authentication → URL Configuration → Redirect URLs:
+   - `stash://auth/callback` (native iOS/Android — the app's `scheme`).
+   - your web origin's `/auth/callback` (only if you run the web build).
+3. **Enable manual linking** (Authentication → settings) so signing in while anonymous *links* the new identity to the existing user and keeps their bookmarks. If linking is disabled the app falls back to a plain sign-in (a separate account).
+
+Notes / limitations:
+
+- The full OAuth round-trip needs the provider credentials above plus a device or emulator; it cannot be exercised in a headless CI/sandbox session.
+- For App Store submission, Apple's guideline 4.8 expects a *native* "Sign in with Apple" button when other social logins are offered. The current browser flow is fine for development/internal builds; swapping in `expo-apple-authentication` (native button + `grant_type=id_token`) is a pre-submission follow-up.

@@ -1,14 +1,17 @@
 import Constants from 'expo-constants';
 import { Link } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
+import type { OAuthProvider } from '@/supabase/types';
 
 export default function SettingsScreen() {
   const palette = usePalette();
+  const [authBusy, setAuthBusy] = useState<OAuthProvider | 'signout' | null>(null);
   const {
     queue,
     isSyncing,
@@ -32,25 +35,53 @@ export default function SettingsScreen() {
   ).length;
   // Sync is upload-then-pull, so it is useful even with nothing to upload
   // (another device or cloud AI enrichment may have changed data).
-  const canSync = auth.status === 'anonymous' && !isSyncing;
+  const canSync = auth.isSignedIn && !isSyncing;
 
   const syncValue = isSyncing
     ? `Syncing ${waiting} item(s)…`
     : waiting === 0
-      ? auth.status === 'anonymous'
+      ? auth.isSignedIn
         ? 'Synced — nothing waiting to upload'
         : 'Local only — nothing waiting to sync'
-      : auth.status === 'anonymous'
+      : auth.isSignedIn
         ? `${waiting} item(s) waiting to upload`
         : `Local only — ${waiting} item(s) queued until Supabase is available`;
+
+  const isAuthenticated = auth.status === 'authenticated';
+
+  const accountValue = isAuthenticated
+    ? `Signed in${auth.email ? ` as ${auth.email}` : ''}`
+    : auth.status === 'anonymous'
+      ? `Anonymous Supabase user ${auth.userId}`
+      : auth.message;
+
+  const handleSignIn = async (provider: OAuthProvider) => {
+    setAuthBusy(provider);
+    try {
+      await auth.signIn(provider);
+    } catch (error) {
+      Alert.alert(
+        'Sign in failed',
+        error instanceof Error ? error.message : 'Could not complete sign in.',
+      );
+    } finally {
+      setAuthBusy(null);
+    }
+  };
+
+  const handleSignOut = async () => {
+    setAuthBusy('signout');
+    try {
+      await auth.signOut();
+    } finally {
+      setAuthBusy(null);
+    }
+  };
 
   const settingsRows = [
     {
       label: 'Account',
-      value:
-        auth.status === 'anonymous'
-          ? `Anonymous Supabase user ${auth.userId}`
-          : auth.message,
+      value: accountValue,
     },
     {
       label: 'Sync status',
@@ -82,6 +113,48 @@ export default function SettingsScreen() {
           <Text style={[styles.rowValue, { color: palette.textSecondary }]}>{row.value}</Text>
         </View>
       ))}
+
+      {auth.status === 'not_configured' ? null : isAuthenticated ? (
+        <Pressable
+          accessibilityRole="button"
+          disabled={authBusy !== null}
+          style={[styles.authButton, { borderColor: palette.border, opacity: authBusy ? 0.6 : 1 }]}
+          onPress={() => void handleSignOut()}
+        >
+          {authBusy === 'signout' ? (
+            <ActivityIndicator color={palette.text} />
+          ) : (
+            <Text style={[styles.authButtonLabel, { color: palette.text }]}>Sign out</Text>
+          )}
+        </Pressable>
+      ) : (
+        <View style={styles.authGroup}>
+          <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
+            Sign in to sync across devices
+          </Text>
+          {(['apple', 'google'] as const).map((provider) => (
+            <Pressable
+              key={provider}
+              accessibilityRole="button"
+              accessibilityLabel={`Sign in with ${provider === 'apple' ? 'Apple' : 'Google'}`}
+              disabled={authBusy !== null}
+              style={[
+                styles.authButton,
+                { borderColor: palette.border, opacity: authBusy ? 0.6 : 1 },
+              ]}
+              onPress={() => void handleSignIn(provider)}
+            >
+              {authBusy === provider ? (
+                <ActivityIndicator color={palette.text} />
+              ) : (
+                <Text style={[styles.authButtonLabel, { color: palette.text }]}>
+                  {provider === 'apple' ? 'Sign in with Apple' : 'Sign in with Google'}
+                </Text>
+              )}
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       <Link href="/review" asChild>
         <Pressable style={[styles.row, { backgroundColor: palette.card }]}>
@@ -179,6 +252,19 @@ const styles = StyleSheet.create({
   },
   syncButtonLabel: {
     color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  authGroup: {
+    gap: 12,
+  },
+  authButton: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  authButtonLabel: {
     fontSize: 16,
     fontWeight: '600',
   },

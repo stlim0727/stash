@@ -11,7 +11,12 @@
  * operational signals are recorded so a report stays safe to store and share.
  */
 
-export type DiagnosticsAuthStatus = 'not_configured' | 'loading' | 'anonymous' | 'error';
+export type DiagnosticsAuthStatus =
+  | 'not_configured'
+  | 'loading'
+  | 'anonymous'
+  | 'authenticated'
+  | 'error';
 
 export interface DiagnosticsInput {
   /** App version string, e.g. from expo-constants (`expoConfig.version`). */
@@ -64,6 +69,7 @@ function normalizeAuthStatus(
     case 'not_configured':
     case 'loading':
     case 'anonymous':
+    case 'authenticated':
     case 'error':
       return value;
     default:

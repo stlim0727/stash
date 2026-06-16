@@ -5,7 +5,8 @@ import {
   readSupabaseSession,
   writeSupabaseSession,
 } from '@/supabase/session-storage';
-import type { SupabaseAuthResponse, SupabaseAuthSession } from '@/supabase/types';
+import { buildAuthorizeQuery } from '@/supabase/oauth';
+import type { OAuthProvider, SupabaseAuthResponse, SupabaseAuthSession } from '@/supabase/types';
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -135,6 +136,61 @@ export class StashSupabaseClient {
     const session = toSession(payload);
     await writeSupabaseSession(session);
     return session;
+  }
+
+  /**
+   * Ask GoTrue for a hosted authorize URL while authenticated as the current
+   * (anonymous) user, so the OAuth identity is LINKED to that user instead of
+   * creating a separate account — existing bookmarks carry over. Returns the
+   * URL to open in the browser. Requires manual linking enabled on the project.
+   */
+  async requestOAuthLinkUrl(params: {
+    provider: OAuthProvider;
+    redirectTo: string;
+    codeChallenge: string;
+    accessToken: string;
+  }): Promise<string> {
+    const query = buildAuthorizeQuery({
+      provider: params.provider,
+      redirectTo: params.redirectTo,
+      codeChallenge: params.codeChallenge,
+      skipHttpRedirect: true,
+    });
+    const payload = await this.request<{ url?: string }>(`/auth/v1/authorize?${query}`, {
+      accessToken: params.accessToken,
+    });
+    if (!payload?.url) {
+      throw new SupabaseRequestError('Supabase did not return an OAuth URL for linking.', 200);
+    }
+    return payload.url;
+  }
+
+  /**
+   * Trade a PKCE authorization code (with its verifier) for a real session and
+   * persist it. Used to complete an OAuth sign-in after the browser redirect.
+   */
+  async exchangeCodeForSession(
+    authCode: string,
+    codeVerifier: string,
+  ): Promise<SupabaseAuthSession> {
+    const payload = (await this.request('/auth/v1/token?grant_type=pkce', {
+      method: 'POST',
+      body: { auth_code: authCode, code_verifier: codeVerifier },
+    })) as SupabaseAuthResponse;
+    const session = toSession(payload);
+    await writeSupabaseSession(session);
+    return session;
+  }
+
+  /** Revoke the current session server-side (best-effort) and clear it locally. */
+  async signOut(accessToken: string): Promise<void> {
+    try {
+      await this.request('/auth/v1/logout', { method: 'POST', accessToken, body: {} });
+    } catch {
+      // Best-effort: the local session is cleared regardless so the user is
+      // signed out on this device even if the network call fails.
+    }
+    await clearSupabaseSession();
   }
 
   async refreshSession(refreshToken: string): Promise<SupabaseAuthSession> {
