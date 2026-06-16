@@ -108,6 +108,12 @@ let repositoryReady: Promise<void> | null = null;
 function ensureRepositoryReady(): Promise<void> {
   if (!repositoryReady) {
     repositoryReady = repository.init(mockBookmarks);
+    // A failed init must not poison the whole session — clear the cached
+    // rejection so the next call retries (e.g. after a transient warm-start
+    // open failure).
+    repositoryReady.catch(() => {
+      repositoryReady = null;
+    });
   }
   return repositoryReady;
 }
@@ -245,31 +251,45 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        await ensureRepositoryReady();
-        const [storedBookmarks, storedQueue, storedEnrichments, storedTagData, storedPulledAt] =
-          await Promise.all([
-            repository.listBookmarks(),
-            repository.listQueue(),
-            repository.listEnrichments(),
-            repository.listTagData(),
-            repository.getMeta(LAST_PULLED_AT_KEY),
-          ]);
-        if (!cancelled) {
-          // Merge instead of replace: saves made while loading must survive.
-          setBookmarks((current) =>
-            current === null
-              ? storedBookmarks
-              : mergeById(current, storedBookmarks, (bookmark) => bookmark.id),
-          );
-          setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
-          setEnrichments(storedEnrichments);
-          setTagData(storedTagData);
-          setLastPulledAt(storedPulledAt);
-        }
-      } catch (error) {
-        logStorageError('startup load', error);
-        if (!cancelled) {
+      // Opening SQLite can fail transiently right after a warm relaunch (the
+      // native handle is briefly invalid). Retry a few times before falling
+      // back to read-only sample data, so a momentary hiccup doesn't strand the
+      // user on the storage-error banner.
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await ensureRepositoryReady();
+          const [storedBookmarks, storedQueue, storedEnrichments, storedTagData, storedPulledAt] =
+            await Promise.all([
+              repository.listBookmarks(),
+              repository.listQueue(),
+              repository.listEnrichments(),
+              repository.listTagData(),
+              repository.getMeta(LAST_PULLED_AT_KEY),
+            ]);
+          if (!cancelled) {
+            // Merge instead of replace: saves made while loading must survive.
+            setBookmarks((current) =>
+              current === null
+                ? storedBookmarks
+                : mergeById(current, storedBookmarks, (bookmark) => bookmark.id),
+            );
+            setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
+            setEnrichments(storedEnrichments);
+            setTagData(storedTagData);
+            setLastPulledAt(storedPulledAt);
+            setLoadError(false);
+          }
+          return;
+        } catch (error) {
+          if (cancelled) {
+            return;
+          }
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+            continue;
+          }
+          logStorageError('startup load', error);
           setLoadError(true);
           setBookmarks((current) =>
             current === null
