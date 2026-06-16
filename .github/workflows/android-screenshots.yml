@@ -1,0 +1,125 @@
+name: Android Screenshots
+
+# Renders the app on a real Android emulator in CI and captures screenshots of
+# key screens (Inbox + the Browse facet shelf). This is the ONLY verification
+# layer that catches Android-native layout bugs like chip clipping — unit tests
+# and the web export cannot reproduce native ScrollView/text-measurement
+# behaviour.
+#
+# Output: PNGs uploaded as a run artifact for human/diff review. The Maestro
+# flow also asserts that key UI is visible, so a crash or a missing Browse shelf
+# fails the job (a real, if coarse, signal).
+#
+# Cost note: booting an emulator is ~3-5 min and occasionally flaky, so this
+# runs only on PRs that touch the mobile app (plus manual dispatch), not on
+# every push.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/mobile/**'
+      - '.github/workflows/android-screenshots.yml'
+
+# One emulator run per ref; cancel superseded runs on rapid pushes.
+concurrency:
+  group: android-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      # A hoisted (npm-like) layout is friendliest for React Native Gradle
+      # autolinking; pnpm's default isolated symlinks can confuse it.
+      - name: Install dependencies (hoisted)
+        run: |
+          echo "node-linker=hoisted" >> .npmrc
+          pnpm install --no-frozen-lockfile
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # ccache survives the in-tree android/ regen that `expo prebuild` does each
+      # run, turning the slow NDK recompiles into cache hits on later builds.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-screens-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-screens-${{ runner.os }}-
+
+      - name: Install Maestro
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+      - name: Prebuild Android project
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Give Gradle more heap
+        working-directory: apps/mobile/android
+        run: printf '\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\norg.gradle.caching=true\n' >> gradle.properties
+
+      # Build the release variant — it is self-contained (bundles the JS, signs
+      # with the debug keystore) so it installs and runs WITHOUT a Metro server.
+      # Target x86_64 because the CI emulator is x86_64; an arm64-only APK would
+      # not install on it.
+      - name: Build APK (x86_64)
+        working-directory: apps/mobile/android
+        env:
+          USE_CCACHE: '1'
+          CCACHE_DIR: /home/runner/.ccache
+          CCACHE_MAXSIZE: 3G
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=x86_64
+
+      - name: Run Maestro flows on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          profile: pixel_5
+          disable-animations: true
+          script: |
+            adb install -r apps/mobile/android/app/build/outputs/apk/release/app-release.apk
+            mkdir -p screenshots
+            # Maestro writes <name>.png to its working directory; run it from the
+            # screenshots dir so the PNGs land there. The flow path is absolute.
+            cd screenshots
+            maestro test "$GITHUB_WORKSPACE/apps/mobile/.maestro/inbox.yaml"
+            ls -la
+
+      - uses: actions/upload-artifact@v4
+        # Upload even on failure: a screenshot of the broken state is exactly
+        # what you want when the flow's assertions fail.
+        if: always()
+        with:
+          name: android-screenshots
+          path: screenshots/*.png
+          if-no-files-found: warn
