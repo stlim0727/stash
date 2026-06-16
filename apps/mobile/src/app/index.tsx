@@ -188,13 +188,17 @@ export default function InboxScreen() {
       }
     }
     const collectionChips: FacetChip[] = [...collectionIds]
-      .map((id) => ({ id, name: getCollection(id)?.name }))
+      .map((id) => ({ id, name: getCollection(id)?.name?.trim() }))
       .filter((entry): entry is { id: string; name: string } => Boolean(entry.name))
       .sort((a, b) => a.name.localeCompare(b.name))
       .map(({ id, name }) => ({ key: `c:${id}`, label: name, filter: { kind: 'collection', id } }));
     const tagChips: FacetChip[] = [...tagsById.entries()]
-      .sort((a, b) => a[1].localeCompare(b[1]))
-      .map(([id, name]) => ({ key: `t:${id}`, label: `#${name}`, filter: { kind: 'tag', id } }));
+      // Drop tags whose name is empty/whitespace so they don't render as blank
+      // pills (AI enrichment or a partial sync can leave a tag with no name).
+      .map(([id, name]) => ({ id, name: name?.trim() ?? '' }))
+      .filter((entry) => entry.name.length > 0)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(({ id, name }) => ({ key: `t:${id}`, label: `#${name}`, filter: { kind: 'tag', id } }));
     return { chips: [...collectionChips, ...tagChips], hasUncollected: uncollected };
   }, [inbox, getTagsForBookmark, getCollection]);
 
@@ -337,14 +341,10 @@ export default function InboxScreen() {
           accessibilityState={{ selected: viewMode === 'list' }}
           testID="inbox-view-toggle"
           onPress={() => setViewMode((mode) => nextViewMode(mode))}
-          style={[
-            styles.sortPill,
-            styles.viewToggle,
-            { backgroundColor: palette.surface, borderColor: palette.border },
-          ]}
+          style={[styles.viewToggle, { backgroundColor: palette.surface, borderColor: palette.border }]}
         >
-          <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-            {viewMode === 'card' ? '▦ Cards' : '☰ List'}
+          <Text style={[styles.viewToggleIcon, { color: palette.text }]}>
+            {viewMode === 'card' ? '☰' : '▦'}
           </Text>
         </Pressable>
       </View>
@@ -531,7 +531,7 @@ export default function InboxScreen() {
           <Button size="lg" style={styles.primaryButton}>Add Bookmark</Button>
         </Link>
         <Link href="/settings" asChild>
-          <Button variant="ghost" size="lg" style={styles.secondaryButton}>Settings</Button>
+          <Button variant="secondary" size="lg" style={styles.secondaryButton}>Settings</Button>
         </Link>
       </View>
     </View>
@@ -651,6 +651,16 @@ const styles = StyleSheet.create({
   },
   viewToggle: {
     marginLeft: 'auto',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewToggleIcon: {
+    fontSize: 17,
+    fontWeight: '700',
   },
   shelf: {
     flexGrow: 0,

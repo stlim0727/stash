@@ -340,6 +340,31 @@ test('the view toggle switches between card and list layouts', async () => {
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
 });
 
+test('blank-named tags and collections do not produce empty filter chips', async () => {
+  const id = '7e64cf1e-0000-4000-8000-000000000050';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Korean video', collection_id: 'col-blank' })],
+    {
+      // A tag/collection with an empty or whitespace name must not render as a
+      // blank pill in the Browse shelf.
+      tags: [makeTag('t-blank', '   '), makeTag('t-real', 'cooking')],
+      bookmarkTags: [
+        { bookmark_id: id, tag_id: 't-blank', source: 'ai', confidence: 0.9, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: id, tag_id: 't-real', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [makeCollection('col-blank', '  ')],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Korean video')).toBeTruthy());
+
+  // The real tag chip renders; the blank ones are dropped.
+  expect(screen.getByRole('button', { name: '#cooking' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: '#' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '#   ' })).toBeNull();
+});
+
 test('shows the no-matches empty state for an unmatched search', async () => {
   fakeRepo.__reset([makeStoredBookmark({ title: 'Only one' })]);
 
