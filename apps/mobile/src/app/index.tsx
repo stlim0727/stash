@@ -30,6 +30,15 @@ import {
   sortBookmarks,
   type SortOption,
 } from '@/domain/sort';
+import {
+  DEFAULT_VIEW_MODE,
+  INBOX_VIEW_PREF_KEY,
+  describeViewMode,
+  nextViewMode,
+  parseViewMode,
+  serializeViewMode,
+  type ViewMode,
+} from '@/domain/view-mode';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
@@ -53,6 +62,35 @@ interface FacetChip {
   filter: InboxFilter;
 }
 
+/**
+ * The bookmark's leading glyph — its favicon when known, otherwise a colored
+ * domain monogram. Shared by both Inbox layouts; `compact` shrinks it for the
+ * dense list rows.
+ */
+function ItemIcon({
+  item,
+  compact = false,
+  testID,
+}: {
+  item: Bookmark;
+  compact?: boolean;
+  testID?: string;
+}) {
+  const icon = itemIcon(item);
+  const sizeStyle = compact ? styles.listIcon : styles.cardIcon;
+  if (icon.kind === 'favicon') {
+    return <Image source={{ uri: icon.uri }} style={sizeStyle} />;
+  }
+  return (
+    <View
+      testID={testID}
+      style={[sizeStyle, styles.cardMonogram, { backgroundColor: MONOGRAM_COLORS[icon.colorIndex] }]}
+    >
+      <Text style={styles.cardMonogramLetter}>{icon.letter}</Text>
+    </View>
+  );
+}
+
 export default function InboxScreen() {
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -67,10 +105,13 @@ export default function InboxScreen() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
+  const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
 
-  // Load the saved sort once, then persist any change. The guard stops the
-  // initial default from clobbering the stored value before it has loaded.
+  // Load the saved sort + view mode once, then persist any change. The guards
+  // stop the initial defaults from clobbering the stored values before they
+  // have loaded.
   const sortLoaded = useRef(false);
+  const viewLoaded = useRef(false);
   useEffect(() => {
     let active = true;
     getPreference(INBOX_SORT_PREF_KEY)
@@ -83,6 +124,16 @@ export default function InboxScreen() {
       .finally(() => {
         sortLoaded.current = true;
       });
+    getPreference(INBOX_VIEW_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setViewMode(parseViewMode(raw));
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        viewLoaded.current = true;
+      });
     return () => {
       active = false;
     };
@@ -93,6 +144,12 @@ export default function InboxScreen() {
     }
     void setPreference(INBOX_SORT_PREF_KEY, serializeSort(sort)).catch(() => {});
   }, [sort]);
+  useEffect(() => {
+    if (!viewLoaded.current) {
+      return;
+    }
+    void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(viewMode)).catch(() => {});
+  }, [viewMode]);
 
   // Browse facet handed in by another screen (e.g. tapping a tag in Bookmark
   // Detail). Applying it on param change lets in-app links jump to a view.
@@ -274,6 +331,22 @@ export default function InboxScreen() {
             {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
           </Text>
         </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`View as ${describeViewMode(nextViewMode(viewMode))}`}
+          accessibilityState={{ selected: viewMode === 'list' }}
+          testID="inbox-view-toggle"
+          onPress={() => setViewMode((mode) => nextViewMode(mode))}
+          style={[
+            styles.sortPill,
+            styles.viewToggle,
+            { backgroundColor: palette.surface, borderColor: palette.border },
+          ]}
+        >
+          <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+            {viewMode === 'card' ? '▦ Cards' : '☰ List'}
+          </Text>
+        </Pressable>
       </View>
       {showShelf ? (
         <ScrollView
@@ -290,7 +363,7 @@ export default function InboxScreen() {
       <FlatList
         data={visible}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, viewMode === 'list' ? styles.listModeList : null]}
         ListHeaderComponent={
           <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
             {sectionLabel}
@@ -307,6 +380,7 @@ export default function InboxScreen() {
                   : 'Nothing saved yet. Add your first bookmark below.'}
           </Text>
         }
+        extraData={viewMode}
         renderItem={({ item }) => {
           const status = statusLabel(item);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
@@ -319,6 +393,69 @@ export default function InboxScreen() {
             getEnrichment(item.id),
             appliedNames,
           ).length;
+          const openDetail = () =>
+            router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
+          const openLink = () => {
+            if (item.url) {
+              void Linking.openURL(item.url).catch(() => {});
+            }
+          };
+
+          // Compact, single-line rows trade the preview image and inline meta
+          // chips for density — more bookmarks visible per screen.
+          if (viewMode === 'list') {
+            return (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.listRow,
+                  {
+                    backgroundColor: palette.surfaceElevated,
+                    borderColor: palette.border,
+                    opacity: pressed ? 0.78 : 1,
+                  },
+                ]}
+                onPress={openDetail}
+              >
+                <ItemIcon item={item} compact testID="inbox-list-monogram" />
+                <View style={styles.listText}>
+                  <Text
+                    testID="inbox-list-title"
+                    style={[styles.listTitle, { color: palette.text }]}
+                    numberOfLines={1}
+                  >
+                    {item.title ?? item.url ?? 'Untitled'}
+                  </Text>
+                  {item.url ? (
+                    <Text style={[styles.listUrl, { color: palette.textSecondary }]} numberOfLines={1}>
+                      {item.url}
+                    </Text>
+                  ) : null}
+                </View>
+                {suggestionCount > 0 ? (
+                  <View
+                    accessibilityLabel={`${suggestionCount} AI suggestion${suggestionCount > 1 ? 's' : ''}`}
+                    style={[styles.suggestBadge, { borderColor: palette.accent }]}
+                  >
+                    <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
+                      ✨ {suggestionCount}
+                    </Text>
+                  </View>
+                ) : null}
+                {item.url ? (
+                  <Pressable
+                    accessibilityRole="link"
+                    accessibilityLabel="Open link"
+                    hitSlop={8}
+                    style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
+                    onPress={openLink}
+                  >
+                    <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                  </Pressable>
+                ) : null}
+              </Pressable>
+            );
+          }
+
           const metaParts = [
             ...(collectionName ? [`in ${collectionName}`] : []),
             ...cardTags.slice(0, 3).map((tag) => `#${tag.name}`),
@@ -328,28 +465,9 @@ export default function InboxScreen() {
               {item.preview_image_url ? (
                 <Image source={{ uri: item.preview_image_url }} style={styles.cardPreview} />
               ) : null}
-              <Pressable
-                style={styles.cardBody}
-                onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
-              >
+              <Pressable style={styles.cardBody} onPress={openDetail}>
                 <View style={styles.cardTitleRow}>
-                  {(() => {
-                    const icon = itemIcon(item);
-                    return icon.kind === 'favicon' ? (
-                      <Image source={{ uri: icon.uri }} style={styles.cardIcon} />
-                    ) : (
-                      <View
-                        testID="inbox-card-monogram"
-                        style={[
-                          styles.cardIcon,
-                          styles.cardMonogram,
-                          { backgroundColor: MONOGRAM_COLORS[icon.colorIndex] },
-                        ]}
-                      >
-                        <Text style={styles.cardMonogramLetter}>{icon.letter}</Text>
-                      </View>
-                    );
-                  })()}
+                  <ItemIcon item={item} testID="inbox-card-monogram" />
                   <Text
                     testID="inbox-card-title"
                     style={[styles.cardTitle, { color: palette.text }]}
@@ -394,11 +512,7 @@ export default function InboxScreen() {
                   accessibilityLabel="Open link"
                   hitSlop={8}
                   style={[styles.cardOpen, { backgroundColor: palette.accentSoft }]}
-                  onPress={() => {
-                    if (item.url) {
-                      void Linking.openURL(item.url).catch(() => {});
-                    }
-                  }}
+                  onPress={openLink}
                 >
                   <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>Open ↗</Text>
                 </Pressable>
@@ -431,6 +545,9 @@ const styles = StyleSheet.create({
   list: {
     padding: 16,
     gap: 16,
+  },
+  listModeList: {
+    gap: 8,
   },
   hero: {
     flexDirection: 'row',
@@ -532,6 +649,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
+  viewToggle: {
+    marginLeft: 'auto',
+  },
   shelf: {
     flexGrow: 0,
     paddingTop: 10,
@@ -543,6 +663,39 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: 24,
     overflow: 'hidden',
+  },
+  listRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  listIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+  },
+  listText: {
+    flex: 1,
+    gap: 2,
+  },
+  listTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  listUrl: {
+    fontSize: 12,
+  },
+  listOpen: {
+    borderRadius: 999,
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   cardPreview: {
     width: '100%',
