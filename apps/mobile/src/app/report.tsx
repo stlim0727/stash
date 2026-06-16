@@ -70,11 +70,10 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const contextPreview = useMemo(() => JSON.stringify(context, null, 2), [context]);
 
   const trimmed = message.trim();
-  const canSubmit =
-    trimmed.length > 0 && auth.status === 'anonymous' && submit.status !== 'submitting';
+  const canSubmit = trimmed.length > 0 && auth.isSignedIn && submit.status !== 'submitting';
 
   const handleSubmit = async () => {
-    if (!trimmed || auth.status !== 'anonymous' || !auth.session) {
+    if (!trimmed || !auth.session) {
       return;
     }
 

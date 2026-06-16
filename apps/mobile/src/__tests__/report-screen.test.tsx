@@ -17,8 +17,12 @@ let mockAuth = {
   status: 'anonymous' as 'anonymous' | 'not_configured',
   session: mockSession as typeof mockSession | null,
   userId: 'user-test' as string | null,
+  email: null as string | null,
+  isSignedIn: true,
   message: null as string | null,
   ensureAnonymousSession: async () => mockSession,
+  signIn: async () => mockSession,
+  signOut: async () => {},
 };
 
 jest.mock('@/supabase/auth-provider', () => ({
@@ -69,8 +73,12 @@ beforeEach(() => {
     status: 'anonymous',
     session: mockSession,
     userId: 'user-test',
+    email: null,
+    isSignedIn: true,
     message: null,
     ensureAnonymousSession: async () => mockSession,
+    signIn: async () => mockSession,
+    signOut: async () => {},
   };
 });
 
@@ -127,8 +135,12 @@ test('shows a friendly message when Supabase is not configured', async () => {
     status: 'not_configured',
     session: null,
     userId: null,
+    email: null,
+    isSignedIn: false,
     message: 'not configured',
     ensureAnonymousSession: async () => null as never,
+    signIn: async () => null as never,
+    signOut: async () => {},
   } as typeof mockAuth;
 
   const screen = await renderReport();

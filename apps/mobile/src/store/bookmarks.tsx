@@ -523,7 +523,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const addTagsToBookmark = useCallback(
     async (bookmarkId: string, names: string[]): Promise<string | null> => {
-      if (auth.status !== 'anonymous' || !auth.session) {
+      if (!auth.session) {
         return 'Tags need the cloud — Supabase is not available right now.';
       }
       if (!hasRemoteIdentity(bookmarkId)) {
@@ -567,7 +567,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const removeTagFromBookmark = useCallback(
     async (bookmarkId: string, tagName: string): Promise<string | null> => {
-      if (auth.status !== 'anonymous' || !auth.session) {
+      if (!auth.session) {
         return 'Tags need the cloud — Supabase is not available right now.';
       }
       if (!hasRemoteIdentity(bookmarkId)) {
@@ -602,7 +602,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // failures (e.g. the function isn't deployed yet) just return a message.
   const requestAiEnrichment = useCallback(
     async (bookmarkId: string): Promise<string | null> => {
-      if (auth.status !== 'anonymous' || !auth.session) {
+      if (!auth.session) {
         return 'AI suggestions need the cloud — Supabase is not available right now.';
       }
       if (!hasRemoteIdentity(bookmarkId)) {
@@ -640,7 +640,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // provenance and confidence are preserved (vs. user-typed tags).
   const acceptSuggestedTags = useCallback(
     async (bookmarkId: string, suggestions: SuggestedTag[]): Promise<string | null> => {
-      if (auth.status !== 'anonymous' || !auth.session) {
+      if (!auth.session) {
         return 'Tags need the cloud — Supabase is not available right now.';
       }
       if (!hasRemoteIdentity(bookmarkId)) {
@@ -694,7 +694,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const createCollection = useCallback(
     async (name: string): Promise<{ collection?: Collection; error?: string }> => {
-      if (auth.status !== 'anonymous' || !auth.session) {
+      if (!auth.session) {
         return { error: 'Collections need the cloud — Supabase is not available right now.' };
       }
       if (!name.trim()) {
@@ -719,7 +719,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (syncInFlight.current) {
       return;
     }
-    if (auth.status !== 'anonymous' || !auth.session) {
+    if (!auth.session) {
       return;
     }
     // Upload-then-pull: even with nothing to upload, the pull still runs.
@@ -906,7 +906,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (
       !isSyncing &&
       bookmarks !== null &&
-      auth.status === 'anonymous' &&
+      (auth.status === 'anonymous' || auth.status === 'authenticated') &&
       queue.some((entry) => entry.sync_status === 'pending')
     ) {
       void syncNow();
@@ -917,7 +917,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // with an empty queue so remote changes (other devices, cloud AI
   // enrichment) reach this device.
   useEffect(() => {
-    if (!initialPullDone.current && bookmarks !== null && auth.status === 'anonymous') {
+    if (
+      !initialPullDone.current &&
+      bookmarks !== null &&
+      (auth.status === 'anonymous' || auth.status === 'authenticated')
+    ) {
       initialPullDone.current = true;
       void syncNow();
     }
