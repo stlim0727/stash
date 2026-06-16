@@ -691,17 +691,14 @@ const styles = StyleSheet.create({
   },
   shelf: {
     flexGrow: 0,
-    // A horizontal ScrollView on Android can collapse its viewport onto the
-    // content and clip the chips' bottom edge. An explicit height reserves
-    // enough room for a chip (paddingVertical 7*2 + lineHeight 18 ≈ 32) so the
-    // viewport can't shrink below it; chips are vertically centred via
-    // shelfContent.alignItems.
-    height: 38,
-    // Spacing above/below the chips must be MARGIN, not padding: vertical
-    // padding (on style OR contentContainerStyle) clips the chips' bottom edge
-    // on Android. Margin lives outside the scroll box and can't clip.
-    marginTop: 10,
-    marginBottom: 2,
+    // Keep this viewport taller than the chip itself. Android clips horizontal
+    // ScrollView children to the viewport, and bold text can be rendered a few
+    // pixels outside its measured line box on some devices/font settings.
+    // Reserving extra vertical room keeps the Browse shelf from shaving off the
+    // chip labels while preserving the compact layout.
+    height: 48,
+    marginTop: 8,
+    marginBottom: 0,
   },
   shelfContent: {
     paddingHorizontal: 16,

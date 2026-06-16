@@ -39,8 +39,10 @@ const styles = StyleSheet.create({
   base: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
+    minHeight: 34,
     paddingVertical: 7,
     paddingHorizontal: 13,
+    justifyContent: 'center',
   },
   label: {
     fontSize: 14,
