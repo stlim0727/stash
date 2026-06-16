@@ -691,21 +691,24 @@ const styles = StyleSheet.create({
   },
   shelf: {
     flexGrow: 0,
-    // A horizontal ScrollView on Android can collapse its viewport onto the
-    // content and clip the chips' bottom edge. An explicit height reserves
-    // enough room for a chip (paddingVertical 7*2 + lineHeight 20 = 34) plus a
-    // little slack so the viewport can't shrink below it; chips are vertically
-    // centred via shelfContent.alignItems.
-    height: 40,
-    // Spacing above/below the chips must be MARGIN, not padding: vertical
-    // padding (on style OR contentContainerStyle) clips the chips' bottom edge
-    // on Android. Margin lives outside the scroll box and can't clip.
+    // Do NOT pin a fixed height here. A horizontal ScrollView sizes its height
+    // to its content, and a fixed height SHORTER than the real (font-padded,
+    // bold) chip is exactly what kept slicing the whole pill off at the bottom
+    // on Android. Letting it grow to the content (floored by shelfContent's
+    // minHeight) makes a bottom clip impossible.
+    // Vertical breathing room must be MARGIN, not padding: vertical padding on
+    // a horizontal ScrollView clips the chips' bottom edge on Android. Margin
+    // lives outside the scroll box and can't clip.
     marginTop: 10,
     marginBottom: 2,
   },
   shelfContent: {
     paddingHorizontal: 16,
     alignItems: 'center',
+    // Floor the row height and vertically centre the chips in it. minHeight
+    // (not a fixed height) lets the row grow to fit a taller-than-expected chip
+    // instead of clipping it.
+    minHeight: 40,
     gap: 8,
   },
   card: {
