@@ -5,5 +5,7 @@ appId: com.stash.app
 - launchApp:
     clearState: true
 - tapOn: 'Settings'
-- assertVisible: 'App version'
+# Assert the FIRST settings row (top of screen) rather than "App version",
+# which is the last row and falls below the fold at larger fonts.
+- assertVisible: 'Account'
 - takeScreenshot: settings

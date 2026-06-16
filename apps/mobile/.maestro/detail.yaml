@@ -5,7 +5,11 @@ appId: com.stash.app
 - launchApp:
     clearState: true
 - tapOn: 'Local-first software'
-# Assert on the Delete action (top action bar, detail-only) rather than the
-# "Title" field, which sits lower and can fall below the fold at larger fonts.
-- assertVisible: 'Delete'
+# Scroll the detail-only "Title" field into view: it confirms we navigated to
+# Detail and survives large fonts, where the action-bar buttons (Delete) overflow
+# off-screen and the field drops below the fold.
+- scrollUntilVisible:
+    element:
+      text: 'Title'
+    direction: DOWN
 - takeScreenshot: detail
