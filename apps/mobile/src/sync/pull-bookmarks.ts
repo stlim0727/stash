@@ -1,3 +1,4 @@
+import { sanitizeTagData } from '@/domain/tag-data';
 import type { AIEnrichment, Bookmark, BookmarkTag, Collection, Tag } from '@/domain/types';
 import type { BookmarkRepository, TagData } from '@/storage/types';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
@@ -61,7 +62,9 @@ export async function pullRemoteChanges(
     api.listBookmarkTags(),
     api.listCollections(),
   ]);
-  const tagData: TagData = { tags, bookmarkTags, collections };
+  // Drop blank-named tags/collections (and their orphaned links) the server may
+  // still hold so they never re-enter local state as empty Browse chips.
+  const { tagData } = sanitizeTagData({ tags, bookmarkTags, collections });
 
   const locals = getLocalBookmarks();
   const localById = new Map(locals.map((bookmark) => [bookmark.id, bookmark]));
