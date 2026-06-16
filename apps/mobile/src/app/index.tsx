@@ -691,12 +691,12 @@ const styles = StyleSheet.create({
   },
   shelf: {
     flexGrow: 0,
-    // Generous fixed height — comfortably taller than the chip (minHeight 36 +
+    // Generous fixed height — comfortably taller than the chip (minHeight 42 +
     // borders) so the horizontal ScrollView neither collapses its viewport nor
     // clips the pill on Android. Chips are vertically centred via
     // shelfContent.alignItems; the chip's own minHeight is what actually keeps
     // its text from being clipped.
-    height: 48,
+    height: 54,
     marginTop: 8,
     marginBottom: 0,
   },

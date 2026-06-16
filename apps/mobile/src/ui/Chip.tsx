@@ -39,24 +39,24 @@ const styles = StyleSheet.create({
   base: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
-    // Android clips a rounded, background-filled View to its outline, so the
-    // PILL itself shaves the chip text if it's sized tight to the label. Bold
-    // text also renders a few px past its measured line box. Give the pill a
-    // real floor and centre the label so there's always slack below the glyphs.
-    // (This — not the ScrollView height — was the actual clip the earlier
-    // passes #58/#60/#62 never reached.)
-    minHeight: 36,
-    paddingVertical: 7,
-    paddingHorizontal: 13,
+    // The clip only reproduces on real Samsung One UI devices, never on the
+    // emulator's Roboto: Samsung's default system font renders bold text with
+    // TALLER metrics, and a rounded, background-filled View clips its children
+    // to its outline — so a pill sized tight to Roboto metrics shaves the
+    // taller Samsung glyphs. Give the pill a generous floor and centre the
+    // label so the text never reaches the rounded edge on any system font.
+    minHeight: 42,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   label: {
     fontSize: 14,
-    // Keep Android's default font padding (do NOT set includeFontPadding:false)
-    // — it reserves descender room; removing it tightened the box and clipped.
-    // A generous lineHeight leaves vertical room for bold glyphs.
-    lineHeight: 20,
+    // Generous lineHeight (~1.57x) so the Text's own line box contains even the
+    // taller Samsung bold ink. Keep Android's default font padding (do NOT set
+    // includeFontPadding:false — that tightened the box and made it clip).
+    lineHeight: 22,
     fontWeight: '700',
   },
 });
