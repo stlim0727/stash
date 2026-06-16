@@ -1,11 +1,14 @@
-# Settings screen — reached from the Inbox via the gear (accessibility label
-# "Settings"). Captured across font scales by the screenshots workflow.
+# Settings screen — reached from the Inbox gear (accessibility label "Settings").
+# The top "Account"/"App version" rows are non-interactive Card text that Maestro
+# doesn't reliably surface; scroll to the always-present "Report a problem" link
+# (same pattern the report flow uses successfully) to confirm we're on Settings.
 appId: com.stash.app
 ---
 - launchApp:
     clearState: true
 - tapOn: 'Settings'
-# Assert the FIRST settings row (top of screen) rather than "App version",
-# which is the last row and falls below the fold at larger fonts.
-- assertVisible: 'Account'
+- scrollUntilVisible:
+    element:
+      text: 'Report a problem'
+    direction: DOWN
 - takeScreenshot: settings
