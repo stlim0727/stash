@@ -69,11 +69,16 @@ async function renderShelf() {
   return screen.getByTestId('browse-shelf');
 }
 
-test('browse shelf declares an explicit height (Android viewport-collapse guard)', async () => {
+test('browse shelf reserves a vertical floor (Android viewport-collapse guard)', async () => {
   const shelf = await renderShelf();
   const style = StyleSheet.flatten(shelf.props.style) as ViewStyle;
 
-  expect(typeof style.height).toBe('number');
+  // Either a fixed height or a minHeight reserves the floor that stops the
+  // horizontal ScrollView from collapsing onto its content. minHeight is
+  // preferred (it grows with larger fonts instead of clipping), but accept
+  // either so this guards the invariant, not the exact property.
+  const floor = style.minHeight ?? style.height;
+  expect(typeof floor).toBe('number');
 });
 
 test('browse shelf content has no vertical padding (Android clip trap)', async () => {
