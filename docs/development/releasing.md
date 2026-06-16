@@ -1,5 +1,23 @@
 # Building and Releasing
 
+## Quick path: installable Android APK from CI (no EAS account)
+
+For a real, installable Android APK without any Expo/EAS account, use the
+**`.github/workflows/android-apk.yml`** workflow — it does `expo prebuild` →
+Gradle `assembleRelease` (debug-signed, standalone) and uploads the APK.
+
+- Run it via **workflow dispatch** with the `version` input, or by pushing a tag:
+  - blank / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ APK as a **run artifact only**.
+  - clean **`vX.Y.Z`** ⇒ also publishes a prerelease **GitHub Release** with the APK.
+- `gh` CLI: `gh workflow run android-apk.yml -f version=v0.1.7-rc8 --ref main`,
+  then `gh run download <run-id> -n stash-android-apk`.
+- Build is **arm64-v8a only** (~6–7 min). Step-by-step (incl. the GitHub MCP-tool
+  sequence for Claude Code web sessions) is in **`AGENTS.md`**.
+
+The rest of this doc covers the EAS-based path for store/internal builds.
+
+## EAS builds
+
 Stash uses [EAS Build](https://docs.expo.dev/build/introduction/) to produce
 installable iOS and Android builds. Build profiles are defined in
 `apps/mobile/eas.json`.

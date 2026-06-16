@@ -54,6 +54,33 @@ This file captures the project state and working conventions so any agent (Codex
 - Headless build verification (no emulator needed): `cd apps/mobile && CI=1 pnpm exec expo install --check || true; CI=1 pnpm exec expo export --platform web` (also `--platform ios` to compile the native/Hermes path, which exercises the expo-sqlite code). Delete `dist/` afterwards; it is gitignored.
 - Keep user-authored fields separate from generated/AI metadata (core product principle; see `docs/api/bookmarks.md`).
 
+## Building an installable Android APK (no EAS account)
+
+The fastest way to get a real, installable APK is the **`.github/workflows/android-apk.yml`** GitHub Actions workflow. It runs `expo prebuild` → Gradle `assembleRelease`, signs with the debug keystore, and uploads a standalone APK — no EAS/Expo account needed. (EAS via `eas.json` is still the path for store builds; see `docs/development/releasing.md`.)
+
+**How the trigger maps to output** (`workflow_dispatch` input `version`, or a pushed git tag):
+
+- `version` **blank** or a **hyphenated** pre-release tag (e.g. `v0.1.7-rc8`) → builds + uploads the APK as a **run artifact only** (no GitHub Release). Use this for test builds.
+- A clean `vX.Y.Z` (no hyphen), as the input or a pushed `vX.Y.Z` git tag → also publishes a prerelease **GitHub Release** with the APK attached.
+
+**From a Claude Code web session (GitHub MCP tools):**
+
+1. `actions_run_trigger` (method `run_workflow`) → `workflow_id: "android-apk.yml"`, `ref: "main"`, `inputs: { version: "v0.1.7-rc8" }`.
+2. `actions_list` (`list_workflow_runs`, filter `event=workflow_dispatch`) → grab the newest run's `id`.
+3. Poll `actions_get` until `status: "completed"` (~6–7 min; arm64-v8a only). Don't `sleep`-poll — arm a short background timer between checks.
+4. `actions_list` (`list_workflow_run_artifacts`) → artifact **`stash-android-apk`**. Share the run URL (`https://github.com/<owner>/<repo>/actions/runs/<id>`) so the user downloads + unzips the `.apk`. (The artifact itself only appears once the build succeeds.)
+
+**With the `gh` CLI** (non-MCP shells):
+
+```bash
+gh workflow run android-apk.yml -f version=v0.1.7-rc8 --ref main
+gh run list --workflow android-apk.yml -L 1     # find the run id
+gh run watch <run-id>                            # wait for it
+gh run download <run-id> -n stash-android-apk    # downloads the .apk
+```
+
+Notes: the build is **arm64-v8a only** (every modern phone) to stay fast/small; the APK is debug-signed but fully standalone (installs + runs on its own). If the repo's `EXPO_PUBLIC_SUPABASE_*` secrets are set, cloud sync is baked in; otherwise it's a local-only build. The app self-reports its build commit in Settings (via `EXPO_PUBLIC_GIT_SHA`), so you can confirm which commit an installed APK came from.
+
 ## Environment gotchas (sandboxed/cloud sessions)
 
 - `expo install <pkg>` may fail offline against the Expo versions API. Get the SDK-pinned version locally instead: `node -e "console.log(require('./apps/mobile/node_modules/expo/bundledNativeModules.json')['<pkg>'])"`, then `pnpm add <pkg>@<that version>`.
