@@ -291,8 +291,8 @@ export default function InboxScreen() {
             style={styles.accountButton}
             onPress={() => router.push('/settings')}
           >
-            <View style={[styles.avatar, { borderColor: palette.border }]}>
-              <Text style={styles.avatarGlyph}>⚙︎</Text>
+            <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+              <Text style={[styles.avatarGlyph, { color: palette.text }]}>⚙︎</Text>
             </View>
             <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
           </Pressable>
