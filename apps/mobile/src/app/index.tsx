@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   FlatList,
   Image,
   Linking,
@@ -109,6 +110,11 @@ function ItemIcon({
   );
 }
 
+// The list that drives the collapsing header. Animated.FlatList lets the
+// scroll position feed an Animated.Value over the native driver; the cast keeps
+// FlatList's generic item typing (Animated.FlatList erases it to `any`).
+const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
+
 export default function InboxScreen() {
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -124,6 +130,26 @@ export default function InboxScreen() {
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+
+  // Collapsing header: the top cluster (hero + search + controls + browse
+  // shelf) slides up out of view as the list scrolls down and slides back on
+  // scroll up — à la Instagram/YouTube — reclaiming vertical space for the
+  // bookmarks. We measure the cluster's height once it lays out, then drive its
+  // translateY from the list's scroll position. diffClamp tracks the *net*
+  // scroll movement (clamped to the header's height), so an upward flick reveals
+  // the header immediately wherever you are in the list, not only at the top.
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const headerTranslate = useMemo(() => {
+    if (!headerHeight) {
+      return 0;
+    }
+    return Animated.diffClamp(scrollY, 0, headerHeight).interpolate({
+      inputRange: [0, headerHeight],
+      outputRange: [0, -headerHeight],
+      extrapolate: 'clamp',
+    });
+  }, [scrollY, headerHeight]);
 
   // Load the saved sort + view mode once, then persist any change. The guards
   // stop the initial defaults from clobbering the stored values before they
@@ -274,126 +300,144 @@ export default function InboxScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
-      <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
-        <View style={styles.heroTitleBlock}>
-          <Text style={[styles.heroTitle, { color: palette.text }]}>Stash</Text>
-          <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
-            Save now. Organize later.
-          </Text>
-          <Text style={[styles.heroCountText, { color: palette.textSecondary }]}>
-            {inbox.length} saved
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Settings"
-            hitSlop={8}
-            style={styles.accountButton}
-            onPress={() => router.push('/settings')}
-          >
-            <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-              <Ionicons name="settings-sharp" size={20} color={palette.text} />
-            </View>
-            <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
-          </Pressable>
-          {showAccount ? (
+      <Animated.View
+        // The cluster is absolutely positioned so it floats over the list and
+        // can translate out of view. It needs an opaque background so list rows
+        // sliding underneath stay hidden while it is partly collapsed.
+        onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
+        style={[
+          styles.header,
+          { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
+        ]}
+      >
+        <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
+          <View style={styles.heroTitleBlock}>
+            <Text style={[styles.heroTitle, { color: palette.text }]}>Stash</Text>
+            <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
+              Save now. Organize later.
+            </Text>
+            <Text style={[styles.heroCountText, { color: palette.textSecondary }]}>
+              {inbox.length} saved
+            </Text>
+          </View>
+          <View style={styles.headerActions}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={isAuthed ? 'Account' : 'Sign in'}
+              accessibilityLabel="Settings"
               hitSlop={8}
               style={styles.accountButton}
-              onPress={() => router.push('/account')}
+              onPress={() => router.push('/settings')}
             >
-              <Avatar size={44} uri={auth.avatarUrl} email={auth.email} authed={isAuthed} />
-              <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
-                {isAuthed ? 'Account' : 'Sign in'}
-              </Text>
+              <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+                <Ionicons name="settings-sharp" size={20} color={palette.text} />
+              </View>
+              <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
             </Pressable>
-          ) : null}
+            {showAccount ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={isAuthed ? 'Account' : 'Sign in'}
+                hitSlop={8}
+                style={styles.accountButton}
+                onPress={() => router.push('/account')}
+              >
+                <Avatar size={44} uri={auth.avatarUrl} email={auth.email} authed={isAuthed} />
+                <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
+                  {isAuthed ? 'Account' : 'Sign in'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
-      </View>
-      {loadError ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Report storage problem"
-          onPress={() => router.push('/report')}
-          style={({ pressed }) => [styles.errorBanner, { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 }]}
-        >
-          <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
-            Couldn’t open local storage — showing sample data. Your saves this session may not
-            persist. Tap to report ›
-          </Text>
-        </Pressable>
-      ) : null}
-      <View style={styles.searchWrap}>
-        <TextInput
-          style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
-          placeholder="Search your stash"
-          placeholderTextColor={palette.textSecondary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          value={query}
-          onChangeText={setQuery}
-          clearButtonMode="while-editing"
-        />
-      </View>
-      <View style={styles.sortRow}>
-        <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>Browse</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Sort field: ${sort.field === 'date' ? 'Date' : 'Name'}`}
-          onPress={() => setSort((s) => ({ ...s, field: s.field === 'date' ? 'name' : 'date' }))}
-          style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
-        >
-          <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-            {sort.field === 'date' ? 'Newest' : 'Name'}
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Sort direction: ${sort.dir === 'asc' ? 'ascending' : 'descending'}`}
-          onPress={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
-          style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
-        >
-          <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-            {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`View as ${describeViewMode(nextViewMode(viewMode))}`}
-          accessibilityState={{ selected: viewMode === 'list' }}
-          testID="inbox-view-toggle"
-          onPress={() => setViewMode((mode) => nextViewMode(mode))}
-          style={[styles.viewToggle, { backgroundColor: palette.surface, borderColor: palette.border }]}
-        >
-          <Text style={[styles.viewToggleIcon, { color: palette.text }]}>
-            {viewMode === 'card' ? '☰' : '▦'}
-          </Text>
-        </Pressable>
-      </View>
-      {showShelf ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          testID="browse-shelf"
-          style={styles.shelf}
-          contentContainerStyle={styles.shelfContent}
-        >
-          {renderChip('all', 'All', ALL_FILTER)}
-          {hasUncollected ? renderChip('uncollected', 'No collection', { kind: 'uncollected' }) : null}
-          {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter))}
-        </ScrollView>
-      ) : null}
-      <FlatList
+        {loadError ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Report storage problem"
+            onPress={() => router.push('/report')}
+            style={({ pressed }) => [styles.errorBanner, { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 }]}
+          >
+            <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
+              Couldn’t open local storage — showing sample data. Your saves this session may not
+              persist. Tap to report ›
+            </Text>
+          </Pressable>
+        ) : null}
+        <View style={styles.searchWrap}>
+          <TextInput
+            style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
+            placeholder="Search your stash"
+            placeholderTextColor={palette.textSecondary}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={query}
+            onChangeText={setQuery}
+            clearButtonMode="while-editing"
+          />
+        </View>
+        <View style={styles.sortRow}>
+          <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>Browse</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Sort field: ${sort.field === 'date' ? 'Date' : 'Name'}`}
+            onPress={() => setSort((s) => ({ ...s, field: s.field === 'date' ? 'name' : 'date' }))}
+            style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
+          >
+            <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+              {sort.field === 'date' ? 'Newest' : 'Name'}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Sort direction: ${sort.dir === 'asc' ? 'ascending' : 'descending'}`}
+            onPress={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
+            style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
+          >
+            <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+              {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`View as ${describeViewMode(nextViewMode(viewMode))}`}
+            accessibilityState={{ selected: viewMode === 'list' }}
+            testID="inbox-view-toggle"
+            onPress={() => setViewMode((mode) => nextViewMode(mode))}
+            style={[styles.viewToggle, { backgroundColor: palette.surface, borderColor: palette.border }]}
+          >
+            <Text style={[styles.viewToggleIcon, { color: palette.text }]}>
+              {viewMode === 'card' ? '☰' : '▦'}
+            </Text>
+          </Pressable>
+        </View>
+        {showShelf ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            testID="browse-shelf"
+            style={styles.shelf}
+            contentContainerStyle={styles.shelfContent}
+          >
+            {renderChip('all', 'All', ALL_FILTER)}
+            {hasUncollected ? renderChip('uncollected', 'No collection', { kind: 'uncollected' }) : null}
+            {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter))}
+          </ScrollView>
+        ) : null}
+      </Animated.View>
+      <AnimatedFlatList
         data={visible}
         keyExtractor={(item) => item.id}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: true,
+        })}
+        scrollEventThrottle={16}
+        // Keep the scrollbar clear of the floating header.
+        scrollIndicatorInsets={{ top: headerHeight }}
         contentContainerStyle={[
           styles.list,
           viewMode === 'list' ? styles.listModeList : null,
-          // Clear the floating Add button so it never covers the last row.
-          { paddingBottom: insets.bottom + 96 },
+          // Start the list below the floating header, and clear the Add button
+          // so it never covers the last row.
+          { paddingTop: headerHeight + 8, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
           <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
@@ -570,6 +614,14 @@ export default function InboxScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  header: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    // Above the list so it floats over the scrolling rows.
+    zIndex: 10,
   },
   list: {
     padding: 16,
