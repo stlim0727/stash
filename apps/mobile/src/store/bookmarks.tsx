@@ -29,10 +29,17 @@ import type {
   Tag,
 } from '@/domain/types';
 import { sanitizeTagData } from '@/domain/tag-data';
+import { recordLog } from '@/observability/log-buffer';
 import { repository } from '@/storage/repository';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
-import { LAST_PULLED_AT_KEY, pullRemoteChanges } from '@/sync/pull-bookmarks';
+import { planAccountTransition } from '@/sync/account-transition';
+import {
+  LAST_PULLED_AT_KEY,
+  SYNCED_USER_ANON_KEY,
+  SYNCED_USER_ID_KEY,
+  pullRemoteChanges,
+} from '@/sync/pull-bookmarks';
 import {
   createSyncApi,
   hasRemoteIdentity,
@@ -926,6 +933,70 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
       }
 
+      const currentUser = {
+        id: session.user.id,
+        isAnonymous: session.user.is_anonymous !== false,
+      };
+
+      // Account-switch guard: before pulling, reconcile the local cache with the
+      // signed-in user so a pull can never treat another account's rows as
+      // remote deletions. Anonymous data carries over (re-home); a different
+      // real account's cache is dropped (it stays safe in that account's cloud).
+      try {
+        const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
+        const previousAnon = (await repository.getMeta(SYNCED_USER_ANON_KEY)) === 'true';
+        const plan = planAccountTransition(
+          previousUserId ? { id: previousUserId, isAnonymous: previousAnon } : null,
+          currentUser,
+          bookmarksRef.current ?? [],
+        );
+        if (plan.rehome.length > 0) {
+          const now = new Date().toISOString();
+          const rehomedById = new Map<string, Bookmark>();
+          const newEntries: LocalPendingBookmark[] = [];
+          for (const old of plan.rehome) {
+            const newId = makeLocalId();
+            rehomedById.set(old.id, { ...old, id: newId, sync_status: 'pending', updated_at: now });
+            newEntries.push({
+              local_id: newId,
+              remote_id: null,
+              operation: 'create',
+              payload: {
+                url: old.url ?? undefined,
+                title: old.title ?? undefined,
+                notes: old.notes ?? undefined,
+              },
+              sync_status: 'pending',
+              retry_count: 0,
+              last_error: null,
+              created_at: now,
+              updated_at: now,
+            });
+          }
+          recordLog('warn', `account switch: re-homing ${plan.rehome.length} bookmark(s) into the new account`);
+          setBookmarks((current) =>
+            (current ?? []).map((bookmark) => rehomedById.get(bookmark.id) ?? bookmark),
+          );
+          setQueue((current) => [...current, ...newEntries]);
+          await ensureRepositoryReady();
+          for (const [oldId, rehomed] of rehomedById) {
+            await repository.replaceBookmark(oldId, rehomed);
+          }
+          for (const entry of newEntries) {
+            await repository.enqueue(entry);
+          }
+        }
+        if (plan.drop.length > 0) {
+          const dropped = new Set(plan.drop);
+          recordLog('warn', `account switch: dropping ${plan.drop.length} cached bookmark(s) from the previous account`);
+          setBookmarks((current) => (current ?? []).filter((bookmark) => !dropped.has(bookmark.id)));
+          await ensureRepositoryReady();
+          await Promise.all(plan.drop.map((id) => repository.deleteBookmark(id)));
+        }
+      } catch (error) {
+        logStorageError('account transition', error);
+      }
+
       // Pull phase: bring down remote changes (other devices, cloud AI
       // enrichment). Local rows with queued work are never overwritten.
       try {
@@ -938,6 +1009,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             queueRef.current.some(
               (queued) => queued.local_id === bookmarkId && queued.sync_status !== 'synced',
             ),
+          currentUser,
         );
         if (result.upserts.length > 0 || result.deletions.length > 0) {
           const upsertIds = new Set(result.upserts.map((bookmark) => bookmark.id));

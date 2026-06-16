@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { LAST_PULLED_AT_KEY, pullRemoteChanges } from './pull-bookmarks.ts';
+import {
+  LAST_PULLED_AT_KEY,
+  SYNCED_USER_ID_KEY,
+  pullRemoteChanges,
+} from './pull-bookmarks.ts';
 import type { PullApi } from './pull-bookmarks.ts';
 import type { AIEnrichment, Bookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
@@ -244,4 +248,64 @@ test('first pull fetches everything (null watermark)', async () => {
   await pullRemoteChanges(api, repository, () => [], () => false);
 
   assert.equal(receivedSince, null);
+});
+
+test('records the synced user id and reports no change on first sync', async () => {
+  const { meta, repository } = fakeRepository();
+  const api = fakeApi();
+
+  const result = await pullRemoteChanges(api, repository, () => [], () => false, {
+    id: 'user-1',
+    isAnonymous: true,
+  });
+
+  assert.equal(result.userChanged, false);
+  assert.equal(meta[SYNCED_USER_ID_KEY], 'user-1');
+});
+
+test('account switch skips deletions and resets the watermark', async () => {
+  const { calls, repository } = fakeRepository({
+    [SYNCED_USER_ID_KEY]: 'anon-user',
+    [LAST_PULLED_AT_KEY]: '2026-06-12T10:00:00.000Z',
+  });
+  // A bookmark synced under the previous account, absent from the new account.
+  const previousAccountRow = makeBookmark({ id: REMOTE_ID_B });
+  let receivedSince: string | null = 'unset';
+  const api = fakeApi({
+    listBookmarkIds: async () => [], // new account is empty
+    listBookmarksUpdatedSince: async (since) => {
+      receivedSince = since;
+      return [];
+    },
+  });
+
+  const result = await pullRemoteChanges(
+    api,
+    repository,
+    () => [previousAccountRow],
+    () => false,
+    { id: 'google-user', isAnonymous: false },
+  );
+
+  // The catastrophic wipe is prevented: no deletions despite the empty account.
+  assert.equal(result.userChanged, true);
+  assert.deepEqual(result.deletions, []);
+  assert.equal(calls.includes(`deleteBookmark:${REMOTE_ID_B}`), false);
+  // Full refresh: the previous account's watermark is not reused.
+  assert.equal(receivedSince, null);
+});
+
+test('same user still reconciles genuine remote deletions', async () => {
+  const { calls, repository } = fakeRepository({ [SYNCED_USER_ID_KEY]: 'user-1' });
+  const goneRemotely = makeBookmark({ id: REMOTE_ID_B });
+  const api = fakeApi({ listBookmarkIds: async () => [] });
+
+  const result = await pullRemoteChanges(api, repository, () => [goneRemotely], () => false, {
+    id: 'user-1',
+    isAnonymous: false,
+  });
+
+  assert.equal(result.userChanged, false);
+  assert.deepEqual(result.deletions, [REMOTE_ID_B]);
+  assert.ok(calls.includes(`deleteBookmark:${REMOTE_ID_B}`));
 });
