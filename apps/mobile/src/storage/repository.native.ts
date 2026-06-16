@@ -30,6 +30,14 @@ interface QueueRow {
  */
 class SqliteBookmarkRepository implements BookmarkRepository {
   private db: SQLite.SQLiteDatabase | null = null;
+  // In-flight open shared by every concurrent caller. A cold start fires
+  // several DB operations at once (the startup load's Promise.all, background
+  // saves, the sync queue drain). Without this guard each one finds `db` null
+  // and calls openDatabaseAsync in parallel, opening competing native handles
+  // to stash.db; the native layer then rejects statements on the losing
+  // handle ("NativeDatabase.prepareAsync ... NullPointerException"). The auth
+  // store (session-storage.native.ts) coalesces opens the same way.
+  private opening: Promise<SQLite.SQLiteDatabase> | null = null;
 
   private async open(): Promise<SQLite.SQLiteDatabase> {
     if (this.db) {
@@ -46,15 +54,26 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         this.db = null;
       }
     }
-    try {
-      this.db = await SQLite.openDatabaseAsync('stash.db');
-      return this.db;
-    } catch (error) {
-      // The precise native open error is otherwise swallowed by callers and
-      // only surfaces as the generic "Couldn't open local storage" banner.
-      recordLog('error', `sqlite open failed: ${String(error)}`);
-      throw error;
+    // Coalesce concurrent opens onto a single openDatabaseAsync call.
+    if (!this.opening) {
+      this.opening = SQLite.openDatabaseAsync('stash.db')
+        .then((db) => {
+          this.db = db;
+          return db;
+        })
+        .catch((error) => {
+          // The precise native open error is otherwise swallowed by callers and
+          // only surfaces as the generic "Couldn't open local storage" banner.
+          recordLog('error', `sqlite open failed: ${String(error)}`);
+          throw error;
+        })
+        .finally(() => {
+          // Clear the in-flight marker so a later stale-handle reopen (or a
+          // retry after a failed open) starts a fresh attempt.
+          this.opening = null;
+        });
     }
+    return this.opening;
   }
 
   async init(seed: Bookmark[]): Promise<void> {
