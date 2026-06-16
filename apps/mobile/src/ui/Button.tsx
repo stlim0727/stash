@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { forwardRef, type ElementRef, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 
 import { usePalette } from '@/theme';
@@ -13,7 +13,10 @@ interface ButtonProps extends Omit<PressableProps, 'style'> {
   style?: StyleProp<ViewStyle>;
 }
 
-export function Button({ children, variant = 'primary', size = 'md', disabled, style, ...props }: ButtonProps) {
+export const Button = forwardRef<ElementRef<typeof Pressable>, ButtonProps>(function Button(
+  { children, variant = 'primary', size = 'md', disabled, style, ...props },
+  ref,
+) {
   const palette = usePalette();
   const colors = {
     primary: { backgroundColor: palette.accent, borderColor: palette.accent, color: '#ffffff' },
@@ -24,6 +27,7 @@ export function Button({ children, variant = 'primary', size = 'md', disabled, s
 
   return (
     <Pressable
+      ref={ref}
       accessibilityRole="button"
       disabled={disabled}
       style={({ pressed }) => [
@@ -37,7 +41,7 @@ export function Button({ children, variant = 'primary', size = 'md', disabled, s
       <Text style={[styles.label, styles[`${size}Label`], { color: colors.color }]}>{children}</Text>
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   base: {

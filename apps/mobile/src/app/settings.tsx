@@ -78,12 +78,6 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={{ backgroundColor: palette.background }} contentContainerStyle={styles.container}>
-      <View style={styles.hero}>
-        <Text style={[styles.heroTitle, { color: palette.text }]}>Settings</Text>
-        <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
-          Manage your library, sync, and support options.
-        </Text>
-      </View>
       {settingsRows.map((row) => (
         <Card key={row.label} style={styles.row}>
           <Text style={[styles.rowLabel, { color: palette.text }]}>{row.label}</Text>
@@ -152,18 +146,6 @@ const styles = StyleSheet.create({
   container: {
     padding: 16,
     gap: 14,
-  },
-  hero: {
-    paddingVertical: 8,
-  },
-  heroTitle: {
-    fontSize: 32,
-    fontWeight: '800',
-    letterSpacing: -0.6,
-  },
-  heroSubtitle: {
-    fontSize: 15,
-    marginTop: 4,
   },
   row: {
     borderRadius: 22,

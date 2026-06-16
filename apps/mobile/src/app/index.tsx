@@ -188,7 +188,7 @@ export default function InboxScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
-      <View style={styles.hero}>
+      <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
         <View>
           <Text style={[styles.heroTitle, { color: palette.text }]}>Stash</Text>
           <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
@@ -483,16 +483,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     gap: 8,
   },
-  chip: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-  },
-  chipLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
   card: {
     borderRadius: 24,
     overflow: 'hidden',
@@ -555,9 +545,6 @@ const styles = StyleSheet.create({
   cardUrl: {
     fontSize: 13,
   },
-  cardMeta: {
-    fontSize: 12,
-  },
   metaChipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -586,16 +573,7 @@ const styles = StyleSheet.create({
   primaryButton: {
     flex: 1,
   },
-  primaryButtonLabel: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
   secondaryButton: {
     minWidth: 112,
-  },
-  secondaryButtonLabel: {
-    fontSize: 16,
-    fontWeight: '600',
   },
 });

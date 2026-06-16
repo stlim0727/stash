@@ -28,12 +28,6 @@ export default function AddBookmarkScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
-      <View style={styles.hero}>
-        <Text style={[styles.heroTitle, { color: palette.text }]}>Quick save</Text>
-        <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
-          Drop in a link and Stash will enrich it in the background.
-        </Text>
-      </View>
       <Card elevated={false} style={styles.captureCard}>
         <Text style={[styles.label, { color: palette.textSecondary }]}>URL</Text>
         <TextInput
@@ -82,18 +76,6 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     gap: 14,
-  },
-  hero: {
-    paddingVertical: 8,
-  },
-  heroTitle: {
-    fontSize: 32,
-    fontWeight: '800',
-    letterSpacing: -0.6,
-  },
-  heroSubtitle: {
-    fontSize: 15,
-    marginTop: 4,
   },
   captureCard: {
     borderRadius: 24,
