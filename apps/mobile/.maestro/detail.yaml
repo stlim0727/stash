@@ -5,5 +5,7 @@ appId: com.stash.app
 - launchApp:
     clearState: true
 - tapOn: 'Local-first software'
-- assertVisible: 'Title'
+# Assert on the Delete action (top action bar, detail-only) rather than the
+# "Title" field, which sits lower and can fall below the fold at larger fonts.
+- assertVisible: 'Delete'
 - takeScreenshot: detail
