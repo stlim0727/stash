@@ -57,19 +57,19 @@ This file captures the project state and working conventions so any agent (Codex
 
 ## Building an installable Android APK (no EAS account)
 
-The fastest way to get a real, installable APK is the **`.github/workflows/android-apk.yml`** GitHub Actions workflow. It runs `expo prebuild` → Gradle `assembleRelease`, signs with the debug keystore, and uploads a standalone APK — no EAS/Expo account needed. (EAS via `eas.json` is still the path for store builds; see `docs/development/releasing.md`.)
+The fastest way to get a real, installable APK is the **`.github/workflows/android-apk.yml`** GitHub Actions workflow. It runs `expo prebuild` → Gradle `assembleRelease`, signs with the debug keystore, and **publishes a standalone APK as a GitHub Release with an install QR code** — no EAS/Expo account needed. (EAS via `eas.json` is still the path for store builds; see `docs/development/releasing.md`.)
 
-**How the trigger maps to output** (`workflow_dispatch` input `version`, or a pushed git tag):
+**How the trigger maps to output** (`workflow_dispatch` input `version`, or a pushed git tag) — every build now publishes a Release with the raw `.apk` + QR (and still uploads a `stash-android-apk` run artifact):
 
-- `version` **blank** or a **hyphenated** pre-release tag (e.g. `v0.1.7-rc8`) → builds + uploads the APK as a **run artifact only** (no GitHub Release). Use this for test builds.
-- A clean `vX.Y.Z` (no hyphen), as the input or a pushed `vX.Y.Z` git tag → also publishes a prerelease **GitHub Release** with the APK attached.
+- `version` **blank** or a **hyphenated** pre-release tag (e.g. `v0.1.7-rc8`) → refreshes the single rolling **`dev`** prerelease in place (stable `dev` tag, `stash-dev-android.apk`). Use this for test builds.
+- A clean `vX.Y.Z` (no hyphen), as the input or a pushed `vX.Y.Z` git tag → publishes a **versioned** prerelease, kept forever.
 
 **From a Claude Code web session (GitHub MCP tools):**
 
 1. `actions_run_trigger` (method `run_workflow`) → `workflow_id: "android-apk.yml"`, `ref: "main"`, `inputs: { version: "v0.1.7-rc8" }`.
 2. `actions_list` (`list_workflow_runs`, filter `event=workflow_dispatch`) → grab the newest run's `id`.
 3. Poll `actions_get` until `status: "completed"` (~6–7 min; arm64-v8a only). Don't `sleep`-poll — arm a short background timer between checks.
-4. `actions_list` (`list_workflow_run_artifacts`) → artifact **`stash-android-apk`**. Share the run URL (`https://github.com/<owner>/<repo>/actions/runs/<id>`) so the user downloads + unzips the `.apk`. (The artifact itself only appears once the build succeeds.)
+4. `get_latest_release` / `get_release_by_tag` (tag `dev` for test builds) → share the Release URL. The user opens it on their phone, scans the QR (or taps the download link), and installs the `.apk` directly — no artifact unzip. (The Release only appears once the build succeeds.)
 
 **With the `gh` CLI** (non-MCP shells):
 

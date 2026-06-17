@@ -5,10 +5,12 @@ name: Android APK
 # `release` build type with the debug keystore and bundles the JS, so the APK
 # installs and runs on a device on its own.
 #
-# - workflow_dispatch: build + upload the APK as a run artifact (no release).
-# - push a `vX.Y.Z` tag: build + publish a GitHub Release with the APK attached.
-#   (A tag containing a hyphen, e.g. v0.1.0-test1, builds the artifact but does
-#    NOT publish a release — handy for validating the build first.)
+# Every build publishes a GitHub Release with the raw .apk + an install QR code
+# (download the Release asset — no artifact zip to unpack):
+# - clean `vX.Y.Z` (pushed tag or dispatch input): a versioned prerelease.
+# - blank dispatch or a hyphenated tag (e.g. v0.1.0-test1): refreshes the single
+#   rolling `dev` prerelease in place, so test builds don't clutter Releases.
+# The APK is also uploaded as a run artifact for tooling that consumes it.
 #
 # Optional build-time config via repo secrets (absent ⇒ local-only build):
 #   EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, EXPO_PUBLIC_SENTRY_DSN
@@ -109,13 +111,44 @@ jobs:
         # the cold-cache native (NDK) compile fast and the APK small.
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=arm64-v8a
 
+      # Decide where this build is published. A clean vX.Y.Z (pushed tag or
+      # dispatch input) is a real, versioned prerelease kept forever. Anything
+      # else — a blank dispatch or a hyphenated pre-release tag — refreshes a
+      # single rolling `dev` prerelease in place (stable tag + filename), so the
+      # Releases list stays tidy instead of growing one entry per test build.
+      - name: Determine release target
+        id: meta
+        run: |
+          SHA_SHORT="${GITHUB_SHA:0:7}"
+          LABEL=""
+          if [ -n "${{ inputs.version }}" ]; then
+            LABEL="${{ inputs.version }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            LABEL="${{ github.ref_name }}"
+          fi
+          if [[ "$LABEL" == v* && "$LABEL" != *-* ]]; then
+            TAG="$LABEL"
+            APK="stash-${LABEL}-${SHA_SHORT}-android.apk"
+            REL_NAME="Stash $LABEL"
+          else
+            TAG="dev"
+            APK="stash-dev-android.apk"
+            REL_NAME="Development build (latest)"
+          fi
+          URL="${{ github.server_url }}/${{ github.repository }}/releases/download/${TAG}/${APK}"
+          {
+            echo "tag=$TAG"
+            echo "apk=$APK"
+            echo "rel_name=$REL_NAME"
+            echo "sha_short=$SHA_SHORT"
+            echo "url=$URL"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Stage the APK
         run: |
           mkdir -p dist
-          NAME="${{ inputs.version || github.ref_name }}"
-          SHA_SHORT="${GITHUB_SHA:0:7}"
           cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk \
-             "dist/stash-${NAME//\//-}-${SHA_SHORT}-android.apk"
+             "dist/${{ steps.meta.outputs.apk }}"
           ls -la dist
 
       # When Supabase is configured, verify Expo actually inlined the URL into
@@ -149,23 +182,42 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
-      # Publish a Release when a vX.Y.Z tag is pushed, OR when dispatched with a
-      # version input. On dispatch the action creates the tag at this commit
-      # (avoids needing to push a tag from a constrained environment).
+      # Encode the direct Release download URL as a QR code, attached to the
+      # Release and embedded in its notes. Scanning it on a phone goes straight
+      # to the .apk — no desktop, no artifact zip to unpack.
+      - name: Generate install QR code
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq qrencode
+          qrencode -o dist/install-qr.png -s 8 -m 2 "${{ steps.meta.outputs.url }}"
+          ls -la dist
+
+      # Every build now publishes a Release with the raw .apk + QR. Versioned
+      # builds get their own tag; everything else refreshes the rolling `dev`
+      # prerelease in place. The action creates/updates the tag at this commit,
+      # so no tag has to be pushed from a constrained environment.
       - name: Publish GitHub Release
-        if: ${{ (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.version != '') }}
         uses: softprops/action-gh-release@v2
         with:
           prerelease: true
-          tag_name: ${{ inputs.version || github.ref_name }}
+          tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Stash ${{ inputs.version || github.ref_name }}
-          files: dist/*.apk
+          name: ${{ steps.meta.outputs.rel_name }}
+          files: |
+            dist/*.apk
+            dist/install-qr.png
           body: |
             Standalone debug-signed Android APK built in CI.
 
-            Install: download the `.apk`, open it on your Android phone, and allow
-            "install unknown apps" for your browser/file manager when prompted.
+            **Commit** [`${{ steps.meta.outputs.sha_short }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) · `${{ github.ref_name }}`
+
+            ### 📲 Install on Android
+            Scan this on your phone (or open the link), then tap the downloaded
+            `.apk` to install. The first time, allow "install unknown apps" for
+            your browser when prompted.
+
+            ![Install QR](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/install-qr.png)
+
+            ➡️ **[Download ${{ steps.meta.outputs.apk }}](${{ steps.meta.outputs.url }})**
 
             Local-only unless the repo's `EXPO_PUBLIC_SUPABASE_*` secrets were set
             at build time.

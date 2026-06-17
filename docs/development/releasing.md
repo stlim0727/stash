@@ -4,15 +4,29 @@
 
 For a real, installable Android APK without any Expo/EAS account, use the
 **`.github/workflows/android-apk.yml`** workflow — it does `expo prebuild` →
-Gradle `assembleRelease` (debug-signed, standalone) and uploads the APK.
+Gradle `assembleRelease` (debug-signed, standalone) and publishes the APK.
+
+**Every build publishes a GitHub Release with the raw `.apk` plus an install QR
+code**, so the phone-only flow is: trigger → open the Release → scan the QR →
+tap the downloaded `.apk` → install (allow "install unknown apps" once). No
+desktop, no artifact zip to unpack.
 
 - Run it via **workflow dispatch** with the `version` input, or by pushing a tag:
-  - blank / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ APK as a **run artifact only**.
-  - clean **`vX.Y.Z`** ⇒ also publishes a prerelease **GitHub Release** with the APK.
+  - clean **`vX.Y.Z`** ⇒ a **versioned** prerelease, kept forever.
+  - blank dispatch / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ refreshes the single
+    rolling **`dev`** prerelease in place, so test builds don't clutter Releases.
+- The APK is also still uploaded as a **run artifact** (`stash-android-apk`) for
+  tooling — but for installing on a phone, prefer the Release asset (no unzip).
 - `gh` CLI: `gh workflow run android-apk.yml -f version=v0.1.7-rc8 --ref main`,
-  then `gh run download <run-id> -n stash-android-apk`.
+  then grab the link from `gh release view dev` (or `gh run download <run-id> -n
+  stash-android-apk` for the raw artifact).
 - Build is **arm64-v8a only** (~6–7 min). Step-by-step (incl. the GitHub MCP-tool
   sequence for Claude Code web sessions) is in **`AGENTS.md`**.
+
+> **Why there's still an "install unknown apps" prompt:** that's inherent to
+> sideloading any APK outside an app store. To remove it entirely you'd
+> distribute via Firebase App Distribution, EAS internal distribution, or a Play
+> internal-testing track — see the options weighed in the project history.
 
 The rest of this doc covers the EAS-based path for store/internal builds.
 
