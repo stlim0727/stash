@@ -233,11 +233,25 @@ export default function BookmarkDetailScreen() {
       contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 32 }]}
     >
       {bookmark.preview_image_url ? (
-        <Image
-          source={{ uri: bookmark.preview_image_url }}
-          style={styles.preview}
-          resizeMode="cover"
-        />
+        bookmark.url ? (
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel="Open link"
+            onPress={handleOpenLink}
+          >
+            <Image
+              source={{ uri: bookmark.preview_image_url }}
+              style={styles.preview}
+              resizeMode="cover"
+            />
+          </Pressable>
+        ) : (
+          <Image
+            source={{ uri: bookmark.preview_image_url }}
+            style={styles.preview}
+            resizeMode="cover"
+          />
+        )
       ) : null}
       {/* Compact byline: favicon · host · status, instead of a header card. */}
       <View style={styles.byline}>

@@ -2,11 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
+  Animated,
   FlatList,
   Image,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -43,6 +47,7 @@ import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { Avatar } from '@/ui/Avatar';
+import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import type { Bookmark } from '@/domain/types';
 
 function statusLabel(bookmark: Bookmark): string | null {
@@ -109,12 +114,27 @@ function ItemIcon({
   );
 }
 
+// The list that drives the collapsing header. Animated.FlatList lets the
+// scroll position feed an Animated.Value over the native driver; the cast keeps
+// FlatList's generic item typing (Animated.FlatList erases it to `any`).
+const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
+
 export default function InboxScreen() {
   const palette = usePalette();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { inbox, isLoading, loadError, getTagsForBookmark, getCollection, getEnrichment } =
-    useBookmarks();
+  const {
+    inbox,
+    isLoading,
+    loadError,
+    getTagsForBookmark,
+    getCollection,
+    getEnrichment,
+    collections,
+    archiveBookmark,
+    deleteBookmark,
+    assignCollection,
+  } = useBookmarks();
   const auth = useSupabaseAuth();
   // Account avatar is only meaningful when the cloud is configured; otherwise
   // there is nothing to sign in to and the hero stays clean.
@@ -124,6 +144,31 @@ export default function InboxScreen() {
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+
+  // Long-press action menu: which bookmark it targets, and whether it's showing
+  // the top-level actions or the "move to collection" picker. Null item = closed.
+  const [menuItem, setMenuItem] = useState<Bookmark | null>(null);
+  const [menuMode, setMenuMode] = useState<'main' | 'move'>('main');
+
+  // Collapsing header: the top cluster (hero + search + controls + browse
+  // shelf) slides up out of view as the list scrolls down and slides back on
+  // scroll up — à la Instagram/YouTube — reclaiming vertical space for the
+  // bookmarks. We measure the cluster's height once it lays out, then drive its
+  // translateY from the list's scroll position. diffClamp tracks the *net*
+  // scroll movement (clamped to the header's height), so an upward flick reveals
+  // the header immediately wherever you are in the list, not only at the top.
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const headerTranslate = useMemo(() => {
+    if (!headerHeight) {
+      return 0;
+    }
+    return Animated.diffClamp(scrollY, 0, headerHeight).interpolate({
+      inputRange: [0, headerHeight],
+      outputRange: [0, -headerHeight],
+      extrapolate: 'clamp',
+    });
+  }, [scrollY, headerHeight]);
 
   // Load the saved sort + view mode once, then persist any change. The guards
   // stop the initial defaults from clobbering the stored values before they
@@ -257,6 +302,122 @@ export default function InboxScreen() {
         ? `${activeChip.label} · ${visible.length}`
         : 'Recently saved';
 
+  const closeMenu = useCallback(() => {
+    setMenuItem(null);
+    setMenuMode('main');
+  }, []);
+
+  // Mirrors the detail screen's delete: a destructive confirm (native Alert, or
+  // window.confirm on web where Alert has no buttons) before the row is gone.
+  const confirmDelete = useCallback(
+    (item: Bookmark) => {
+      const remove = () => deleteBookmark(item.id);
+      if (Platform.OS === 'web') {
+        if (typeof confirm === 'undefined' || confirm('Delete this bookmark permanently?')) {
+          remove();
+        }
+        return;
+      }
+      Alert.alert('Delete bookmark', 'This permanently removes the bookmark from this device.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: remove },
+      ]);
+    },
+    [deleteBookmark],
+  );
+
+  // Actions for the long-press sheet. In 'move' mode it lists the collections so
+  // a bookmark can be filed in one tap; otherwise the top-level item actions.
+  const menuActions = useMemo<SheetAction[]>(() => {
+    const item = menuItem;
+    if (!item) {
+      return [];
+    }
+    if (menuMode === 'move') {
+      return [
+        {
+          key: 'none',
+          label: 'Inbox (no collection)',
+          icon: 'file-tray-outline',
+          selected: item.collection_id === null,
+          onPress: () => {
+            assignCollection(item.id, null);
+            closeMenu();
+          },
+        },
+        ...collections.map(
+          (collection): SheetAction => ({
+            key: collection.id,
+            label: collection.name,
+            icon: 'folder-outline',
+            selected: item.collection_id === collection.id,
+            onPress: () => {
+              assignCollection(item.id, collection.id);
+              closeMenu();
+            },
+          }),
+        ),
+        { key: 'back', label: '‹ Back', onPress: () => setMenuMode('main') },
+      ];
+    }
+    const actions: SheetAction[] = [];
+    if (item.url) {
+      actions.push({
+        key: 'open',
+        label: 'Open link',
+        icon: 'open-outline',
+        onPress: () => {
+          closeMenu();
+          void Linking.openURL(item.url!).catch(() => {});
+        },
+      });
+      actions.push({
+        key: 'share',
+        label: 'Share',
+        icon: 'share-social-outline',
+        onPress: () => {
+          closeMenu();
+          void Share.share({
+            message: item.url!,
+            url: item.url!,
+            title: item.title ?? undefined,
+          }).catch(() => {});
+        },
+      });
+    }
+    actions.push({
+      key: 'move',
+      label: 'Move to collection…',
+      icon: 'folder-outline',
+      onPress: () => setMenuMode('move'),
+    });
+    actions.push({
+      key: 'archive',
+      label: 'Archive',
+      icon: 'archive-outline',
+      onPress: () => {
+        closeMenu();
+        archiveBookmark(item.id, true);
+      },
+    });
+    actions.push({
+      key: 'delete',
+      label: 'Delete',
+      icon: 'trash-outline',
+      destructive: true,
+      onPress: () => {
+        closeMenu();
+        confirmDelete(item);
+      },
+    });
+    return actions;
+  }, [menuItem, menuMode, collections, assignCollection, archiveBookmark, confirmDelete, closeMenu]);
+
+  const menuTitle =
+    menuMode === 'move'
+      ? 'Move to collection'
+      : (menuItem?.title ?? menuItem?.url ?? 'Untitled');
+
   const renderChip = (key: string, label: string, target: InboxFilter) => {
     const active = sameFilter(target, filter);
     return (
@@ -274,126 +435,144 @@ export default function InboxScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
-      <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
-        <View style={styles.heroTitleBlock}>
-          <Text style={[styles.heroTitle, { color: palette.text }]}>Stash</Text>
-          <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
-            Save now. Organize later.
-          </Text>
-          <Text style={[styles.heroCountText, { color: palette.textSecondary }]}>
-            {inbox.length} saved
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Settings"
-            hitSlop={8}
-            style={styles.accountButton}
-            onPress={() => router.push('/settings')}
-          >
-            <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-              <Ionicons name="settings-sharp" size={20} color={palette.text} />
-            </View>
-            <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
-          </Pressable>
-          {showAccount ? (
+      <Animated.View
+        // The cluster is absolutely positioned so it floats over the list and
+        // can translate out of view. It needs an opaque background so list rows
+        // sliding underneath stay hidden while it is partly collapsed.
+        onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
+        style={[
+          styles.header,
+          { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
+        ]}
+      >
+        <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
+          <View style={styles.heroTitleBlock}>
+            <Text style={[styles.heroTitle, { color: palette.text }]}>Stash</Text>
+            <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
+              Save now. Organize later.
+            </Text>
+            <Text style={[styles.heroCountText, { color: palette.textSecondary }]}>
+              {inbox.length} saved
+            </Text>
+          </View>
+          <View style={styles.headerActions}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={isAuthed ? 'Account' : 'Sign in'}
+              accessibilityLabel="Settings"
               hitSlop={8}
               style={styles.accountButton}
-              onPress={() => router.push('/account')}
+              onPress={() => router.push('/settings')}
             >
-              <Avatar size={44} uri={auth.avatarUrl} email={auth.email} authed={isAuthed} />
-              <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
-                {isAuthed ? 'Account' : 'Sign in'}
-              </Text>
+              <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+                <Ionicons name="settings-sharp" size={20} color={palette.text} />
+              </View>
+              <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
             </Pressable>
-          ) : null}
+            {showAccount ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={isAuthed ? 'Account' : 'Sign in'}
+                hitSlop={8}
+                style={styles.accountButton}
+                onPress={() => router.push('/account')}
+              >
+                <Avatar size={44} uri={auth.avatarUrl} email={auth.email} authed={isAuthed} />
+                <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
+                  {isAuthed ? 'Account' : 'Sign in'}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
-      </View>
-      {loadError ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Report storage problem"
-          onPress={() => router.push('/report')}
-          style={({ pressed }) => [styles.errorBanner, { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 }]}
-        >
-          <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
-            Couldn’t open local storage — showing sample data. Your saves this session may not
-            persist. Tap to report ›
-          </Text>
-        </Pressable>
-      ) : null}
-      <View style={styles.searchWrap}>
-        <TextInput
-          style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
-          placeholder="Search your stash"
-          placeholderTextColor={palette.textSecondary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          value={query}
-          onChangeText={setQuery}
-          clearButtonMode="while-editing"
-        />
-      </View>
-      <View style={styles.sortRow}>
-        <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>Browse</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Sort field: ${sort.field === 'date' ? 'Date' : 'Name'}`}
-          onPress={() => setSort((s) => ({ ...s, field: s.field === 'date' ? 'name' : 'date' }))}
-          style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
-        >
-          <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-            {sort.field === 'date' ? 'Newest' : 'Name'}
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Sort direction: ${sort.dir === 'asc' ? 'ascending' : 'descending'}`}
-          onPress={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
-          style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
-        >
-          <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-            {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
-          </Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`View as ${describeViewMode(nextViewMode(viewMode))}`}
-          accessibilityState={{ selected: viewMode === 'list' }}
-          testID="inbox-view-toggle"
-          onPress={() => setViewMode((mode) => nextViewMode(mode))}
-          style={[styles.viewToggle, { backgroundColor: palette.surface, borderColor: palette.border }]}
-        >
-          <Text style={[styles.viewToggleIcon, { color: palette.text }]}>
-            {viewMode === 'card' ? '☰' : '▦'}
-          </Text>
-        </Pressable>
-      </View>
-      {showShelf ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          testID="browse-shelf"
-          style={styles.shelf}
-          contentContainerStyle={styles.shelfContent}
-        >
-          {renderChip('all', 'All', ALL_FILTER)}
-          {hasUncollected ? renderChip('uncollected', 'No collection', { kind: 'uncollected' }) : null}
-          {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter))}
-        </ScrollView>
-      ) : null}
-      <FlatList
+        {loadError ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Report storage problem"
+            onPress={() => router.push('/report')}
+            style={({ pressed }) => [styles.errorBanner, { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 }]}
+          >
+            <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
+              Couldn’t open local storage — showing sample data. Your saves this session may not
+              persist. Tap to report ›
+            </Text>
+          </Pressable>
+        ) : null}
+        <View style={styles.searchWrap}>
+          <TextInput
+            style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
+            placeholder="Search your stash"
+            placeholderTextColor={palette.textSecondary}
+            autoCapitalize="none"
+            autoCorrect={false}
+            value={query}
+            onChangeText={setQuery}
+            clearButtonMode="while-editing"
+          />
+        </View>
+        <View style={styles.sortRow}>
+          <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>Browse</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Sort field: ${sort.field === 'date' ? 'Date' : 'Name'}`}
+            onPress={() => setSort((s) => ({ ...s, field: s.field === 'date' ? 'name' : 'date' }))}
+            style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
+          >
+            <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+              {sort.field === 'date' ? 'Newest' : 'Name'}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Sort direction: ${sort.dir === 'asc' ? 'ascending' : 'descending'}`}
+            onPress={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
+            style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
+          >
+            <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+              {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`View as ${describeViewMode(nextViewMode(viewMode))}`}
+            accessibilityState={{ selected: viewMode === 'list' }}
+            testID="inbox-view-toggle"
+            onPress={() => setViewMode((mode) => nextViewMode(mode))}
+            style={[styles.viewToggle, { backgroundColor: palette.surface, borderColor: palette.border }]}
+          >
+            <Text style={[styles.viewToggleIcon, { color: palette.text }]}>
+              {viewMode === 'card' ? '☰' : '▦'}
+            </Text>
+          </Pressable>
+        </View>
+        {showShelf ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            testID="browse-shelf"
+            style={styles.shelf}
+            contentContainerStyle={styles.shelfContent}
+          >
+            {renderChip('all', 'All', ALL_FILTER)}
+            {hasUncollected ? renderChip('uncollected', 'No collection', { kind: 'uncollected' }) : null}
+            {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter))}
+          </ScrollView>
+        ) : null}
+      </Animated.View>
+      <AnimatedFlatList
         data={visible}
         keyExtractor={(item) => item.id}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: true,
+        })}
+        scrollEventThrottle={16}
+        // Keep the scrollbar clear of the floating header.
+        scrollIndicatorInsets={{ top: headerHeight }}
         contentContainerStyle={[
           styles.list,
           viewMode === 'list' ? styles.listModeList : null,
-          // Clear the floating Add button so it never covers the last row.
-          { paddingBottom: insets.bottom + 96 },
+          // Start the list below the floating header, and clear the Add button
+          // so it never covers the last row.
+          { paddingTop: headerHeight + 8, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
           <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
@@ -446,6 +625,7 @@ export default function InboxScreen() {
                   },
                 ]}
                 onPress={openDetail}
+                onLongPress={() => setMenuItem(item)}
               >
                 <ItemIcon item={item} compact testID="inbox-list-monogram" />
                 <View style={styles.listText}>
@@ -493,11 +673,16 @@ export default function InboxScreen() {
           ];
           return (
             <Card style={styles.card}>
-              {item.preview_image_url ? (
-                <Image source={{ uri: item.preview_image_url }} style={styles.cardPreview} />
-              ) : null}
-              <Pressable style={styles.cardBody} onPress={openDetail}>
-                <View style={styles.cardTitleRow}>
+              <Pressable onPress={openDetail} onLongPress={() => setMenuItem(item)}>
+                {item.preview_image_url ? (
+                  <Image
+                    testID="inbox-card-preview"
+                    source={{ uri: item.preview_image_url }}
+                    style={styles.cardPreview}
+                  />
+                ) : null}
+                <View style={styles.cardBody}>
+                  <View style={styles.cardTitleRow}>
                   <ItemIcon item={item} testID="inbox-card-monogram" />
                   <Text
                     testID="inbox-card-title"
@@ -533,9 +718,10 @@ export default function InboxScreen() {
                     ))}
                   </View>
                 ) : null}
-                {status ? (
-                  <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
-                ) : null}
+                  {status ? (
+                    <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
+                  ) : null}
+                </View>
               </Pressable>
               {item.url ? (
                 <Pressable
@@ -563,6 +749,12 @@ export default function InboxScreen() {
       >
         <Ionicons name="add" size={34} color="#ffffff" />
       </Pressable>
+      <ActionSheet
+        visible={menuItem !== null}
+        title={menuTitle}
+        actions={menuActions}
+        onClose={closeMenu}
+      />
     </View>
   );
 }
@@ -570,6 +762,14 @@ export default function InboxScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  header: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    // Above the list so it floats over the scrolling rows.
+    zIndex: 10,
   },
   list: {
     padding: 16,
