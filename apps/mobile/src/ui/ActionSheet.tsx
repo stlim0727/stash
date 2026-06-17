@@ -1,0 +1,158 @@
+import { Ionicons } from '@expo/vector-icons';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { usePalette } from '@/theme';
+
+export interface SheetAction {
+  key: string;
+  label: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  /** Renders the row in the danger tint (for destructive actions like Delete). */
+  destructive?: boolean;
+  /** Shows a trailing checkmark (e.g. the bookmark's current collection). */
+  selected?: boolean;
+  onPress: () => void;
+}
+
+/**
+ * A bottom action sheet built on the core React Native Modal — no gesture or
+ * reanimated dependency. Tapping the dimmed backdrop (or Cancel) dismisses it;
+ * taps on the sheet itself are swallowed so it stays open. Used for the Inbox
+ * long-press menu so item actions (Open, Share, Move, Archive, Delete) are
+ * reachable without opening the detail screen.
+ */
+export function ActionSheet({
+  visible,
+  title,
+  actions,
+  onClose,
+}: {
+  visible: boolean;
+  title?: string;
+  actions: SheetAction[];
+  onClose: () => void;
+}) {
+  const palette = usePalette();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable
+        style={styles.backdrop}
+        accessibilityRole="button"
+        accessibilityLabel="Dismiss menu"
+        onPress={onClose}
+      >
+        {/* Swallow presses so tapping the sheet body doesn't dismiss it. */}
+        <Pressable
+          style={[
+            styles.sheet,
+            { backgroundColor: palette.surfaceElevated, paddingBottom: insets.bottom + 12 },
+          ]}
+          onPress={() => {}}
+        >
+          <View style={[styles.grabber, { backgroundColor: palette.border }]} />
+          {title ? (
+            <Text style={[styles.title, { color: palette.textSecondary }]} numberOfLines={2}>
+              {title}
+            </Text>
+          ) : null}
+          {actions.map((action) => (
+            <Pressable
+              key={action.key}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+              onPress={action.onPress}
+              style={({ pressed }) => [
+                styles.action,
+                { backgroundColor: pressed ? palette.mutedSurface : 'transparent' },
+              ]}
+            >
+              {action.icon ? (
+                <Ionicons
+                  name={action.icon}
+                  size={20}
+                  color={action.destructive ? palette.danger : palette.text}
+                  style={styles.actionIcon}
+                />
+              ) : (
+                <View style={styles.actionIcon} />
+              )}
+              <Text
+                style={[
+                  styles.actionLabel,
+                  { color: action.destructive ? palette.danger : palette.text },
+                ]}
+                numberOfLines={1}
+              >
+                {action.label}
+              </Text>
+              {action.selected ? <Text style={{ color: palette.accent }}>✓</Text> : null}
+            </Pressable>
+          ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Cancel"
+            onPress={onClose}
+            style={[styles.cancel, { borderColor: palette.border }]}
+          >
+            <Text style={[styles.cancelLabel, { color: palette.textSecondary }]}>Cancel</Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+const styles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  sheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 8,
+    paddingHorizontal: 12,
+  },
+  grabber: {
+    alignSelf: 'center',
+    width: 36,
+    height: 5,
+    borderRadius: 3,
+    marginBottom: 8,
+  },
+  title: {
+    fontSize: 13,
+    fontWeight: '600',
+    paddingHorizontal: 10,
+    paddingBottom: 6,
+  },
+  action: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 13,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+  },
+  actionIcon: {
+    width: 28,
+  },
+  actionLabel: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  cancel: {
+    marginTop: 8,
+    paddingVertical: 13,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+  },
+  cancelLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+});

@@ -2,12 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   FlatList,
   Image,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -44,6 +47,7 @@ import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { Avatar } from '@/ui/Avatar';
+import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import type { Bookmark } from '@/domain/types';
 
 function statusLabel(bookmark: Bookmark): string | null {
@@ -119,8 +123,18 @@ export default function InboxScreen() {
   const palette = usePalette();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { inbox, isLoading, loadError, getTagsForBookmark, getCollection, getEnrichment } =
-    useBookmarks();
+  const {
+    inbox,
+    isLoading,
+    loadError,
+    getTagsForBookmark,
+    getCollection,
+    getEnrichment,
+    collections,
+    archiveBookmark,
+    deleteBookmark,
+    assignCollection,
+  } = useBookmarks();
   const auth = useSupabaseAuth();
   // Account avatar is only meaningful when the cloud is configured; otherwise
   // there is nothing to sign in to and the hero stays clean.
@@ -130,6 +144,11 @@ export default function InboxScreen() {
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+
+  // Long-press action menu: which bookmark it targets, and whether it's showing
+  // the top-level actions or the "move to collection" picker. Null item = closed.
+  const [menuItem, setMenuItem] = useState<Bookmark | null>(null);
+  const [menuMode, setMenuMode] = useState<'main' | 'move'>('main');
 
   // Collapsing header: the top cluster (hero + search + controls + browse
   // shelf) slides up out of view as the list scrolls down and slides back on
@@ -282,6 +301,122 @@ export default function InboxScreen() {
       : activeChip
         ? `${activeChip.label} · ${visible.length}`
         : 'Recently saved';
+
+  const closeMenu = useCallback(() => {
+    setMenuItem(null);
+    setMenuMode('main');
+  }, []);
+
+  // Mirrors the detail screen's delete: a destructive confirm (native Alert, or
+  // window.confirm on web where Alert has no buttons) before the row is gone.
+  const confirmDelete = useCallback(
+    (item: Bookmark) => {
+      const remove = () => deleteBookmark(item.id);
+      if (Platform.OS === 'web') {
+        if (typeof confirm === 'undefined' || confirm('Delete this bookmark permanently?')) {
+          remove();
+        }
+        return;
+      }
+      Alert.alert('Delete bookmark', 'This permanently removes the bookmark from this device.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: remove },
+      ]);
+    },
+    [deleteBookmark],
+  );
+
+  // Actions for the long-press sheet. In 'move' mode it lists the collections so
+  // a bookmark can be filed in one tap; otherwise the top-level item actions.
+  const menuActions = useMemo<SheetAction[]>(() => {
+    const item = menuItem;
+    if (!item) {
+      return [];
+    }
+    if (menuMode === 'move') {
+      return [
+        {
+          key: 'none',
+          label: 'Inbox (no collection)',
+          icon: 'file-tray-outline',
+          selected: item.collection_id === null,
+          onPress: () => {
+            assignCollection(item.id, null);
+            closeMenu();
+          },
+        },
+        ...collections.map(
+          (collection): SheetAction => ({
+            key: collection.id,
+            label: collection.name,
+            icon: 'folder-outline',
+            selected: item.collection_id === collection.id,
+            onPress: () => {
+              assignCollection(item.id, collection.id);
+              closeMenu();
+            },
+          }),
+        ),
+        { key: 'back', label: '‹ Back', onPress: () => setMenuMode('main') },
+      ];
+    }
+    const actions: SheetAction[] = [];
+    if (item.url) {
+      actions.push({
+        key: 'open',
+        label: 'Open link',
+        icon: 'open-outline',
+        onPress: () => {
+          closeMenu();
+          void Linking.openURL(item.url!).catch(() => {});
+        },
+      });
+      actions.push({
+        key: 'share',
+        label: 'Share',
+        icon: 'share-social-outline',
+        onPress: () => {
+          closeMenu();
+          void Share.share({
+            message: item.url!,
+            url: item.url!,
+            title: item.title ?? undefined,
+          }).catch(() => {});
+        },
+      });
+    }
+    actions.push({
+      key: 'move',
+      label: 'Move to collection…',
+      icon: 'folder-outline',
+      onPress: () => setMenuMode('move'),
+    });
+    actions.push({
+      key: 'archive',
+      label: 'Archive',
+      icon: 'archive-outline',
+      onPress: () => {
+        closeMenu();
+        archiveBookmark(item.id, true);
+      },
+    });
+    actions.push({
+      key: 'delete',
+      label: 'Delete',
+      icon: 'trash-outline',
+      destructive: true,
+      onPress: () => {
+        closeMenu();
+        confirmDelete(item);
+      },
+    });
+    return actions;
+  }, [menuItem, menuMode, collections, assignCollection, archiveBookmark, confirmDelete, closeMenu]);
+
+  const menuTitle =
+    menuMode === 'move'
+      ? 'Move to collection'
+      : (menuItem?.title ?? menuItem?.url ?? 'Untitled');
 
   const renderChip = (key: string, label: string, target: InboxFilter) => {
     const active = sameFilter(target, filter);
@@ -490,6 +625,7 @@ export default function InboxScreen() {
                   },
                 ]}
                 onPress={openDetail}
+                onLongPress={() => setMenuItem(item)}
               >
                 <ItemIcon item={item} compact testID="inbox-list-monogram" />
                 <View style={styles.listText}>
@@ -540,7 +676,11 @@ export default function InboxScreen() {
               {item.preview_image_url ? (
                 <Image source={{ uri: item.preview_image_url }} style={styles.cardPreview} />
               ) : null}
-              <Pressable style={styles.cardBody} onPress={openDetail}>
+              <Pressable
+                style={styles.cardBody}
+                onPress={openDetail}
+                onLongPress={() => setMenuItem(item)}
+              >
                 <View style={styles.cardTitleRow}>
                   <ItemIcon item={item} testID="inbox-card-monogram" />
                   <Text
@@ -607,6 +747,12 @@ export default function InboxScreen() {
       >
         <Ionicons name="add" size={34} color="#ffffff" />
       </Pressable>
+      <ActionSheet
+        visible={menuItem !== null}
+        title={menuTitle}
+        actions={menuActions}
+        onClose={closeMenu}
+      />
     </View>
   );
 }
