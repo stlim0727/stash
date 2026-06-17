@@ -5,6 +5,11 @@ jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
 );
 
+jest.mock('react-native-safe-area-context', () => ({
+  ...jest.requireActual('react-native-safe-area-context'),
+  useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
+}));
+
 const mockSession = {
   access_token: 'token',
   refresh_token: 'refresh',
@@ -128,6 +133,29 @@ test('submitting calls the feedback api with the message and redacted context', 
   expect(Object.keys(arg.context)).not.toContain('notes');
   expect(arg.context.route).toBe('/report');
 
+  expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
+});
+
+test('refreshes the session before submitting so an expired token is renewed', async () => {
+  // A token that expired while the screen stayed open: ensureAnonymousSession
+  // hands back a renewed session, which is what the API must be created with.
+  const refreshedSession = { ...mockSession, access_token: 'refreshed-token' };
+  mockAuth.ensureAnonymousSession = async () => refreshedSession;
+
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Token went stale');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  expect(createApi).toHaveBeenCalledWith(refreshedSession);
+  expect(submitReport).toHaveBeenCalledTimes(1);
   expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
 });
 

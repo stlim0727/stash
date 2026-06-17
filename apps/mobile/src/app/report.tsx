@@ -11,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { createFeedbackApi } from '@/api/feedback';
 import type { FeedbackApi, FeedbackCategory } from '@/api/feedback';
@@ -51,6 +52,7 @@ export interface ReportScreenProps {
 
 export default function ReportScreen({ createApi = createFeedbackApi }: ReportScreenProps = {}) {
   const palette = usePalette();
+  const insets = useSafeAreaInsets();
   const auth = useSupabaseAuth();
   const pathname = usePathname();
   const { queue, isSyncing, lastPulledAt } = useBookmarks();
@@ -116,13 +118,20 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const canSubmit = trimmed.length > 0 && auth.isSignedIn && submit.status !== 'submitting';
 
   const handleSubmit = async () => {
-    if (!trimmed || !auth.session) {
+    if (!trimmed) {
       return;
     }
 
     setSubmit({ status: 'submitting' });
     try {
-      const api: FeedbackApi = createApi(auth.session);
+      // Re-ensure the session so a token that expired while this screen stayed
+      // open is refreshed before we post; otherwise the request is rejected
+      // with "JWT expired".
+      const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+      if (!session) {
+        throw new Error('You need an active session to submit a report.');
+      }
+      const api: FeedbackApi = createApi(session);
       await api.submitReport({
         category,
         message: trimmed,
@@ -142,7 +151,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
 
   if (auth.status === 'not_configured') {
     return (
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}>
         <View style={[styles.field, { backgroundColor: palette.card }]}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
             Cloud reporting unavailable
@@ -173,7 +182,10 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
+      keyboardShouldPersistTaps="handled"
+    >
       <View style={[styles.field, { backgroundColor: palette.card }]}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Category</Text>
         <View style={styles.chipRow}>
