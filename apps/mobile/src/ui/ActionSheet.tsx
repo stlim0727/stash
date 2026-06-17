@@ -1,5 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
@@ -35,6 +43,11 @@ export function ActionSheet({
 }) {
   const palette = usePalette();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  // Cap the scrollable action list so a long list (e.g. many collections in
+  // "move" mode) scrolls instead of pushing rows off-screen where they can't
+  // be tapped. The title and Cancel stay pinned outside the scroll area.
+  const maxListHeight = windowHeight * 0.6;
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable
@@ -57,39 +70,45 @@ export function ActionSheet({
               {title}
             </Text>
           ) : null}
-          {actions.map((action) => (
-            <Pressable
-              key={action.key}
-              accessibilityRole="button"
-              accessibilityLabel={action.label}
-              onPress={action.onPress}
-              style={({ pressed }) => [
-                styles.action,
-                { backgroundColor: pressed ? palette.mutedSurface : 'transparent' },
-              ]}
-            >
-              {action.icon ? (
-                <Ionicons
-                  name={action.icon}
-                  size={20}
-                  color={action.destructive ? palette.danger : palette.text}
-                  style={styles.actionIcon}
-                />
-              ) : (
-                <View style={styles.actionIcon} />
-              )}
-              <Text
-                style={[
-                  styles.actionLabel,
-                  { color: action.destructive ? palette.danger : palette.text },
+          <ScrollView
+            style={{ maxHeight: maxListHeight }}
+            bounces={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {actions.map((action) => (
+              <Pressable
+                key={action.key}
+                accessibilityRole="button"
+                accessibilityLabel={action.label}
+                onPress={action.onPress}
+                style={({ pressed }) => [
+                  styles.action,
+                  { backgroundColor: pressed ? palette.mutedSurface : 'transparent' },
                 ]}
-                numberOfLines={1}
               >
-                {action.label}
-              </Text>
-              {action.selected ? <Text style={{ color: palette.accent }}>✓</Text> : null}
-            </Pressable>
-          ))}
+                {action.icon ? (
+                  <Ionicons
+                    name={action.icon}
+                    size={20}
+                    color={action.destructive ? palette.danger : palette.text}
+                    style={styles.actionIcon}
+                  />
+                ) : (
+                  <View style={styles.actionIcon} />
+                )}
+                <Text
+                  style={[
+                    styles.actionLabel,
+                    { color: action.destructive ? palette.danger : palette.text },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {action.label}
+                </Text>
+                {action.selected ? <Text style={{ color: palette.accent }}>✓</Text> : null}
+              </Pressable>
+            ))}
+          </ScrollView>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Cancel"
