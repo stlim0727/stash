@@ -1,4 +1,5 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Linking } from 'react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -58,6 +59,28 @@ test('tapping a tag chip navigates to the Inbox filtered by that tag', async () 
   await fireEvent.press(screen.getByLabelText('Browse #design'));
 
   expect(mockNavigate).toHaveBeenCalledWith({ pathname: '/', params: { tag: 'tag-design' } });
+});
+
+test('tapping the preview image opens the bookmark link', async () => {
+  mockRouteId = SYNCED_ID;
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+      preview_image_url: 'https://example.com/preview.png',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Open link'));
+
+  expect(openURL).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
+  openURL.mockRestore();
 });
 
 test('renders AI suggestions with a model badge, summary, and trigger button', async () => {
