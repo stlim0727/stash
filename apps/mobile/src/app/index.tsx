@@ -673,15 +673,16 @@ export default function InboxScreen() {
           ];
           return (
             <Card style={styles.card}>
-              {item.preview_image_url ? (
-                <Image source={{ uri: item.preview_image_url }} style={styles.cardPreview} />
-              ) : null}
-              <Pressable
-                style={styles.cardBody}
-                onPress={openDetail}
-                onLongPress={() => setMenuItem(item)}
-              >
-                <View style={styles.cardTitleRow}>
+              <Pressable onPress={openDetail} onLongPress={() => setMenuItem(item)}>
+                {item.preview_image_url ? (
+                  <Image
+                    testID="inbox-card-preview"
+                    source={{ uri: item.preview_image_url }}
+                    style={styles.cardPreview}
+                  />
+                ) : null}
+                <View style={styles.cardBody}>
+                  <View style={styles.cardTitleRow}>
                   <ItemIcon item={item} testID="inbox-card-monogram" />
                   <Text
                     testID="inbox-card-title"
@@ -717,9 +718,10 @@ export default function InboxScreen() {
                     ))}
                   </View>
                 ) : null}
-                {status ? (
-                  <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
-                ) : null}
+                  {status ? (
+                    <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
+                  ) : null}
+                </View>
               </Pressable>
               {item.url ? (
                 <Pressable

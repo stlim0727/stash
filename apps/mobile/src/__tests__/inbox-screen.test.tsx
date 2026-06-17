@@ -390,6 +390,25 @@ test('long-pressing an inbox card opens the action menu and Archive removes the 
   await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
 });
 
+test('long-pressing the preview image (not just the title) opens the action menu', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000063',
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+      preview_image_url: 'https://example.com/preview.png',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-card-preview')).toBeTruthy());
+
+  // The whole card (image included) is the long-press target, not only the title.
+  await fireEvent(screen.getByTestId('inbox-card-preview'), 'longPress');
+  expect(screen.getByText('Archive')).toBeTruthy();
+});
+
 test('the action menu Open link opens the bookmark URL', async () => {
   const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
   fakeRepo.__reset([
