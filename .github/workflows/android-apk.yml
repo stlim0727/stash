@@ -221,3 +221,31 @@ jobs:
 
             Local-only unless the repo's `EXPO_PUBLIC_SUPABASE_*` secrets were set
             at build time.
+
+      # Distribute to testers via Firebase App Distribution when configured.
+      # Testers install through the "App Tester" app: no per-build unknown-sources
+      # toggle, and each build pushes a notification. Skips cleanly when the
+      # secrets are absent, so the workflow still runs without Firebase set up.
+      # Setup: docs/development/releasing.md → "Firebase App Distribution".
+      - name: Distribute to Firebase App Distribution (when configured)
+        env:
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # Comma-separated Firebase tester group aliases (create them in the
+          # console). Override via a repo variable; defaults to `testers`.
+          FIREBASE_TESTER_GROUPS: ${{ vars.FIREBASE_TESTER_GROUPS || 'testers' }}
+        run: |
+          if [ -z "$FIREBASE_APP_ID" ] || [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "Firebase secrets not set — skipping App Distribution upload."
+            exit 0
+          fi
+          # The service-account JSON is passed via a file, not an inline flag,
+          # so it never lands in the process list or logs.
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
+          npx --yes firebase-tools appdistribution:distribute \
+            "dist/${{ steps.meta.outputs.apk }}" \
+            --app "$FIREBASE_APP_ID" \
+            --groups "$FIREBASE_TESTER_GROUPS" \
+            --release-notes "${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})"
+          rm -f "$RUNNER_TEMP/firebase-sa.json"
