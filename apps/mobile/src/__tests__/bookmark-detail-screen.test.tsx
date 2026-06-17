@@ -83,6 +83,26 @@ test('tapping the preview image opens the bookmark link', async () => {
   openURL.mockRestore();
 });
 
+test('a very long title collapses behind a Show more toggle', async () => {
+  mockRouteId = SYNCED_ID;
+  const longTitle =
+    '여행 크리에이터 도PD on Instagram: "(공유해서 여행 계획 세워보세요) 입소문 나긴함 양양 광나루해변 수심이 다양하고 방파제가 파도를 막아주면서 물놀이하기 좋은 숨겨진 해변이었는데요';
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: longTitle })]);
+
+  const screen = await renderDetail();
+  const title = await waitFor(() => screen.getByText(longTitle));
+
+  // onTextLayout doesn't fire in the test renderer; simulate a title that
+  // wraps to more lines than the collapsed limit so the toggle appears.
+  fireEvent(title, 'textLayout', {
+    nativeEvent: { lines: new Array(8).fill({ text: '' }) },
+  });
+
+  const toggle = await waitFor(() => screen.getByText('Show more'));
+  await fireEvent.press(toggle);
+  expect(screen.getByText('Show less')).toBeTruthy();
+});
+
 test('renders AI suggestions with a model badge, summary, and trigger button', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
