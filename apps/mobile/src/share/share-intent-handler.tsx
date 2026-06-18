@@ -26,31 +26,46 @@ export function ShareIntentHandler() {
   const insets = useSafeAreaInsets();
 
   const [message, setMessage] = useState<string | null>(null);
+  // A share copied out of expo-share-intent, held until the store has loaded.
+  // We capture it immediately (and release the OS intent) so a
+  // resetOnBackground — or the user backing out during a slow SQLite load —
+  // can never drop a capture; the save itself waits for the store so dedupe
+  // sees the bookmarks already on the device. Capture is sacred.
+  const [pendingShare, setPendingShare] = useState<{ url: string | null; title?: string } | null>(
+    null,
+  );
   const opacity = useRef(new Animated.Value(0)).current;
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Guards against handling the same share intent twice while we wait for the
-  // store to load (the effect re-runs as isLoading flips). Reset once the
-  // intent clears so a later share is handled afresh.
-  const handledRef = useRef(false);
+  // Guards against re-copying the same intent across renders before the reset
+  // propagates; cleared once the intent goes away so a later share is captured.
+  const capturedRef = useRef(false);
 
+  // Copy the incoming share into local state right away, then release the OS
+  // intent so nothing else can clear it while we wait for the store to load.
   useEffect(() => {
     if (!hasShareIntent) {
-      handledRef.current = false;
+      capturedRef.current = false;
       return;
     }
-
-    // A share launches the app cold, so the durable store is usually still
-    // loading when the intent arrives. Capturing now would dedupe against an
-    // empty in-memory set and create a duplicate of a URL already stashed, so
-    // wait until the store has loaded before saving.
-    if (isLoading || handledRef.current) {
+    if (capturedRef.current) {
       return;
     }
-    handledRef.current = true;
+    capturedRef.current = true;
+    setPendingShare({
+      url: shareIntent.webUrl ?? extractFirstUrl(shareIntent.text),
+      title: shareIntent.meta?.title ?? undefined,
+    });
+    resetShareIntent();
+  }, [hasShareIntent, shareIntent, resetShareIntent]);
 
-    const url = shareIntent.webUrl ?? extractFirstUrl(shareIntent.text);
-    if (url) {
-      const result = addBookmark({ url, title: shareIntent.meta?.title ?? undefined });
+  // Save once the store has loaded, so the in-memory dedupe sees existing
+  // bookmarks instead of running against an empty set during the cold start.
+  useEffect(() => {
+    if (!pendingShare || isLoading) {
+      return;
+    }
+    if (pendingShare.url) {
+      const result = addBookmark({ url: pendingShare.url, title: pendingShare.title });
       setMessage(result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash');
       // Land on Inbox so the freshly stashed item is visible; this is not a
       // full editor, matching the fast-capture requirement.
@@ -58,12 +73,8 @@ export function ShareIntentHandler() {
     } else {
       setMessage('No link found to stash');
     }
-
-    resetShareIntent();
-    // shareIntent is reset right after handling, and handledRef guards re-runs
-    // while we wait on isLoading, so this fires exactly once per share.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasShareIntent, isLoading]);
+    setPendingShare(null);
+  }, [pendingShare, isLoading, addBookmark, router]);
 
   useEffect(() => {
     if (!message) {
