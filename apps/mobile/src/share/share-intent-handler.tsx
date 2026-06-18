@@ -20,7 +20,7 @@ const TOAST_VISIBLE_MS = 2200;
  */
 export function ShareIntentHandler() {
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
-  const { addBookmark } = useBookmarks();
+  const { addBookmark, isLoading } = useBookmarks();
   const router = useRouter();
   const palette = usePalette();
   const insets = useSafeAreaInsets();
@@ -28,11 +28,25 @@ export function ShareIntentHandler() {
   const [message, setMessage] = useState<string | null>(null);
   const opacity = useRef(new Animated.Value(0)).current;
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards against handling the same share intent twice while we wait for the
+  // store to load (the effect re-runs as isLoading flips). Reset once the
+  // intent clears so a later share is handled afresh.
+  const handledRef = useRef(false);
 
   useEffect(() => {
     if (!hasShareIntent) {
+      handledRef.current = false;
       return;
     }
+
+    // A share launches the app cold, so the durable store is usually still
+    // loading when the intent arrives. Capturing now would dedupe against an
+    // empty in-memory set and create a duplicate of a URL already stashed, so
+    // wait until the store has loaded before saving.
+    if (isLoading || handledRef.current) {
+      return;
+    }
+    handledRef.current = true;
 
     const url = shareIntent.webUrl ?? extractFirstUrl(shareIntent.text);
     if (url) {
@@ -46,10 +60,10 @@ export function ShareIntentHandler() {
     }
 
     resetShareIntent();
-    // shareIntent is reset right after handling, so keying on hasShareIntent
-    // is enough to fire exactly once per share.
+    // shareIntent is reset right after handling, and handledRef guards re-runs
+    // while we wait on isLoading, so this fires exactly once per share.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasShareIntent]);
+  }, [hasShareIntent, isLoading]);
 
   useEffect(() => {
     if (!message) {

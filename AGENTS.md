@@ -90,5 +90,5 @@ Notes: the build is **arm64-v8a only** (every modern phone) to stay fast/small; 
 
 ## Known minor gaps
 
-- Duplicate detection only checks in-memory state; a save made while the startup load is in flight could miss a stored duplicate (cosmetic: creates a second entry rather than losing data).
+- Duplicate detection only checks in-memory state; a save made while the startup load is in flight could miss a stored duplicate (cosmetic: creates a second entry rather than losing data). The share path — the worst offender, since a share cold-starts the app right when the store is still loading — now waits for the store to finish loading before capturing (`ShareIntentHandler` gates on `isLoading`), so re-sharing an already-stashed URL dedupes instead of piling up duplicates stuck at "sync pending". The manual Add screen can still hit the window in theory, but it's only reachable after the app is already open. See `src/__tests__/share-intent-handler.test.tsx`.
 - `bookmarks` SQLite table stores the full record as a JSON column plus `created_at`/`is_archived` columns; promote fields to real columns when query needs grow.
