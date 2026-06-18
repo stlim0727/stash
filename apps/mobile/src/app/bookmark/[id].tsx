@@ -62,6 +62,7 @@ export default function BookmarkDetailScreen() {
   // rest of the screen out of view. null = not yet measured.
   const [titleExpanded, setTitleExpanded] = useState(false);
   const [titleLineCount, setTitleLineCount] = useState<number | null>(null);
+  const [titleWidth, setTitleWidth] = useState<number | null>(null);
   const insets = useSafeAreaInsets();
 
   // Auto-save drafts even when the screen is dismissed via the system back
@@ -75,6 +76,16 @@ export default function BookmarkDetailScreen() {
   useEffect(() => () => flushRef.current(), []);
 
   const bookmark = id ? getBookmark(id) : undefined;
+
+  // The title shown when not editing. Background metadata enrichment can swap
+  // this from the URL/"Untitled" to a long title while the screen stays
+  // mounted, so re-measure whenever it changes — otherwise the stale line
+  // count leaves an overlong title clamped with no "Show more" toggle.
+  const displayedTitle = bookmark?.title ?? bookmark?.url ?? 'Untitled';
+  useEffect(() => {
+    setTitleLineCount(null);
+    setTitleExpanded(false);
+  }, [displayedTitle]);
 
   if (!bookmark) {
     return (
@@ -124,9 +135,7 @@ export default function BookmarkDetailScreen() {
   const commitTitle = () => {
     if (draftTitle !== null && draftTitle.trim() !== (bookmark.title ?? '')) {
       updateBookmarkFields(bookmark.id, { title: draftTitle.trim() });
-      // Title changed — re-measure so the Show more toggle reflects new length.
-      setTitleLineCount(null);
-      setTitleExpanded(false);
+      // The displayedTitle effect re-measures once the store update lands.
     }
     setDraftTitle(null);
   };
@@ -281,10 +290,24 @@ export default function BookmarkDetailScreen() {
           (full social captions) collapse to a few lines with a Show more
           toggle so they don't crowd out the rest of the screen. */}
       {draftTitle === null ? (
-        <View style={styles.titleBlock}>
+        <View
+          style={styles.titleBlock}
+          // A width change (e.g. rotation) can change how the title wraps, so
+          // re-measure to keep the overflow/"Show more" state accurate.
+          onLayout={(event) => {
+            const width = event.nativeEvent.layout.width;
+            if (titleWidth !== null && width !== titleWidth) {
+              setTitleLineCount(null);
+            }
+            setTitleWidth(width);
+          }}
+        >
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Edit title"
+            // Announce the title itself (not just the action) so screen-reader
+            // users still hear the primary content; the edit affordance is a hint.
+            accessibilityLabel={displayedTitle}
+            accessibilityHint="Edits the title"
             onPress={() => setDraftTitle(bookmark.title ?? '')}
           >
             <Text
@@ -300,7 +323,7 @@ export default function BookmarkDetailScreen() {
                 }
               }}
             >
-              {bookmark.title ?? bookmark.url ?? 'Untitled'}
+              {displayedTitle}
             </Text>
           </Pressable>
           {titleLineCount !== null && titleLineCount > TITLE_COLLAPSED_LINES ? (

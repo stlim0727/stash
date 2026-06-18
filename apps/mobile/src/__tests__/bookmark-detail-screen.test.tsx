@@ -103,6 +103,46 @@ test('a very long title collapses behind a Show more toggle', async () => {
   expect(screen.getByText('Show less')).toBeTruthy();
 });
 
+test('the title button exposes the title text to screen readers', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'Local-first software' })]);
+
+  const screen = await renderDetail();
+
+  // The accessible name must be the title itself, not just the edit action,
+  // so VoiceOver/TalkBack announce the primary content.
+  const titleButton = await waitFor(() => screen.getByLabelText('Local-first software'));
+  expect(titleButton).toBeTruthy();
+});
+
+test('a title that grows after mount re-measures and shows the toggle', async () => {
+  mockRouteId = SYNCED_ID;
+  const longTitle =
+    'A very long title that only arrives after background metadata enrichment fills it in';
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'Untitled' })]);
+
+  const screen = await renderDetail();
+
+  // Initial short title measures as a single line — no toggle.
+  const initial = await waitFor(() => screen.getByText('Untitled'));
+  await fireEvent(initial, 'textLayout', { nativeEvent: { lines: [{ text: '' }] } });
+  expect(screen.queryByText('Show more')).toBeNull();
+
+  // Simulate the title changing while the screen stays mounted (edit + commit
+  // exercises the same store update that background enrichment would).
+  await fireEvent.press(screen.getByText('Untitled'));
+  const input = await waitFor(() => screen.getByLabelText('Edit title'));
+  await fireEvent.changeText(input, longTitle);
+  await fireEvent(input, 'blur');
+
+  // The displayed title is re-measured; now it overflows and offers the toggle.
+  const grown = await waitFor(() => screen.getByText(longTitle));
+  await fireEvent(grown, 'textLayout', {
+    nativeEvent: { lines: new Array(6).fill({ text: '' }) },
+  });
+  expect(await waitFor(() => screen.getByText('Show more'))).toBeTruthy();
+});
+
 test('renders AI suggestions with a model badge, summary, and trigger button', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
