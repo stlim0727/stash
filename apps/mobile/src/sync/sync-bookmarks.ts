@@ -214,3 +214,54 @@ export function isSyncable(entry: LocalPendingBookmark): boolean {
   // storage write threw mid-upload) is retried rather than orphaned forever.
   return entry.sync_status !== 'synced';
 }
+
+/**
+ * Finds bookmarks stranded in a non-synced state with no queue entry to drive
+ * them, and returns one upload entry per orphan so the next sync pass finishes
+ * the job.
+ *
+ * A bookmark and its queue entry are written in two steps, so a storage hiccup
+ * or the app being killed in between can leave a `pending`/`failed` bookmark
+ * with nothing queued to sync it. With no entry the background loop never
+ * touches it: it shows "sync pending" forever and stays un-editable (tags and
+ * AI suggestions are gated until it has a remote identity). Seeded sample rows
+ * that ship as `pending` are stranded the same way.
+ *
+ * Local-ID rows get a `create`; rows that already have a remote identity get an
+ * `update`. Both are idempotent on the server (create dedupes on URL, update is
+ * last-write-wins), so re-enqueuing a bookmark that actually did reach the
+ * cloud is harmless.
+ */
+export function reconcileOrphanedQueueEntries(
+  bookmarks: Bookmark[],
+  queue: LocalPendingBookmark[],
+): LocalPendingBookmark[] {
+  const queuedIds = new Set(queue.map((entry) => entry.local_id));
+  const now = new Date().toISOString();
+  const entries: LocalPendingBookmark[] = [];
+  for (const bookmark of bookmarks) {
+    if (bookmark.sync_status === 'synced' || queuedIds.has(bookmark.id)) {
+      continue;
+    }
+    if (hasRemoteIdentity(bookmark.id)) {
+      entries.push(makeMutationEntry(bookmark.id, 'update'));
+      continue;
+    }
+    entries.push({
+      local_id: bookmark.id,
+      remote_id: null,
+      operation: 'create',
+      payload: {
+        url: bookmark.url ?? undefined,
+        title: bookmark.title ?? undefined,
+        notes: bookmark.notes ?? undefined,
+      },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+  return entries;
+}

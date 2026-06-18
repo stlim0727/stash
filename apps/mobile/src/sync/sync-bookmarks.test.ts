@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { hasRemoteIdentity, makeMutationEntry, syncQueueEntry } from './sync-bookmarks.ts';
+import {
+  hasRemoteIdentity,
+  makeMutationEntry,
+  reconcileOrphanedQueueEntries,
+  syncQueueEntry,
+} from './sync-bookmarks.ts';
 import type { BookmarkApi } from '@/api/bookmarks';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
@@ -295,6 +300,54 @@ test('update of a missing bookmark preserves a superseding delete entry', async 
 
   assert.equal(result.removeEntry, true);
   assert.equal(calls.includes('removeQueueEntry:remote-1'), false);
+});
+
+const REMOTE_ID = '7e64cf1e-0000-4000-8000-000000000001';
+
+test('reconcileOrphanedQueueEntries re-creates a stranded local bookmark', () => {
+  const orphan = makeBookmark({
+    id: 'local-abc',
+    url: 'https://example.com/a',
+    title: 'Stranded',
+    notes: 'keep me',
+    sync_status: 'pending',
+  });
+
+  const entries = reconcileOrphanedQueueEntries([orphan], []);
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.local_id, 'local-abc');
+  assert.equal(entries[0]?.operation, 'create');
+  assert.equal(entries[0]?.sync_status, 'pending');
+  assert.deepEqual(entries[0]?.payload, {
+    url: 'https://example.com/a',
+    title: 'Stranded',
+    notes: 'keep me',
+  });
+});
+
+test('reconcileOrphanedQueueEntries re-queues an update for a stranded synced-id bookmark', () => {
+  const orphan = makeBookmark({ id: REMOTE_ID, sync_status: 'pending' });
+
+  const entries = reconcileOrphanedQueueEntries([orphan], []);
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.local_id, REMOTE_ID);
+  assert.equal(entries[0]?.operation, 'update');
+});
+
+test('reconcileOrphanedQueueEntries leaves synced and already-queued bookmarks alone', () => {
+  const synced = makeBookmark({ id: 'local-synced', sync_status: 'synced' });
+  const alreadyQueued = makeBookmark({ id: 'local-queued', sync_status: 'pending' });
+  const orphan = makeBookmark({ id: 'local-orphan', sync_status: 'failed' });
+
+  const entries = reconcileOrphanedQueueEntries(
+    [synced, alreadyQueued, orphan],
+    [makeCreateEntry({ local_id: 'local-queued' })],
+  );
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.local_id, 'local-orphan');
 });
 
 test('makeMutationEntry targets the bookmark with a pending status', () => {
