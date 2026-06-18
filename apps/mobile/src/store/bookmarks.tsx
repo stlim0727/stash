@@ -43,6 +43,7 @@ import { recordLog } from '@/observability/log-buffer';
 import { repository } from '@/storage/repository';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
+import { SupabaseRequestError } from '@/supabase/client';
 import { planAccountTransition } from '@/sync/account-transition';
 import {
   LAST_PULLED_AT_KEY,
@@ -870,8 +871,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       aiEnriching.current.add(bookmarkId);
       try {
-        const api = createSyncApi(auth.session);
-        const enrichment = await api.requestEnrichment(bookmarkId);
+        // The edge function forwards this access token to PostgREST, which 401s
+        // on a stale one. The token can expire while the app sits idle, so
+        // refresh it before the call (as the sync paths do) instead of reusing
+        // the possibly-expired `auth.session`.
+        const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+        if (!session) {
+          return 'AI suggestions need the cloud — Supabase is not available right now.';
+        }
+        let enrichment: AIEnrichment;
+        try {
+          enrichment = await createSyncApi(session).requestEnrichment(bookmarkId);
+        } catch (error) {
+          // If the server still rejects the token (rotation / clock skew),
+          // force a refresh and retry once before surfacing the error.
+          if (error instanceof SupabaseRequestError && error.status === 401) {
+            const refreshed = (await auth.ensureAnonymousSession(true)) ?? session;
+            enrichment = await createSyncApi(refreshed).requestEnrichment(bookmarkId);
+          } else {
+            throw error;
+          }
+        }
         // Newest enrichment for this bookmark wins (getEnrichment sorts too).
         setEnrichments((current) => [
           enrichment,
