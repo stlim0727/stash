@@ -29,6 +29,13 @@ import {
   toNetscapeHtml,
   type ExportInput,
 } from '@/domain/export';
+import {
+  DEFAULT_SHARE_BEHAVIOR,
+  parseShareBehavior,
+  serializeShareBehavior,
+  SHARE_BEHAVIOR_PREF_KEY,
+  type ShareBehavior,
+} from '@/domain/share-behavior';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { deliverExport } from '@/share/export-data';
 import { useBookmarks } from '@/store/bookmarks';
@@ -135,6 +142,35 @@ export default function SettingsScreen() {
     }
     void setPreference(DEVELOPER_MODE_PREF_KEY, developerMode ? 'true' : 'false').catch(() => {});
   }, [developerMode]);
+
+  // What happens after a URL is shared in from another app. Default is a
+  // modeless toast (no navigation); opting in lands on the Inbox instead.
+  const [shareBehavior, setShareBehavior] = useState<ShareBehavior>(DEFAULT_SHARE_BEHAVIOR);
+  const shareLoaded = useRef(false);
+  useEffect(() => {
+    let active = true;
+    getPreference(SHARE_BEHAVIOR_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setShareBehavior(parseShareBehavior(raw));
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        shareLoaded.current = true;
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!shareLoaded.current) {
+      return;
+    }
+    void setPreference(SHARE_BEHAVIOR_PREF_KEY, serializeShareBehavior(shareBehavior)).catch(
+      () => {},
+    );
+  }, [shareBehavior]);
 
   // Total high-confidence, un-applied suggestions waiting in the review queue.
   const pendingSuggestionCount = inbox.reduce((total, bookmark) => {
@@ -284,6 +320,30 @@ export default function SettingsScreen() {
         Your bookmarks are yours. Export a standard HTML file any browser or bookmark app can
         import, or a full JSON backup — anytime, even offline.
       </Text>
+
+      {/* Sharing behavior */}
+      <Group styles={styles}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="share-outline"
+          label="Open Inbox after sharing"
+          value={
+            shareBehavior === 'inbox'
+              ? 'Shared links open the Inbox'
+              : 'Shared links just show a toast'
+          }
+          last
+          right={
+            <Switch
+              value={shareBehavior === 'inbox'}
+              onValueChange={(on) => setShareBehavior(on ? 'inbox' : 'toast')}
+              trackColor={{ true: palette.accent, false: palette.border }}
+              thumbColor="#ffffff"
+            />
+          }
+        />
+      </Group>
 
       {/* Developer mode toggle */}
       <Group styles={styles}>
