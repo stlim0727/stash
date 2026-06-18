@@ -47,5 +47,6 @@ Backend: `supabase/migrations` (owner-scoped RLS) and `supabase/functions` edge 
 
 ## Branch / release notes
 
+- **Pull requests: open as regular (non-draft) PRs, not drafts.**
 - CI (`.github/workflows/ci.yml`) runs lint, typecheck, and tests on every PR.
 - Installable Android APK without an EAS account: the `android-apk.yml` workflow (`expo prebuild` → Gradle `assembleRelease`, debug-signed standalone, arm64-v8a only). Trigger/output mapping and the MCP/`gh` invocation steps are documented in `AGENTS.md`. EAS profiles for store builds live in `apps/mobile/eas.json`; release flow in `docs/development/releasing.md`.
