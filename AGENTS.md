@@ -54,6 +54,7 @@ This file captures the project state and working conventions so any agent (Codex
   - `pnpm test` — Node's built-in test runner over `apps/mobile/src/**/*.test.ts`.
 - Headless build verification (no emulator needed): `cd apps/mobile && CI=1 pnpm exec expo install --check || true; CI=1 pnpm exec expo export --platform web` (also `--platform ios` to compile the native/Hermes path, which exercises the expo-sqlite code). Delete `dist/` afterwards; it is gitignored.
 - Keep user-authored fields separate from generated/AI metadata (core product principle; see `docs/api/bookmarks.md`).
+- PR review feedback: when a commit addresses a review comment (human or bot), post a short reply (1–2 sentences) on that thread referencing the fixing commit — even if the commit already resolves it.
 
 ## Building an installable Android APK (no EAS account)
 
