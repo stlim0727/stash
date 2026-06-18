@@ -22,6 +22,7 @@ import { CollectionPicker } from '@/ui/CollectionPicker';
 import { TagField } from '@/ui/TagField';
 import { hostFromUrl } from '@/domain/item-icon';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { hashtagSuggestions } from '@/domain/hashtags';
 import { useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
@@ -129,6 +130,26 @@ export default function BookmarkDetailScreen() {
   const showCollectionSuggestion =
     !!suggestedCollection && bookmark.collection_id !== suggestedCollection.id;
 
+  // Hashtags already written into the captured content (e.g. an Instagram
+  // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
+  // any already applied or dismissed, and minus duplicates of an AI suggestion.
+  // Only when the bookmark can actually be tagged, so we never surface a chip
+  // whose accept would just error.
+  const aiSuggestionNames = new Set(pending.map((suggestion) => suggestion.name.toLowerCase()));
+  const hashtagTags = canOrganizeRemotely
+    ? hashtagSuggestions([bookmark.title, bookmark.description], appliedTagNames).filter(
+        (name) =>
+          !dismissed.has(name.toLowerCase()) && !aiSuggestionNames.has(name.toLowerCase()),
+      )
+    : [];
+
+  // AI suggestions carry a real confidence; hashtag chips render the same way
+  // but are added straight as user tags when accepted.
+  const tagSuggestions = [
+    ...pending.map((suggestion) => ({ name: suggestion.name, confidence: suggestion.confidence })),
+    ...hashtagTags.map((name) => ({ name, confidence: 1 })),
+  ];
+
   const notesValue = draftNotes ?? bookmark.notes ?? '';
 
   // Auto-save on blur: edit in place, no explicit "Save" button.
@@ -198,6 +219,9 @@ export default function BookmarkDetailScreen() {
     const match = pending.find((suggestion) => suggestion.name === name);
     if (match) {
       void runOrganizeAction(() => acceptSuggestedTags(bookmark.id, [match]));
+    } else {
+      // A hashtag chip — accepting it adds a plain user tag.
+      void runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
     }
   };
   const handleDismissTag = (name: string) =>
@@ -399,10 +423,7 @@ export default function BookmarkDetailScreen() {
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
         <TagField
           tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
-          suggestions={pending.map((suggestion) => ({
-            name: suggestion.name,
-            confidence: suggestion.confidence,
-          }))}
+          suggestions={tagSuggestions}
           editable={canOrganizeRemotely}
           busy={busy}
           onAdd={handleAddTag}
