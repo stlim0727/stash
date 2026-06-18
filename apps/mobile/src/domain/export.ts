@@ -11,6 +11,9 @@
  *    folders; tags ride along in the `TAGS` attribute.
  *  - JSON backup — full fidelity (notes, tags with source/confidence, the
  *    latest AI enrichment, timestamps) for a faithful re-import into Stash.
+ *  - CSV — a flat, spreadsheet-friendly table (one row per saved item) for
+ *    users who want to open their library in Excel/Sheets or feed it to tools
+ *    that ingest CSV rather than the Netscape HTML format.
  */
 
 import type { AIEnrichment, Bookmark, Collection, Tag } from '@/domain/types';
@@ -77,9 +80,16 @@ export function exportDateStamp(exportedAt = new Date().toISOString()): string {
   return (exportedAt.split('T')[0] ?? exportedAt).slice(0, 10);
 }
 
-export function exportFilename(kind: 'html' | 'json', exportedAt?: string): string {
+export function exportFilename(kind: 'html' | 'json' | 'csv', exportedAt?: string): string {
   const stamp = exportDateStamp(exportedAt);
-  return kind === 'html' ? `stash-bookmarks-${stamp}.html` : `stash-backup-${stamp}.json`;
+  switch (kind) {
+    case 'html':
+      return `stash-bookmarks-${stamp}.html`;
+    case 'csv':
+      return `stash-bookmarks-${stamp}.csv`;
+    default:
+      return `stash-backup-${stamp}.json`;
+  }
 }
 
 export function buildJsonBackup(input: ExportInput): JsonBackup {
@@ -220,4 +230,65 @@ export function toNetscapeHtml(input: ExportInput): string {
 
   lines.push('</DL><p>');
   return `${lines.join('\n')}\n`;
+}
+
+/** The CSV column order. Stable so re-imports and external tools can rely on it. */
+export const CSV_COLUMNS = [
+  'url',
+  'title',
+  'notes',
+  'tags',
+  'collection',
+  'created_at',
+  'updated_at',
+  'is_archived',
+] as const;
+
+/**
+ * Serialize a single CSV field. Two concerns:
+ *
+ *  1. CSV/formula injection — a cell that begins with `=`, `+`, `-`, `@`, or a
+ *     leading tab/CR is executed as a formula by Excel/Sheets, so a hostile page
+ *     title (or imported bookmark) could become an active payload. RFC quoting
+ *     does NOT stop this, so we first prefix such values with a single quote,
+ *     which the spreadsheet treats as "the rest is literal text".
+ *  2. RFC 4180 quoting — wrap in double quotes only when the value contains a
+ *     comma, quote, or line break, doubling any embedded quotes. Quoting only
+ *     when needed keeps the file readable as plain text.
+ */
+function csvField(value: string): string {
+  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(guarded) ? `"${guarded.replaceAll('"', '""')}"` : guarded;
+}
+
+/**
+ * Render the library as an RFC 4180 CSV table — one row per saved item, with a
+ * header row. Unlike the Netscape HTML export, url-less saves are kept (the
+ * `url` cell is simply empty) so the table is a complete view of the library.
+ * Tags are comma-joined within their cell (which is then quoted); CRLF line
+ * endings keep Excel happy.
+ */
+export function toCsv(input: ExportInput): string {
+  const collectionName = new Map(input.collections.map((c) => [c.id, c.name]));
+
+  const rows = [CSV_COLUMNS.join(',')];
+  for (const bookmark of input.bookmarks) {
+    const tags = (input.tagsByBookmark[bookmark.id] ?? []).map((tag) => tag.name).join(', ');
+    const collection = bookmark.collection_id
+      ? (collectionName.get(bookmark.collection_id) ?? '')
+      : '';
+    const cells = [
+      bookmark.url ?? '',
+      bookmarkTitle(bookmark),
+      bookmark.notes?.trim() || bookmark.description?.trim() || '',
+      tags,
+      collection,
+      bookmark.created_at ?? '',
+      bookmark.updated_at ?? '',
+      bookmark.is_archived ? 'true' : 'false',
+    ];
+    rows.push(cells.map(csvField).join(','));
+  }
+
+  return `${rows.join('\r\n')}\r\n`;
 }

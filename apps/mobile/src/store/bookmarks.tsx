@@ -19,6 +19,7 @@ import {
 } from '@/domain/mock-data';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
+import type { ImportItem } from '@/domain/import';
 import type {
   AIEnrichment,
   Bookmark,
@@ -63,6 +64,16 @@ export type AddBookmarkResult =
   | { status: 'created' | 'duplicate'; bookmark: Bookmark }
   | { status: 'invalid'; error: string };
 
+/** Outcome counts from re-ingesting an imported file. */
+export interface ImportSummary {
+  /** Bookmarks newly added to the library. */
+  imported: number;
+  /** Items skipped because their URL already exists in the library. */
+  duplicates: number;
+  /** Items skipped for lacking a usable URL (e.g. text-only saves). */
+  skipped: number;
+}
+
 interface BookmarksContextValue {
   /** True until the durable store has been read on startup. */
   isLoading: boolean;
@@ -80,6 +91,13 @@ interface BookmarksContextValue {
   getEnrichment: (bookmarkId: string) => AIEnrichment | undefined;
   /** Local-first creation: the bookmark is visible immediately with pending states. */
   addBookmark: (input: { url: string; title?: string; notes?: string }) => AddBookmarkResult;
+  /**
+   * Re-ingest items parsed from an imported file. Local-first like addBookmark:
+   * each URL is added with pending states, deduped against the existing library
+   * (and within the batch). Returns a count summary. Note: tags/collections from
+   * the source are not restored yet — see the import UI copy.
+   */
+  importBookmarks: (items: ImportItem[]) => ImportSummary;
   /** Archive or unarchive a bookmark (preferred over permanent deletion). */
   archiveBookmark: (id: string, archived: boolean) => void;
   /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
@@ -536,6 +554,99 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       enrichInBackground(bookmark);
 
       return { status: 'created', bookmark };
+    },
+    [loadedBookmarks, enrichInBackground],
+  );
+
+  // Bulk re-ingest of imported items. Mirrors addBookmark's local-first create
+  // (optimistic insert + queued create + background enrichment) but batches the
+  // whole file into one state update, and dedupes within the batch too so a file
+  // listing the same URL twice doesn't create duplicates.
+  const importBookmarks = useCallback(
+    (items: ImportItem[]): ImportSummary => {
+      const now = new Date().toISOString();
+      // Latest committed rows (the ref), so an import right after a save sees it.
+      const seen = new Set(
+        (bookmarksRef.current ?? loadedBookmarks)
+          .map((bookmark) => bookmark.url_hash)
+          .filter((hash): hash is string => hash !== null),
+      );
+      const newBookmarks: Bookmark[] = [];
+      const newEntries: LocalPendingBookmark[] = [];
+      let imported = 0;
+      let duplicates = 0;
+      let skipped = 0;
+
+      for (const item of items) {
+        const normalized = item.url ? normalizeUrl(item.url) : null;
+        if (!normalized) {
+          skipped += 1;
+          continue;
+        }
+        const dedupeKey = canonicalizeUrl(normalized);
+        if (seen.has(dedupeKey)) {
+          duplicates += 1;
+          continue;
+        }
+        seen.add(dedupeKey);
+
+        const id = makeLocalId();
+        const title = item.title?.trim() ? item.title.trim() : null;
+        const notes = item.notes?.trim() ? item.notes.trim() : null;
+        newBookmarks.push({
+          id,
+          user_id: mockUserId,
+          url: normalized,
+          canonical_url: null,
+          url_hash: dedupeKey,
+          title,
+          description: null,
+          notes,
+          source_app: null,
+          content_type: 'url',
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          collection_id: null,
+          is_archived: false,
+          created_at: now,
+          updated_at: now,
+          last_saved_at: now,
+          metadata_status: 'pending',
+          sync_status: 'pending',
+        });
+        newEntries.push({
+          local_id: id,
+          remote_id: null,
+          operation: 'create',
+          payload: { url: normalized, title: title ?? undefined, notes: notes ?? undefined },
+          sync_status: 'pending',
+          retry_count: 0,
+          last_error: null,
+          created_at: now,
+          updated_at: now,
+        });
+        imported += 1;
+      }
+
+      if (newBookmarks.length > 0) {
+        setBookmarks((current) => [...newBookmarks, ...(current ?? [])]);
+        setQueue((current) => [...current, ...newEntries]);
+        ensureRepositoryReady()
+          .then(() =>
+            Promise.all([
+              ...newBookmarks.map((bookmark) => repository.insertBookmark(bookmark)),
+              ...newEntries.map((entry) => repository.enqueue(entry)),
+            ]),
+          )
+          .catch((error) => logStorageError('imported bookmarks', error));
+        // Enrich after the rows are visible and persisted, like a fresh save.
+        for (const bookmark of newBookmarks) {
+          enrichInBackground(bookmark);
+        }
+      }
+
+      return { imported, duplicates, skipped };
     },
     [loadedBookmarks, enrichInBackground],
   );
@@ -1212,6 +1323,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getCollection,
       getEnrichment,
       addBookmark,
+      importBookmarks,
       archiveBookmark,
       updateBookmarkFields,
       deleteBookmark,
@@ -1236,6 +1348,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getCollection,
       getEnrichment,
       addBookmark,
+      importBookmarks,
       archiveBookmark,
       updateBookmarkFields,
       deleteBookmark,
