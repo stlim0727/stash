@@ -156,3 +156,24 @@ test('dismissing a suggested tag removes it from the list', async () => {
   expect(screen.queryByLabelText('Accept suggested tag design')).toBeNull();
   expect(screen.getByLabelText('Accept suggested tag video')).toBeTruthy();
 });
+
+test('offers hashtags from the title as one-tap tag suggestions', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: '자취요리신 on Instagram: "SNS에서 난리난 덮밥 #목살 #덮밥"',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Accept suggested tag 목살')).toBeTruthy());
+
+  expect(screen.getByLabelText('Accept suggested tag 덮밥')).toBeTruthy();
+
+  // Accepting promotes the hashtag to a real, browsable tag chip.
+  await fireEvent.press(screen.getByLabelText('Accept suggested tag 목살'));
+  await waitFor(() => expect(screen.getByLabelText('Browse #목살')).toBeTruthy());
+  // ...and it is no longer offered as a suggestion.
+  expect(screen.queryByLabelText('Accept suggested tag 목살')).toBeNull();
+});
