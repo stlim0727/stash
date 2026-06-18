@@ -83,6 +83,66 @@ test('tapping the preview image opens the bookmark link', async () => {
   openURL.mockRestore();
 });
 
+test('a very long title collapses behind a Show more toggle', async () => {
+  mockRouteId = SYNCED_ID;
+  const longTitle =
+    '여행 크리에이터 도PD on Instagram: "(공유해서 여행 계획 세워보세요) 입소문 나긴함 양양 광나루해변 수심이 다양하고 방파제가 파도를 막아주면서 물놀이하기 좋은 숨겨진 해변이었는데요';
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: longTitle })]);
+
+  const screen = await renderDetail();
+  const title = await waitFor(() => screen.getByText(longTitle));
+
+  // onTextLayout doesn't fire in the test renderer; simulate a title that
+  // wraps to more lines than the collapsed limit so the toggle appears.
+  fireEvent(title, 'textLayout', {
+    nativeEvent: { lines: new Array(8).fill({ text: '' }) },
+  });
+
+  const toggle = await waitFor(() => screen.getByText('Show more'));
+  await fireEvent.press(toggle);
+  expect(screen.getByText('Show less')).toBeTruthy();
+});
+
+test('the title button exposes the title text to screen readers', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'Local-first software' })]);
+
+  const screen = await renderDetail();
+
+  // The accessible name must be the title itself, not just the edit action,
+  // so VoiceOver/TalkBack announce the primary content.
+  const titleButton = await waitFor(() => screen.getByLabelText('Local-first software'));
+  expect(titleButton).toBeTruthy();
+});
+
+test('a title that grows after mount re-measures and shows the toggle', async () => {
+  mockRouteId = SYNCED_ID;
+  const longTitle =
+    'A very long title that only arrives after background metadata enrichment fills it in';
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'Untitled' })]);
+
+  const screen = await renderDetail();
+
+  // Initial short title measures as a single line — no toggle.
+  const initial = await waitFor(() => screen.getByText('Untitled'));
+  await fireEvent(initial, 'textLayout', { nativeEvent: { lines: [{ text: '' }] } });
+  expect(screen.queryByText('Show more')).toBeNull();
+
+  // Simulate the title changing while the screen stays mounted (edit + commit
+  // exercises the same store update that background enrichment would).
+  await fireEvent.press(screen.getByText('Untitled'));
+  const input = await waitFor(() => screen.getByLabelText('Edit title'));
+  await fireEvent.changeText(input, longTitle);
+  await fireEvent(input, 'blur');
+
+  // The displayed title is re-measured; now it overflows and offers the toggle.
+  const grown = await waitFor(() => screen.getByText(longTitle));
+  await fireEvent(grown, 'textLayout', {
+    nativeEvent: { lines: new Array(6).fill({ text: '' }) },
+  });
+  expect(await waitFor(() => screen.getByText('Show more'))).toBeTruthy();
+});
+
 test('renders AI suggestions with a model badge, summary, and trigger button', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
