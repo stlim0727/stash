@@ -55,6 +55,9 @@ export function ShareIntentHandler() {
       setMessage(result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash');
       // Only jump to the Inbox when the user has opted in; otherwise the toast
       // is the entire interaction and we leave the current screen untouched.
+      // The leaked `stash://dataUrl=...` share deep link is cleared regardless
+      // by the global `+not-found` absorber, so toast mode never strands the
+      // user on the unmatched route.
       getPreference(SHARE_BEHAVIOR_PREF_KEY)
         .then((raw) => {
           behavior.current = parseShareBehavior(raw);
