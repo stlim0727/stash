@@ -45,8 +45,6 @@ import {
 } from '@/domain/view-mode';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
-import { useSupabaseAuth } from '@/supabase/auth-provider';
-import { Avatar } from '@/ui/Avatar';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import type { Bookmark } from '@/domain/types';
 
@@ -135,11 +133,6 @@ export default function InboxScreen() {
     deleteBookmark,
     assignCollection,
   } = useBookmarks();
-  const auth = useSupabaseAuth();
-  // Account avatar is only meaningful when the cloud is configured; otherwise
-  // there is nothing to sign in to and the hero stays clean.
-  const showAccount = auth.status !== 'not_configured';
-  const isAuthed = auth.status === 'authenticated';
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
@@ -456,6 +449,9 @@ export default function InboxScreen() {
             </Text>
           </View>
           <View style={styles.headerActions}>
+            {/* Single settings entry point. Account sign-in/management lives
+                inside Settings (the account card), so the hero stays focused on
+                bookmarks rather than carrying a second, redundant account button. */}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Settings"
@@ -468,20 +464,6 @@ export default function InboxScreen() {
               </View>
               <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
             </Pressable>
-            {showAccount ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={isAuthed ? 'Account' : 'Sign in'}
-                hitSlop={8}
-                style={styles.accountButton}
-                onPress={() => router.push('/account')}
-              >
-                <Avatar size={44} uri={auth.avatarUrl} email={auth.email} authed={isAuthed} />
-                <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>
-                  {isAuthed ? 'Account' : 'Sign in'}
-                </Text>
-              </Pressable>
-            ) : null}
           </View>
         </View>
         {loadError ? (

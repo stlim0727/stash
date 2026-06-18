@@ -288,7 +288,9 @@ export default function SettingsScreen() {
         ) : null}
       </Card>
 
-      {/* Sync */}
+      {/* Sync — status and the sync action are one row: the summary is the
+          value and tapping the row syncs (upload-then-pull). A trailing refresh
+          glyph signals it's tappable; it spins to a spinner while syncing. */}
       <Group styles={styles}>
         <Row
           styles={styles}
@@ -296,22 +298,16 @@ export default function SettingsScreen() {
           icon="sync"
           label="Sync"
           value={syncSummary}
-          last={!canSync}
+          last
+          onPress={canSync ? () => void syncNow() : undefined}
           right={
-            isSyncing ? <ActivityIndicator color={palette.textSecondary} /> : undefined
+            isSyncing ? (
+              <ActivityIndicator color={palette.textSecondary} />
+            ) : canSync ? (
+              <Ionicons name="refresh" size={18} color={palette.accent} />
+            ) : undefined
           }
         />
-        {canSync ? (
-          <Row
-            styles={styles}
-            palette={palette}
-            icon="cloud-upload-outline"
-            label="Sync now"
-            accent
-            last
-            onPress={() => void syncNow()}
-          />
-        ) : null}
       </Group>
 
       {/* Library & tools */}
