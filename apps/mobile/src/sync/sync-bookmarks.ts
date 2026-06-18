@@ -230,7 +230,9 @@ export function isSyncable(entry: LocalPendingBookmark): boolean {
  * Local-ID rows get a `create`; rows that already have a remote identity get an
  * `update`. Both are idempotent on the server (create dedupes on URL, update is
  * last-write-wins), so re-enqueuing a bookmark that actually did reach the
- * cloud is harmless.
+ * cloud is harmless. A local row with no URL is skipped: the create API needs a
+ * URL (or shared text, which this app doesn't capture), so enqueuing one would
+ * just swap "sync pending" for a permanently failed entry.
  */
 export function reconcileOrphanedQueueEntries(
   bookmarks: Bookmark[],
@@ -247,12 +249,15 @@ export function reconcileOrphanedQueueEntries(
       entries.push(makeMutationEntry(bookmark.id, 'update'));
       continue;
     }
+    if (!bookmark.url) {
+      continue;
+    }
     entries.push({
       local_id: bookmark.id,
       remote_id: null,
       operation: 'create',
       payload: {
-        url: bookmark.url ?? undefined,
+        url: bookmark.url,
         title: bookmark.title ?? undefined,
         notes: bookmark.notes ?? undefined,
       },

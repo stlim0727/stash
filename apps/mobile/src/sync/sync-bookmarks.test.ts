@@ -336,6 +336,19 @@ test('reconcileOrphanedQueueEntries re-queues an update for a stranded synced-id
   assert.equal(entries[0]?.operation, 'update');
 });
 
+test('reconcileOrphanedQueueEntries skips a url-less local bookmark', () => {
+  // A create with neither url nor shared_text is rejected by the server, so
+  // re-enqueuing it would strand the row as failed instead of self-healing it.
+  const orphan = makeBookmark({
+    id: 'local-textonly',
+    url: null,
+    content_type: 'text',
+    sync_status: 'pending',
+  });
+
+  assert.deepEqual(reconcileOrphanedQueueEntries([orphan], []), []);
+});
+
 test('reconcileOrphanedQueueEntries leaves synced and already-queued bookmarks alone', () => {
   const synced = makeBookmark({ id: 'local-synced', sync_status: 'synced' });
   const alreadyQueued = makeBookmark({ id: 'local-queued', sync_status: 'pending' });
