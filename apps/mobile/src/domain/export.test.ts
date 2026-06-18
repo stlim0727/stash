@@ -158,6 +158,22 @@ test('toNetscapeHtml groups collections into folders and keeps uncategorized at 
   assert.match(html, /\n {4}<DT><A [^>]*>Top Level<\/A>/);
 });
 
+test('toNetscapeHtml keeps bookmarks whose collection is missing from the manifest', () => {
+  const html = toNetscapeHtml(
+    baseInput({
+      bookmarks: [
+        bookmark({ id: 'b1', url: 'https://orphan.example', title: 'Orphaned', collection_id: 'missing' }),
+      ],
+      collections: [], // collection metadata unavailable / sanitized away
+    }),
+  );
+
+  // No folder is emitted for the unknown collection, but the bookmark survives
+  // at the top level rather than disappearing.
+  assert.doesNotMatch(html, /<H3/);
+  assert.match(html, /\n {4}<DT><A [^>]*>Orphaned<\/A>/);
+});
+
 test('toNetscapeHtml omits url-less bookmarks but the JSON backup keeps them', () => {
   const input = baseInput({
     bookmarks: [

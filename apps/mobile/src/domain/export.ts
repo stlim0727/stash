@@ -189,11 +189,13 @@ export function toNetscapeHtml(input: ExportInput): string {
   }
 
   // Then one folder per collection that actually holds bookmarks.
+  const emittedCollectionIds = new Set<string>();
   for (const collection of input.collections) {
     const items = byCollection.get(collection.id);
     if (!items || items.length === 0) {
       continue;
     }
+    emittedCollectionIds.add(collection.id);
     const addDate = toUnixSeconds(collection.created_at);
     const folderAttrs = addDate ? ` ADD_DATE="${addDate}"` : '';
     lines.push(`    <DT><H3${folderAttrs}>${escapeHtml(collection.name)}</H3>`);
@@ -202,6 +204,18 @@ export function toNetscapeHtml(input: ExportInput): string {
       lines.push(htmlEntry(input, bookmark, '        ').trimEnd());
     }
     lines.push('    </DL><p>');
+  }
+
+  // Bookmarks whose collection_id has no matching collection row (e.g. local
+  // metadata is missing or was sanitized) must never silently vanish. Emit them
+  // at the top level so the export stays lossless.
+  for (const [key, items] of byCollection) {
+    if (key === null || emittedCollectionIds.has(key)) {
+      continue;
+    }
+    for (const bookmark of items) {
+      lines.push(htmlEntry(input, bookmark, '    ').trimEnd());
+    }
   }
 
   lines.push('</DL><p>');
