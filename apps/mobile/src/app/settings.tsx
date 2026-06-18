@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Pressable,
   ScrollView,
@@ -19,9 +20,17 @@ import { usePalette } from '@/theme';
 import { Avatar } from '@/ui/Avatar';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
+import { ActionSheet } from '@/ui/ActionSheet';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
+import {
+  exportFilename,
+  toJsonBackup,
+  toNetscapeHtml,
+  type ExportInput,
+} from '@/domain/export';
 import { getPreference, setPreference } from '@/storage/preferences';
+import { deliverExport } from '@/share/export-data';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 
@@ -40,10 +49,65 @@ export default function SettingsScreen() {
     inbox,
     archived,
     lastPulledAt,
+    collections,
     getTagsForBookmark,
     getEnrichment,
   } = useBookmarks();
   const auth = useSupabaseAuth();
+
+  // Data export: build a portable file from the on-device library and hand it
+  // to the platform delivery shim (browser download on web, share sheet on
+  // native). This is the user's "your data is yours" escape hatch — it works
+  // offline and produces formats other apps can import.
+  const [exportSheetOpen, setExportSheetOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const totalBookmarks = inbox.length + archived.length;
+
+  const runExport = async (kind: 'html' | 'json') => {
+    setExportSheetOpen(false);
+    if (exporting) {
+      return;
+    }
+    setExporting(true);
+    try {
+      const bookmarks = [...inbox, ...archived];
+      const tagsByBookmark: ExportInput['tagsByBookmark'] = {};
+      const enrichmentByBookmark: NonNullable<ExportInput['enrichmentByBookmark']> = {};
+      for (const bookmark of bookmarks) {
+        tagsByBookmark[bookmark.id] = getTagsForBookmark(bookmark.id);
+        enrichmentByBookmark[bookmark.id] = getEnrichment(bookmark.id);
+      }
+      const input: ExportInput = {
+        bookmarks,
+        tagsByBookmark,
+        enrichmentByBookmark,
+        collections,
+        exportedAt: new Date().toISOString(),
+        appVersion: Constants.expoConfig?.version ?? undefined,
+      };
+
+      await deliverExport(
+        kind === 'html'
+          ? {
+              filename: exportFilename('html', input.exportedAt),
+              mimeType: 'text/html',
+              contents: toNetscapeHtml(input),
+            }
+          : {
+              filename: exportFilename('json', input.exportedAt),
+              mimeType: 'application/json',
+              contents: toJsonBackup(input),
+            },
+      );
+    } catch (error) {
+      Alert.alert(
+        'Export failed',
+        error instanceof Error ? error.message : 'Could not export your data. Please try again.',
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // Developer mode hides diagnostics behind an opt-in so the everyday screen
   // stays compact. Persisted so it survives app restarts.
@@ -195,6 +259,32 @@ export default function SettingsScreen() {
         />
       </Group>
 
+      {/* Your data — export / portability */}
+      <Group styles={styles}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="download-outline"
+          label="Export my data"
+          value={
+            exporting
+              ? 'Preparing export…'
+              : totalBookmarks === 0
+                ? 'Nothing to export yet'
+                : 'Download a bookmarks file or full backup'
+          }
+          last
+          right={exporting ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
+          onPress={
+            exporting || totalBookmarks === 0 ? undefined : () => setExportSheetOpen(true)
+          }
+        />
+      </Group>
+      <Text style={styles.exportNote}>
+        Your bookmarks are yours. Export a standard HTML file any browser or bookmark app can
+        import, or a full JSON backup — anytime, even offline.
+      </Text>
+
       {/* Developer mode toggle */}
       <Group styles={styles}>
         <Row
@@ -266,6 +356,26 @@ export default function SettingsScreen() {
           )}
         </>
       ) : null}
+
+      <ActionSheet
+        visible={exportSheetOpen}
+        title="Export my data"
+        onClose={() => setExportSheetOpen(false)}
+        actions={[
+          {
+            key: 'html',
+            label: 'Bookmarks file (HTML)',
+            icon: 'globe-outline',
+            onPress: () => void runExport('html'),
+          },
+          {
+            key: 'json',
+            label: 'Full backup (JSON)',
+            icon: 'code-slash-outline',
+            onPress: () => void runExport('json'),
+          },
+        ]}
+      />
     </ScrollView>
   );
 }
@@ -346,6 +456,8 @@ function Row({
 
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
       onPress={onPress}
       style={({ pressed }) => [rowStyle, pressed && { opacity: 0.6 }]}
     >
@@ -490,5 +602,12 @@ const makeStyles = (palette: AppPalette) =>
       fontSize: 14,
       color: palette.textSecondary,
       marginLeft: 4,
+    },
+    exportNote: {
+      fontSize: 13,
+      color: palette.textSecondary,
+      marginTop: -10,
+      marginHorizontal: 4,
+      lineHeight: 18,
     },
   });
