@@ -53,6 +53,7 @@ jest.mock('expo-share-intent', () => ({
 
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
+import { CaptureToastProvider } from '@/ui/capture-toast';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeStoredBookmark } from './helpers/fake-repository';
 
@@ -60,7 +61,9 @@ const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModul
 
 const handlerTree = (
   <BookmarksProvider>
-    <ShareIntentHandler />
+    <CaptureToastProvider>
+      <ShareIntentHandler />
+    </CaptureToastProvider>
   </BookmarksProvider>
 );
 

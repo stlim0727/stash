@@ -9,6 +9,7 @@ import { installConsoleCapture } from '@/observability/log-buffer';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
+import { CaptureToastProvider } from '@/ui/capture-toast';
 
 // Capture console output into an in-memory buffer so the "Report a problem"
 // screen can attach real logs. Install before anything else so early errors
@@ -28,25 +29,27 @@ function RootLayout() {
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <SupabaseAuthProvider>
             <BookmarksProvider>
-              <ShareIntentHandler />
-              <Stack>
-                <Stack.Screen name="index" options={{ headerShown: false }} />
-                <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
-                <Stack.Screen
-                  name="add"
-                  options={{ title: 'Add Bookmark', presentation: 'modal' }}
-                />
-                <Stack.Screen name="settings" options={{ title: 'Settings' }} />
-                <Stack.Screen
-                  name="account"
-                  options={{ title: 'Account', presentation: 'modal' }}
-                />
-                <Stack.Screen name="review" options={{ title: 'Review AI suggestions' }} />
-                <Stack.Screen name="report" options={{ title: 'Report a problem' }} />
-                <Stack.Screen name="archived" options={{ title: 'Archived' }} />
-                <Stack.Screen name="bookmark/[id]" options={{ title: 'Bookmark' }} />
-              </Stack>
-              <StatusBar style="auto" />
+              <CaptureToastProvider>
+                <ShareIntentHandler />
+                <Stack>
+                  <Stack.Screen name="index" options={{ headerShown: false }} />
+                  <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
+                  <Stack.Screen
+                    name="add"
+                    options={{ title: 'Add Bookmark', presentation: 'modal' }}
+                  />
+                  <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+                  <Stack.Screen
+                    name="account"
+                    options={{ title: 'Account', presentation: 'modal' }}
+                  />
+                  <Stack.Screen name="review" options={{ title: 'Review AI suggestions' }} />
+                  <Stack.Screen name="report" options={{ title: 'Report a problem' }} />
+                  <Stack.Screen name="archived" options={{ title: 'Archived' }} />
+                  <Stack.Screen name="bookmark/[id]" options={{ title: 'Bookmark' }} />
+                </Stack>
+                <StatusBar style="auto" />
+              </CaptureToastProvider>
             </BookmarksProvider>
           </SupabaseAuthProvider>
         </ThemeProvider>
