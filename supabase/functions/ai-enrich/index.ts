@@ -28,9 +28,11 @@ const fallbackProvider = new DummyProvider();
 function selectProvider(): EnrichmentProvider {
   const apiKey = Deno.env.get('GEMINI_API_KEY');
   if (apiKey) {
+    const timeoutMs = Number(Deno.env.get('GEMINI_TIMEOUT_MS'));
     return new GeminiProvider({
       apiKey,
       model: Deno.env.get('GEMINI_MODEL') ?? undefined,
+      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined,
     });
   }
   return fallbackProvider;

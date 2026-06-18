@@ -101,6 +101,18 @@ test('sends the api key header and existing collection names in the prompt', asy
   assert.match(calls[0].init?.body ?? '', /Development, Reading/);
 });
 
+test('aborts and throws when the endpoint hangs past the timeout', async () => {
+  // A fetch that never resolves on its own, but rejects when the signal aborts.
+  const fetchImpl: FetchLike = (_url, init) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () =>
+        reject(new DOMException('aborted', 'AbortError')),
+      );
+    });
+  const provider = new GeminiProvider({ apiKey: 'k', timeoutMs: 10, fetchImpl });
+  await assert.rejects(() => provider.enrich(input()), /timed out after 10ms/);
+});
+
 test('throws on a non-ok response so the caller can fall back', async () => {
   const { fetchImpl } = stubFetch(null, { ok: false, status: 429 });
   const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });

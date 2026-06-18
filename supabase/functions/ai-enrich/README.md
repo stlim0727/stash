@@ -51,8 +51,9 @@ function selectProvider(): EnrichmentProvider {
 
 | Env var          | Required | Default            | Notes                                  |
 | ---------------- | -------- | ------------------ | -------------------------------------- |
-| `GEMINI_API_KEY` | no       | —                  | Enables `GeminiProvider` when present. |
-| `GEMINI_MODEL`   | no       | `gemini-2.0-flash` | Any Gemini model id.                   |
+| `GEMINI_API_KEY`   | no     | —                  | Enables `GeminiProvider` when present. |
+| `GEMINI_MODEL`     | no     | `gemini-2.0-flash` | Any Gemini model id.                   |
+| `GEMINI_TIMEOUT_MS`| no     | `15000`            | Aborts a hung request so it falls back. |
 
 ```bash
 supabase secrets set GEMINI_API_KEY=...

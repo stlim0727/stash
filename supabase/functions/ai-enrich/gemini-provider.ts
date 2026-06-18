@@ -28,6 +28,7 @@ export type FetchLike = (
     method?: string;
     headers?: Record<string, string>;
     body?: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
@@ -37,12 +38,16 @@ export interface GeminiProviderConfig {
   model?: string;
   /** Override the API base (e.g. for a proxy). Defaults to the public endpoint. */
   baseUrl?: string;
+  /** Abort the request after this many ms so a hung connection falls back to the
+   *  heuristics promptly rather than blocking. Defaults to 15s. */
+  timeoutMs?: number;
   /** Injected for testing; defaults to the global `fetch`. */
   fetchImpl?: FetchLike;
 }
 
 const DEFAULT_MODEL = 'gemini-2.0-flash';
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TAGS = 5;
 
 const SYSTEM_INSTRUCTION = [
@@ -173,6 +178,7 @@ export class GeminiProvider implements EnrichmentProvider {
   readonly model: string;
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private readonly timeoutMs: number;
   private readonly fetchImpl: FetchLike;
 
   constructor(config: GeminiProviderConfig) {
@@ -183,6 +189,8 @@ export class GeminiProvider implements EnrichmentProvider {
     const modelName = config.model?.trim() || DEFAULT_MODEL;
     this.model = `gemini:${modelName}`;
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+    this.timeoutMs =
+      config.timeoutMs && config.timeoutMs > 0 ? config.timeoutMs : DEFAULT_TIMEOUT_MS;
     // `fetch` is global in Deno and modern Node; fall back to it when present.
     const globalFetch = (globalThis as { fetch?: unknown }).fetch;
     const resolved = config.fetchImpl ?? (globalFetch as FetchLike | undefined);
@@ -205,18 +213,38 @@ export class GeminiProvider implements EnrichmentProvider {
       },
     });
 
-    const res = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': this.apiKey,
-      },
-      body,
-    });
+    // Bound the whole exchange (connect + body read) with an abort timer so a
+    // hung connection throws promptly and index.ts can fall back to the
+    // heuristics, rather than blocking until the runtime kills the request.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let ok: boolean;
+    let status: number;
+    let raw: string;
+    try {
+      const res = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': this.apiKey,
+        },
+        body,
+        signal: controller.signal,
+      });
+      ok = res.ok;
+      status = res.status;
+      raw = await res.text();
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`Gemini request timed out after ${this.timeoutMs}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
 
-    const raw = await res.text();
-    if (!res.ok) {
-      throw new Error(`Gemini request failed (${res.status}): ${raw.slice(0, 500)}`);
+    if (!ok) {
+      throw new Error(`Gemini request failed (${status}): ${raw.slice(0, 500)}`);
     }
 
     let payload: unknown;
