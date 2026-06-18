@@ -158,4 +158,59 @@ describe('ShareIntentHandler', () => {
     expect(fakeRepo.__queue()[0].payload.url).toBe('https://example.com/slow');
     unmount();
   });
+
+  it('re-sharing a share.google link with a different si token dedupes to one bookmark', async () => {
+    // issie's exact report: re-sharing the same content (share.google / YouTube)
+    // appends a fresh ?si=… share token each time, so the two payloads differ.
+    // Canonicalization strips si for these hosts, so the second share must
+    // dedupe end-to-end through the handler rather than pile up a duplicate.
+    // A fresh element per render mirrors a real second share, which re-renders
+    // the handler with a new share-intent context (passing the same element
+    // reference would let React bail out of re-rendering and never re-read it).
+    const freshTree = () => (
+      <BookmarksProvider>
+        <CaptureToastProvider>
+          <ShareIntentHandler />
+        </CaptureToastProvider>
+      </BookmarksProvider>
+    );
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://share.google/bb3vpuiCbbyVhrpTp?si=Kgq04hU28tQmyOaV', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, rerender, unmount } = await render(freshTree());
+
+    // First share saves and enqueues exactly one create.
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+
+    // The OS clears the intent after handling; re-fire it with the same link but
+    // a DIFFERENT si token, as a real second share would.
+    mockShareIntent = {
+      hasShareIntent: false,
+      shareIntent: { webUrl: null, text: null },
+      resetShareIntent: jest.fn(),
+    };
+    await act(async () => {
+      rerender(freshTree());
+    });
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://share.google/bb3vpuiCbbyVhrpTp?si=g2oSW1QiR4zjMhzS', text: null },
+      resetShareIntent: jest.fn(),
+    };
+    await act(async () => {
+      rerender(freshTree());
+    });
+
+    // Second share reuses the existing bookmark: duplicate toast, no new create,
+    // and still exactly one bookmark in the store.
+    await findByText('Already in Stash');
+    expect(fakeRepo.__queue()).toHaveLength(1);
+    expect(await fakeRepo.repository.listBookmarks()).toHaveLength(1);
+    unmount();
+  });
 });
