@@ -139,7 +139,11 @@ Expected sequence:
 ## Error Handling
 
 - Network failures should leave the local item in a retryable pending state.
-- Duplicate saves should return the existing bookmark ID.
+- Duplicate saves should return the existing bookmark ID. Dedupe uses the
+  **canonical** URL (tracking params / fragment stripped, via `canonicalizeUrl`)
+  for `url_hash` on both the client and the server, so `…?utm_source=x` and the
+  bare URL collapse to one active row. The server's active-URL unique index is
+  on this canonical `url_hash`.
 - Invalid payloads should fail fast with a non-blocking toast.
 - Authorization failures should pause sync and prompt account recovery in the main app.
 

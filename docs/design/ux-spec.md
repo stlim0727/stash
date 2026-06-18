@@ -48,14 +48,20 @@ states. Each screen links to the section that specifies its behavior; see
 - ✅ A valid save returns to Inbox immediately; the bookmark is already visible
   with `sync pending · metadata pending` badges. Saving never waits on network.
 - ✅ Saving an already-saved URL reuses the existing bookmark (no duplicate row,
-  `last_saved_at` updated) and returns to Inbox.
+  `last_saved_at` updated) and returns to Inbox. The dedupe key is the
+  **canonical** URL (tracking params / fragment stripped), so `…?utm_source=x`
+  and the bare URL are the same bookmark — on the client and in the cloud.
+- ✅ Capture confirmation is **consistent across capture paths**: the manual Add
+  screen shows the same ~2s capture toast the share intake uses — "Saved to
+  Stash" for a new save, "Already in Stash" for a duplicate (shared
+  `CaptureToastProvider`). Manual add no longer returns silently.
 - ✅ An optional note is stored as the user's private `notes`.
 
 ### 1.2 Share intake (OS share sheet)
 
 - 🔶 Sharing a URL (or text containing one) from any app saves it without
-  opening an editor; the app shows Inbox plus a ~2s toast "Saved to Stash" /
-  "Already in Stash" / "No link found to stash".
+  opening an editor; the app shows Inbox plus the same ~2s capture toast as
+  manual add — "Saved to Stash" / "Already in Stash" / "No link found to stash".
 - 🔶 The shared page title (when provided by the source app) becomes the
   bookmark's initial title; enrichment fills the title only when none was
   provided.

@@ -1,5 +1,5 @@
 import { normalizeText, slugify } from '@/domain/tag-normalize';
-import { normalizeUrl } from '@/domain/urls';
+import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import type {
   AIEnrichment,
   Bookmark,
@@ -184,8 +184,15 @@ export class BookmarkApi {
     const notes = input.notes?.trim() || null;
     const sourceApp = input.source_app?.trim() || null;
 
-    if (payload.url) {
-      const existing = await this.findActiveBookmarkByUrlHash(payload.url);
+    // Dedupe on the canonical URL (tracking params / fragment stripped), the
+    // same key the local store uses, so the server's active-URL unique index
+    // and the client agree on what counts as "the same bookmark". Storing the
+    // raw normalized URL here would let `…?utm_source=x` and the bare URL
+    // become two separate cloud rows.
+    const urlHash = payload.url ? canonicalizeUrl(payload.url) : null;
+
+    if (urlHash) {
+      const existing = await this.findActiveBookmarkByUrlHash(urlHash);
       if (existing) {
         await this.updateBookmark(existing.id, { last_saved_at: timestamp });
         return {
@@ -200,7 +207,7 @@ export class BookmarkApi {
       user_id: this.session.user.id,
       url: payload.url,
       canonical_url: null,
-      url_hash: payload.url,
+      url_hash: urlHash,
       title,
       description,
       notes,
@@ -229,8 +236,8 @@ export class BookmarkApi {
       // If another client created the same active URL between our lookup and
       // insert, treat the unique-index conflict as the documented duplicate
       // save behavior.
-      if (payload.url && error instanceof SupabaseRequestError && error.status === 409) {
-        const duplicate = await this.findActiveBookmarkByUrlHash(payload.url);
+      if (urlHash && error instanceof SupabaseRequestError && error.status === 409) {
+        const duplicate = await this.findActiveBookmarkByUrlHash(urlHash);
         if (duplicate) {
           return {
             bookmark_id: duplicate.id,

@@ -5,12 +5,14 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
+import { useCaptureToast } from '@/ui/capture-toast';
 import { useBookmarks } from '@/store/bookmarks';
 
 export default function AddBookmarkScreen() {
   const palette = usePalette();
   const router = useRouter();
   const { addBookmark } = useBookmarks();
+  const { show } = useCaptureToast();
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -21,8 +23,11 @@ export default function AddBookmarkScreen() {
       setError(result.error);
       return;
     }
-    // Created or duplicate: the bookmark is already visible in Inbox,
-    // so capture stays fast and non-blocking.
+    // Confirm with the same capture toast the share flow uses, so adding a URL
+    // that's already saved reads identically however it was captured. The
+    // bookmark is already visible in Inbox, so capture stays fast and
+    // non-blocking.
+    show(result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash');
     router.back();
   }
 
