@@ -419,26 +419,25 @@ export default function BookmarkDetailScreen() {
         />
       </View>
 
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
-        <TagField
-          tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
-          suggestions={tagSuggestions}
-          editable={canOrganizeRemotely}
-          busy={busy}
-          onAdd={handleAddTag}
-          onRemove={handleRemoveTag}
-          onBrowse={(tagId) => router.navigate({ pathname: '/', params: { tag: tagId } })}
-          onAcceptSuggestion={handleAcceptSuggestion}
-          onDismissSuggestion={handleDismissTag}
-          disabledHint={
-            canOrganizeRemotely ? undefined : 'Tags can be edited once this bookmark has synced.'
-          }
-        />
-      </Card>
+      {/* Tags sit directly under the note as a compact token field (its own
+          "Add tags…" placeholder labels it), not a separate titled panel. */}
+      <TagField
+        tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
+        suggestions={tagSuggestions}
+        editable={canOrganizeRemotely}
+        busy={busy}
+        onAdd={handleAddTag}
+        onRemove={handleRemoveTag}
+        onBrowse={(tagId) => router.navigate({ pathname: '/', params: { tag: tagId } })}
+        onAcceptSuggestion={handleAcceptSuggestion}
+        onDismissSuggestion={handleDismissTag}
+        disabledHint={
+          canOrganizeRemotely ? undefined : 'Tags can be edited once this bookmark has synced.'
+        }
+      />
 
-      <Card elevated={false} style={styles.field}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Collection</Text>
+      {/* Collection — no title; the folder-icon picker speaks for itself. */}
+      <View style={styles.collectionBlock}>
         <CollectionPicker
           collections={collections.map((item) => ({ id: item.id, name: item.name }))}
           currentId={bookmark.collection_id}
@@ -452,19 +451,19 @@ export default function BookmarkDetailScreen() {
             Currently in: {collection.name}
           </Text>
         ) : null}
-      </Card>
+      </View>
 
+      {/* AI suggestions — no redundant header; the action button names itself. */}
       <Card elevated={false} style={styles.field}>
-        <View style={styles.suggestHeader}>
-          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>AI suggestions</Text>
-          {enrichment?.model ? (
+        {enrichment?.model ? (
+          <View style={styles.suggestHeader}>
             <View style={[styles.aiBadge, { borderColor: palette.border }]}>
               <Text style={[styles.aiBadgeLabel, { color: palette.textSecondary }]}>
                 {enrichment.model}
               </Text>
             </View>
-          ) : null}
-        </View>
+          </View>
+        ) : null}
 
         {enrichment?.status === 'stale' ? (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>
@@ -742,6 +741,9 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     padding: 18,
     gap: 10,
+  },
+  collectionBlock: {
+    gap: 6,
   },
   fieldLabel: {
     fontSize: 13,
