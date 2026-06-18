@@ -8,7 +8,10 @@
 //
 // Auth: the caller's Supabase JWT is forwarded straight to PostgREST, so Row
 // Level Security scopes every read/write to the bookmark's owner — this
-// function holds no elevated privileges.
+// function holds no elevated privileges. It is deployed with verify_jwt = false
+// (see supabase/config.toml) so the gateway does not pre-reject the app's
+// anonymous-session tokens; authorization is enforced by RLS via the forwarded
+// token, and a missing token is rejected below.
 //
 // To ship a real model: implement EnrichmentProvider in a new module and
 // change the single `provider` assignment below. Nothing else in the function,
