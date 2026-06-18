@@ -79,6 +79,24 @@ const TRACKING_PARAMS = new Set([
 ]);
 
 /**
+ * Hosts where the `si` query param is a share-source tracking token rather than
+ * content-identifying. YouTube (and the `youtu.be` / `share.google` share
+ * links) append `?si=…` to every "Share" action, so the same video re-shared
+ * twice would otherwise produce two dedupe keys. Scoped to these hosts on
+ * purpose: `si` is a short, generic param name that other sites may use
+ * meaningfully, so it is not safe to strip globally.
+ */
+function stripsShareSi(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === 'youtu.be' ||
+    host === 'youtube.com' ||
+    host.endsWith('.youtube.com') ||
+    host === 'share.google'
+  );
+}
+
+/**
  * Best-effort canonical form for deduplication. Conservative on purpose — only
  * changes that are safe across the web: drop the fragment and known tracking
  * params, sort the remaining query, and trim a trailing slash on non-root
@@ -96,10 +114,11 @@ export function canonicalizeUrl(input: string): string {
 
   parsed.hash = '';
 
+  const dropSi = stripsShareSi(parsed.hostname);
   const drop: string[] = [];
   parsed.searchParams.forEach((_value, key) => {
     const lower = key.toLowerCase();
-    if (lower.startsWith('utm_') || TRACKING_PARAMS.has(lower)) {
+    if (lower.startsWith('utm_') || TRACKING_PARAMS.has(lower) || (dropSi && lower === 'si')) {
       drop.push(key);
     }
   });

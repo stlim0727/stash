@@ -70,6 +70,23 @@ test('canonicalizeUrl maps tracking variants of one page to the same key', () =>
   assert.equal(canonicalizeUrl('https://example.com/post#top'), clean);
 });
 
+test('canonicalizeUrl strips the YouTube share `si` token so re-shares dedupe', () => {
+  const clean = 'https://youtube.com/shorts/gkx8ZfytWeE';
+  assert.equal(canonicalizeUrl('https://youtube.com/shorts/gkx8ZfytWeE?si=Kgq04hU28tQmyOaV'), clean);
+  assert.equal(canonicalizeUrl('https://youtube.com/shorts/gkx8ZfytWeE?si=g2oSW1QiR4zjMhzS'), clean);
+  // youtu.be, www/m subdomains, and share.google links are covered too.
+  assert.equal(canonicalizeUrl('https://youtu.be/MfwJ4X7lx4k?si=abc'), 'https://youtu.be/MfwJ4X7lx4k');
+  assert.equal(
+    canonicalizeUrl('https://m.youtube.com/watch?v=CGMooBw-5XM&si=ZJpWatBo15jHGz8q'),
+    'https://m.youtube.com/watch?v=CGMooBw-5XM',
+  );
+  assert.equal(canonicalizeUrl('https://share.google/m97weCW3E6wKEfgTK?si=x'), 'https://share.google/m97weCW3E6wKEfgTK');
+});
+
+test('canonicalizeUrl keeps `si` on other hosts (not safe to strip globally)', () => {
+  assert.equal(canonicalizeUrl('https://example.com/p?si=keep'), 'https://example.com/p?si=keep');
+});
+
 test('canonicalizeUrl returns unparsable input unchanged', () => {
   assert.equal(canonicalizeUrl('not a url'), 'not a url');
 });

@@ -137,6 +137,18 @@ function makeLocalId() {
   return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/**
+ * The current canonical dedupe key for an already-stored bookmark. Recomputed
+ * from the URL rather than trusting the persisted `url_hash`, so a row saved by
+ * an older build — whose hash predates a canonicalization change (e.g. the
+ * YouTube `si` strip) and hasn't yet been rewritten by pull sync — still
+ * dedupes against a fresh save instead of creating the duplicate this is meant
+ * to prevent. Falls back to the stored hash when the row has no URL.
+ */
+function currentDedupeKey(bookmark: Pick<Bookmark, 'url' | 'url_hash'>): string | null {
+  return bookmark.url ? canonicalizeUrl(bookmark.url) : bookmark.url_hash;
+}
+
 /** Parse the persisted tag-op queue, tolerating absent/corrupt values. */
 function parseTagOps(raw: string | null): PendingTagOp[] {
   if (!raw) {
@@ -485,7 +497,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Idempotent saves: reuse the existing bookmark for the same URL. Dedupe
       // on the canonical form so tracking params / fragments don't create dupes.
       const dedupeKey = canonicalizeUrl(normalized);
-      const existing = loadedBookmarks.find((bookmark) => bookmark.url_hash === dedupeKey);
+      const existing = loadedBookmarks.find((bookmark) => currentDedupeKey(bookmark) === dedupeKey);
       if (existing) {
         const updated = { ...existing, last_saved_at: now };
         setBookmarks((current) =>
@@ -568,7 +580,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Latest committed rows (the ref), so an import right after a save sees it.
       const seen = new Set(
         (bookmarksRef.current ?? loadedBookmarks)
-          .map((bookmark) => bookmark.url_hash)
+          .map((bookmark) => currentDedupeKey(bookmark))
           .filter((hash): hash is string => hash !== null),
       );
       const newBookmarks: Bookmark[] = [];
