@@ -19,7 +19,7 @@ jest.mock('@/domain/enrichment', () => ({
 }));
 
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
-import type { FakeRepositoryModule } from './helpers/fake-repository';
+import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 
@@ -64,6 +64,31 @@ test('saving the same URL twice reuses the existing bookmark', async () => {
   let status = '';
   await act(async () => {
     status = result.current.addBookmark({ url: 'https://example.com/a' }).status;
+  });
+
+  expect(status).toBe('duplicate');
+  expect(result.current.inbox).toHaveLength(1);
+});
+
+test('re-sharing a YouTube URL dedupes against a stored row with a stale si hash', async () => {
+  // Simulates a local row saved by an older build, before `si` was stripped:
+  // its persisted url_hash still carries the old share token and hasn't been
+  // rewritten by pull sync yet. A fresh re-share (different si) must still
+  // dedupe against it instead of creating a duplicate.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      url: 'https://youtube.com/shorts/gkx8ZfytWeE?si=OLDtoken',
+      url_hash: 'https://youtube.com/shorts/gkx8ZfytWeE?si=OLDtoken',
+    }),
+  ]);
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  let status = '';
+  await act(async () => {
+    status = result.current.addBookmark({
+      url: 'https://youtube.com/shorts/gkx8ZfytWeE?si=NEWtoken',
+    }).status;
   });
 
   expect(status).toBe('duplicate');
