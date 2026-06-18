@@ -25,12 +25,15 @@ import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import {
   exportFilename,
+  toCsv,
   toJsonBackup,
   toNetscapeHtml,
   type ExportInput,
 } from '@/domain/export';
+import { parseImport } from '@/domain/import';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { deliverExport } from '@/share/export-data';
+import { pickImportFile } from '@/share/import-data';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 
@@ -52,6 +55,7 @@ export default function SettingsScreen() {
     collections,
     getTagsForBookmark,
     getEnrichment,
+    importBookmarks,
   } = useBookmarks();
   const auth = useSupabaseAuth();
 
@@ -63,7 +67,7 @@ export default function SettingsScreen() {
   const [exporting, setExporting] = useState(false);
   const totalBookmarks = inbox.length + archived.length;
 
-  const runExport = async (kind: 'html' | 'json') => {
+  const runExport = async (kind: 'html' | 'json' | 'csv') => {
     setExportSheetOpen(false);
     if (exporting) {
       return;
@@ -86,19 +90,25 @@ export default function SettingsScreen() {
         appVersion: Constants.expoConfig?.version ?? undefined,
       };
 
-      await deliverExport(
+      const file =
         kind === 'html'
           ? {
               filename: exportFilename('html', input.exportedAt),
               mimeType: 'text/html',
               contents: toNetscapeHtml(input),
             }
-          : {
-              filename: exportFilename('json', input.exportedAt),
-              mimeType: 'application/json',
-              contents: toJsonBackup(input),
-            },
-      );
+          : kind === 'csv'
+            ? {
+                filename: exportFilename('csv', input.exportedAt),
+                mimeType: 'text/csv',
+                contents: toCsv(input),
+              }
+            : {
+                filename: exportFilename('json', input.exportedAt),
+                mimeType: 'application/json',
+                contents: toJsonBackup(input),
+              };
+      await deliverExport(file);
     } catch (error) {
       Alert.alert(
         'Export failed',
@@ -106,6 +116,49 @@ export default function SettingsScreen() {
       );
     } finally {
       setExporting(false);
+    }
+  };
+
+  // Data import: pick a previously exported file (a Stash JSON backup, or a
+  // Netscape HTML bookmarks file from any browser/bookmark app), parse it, and
+  // re-ingest the bookmarks local-first. The mirror of export — "you can bring
+  // your data in as easily as you can take it out."
+  const [importSheetOpen, setImportSheetOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  const runImport = async (kind: 'json' | 'html') => {
+    setImportSheetOpen(false);
+    if (importing) {
+      return;
+    }
+    setImporting(true);
+    try {
+      const picked = await pickImportFile(kind);
+      if (!picked) {
+        return; // user cancelled the picker
+      }
+      const items = parseImport(kind, picked.text);
+      const summary = importBookmarks(items);
+
+      if (summary.imported === 0 && summary.duplicates === 0 && summary.skipped === 0) {
+        Alert.alert('Nothing to import', `No bookmarks were found in ${picked.name}.`);
+        return;
+      }
+      const parts = [`Added ${summary.imported} bookmark${summary.imported === 1 ? '' : 's'}.`];
+      if (summary.duplicates > 0) {
+        parts.push(`${summary.duplicates} already in your library.`);
+      }
+      if (summary.skipped > 0) {
+        parts.push(`${summary.skipped} skipped (no web address).`);
+      }
+      Alert.alert('Import complete', parts.join('\n'));
+    } catch (error) {
+      Alert.alert(
+        'Import failed',
+        error instanceof Error ? error.message : 'Could not import that file. Please try again.',
+      );
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -273,16 +326,25 @@ export default function SettingsScreen() {
                 ? 'Nothing to export yet'
                 : 'Download a bookmarks file or full backup'
           }
-          last
           right={exporting ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
           onPress={
             exporting || totalBookmarks === 0 ? undefined : () => setExportSheetOpen(true)
           }
         />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="enter-outline"
+          label="Import data"
+          value={importing ? 'Importing…' : "Restore a backup or another app's bookmarks"}
+          last
+          right={importing ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
+          onPress={importing ? undefined : () => setImportSheetOpen(true)}
+        />
       </Group>
       <Text style={styles.exportNote}>
         Your bookmarks are yours. Export a standard HTML file any browser or bookmark app can
-        import, or a full JSON backup — anytime, even offline.
+        import, a CSV for spreadsheets, or a full JSON backup — anytime, even offline.
       </Text>
 
       {/* Developer mode toggle */}
@@ -369,10 +431,36 @@ export default function SettingsScreen() {
             onPress: () => void runExport('html'),
           },
           {
+            key: 'csv',
+            label: 'Spreadsheet (CSV)',
+            icon: 'grid-outline',
+            onPress: () => void runExport('csv'),
+          },
+          {
             key: 'json',
             label: 'Full backup (JSON)',
             icon: 'code-slash-outline',
             onPress: () => void runExport('json'),
+          },
+        ]}
+      />
+
+      <ActionSheet
+        visible={importSheetOpen}
+        title="Import data"
+        onClose={() => setImportSheetOpen(false)}
+        actions={[
+          {
+            key: 'html',
+            label: 'Bookmarks file (HTML)',
+            icon: 'globe-outline',
+            onPress: () => void runImport('html'),
+          },
+          {
+            key: 'json',
+            label: 'Stash backup (JSON)',
+            icon: 'code-slash-outline',
+            onPress: () => void runImport('json'),
           },
         ]}
       />

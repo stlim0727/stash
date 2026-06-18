@@ -151,3 +151,42 @@ test('exports a JSON backup with the bookmark and its tags', async () => {
   expect(parsed.bookmarks[0].title).toBe('Raindrop review');
   expect(parsed.bookmarks[0].tags.map((t: { name: string }) => t.name)).toContain('tools');
 });
+
+test('exports a CSV table assembled from the stored library', async () => {
+  const bookmark = makeStoredBookmark({
+    id: '7e64cf1e-0000-4000-8000-0000000000cc',
+    title: 'Local-first software',
+    url: 'https://www.inkandswitch.com/local-first/',
+    url_hash: 'https://www.inkandswitch.com/local-first/',
+    collection_id: 'col-1',
+  });
+  const tagData: TagData = {
+    tags: [makeTag('tag-3', 'reading')],
+    bookmarkTags: [
+      { bookmark_id: bookmark.id, tag_id: 'tag-3', source: 'user', confidence: null, created_at: bookmark.created_at },
+    ],
+    collections: [makeCollection('col-1', 'Research')],
+  };
+  fakeRepo.__reset([bookmark], tagData);
+
+  const view = await renderSettings();
+  await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
+
+  await fireEvent.press(view.getByLabelText('Export my data'));
+  await waitFor(() => view.getByLabelText('Spreadsheet (CSV)'));
+  await fireEvent.press(view.getByLabelText('Spreadsheet (CSV)'));
+
+  await waitFor(() => expect(mockDeliverExport).toHaveBeenCalledTimes(1));
+  const file = mockDeliverExport.mock.calls[0][0] as {
+    filename: string;
+    mimeType: string;
+    contents: string;
+  };
+  expect(file.mimeType).toBe('text/csv');
+  expect(file.filename).toMatch(/^stash-bookmarks-\d{4}-\d{2}-\d{2}\.csv$/);
+  const [header, firstRow] = file.contents.split('\r\n');
+  expect(header).toBe('url,title,notes,tags,collection,created_at,updated_at,is_archived');
+  expect(firstRow).toContain('Local-first software');
+  expect(firstRow).toContain('Research');
+  expect(firstRow).toContain('reading');
+});
