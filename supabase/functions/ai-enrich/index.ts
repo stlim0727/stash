@@ -15,10 +15,30 @@
 // the database, or the app needs to change.
 
 import { DummyProvider } from './dummy-provider.ts';
-import type { EnrichmentProvider } from './provider.ts';
+import { GeminiProvider } from './gemini-provider.ts';
+import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
-const provider: EnrichmentProvider = new DummyProvider();
+// Use the Gemini-backed provider when an API key is configured; otherwise fall
+// back to the deterministic, network-free heuristics so the pipeline still
+// works with no external dependency. `fallbackProvider` also catches live-call
+// failures (rate limits, outages) at request time below.
+const fallbackProvider = new DummyProvider();
+
+function selectProvider(): EnrichmentProvider {
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
+  if (apiKey) {
+    const timeoutMs = Number(Deno.env.get('GEMINI_TIMEOUT_MS'));
+    return new GeminiProvider({
+      apiKey,
+      model: Deno.env.get('GEMINI_MODEL') ?? undefined,
+      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined,
+    });
+  }
+  return fallbackProvider;
+}
+
+const provider: EnrichmentProvider = selectProvider();
 // ────────────────────────────────────────────────────────────────────────────
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
@@ -95,28 +115,48 @@ Deno.serve(async (req) => {
       return json({ error: 'Bookmark not found' }, 404);
     }
 
-    const output = await provider.enrich({
+    // Load the user's collections up front: their names guide the provider
+    // toward an existing bucket, and the same list resolves the returned name
+    // hint to a real id below — never inventing or creating a collection here.
+    let collections: Array<{ id: string; name: string }> = [];
+    const colRes = await rest(`/collections?select=id,name`);
+    if (colRes.ok) {
+      collections = (await colRes.json()) as Array<{ id: string; name: string }>;
+    }
+
+    const input = {
       url: bookmark.url,
       title: bookmark.title,
       description: bookmark.description,
       notes: bookmark.notes,
       site_name: bookmark.site_name,
       content_type: bookmark.content_type,
-    });
+      collections: collections.map((col) => col.name),
+    };
+
+    // Run the configured provider; if a live model call fails (rate limit,
+    // outage, bad response), degrade to the deterministic heuristics rather
+    // than failing the whole request.
+    let output: EnrichmentOutput;
+    let usedModel = provider.model;
+    try {
+      output = await provider.enrich(input);
+    } catch (err) {
+      if (provider === fallbackProvider) {
+        throw err;
+      }
+      console.error('Primary enrichment provider failed; using fallback:', err);
+      output = await fallbackProvider.enrich(input);
+      usedModel = fallbackProvider.model;
+    }
 
     // Resolve the collection NAME hint to one of the user's existing
     // collections; never create one here.
-    let suggestedCollectionId: string | null = null;
-    if (output.suggested_collection) {
-      const colRes = await rest(`/collections?select=id,name`);
-      if (colRes.ok) {
-        const cols = (await colRes.json()) as Array<{ id: string; name: string }>;
-        suggestedCollectionId =
-          cols.find(
-            (col) => col.name.toLowerCase() === output.suggested_collection!.toLowerCase(),
-          )?.id ?? null;
-      }
-    }
+    const suggestedCollectionId = output.suggested_collection
+      ? collections.find(
+          (col) => col.name.toLowerCase() === output.suggested_collection!.toLowerCase(),
+        )?.id ?? null
+      : null;
 
     const now = new Date().toISOString();
     const row = {
@@ -126,7 +166,7 @@ Deno.serve(async (req) => {
       topics: output.topics,
       suggested_tags: output.suggested_tags,
       suggested_collection_id: suggestedCollectionId,
-      model: provider.model,
+      model: usedModel,
       status: 'complete',
       confidence: output.confidence,
       updated_at: now,
