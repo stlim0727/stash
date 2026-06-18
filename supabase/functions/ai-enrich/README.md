@@ -52,7 +52,7 @@ function selectProvider(): EnrichmentProvider {
 | Env var          | Required | Default            | Notes                                  |
 | ---------------- | -------- | ------------------ | -------------------------------------- |
 | `GEMINI_API_KEY`   | no     | —                  | Enables `GeminiProvider` when present. |
-| `GEMINI_MODEL`     | no     | `gemini-2.0-flash` | Any Gemini model id.                   |
+| `GEMINI_MODEL`     | no     | `gemini-2.5-flash` | Any Gemini model id. (The 2.0 models have no free-tier quota.) |
 | `GEMINI_TIMEOUT_MS`| no     | `15000`            | Aborts a hung request so it falls back. |
 
 ```bash
