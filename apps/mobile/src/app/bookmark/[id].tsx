@@ -22,8 +22,12 @@ import { CollectionPicker } from '@/ui/CollectionPicker';
 import { TagField } from '@/ui/TagField';
 import { hostFromUrl } from '@/domain/item-icon';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { hashtagSuggestions } from '@/domain/hashtags';
 import { useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
+
+// Lines of title shown before collapsing behind a "Show more" toggle.
+const TITLE_COLLAPSED_LINES = 4;
 
 export default function BookmarkDetailScreen() {
   const palette = usePalette();
@@ -54,6 +58,12 @@ export default function BookmarkDetailScreen() {
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  // Long titles (e.g. a full Instagram caption pasted as the title) are
+  // collapsed to a few lines with a "Show more" toggle so they don't push the
+  // rest of the screen out of view. null = not yet measured.
+  const [titleExpanded, setTitleExpanded] = useState(false);
+  const [titleLineCount, setTitleLineCount] = useState<number | null>(null);
+  const [titleWidth, setTitleWidth] = useState<number | null>(null);
   const insets = useSafeAreaInsets();
 
   // Auto-save drafts even when the screen is dismissed via the system back
@@ -67,6 +77,16 @@ export default function BookmarkDetailScreen() {
   useEffect(() => () => flushRef.current(), []);
 
   const bookmark = id ? getBookmark(id) : undefined;
+
+  // The title shown when not editing. Background metadata enrichment can swap
+  // this from the URL/"Untitled" to a long title while the screen stays
+  // mounted, so re-measure whenever it changes — otherwise the stale line
+  // count leaves an overlong title clamped with no "Show more" toggle.
+  const displayedTitle = bookmark?.title ?? bookmark?.url ?? 'Untitled';
+  useEffect(() => {
+    setTitleLineCount(null);
+    setTitleExpanded(false);
+  }, [displayedTitle]);
 
   if (!bookmark) {
     return (
@@ -110,12 +130,33 @@ export default function BookmarkDetailScreen() {
   const showCollectionSuggestion =
     !!suggestedCollection && bookmark.collection_id !== suggestedCollection.id;
 
+  // Hashtags already written into the captured content (e.g. an Instagram
+  // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
+  // any already applied or dismissed, and minus duplicates of an AI suggestion.
+  // Only when the bookmark can actually be tagged, so we never surface a chip
+  // whose accept would just error.
+  const aiSuggestionNames = new Set(pending.map((suggestion) => suggestion.name.toLowerCase()));
+  const hashtagTags = canOrganizeRemotely
+    ? hashtagSuggestions([bookmark.title, bookmark.description], appliedTagNames).filter(
+        (name) =>
+          !dismissed.has(name.toLowerCase()) && !aiSuggestionNames.has(name.toLowerCase()),
+      )
+    : [];
+
+  // AI suggestions carry a real confidence; hashtag chips render the same way
+  // but are added straight as user tags when accepted.
+  const tagSuggestions = [
+    ...pending.map((suggestion) => ({ name: suggestion.name, confidence: suggestion.confidence })),
+    ...hashtagTags.map((name) => ({ name, confidence: 1 })),
+  ];
+
   const notesValue = draftNotes ?? bookmark.notes ?? '';
 
   // Auto-save on blur: edit in place, no explicit "Save" button.
   const commitTitle = () => {
     if (draftTitle !== null && draftTitle.trim() !== (bookmark.title ?? '')) {
       updateBookmarkFields(bookmark.id, { title: draftTitle.trim() });
+      // The displayedTitle effect re-measures once the store update lands.
     }
     setDraftTitle(null);
   };
@@ -178,6 +219,9 @@ export default function BookmarkDetailScreen() {
     const match = pending.find((suggestion) => suggestion.name === name);
     if (match) {
       void runOrganizeAction(() => acceptSuggestedTags(bookmark.id, [match]));
+    } else {
+      // A hashtag chip — accepting it adds a plain user tag.
+      void runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
     }
   };
   const handleDismissTag = (name: string) =>
@@ -266,13 +310,59 @@ export default function BookmarkDetailScreen() {
         </Text>
       </View>
 
-      {/* Title — tap to edit in place, auto-saved on blur. */}
+      {/* Title — tap to edit in place, auto-saved on blur. Overlong titles
+          (full social captions) collapse to a few lines with a Show more
+          toggle so they don't crowd out the rest of the screen. */}
       {draftTitle === null ? (
-        <Pressable accessibilityRole="button" onPress={() => setDraftTitle(bookmark.title ?? '')}>
-          <Text style={[styles.title, { color: palette.text }]}>
-            {bookmark.title ?? bookmark.url ?? 'Untitled'}
-          </Text>
-        </Pressable>
+        <View
+          style={styles.titleBlock}
+          // A width change (e.g. rotation) can change how the title wraps, so
+          // re-measure to keep the overflow/"Show more" state accurate.
+          onLayout={(event) => {
+            const width = event.nativeEvent.layout.width;
+            if (titleWidth !== null && width !== titleWidth) {
+              setTitleLineCount(null);
+            }
+            setTitleWidth(width);
+          }}
+        >
+          <Pressable
+            accessibilityRole="button"
+            // Announce the title itself (not just the action) so screen-reader
+            // users still hear the primary content; the edit affordance is a hint.
+            accessibilityLabel={displayedTitle}
+            accessibilityHint="Edits the title"
+            onPress={() => setDraftTitle(bookmark.title ?? '')}
+          >
+            <Text
+              style={[styles.title, { color: palette.text }]}
+              // Measure unclamped on first layout so overflow detection is
+              // reliable across platforms; clamp once we know the line count.
+              numberOfLines={
+                titleLineCount === null || titleExpanded ? undefined : TITLE_COLLAPSED_LINES
+              }
+              onTextLayout={(event) => {
+                if (titleLineCount === null) {
+                  setTitleLineCount(event.nativeEvent.lines.length);
+                }
+              }}
+            >
+              {displayedTitle}
+            </Text>
+          </Pressable>
+          {titleLineCount !== null && titleLineCount > TITLE_COLLAPSED_LINES ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={titleExpanded ? 'Show less of the title' : 'Show the full title'}
+              hitSlop={8}
+              onPress={() => setTitleExpanded((value) => !value)}
+            >
+              <Text style={[styles.titleToggle, { color: palette.accent }]}>
+                {titleExpanded ? 'Show less' : 'Show more'}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
       ) : (
         <TextInput
           accessibilityLabel="Edit title"
@@ -333,10 +423,7 @@ export default function BookmarkDetailScreen() {
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Tags</Text>
         <TagField
           tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
-          suggestions={pending.map((suggestion) => ({
-            name: suggestion.name,
-            confidence: suggestion.confidence,
-          }))}
+          suggestions={tagSuggestions}
           editable={canOrganizeRemotely}
           busy={busy}
           onAdd={handleAddTag}
@@ -536,11 +623,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  titleBlock: {
+    gap: 6,
+  },
   title: {
     fontSize: 26,
     fontWeight: '800',
     letterSpacing: -0.5,
     lineHeight: 32,
+  },
+  titleToggle: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   titleInput: {
     borderWidth: StyleSheet.hairlineWidth,

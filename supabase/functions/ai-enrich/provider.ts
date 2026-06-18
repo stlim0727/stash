@@ -17,6 +17,11 @@ export interface EnrichmentInput {
   notes: string | null;
   site_name: string | null;
   content_type: string;
+  /** The names of the user's existing collections, when known. A provider may
+   *  use these to route a bookmark into one that already exists instead of
+   *  inventing a new name. Optional: heuristic providers ignore it, and the
+   *  caller still resolves `suggested_collection` to a real id (or null). */
+  collections?: string[];
 }
 
 export interface SuggestedTag {

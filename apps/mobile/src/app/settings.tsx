@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Linking,
   Pressable,
   ScrollView,
@@ -19,6 +20,7 @@ import { usePalette } from '@/theme';
 import { Avatar } from '@/ui/Avatar';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
+import { ActionSheet } from '@/ui/ActionSheet';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import {
@@ -28,7 +30,17 @@ import {
   SHARE_BEHAVIOR_PREF_KEY,
   type ShareBehavior,
 } from '@/domain/share-behavior';
+import {
+  exportFilename,
+  toCsv,
+  toJsonBackup,
+  toNetscapeHtml,
+  type ExportInput,
+} from '@/domain/export';
+import { parseImport } from '@/domain/import';
 import { getPreference, setPreference } from '@/storage/preferences';
+import { deliverExport } from '@/share/export-data';
+import { pickImportFile } from '@/share/import-data';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 
@@ -47,10 +59,115 @@ export default function SettingsScreen() {
     inbox,
     archived,
     lastPulledAt,
+    collections,
     getTagsForBookmark,
     getEnrichment,
+    importBookmarks,
   } = useBookmarks();
   const auth = useSupabaseAuth();
+
+  // Data export: build a portable file from the on-device library and hand it
+  // to the platform delivery shim (browser download on web, share sheet on
+  // native). This is the user's "your data is yours" escape hatch — it works
+  // offline and produces formats other apps can import.
+  const [exportSheetOpen, setExportSheetOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const totalBookmarks = inbox.length + archived.length;
+
+  const runExport = async (kind: 'html' | 'json' | 'csv') => {
+    setExportSheetOpen(false);
+    if (exporting) {
+      return;
+    }
+    setExporting(true);
+    try {
+      const bookmarks = [...inbox, ...archived];
+      const tagsByBookmark: ExportInput['tagsByBookmark'] = {};
+      const enrichmentByBookmark: NonNullable<ExportInput['enrichmentByBookmark']> = {};
+      for (const bookmark of bookmarks) {
+        tagsByBookmark[bookmark.id] = getTagsForBookmark(bookmark.id);
+        enrichmentByBookmark[bookmark.id] = getEnrichment(bookmark.id);
+      }
+      const input: ExportInput = {
+        bookmarks,
+        tagsByBookmark,
+        enrichmentByBookmark,
+        collections,
+        exportedAt: new Date().toISOString(),
+        appVersion: Constants.expoConfig?.version ?? undefined,
+      };
+
+      const file =
+        kind === 'html'
+          ? {
+              filename: exportFilename('html', input.exportedAt),
+              mimeType: 'text/html',
+              contents: toNetscapeHtml(input),
+            }
+          : kind === 'csv'
+            ? {
+                filename: exportFilename('csv', input.exportedAt),
+                mimeType: 'text/csv',
+                contents: toCsv(input),
+              }
+            : {
+                filename: exportFilename('json', input.exportedAt),
+                mimeType: 'application/json',
+                contents: toJsonBackup(input),
+              };
+      await deliverExport(file);
+    } catch (error) {
+      Alert.alert(
+        'Export failed',
+        error instanceof Error ? error.message : 'Could not export your data. Please try again.',
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Data import: pick a previously exported file (a Stash JSON backup, or a
+  // Netscape HTML bookmarks file from any browser/bookmark app), parse it, and
+  // re-ingest the bookmarks local-first. The mirror of export — "you can bring
+  // your data in as easily as you can take it out."
+  const [importSheetOpen, setImportSheetOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  const runImport = async (kind: 'json' | 'html') => {
+    setImportSheetOpen(false);
+    if (importing) {
+      return;
+    }
+    setImporting(true);
+    try {
+      const picked = await pickImportFile(kind);
+      if (!picked) {
+        return; // user cancelled the picker
+      }
+      const items = parseImport(kind, picked.text);
+      const summary = importBookmarks(items);
+
+      if (summary.imported === 0 && summary.duplicates === 0 && summary.skipped === 0) {
+        Alert.alert('Nothing to import', `No bookmarks were found in ${picked.name}.`);
+        return;
+      }
+      const parts = [`Added ${summary.imported} bookmark${summary.imported === 1 ? '' : 's'}.`];
+      if (summary.duplicates > 0) {
+        parts.push(`${summary.duplicates} already in your library.`);
+      }
+      if (summary.skipped > 0) {
+        parts.push(`${summary.skipped} skipped (no web address).`);
+      }
+      Alert.alert('Import complete', parts.join('\n'));
+    } catch (error) {
+      Alert.alert(
+        'Import failed',
+        error instanceof Error ? error.message : 'Could not import that file. Please try again.',
+      );
+    } finally {
+      setImporting(false);
+    }
+  };
 
   // Developer mode hides diagnostics behind an opt-in so the everyday screen
   // stays compact. Persisted so it survives app restarts.
@@ -231,6 +348,41 @@ export default function SettingsScreen() {
         />
       </Group>
 
+      {/* Your data — export / portability */}
+      <Group styles={styles}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="download-outline"
+          label="Export my data"
+          value={
+            exporting
+              ? 'Preparing export…'
+              : totalBookmarks === 0
+                ? 'Nothing to export yet'
+                : 'Download a bookmarks file or full backup'
+          }
+          right={exporting ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
+          onPress={
+            exporting || totalBookmarks === 0 ? undefined : () => setExportSheetOpen(true)
+          }
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="enter-outline"
+          label="Import data"
+          value={importing ? 'Importing…' : "Restore a backup or another app's bookmarks"}
+          last
+          right={importing ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
+          onPress={importing ? undefined : () => setImportSheetOpen(true)}
+        />
+      </Group>
+      <Text style={styles.exportNote}>
+        Your bookmarks are yours. Export a standard HTML file any browser or bookmark app can
+        import, a CSV for spreadsheets, or a full JSON backup — anytime, even offline.
+      </Text>
+
       {/* Sharing behavior */}
       <Group styles={styles}>
         <Row
@@ -326,6 +478,52 @@ export default function SettingsScreen() {
           )}
         </>
       ) : null}
+
+      <ActionSheet
+        visible={exportSheetOpen}
+        title="Export my data"
+        onClose={() => setExportSheetOpen(false)}
+        actions={[
+          {
+            key: 'html',
+            label: 'Bookmarks file (HTML)',
+            icon: 'globe-outline',
+            onPress: () => void runExport('html'),
+          },
+          {
+            key: 'csv',
+            label: 'Spreadsheet (CSV)',
+            icon: 'grid-outline',
+            onPress: () => void runExport('csv'),
+          },
+          {
+            key: 'json',
+            label: 'Full backup (JSON)',
+            icon: 'code-slash-outline',
+            onPress: () => void runExport('json'),
+          },
+        ]}
+      />
+
+      <ActionSheet
+        visible={importSheetOpen}
+        title="Import data"
+        onClose={() => setImportSheetOpen(false)}
+        actions={[
+          {
+            key: 'html',
+            label: 'Bookmarks file (HTML)',
+            icon: 'globe-outline',
+            onPress: () => void runImport('html'),
+          },
+          {
+            key: 'json',
+            label: 'Stash backup (JSON)',
+            icon: 'code-slash-outline',
+            onPress: () => void runImport('json'),
+          },
+        ]}
+      />
     </ScrollView>
   );
 }
@@ -406,6 +604,8 @@ function Row({
 
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
       onPress={onPress}
       style={({ pressed }) => [rowStyle, pressed && { opacity: 0.6 }]}
     >
@@ -550,5 +750,12 @@ const makeStyles = (palette: AppPalette) =>
       fontSize: 14,
       color: palette.textSecondary,
       marginLeft: 4,
+    },
+    exportNote: {
+      fontSize: 13,
+      color: palette.textSecondary,
+      marginTop: -10,
+      marginHorizontal: 4,
+      lineHeight: 18,
     },
   });

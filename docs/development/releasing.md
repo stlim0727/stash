@@ -4,15 +4,85 @@
 
 For a real, installable Android APK without any Expo/EAS account, use the
 **`.github/workflows/android-apk.yml`** workflow — it does `expo prebuild` →
-Gradle `assembleRelease` (debug-signed, standalone) and uploads the APK.
+Gradle `assembleRelease` (debug-signed, standalone) and publishes the APK.
+
+**Every build publishes a GitHub Release with the raw `.apk` plus an install QR
+code**, so the phone-only flow is: trigger → open the Release → scan the QR →
+tap the downloaded `.apk` → install (allow "install unknown apps" once). No
+desktop, no artifact zip to unpack.
 
 - Run it via **workflow dispatch** with the `version` input, or by pushing a tag:
-  - blank / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ APK as a **run artifact only**.
-  - clean **`vX.Y.Z`** ⇒ also publishes a prerelease **GitHub Release** with the APK.
+  - clean **`vX.Y.Z`** ⇒ a **versioned** prerelease, kept forever.
+  - blank dispatch / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ refreshes the single
+    rolling **`dev`** prerelease in place, so test builds don't clutter Releases.
+- The APK is also still uploaded as a **run artifact** (`stash-android-apk`) for
+  tooling — but for installing on a phone, prefer the Release asset (no unzip).
 - `gh` CLI: `gh workflow run android-apk.yml -f version=v0.1.7-rc8 --ref main`,
-  then `gh run download <run-id> -n stash-android-apk`.
+  then grab the link from `gh release view dev` (or `gh run download <run-id> -n
+  stash-android-apk` for the raw artifact).
 - Build is **arm64-v8a only** (~6–7 min). Step-by-step (incl. the GitHub MCP-tool
   sequence for Claude Code web sessions) is in **`AGENTS.md`**.
+
+> **Why there's still an "install unknown apps" prompt:** that's inherent to
+> sideloading any APK outside an app store. To cut the repeat friction, set up
+> **[Firebase App Distribution](#firebase-app-distribution-smoother-tester-installs)**
+> (below) — testers install once via the App Tester app and new builds arrive
+> with a notification.
+
+## Firebase App Distribution (smoother tester installs)
+
+The QR/Release path above still shows a one-time "install unknown apps" prompt
+because it's a bare sideload. **Firebase App Distribution** removes the repeat
+friction: testers install once through the **App Tester** app, then every new CI
+build appears there with a push notification — no per-build toggling, no zip.
+
+The CI step already exists in `android-apk.yml` (`Distribute to Firebase App
+Distribution`). It **skips cleanly until two repo secrets are set**, so nothing
+breaks before setup. Once configured, every build uploads automatically.
+
+### One-time setup (Firebase Console, ~10 min)
+
+1. **Create / pick a project** at <https://console.firebase.google.com> (the
+   free Spark plan covers App Distribution).
+2. **Register an Android app**: Project → *Add app* → Android. Use package name
+   **`com.stash.app`** (matches `app.json`). A `google-services.json` is offered
+   but is **not required** for App Distribution — you can skip it.
+3. **Copy the App ID** (Project settings → General → *Your apps*). It looks like
+   `1:1234567890:android:abc123def456`.
+4. **Add testers**: App Distribution → *Testers & Groups* → create a group with
+   alias **`testers`** and add your email (and anyone else). The CI step targets
+   the `testers` group by default (override with the `FIREBASE_TESTER_GROUPS`
+   repo variable).
+5. **Create a service account for CI**:
+   - Google Cloud Console → *IAM & Admin* → *Service Accounts* → create one
+     (e.g. `github-app-distribution`).
+   - Grant it the **Firebase App Distribution Admin** role.
+   - *Keys* → *Add key* → *JSON* → download the key file.
+
+### Add the repo secrets
+
+In GitHub → repo *Settings* → *Secrets and variables* → *Actions*:
+
+| Secret | Value |
+| --- | --- |
+| `FIREBASE_APP_ID` | the App ID from step 3 (`1:…:android:…`) |
+| `FIREBASE_SERVICE_ACCOUNT` | the **entire contents** of the downloaded JSON key |
+
+Optional variable (not a secret): `FIREBASE_TESTER_GROUPS` — comma-separated
+group aliases if you don't want the `testers` default.
+
+### Using it
+
+- Trigger the **Android APK** workflow as before. After the build, the APK is
+  uploaded to App Distribution and your testers get an email/notification.
+- **First time per tester**: accept the email invite → install the *App Tester*
+  app → allow "install unknown apps" for App Tester **once**. After that, new
+  builds are one tap from the App Tester app — no further prompts.
+- The GitHub Release + QR path keeps working in parallel; Firebase is additive.
+
+> Security: `FIREBASE_SERVICE_ACCOUNT` is written to a temp file in CI (never an
+> inline CLI flag) and deleted after upload. Treat the JSON key like a password;
+> rotate it from the Cloud Console if it leaks.
 
 The rest of this doc covers the EAS-based path for store/internal builds.
 
