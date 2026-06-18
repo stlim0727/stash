@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -94,13 +94,14 @@ test('exports an HTML bookmarks file assembled from the stored library', async (
   };
   fakeRepo.__reset([bookmark], tagData);
 
-  renderSettings();
+  const view = await renderSettings();
 
   // Wait for the durable store to load so the export sees the seeded bookmark.
-  await waitFor(() => screen.getByText('Download a bookmarks file or full backup'));
+  await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
-  fireEvent.press(screen.getByLabelText('Export my data'));
-  fireEvent.press(await screen.findByLabelText('Bookmarks file (HTML)'));
+  await fireEvent.press(view.getByLabelText('Export my data'));
+  await waitFor(() => view.getByLabelText('Bookmarks file (HTML)'));
+  await fireEvent.press(view.getByLabelText('Bookmarks file (HTML)'));
 
   await waitFor(() => expect(mockDeliverExport).toHaveBeenCalledTimes(1));
   const file = mockDeliverExport.mock.calls[0][0] as {
@@ -133,11 +134,12 @@ test('exports a JSON backup with the bookmark and its tags', async () => {
   };
   fakeRepo.__reset([bookmark], tagData);
 
-  renderSettings();
-  await waitFor(() => screen.getByText('Download a bookmarks file or full backup'));
+  const view = await renderSettings();
+  await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
-  fireEvent.press(screen.getByLabelText('Export my data'));
-  fireEvent.press(await screen.findByLabelText('Full backup (JSON)'));
+  await fireEvent.press(view.getByLabelText('Export my data'));
+  await waitFor(() => view.getByLabelText('Full backup (JSON)'));
+  await fireEvent.press(view.getByLabelText('Full backup (JSON)'));
 
   await waitFor(() => expect(mockDeliverExport).toHaveBeenCalledTimes(1));
   const file = mockDeliverExport.mock.calls[0][0] as { mimeType: string; contents: string };
