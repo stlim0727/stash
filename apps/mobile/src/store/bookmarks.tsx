@@ -54,6 +54,7 @@ import {
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
+  reconcileOrphanedQueueEntries,
   removeQueueEntryIfNotSuperseded,
   syncQueueEntry,
 } from '@/sync/sync-bookmarks';
@@ -346,6 +347,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 : mergeById(current, storedBookmarks, (bookmark) => bookmark.id),
             );
             setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
+            // Self-heal stranded bookmarks: a non-synced row whose queue entry
+            // never persisted (storage hiccup, or the app killed between the two
+            // writes) has nothing to drive its sync and would show "sync
+            // pending" forever. Re-enqueue an upload so the background loop
+            // finishes it. Idempotent on the server, so it's safe to repeat.
+            const orphanEntries = reconcileOrphanedQueueEntries(storedBookmarks, storedQueue);
+            if (orphanEntries.length > 0) {
+              const orphanIds = new Set(orphanEntries.map((entry) => entry.local_id));
+              setQueue((current) => [
+                ...current.filter((entry) => !orphanIds.has(entry.local_id)),
+                ...orphanEntries,
+              ]);
+              void Promise.all(orphanEntries.map((entry) => repository.enqueue(entry))).catch(
+                (error) => logStorageError('orphan re-enqueue', error),
+              );
+            }
             setEnrichments(storedEnrichments);
             // One-time cleanup: purge blank-named tags/collections (and orphaned
             // links) a prior version may have stored, so they stop showing as

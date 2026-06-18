@@ -196,6 +196,34 @@ test('bookmarks stored from a previous session load on startup', async () => {
   expect(result.current.inbox[0]?.title).toBe('From last session');
 });
 
+test('a stranded pending bookmark with no queue entry is re-enqueued on startup', async () => {
+  const { makeStoredBookmark } = require('./helpers/fake-repository');
+  // A non-synced local-ID row whose create entry never persisted: without a
+  // queue entry it would show "sync pending" forever.
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: 'local-stranded', sync_status: 'pending', title: 'Stuck' }),
+  ]);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+
+  const { result } = await renderStore();
+
+  expect(result.current.inbox).toHaveLength(1);
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+  expect(fakeRepo.__queue()[0]).toMatchObject({
+    local_id: 'local-stranded',
+    operation: 'create',
+  });
+});
+
+test('a synced bookmark loaded on startup is not re-enqueued', async () => {
+  const { makeStoredBookmark } = require('./helpers/fake-repository');
+  fakeRepo.__reset([makeStoredBookmark({ sync_status: 'synced' })]);
+
+  await renderStore();
+
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
 test('enriching a synced bookmark queues an update so metadata reaches the cloud', async () => {
   const { makeStoredBookmark } = require('./helpers/fake-repository');
   // A cloud-synced bookmark whose metadata has not been enriched yet.
