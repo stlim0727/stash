@@ -25,6 +25,7 @@ import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import {
   exportFilename,
+  toCsv,
   toJsonBackup,
   toNetscapeHtml,
   type ExportInput,
@@ -63,7 +64,7 @@ export default function SettingsScreen() {
   const [exporting, setExporting] = useState(false);
   const totalBookmarks = inbox.length + archived.length;
 
-  const runExport = async (kind: 'html' | 'json') => {
+  const runExport = async (kind: 'html' | 'json' | 'csv') => {
     setExportSheetOpen(false);
     if (exporting) {
       return;
@@ -86,19 +87,25 @@ export default function SettingsScreen() {
         appVersion: Constants.expoConfig?.version ?? undefined,
       };
 
-      await deliverExport(
+      const file =
         kind === 'html'
           ? {
               filename: exportFilename('html', input.exportedAt),
               mimeType: 'text/html',
               contents: toNetscapeHtml(input),
             }
-          : {
-              filename: exportFilename('json', input.exportedAt),
-              mimeType: 'application/json',
-              contents: toJsonBackup(input),
-            },
-      );
+          : kind === 'csv'
+            ? {
+                filename: exportFilename('csv', input.exportedAt),
+                mimeType: 'text/csv',
+                contents: toCsv(input),
+              }
+            : {
+                filename: exportFilename('json', input.exportedAt),
+                mimeType: 'application/json',
+                contents: toJsonBackup(input),
+              };
+      await deliverExport(file);
     } catch (error) {
       Alert.alert(
         'Export failed',
@@ -282,7 +289,7 @@ export default function SettingsScreen() {
       </Group>
       <Text style={styles.exportNote}>
         Your bookmarks are yours. Export a standard HTML file any browser or bookmark app can
-        import, or a full JSON backup — anytime, even offline.
+        import, a CSV for spreadsheets, or a full JSON backup — anytime, even offline.
       </Text>
 
       {/* Developer mode toggle */}
@@ -367,6 +374,12 @@ export default function SettingsScreen() {
             label: 'Bookmarks file (HTML)',
             icon: 'globe-outline',
             onPress: () => void runExport('html'),
+          },
+          {
+            key: 'csv',
+            label: 'Spreadsheet (CSV)',
+            icon: 'grid-outline',
+            onPress: () => void runExport('csv'),
           },
           {
             key: 'json',

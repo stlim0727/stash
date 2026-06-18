@@ -3,9 +3,11 @@ import { test } from 'node:test';
 
 import type { AIEnrichment, Bookmark, Collection, Tag } from './types.ts';
 import {
+  CSV_COLUMNS,
   EXPORT_SCHEMA_VERSION,
   buildJsonBackup,
   exportFilename,
+  toCsv,
   toJsonBackup,
   toNetscapeHtml,
   type ExportInput,
@@ -71,6 +73,7 @@ const baseInput = (overrides: Partial<ExportInput> = {}): ExportInput => ({
 test('exportFilename uses a date-stamped, format-specific name', () => {
   assert.equal(exportFilename('html', '2026-06-18T12:00:00.000Z'), 'stash-bookmarks-2026-06-18.html');
   assert.equal(exportFilename('json', '2026-06-18T12:00:00.000Z'), 'stash-backup-2026-06-18.json');
+  assert.equal(exportFilename('csv', '2026-06-18T12:00:00.000Z'), 'stash-bookmarks-2026-06-18.csv');
 });
 
 test('buildJsonBackup captures tags, enrichment, and a collection name', () => {
@@ -217,4 +220,66 @@ test('unparseable timestamps drop ADD_DATE rather than emitting NaN', () => {
   );
   assert.doesNotMatch(html, /ADD_DATE/);
   assert.doesNotMatch(html, /NaN/);
+});
+
+test('toCsv emits a header row and one CRLF-terminated row per bookmark', () => {
+  const csv = toCsv(
+    baseInput({
+      bookmarks: [bookmark({ collection_id: 'c1' })],
+      tagsByBookmark: { b1: [tag('reading'), tag('tech')] },
+      collections: [collection('c1', 'Research')],
+    }),
+  );
+
+  const lines = csv.split('\r\n');
+  assert.equal(lines[0], CSV_COLUMNS.join(','));
+  // Header + one data row + trailing empty (from the final CRLF).
+  assert.equal(lines.length, 3);
+  assert.equal(lines[2], '');
+  assert.ok(csv.endsWith('\r\n'));
+
+  const row = lines[1] ?? '';
+  assert.match(row, /^https:\/\/example\.com\/article,Example Article,/);
+  // Tags are comma-joined within a single (quoted) cell.
+  assert.match(row, /"reading, tech"/);
+  assert.match(row, /Research/);
+  assert.match(row, /,false$/);
+});
+
+test('toCsv keeps url-less saves, unlike the HTML export', () => {
+  const csv = toCsv(
+    baseInput({
+      bookmarks: [
+        bookmark({ id: 'b1', url: 'https://has-url.example', title: 'Has URL' }),
+        bookmark({ id: 'b2', url: null, content_type: 'text', title: 'Just a thought' }),
+      ],
+    }),
+  );
+  const dataRows = csv.trimEnd().split('\r\n').slice(1);
+  assert.equal(dataRows.length, 2);
+  // The url-less row still appears, just with an empty leading cell.
+  assert.ok(dataRows.some((row) => row.startsWith(',Just a thought,')));
+});
+
+test('toCsv escapes commas, quotes, and newlines per RFC 4180', () => {
+  const csv = toCsv(
+    baseInput({
+      bookmarks: [
+        bookmark({
+          id: 'b1',
+          title: 'Tom, "Jerry"',
+          notes: 'line one\nline two',
+        }),
+      ],
+    }),
+  );
+  // Comma + embedded quotes -> wrapped and quotes doubled.
+  assert.match(csv, /"Tom, ""Jerry"""/);
+  // A newline inside a field stays inside its quoted cell.
+  assert.match(csv, /"line one\nline two"/);
+});
+
+test('toCsv marks archived rows', () => {
+  const csv = toCsv(baseInput({ bookmarks: [bookmark({ is_archived: true })] }));
+  assert.match(csv.trimEnd().split('\r\n')[1] ?? '', /,true$/);
 });
