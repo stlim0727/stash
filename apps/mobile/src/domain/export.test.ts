@@ -279,6 +279,29 @@ test('toCsv escapes commas, quotes, and newlines per RFC 4180', () => {
   assert.match(csv, /"line one\nline two"/);
 });
 
+test('toCsv neutralizes spreadsheet formula injection in cells', () => {
+  const csv = toCsv(
+    baseInput({
+      bookmarks: [
+        bookmark({ id: 'b1', title: '=HYPERLINK("http://evil","x")' }),
+        bookmark({ id: 'b2', title: '@SUM(1,2)' }),
+        bookmark({ id: 'b3', title: '-2+3' }),
+        bookmark({ id: 'b4', title: '+1' }),
+      ],
+      tagsByBookmark: { b1: [tag('=danger')] },
+    }),
+  );
+  // Each formula-leading value is prefixed with a single quote before quoting.
+  assert.match(csv, /'=HYPERLINK/);
+  assert.match(csv, /'@SUM/);
+  assert.match(csv, /'-2\+3/);
+  assert.match(csv, /'\+1/);
+  // A dangerous leading char inside a tag cell is neutralized too.
+  assert.match(csv, /'=danger/);
+  // A normal title (no leading formula char) is left untouched.
+  assert.doesNotMatch(csv, /'Example Article/);
+});
+
 test('toCsv marks archived rows', () => {
   const csv = toCsv(baseInput({ bookmarks: [bookmark({ is_archived: true })] }));
   assert.match(csv.trimEnd().split('\r\n')[1] ?? '', /,true$/);

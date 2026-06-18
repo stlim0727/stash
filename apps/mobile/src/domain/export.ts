@@ -245,13 +245,20 @@ export const CSV_COLUMNS = [
 ] as const;
 
 /**
- * Quote a single CSV field per RFC 4180: wrap in double quotes only when the
- * value contains a comma, quote, or line break, doubling any embedded quotes.
- * Always quoting would be valid too, but quoting only when needed keeps the
- * file readable when opened as plain text.
+ * Serialize a single CSV field. Two concerns:
+ *
+ *  1. CSV/formula injection — a cell that begins with `=`, `+`, `-`, `@`, or a
+ *     leading tab/CR is executed as a formula by Excel/Sheets, so a hostile page
+ *     title (or imported bookmark) could become an active payload. RFC quoting
+ *     does NOT stop this, so we first prefix such values with a single quote,
+ *     which the spreadsheet treats as "the rest is literal text".
+ *  2. RFC 4180 quoting — wrap in double quotes only when the value contains a
+ *     comma, quote, or line break, doubling any embedded quotes. Quoting only
+ *     when needed keeps the file readable as plain text.
  */
 function csvField(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+  const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(guarded) ? `"${guarded.replaceAll('"', '""')}"` : guarded;
 }
 
 /**

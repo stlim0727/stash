@@ -99,7 +99,11 @@ export function parseJsonBackup(text: string): ImportItem[] {
     return {
       url: cleanString(entry.url),
       title: cleanString(entry.title),
-      notes: cleanString(entry.notes) ?? cleanString(entry.description),
+      // `notes` is the user-authored field; `description` is generated page
+      // metadata. Never restore a generated description as user notes — that
+      // would corrupt the user-vs-generated separation and then sync the
+      // generated text as if the user had typed it.
+      notes: cleanString(entry.notes),
       tags,
       collection: cleanString(entry.collection_name),
     };

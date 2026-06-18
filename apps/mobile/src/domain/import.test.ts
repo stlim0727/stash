@@ -81,9 +81,11 @@ test('parseJsonBackup reads url, title, notes, tags, and collection name', () =>
   assert.equal(item?.collection, 'Research');
 });
 
-test('parseJsonBackup falls back to description when notes are absent', () => {
+test('parseJsonBackup never restores a generated description as user notes', () => {
+  // `description` is generated page metadata; importing it as `notes` would
+  // corrupt the user-vs-generated separation, so notes stays null.
   const json = JSON.stringify({ bookmarks: [{ url: 'https://x.example', description: 'desc' }] });
-  assert.equal(parseJsonBackup(json)[0]?.notes, 'desc');
+  assert.equal(parseJsonBackup(json)[0]?.notes, null);
 });
 
 test('parseJsonBackup accepts plain-string tags', () => {
