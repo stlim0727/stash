@@ -21,21 +21,52 @@ read and write to the bookmark's owner. The function holds no service-role key.
 | -------------------- | --------------------------------------------------------------- |
 | `provider.ts`        | `EnrichmentProvider` interface + I/O types — the swappable seam |
 | `dummy-provider.ts`  | `DummyProvider`: deterministic keyword heuristics, no network   |
+| `gemini-provider.ts` | `GeminiProvider`: structured-output call to the Google Gemini API |
 | `index.ts`           | Deno HTTP shell: auth → load bookmark → provider → upsert row    |
-| `dummy-provider.test.ts` | Node unit tests for the heuristics (run by `pnpm test`)      |
+| `*.test.ts`          | Node unit tests for the providers (run by `pnpm test`)          |
 
-## Swapping in a real model
+## Provider selection
 
-The placeholder is wired at exactly one line in `index.ts`:
+`index.ts` picks a provider from the environment, with the heuristic provider
+as a built-in fallback:
 
 ```ts
-const provider: EnrichmentProvider = new DummyProvider();
+function selectProvider(): EnrichmentProvider {
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
+  if (apiKey) return new GeminiProvider({ apiKey, model: Deno.env.get('GEMINI_MODEL') ?? undefined });
+  return fallbackProvider; // DummyProvider
+}
 ```
 
-To use a real model, add a module implementing `EnrichmentProvider` (e.g.
-`claude-provider.ts` that calls the Anthropic API with a key from
-`Deno.env`), then point that line at it. The function shell, the database
-schema, the sync layer, and the app UI all stay unchanged.
+- **No key set** → deterministic heuristics, zero external calls. Nothing else
+  to configure; the pipeline works out of the box.
+- **`GEMINI_API_KEY` set** → a single structured-output Gemini call produces the
+  note (summary), topics, tags-with-confidence, and a collection routing hint.
+  The user's existing collection names are passed in so the model routes into a
+  bucket that already exists. If the live call fails (rate limit / outage /
+  malformed response), the request degrades to the heuristics instead of
+  erroring, and the saved `model` reflects which provider actually ran.
+
+### Configuration
+
+| Env var          | Required | Default            | Notes                                  |
+| ---------------- | -------- | ------------------ | -------------------------------------- |
+| `GEMINI_API_KEY` | no       | —                  | Enables `GeminiProvider` when present. |
+| `GEMINI_MODEL`   | no       | `gemini-2.0-flash` | Any Gemini model id.                   |
+
+```bash
+supabase secrets set GEMINI_API_KEY=...
+```
+
+The key lives only in the edge function's environment and never ships to the
+mobile client — the app only ever POSTs a bookmark id and reads the result.
+
+### Adding another model
+
+Add a module implementing `EnrichmentProvider` (e.g. `claude-provider.ts`
+calling the Anthropic API with a key from `Deno.env`), then extend
+`selectProvider()`. The function shell, the database schema, the sync layer,
+and the app UI all stay unchanged.
 
 ## Triggering
 
