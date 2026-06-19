@@ -14,6 +14,10 @@ reached after an initial assessment was challenged by an independent adversarial
    to disagree, not validate) challenged every claim against the code.
 3. The two positions were reconciled. Where the original claims were wrong or
    overstated, they were revised; one reviewer overstatement was corrected back.
+4. A second automated reviewer (Codex) reviewed the committed doc and raised two
+   corrections, both verified against the code and incorporated: the `syncNow` blocks are
+   side-effectful (not "pure"), and partial repository consumers already exist (so the ISP
+   no-action conclusion was re-grounded rather than resting on "no partial consumer").
 
 The result below is the **aligned** position, not the original take.
 
@@ -24,7 +28,7 @@ The result below is the **aligned** position, not the original take.
 | **S**RP | Relatively weakest | Not a "god object" — one overgrown method (`syncNow`) + duplicated bookmark construction. |
 | **O**CP | Reasonable | Platform-extension pattern is real OCP; the genuine gap is duplicated `Bookmark` literals, not switch statements. |
 | **L**SP | Good | Both repository impls substitute cleanly; saved partly by environment, not just by code. |
-| **I**SP | Mixed (no action) | Fat repository interface, but single consumer/impl — YAGNI; codebase already shows the lazy fix. |
+| **I**SP | Mixed (low priority) | Fat repository interface; partial consumers exist (`preferences.ts` is meta-only) but harm is low — at most type meta-only call sites against a narrow `MetaStore`. |
 | **D**IP | Strongest | Interface-based seams throughout sync; one caveat at the top-level context. |
 
 ---
@@ -68,12 +72,27 @@ function for a worse cross-module coordination problem.
 ### The genuine, low-risk move
 
 `syncNow` is a real method-level liability (five phases in ~300 lines). The honest fix is
-small: extract the two already-near-pure inline blocks —
+small, but it is **not** a "pure" extraction. Both candidate blocks are side-effectful:
 
-- leftover-reconciliation (`:1039-1066`)
-- the account-transition **apply** loop (`:1215-1257`) — the *planner* is already extracted
+- leftover-reconciliation (`:1039-1066`) calls `setBookmarks`, `setQueue`,
+  `repository.replaceBookmark`, and `repository.removeQueueEntry`.
+- the account-transition **apply** loop (`:1215-1257`) allocates IDs (`makeLocalId`),
+  records logs, mutates React state (`setBookmarks`/`setQueue`), and writes
+  `replaceBookmark`/`enqueue`/`deleteBookmark`. Only its *planner* (`planAccountTransition`)
+  is pure and already extracted.
 
-— into `sync/` helpers, shaving ~100 lines without touching the interleaved upload loop.
+So the extraction must take one of two honest shapes — never a bare "pure helper":
+
+1. **Extract only the pure planning data.** Like `planAccountTransition`, compute a plan
+   (which leftovers need an identity swap; which entries/rows to drop) as a pure function
+   returning data, and leave the side-effectful apply (state + repository writes) inline in
+   the context. This is the lower-risk, higher-value half.
+2. **Or extract a side-effectful helper with injected callbacks.** Move the whole block to
+   `sync/` but pass the repository and the `setBookmarks`/`setQueue` setters (or a small
+   effects object) in, so the side effects are explicit at the boundary, not hidden under a
+   "pure" label.
+
+Either way it shaves ~100 lines from `syncNow` without touching the interleaved upload loop.
 
 ### Secondary SRP leak (minor, defensible)
 
@@ -117,17 +136,31 @@ caller branching. Verdict stands, with sharpened reasoning:
 ## I — Interface Segregation · mixed, no action
 
 The `BookmarkRepository` interface is genuinely multi-concern (bookmarks + sync queue +
-meta KV + enrichments cache + tag data, 18 methods). But:
+meta KV + enrichments cache + tag data, 18 methods). **Partial consumers already exist** —
+the earlier draft's "exactly one consumer pattern" claim was wrong:
 
-- There is exactly **one consumer pattern and one impl per platform.** Splitting into
-  `BookmarkStore + SyncQueue + MetaStore + CacheStore` is speculative generality and would
-  fragment the shared SQLite connection-management invariant in the native class.
-- The codebase already demonstrates the correct lazy alternative: a **call-site role
-  interface** (`PullApi`, `sync/pull-bookmarks.ts:22`) narrowing the fat impl where a
-  partial consumer exists.
+- `storage/preferences.ts` uses only `getMeta`/`setMeta` (the meta KV subset), and its own
+  comment says it is "kept separate… so UI preferences don't widen that API."
+- `syncQueueEntry` and `pullRemoteChanges` each receive a `BookmarkRepository` but exercise
+  different method subsets.
 
-**Action:** none, until a partial consumer actually appears — then declare a narrow reader
-interface at that call site. API input types (`CreateBookmarkInput`, `UpdateBookmarkInput`,
+So the no-action conclusion can't rest on "no partial consumer exists." It rests instead on
+**where the dependency is and what splitting would cost**:
+
+- `preferences.ts` calls the concrete `repository` singleton (it imports the module, not the
+  interface type), so it takes on no over-wide *type* dependency today; a narrow
+  `MetaStore`-typed accessor would tidy it but changes no behavior.
+- `syncQueueEntry`/`pullRemoteChanges` consume structural subsets of the full interface,
+  which TypeScript's structural typing already tolerates without harm.
+- Both impls are single classes that share one SQLite handle / `open()`-coalescing
+  invariant; physically splitting them buys nothing and risks fragmenting that invariant.
+- The codebase already demonstrates the preferred lazy alternative — a **call-site role
+  interface** (`PullApi`, `sync/pull-bookmarks.ts:22`) narrowing the fat impl per consumer.
+
+**Action:** low priority. The one concrete, behavior-neutral tidy worth considering is
+typing `preferences.ts` (and similar meta-only call sites) against a narrow `MetaStore`
+interface rather than the whole repository. Full four-way segregation of the producer
+remains speculative generality. API input types (`CreateBookmarkInput`, `UpdateBookmarkInput`,
 etc., `api/bookmarks.ts:44-85`) are already well segregated.
 
 ---
@@ -156,12 +189,14 @@ the repository into 4 interfaces":
 1. **`createLocalBookmark()` domain factory** — dedupe the two full `Bookmark` literals in
    `addBookmark` and `importBookmarks`. Centralizes the fresh-bookmark shape so adding a
    nullable column can't silently leave a site unset.
-2. **Extract two inline `syncNow` blocks** — move leftover-reconciliation (`:1039-1066`) and
-   the account-transition apply loop (`:1215-1257`) into pure `sync/` helpers. Shaves ~100
-   lines from `syncNow` without disturbing the interleaved upload loop or the shared
-   tombstone/in-flight/ref coordination state.
+2. **Slim `syncNow`'s two inline blocks** — leftover-reconciliation (`:1039-1066`) and the
+   account-transition apply loop (`:1215-1257`). These are **side-effectful** (state +
+   repository writes), so extract them as *either* a pure planner returning data (apply stays
+   inline, like `planAccountTransition`) *or* a `sync/` helper with injected repository/setter
+   callbacks — never a "pure" helper. Shaves ~100 lines from `syncNow` without disturbing the
+   interleaved upload loop or the shared tombstone/in-flight/ref coordination state.
 
 Deliberately **not** doing: a `SyncOrchestrator` returning a delta stream (would externalize
-tightly-coupled mutable coordination state across a module boundary), or splitting
-`BookmarkRepository` into four interfaces (YAGNI; use a call-site role interface if a partial
-consumer appears).
+tightly-coupled mutable coordination state across a module boundary), or four-way segregation
+of `BookmarkRepository` (partial consumers exist but the harm is low; at most type meta-only
+call sites against a narrow `MetaStore`).
