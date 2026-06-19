@@ -84,15 +84,28 @@ Deno.serve(async (req) => {
     return json({ error: 'Missing Authorization header' }, 401);
   }
 
-  let bookmarkId: unknown;
+  let body: Record<string, unknown>;
   try {
-    bookmarkId = (await req.json())?.bookmark_id;
+    body = ((await req.json()) ?? {}) as Record<string, unknown>;
   } catch {
     return json({ error: 'Invalid JSON body' }, 400);
   }
+  const bookmarkId = body.bookmark_id;
   if (typeof bookmarkId !== 'string' || !bookmarkId) {
     return json({ error: 'bookmark_id is required' }, 400);
   }
+
+  // The client may send the freshest local metadata it has (title/site/etc.).
+  // The cloud row can lag behind on-device OpenGraph enrichment — a bookmark
+  // captured seconds ago is often still a bare URL server-side — so without
+  // this the model would reason about an empty row and return nothing useful.
+  // We overlay these onto the loaded row below; the DB stays the source of
+  // truth for identity (id/user_id) and is never written from client input.
+  const clientMetadata = (body.metadata ?? null) as Record<string, unknown> | null;
+  const overlay = (dbValue: string | null, key: string): string | null => {
+    const provided = clientMetadata?.[key];
+    return typeof provided === 'string' && provided.trim() ? provided.trim() : dbValue;
+  };
 
   // PostgREST as the calling user (RLS enforced).
   const rest = (path: string, init: RequestInit = {}) =>
@@ -129,11 +142,11 @@ Deno.serve(async (req) => {
 
     const input = {
       url: bookmark.url,
-      title: bookmark.title,
-      description: bookmark.description,
-      notes: bookmark.notes,
-      site_name: bookmark.site_name,
-      content_type: bookmark.content_type,
+      title: overlay(bookmark.title, 'title'),
+      description: overlay(bookmark.description, 'description'),
+      notes: overlay(bookmark.notes, 'notes'),
+      site_name: overlay(bookmark.site_name, 'site_name'),
+      content_type: overlay(bookmark.content_type, 'content_type') ?? bookmark.content_type,
       collections: collections.map((col) => col.name),
     };
 

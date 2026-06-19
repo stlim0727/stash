@@ -41,6 +41,7 @@ import {
 } from '@/domain/pending-tags';
 import { recordLog } from '@/observability/log-buffer';
 import { repository } from '@/storage/repository';
+import type { EnrichmentMetadataHint } from '@/api/bookmarks';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { SupabaseRequestError } from '@/supabase/client';
@@ -148,6 +149,25 @@ const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
 /** Durable key for the local-first tag operation queue (JSON in meta). */
 const PENDING_TAG_OPS_KEY = 'pending_tag_ops';
 
+/** Durable key (JSON id array in meta) for bookmarks awaiting their first auto
+ *  AI enrichment. Persisted so a kill during the metadata-fetch window doesn't
+ *  drop the auto-trigger — the marker is re-hydrated and fired on next launch. */
+const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
+
+function parseIdSet(raw: string | null): Set<string> {
+  if (!raw) {
+    return new Set();
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((id): id is string => typeof id === 'string'))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 const BookmarksContext = createContext<BookmarksContextValue | null>(null);
 
 function makeLocalId() {
@@ -245,6 +265,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Bookmark IDs with an AI enrichment request in flight, so an auto-trigger
   // and a manual "Suggest with AI" tap never fire duplicate requests.
   const aiEnriching = useRef(new Set<string>());
+  // Freshly created bookmarks awaiting their first auto AI enrichment. We hold
+  // them here until metadata enrichment settles (see the effect below) so the
+  // model never reasons about a bare, not-yet-enriched URL. Mirrored durably in
+  // meta (PENDING_AI_TRIGGER_KEY) so the trigger survives an app kill during the
+  // metadata-fetch window. Cleared only once enrichment succeeds.
+  const pendingAiTrigger = useRef(new Set<string>());
+  // Ids already attempted this session, so the effect doesn't re-fire on every
+  // render while a marker lingers (e.g. after a failed request). In-memory on
+  // purpose: a fresh launch retries a marker that never succeeded.
+  const aiTriggerAttempted = useRef(new Set<string>());
   // Reactive mirror of `aiEnriching` so the UI can show an "AI is working"
   // indicator while a request (auto-triggered or manual) is in flight.
   const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(new Set());
@@ -291,6 +321,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .then(() => repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)))
       .catch((error) => logStorageError('tag ops', error));
   }, []);
+
+  // Mirror the deferred AI-trigger set to durable meta after a ref mutation.
+  const persistPendingAiTrigger = useCallback(() => {
+    const ids = [...pendingAiTrigger.current];
+    ensureRepositoryReady()
+      .then(() => repository.setMeta(PENDING_AI_TRIGGER_KEY, JSON.stringify(ids)))
+      .catch((error) => logStorageError('ai trigger queue', error));
+  }, []);
+  const markPendingAiTrigger = useCallback(
+    (id: string) => {
+      pendingAiTrigger.current.add(id);
+      persistPendingAiTrigger();
+    },
+    [persistPendingAiTrigger],
+  );
+  const clearPendingAiTrigger = useCallback(
+    (id: string) => {
+      if (pendingAiTrigger.current.delete(id)) {
+        persistPendingAiTrigger();
+      }
+    },
+    [persistPendingAiTrigger],
+  );
 
   // Queue a remote mutation for a bookmark that already exists on the server.
   // One entry per bookmark: a newer mutation supersedes an older one.
@@ -384,6 +437,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedTagData,
             storedPulledAt,
             storedTagOpsRaw,
+            storedAiTriggerRaw,
           ] = await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
@@ -391,8 +445,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.listTagData(),
             repository.getMeta(LAST_PULLED_AT_KEY),
             repository.getMeta(PENDING_TAG_OPS_KEY),
+            repository.getMeta(PENDING_AI_TRIGGER_KEY),
           ]);
           if (!cancelled) {
+            // Re-hydrate deferred AI triggers so a bookmark whose create synced
+            // before the app was killed still gets auto suggestions once its
+            // metadata enrichment settles (the effect below picks it up).
+            for (const id of parseIdSet(storedAiTriggerRaw)) {
+              pendingAiTrigger.current.add(id);
+            }
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
@@ -922,15 +983,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (!session) {
           return 'AI suggestions need the cloud — Supabase is not available right now.';
         }
+        // Send the device's freshest metadata: the cloud row can still be a bare
+        // URL (on-device OpenGraph enrichment may not have synced yet), and the
+        // model would otherwise have nothing to reason about.
+        const latest = bookmarksRef.current?.find((item) => item.id === bookmarkId);
+        const metadata: EnrichmentMetadataHint | undefined = latest
+          ? {
+              title: latest.title,
+              description: latest.description,
+              notes: latest.notes,
+              site_name: latest.site_name,
+              content_type: latest.content_type,
+            }
+          : undefined;
         let enrichment: AIEnrichment;
         try {
-          enrichment = await createSyncApi(session).requestEnrichment(bookmarkId);
+          enrichment = await createSyncApi(session).requestEnrichment(bookmarkId, metadata);
         } catch (error) {
           // If the server still rejects the token (rotation / clock skew),
           // force a refresh and retry once before surfacing the error.
           if (error instanceof SupabaseRequestError && error.status === 401) {
             const refreshed = (await auth.ensureAnonymousSession(true)) ?? session;
-            enrichment = await createSyncApi(refreshed).requestEnrichment(bookmarkId);
+            enrichment = await createSyncApi(refreshed).requestEnrichment(bookmarkId, metadata);
           } else {
             throw error;
           }
@@ -1180,10 +1254,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               ) {
                 enqueueMutation(persisted.id, 'update');
               }
-              // A brand-new bookmark just gained a remote identity: kick off AI
-              // suggestions once, in the background. Failures are swallowed.
+              // A brand-new bookmark just gained a remote identity: queue AI
+              // suggestions for it. We DON'T fire immediately — the background
+              // OpenGraph fetch may still be in flight, and enriching against a
+              // bare URL yields nothing. The effect below fires once this
+              // bookmark's metadata enrichment has settled.
               if (entry.operation === 'create') {
-                void requestAiEnrichment(persisted.id);
+                markPendingAiTrigger(persisted.id);
               }
             }
           }
@@ -1305,6 +1382,49 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [bookmarks, enrichInBackground]);
+
+  // Deferred auto AI enrichment: fire for a freshly created bookmark only once
+  // its metadata enrichment has settled (no longer 'pending'), so the model
+  // sees a real title/site instead of the bare URL it was captured as. Driven
+  // off committed state, so it's correct whether the create or the OpenGraph
+  // fetch finished first, and immune to any local→remote id swap along the way.
+  useEffect(() => {
+    // Wait for an auth session: requestAiEnrichment no-ops without one, and
+    // marking the id attempted before then would consume the only same-session
+    // attempt — when auth restores, the rerun would skip it and the trigger
+    // would never fire until another restart. On a cold start, storage loads
+    // before the session is restored, so this gate matters.
+    if (bookmarks === null || !auth.session || pendingAiTrigger.current.size === 0) {
+      return;
+    }
+    for (const id of [...pendingAiTrigger.current]) {
+      if (aiTriggerAttempted.current.has(id)) {
+        continue; // already fired this session — don't re-fire on every render
+      }
+      const bookmark = bookmarks.find((item) => item.id === id);
+      if (!bookmark) {
+        continue; // not committed under this id yet — wait for a later render
+      }
+      if (bookmark.metadata_status === 'pending') {
+        continue; // metadata fetch still in flight — fire once it settles
+      }
+      // Already has suggestions (enriched in a prior session or via the manual
+      // action): clear the durable marker without re-requesting.
+      if (enrichmentsRef.current.some((enrichment) => enrichment.bookmark_id === id)) {
+        clearPendingAiTrigger(id);
+        continue;
+      }
+      aiTriggerAttempted.current.add(id);
+      // Clear the durable marker only on success; a failure keeps it so the
+      // next launch retries (the in-memory attempt guard prevents a same-session
+      // retry storm).
+      void requestAiEnrichment(id).then((error) => {
+        if (!error) {
+          clearPendingAiTrigger(id);
+        }
+      });
+    }
+  }, [bookmarks, auth.session, requestAiEnrichment, clearPendingAiTrigger]);
 
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the

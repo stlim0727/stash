@@ -84,6 +84,20 @@ export interface ApplyAISuggestionsInput {
   collection_id?: string | null;
 }
 
+/**
+ * The device's freshest content fields, passed to `requestEnrichment` so the
+ * `ai-enrich` function can reason about real metadata even when the cloud row
+ * still lags behind on-device OpenGraph enrichment. All optional: only non-empty
+ * values are sent, and the server falls back to the stored row for the rest.
+ */
+export interface EnrichmentMetadataHint {
+  title?: string | null;
+  description?: string | null;
+  notes?: string | null;
+  site_name?: string | null;
+  content_type?: string | null;
+}
+
 type PostgrestSort = 'created_at.desc' | 'created_at.asc' | 'updated_at.desc' | 'updated_at.asc';
 
 type RemoteAIEnrichment = Omit<AIEnrichment, 'topics' | 'suggested_tags'> & {
@@ -564,12 +578,20 @@ export class BookmarkApi {
    * Ask the backend `ai-enrich` edge function to (re)generate suggestions for a
    * bookmark. The function writes the `ai_enrichments` row and returns it, so
    * the caller can surface results without waiting for the next pull sync.
+   *
+   * `metadata` carries the device's freshest content fields. The cloud row can
+   * lag behind on-device OpenGraph enrichment (a just-captured bookmark is often
+   * still a bare URL server-side), so passing them lets the model reason about
+   * the real title/site instead of an empty row and return useful suggestions.
    */
-  async requestEnrichment(bookmarkId: string): Promise<AIEnrichment> {
+  async requestEnrichment(
+    bookmarkId: string,
+    metadata?: EnrichmentMetadataHint,
+  ): Promise<AIEnrichment> {
     const row = await this.client.request<RemoteAIEnrichment>('/functions/v1/ai-enrich', {
       method: 'POST',
       accessToken: this.session.access_token,
-      body: { bookmark_id: bookmarkId },
+      body: { bookmark_id: bookmarkId, ...(metadata ? { metadata } : {}) },
     });
     return enrichmentFromRemote(row);
   }
