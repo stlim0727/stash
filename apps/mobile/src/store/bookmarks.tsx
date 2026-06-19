@@ -20,6 +20,14 @@ import {
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
 import type { ImportItem } from '@/domain/import';
+import {
+  PENDING_SHARES_KEY,
+  addPendingShare,
+  parsePendingShares,
+  removePendingShare,
+  serializePendingShares,
+  type PendingShare,
+} from '@/domain/pending-shares';
 import type {
   AIEnrichment,
   Bookmark,
@@ -94,6 +102,13 @@ interface BookmarksContextValue {
   /** Local-first creation: the bookmark is visible immediately with pending states. */
   addBookmark: (input: { url: string; title?: string; notes?: string }) => AddBookmarkResult;
   /**
+   * Durably record a freshly captured share before its (deferred) save, so a
+   * process kill while Stash is backgrounded right after the share can't drop
+   * the capture — the next launch recovers any unsaved one. No-op when the
+   * payload has no usable link. See `domain/pending-shares`.
+   */
+  recordPendingShare: (input: { url: string; title?: string }) => void;
+  /**
    * Re-ingest items parsed from an imported file. Local-first like addBookmark:
    * each URL is added with pending states, deduped against the existing library
    * (and within the batch). Returns a count summary. Note: tags/collections from
@@ -140,6 +155,11 @@ const BookmarksContext = createContext<BookmarksContextValue | null>(null);
 function makeLocalId() {
   return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+// Identifies this app launch. A new JS runtime (a fresh launch after the OS
+// killed the app) gets a new id, which is how the pending-share recovery tells
+// a share stranded by a previous launch from one the current launch still owns.
+const SHARE_SESSION_ID = makeLocalId();
 
 /**
  * The current canonical dedupe key for an already-stored bookmark. Recomputed
@@ -239,6 +259,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // snapshot, so a delete that lands mid-run must be visible to it — both
   // before uploading an entry and before applying an upload's result.
   const deletedIds = useRef(new Set<string>());
+  // Normalized URLs of shares this session's live handler owns (recorded but
+  // not yet saved). The post-load recovery drain skips these so it never
+  // double-saves a share the handler is already about to save itself.
+  const handlingShares = useRef(new Set<string>());
   // Mirror of the bookmarks state so async loops can read the LATEST rows
   // instead of the stale closure captured when they started.
   const bookmarksRef = useRef<Bookmark[] | null>(null);
@@ -492,6 +516,54 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [enrichments],
   );
 
+  // Persist a captured share durably the instant it arrives — before the
+  // handler's deferred save — so a process kill while Stash sits backgrounded
+  // right after the share can't drop it. Keyed by normalized URL so it matches
+  // what addBookmark later saves/clears. Fire-and-forget; never blocks capture.
+  const recordPendingShare = useCallback((input: { url: string; title?: string }) => {
+    const normalized = normalizeUrl(input.url);
+    if (!normalized) {
+      return; // no usable link; the handler surfaces "No link found to stash"
+    }
+    handlingShares.current.add(normalized);
+    const share: PendingShare = {
+      url: normalized,
+      title: input.title,
+      captured_at: new Date().toISOString(),
+      session_id: SHARE_SESSION_ID,
+    };
+    ensureRepositoryReady()
+      .then(async () => {
+        const next = addPendingShare(
+          parsePendingShares(await repository.getMeta(PENDING_SHARES_KEY)),
+          share,
+        );
+        await repository.setMeta(PENDING_SHARES_KEY, serializePendingShares(next));
+      })
+      .catch((error) => logStorageError('record pending share', error));
+  }, []);
+
+  // Release a share's durable record once it has been saved (its bookmark row +
+  // queue entry are persisting). Only touches storage for share-originated
+  // saves, so manual adds/imports don't pay for an extra meta write. A benign
+  // race with a late record write just leaves a leftover the next launch's
+  // recovery drain re-saves idempotently (deduped to a no-op).
+  const clearHandledShare = useCallback((normalizedUrl: string) => {
+    if (!handlingShares.current.has(normalizedUrl)) {
+      return;
+    }
+    handlingShares.current.delete(normalizedUrl);
+    ensureRepositoryReady()
+      .then(async () => {
+        const next = removePendingShare(
+          parsePendingShares(await repository.getMeta(PENDING_SHARES_KEY)),
+          normalizedUrl,
+        );
+        await repository.setMeta(PENDING_SHARES_KEY, serializePendingShares(next));
+      })
+      .catch((error) => logStorageError('clear pending share', error));
+  }, []);
+
   const addBookmark = useCallback(
     ({ url, title, notes }: { url: string; title?: string; notes?: string }): AddBookmarkResult => {
       const normalized = normalizeUrl(url);
@@ -516,6 +588,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         ensureRepositoryReady()
           .then(() => repository.updateBookmark(updated))
           .catch((error) => logStorageError('duplicate save', error));
+        clearHandledShare(normalized);
         return { status: 'duplicate', bookmark: existing };
       }
 
@@ -575,9 +648,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Enrich after the bookmark is already visible and persisted.
       enrichInBackground(bookmark);
 
+      // The capture is now durably saved — release its pending-share record.
+      clearHandledShare(normalized);
+
       return { status: 'created', bookmark };
     },
-    [loadedBookmarks, enrichInBackground],
+    [loadedBookmarks, enrichInBackground, clearHandledShare],
   );
 
   // Bulk re-ingest of imported items. Mirrors addBookmark's local-first create
@@ -1285,6 +1361,41 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
   }, [bookmarks, enrichInBackground]);
 
+  // Recover shares the OS handed us but that were never confirmed saved — e.g.
+  // the app was killed while backgrounded right after a cold-start share, before
+  // its deferred save could run. Runs once, after the local store has loaded so
+  // the recovered saves dedupe against existing bookmarks. Only shares from a
+  // *previous* launch are recovered (by session id): one the current launch is
+  // still handling will be saved by the handler itself, so it is never
+  // double-saved — even though the handler clears its record before this drain
+  // runs (child effects run before this parent effect).
+  const pendingSharesDrained = useRef(false);
+  useEffect(() => {
+    if (bookmarks === null || pendingSharesDrained.current) {
+      return;
+    }
+    pendingSharesDrained.current = true;
+    ensureRepositoryReady()
+      .then(async () => {
+        const pending = parsePendingShares(await repository.getMeta(PENDING_SHARES_KEY));
+        const recovered = pending.filter((share) => share.session_id !== SHARE_SESSION_ID);
+        if (recovered.length === 0) {
+          return;
+        }
+        for (const share of recovered) {
+          addBookmark({ url: share.url, title: share.title });
+        }
+        // Drop only what we recovered; leave any current-launch entry for the
+        // handler to clear once it saves.
+        const recoveredUrls = new Set(recovered.map((share) => share.url));
+        const remaining = parsePendingShares(
+          await repository.getMeta(PENDING_SHARES_KEY),
+        ).filter((share) => !recoveredUrls.has(share.url));
+        await repository.setMeta(PENDING_SHARES_KEY, serializePendingShares(remaining));
+      })
+      .catch((error) => logStorageError('drain pending shares', error));
+  }, [bookmarks, addBookmark]);
+
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the
   // next save or via the manual Sync now action, not in a hot loop.
@@ -1347,6 +1458,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getCollection,
       getEnrichment,
       addBookmark,
+      recordPendingShare,
       importBookmarks,
       archiveBookmark,
       updateBookmarkFields,
@@ -1373,6 +1485,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getCollection,
       getEnrichment,
       addBookmark,
+      recordPendingShare,
       importBookmarks,
       archiveBookmark,
       updateBookmarkFields,
