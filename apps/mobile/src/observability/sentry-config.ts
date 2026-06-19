@@ -108,3 +108,31 @@ export function describeSentryConfig(state = getSentryConfigState()): string {
     ? `Enabled (${state.config.environment})`
     : `Disabled — ${state.reason}`;
 }
+
+export interface SentryDsnParts {
+  publicKey: string;
+  host: string;
+  projectId: string;
+  /** Legacy "store" endpoint that accepts a single JSON event. */
+  storeUrl: string;
+}
+
+/**
+ * Parse a DSN (`{protocol}://{publicKey}@{host}/{projectId}`) into the pieces
+ * needed to send an event directly to Sentry's ingest API. Pure and
+ * regex-based (no `URL` dependency) so it stays portable and unit-testable.
+ * Returns null for anything that does not look like a DSN.
+ */
+export function parseSentryDsn(dsn: string): SentryDsnParts | null {
+  const match = /^(https?):\/\/([^:@/]+)(?::[^@/]+)?@([^/]+)\/(.+)$/.exec(dsn.trim());
+  if (!match) {
+    return null;
+  }
+  const [, protocol, publicKey, host, projectId] = match;
+  return {
+    publicKey: publicKey!,
+    host: host!,
+    projectId: projectId!,
+    storeUrl: `${protocol}://${host}/api/${projectId}/store/`,
+  };
+}

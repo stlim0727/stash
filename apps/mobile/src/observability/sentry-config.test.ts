@@ -6,6 +6,7 @@ import {
   describeSentryConfig,
   getSentryConfigState,
   parseSampleRate,
+  parseSentryDsn,
 } from './sentry-config.ts';
 
 const ENV_KEYS = [
@@ -78,6 +79,23 @@ test('buildSentryInitOptions sets safe defaults and attaches release', () => {
   assert.equal(options.release, '1.4.0');
   assert.equal(options.dist, '42');
   clearEnv();
+});
+
+test('parseSentryDsn splits a DSN into ingest pieces', () => {
+  const parts = parseSentryDsn('https://abc123@o4511.ingest.us.sentry.io/4509');
+  assert.ok(parts);
+  assert.equal(parts.publicKey, 'abc123');
+  assert.equal(parts.host, 'o4511.ingest.us.sentry.io');
+  assert.equal(parts.projectId, '4509');
+  assert.equal(parts.storeUrl, 'https://o4511.ingest.us.sentry.io/api/4509/store/');
+});
+
+test('parseSentryDsn tolerates a legacy secret and rejects junk', () => {
+  const withSecret = parseSentryDsn('https://pub:secret@o1.ingest.us.sentry.io/2');
+  assert.equal(withSecret?.publicKey, 'pub');
+  assert.equal(withSecret?.storeUrl, 'https://o1.ingest.us.sentry.io/api/2/store/');
+  assert.equal(parseSentryDsn('not-a-dsn'), null);
+  assert.equal(parseSentryDsn('https://o1.ingest.us.sentry.io/2'), null); // no public key
 });
 
 test('buildSentryInitOptions omits release/dist when blank', () => {

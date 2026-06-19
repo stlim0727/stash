@@ -90,6 +90,17 @@ Optional tuning:
 Privacy: `sendDefaultPii` is off and only an opaque user id is ever attached —
 never email or bookmark content.
 
+To confirm the DSN → project pipeline is live, run the smoke test (it sends a
+synthetic event tagged `environment:verify` / `logger:stash-verify` and asserts
+the ingest API accepted it):
+
+```bash
+EXPO_PUBLIC_SENTRY_DSN=<your-dsn> pnpm verify:sentry
+```
+
+Resolve/ignore the resulting `verify` event in Sentry so it stays out of real
+issues.
+
 ### OAuth sign-in (Apple / Google)
 
 Settings offers "Sign in with Apple / Google", which upgrades the anonymous account to a permanent one. The client uses a browser-based PKCE flow against GoTrue (`/auth/v1/authorize` → `grant_type=pkce`), so no `supabase-js` dependency or custom backend is needed. To enable it on a project:
