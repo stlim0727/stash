@@ -43,6 +43,24 @@ test('stringifyArg handles strings, errors and objects', () => {
   assert.equal(stringifyArg({ a: 1 }), '{"a":1}');
 });
 
+test('recordLog notifies listeners directly (errors that bypass console reach the bridge)', () => {
+  clearLogEntries();
+  const notified: Array<{ level: string; args: unknown[] }> = [];
+  const unsubscribe = onConsoleEntry((level, args) => notified.push({ level, args }));
+
+  // e.g. repository.native.ts logs the SQLite-open failure via recordLog, not console.
+  recordLog('error', 'sqlite open failed: boom');
+
+  assert.equal(notified.length, 1);
+  assert.equal(notified[0]!.level, 'error');
+  // With no raw args, the message itself is forwarded.
+  assert.deepEqual(notified[0]!.args, ['sqlite open failed: boom']);
+
+  unsubscribe();
+  recordLog('error', 'ignored after unsubscribe');
+  assert.equal(notified.length, 1);
+});
+
 test('installConsoleCapture records calls, preserves output, and notifies listeners', () => {
   clearLogEntries();
   const seen: string[] = [];

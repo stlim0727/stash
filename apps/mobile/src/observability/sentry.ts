@@ -23,10 +23,12 @@ let consoleReportingInstalled = false;
 let reporting = false;
 
 /**
- * Forward handled `console.error(...)` calls to Sentry as exceptions. Unhandled
- * crashes are already captured by `Sentry.wrap` + native crash handling; this
- * closes the gap for the many errors this app deliberately swallows and logs
- * (enrichment/sync failures, storage banners) so they never reach monitoring.
+ * Forward handled error-level logs to Sentry as exceptions. Unhandled crashes
+ * are already captured by `Sentry.wrap` + native crash handling; this closes the
+ * gap for the many errors this app deliberately swallows and logs (enrichment/
+ * sync failures, the storage banner) so they never reach monitoring. Fires for
+ * both `console.error(...)` and direct `recordLog('error', …)` calls, since the
+ * log buffer notifies listeners on every recorded entry.
  *
  * Messages and stacks are scrubbed of URLs/emails first (see sentry-report).
  */
