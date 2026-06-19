@@ -221,7 +221,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
-  const initialPullDone = useRef(false);
+  // The user id the pull effect last fired for. A sign-in (anonymous → real)
+  // or account switch changes this, re-triggering a pull; null until the first
+  // session is established.
+  const lastSyncedUserId = useRef<string | null>(null);
   // Bookmark IDs currently being enriched, so concurrent passes (startup +
   // a fresh save) never double-process the same item.
   const enriching = useRef(new Set<string>());
@@ -1346,19 +1349,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
   }, [bookmarks, auth.status, queue, isSyncing, syncNow]);
 
-  // Startup pull: once auth and local data are ready, run one sync pass even
-  // with an empty queue so remote changes (other devices, cloud AI
-  // enrichment) reach this device.
+  // Pull on first ready, and again whenever the signed-in user changes —
+  // including the anonymous → real upgrade at sign-in and an account switch.
+  // Runs even with an empty queue so remote changes (other devices, cloud AI
+  // enrichment) reach this device. Keying off the user id (not a one-shot flag)
+  // is what makes a sign-in pull the account's existing cloud data right away:
+  // the startup pass already fired for the auto-created anonymous user, and the
+  // background-sync effect only fires when there is queued work — so without
+  // this, a reinstall-then-sign-in would show an empty library until the next
+  // cold start.
   useEffect(() => {
     if (
-      !initialPullDone.current &&
+      !isSyncing &&
       bookmarks !== null &&
-      (auth.status === 'anonymous' || auth.status === 'authenticated')
+      auth.userId !== null &&
+      (auth.status === 'anonymous' || auth.status === 'authenticated') &&
+      lastSyncedUserId.current !== auth.userId
     ) {
-      initialPullDone.current = true;
+      // Only claim this user as synced once we can actually start — otherwise a
+      // sign-in landing mid-flight (the startup anonymous sync still running)
+      // would set the ref and then syncNow() would early-return on its in-flight
+      // guard, and with the ref already matching, the effect would never retry.
+      // Gating on isSyncing makes the effect re-run when the in-flight sync
+      // settles, so the new user's pull still fires.
+      lastSyncedUserId.current = auth.userId;
       void syncNow();
     }
-  }, [bookmarks, auth.status, syncNow]);
+  }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
 
   const value = useMemo<BookmarksContextValue>(
     () => ({
