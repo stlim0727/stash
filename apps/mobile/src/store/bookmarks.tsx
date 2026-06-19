@@ -63,7 +63,18 @@ import {
 } from '@/sync/sync-bookmarks';
 
 export type AddBookmarkResult =
-  | { status: 'created' | 'duplicate'; bookmark: Bookmark }
+  | {
+      status: 'created' | 'duplicate';
+      bookmark: Bookmark;
+      /**
+       * Resolves once the optimistic save has been written through to durable
+       * storage (it never rejects — storage errors are logged and swallowed).
+       * Callers that tear the app down right after a capture (e.g. the share
+       * handler backgrounding the app) must await this so a capture is never
+       * lost to an in-flight SQLite write. Capture is sacred.
+       */
+      persisted: Promise<void>;
+    }
   | { status: 'invalid'; error: string };
 
 /** Outcome counts from re-ingesting an imported file. */
@@ -513,10 +524,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setBookmarks((current) =>
           (current ?? []).map((bookmark) => (bookmark.id === existing.id ? updated : bookmark)),
         );
-        ensureRepositoryReady()
+        const persisted = ensureRepositoryReady()
           .then(() => repository.updateBookmark(updated))
           .catch((error) => logStorageError('duplicate save', error));
-        return { status: 'duplicate', bookmark: existing };
+        return { status: 'duplicate', bookmark: existing, persisted };
       }
 
       const bookmark: Bookmark = {
@@ -566,16 +577,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // capture never waits on storage or (later) the network.
       setBookmarks((current) => [bookmark, ...(current ?? [])]);
       setQueue((current) => [...current, queueEntry]);
-      ensureRepositoryReady()
+      const persisted = ensureRepositoryReady()
         .then(() =>
           Promise.all([repository.insertBookmark(bookmark), repository.enqueue(queueEntry)]),
         )
+        .then(() => undefined)
         .catch((error) => logStorageError('new bookmark', error));
 
       // Enrich after the bookmark is already visible and persisted.
       enrichInBackground(bookmark);
 
-      return { status: 'created', bookmark };
+      return { status: 'created', bookmark, persisted };
     },
     [loadedBookmarks, enrichInBackground],
   );
