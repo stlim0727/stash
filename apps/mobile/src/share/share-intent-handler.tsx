@@ -82,7 +82,7 @@ export function ShareIntentHandler() {
     setPendingShare(null);
 
     let message = 'No link found to stash';
-    let persisted: Promise<void> | undefined;
+    let persisted: Promise<boolean> | undefined;
     if (share.url) {
       const result = addBookmark({ url: share.url, title: share.title });
       if (result.status !== 'invalid') {
@@ -118,8 +118,14 @@ export function ShareIntentHandler() {
       // Detail/Settings screen the share happened to resume onto. The leaked
       // `stash://dataUrl=...` deep link is cleared by the +not-found absorber
       // regardless, so neither path strands the user.
-      await persisted;
-      if (dismissAfterShare(message)) {
+      //
+      // Crucially, only background the app once the capture is DURABLY written
+      // (`persisted === true`). If the write failed, the row lives only in
+      // optimistic in-memory state, so exiting would lose it — keep the user
+      // in-app instead. `undefined` means nothing was saved (no link), which is
+      // safe to dismiss on. Capture is sacred.
+      const durable = await persisted;
+      if (durable !== false && dismissAfterShare(message)) {
         return;
       }
       show(message);

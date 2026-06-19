@@ -276,6 +276,35 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('toast mode does not dismiss the app when the durable write fails', async () => {
+    // If the only copy of a freshly shared bookmark is still in optimistic
+    // in-memory state because the SQLite write failed, backgrounding the app
+    // would lose it. The handler must keep the user in-app (Inbox) instead —
+    // even though the OS *could* self-dismiss. Capture is sacred.
+    fakeRepo.__reset([]);
+    mockDismiss.mockReturnValue(true);
+    const originalInsert = fakeRepo.repository.insertBookmark;
+    fakeRepo.repository.insertBookmark = jest.fn(async () => {
+      throw new Error('simulated storage failure');
+    });
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/fail', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    try {
+      const { findByText, unmount } = await renderHandler();
+
+      await findByText('Saved to Stash');
+      await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+      expect(mockDismiss).not.toHaveBeenCalled();
+      unmount();
+    } finally {
+      fakeRepo.repository.insertBookmark = originalInsert;
+    }
+  });
+
   it('inbox mode jumps to the Inbox and never dismisses the app', async () => {
     fakeRepo.__reset([]);
     await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');
