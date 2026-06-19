@@ -41,6 +41,7 @@ import {
 } from '@/domain/pending-tags';
 import { recordLog } from '@/observability/log-buffer';
 import { repository } from '@/storage/repository';
+import type { EnrichmentMetadataHint } from '@/api/bookmarks';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { SupabaseRequestError } from '@/supabase/client';
@@ -232,6 +233,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Bookmark IDs with an AI enrichment request in flight, so an auto-trigger
   // and a manual "Suggest with AI" tap never fire duplicate requests.
   const aiEnriching = useRef(new Set<string>());
+  // Freshly created bookmarks awaiting their first auto AI enrichment. We hold
+  // them here until metadata enrichment settles (see the effect below) so the
+  // model never reasons about a bare, not-yet-enriched URL.
+  const pendingAiTrigger = useRef(new Set<string>());
   // Reactive mirror of `aiEnriching` so the UI can show an "AI is working"
   // indicator while a request (auto-triggered or manual) is in flight.
   const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(new Set());
@@ -901,15 +906,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (!session) {
           return 'AI suggestions need the cloud — Supabase is not available right now.';
         }
+        // Send the device's freshest metadata: the cloud row can still be a bare
+        // URL (on-device OpenGraph enrichment may not have synced yet), and the
+        // model would otherwise have nothing to reason about.
+        const latest = bookmarksRef.current?.find((item) => item.id === bookmarkId);
+        const metadata: EnrichmentMetadataHint | undefined = latest
+          ? {
+              title: latest.title,
+              description: latest.description,
+              notes: latest.notes,
+              site_name: latest.site_name,
+              content_type: latest.content_type,
+            }
+          : undefined;
         let enrichment: AIEnrichment;
         try {
-          enrichment = await createSyncApi(session).requestEnrichment(bookmarkId);
+          enrichment = await createSyncApi(session).requestEnrichment(bookmarkId, metadata);
         } catch (error) {
           // If the server still rejects the token (rotation / clock skew),
           // force a refresh and retry once before surfacing the error.
           if (error instanceof SupabaseRequestError && error.status === 401) {
             const refreshed = (await auth.ensureAnonymousSession(true)) ?? session;
-            enrichment = await createSyncApi(refreshed).requestEnrichment(bookmarkId);
+            enrichment = await createSyncApi(refreshed).requestEnrichment(bookmarkId, metadata);
           } else {
             throw error;
           }
@@ -1159,10 +1177,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               ) {
                 enqueueMutation(persisted.id, 'update');
               }
-              // A brand-new bookmark just gained a remote identity: kick off AI
-              // suggestions once, in the background. Failures are swallowed.
+              // A brand-new bookmark just gained a remote identity: queue AI
+              // suggestions for it. We DON'T fire immediately — the background
+              // OpenGraph fetch may still be in flight, and enriching against a
+              // bare URL yields nothing. The effect below fires once this
+              // bookmark's metadata enrichment has settled.
               if (entry.operation === 'create') {
-                void requestAiEnrichment(persisted.id);
+                pendingAiTrigger.current.add(persisted.id);
               }
             }
           }
@@ -1284,6 +1305,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
     }
   }, [bookmarks, enrichInBackground]);
+
+  // Deferred auto AI enrichment: fire for a freshly created bookmark only once
+  // its metadata enrichment has settled (no longer 'pending'), so the model
+  // sees a real title/site instead of the bare URL it was captured as. Driven
+  // off committed state, so it's correct whether the create or the OpenGraph
+  // fetch finished first, and immune to any local→remote id swap along the way.
+  useEffect(() => {
+    if (bookmarks === null || pendingAiTrigger.current.size === 0) {
+      return;
+    }
+    for (const id of [...pendingAiTrigger.current]) {
+      const bookmark = bookmarks.find((item) => item.id === id);
+      if (!bookmark) {
+        continue; // not committed under this id yet — wait for a later render
+      }
+      if (bookmark.metadata_status === 'pending') {
+        continue; // metadata fetch still in flight — fire once it settles
+      }
+      pendingAiTrigger.current.delete(id);
+      void requestAiEnrichment(id);
+    }
+  }, [bookmarks, requestAiEnrichment]);
 
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the

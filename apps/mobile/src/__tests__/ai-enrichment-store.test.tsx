@@ -56,13 +56,16 @@ jest.mock('@/api/bookmarks', () => {
       created_at: '2026-06-13T00:00:00.000Z',
     })),
   );
+  // Reconfigurable so a test can let the pull keep a seeded row in state
+  // (the default empty list otherwise diffs it away as a remote deletion).
+  const listBookmarkIds = jest.fn(async () => [] as string[]);
   return {
-    __spies: { requestEnrichment, addTags },
+    __spies: { requestEnrichment, addTags, listBookmarkIds },
     createBookmarkApi: () => ({
       requestEnrichment,
       addTags,
       listBookmarksUpdatedSince: empty,
-      listBookmarkIds: empty,
+      listBookmarkIds,
       listEnrichmentsUpdatedSince: empty,
       listTags: empty,
       listBookmarkTags: empty,
@@ -77,7 +80,7 @@ import { makeStoredBookmark } from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 const apiMock = jest.requireMock('@/api/bookmarks') as {
-  __spies: { requestEnrichment: jest.Mock; addTags: jest.Mock };
+  __spies: { requestEnrichment: jest.Mock; addTags: jest.Mock; listBookmarkIds: jest.Mock };
 };
 
 const SYNCED_ID = '7e64cf1e-0000-4000-8000-000000000001';
@@ -110,6 +113,8 @@ async function renderReady() {
 beforeEach(() => {
   apiMock.__spies.requestEnrichment.mockClear();
   apiMock.__spies.addTags.mockClear();
+  apiMock.__spies.listBookmarkIds.mockReset();
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([]);
 });
 
 test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
@@ -121,8 +126,32 @@ test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
   });
 
   expect(error).toBeNull();
-  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(SYNCED_ID);
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(SYNCED_ID, undefined);
   expect(store.current!.getEnrichment(SYNCED_ID)?.summary).toBe('Generated summary');
+});
+
+test('requestAiEnrichment forwards the device\'s freshest metadata', async () => {
+  // Keep the seeded row in state so requestAiEnrichment can read its metadata
+  // (without this the inert pull would diff it away as a remote deletion).
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID, title: 'Tender steak', site_name: 'YouTube' }),
+  ]);
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  await waitFor(() => expect(store.current?.getBookmark(SYNCED_ID)).toBeDefined());
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  // The cloud row can still be a bare URL; the device sends what it has so the
+  // model reasons about the real title/site instead of nothing.
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
+    SYNCED_ID,
+    expect.objectContaining({ title: 'Tender steak', site_name: 'YouTube', content_type: 'url' }),
+  );
 });
 
 test('isEnriching reports true while a request is in flight, false once it settles', async () => {
