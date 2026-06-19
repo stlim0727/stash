@@ -704,13 +704,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .then(() =>
           Promise.all([repository.insertBookmark(bookmark), repository.enqueue(queueEntry)]),
         )
+        // Release the durable pending-share record only once the row AND its
+        // queue entry have actually committed. Clearing it synchronously (before
+        // this write resolves) means a background kill in that window would drop
+        // both the recovery record and the not-yet-written bookmark — losing the
+        // shared URL the queue exists to protect. On a failed write we keep the
+        // record so the next launch recovers it (the `.catch` skips this clear).
+        .then(() => clearHandledShare(normalized))
         .catch((error) => logStorageError('new bookmark', error));
 
       // Enrich after the bookmark is already visible and persisted.
       enrichInBackground(bookmark);
-
-      // The capture is now durably saved — release its pending-share record.
-      clearHandledShare(normalized);
 
       return { status: 'created', bookmark };
     },
