@@ -21,12 +21,48 @@ export interface LogEntry {
 const MAX_ENTRIES = 300;
 const entries: LogEntry[] = [];
 
-/** Append one entry, trimming the oldest once the cap is exceeded. */
-export function recordLog(level: LogLevel, message: string): void {
+/** Notified for every recorded log entry, with the *raw* arguments when
+ *  available (so a subscriber can recover the original Error object and its
+ *  stack). Defined ahead of `recordLog` so it can notify on every entry. */
+export type ConsoleListener = (level: LogLevel, args: unknown[]) => void;
+
+const listeners = new Set<ConsoleListener>();
+
+/**
+ * Subscribe to log entries as they are recorded — from the patched console
+ * *and* from direct `recordLog` calls (e.g. the native SQLite-open failure).
+ * Used to forward errors to crash monitoring without coupling this
+ * dependency-free module to the Sentry SDK. Returns an unsubscribe function.
+ */
+export function onConsoleEntry(listener: ConsoleListener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function notifyListeners(level: LogLevel, args: unknown[]): void {
+  for (const listener of listeners) {
+    try {
+      listener(level, args);
+    } catch {
+      // A misbehaving listener must never break logging.
+    }
+  }
+}
+
+/**
+ * Append one entry, trimming the oldest once the cap is exceeded, then notify
+ * listeners. `args` carries the original console arguments when present (so the
+ * Sentry bridge keeps the real Error/stack); direct callers pass only a string,
+ * for which the message itself is forwarded.
+ */
+export function recordLog(level: LogLevel, message: string, args?: unknown[]): void {
   entries.push({ t: new Date().toISOString(), level, message });
   if (entries.length > MAX_ENTRIES) {
     entries.splice(0, entries.length - MAX_ENTRIES);
   }
+  notifyListeners(level, args ?? [message]);
 }
 
 /** A copy of the captured entries, oldest first. */
@@ -78,7 +114,8 @@ export function installConsoleCapture(target: ConsoleLike = console as unknown a
     const original = typeof target[level] === 'function' ? target[level].bind(target) : undefined;
     target[level] = (...args: unknown[]) => {
       try {
-        recordLog(level, args.map(stringifyArg).join(' '));
+        // Pass the raw args so listeners keep the original Error/stack.
+        recordLog(level, args.map(stringifyArg).join(' '), args);
       } catch {
         // Never let logging capture break the app.
       }

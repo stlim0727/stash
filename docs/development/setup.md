@@ -63,6 +63,44 @@ Milestone 5 introduces the client-side Supabase bootstrap. Copy `.env.example` t
 
 Anonymous sign-ins must also be enabled in the Supabase Auth provider settings. Without real project credentials the app stays local-first and reports the missing configuration from Settings.
 
+## Crash & error monitoring (Sentry)
+
+The app reports unhandled crashes (`Sentry.wrap` + native crash handling) **and**
+handled error-level logs — `console.error(...)` and direct `recordLog('error', …)`
+are forwarded to Sentry as exceptions, with URLs/emails scrubbed from the message
+and stack first (see `apps/mobile/src/observability/`). Monitoring is a **no-op
+until a DSN is configured**, so local and preview environments never report by
+accident.
+
+To enable it, create a React Native project in Sentry, then provide its DSN via
+the `EXPO_PUBLIC_SENTRY_DSN` environment variable wherever you build:
+
+- **Local dev** — add `EXPO_PUBLIC_SENTRY_DSN` to your `.env.local`.
+- **Android APK CI** (`.github/workflows/android-apk.yml`) — set a repository
+  secret named `EXPO_PUBLIC_SENTRY_DSN`; the workflow already passes it through
+  to the build, and a CI guard asserts it gets inlined into the bundle.
+- **EAS builds** — set it as an EAS secret / `eas.json` env value.
+
+Optional tuning:
+
+- `EXPO_PUBLIC_SENTRY_ENVIRONMENT` — environment tag (defaults to `development`).
+- `EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE` — `0..1` performance-tracing sample
+  rate (defaults to `0`, i.e. tracing off).
+
+Privacy: `sendDefaultPii` is off and only an opaque user id is ever attached —
+never email or bookmark content.
+
+To confirm the DSN → project pipeline is live, run the smoke test (it sends a
+synthetic event tagged `environment:verify` / `logger:stash-verify` and asserts
+the ingest API accepted it):
+
+```bash
+EXPO_PUBLIC_SENTRY_DSN=<your-dsn> pnpm verify:sentry
+```
+
+Resolve/ignore the resulting `verify` event in Sentry so it stays out of real
+issues.
+
 ### OAuth sign-in (Apple / Google)
 
 Settings offers "Sign in with Apple / Google", which upgrades the anonymous account to a permanent one. The client uses a browser-based PKCE flow against GoTrue (`/auth/v1/authorize` → `grant_type=pkce`), so no `supabase-js` dependency or custom backend is needed. To enable it on a project:
