@@ -207,11 +207,13 @@ This plan turns the current product and architecture docs into an implementation
 
 ---
 
-# 0.1.8 cycle — "Korean & internationalization"
+# 0.2.0 cycle — "Korean & internationalization"
 
 M0–M10 delivered the MVP; 0.1.7 added the capabilities (AI enrichment, export,
-OAuth, sync hardening). 0.1.8 is a focused **localization** release: speak
-Korean, and make AI answer in the user's language.
+OAuth, sync hardening), and 0.1.8 was a maintenance patch (sync/reinstall fixes,
+AI progress indicator). 0.2.0 is a focused **localization** release: speak
+Korean, and make AI answer in the user's language. (It's a feature release, so
+it bumps the MINOR — see the Versioning section in `docs/development/releasing.md`.)
 
 **Already shipped in the 0.1.7 tree — do _not_ re-plan these** (an earlier draft
 of this section incorrectly listed them as new work; they exist on `main`):
@@ -224,7 +226,7 @@ of this section incorrectly listed them as new work; they exist on `main`):
 - **Offline tag editing** — tag add/remove are already optimistic + queued
   through the durable local-first tag-op queue (`store/bookmarks.tsx`).
 
-0.1.8's job is therefore to **localize the existing surfaces** (incl. those
+0.2.0's job is therefore to **localize the existing surfaces** (incl. those
 above), not to rebuild them.
 
 ## Milestone 11 — Internationalization foundation + Korean
@@ -271,10 +273,10 @@ primary audience; capture test data is already Korean).
 
 ---
 
-## Deferred to 0.2.0 — "public beta"
+## Deferred to a later "public beta" (0.3.0 / 1.0.0)
 
-Bigger or infra items intentionally held back so 0.1.8 stays a tight point
-release:
+Bigger or infra items intentionally held back so 0.2.0 stays a focused
+localization release:
 
 - Real branding (icon/splash) replacing Expo defaults.
 - A tester distribution channel (Firebase App Distribution / Play internal
