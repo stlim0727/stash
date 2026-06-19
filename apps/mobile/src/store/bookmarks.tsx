@@ -136,6 +136,25 @@ const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
 /** Durable key for the local-first tag operation queue (JSON in meta). */
 const PENDING_TAG_OPS_KEY = 'pending_tag_ops';
 
+/** Durable key (JSON id array in meta) for bookmarks awaiting their first auto
+ *  AI enrichment. Persisted so a kill during the metadata-fetch window doesn't
+ *  drop the auto-trigger — the marker is re-hydrated and fired on next launch. */
+const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
+
+function parseIdSet(raw: string | null): Set<string> {
+  if (!raw) {
+    return new Set();
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? new Set(parsed.filter((id): id is string => typeof id === 'string'))
+      : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 const BookmarksContext = createContext<BookmarksContextValue | null>(null);
 
 function makeLocalId() {
@@ -235,8 +254,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const aiEnriching = useRef(new Set<string>());
   // Freshly created bookmarks awaiting their first auto AI enrichment. We hold
   // them here until metadata enrichment settles (see the effect below) so the
-  // model never reasons about a bare, not-yet-enriched URL.
+  // model never reasons about a bare, not-yet-enriched URL. Mirrored durably in
+  // meta (PENDING_AI_TRIGGER_KEY) so the trigger survives an app kill during the
+  // metadata-fetch window. Cleared only once enrichment succeeds.
   const pendingAiTrigger = useRef(new Set<string>());
+  // Ids already attempted this session, so the effect doesn't re-fire on every
+  // render while a marker lingers (e.g. after a failed request). In-memory on
+  // purpose: a fresh launch retries a marker that never succeeded.
+  const aiTriggerAttempted = useRef(new Set<string>());
   // Reactive mirror of `aiEnriching` so the UI can show an "AI is working"
   // indicator while a request (auto-triggered or manual) is in flight.
   const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(new Set());
@@ -283,6 +308,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .then(() => repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)))
       .catch((error) => logStorageError('tag ops', error));
   }, []);
+
+  // Mirror the deferred AI-trigger set to durable meta after a ref mutation.
+  const persistPendingAiTrigger = useCallback(() => {
+    const ids = [...pendingAiTrigger.current];
+    ensureRepositoryReady()
+      .then(() => repository.setMeta(PENDING_AI_TRIGGER_KEY, JSON.stringify(ids)))
+      .catch((error) => logStorageError('ai trigger queue', error));
+  }, []);
+  const markPendingAiTrigger = useCallback(
+    (id: string) => {
+      pendingAiTrigger.current.add(id);
+      persistPendingAiTrigger();
+    },
+    [persistPendingAiTrigger],
+  );
+  const clearPendingAiTrigger = useCallback(
+    (id: string) => {
+      if (pendingAiTrigger.current.delete(id)) {
+        persistPendingAiTrigger();
+      }
+    },
+    [persistPendingAiTrigger],
+  );
 
   // Queue a remote mutation for a bookmark that already exists on the server.
   // One entry per bookmark: a newer mutation supersedes an older one.
@@ -376,6 +424,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedTagData,
             storedPulledAt,
             storedTagOpsRaw,
+            storedAiTriggerRaw,
           ] = await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
@@ -383,8 +432,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.listTagData(),
             repository.getMeta(LAST_PULLED_AT_KEY),
             repository.getMeta(PENDING_TAG_OPS_KEY),
+            repository.getMeta(PENDING_AI_TRIGGER_KEY),
           ]);
           if (!cancelled) {
+            // Re-hydrate deferred AI triggers so a bookmark whose create synced
+            // before the app was killed still gets auto suggestions once its
+            // metadata enrichment settles (the effect below picks it up).
+            for (const id of parseIdSet(storedAiTriggerRaw)) {
+              pendingAiTrigger.current.add(id);
+            }
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
@@ -1183,7 +1239,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // bare URL yields nothing. The effect below fires once this
               // bookmark's metadata enrichment has settled.
               if (entry.operation === 'create') {
-                pendingAiTrigger.current.add(persisted.id);
+                markPendingAiTrigger(persisted.id);
               }
             }
           }
@@ -1316,6 +1372,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return;
     }
     for (const id of [...pendingAiTrigger.current]) {
+      if (aiTriggerAttempted.current.has(id)) {
+        continue; // already fired this session — don't re-fire on every render
+      }
       const bookmark = bookmarks.find((item) => item.id === id);
       if (!bookmark) {
         continue; // not committed under this id yet — wait for a later render
@@ -1323,10 +1382,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (bookmark.metadata_status === 'pending') {
         continue; // metadata fetch still in flight — fire once it settles
       }
-      pendingAiTrigger.current.delete(id);
-      void requestAiEnrichment(id);
+      // Already has suggestions (enriched in a prior session or via the manual
+      // action): clear the durable marker without re-requesting.
+      if (enrichmentsRef.current.some((enrichment) => enrichment.bookmark_id === id)) {
+        clearPendingAiTrigger(id);
+        continue;
+      }
+      aiTriggerAttempted.current.add(id);
+      // Clear the durable marker only on success; a failure keeps it so the
+      // next launch retries (the in-memory attempt guard prevents a same-session
+      // retry storm).
+      void requestAiEnrichment(id).then((error) => {
+        if (!error) {
+          clearPendingAiTrigger(id);
+        }
+      });
     }
-  }, [bookmarks, requestAiEnrichment]);
+  }, [bookmarks, requestAiEnrichment, clearPendingAiTrigger]);
 
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the

@@ -154,6 +154,24 @@ test('requestAiEnrichment forwards the device\'s freshest metadata', async () =>
   );
 });
 
+test('re-hydrates a persisted deferred AI trigger and fires it after a restart', async () => {
+  // Simulates: a create synced, then the app was killed during the metadata
+  // fetch window. The marker was persisted; metadata is settled on relaunch.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  // The deferred trigger fires on launch (no manual tap needed)...
+  await waitFor(() =>
+    expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(SYNCED_ID, expect.anything()),
+  );
+  // ...and the durable marker is cleared once it succeeds, so it won't re-fire.
+  await waitFor(() => expect(fakeRepo.__meta('pending_ai_trigger')).toBe('[]'));
+});
+
 test('isEnriching reports true while a request is in flight, false once it settles', async () => {
   const store = await renderReady();
 
