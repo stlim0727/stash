@@ -274,4 +274,44 @@ describe('ShareIntentHandler', () => {
     expect(await fakeRepo.repository.listBookmarks()).toHaveLength(1);
     unmount();
   });
+
+  it('keeps the pending-share record until the bookmark write commits', async () => {
+    // Regression: the durable record must NOT be cleared on the synchronous path
+    // before the background insert/enqueue commits. Otherwise a background kill
+    // in that window drops both the not-yet-written row AND its recovery record,
+    // losing the shared URL the queue exists to protect.
+    fakeRepo.__reset([]);
+    // Hold the durable write open so we can observe the in-flight window.
+    const realInsert = fakeRepo.repository.insertBookmark;
+    let releaseInsert: (() => void) | undefined;
+    fakeRepo.repository.insertBookmark = (bookmark) =>
+      new Promise<void>((resolve) => {
+        releaseInsert = () => resolve(realInsert(bookmark));
+      });
+
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/inflight', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    // The capture is confirmed, but the write is still in flight — the record
+    // must remain so a kill right now is recoverable.
+    await findByText('Saved to Stash');
+    await waitFor(() =>
+      expect(fakeRepo.__meta('pending_shares')).toContain('https://example.com/inflight'),
+    );
+    expect(fakeRepo.__meta('pending_shares')).toContain('https://example.com/inflight');
+
+    // Only once the write commits is the record released.
+    await act(async () => {
+      releaseInsert?.();
+    });
+    await waitFor(() => expect(fakeRepo.__meta('pending_shares')).toBe('[]'));
+
+    fakeRepo.repository.insertBookmark = realInsert;
+    unmount();
+  });
 });
