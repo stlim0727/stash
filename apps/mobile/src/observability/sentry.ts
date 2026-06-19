@@ -12,9 +12,52 @@ import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
 import type { ComponentType } from 'react';
 
+import { onConsoleEntry } from './log-buffer';
 import { buildSentryInitOptions, getSentryConfigState } from './sentry-config';
+import { buildConsoleErrorReport } from './sentry-report';
 
 let started = false;
+let consoleReportingInstalled = false;
+// Re-entrancy guard: capturing an exception can itself log via console.error
+// (e.g. from inside the SDK), which would otherwise re-enter this forwarder.
+let reporting = false;
+
+/**
+ * Forward handled `console.error(...)` calls to Sentry as exceptions. Unhandled
+ * crashes are already captured by `Sentry.wrap` + native crash handling; this
+ * closes the gap for the many errors this app deliberately swallows and logs
+ * (enrichment/sync failures, storage banners) so they never reach monitoring.
+ *
+ * Messages and stacks are scrubbed of URLs/emails first (see sentry-report).
+ */
+function installConsoleErrorReporting(): void {
+  if (consoleReportingInstalled) {
+    return;
+  }
+  consoleReportingInstalled = true;
+  onConsoleEntry((level, args) => {
+    if (level !== 'error' || reporting) {
+      return;
+    }
+    reporting = true;
+    try {
+      const report = buildConsoleErrorReport(args);
+      if (!report) {
+        return;
+      }
+      const error = new Error(report.message);
+      error.name = report.name;
+      if (report.stack) {
+        error.stack = report.stack;
+      }
+      Sentry.captureException(error);
+    } catch {
+      // Never let error reporting break the app.
+    } finally {
+      reporting = false;
+    }
+  });
+}
 
 /** Initialize crash & error monitoring. Safe to call more than once; only the
  *  first call with a configured DSN takes effect. Returns whether monitoring
@@ -31,6 +74,7 @@ export function initSentry(): boolean {
   }
   Sentry.init(options);
   started = true;
+  installConsoleErrorReporting();
   return true;
 }
 

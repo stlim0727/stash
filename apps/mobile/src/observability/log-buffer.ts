@@ -43,6 +43,24 @@ export function formatLogEntries(list: LogEntry[] = entries): string {
   return list.map((e) => `${e.t} [${e.level}] ${e.message}`).join('\n');
 }
 
+/** Notified for every captured console call, with the *raw* arguments (so a
+ *  subscriber can recover the original Error object and its stack). */
+export type ConsoleListener = (level: LogLevel, args: unknown[]) => void;
+
+const listeners = new Set<ConsoleListener>();
+
+/**
+ * Subscribe to console calls as they happen. Used to forward errors to crash
+ * monitoring without coupling this dependency-free module to the Sentry SDK.
+ * Returns an unsubscribe function.
+ */
+export function onConsoleEntry(listener: ConsoleListener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 /** Best-effort, readable stringification of a single console argument. */
 export function stringifyArg(value: unknown): string {
   if (typeof value === 'string') {
@@ -79,6 +97,9 @@ export function installConsoleCapture(target: ConsoleLike = console as unknown a
     target[level] = (...args: unknown[]) => {
       try {
         recordLog(level, args.map(stringifyArg).join(' '));
+        for (const listener of listeners) {
+          listener(level, args);
+        }
       } catch {
         // Never let logging capture break the app.
       }

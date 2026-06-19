@@ -6,6 +6,7 @@ import {
   formatLogEntries,
   getLogEntries,
   installConsoleCapture,
+  onConsoleEntry,
   recordLog,
   stringifyArg,
 } from './log-buffer.ts';
@@ -42,7 +43,7 @@ test('stringifyArg handles strings, errors and objects', () => {
   assert.equal(stringifyArg({ a: 1 }), '{"a":1}');
 });
 
-test('installConsoleCapture records calls and preserves original output', () => {
+test('installConsoleCapture records calls, preserves output, and notifies listeners', () => {
   clearLogEntries();
   const seen: string[] = [];
   const fake = {
@@ -52,11 +53,27 @@ test('installConsoleCapture records calls and preserves original output', () => 
     error: () => {},
   } as unknown as Record<string, (...args: unknown[]) => void>;
 
+  // installConsoleCapture is idempotent (patches once per process), so the
+  // listener assertions live here, alongside the only install call in this file.
+  const notified: Array<{ level: string; args: unknown[] }> = [];
+  const unsubscribe = onConsoleEntry((level, args) => notified.push({ level, args }));
+
   installConsoleCapture(fake);
+  const err = new Error('boom');
+  fake.error('save failed', err);
   fake.warn('disk', 'failed');
 
   // Original still ran...
   assert.deepEqual(seen, ['warn:disk failed']);
-  // ...and it was captured.
+  // ...it was captured into the buffer...
   assert.match(formatLogEntries(), /\[warn\] disk failed/);
+  // ...and listeners got the raw args (the Error object survives, for stacks).
+  assert.equal(notified.length, 2);
+  assert.equal(notified[0]!.level, 'error');
+  assert.equal(notified[0]!.args[1], err);
+
+  // Unsubscribe stops further notifications.
+  unsubscribe();
+  fake.error('after unsubscribe');
+  assert.equal(notified.length, 2);
 });
