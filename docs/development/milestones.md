@@ -204,3 +204,83 @@ This plan turns the current product and architecture docs into an implementation
 - Internal builds can be produced.
 - Manual save, Inbox browsing, detail view, archive/delete, and sync state are usable.
 - The app remains optimized for fast capture and later organization.
+
+---
+
+# 0.1.8 cycle — "Korean & internationalization"
+
+M0–M10 delivered the MVP; 0.1.7 added the capabilities (AI enrichment, export,
+OAuth, sync hardening). 0.1.8 is a focused **localization** release: speak
+Korean, and make AI answer in the user's language.
+
+**Already shipped in the 0.1.7 tree — do _not_ re-plan these** (an earlier draft
+of this section incorrectly listed them as new work; they exist on `main`):
+
+- **Client-side search** — Inbox search box over title/url/notes/tags,
+  incremental and offline (`apps/mobile/src/app/index.tsx`, `filterBookmarks`).
+- **Import** — re-ingest a Stash **JSON** backup *or* a Netscape **HTML**
+  bookmarks file, local-first (`settings.tsx`, `domain/import.ts`,
+  `share/import-data.ts`, `store/bookmarks.tsx#importBookmarks`).
+- **Offline tag editing** — tag add/remove are already optimistic + queued
+  through the durable local-first tag-op queue (`store/bookmarks.tsx`).
+
+0.1.8's job is therefore to **localize the existing surfaces** (incl. those
+above), not to rebuild them.
+
+## Milestone 11 — Internationalization foundation + Korean
+
+**Goal:** make the UI translatable and ship Korean as the first locale (the
+primary audience; capture test data is already Korean).
+
+**Deliverables:**
+
+- Add an i18n layer (`expo-localization` for device locale + a lightweight
+  message catalog; no heavy framework needed) with a typed `t()` helper. (None
+  exists today — verified no `expo-localization`/i18n in the tree.)
+- Extract all user-facing strings from the **existing** screens/components into
+  a default English catalog (keys, not inline literals) — Inbox + search,
+  Settings (incl. export/import), bookmark Detail, Review, Account, Report.
+- Add a Korean (`ko`) catalog; detect device locale with English fallback and a
+  manual language override in Settings.
+- Locale-aware formatting for dates/counts/pluralization.
+
+**Acceptance criteria:**
+
+- On a Korean device the app renders in Korean; unknown keys fall back to
+  English, never to a blank/visible key.
+- Capture is never blocked or slowed by locale loading.
+- No remaining hardcoded user-facing literals in the touched screens (lint/grep
+  guard).
+- Note: AI-generated text (summaries/tags) language is handled in M12, not here.
+
+## Milestone 12 — Locale-aware AI output + degraded-mode visibility
+
+**Goal:** make AI answer in the user's language and degrade visibly.
+
+**Deliverables:**
+
+- Prompt Gemini to return summary/tags in the user's locale (ties to M11).
+- Surface degraded mode (rate-limit/outage → heuristic fallback) with a clear,
+  non-error in-app signal (the #101 free-tier `limit:0` case currently falls
+  silently to dummy heuristics, masking the cause).
+
+**Acceptance criteria:**
+
+- For a Korean user, generated summaries/tags come back in Korean.
+- An outage/rate-limit is visibly indicated rather than silently degraded.
+
+---
+
+## Deferred to 0.2.0 — "public beta"
+
+Bigger or infra items intentionally held back so 0.1.8 stays a tight point
+release:
+
+- Real branding (icon/splash) replacing Expo defaults.
+- A tester distribution channel (Firebase App Distribution / Play internal
+  testing) that removes the per-install "install unknown apps" prompt — pairs
+  with branding as the public-beta theme, and lets the `-rcN` tag convention be
+  retired in favor of an auto-updating internal track.
+- Native Apple sign-in button (App Store submission requirement) (#49).
+- Native silent share extension + system notification (#89).
+- `pgvector` embeddings for collection routing as collections grow (#87).
