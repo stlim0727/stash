@@ -1,0 +1,7 @@
+{
+  "name": "share-return",
+  "version": "0.1.0",
+  "description": "Drop Stash back to the previous app after a silent share capture (Android only).",
+  "main": "index.ts",
+  "private": true
+}

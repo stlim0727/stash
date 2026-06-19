@@ -39,6 +39,13 @@ jest.mock('@/domain/enrichment', () => ({
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
 }));
+// Force the in-app-toast fallback so these assertions hold regardless of the
+// jest platform: the Android "floating toast + return to previous app" path is
+// covered in return-to-app.test.tsx.
+jest.mock('@/share/return-to-app', () => ({
+  showSystemToast: jest.fn(() => false),
+  returnToPreviousApp: jest.fn(() => false),
+}));
 
 // Controllable share-intent context: a cold-start share has hasShareIntent
 // true from the very first render, before the durable store has loaded.

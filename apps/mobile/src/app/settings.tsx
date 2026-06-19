@@ -389,7 +389,7 @@ export default function SettingsScreen() {
           value={
             shareBehavior === 'inbox'
               ? 'Shared links open the Inbox'
-              : 'Shared links just show a toast'
+              : 'Shared links save and return you to the app you shared from'
           }
           last
           right={

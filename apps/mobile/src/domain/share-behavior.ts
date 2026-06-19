@@ -1,18 +1,21 @@
 /**
  * What Stash does *after* it captures a URL shared from another app.
  *
- * Sharing always briefly launches the host app (a constraint of the OS share
- * flow), but we control what happens once the URL is saved:
- *  - `toast`  — confirm with a short, modeless toast and stay out of the way,
- *               never navigating; this matches the original fast-capture intent.
- *  - `inbox`  — additionally jump to the Inbox so the freshly stashed item is
+ * Sharing always briefly launches Stash (a constraint of the OS share flow:
+ * `expo-share-intent` has no inline-handling mode), but we control what happens
+ * once the URL is saved:
+ *  - `toast`  — fire-and-forget: confirm and step back out of the way. On
+ *               Android we show a floating OS toast and drop straight back to
+ *               the app the share came from; on iOS, which won't let an app
+ *               background itself, we just show the in-app toast and stay put.
+ *  - `inbox`  — instead jump to the Inbox so the freshly stashed item is
  *               immediately visible.
  */
 export type ShareBehavior = 'toast' | 'inbox';
 
 /**
- * Toast-only is the default: a share is meant to be a fast, fire-and-forget
- * capture, not a context switch into the Inbox.
+ * Toast is the default: a share is meant to be a fast, fire-and-forget capture
+ * that returns you to where you were, not a context switch into the Inbox.
  */
 export const DEFAULT_SHARE_BEHAVIOR: ShareBehavior = 'toast';
 
