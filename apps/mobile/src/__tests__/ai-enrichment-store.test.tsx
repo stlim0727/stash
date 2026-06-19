@@ -12,14 +12,18 @@ const mockSession = {
   expires_at: Math.floor(Date.now() / 1000) + 3600,
   user: { id: 'user-test' },
 };
+// Mutable so a test can simulate a cold start where storage loads before the
+// auth session is restored (session null). `mock`-prefixed so jest's factory
+// hoisting allows referencing it.
+let mockAuthSession: typeof mockSession | null = mockSession;
 
 jest.mock('@/supabase/auth-provider', () => ({
   useSupabaseAuth: () => ({
     status: 'anonymous',
-    session: mockSession,
+    session: mockAuthSession,
     userId: 'user-test',
     message: null,
-    ensureAnonymousSession: async () => mockSession,
+    ensureAnonymousSession: async () => mockAuthSession,
   }),
   SupabaseAuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
@@ -111,6 +115,7 @@ async function renderReady() {
 }
 
 beforeEach(() => {
+  mockAuthSession = mockSession;
   apiMock.__spies.requestEnrichment.mockClear();
   apiMock.__spies.addTags.mockClear();
   apiMock.__spies.listBookmarkIds.mockReset();
@@ -170,6 +175,23 @@ test('re-hydrates a persisted deferred AI trigger and fires it after a restart',
   );
   // ...and the durable marker is cleared once it succeeds, so it won't re-fire.
   await waitFor(() => expect(fakeRepo.__meta('pending_ai_trigger')).toBe('[]'));
+});
+
+test('does not consume a deferred AI trigger before the auth session is ready', async () => {
+  // Cold start: storage (and the persisted marker) loads before auth restores.
+  mockAuthSession = null;
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.getBookmark(SYNCED_ID)).toBeDefined());
+
+  // With no session the effect must NOT fire or burn the marker — otherwise the
+  // trigger would be lost when auth becomes ready.
+  expect(apiMock.__spies.requestEnrichment).not.toHaveBeenCalled();
+  expect(fakeRepo.__meta('pending_ai_trigger')).toBe(JSON.stringify([SYNCED_ID]));
 });
 
 test('isEnriching reports true while a request is in flight, false once it settles', async () => {
