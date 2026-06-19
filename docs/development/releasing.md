@@ -65,6 +65,18 @@ embedded commit SHA (`EXPO_PUBLIC_GIT_SHA`, shown in Settings and the Release
 body). To annotate a build without cutting a new release, SemVer build metadata
 after `+` is ignored for ordering: `0.1.7+cc0c8c7`.
 
+### Which branch to release from
+
+Releases are tag-driven, and **a `v*` tag can point at any branch** — so the
+release line follows the branch model in [`branching.md`](./branching.md):
+
+- **PATCH for a shipped series** (e.g. `v0.1.9`) → tag it on that series'
+  maintenance branch, `release/0.1.x`.
+- **MINOR / next release** (e.g. `v0.2.0`) → tag it on `main` (trunk).
+
+Bug fixes land on the oldest affected branch (`release/0.1.x`) and are
+cherry-picked forward into `main`; never merge `main` into a release branch.
+
 ### Don't ship different code under the same version
 
 If a build fixes bugs, give it its own number (`0.1.7 → 0.1.8`) rather than
