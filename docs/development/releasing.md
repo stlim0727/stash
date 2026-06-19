@@ -12,7 +12,8 @@ tap the downloaded `.apk` → install (allow "install unknown apps" once). No
 desktop, no artifact zip to unpack.
 
 - Run it via **workflow dispatch** with the `version` input, or by pushing a tag:
-  - clean **`vX.Y.Z`** ⇒ a **versioned** prerelease, kept forever.
+  - clean **`vX.Y.Z`** ⇒ a **versioned, stable** release (non-prerelease, marked
+    _latest_), kept forever; its notes come from `docs/release-notes/<tag>.md`.
   - blank dispatch / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ refreshes the single
     rolling **`dev`** prerelease in place, so test builds don't clutter Releases.
 - The APK is also still uploaded as a **run artifact** (`stash-android-apk`) for
@@ -28,6 +29,48 @@ desktop, no artifact zip to unpack.
 > **[Firebase App Distribution](#firebase-app-distribution-smoother-tester-installs)**
 > (below) — testers install once via the App Tester app and new builds arrive
 > with a notification.
+
+## Versioning
+
+Stash uses `MAJOR.MINOR.PATCH` (e.g. `0.1.7`). As a **pre-1.0 app** (not a
+library with a public API), the practical convention is:
+
+| Bump            | When                                           | Example         |
+| --------------- | ---------------------------------------------- | --------------- |
+| MINOR (`x.Y.0`) | a feature release                              | `0.1.x → 0.2.0` |
+| PATCH (`x.y.Z`) | a bug-fix / hotfix release                     | `0.2.0 → 0.2.1` |
+| MAJOR (`X.0.0`) | reserved for the first public/stable milestone | `→ 1.0.0`       |
+
+Rules of thumb:
+
+- **Any code users receive changed → bump the version.** A bug-fix release is a
+  PATCH bump (`0.1.7 → 0.1.8`); new features are a MINOR bump (`→ 0.2.0`). Don't
+  ship features under a PATCH bump — that's the "patch-as-feature" mismatch.
+- **Same code, just rebuilt** (CI re-run, re-sign, refreshed QR) → keep the
+  version; the build number distinguishes it.
+
+### Marketing version vs build number
+
+Two independent identifiers — don't conflate them:
+
+- **Version name** — `apps/mobile/app.json` `version` (e.g. `0.1.7`), the human
+  SemVer string. Drives `APP_VERSION` → `versionName` (see `app.config.js`, #96).
+- **Build number** (`versionCode`) — a monotonic integer set to
+  `github.run_number` per CI build, shown in-app as `0.1.7 (58)`. Stores require
+  it to increase on every upload of the same version name. Use it only for
+  **identical-code rebuilds**, never to paper over a code change.
+
+So two builds of the *same* release are told apart by build number plus the
+embedded commit SHA (`EXPO_PUBLIC_GIT_SHA`, shown in Settings and the Release
+body). To annotate a build without cutting a new release, SemVer build metadata
+after `+` is ignored for ordering: `0.1.7+cc0c8c7`.
+
+### Don't ship different code under the same version
+
+If a build fixes bugs, give it its own number (`0.1.7 → 0.1.8`) rather than
+reusing `0.1.7` with a higher build number — otherwise the only signal that the
+code changed is the build number / SHA, which is easy to miss. Reserve the
+build-number-only distinction for genuinely identical code.
 
 ## Firebase App Distribution (smoother tester installs)
 
