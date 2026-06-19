@@ -1,9 +1,9 @@
 /**
- * Decides what to do with the LOCAL bookmark cache when the signed-in Supabase
- * user changes between syncs. This exists because a pull reconciles local rows
- * against the *current* account's remote IDs — so without this, switching
- * accounts would make the pull treat the previous account's bookmarks as
- * "deleted remotely" and wipe them locally (the data-loss bug this fixes).
+ * Plans and applies local bookmark cache transitions when the signed-in
+ * Supabase user changes between syncs. This exists because a pull reconciles
+ * local rows against the *current* account's remote IDs — so without this,
+ * switching accounts would make the pull treat the previous account's bookmarks
+ * as "deleted remotely" and wipe them locally (the data-loss bug this fixes).
  *
  * The model (see docs/architecture/sync-account-switching.md):
  *  - Anonymous → real account: the anonymous data belongs to whoever signs in,
@@ -14,10 +14,14 @@
  *    — drop A's local cache (safe: it stays in A's cloud) and load B's data.
  *  - Same user / first sync: nothing to do.
  *
- * Pure and dependency-light so it is unit-tested under the Node runner.
+ * `planAccountTransition` is pure and unit-tested under the Node runner.
+ * `applyAccountTransition` is side-effectful (state + repository writes) and
+ * takes its dependencies injected so the planner stays independently testable.
  */
 
-import type { Bookmark } from '@/domain/types';
+import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { recordLog } from '@/observability/log-buffer';
+import type { BookmarkRepository } from '@/storage/types';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
 export interface SyncedUserRef {
@@ -67,4 +71,64 @@ export function planAccountTransition(
     return { kind: 'carry-over', rehome: owned, drop: [], resetWatermark: true };
   }
   return { kind: 'switch', rehome: [], drop: owned.map((bookmark) => bookmark.id), resetWatermark: true };
+}
+
+/**
+ * Applies an account transition plan: re-homes anonymous bookmarks under the
+ * new account or drops cached rows from the previous real account. Side-
+ * effectful — mutates React state and writes to the repository. Dependencies
+ * are injected so this can be called from the store without creating a
+ * top-level import cycle.
+ */
+export async function applyAccountTransition(
+  plan: AccountTransitionPlan,
+  repository: BookmarkRepository,
+  setBookmarks: (updater: (prev: Bookmark[] | null) => Bookmark[] | null) => void,
+  setQueue: (updater: (prev: LocalPendingBookmark[]) => LocalPendingBookmark[]) => void,
+  makeLocalId: () => string,
+  ensureRepositoryReady: () => Promise<void>,
+): Promise<void> {
+  if (plan.rehome.length > 0) {
+    const now = new Date().toISOString();
+    const rehomedById = new Map<string, Bookmark>();
+    const newEntries: LocalPendingBookmark[] = [];
+    for (const old of plan.rehome) {
+      const newId = makeLocalId();
+      rehomedById.set(old.id, { ...old, id: newId, sync_status: 'pending', updated_at: now });
+      newEntries.push({
+        local_id: newId,
+        remote_id: null,
+        operation: 'create',
+        payload: {
+          url: old.url ?? undefined,
+          title: old.title ?? undefined,
+          notes: old.notes ?? undefined,
+        },
+        sync_status: 'pending',
+        retry_count: 0,
+        last_error: null,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    recordLog('warn', `account switch: re-homing ${plan.rehome.length} bookmark(s) into the new account`);
+    setBookmarks((current) =>
+      (current ?? []).map((bookmark) => rehomedById.get(bookmark.id) ?? bookmark),
+    );
+    setQueue((current) => [...current, ...newEntries]);
+    await ensureRepositoryReady();
+    for (const [oldId, rehomed] of rehomedById) {
+      await repository.replaceBookmark(oldId, rehomed);
+    }
+    for (const entry of newEntries) {
+      await repository.enqueue(entry);
+    }
+  }
+  if (plan.drop.length > 0) {
+    const dropped = new Set(plan.drop);
+    recordLog('warn', `account switch: dropping ${plan.drop.length} cached bookmark(s) from the previous account`);
+    setBookmarks((current) => (current ?? []).filter((bookmark) => !dropped.has(bookmark.id)));
+    await ensureRepositoryReady();
+    await Promise.all(plan.drop.map((id) => repository.deleteBookmark(id)));
+  }
 }
