@@ -204,3 +204,113 @@ This plan turns the current product and architecture docs into an implementation
 - Internal builds can be produced.
 - Manual save, Inbox browsing, detail view, archive/delete, and sync state are usable.
 - The app remains optimized for fast capture and later organization.
+
+---
+
+# 0.1.8 cycle — "localize + retrieve your stuff"
+
+M0–M10 delivered the MVP; 0.1.7 added the capabilities (AI enrichment, export,
+OAuth, sync hardening). 0.1.8 closes everyday loops and reaches Korean users.
+**Sequencing note:** do M11 first — it is cross-cutting, so every string added
+by M12–M15 should be authored through the i18n layer rather than retrofitted.
+
+## Milestone 11 — Internationalization foundation + Korean
+
+**Goal:** make the UI translatable and ship Korean as the first locale (the
+primary audience; capture test data is already Korean).
+
+**Deliverables:**
+
+- Add an i18n layer (`expo-localization` for device locale + a lightweight
+  message catalog; no heavy framework needed) with a typed `t()` helper.
+- Extract all user-facing strings from screens/components into a default
+  English catalog (keys, not inline literals).
+- Add a Korean (`ko`) catalog; detect device locale with English fallback and a
+  manual language override in Settings.
+- Locale-aware formatting for dates/counts/pluralization.
+
+**Acceptance criteria:**
+
+- On a Korean device the app renders in Korean; unknown keys fall back to
+  English, never to a blank/visible key.
+- Capture is never blocked or slowed by locale loading.
+- No remaining hardcoded user-facing literals in the touched screens (lint/grep
+  guard).
+- Note: AI-generated text (summaries/tags) language is handled in M15, not here.
+
+## Milestone 12 — Client-side search UI
+
+**Goal:** surface the existing domain search through the UI.
+
+**Deliverables:**
+
+- A search entry over title / url / notes / tags, incremental and offline.
+- Sensible empty/no-results states (localized via M11).
+
+**Acceptance criteria:**
+
+- Typing filters the list live with no network dependency.
+- Search covers user-authored fields and tags.
+
+## Milestone 13 — Import (re-ingest a JSON backup)
+
+**Goal:** complete the data-portability round-trip started by export (#88).
+
+**Deliverables:**
+
+- Import a Stash JSON backup from Settings; merge into the local store.
+- De-dupe on canonical `url_hash`; fold tags/enrichment into the existing row
+  rather than creating duplicates.
+
+**Acceptance criteria:**
+
+- Importing a file Stash exported is idempotent (no duplicate rows).
+- Imported bookmarks sync through the normal queue.
+
+## Milestone 14 — Offline tag editing
+
+**Goal:** remove the last online dependency in core editing (AGENTS.md "Possible
+future work").
+
+**Deliverables:**
+
+- Tag add/remove become optimistic + queued, mirroring the already-local-first
+  collection-assignment path.
+
+**Acceptance criteria:**
+
+- Adding/removing a tag offline persists locally and syncs later; capture/edit
+  stays sacred.
+
+## Milestone 15 — AI quota/fallback hardening + locale-aware output
+
+**Goal:** make AI degrade visibly and answer in the user's language.
+
+**Deliverables:**
+
+- Surface degraded mode (rate-limit/outage → heuristic fallback) with a clear,
+  non-error in-app signal (the #101 free-tier `limit:0` case currently fails
+  silently to dummy heuristics).
+- Prompt Gemini to return summary/tags in the user's locale (ties to M11).
+- A polish pass over the suggestion-review screen.
+
+**Acceptance criteria:**
+
+- An outage/rate-limit no longer surfaces as a user-facing error.
+- For a Korean user, generated summaries/tags come back in Korean.
+
+---
+
+## Deferred to 0.2.0 — "public beta"
+
+Bigger or infra items intentionally held back so 0.1.8 stays a tight point
+release:
+
+- Real branding (icon/splash) replacing Expo defaults.
+- A tester distribution channel (Firebase App Distribution / Play internal
+  testing) that removes the per-install "install unknown apps" prompt — pairs
+  with branding as the public-beta theme, and lets the `-rcN` tag convention be
+  retired in favor of an auto-updating internal track.
+- Native Apple sign-in button (App Store submission requirement) (#49).
+- Native silent share extension + system notification (#89).
+- `pgvector` embeddings for collection routing as collections grow (#87).
