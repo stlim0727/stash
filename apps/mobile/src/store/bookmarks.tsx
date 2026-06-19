@@ -119,6 +119,8 @@ interface BookmarksContextValue {
   removeTagFromBookmark: (bookmarkId: string, tagName: string) => Promise<string | null>;
   /** Generate AI suggestions for a synced bookmark. Resolves to an error, or null. */
   requestAiEnrichment: (bookmarkId: string) => Promise<string | null>;
+  /** True while AI suggestions are being generated for this bookmark. */
+  isEnriching: (bookmarkId: string) => boolean;
   /** Accept AI-suggested tags (linked with source 'ai'). Resolves to an error, or null. */
   acceptSuggestedTags: (bookmarkId: string, suggestions: SuggestedTag[]) => Promise<string | null>;
   /** Move a bookmark into a collection (or out, with null). Local-first. */
@@ -226,6 +228,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Bookmark IDs with an AI enrichment request in flight, so an auto-trigger
   // and a manual "Suggest with AI" tap never fire duplicate requests.
   const aiEnriching = useRef(new Set<string>());
+  // Reactive mirror of `aiEnriching` so the UI can show an "AI is working"
+  // indicator while a request (auto-triggered or manual) is in flight.
+  const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(new Set());
   // Tombstones for deleted local bookmarks. The sync loop iterates over a
   // snapshot, so a delete that lands mid-run must be visible to it — both
   // before uploading an entry and before applying an upload's result.
@@ -882,6 +887,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return null;
       }
       aiEnriching.current.add(bookmarkId);
+      setEnrichingIds((prev) => new Set(prev).add(bookmarkId));
       try {
         // The edge function forwards this access token to PostgREST, which 401s
         // on a stale one. The token can expire while the app sits idle, so
@@ -920,9 +926,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
       } finally {
         aiEnriching.current.delete(bookmarkId);
+        setEnrichingIds((prev) => {
+          if (!prev.has(bookmarkId)) {
+            return prev;
+          }
+          const next = new Set(prev);
+          next.delete(bookmarkId);
+          return next;
+        });
       }
     },
     [auth],
+  );
+
+  // True while an AI enrichment request for this bookmark is in flight (whether
+  // auto-triggered after sync or started by a manual "Suggest with AI" tap).
+  const isEnriching = useCallback(
+    (bookmarkId: string): boolean => enrichingIds.has(bookmarkId),
+    [enrichingIds],
   );
 
   // Accept AI-suggested tags: ensure + link them with `source: 'ai'` so their
@@ -1366,6 +1387,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       addTagsToBookmark,
       removeTagFromBookmark,
       requestAiEnrichment,
+      isEnriching,
       acceptSuggestedTags,
       assignCollection,
       createCollection,
@@ -1391,6 +1413,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       addTagsToBookmark,
       removeTagFromBookmark,
       requestAiEnrichment,
+      isEnriching,
       acceptSuggestedTags,
       assignCollection,
       createCollection,

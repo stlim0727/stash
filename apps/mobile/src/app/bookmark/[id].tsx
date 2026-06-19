@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Linking,
@@ -45,6 +46,7 @@ export default function BookmarkDetailScreen() {
     addTagsToBookmark,
     removeTagFromBookmark,
     requestAiEnrichment,
+    isEnriching,
     acceptSuggestedTags,
     assignCollection,
     createCollection,
@@ -118,6 +120,9 @@ export default function BookmarkDetailScreen() {
   const collection = getCollection(bookmark.collection_id);
   const enrichment = getEnrichment(bookmark.id);
   const canOrganizeRemotely = hasRemoteIdentity(bookmark.id);
+  // True while an AI enrichment request is in flight for this bookmark, so the
+  // section can show a "working" indicator (auto-trigger or manual refresh).
+  const aiWorking = isEnriching(bookmark.id);
 
   // AI suggestions: surface only high-confidence tags not already applied
   // (centralized in @/domain/ai-suggestions) and not dismissed this session,
@@ -455,13 +460,22 @@ export default function BookmarkDetailScreen() {
 
       {/* AI suggestions — no redundant header; the action button names itself. */}
       <Card elevated={false} style={styles.field}>
-        {enrichment?.model ? (
+        {aiWorking || enrichment?.model ? (
           <View style={styles.suggestHeader}>
-            <View style={[styles.aiBadge, { borderColor: palette.border }]}>
-              <Text style={[styles.aiBadgeLabel, { color: palette.textSecondary }]}>
-                {enrichment.model}
-              </Text>
-            </View>
+            {aiWorking ? (
+              <View style={styles.aiWorking}>
+                <ActivityIndicator size="small" color={palette.accent} />
+                <Text style={[styles.aiWorkingLabel, { color: palette.textSecondary }]}>
+                  Working…
+                </Text>
+              </View>
+            ) : (
+              <View style={[styles.aiBadge, { borderColor: palette.border }]}>
+                <Text style={[styles.aiBadgeLabel, { color: palette.textSecondary }]}>
+                  {enrichment!.model}
+                </Text>
+              </View>
+            )}
           </View>
         ) : null}
 
@@ -498,13 +512,23 @@ export default function BookmarkDetailScreen() {
         {canOrganizeRemotely ? (
           <Pressable
             accessibilityRole="button"
-            disabled={busy}
+            accessibilityState={{ disabled: busy || aiWorking, busy: aiWorking }}
+            disabled={busy || aiWorking}
             style={[styles.suggestButton, { borderColor: palette.border }]}
             onPress={() => void handleSuggestAi()}
           >
-            <Text style={[styles.actionLabel, { color: palette.accent }]}>
-              {enrichment ? 'Refresh AI suggestions' : 'Suggest with AI'}
-            </Text>
+            {aiWorking ? (
+              <View style={styles.aiWorking}>
+                <ActivityIndicator size="small" color={palette.accent} />
+                <Text style={[styles.actionLabel, { color: palette.accent }]}>
+                  Generating suggestions…
+                </Text>
+              </View>
+            ) : (
+              <Text style={[styles.actionLabel, { color: palette.accent }]}>
+                {enrichment ? 'Refresh AI suggestions' : 'Suggest with AI'}
+              </Text>
+            )}
           </Pressable>
         ) : (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>
@@ -766,6 +790,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   aiBadgeLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  aiWorking: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  aiWorkingLabel: {
     fontSize: 11,
     fontWeight: '600',
   },

@@ -125,6 +125,47 @@ test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
   expect(store.current!.getEnrichment(SYNCED_ID)?.summary).toBe('Generated summary');
 });
 
+test('isEnriching reports true while a request is in flight, false once it settles', async () => {
+  const store = await renderReady();
+
+  // Hold the request open so we can observe the in-flight state.
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) => {
+    await gate;
+    return {
+      id: 'enrichment-new',
+      bookmark_id: bookmarkId,
+      user_id: 'user-test',
+      summary: 'Generated summary',
+      topics: [],
+      suggested_tags: [],
+      suggested_collection_id: null,
+      model: 'dummy-v0',
+      status: 'complete',
+      confidence: null,
+      created_at: '2026-06-13T00:00:00.000Z',
+      updated_at: '2026-06-13T00:00:00.000Z',
+    };
+  });
+
+  expect(store.current!.isEnriching(SYNCED_ID)).toBe(false);
+
+  let pending: Promise<string | null>;
+  await act(async () => {
+    pending = store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+  expect(store.current!.isEnriching(SYNCED_ID)).toBe(true);
+
+  await act(async () => {
+    release();
+    await pending;
+  });
+  expect(store.current!.isEnriching(SYNCED_ID)).toBe(false);
+});
+
 test('acceptSuggestedTags links the tag with source ai and its confidence', async () => {
   const store = await renderReady();
 
