@@ -44,7 +44,7 @@ import { repository } from '@/storage/repository';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { SupabaseRequestError } from '@/supabase/client';
-import { planAccountTransition } from '@/sync/account-transition';
+import { applyAccountTransition, planAccountTransition } from '@/sync/account-transition';
 import {
   LAST_PULLED_AT_KEY,
   SYNCED_USER_ANON_KEY,
@@ -56,6 +56,7 @@ import {
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
+  planLeftoverReconciliation,
   reconcileOrphanedQueueEntries,
   removeQueueEntryIfNotSuperseded,
   syncQueueEntry,
@@ -1038,25 +1039,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // as a permanent duplicate of the remote row once the pull brings it down.
       const syncedLeftovers = queue.filter((entry) => entry.sync_status === 'synced');
       if (syncedLeftovers.length > 0) {
-        for (const leftover of syncedLeftovers) {
-          const remoteId = leftover.remote_id;
-          if (!remoteId || remoteId === leftover.local_id) {
-            continue; // update/delete leftover, or already reconciled.
-          }
-          const localRow = bookmarksRef.current?.find(
-            (bookmark) => bookmark.id === leftover.local_id,
-          );
-          if (!localRow) {
-            continue; // Swap already completed (row is under the remote id).
-          }
-          const reconciled: Bookmark = { ...localRow, id: remoteId, sync_status: 'synced' };
+        const swaps = planLeftoverReconciliation(syncedLeftovers, bookmarksRef.current ?? []);
+        for (const { localId, reconciled } of swaps) {
           setBookmarks((current) =>
-            (current ?? []).map((bookmark) =>
-              bookmark.id === leftover.local_id ? reconciled : bookmark,
-            ),
+            (current ?? []).map((bookmark) => (bookmark.id === localId ? reconciled : bookmark)),
           );
           void repository
-            .replaceBookmark(leftover.local_id, reconciled)
+            .replaceBookmark(localId, reconciled)
             .catch((error) => logStorageError('synced leftover reconcile', error));
         }
         setQueue((current) => current.filter((entry) => entry.sync_status !== 'synced'));
@@ -1212,49 +1201,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           currentUser,
           bookmarksRef.current ?? [],
         );
-        if (plan.rehome.length > 0) {
-          const now = new Date().toISOString();
-          const rehomedById = new Map<string, Bookmark>();
-          const newEntries: LocalPendingBookmark[] = [];
-          for (const old of plan.rehome) {
-            const newId = makeLocalId();
-            rehomedById.set(old.id, { ...old, id: newId, sync_status: 'pending', updated_at: now });
-            newEntries.push({
-              local_id: newId,
-              remote_id: null,
-              operation: 'create',
-              payload: {
-                url: old.url ?? undefined,
-                title: old.title ?? undefined,
-                notes: old.notes ?? undefined,
-              },
-              sync_status: 'pending',
-              retry_count: 0,
-              last_error: null,
-              created_at: now,
-              updated_at: now,
-            });
-          }
-          recordLog('warn', `account switch: re-homing ${plan.rehome.length} bookmark(s) into the new account`);
-          setBookmarks((current) =>
-            (current ?? []).map((bookmark) => rehomedById.get(bookmark.id) ?? bookmark),
-          );
-          setQueue((current) => [...current, ...newEntries]);
-          await ensureRepositoryReady();
-          for (const [oldId, rehomed] of rehomedById) {
-            await repository.replaceBookmark(oldId, rehomed);
-          }
-          for (const entry of newEntries) {
-            await repository.enqueue(entry);
-          }
-        }
-        if (plan.drop.length > 0) {
-          const dropped = new Set(plan.drop);
-          recordLog('warn', `account switch: dropping ${plan.drop.length} cached bookmark(s) from the previous account`);
-          setBookmarks((current) => (current ?? []).filter((bookmark) => !dropped.has(bookmark.id)));
-          await ensureRepositoryReady();
-          await Promise.all(plan.drop.map((id) => repository.deleteBookmark(id)));
-        }
+        await applyAccountTransition(
+          plan,
+          repository,
+          setBookmarks,
+          setQueue,
+          makeLocalId,
+          ensureRepositoryReady,
+        );
       } catch (error) {
         logStorageError('account transition', error);
       }

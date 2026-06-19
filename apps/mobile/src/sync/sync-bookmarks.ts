@@ -234,6 +234,35 @@ export function isSyncable(entry: LocalPendingBookmark): boolean {
  * URL (or shared text, which this app doesn't capture), so enqueuing one would
  * just swap "sync pending" for a permanently failed entry.
  */
+/** A local→remote identity swap computed for a synced-leftover queue entry. */
+export interface LeftoverSwap {
+  localId: string;
+  reconciled: Bookmark;
+}
+
+/**
+ * Identifies synced queue leftovers that still need a local-ID → remote-ID
+ * swap on the bookmark row. A `create` marks its queue entry `synced` (with
+ * the new remote_id) BEFORE swapping the local bookmark ID; if the app was
+ * killed between those writes the queue entry survives but the bookmark is
+ * still under the old local-* id. This pure planner finds those stragglers —
+ * the caller applies the swaps and removes the queue entries.
+ */
+export function planLeftoverReconciliation(
+  leftovers: LocalPendingBookmark[],
+  bookmarks: Bookmark[],
+): LeftoverSwap[] {
+  const swaps: LeftoverSwap[] = [];
+  for (const leftover of leftovers) {
+    const remoteId = leftover.remote_id;
+    if (!remoteId || remoteId === leftover.local_id) continue; // update/delete leftover, or already reconciled
+    const localRow = bookmarks.find((b) => b.id === leftover.local_id);
+    if (!localRow) continue; // swap already completed — row is under the remote id
+    swaps.push({ localId: leftover.local_id, reconciled: { ...localRow, id: remoteId, sync_status: 'synced' } });
+  }
+  return swaps;
+}
+
 export function reconcileOrphanedQueueEntries(
   bookmarks: Bookmark[],
   queue: LocalPendingBookmark[],
