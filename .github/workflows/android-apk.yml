@@ -142,10 +142,16 @@ jobs:
             TAG="$LABEL"
             APK="stash-${LABEL}-${SHA_SHORT}-android.apk"
             REL_NAME="Stash $LABEL"
+            # A clean vX.Y.Z is a real, stable release: mark it latest, not a prerelease.
+            PRERELEASE="false"
+            MAKE_LATEST="true"
           else
             TAG="dev"
             APK="stash-dev-android.apk"
             REL_NAME="Development build (latest)"
+            # Rolling dev / hyphenated test builds stay prereleases and never "latest".
+            PRERELEASE="true"
+            MAKE_LATEST="false"
           fi
           URL="${{ github.server_url }}/${{ github.repository }}/releases/download/${TAG}/${APK}"
           {
@@ -154,6 +160,8 @@ jobs:
             echo "rel_name=$REL_NAME"
             echo "sha_short=$SHA_SHORT"
             echo "url=$URL"
+            echo "prerelease=$PRERELEASE"
+            echo "make_latest=$MAKE_LATEST"
           } >> "$GITHUB_OUTPUT"
 
       - name: Stage the APK
@@ -216,36 +224,54 @@ jobs:
           git tag -f dev "$GITHUB_SHA"
           git push -f origin "refs/tags/dev"
 
-      # Every build now publishes a Release with the raw .apk + QR. Versioned
-      # builds get their own tag; everything else refreshes the rolling `dev`
-      # prerelease in place. The action creates/updates the tag at this commit,
-      # so no tag has to be pushed from a constrained environment.
+      # Compose the release body. For a versioned release, lead with the
+      # human-written notes at docs/release-notes/<tag>.md (if present) so the
+      # Release reads as a real changelog; the install/QR section is always
+      # appended. The rolling `dev` build keeps just the install section.
+      - name: Compose release notes
+        run: |
+          BODY=dist/RELEASE_BODY.md
+          NOTES="docs/release-notes/${{ steps.meta.outputs.tag }}.md"
+          : > "$BODY"
+          if [ -f "$NOTES" ]; then
+            cat "$NOTES" >> "$BODY"
+            printf '\n\n---\n\n' >> "$BODY"
+          fi
+          cat >> "$BODY" <<EOF
+          Standalone debug-signed Android APK built in CI.
+
+          **Commit** [\`${{ steps.meta.outputs.sha_short }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) · \`${{ github.ref_name }}\`
+
+          ### 📲 Install on Android
+          Scan this on your phone (or open the link), then tap the downloaded
+          \`.apk\` to install. The first time, allow "install unknown apps" for
+          your browser when prompted.
+
+          ![Install QR](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/install-qr.png)
+
+          ➡️ **[Download ${{ steps.meta.outputs.apk }}](${{ steps.meta.outputs.url }})**
+
+          Local-only unless the repo's \`EXPO_PUBLIC_SUPABASE_*\` secrets were set
+          at build time.
+          EOF
+          echo "----- release body -----"; cat "$BODY"
+
+      # Every build now publishes a Release with the raw .apk + QR. A clean
+      # vX.Y.Z is a stable, "latest" release; everything else refreshes the
+      # rolling `dev` prerelease in place. The action creates/updates the tag at
+      # this commit, so no tag has to be pushed from a constrained environment.
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: true
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          make_latest: ${{ steps.meta.outputs.make_latest }}
           tag_name: ${{ steps.meta.outputs.tag }}
           target_commitish: ${{ github.sha }}
           name: ${{ steps.meta.outputs.rel_name }}
           files: |
             dist/*.apk
             dist/install-qr.png
-          body: |
-            Standalone debug-signed Android APK built in CI.
-
-            **Commit** [`${{ steps.meta.outputs.sha_short }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) · `${{ github.ref_name }}`
-
-            ### 📲 Install on Android
-            Scan this on your phone (or open the link), then tap the downloaded
-            `.apk` to install. The first time, allow "install unknown apps" for
-            your browser when prompted.
-
-            ![Install QR](${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/install-qr.png)
-
-            ➡️ **[Download ${{ steps.meta.outputs.apk }}](${{ steps.meta.outputs.url }})**
-
-            Local-only unless the repo's `EXPO_PUBLIC_SUPABASE_*` secrets were set
-            at build time.
+          body_path: dist/RELEASE_BODY.md
 
       # Distribute to testers via Firebase App Distribution when configured.
       # Testers install through the "App Tester" app: no per-build unknown-sources
