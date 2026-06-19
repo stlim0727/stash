@@ -79,6 +79,7 @@ jest.mock('@/api/bookmarks', () => {
 });
 
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
+import { pendingSuggestions } from '@/domain/ai-suggestions';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeStoredBookmark } from './helpers/fake-repository';
 
@@ -250,4 +251,67 @@ test('acceptSuggestedTags links the tag with source ai and its confidence', asyn
     expect.objectContaining({ bookmark_id: SYNCED_ID, source: 'ai' }),
   );
   expect(store.current!.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).toContain('design');
+});
+
+test('accepting a suggestion records it as reviewed and persists it durably', async () => {
+  const store = await renderReady();
+  expect(store.current!.getReviewedSuggestions(SYNCED_ID).size).toBe(0);
+
+  await act(async () => {
+    await store.current!.acceptSuggestedTags(SYNCED_ID, [{ name: 'design', confidence: 0.8 }]);
+  });
+
+  expect(store.current!.getReviewedSuggestions(SYNCED_ID).has('design')).toBe(true);
+  // Persisted so the decision survives a relaunch.
+  expect(fakeRepo.__meta('reviewed_ai_suggestions')).toContain('design');
+});
+
+test('the badge stays gone after accepting then removing a suggested tag', async () => {
+  // The reported bug: accept a suggestion (tag applied), then remove it — the
+  // "✨" badge used to reappear because the suggestion was no longer *applied*.
+  // Now an accepted suggestion is *reviewed*, so it stays out of the pending set.
+  const store = await renderReady();
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+  const enrichment = store.current!.getEnrichment(SYNCED_ID);
+  // Before any review, the high-confidence suggestion is pending (badge shows).
+  expect(pendingSuggestions(enrichment, new Set(), new Set()).map((s) => s.name)).toEqual([
+    'design',
+  ]);
+
+  await act(async () => {
+    await store.current!.acceptSuggestedTags(SYNCED_ID, [{ name: 'design', confidence: 0.8 }]);
+  });
+  await act(async () => {
+    await store.current!.removeTagFromBookmark(SYNCED_ID, 'design');
+  });
+
+  // The tag is gone from the bookmark...
+  expect(store.current!.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).not.toContain(
+    'design',
+  );
+  // ...but it stays reviewed, so nothing is pending — the badge does not return.
+  const applied = new Set(
+    store.current!.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name.toLowerCase()),
+  );
+  const reviewed = store.current!.getReviewedSuggestions(SYNCED_ID);
+  expect(pendingSuggestions(enrichment, applied, reviewed)).toEqual([]);
+});
+
+test('markSuggestionsReviewed (dismiss path) persists across a remount', async () => {
+  const store = await renderReady();
+
+  await act(async () => {
+    store.current!.markSuggestionsReviewed(SYNCED_ID, ['Video']);
+  });
+  expect(fakeRepo.__meta('reviewed_ai_suggestions')).toContain('video');
+
+  // Re-mount over the same persisted meta (simulating an app relaunch): the
+  // reviewed names re-hydrate, so a dismissed suggestion never re-surfaces.
+  const remounted = renderStore();
+  await waitFor(() => expect(remounted.current?.isLoading).toBe(false));
+  await waitFor(() => expect(remounted.current!.getReviewedSuggestions(SYNCED_ID).has('video')));
+  expect(remounted.current!.getReviewedSuggestions(SYNCED_ID).has('video')).toBe(true);
 });

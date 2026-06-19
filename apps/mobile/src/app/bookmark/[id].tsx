@@ -48,6 +48,8 @@ export default function BookmarkDetailScreen() {
     requestAiEnrichment,
     isEnriching,
     acceptSuggestedTags,
+    getReviewedSuggestions,
+    markSuggestionsReviewed,
     assignCollection,
     createCollection,
   } = useBookmarks();
@@ -128,7 +130,10 @@ export default function BookmarkDetailScreen() {
   // (centralized in @/domain/ai-suggestions) and not dismissed this session,
   // plus a collection that differs from where the bookmark currently lives.
   const appliedTagNames = new Set(tags.map((tag) => tag.name.toLowerCase()));
-  const pending = pendingSuggestions(enrichment, appliedTagNames).filter(
+  // Reviewed = accepted or dismissed in a past session (durable); `dismissed` is
+  // this session's not-yet-persisted dismissals (and covers hashtag chips too).
+  const reviewedNames = getReviewedSuggestions(bookmark.id);
+  const pending = pendingSuggestions(enrichment, appliedTagNames, reviewedNames).filter(
     (suggestion) => !dismissed.has(suggestion.name.toLowerCase()),
   );
   const suggestedCollection = getCollection(enrichment?.suggested_collection_id ?? null);
@@ -229,8 +234,15 @@ export default function BookmarkDetailScreen() {
       void runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
     }
   };
-  const handleDismissTag = (name: string) =>
+  const handleDismissTag = (name: string) => {
     setDismissed((prev) => new Set(prev).add(name.toLowerCase()));
+    // Dismissing an AI suggestion is a review decision — persist it so the "✨"
+    // badge stays gone across sessions. Hashtag chips aren't AI suggestions, so
+    // they only get the session-local dismissal above.
+    if (aiSuggestionNames.has(name.toLowerCase())) {
+      markSuggestionsReviewed(bookmark.id, [name]);
+    }
+  };
 
   const handleSuggestAi = () => void runOrganizeAction(() => requestAiEnrichment(bookmark.id));
 

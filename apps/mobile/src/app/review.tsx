@@ -14,7 +14,8 @@ interface ReviewItem {
 
 export default function ReviewScreen() {
   const palette = usePalette();
-  const { inbox, getTagsForBookmark, getEnrichment, acceptSuggestedTags } = useBookmarks();
+  const { inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions, acceptSuggestedTags } =
+    useBookmarks();
   const [busy, setBusy] = useState(false);
 
   // Every inbox bookmark that still has at least one high-confidence,
@@ -23,7 +24,11 @@ export default function ReviewScreen() {
     const result: ReviewItem[] = [];
     for (const bookmark of inbox) {
       const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
-      const suggestions = pendingSuggestions(getEnrichment(bookmark.id), applied);
+      const suggestions = pendingSuggestions(
+        getEnrichment(bookmark.id),
+        applied,
+        getReviewedSuggestions(bookmark.id),
+      );
       if (suggestions.length > 0) {
         result.push({
           id: bookmark.id,
@@ -33,7 +38,7 @@ export default function ReviewScreen() {
       }
     }
     return result;
-  }, [inbox, getTagsForBookmark, getEnrichment]);
+  }, [inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions]);
 
   const accept = (id: string, suggestions: SuggestedTag[]) => {
     setBusy(true);
