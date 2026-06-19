@@ -1368,7 +1368,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // off committed state, so it's correct whether the create or the OpenGraph
   // fetch finished first, and immune to any local→remote id swap along the way.
   useEffect(() => {
-    if (bookmarks === null || pendingAiTrigger.current.size === 0) {
+    // Wait for an auth session: requestAiEnrichment no-ops without one, and
+    // marking the id attempted before then would consume the only same-session
+    // attempt — when auth restores, the rerun would skip it and the trigger
+    // would never fire until another restart. On a cold start, storage loads
+    // before the session is restored, so this gate matters.
+    if (bookmarks === null || !auth.session || pendingAiTrigger.current.size === 0) {
       return;
     }
     for (const id of [...pendingAiTrigger.current]) {
@@ -1398,7 +1403,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
       });
     }
-  }, [bookmarks, requestAiEnrichment, clearPendingAiTrigger]);
+  }, [bookmarks, auth.session, requestAiEnrichment, clearPendingAiTrigger]);
 
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the
