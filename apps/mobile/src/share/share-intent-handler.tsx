@@ -28,7 +28,7 @@ import { useCaptureToast } from '@/ui/capture-toast';
  */
 export function ShareIntentHandler() {
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
-  const { addBookmark, isLoading } = useBookmarks();
+  const { addBookmark, recordPendingShare, isLoading } = useBookmarks();
   const router = useRouter();
   const { show } = useCaptureToast();
 
@@ -58,12 +58,18 @@ export function ShareIntentHandler() {
       return;
     }
     capturedRef.current = true;
-    setPendingShare({
-      url: shareIntent.webUrl ?? extractFirstUrl(shareIntent.text),
-      title: shareIntent.meta?.title ?? undefined,
-    });
+    const url = shareIntent.webUrl ?? extractFirstUrl(shareIntent.text);
+    const title = shareIntent.meta?.title ?? undefined;
+    // Persist the capture durably right away — before the deferred save below —
+    // so a process kill while Stash sits backgrounded right after the share
+    // can't drop it; the store recovers any unsaved capture on the next launch.
+    // No-op when the payload has no usable link.
+    if (url) {
+      recordPendingShare({ url, title });
+    }
+    setPendingShare({ url, title });
     resetShareIntent();
-  }, [hasShareIntent, shareIntent, resetShareIntent]);
+  }, [hasShareIntent, shareIntent, resetShareIntent, recordPendingShare]);
 
   // Save once the store has loaded, so the in-memory dedupe sees existing
   // bookmarks instead of running against an empty set during the cold start.

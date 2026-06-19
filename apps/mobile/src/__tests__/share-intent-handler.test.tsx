@@ -159,6 +159,60 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('recovers a share persisted before the app was killed, on the next launch', async () => {
+    // The previous launch captured a share (durably recording it) but was killed
+    // while backgrounded before its deferred save could run. This launch has no
+    // live share intent; the store must drain the leftover and save it.
+    fakeRepo.__reset([]);
+    await fakeRepo.repository.setMeta(
+      'pending_shares',
+      JSON.stringify([
+        { url: 'https://example.com/recovered', captured_at: '2026-06-19T00:00:00.000Z' },
+      ]),
+    );
+    mockShareIntent = {
+      hasShareIntent: false,
+      shareIntent: { webUrl: null, text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { unmount } = await renderHandler();
+
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    expect(fakeRepo.__queue()[0].payload.url).toBe('https://example.com/recovered');
+    // The drained entry is cleared so it isn't re-saved on a later launch.
+    await waitFor(() => expect(fakeRepo.__meta('pending_shares')).toBe('[]'));
+    unmount();
+  });
+
+  it('records the shared URL durably the moment it is captured', async () => {
+    // Even before the deferred save runs, the raw capture is persisted so a
+    // process kill can't lose it. The fake store loads instantly here, so by the
+    // time the save lands the record is cleared again — assert it was written.
+    fakeRepo.__reset([]);
+    mockLoadGate.hold = true;
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/durable', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    // While the store load is held, the durable record already exists.
+    await waitFor(() =>
+      expect(fakeRepo.__meta('pending_shares')).toContain('https://example.com/durable'),
+    );
+
+    // Release the load: the deferred save runs and clears the record.
+    await act(async () => {
+      mockLoadGate.release?.();
+    });
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(fakeRepo.__meta('pending_shares')).toBe('[]'));
+    unmount();
+  });
+
   it('re-sharing a share.google link with a different si token dedupes to one bookmark', async () => {
     // issie's exact report: re-sharing the same content (share.google / YouTube)
     // appends a fresh ?si=… share token each time, so the two payloads differ.
