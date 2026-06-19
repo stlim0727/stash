@@ -209,13 +209,17 @@ export class StashSupabaseClient {
    * recoverable session exists. Network/server failures during refresh are
    * rethrown so callers do not silently mint a second anonymous user (which
    * would orphan the original user's data).
+   *
+   * Pass `forceRefresh` to refresh even when the stored token still looks valid
+   * — useful after the server rejects a token we believed current (clock skew
+   * or rotation), so a retry uses a genuinely fresh one.
    */
-  async restoreSession(): Promise<SupabaseAuthSession | null> {
+  async restoreSession(forceRefresh = false): Promise<SupabaseAuthSession | null> {
     const stored = await readSupabaseSession();
     if (!stored) {
       return null;
     }
-    if (!isSessionExpired(stored)) {
+    if (!forceRefresh && !isSessionExpired(stored)) {
       return stored;
     }
 

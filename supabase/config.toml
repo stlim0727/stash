@@ -12,3 +12,11 @@ major_version = 15
 [auth]
 # Stash is anonymous-first: the app creates an anonymous session on first launch.
 enable_anonymous_sign_ins = true
+
+[functions.ai-enrich]
+# The function authorizes via the caller's forwarded JWT + RLS (it holds no
+# service-role key). The gateway must therefore NOT pre-verify the JWT, or it
+# rejects the app's anonymous-session tokens with 401 "Invalid JWT" before the
+# function runs. Authorization is still enforced — by RLS on the forwarded
+# token, and a missing token is rejected in the handler.
+verify_jwt = false

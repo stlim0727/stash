@@ -92,12 +92,12 @@ test('sends the api key header and existing collection names in the prompt', asy
     suggested_collection: null,
     confidence: null,
   });
-  const provider = new GeminiProvider({ apiKey: 'secret-key', model: 'gemini-2.0-flash', fetchImpl });
+  const provider = new GeminiProvider({ apiKey: 'secret-key', model: 'gemini-2.5-flash', fetchImpl });
 
   await provider.enrich(input({ collections: ['Development', 'Reading'] }));
   assert.equal(calls.length, 1);
   assert.equal(calls[0].init?.headers?.['x-goog-api-key'], 'secret-key');
-  assert.match(calls[0].url, /models\/gemini-2\.0-flash:generateContent$/);
+  assert.match(calls[0].url, /models\/gemini-2\.5-flash:generateContent$/);
   assert.match(calls[0].init?.body ?? '', /Development, Reading/);
 });
 
@@ -120,8 +120,8 @@ test('throws on a non-ok response so the caller can fall back', async () => {
 });
 
 test('reports its model id with a gemini prefix', () => {
-  const provider = new GeminiProvider({ apiKey: 'k', model: 'gemini-2.0-flash', fetchImpl: stubFetch(null).fetchImpl });
-  assert.equal(provider.model, 'gemini:gemini-2.0-flash');
+  const provider = new GeminiProvider({ apiKey: 'k', model: 'gemini-2.5-flash', fetchImpl: stubFetch(null).fetchImpl });
+  assert.equal(provider.model, 'gemini:gemini-2.5-flash');
 });
 
 test('requires an api key', () => {

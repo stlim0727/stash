@@ -35,7 +35,7 @@ interface SupabaseAuthContextValue {
   /** True when a usable session exists (anonymous OR authenticated). */
   isSignedIn: boolean;
   message: string;
-  ensureAnonymousSession: () => Promise<SupabaseAuthSession | null>;
+  ensureAnonymousSession: (forceRefresh?: boolean) => Promise<SupabaseAuthSession | null>;
   /** Start an OAuth sign-in; links the anonymous account in place when possible. */
   signIn: (provider: OAuthProvider) => Promise<SupabaseAuthSession | null>;
   /** Sign out and fall back to a fresh anonymous session (anonymous-first). */
@@ -71,14 +71,14 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   // anonymous users.
   const inFlight = useRef<Promise<SupabaseAuthSession | null> | null>(null);
 
-  const ensureAnonymousSession = useCallback((): Promise<SupabaseAuthSession | null> => {
+  const ensureAnonymousSession = useCallback((forceRefresh = false): Promise<SupabaseAuthSession | null> => {
     if (configState.status === 'missing') {
       setStatus('not_configured');
       setMessage(describeSupabaseConfig(configState));
       return Promise.resolve(null);
     }
 
-    if (inFlight.current) {
+    if (inFlight.current && !forceRefresh) {
       return inFlight.current;
     }
 
@@ -86,7 +86,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     const client = createSupabaseClient();
     const run = (async (): Promise<SupabaseAuthSession | null> => {
       try {
-        const restored = await client.restoreSession();
+        const restored = await client.restoreSession(forceRefresh);
         if (restored) {
           setSession(restored);
           setStatus(statusForSession(restored));

@@ -45,7 +45,7 @@ export interface GeminiProviderConfig {
   fetchImpl?: FetchLike;
 }
 
-const DEFAULT_MODEL = 'gemini-2.0-flash';
+const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TAGS = 5;
