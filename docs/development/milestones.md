@@ -207,12 +207,25 @@ This plan turns the current product and architecture docs into an implementation
 
 ---
 
-# 0.1.8 cycle — "localize + retrieve your stuff"
+# 0.1.8 cycle — "Korean & internationalization"
 
 M0–M10 delivered the MVP; 0.1.7 added the capabilities (AI enrichment, export,
-OAuth, sync hardening). 0.1.8 closes everyday loops and reaches Korean users.
-**Sequencing note:** do M11 first — it is cross-cutting, so every string added
-by M12–M15 should be authored through the i18n layer rather than retrofitted.
+OAuth, sync hardening). 0.1.8 is a focused **localization** release: speak
+Korean, and make AI answer in the user's language.
+
+**Already shipped in the 0.1.7 tree — do _not_ re-plan these** (an earlier draft
+of this section incorrectly listed them as new work; they exist on `main`):
+
+- **Client-side search** — Inbox search box over title/url/notes/tags,
+  incremental and offline (`apps/mobile/src/app/index.tsx`, `filterBookmarks`).
+- **Import** — re-ingest a Stash **JSON** backup *or* a Netscape **HTML**
+  bookmarks file, local-first (`settings.tsx`, `domain/import.ts`,
+  `share/import-data.ts`, `store/bookmarks.tsx#importBookmarks`).
+- **Offline tag editing** — tag add/remove are already optimistic + queued
+  through the durable local-first tag-op queue (`store/bookmarks.tsx`).
+
+0.1.8's job is therefore to **localize the existing surfaces** (incl. those
+above), not to rebuild them.
 
 ## Milestone 11 — Internationalization foundation + Korean
 
@@ -222,9 +235,11 @@ primary audience; capture test data is already Korean).
 **Deliverables:**
 
 - Add an i18n layer (`expo-localization` for device locale + a lightweight
-  message catalog; no heavy framework needed) with a typed `t()` helper.
-- Extract all user-facing strings from screens/components into a default
-  English catalog (keys, not inline literals).
+  message catalog; no heavy framework needed) with a typed `t()` helper. (None
+  exists today — verified no `expo-localization`/i18n in the tree.)
+- Extract all user-facing strings from the **existing** screens/components into
+  a default English catalog (keys, not inline literals) — Inbox + search,
+  Settings (incl. export/import), bookmark Detail, Review, Account, Report.
 - Add a Korean (`ko`) catalog; detect device locale with English fallback and a
   manual language override in Settings.
 - Locale-aware formatting for dates/counts/pluralization.
@@ -236,68 +251,23 @@ primary audience; capture test data is already Korean).
 - Capture is never blocked or slowed by locale loading.
 - No remaining hardcoded user-facing literals in the touched screens (lint/grep
   guard).
-- Note: AI-generated text (summaries/tags) language is handled in M15, not here.
+- Note: AI-generated text (summaries/tags) language is handled in M12, not here.
 
-## Milestone 12 — Client-side search UI
+## Milestone 12 — Locale-aware AI output + degraded-mode visibility
 
-**Goal:** surface the existing domain search through the UI.
-
-**Deliverables:**
-
-- A search entry over title / url / notes / tags, incremental and offline.
-- Sensible empty/no-results states (localized via M11).
-
-**Acceptance criteria:**
-
-- Typing filters the list live with no network dependency.
-- Search covers user-authored fields and tags.
-
-## Milestone 13 — Import (re-ingest a JSON backup)
-
-**Goal:** complete the data-portability round-trip started by export (#88).
+**Goal:** make AI answer in the user's language and degrade visibly.
 
 **Deliverables:**
 
-- Import a Stash JSON backup from Settings; merge into the local store.
-- De-dupe on canonical `url_hash`; fold tags/enrichment into the existing row
-  rather than creating duplicates.
-
-**Acceptance criteria:**
-
-- Importing a file Stash exported is idempotent (no duplicate rows).
-- Imported bookmarks sync through the normal queue.
-
-## Milestone 14 — Offline tag editing
-
-**Goal:** remove the last online dependency in core editing (AGENTS.md "Possible
-future work").
-
-**Deliverables:**
-
-- Tag add/remove become optimistic + queued, mirroring the already-local-first
-  collection-assignment path.
-
-**Acceptance criteria:**
-
-- Adding/removing a tag offline persists locally and syncs later; capture/edit
-  stays sacred.
-
-## Milestone 15 — AI quota/fallback hardening + locale-aware output
-
-**Goal:** make AI degrade visibly and answer in the user's language.
-
-**Deliverables:**
-
-- Surface degraded mode (rate-limit/outage → heuristic fallback) with a clear,
-  non-error in-app signal (the #101 free-tier `limit:0` case currently fails
-  silently to dummy heuristics).
 - Prompt Gemini to return summary/tags in the user's locale (ties to M11).
-- A polish pass over the suggestion-review screen.
+- Surface degraded mode (rate-limit/outage → heuristic fallback) with a clear,
+  non-error in-app signal (the #101 free-tier `limit:0` case currently falls
+  silently to dummy heuristics, masking the cause).
 
 **Acceptance criteria:**
 
-- An outage/rate-limit no longer surfaces as a user-facing error.
 - For a Korean user, generated summaries/tags come back in Korean.
+- An outage/rate-limit is visibly indicated rather than silently degraded.
 
 ---
 
