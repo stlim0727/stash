@@ -1360,15 +1360,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // cold start.
   useEffect(() => {
     if (
+      !isSyncing &&
       bookmarks !== null &&
       auth.userId !== null &&
       (auth.status === 'anonymous' || auth.status === 'authenticated') &&
       lastSyncedUserId.current !== auth.userId
     ) {
+      // Only claim this user as synced once we can actually start — otherwise a
+      // sign-in landing mid-flight (the startup anonymous sync still running)
+      // would set the ref and then syncNow() would early-return on its in-flight
+      // guard, and with the ref already matching, the effect would never retry.
+      // Gating on isSyncing makes the effect re-run when the in-flight sync
+      // settles, so the new user's pull still fires.
       lastSyncedUserId.current = auth.userId;
       void syncNow();
     }
-  }, [bookmarks, auth.userId, auth.status, syncNow]);
+  }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
 
   const value = useMemo<BookmarksContextValue>(
     () => ({
