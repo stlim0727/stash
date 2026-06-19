@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
@@ -11,6 +12,7 @@ import { useBookmarks } from '@/store/bookmarks';
 export default function AddBookmarkScreen() {
   const palette = usePalette();
   const router = useRouter();
+  const t = useT();
   const { addBookmark } = useBookmarks();
   const { show } = useCaptureToast();
   const [url, setUrl] = useState('');
@@ -27,17 +29,17 @@ export default function AddBookmarkScreen() {
     // that's already saved reads identically however it was captured. The
     // bookmark is already visible in Inbox, so capture stays fast and
     // non-blocking.
-    show(result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash');
+    show(result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved'));
     router.back();
   }
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
       <Card elevated={false} style={styles.captureCard}>
-        <Text style={[styles.label, { color: palette.textSecondary }]}>URL</Text>
+        <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
         <TextInput
           style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
-          placeholder="https://"
+          placeholder={t('add.urlPlaceholder')}
           placeholderTextColor={palette.textSecondary}
           autoCapitalize="none"
           autoCorrect={false}
@@ -53,25 +55,22 @@ export default function AddBookmarkScreen() {
           onSubmitEditing={handleSave}
         />
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Text style={[styles.label, { color: palette.textSecondary }]}>Note (optional)</Text>
+        <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.noteLabel')}</Text>
         <TextInput
           style={[
             styles.input,
             styles.noteInput,
             { backgroundColor: palette.card, color: palette.text },
           ]}
-          placeholder="Why are you saving this?"
+          placeholder={t('add.notePlaceholder')}
           placeholderTextColor={palette.textSecondary}
           multiline
           value={note}
           onChangeText={setNote}
         />
       </Card>
-      <Button size="lg" onPress={handleSave}>Save bookmark</Button>
-      <Text style={[styles.hint, { color: palette.textSecondary }]}>
-        Saved instantly to your device and synced to the cloud in the background — capture never
-        waits on the network.
-      </Text>
+      <Button size="lg" onPress={handleSave}>{t('add.save')}</Button>
+      <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('add.hint')}</Text>
     </View>
   );
 }

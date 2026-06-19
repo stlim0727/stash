@@ -37,24 +37,26 @@ import {
 import {
   DEFAULT_VIEW_MODE,
   INBOX_VIEW_PREF_KEY,
-  describeViewMode,
   nextViewMode,
   parseViewMode,
   serializeViewMode,
   type ViewMode,
 } from '@/domain/view-mode';
 import { getPreference, setPreference } from '@/storage/preferences';
+import { useT } from '@/i18n';
+import type { TFunction } from '@/i18n/translate';
+import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import type { Bookmark } from '@/domain/types';
 
-function statusLabel(bookmark: Bookmark): string | null {
+function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
   const parts: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    parts.push(`sync ${bookmark.sync_status}`);
+    parts.push(syncStatusLabel(t, bookmark.sync_status));
   }
   if (bookmark.metadata_status === 'pending') {
-    parts.push('metadata pending');
+    parts.push(metadataStatusLabel(t, 'pending'));
   }
   return parts.length > 0 ? parts.join(' · ') : null;
 }
@@ -119,6 +121,7 @@ const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
 
 export default function InboxScreen() {
   const palette = usePalette();
+  const t = useT();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const {
@@ -288,12 +291,12 @@ export default function InboxScreen() {
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
   const sectionLabel = searching
-    ? `Matches (${visible.length})`
+    ? t('inbox.sectionMatches', { count: visible.length })
     : filter.kind === 'uncollected'
-      ? `No collection · ${visible.length}`
+      ? t('inbox.sectionNoCollection', { count: visible.length })
       : activeChip
-        ? `${activeChip.label} · ${visible.length}`
-        : 'Recently saved';
+        ? t('inbox.sectionFacet', { label: activeChip.label, count: visible.length })
+        : t('inbox.sectionRecent');
 
   const closeMenu = useCallback(() => {
     setMenuItem(null);
@@ -306,17 +309,17 @@ export default function InboxScreen() {
     (item: Bookmark) => {
       const remove = () => deleteBookmark(item.id);
       if (Platform.OS === 'web') {
-        if (typeof confirm === 'undefined' || confirm('Delete this bookmark permanently?')) {
+        if (typeof confirm === 'undefined' || confirm(t('detail.deleteConfirmWeb'))) {
           remove();
         }
         return;
       }
-      Alert.alert('Delete bookmark', 'This permanently removes the bookmark from this device.', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: remove },
+      Alert.alert(t('bookmark.deleteTitle'), t('bookmark.deleteMessage'), [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('common.delete'), style: 'destructive', onPress: remove },
       ]);
     },
-    [deleteBookmark],
+    [deleteBookmark, t],
   );
 
   // Actions for the long-press sheet. In 'move' mode it lists the collections so
@@ -330,7 +333,7 @@ export default function InboxScreen() {
       return [
         {
           key: 'none',
-          label: 'Inbox (no collection)',
+          label: t('inbox.inboxNoCollection'),
           icon: 'file-tray-outline',
           selected: item.collection_id === null,
           onPress: () => {
@@ -350,14 +353,14 @@ export default function InboxScreen() {
             },
           }),
         ),
-        { key: 'back', label: '‹ Back', onPress: () => setMenuMode('main') },
+        { key: 'back', label: t('common.back'), onPress: () => setMenuMode('main') },
       ];
     }
     const actions: SheetAction[] = [];
     if (item.url) {
       actions.push({
         key: 'open',
-        label: 'Open link',
+        label: t('common.openLink'),
         icon: 'open-outline',
         onPress: () => {
           closeMenu();
@@ -366,7 +369,7 @@ export default function InboxScreen() {
       });
       actions.push({
         key: 'share',
-        label: 'Share',
+        label: t('common.share'),
         icon: 'share-social-outline',
         onPress: () => {
           closeMenu();
@@ -380,13 +383,13 @@ export default function InboxScreen() {
     }
     actions.push({
       key: 'move',
-      label: 'Move to collection…',
+      label: t('inbox.moveToCollectionAction'),
       icon: 'folder-outline',
       onPress: () => setMenuMode('move'),
     });
     actions.push({
       key: 'archive',
-      label: 'Archive',
+      label: t('common.archive'),
       icon: 'archive-outline',
       onPress: () => {
         closeMenu();
@@ -395,7 +398,7 @@ export default function InboxScreen() {
     });
     actions.push({
       key: 'delete',
-      label: 'Delete',
+      label: t('common.delete'),
       icon: 'trash-outline',
       destructive: true,
       onPress: () => {
@@ -404,12 +407,12 @@ export default function InboxScreen() {
       },
     });
     return actions;
-  }, [menuItem, menuMode, collections, assignCollection, archiveBookmark, confirmDelete, closeMenu]);
+  }, [menuItem, menuMode, collections, assignCollection, archiveBookmark, confirmDelete, closeMenu, t]);
 
   const menuTitle =
     menuMode === 'move'
-      ? 'Move to collection'
-      : (menuItem?.title ?? menuItem?.url ?? 'Untitled');
+      ? t('inbox.moveToCollectionTitle')
+      : (menuItem?.title ?? menuItem?.url ?? t('common.untitled'));
 
   const renderChip = (key: string, label: string, target: InboxFilter) => {
     const active = sameFilter(target, filter);
@@ -440,12 +443,12 @@ export default function InboxScreen() {
       >
         <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
           <View style={styles.heroTitleBlock}>
-            <Text style={[styles.heroTitle, { color: palette.text }]}>Stash</Text>
+            <Text style={[styles.heroTitle, { color: palette.text }]}>{t('app.name')}</Text>
             <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
-              Save now. Organize later.
+              {t('app.tagline')}
             </Text>
             <Text style={[styles.heroCountText, { color: palette.textSecondary }]}>
-              {inbox.length} saved
+              {t('inbox.savedCount', { count: inbox.length })}
             </Text>
           </View>
           <View style={styles.headerActions}>
@@ -454,7 +457,7 @@ export default function InboxScreen() {
                 bookmarks rather than carrying a second, redundant account button. */}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Settings"
+              accessibilityLabel={t('inbox.settingsA11y')}
               hitSlop={8}
               style={styles.accountButton}
               onPress={() => router.push('/settings')}
@@ -462,27 +465,26 @@ export default function InboxScreen() {
               <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
                 <Ionicons name="settings-sharp" size={20} color={palette.text} />
               </View>
-              <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>Settings</Text>
+              <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>{t('nav.settings')}</Text>
             </Pressable>
           </View>
         </View>
         {loadError ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Report storage problem"
+            accessibilityLabel={t('inbox.reportStorageProblem')}
             onPress={() => router.push('/report')}
             style={({ pressed }) => [styles.errorBanner, { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 }]}
           >
             <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
-              Couldn’t open local storage — showing sample data. Your saves this session may not
-              persist. Tap to report ›
+              {t('inbox.storageError')}
             </Text>
           </Pressable>
         ) : null}
         <View style={styles.searchWrap}>
           <TextInput
             style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
-            placeholder="Search your stash"
+            placeholder={t('inbox.searchPlaceholder')}
             placeholderTextColor={palette.textSecondary}
             autoCapitalize="none"
             autoCorrect={false}
@@ -492,30 +494,40 @@ export default function InboxScreen() {
           />
         </View>
         <View style={styles.sortRow}>
-          <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>Browse</Text>
+          <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>{t('inbox.browse')}</Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Sort field: ${sort.field === 'date' ? 'Date' : 'Name'}`}
+            accessibilityLabel={t('inbox.sortFieldA11y', {
+              field: t(sort.field === 'date' ? 'inbox.sortFieldDate' : 'inbox.sortFieldName'),
+            })}
             onPress={() => setSort((s) => ({ ...s, field: s.field === 'date' ? 'name' : 'date' }))}
             style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
           >
             <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-              {sort.field === 'date' ? 'Newest' : 'Name'}
+              {sort.field === 'date' ? t('inbox.sortNewest') : t('inbox.sortName')}
             </Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Sort direction: ${sort.dir === 'asc' ? 'ascending' : 'descending'}`}
+            accessibilityLabel={t('inbox.sortDirectionA11y', {
+              direction: t(
+                sort.dir === 'asc'
+                  ? 'inbox.sortDirectionAscending'
+                  : 'inbox.sortDirectionDescending',
+              ),
+            })}
             onPress={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
             style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
           >
             <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-              {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
+              {sort.dir === 'asc' ? t('inbox.sortAsc') : t('inbox.sortDesc')}
             </Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`View as ${describeViewMode(nextViewMode(viewMode))}`}
+            accessibilityLabel={t('inbox.viewAsA11y', {
+              mode: t(nextViewMode(viewMode) === 'card' ? 'viewMode.card' : 'viewMode.list'),
+            })}
             accessibilityState={{ selected: viewMode === 'list' }}
             testID="inbox-view-toggle"
             onPress={() => setViewMode((mode) => nextViewMode(mode))}
@@ -534,8 +546,8 @@ export default function InboxScreen() {
             style={styles.shelf}
             contentContainerStyle={styles.shelfContent}
           >
-            {renderChip('all', 'All', ALL_FILTER)}
-            {hasUncollected ? renderChip('uncollected', 'No collection', { kind: 'uncollected' }) : null}
+            {renderChip('all', t('inbox.filterAll'), ALL_FILTER)}
+            {hasUncollected ? renderChip('uncollected', t('inbox.filterNoCollection'), { kind: 'uncollected' }) : null}
             {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter))}
           </ScrollView>
         ) : null}
@@ -564,17 +576,17 @@ export default function InboxScreen() {
         ListEmptyComponent={
           <Text style={[styles.empty, { color: palette.textSecondary }]}>
             {isLoading
-              ? 'Loading your bookmarks…'
+              ? t('inbox.loading')
               : searching
-                ? 'No bookmarks match your search.'
+                ? t('inbox.emptySearch')
                 : filter.kind !== 'all'
-                  ? 'Nothing in this view yet.'
-                  : 'Nothing saved yet. Add your first bookmark below.'}
+                  ? t('inbox.emptyView')
+                  : t('inbox.emptyAll')}
           </Text>
         }
         extraData={viewMode}
         renderItem={({ item }) => {
-          const status = statusLabel(item);
+          const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
           // Pending AI suggestions = high-confidence suggested tags not yet
@@ -616,7 +628,7 @@ export default function InboxScreen() {
                     style={[styles.listTitle, { color: palette.text }]}
                     numberOfLines={1}
                   >
-                    {item.title ?? item.url ?? 'Untitled'}
+                    {item.title ?? item.url ?? t('common.untitled')}
                   </Text>
                   {item.url ? (
                     <Text style={[styles.listUrl, { color: palette.textSecondary }]} numberOfLines={1}>
@@ -626,7 +638,7 @@ export default function InboxScreen() {
                 </View>
                 {suggestionCount > 0 ? (
                   <View
-                    accessibilityLabel={`${suggestionCount} AI suggestion${suggestionCount > 1 ? 's' : ''}`}
+                    accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
                     style={[styles.suggestBadge, { borderColor: palette.accent }]}
                   >
                     <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
@@ -637,7 +649,7 @@ export default function InboxScreen() {
                 {item.url ? (
                   <Pressable
                     accessibilityRole="link"
-                    accessibilityLabel="Open link"
+                    accessibilityLabel={t('common.openLink')}
                     hitSlop={8}
                     style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
                     onPress={openLink}
@@ -650,7 +662,7 @@ export default function InboxScreen() {
           }
 
           const metaParts = [
-            ...(collectionName ? [`in ${collectionName}`] : []),
+            ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
             ...cardTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
           return (
@@ -671,11 +683,11 @@ export default function InboxScreen() {
                     style={[styles.cardTitle, { color: palette.text }]}
                     numberOfLines={1}
                   >
-                    {item.title ?? item.url ?? 'Untitled'}
+                    {item.title ?? item.url ?? t('common.untitled')}
                   </Text>
                   {suggestionCount > 0 ? (
                     <View
-                      accessibilityLabel={`${suggestionCount} AI suggestion${suggestionCount > 1 ? 's' : ''}`}
+                      accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
                       style={[styles.suggestBadge, { borderColor: palette.accent }]}
                     >
                       <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
@@ -708,12 +720,12 @@ export default function InboxScreen() {
               {item.url ? (
                 <Pressable
                   accessibilityRole="link"
-                  accessibilityLabel="Open link"
+                  accessibilityLabel={t('common.openLink')}
                   hitSlop={8}
                   style={[styles.cardOpen, { backgroundColor: palette.accentSoft }]}
                   onPress={openLink}
                 >
-                  <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>Open ↗</Text>
+                  <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>{t('inbox.openExternal')}</Text>
                 </Pressable>
               ) : null}
             </Card>
@@ -722,7 +734,7 @@ export default function InboxScreen() {
       />
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Add bookmark"
+        accessibilityLabel={t('inbox.addBookmark')}
         onPress={() => router.push('/add')}
         style={({ pressed }) => [
           styles.fab,

@@ -38,6 +38,8 @@ import {
   type ExportInput,
 } from '@/domain/export';
 import { parseImport } from '@/domain/import';
+import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
+import type { MessageKey } from '@/i18n/messages';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { deliverExport } from '@/share/export-data';
 import { pickImportFile } from '@/share/import-data';
@@ -48,10 +50,20 @@ const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
 
 type AppPalette = ReturnType<typeof usePalette>;
 
+/** The language-preference options, in display order, with their label keys. */
+const LANGUAGE_OPTIONS: { value: LocalePreference; labelKey: MessageKey }[] = [
+  { value: 'system', labelKey: 'settings.language.system' },
+  ...SUPPORTED_LOCALES.map((code) => ({
+    value: code,
+    labelKey: `settings.language.${code}` as MessageKey,
+  })),
+];
+
 export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
   const router = useRouter();
+  const { t, preference: languagePref, setLocalePreference, formatDate } = useI18n();
   const {
     queue,
     isSyncing,
@@ -72,6 +84,7 @@ export default function SettingsScreen() {
   // offline and produces formats other apps can import.
   const [exportSheetOpen, setExportSheetOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [languageSheetOpen, setLanguageSheetOpen] = useState(false);
   const totalBookmarks = inbox.length + archived.length;
 
   const runExport = async (kind: 'html' | 'json' | 'csv') => {
@@ -118,8 +131,8 @@ export default function SettingsScreen() {
       await deliverExport(file);
     } catch (error) {
       Alert.alert(
-        'Export failed',
-        error instanceof Error ? error.message : 'Could not export your data. Please try again.',
+        t('settings.export.failedTitle'),
+        error instanceof Error ? error.message : t('settings.export.failedBody'),
       );
     } finally {
       setExporting(false);
@@ -148,21 +161,21 @@ export default function SettingsScreen() {
       const summary = importBookmarks(items);
 
       if (summary.imported === 0 && summary.duplicates === 0 && summary.skipped === 0) {
-        Alert.alert('Nothing to import', `No bookmarks were found in ${picked.name}.`);
+        Alert.alert(t('settings.import.nothingTitle'), t('settings.import.nothingBody', { name: picked.name }));
         return;
       }
-      const parts = [`Added ${summary.imported} bookmark${summary.imported === 1 ? '' : 's'}.`];
+      const parts = [t('settings.import.added', { count: summary.imported })];
       if (summary.duplicates > 0) {
-        parts.push(`${summary.duplicates} already in your library.`);
+        parts.push(t('settings.import.duplicates', { count: summary.duplicates }));
       }
       if (summary.skipped > 0) {
-        parts.push(`${summary.skipped} skipped (no web address).`);
+        parts.push(t('settings.import.skipped', { count: summary.skipped }));
       }
-      Alert.alert('Import complete', parts.join('\n'));
+      Alert.alert(t('settings.import.completeTitle'), parts.join('\n'));
     } catch (error) {
       Alert.alert(
-        'Import failed',
-        error instanceof Error ? error.message : 'Could not import that file. Please try again.',
+        t('settings.import.failedTitle'),
+        error instanceof Error ? error.message : t('settings.import.failedBody'),
       );
     } finally {
       setImporting(false);
@@ -239,14 +252,14 @@ export default function SettingsScreen() {
   const isAuthenticated = auth.status === 'authenticated';
 
   const syncSummary = isSyncing
-    ? `Syncing ${waiting} item${waiting === 1 ? '' : 's'}…`
+    ? t('settings.sync.syncing', { count: waiting })
     : waiting === 0
       ? auth.isSignedIn
-        ? 'Up to date'
-        : 'Local only'
+        ? t('settings.sync.upToDate')
+        : t('settings.sync.localOnly')
       : auth.isSignedIn
-        ? `${waiting} item${waiting === 1 ? '' : 's'} waiting to upload`
-        : `${waiting} queued — offline`;
+        ? t('settings.sync.waiting', { count: waiting })
+        : t('settings.sync.queuedOffline', { count: waiting });
 
   const build = getBuildInfo();
   const appVersion = `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
@@ -264,17 +277,17 @@ export default function SettingsScreen() {
         <View style={styles.accountText}>
           <Text style={styles.accountName} numberOfLines={1}>
             {isAuthenticated
-              ? (auth.displayName ?? auth.email ?? 'Signed in')
+              ? (auth.displayName ?? auth.email ?? t('settings.account.signedIn'))
               : auth.status === 'not_configured'
-                ? 'Cloud sync unavailable'
-                : 'Not signed in'}
+                ? t('settings.account.cloudUnavailable')
+                : t('settings.account.notSignedIn')}
           </Text>
           <Text style={styles.accountMeta} numberOfLines={1}>
             {isAuthenticated
-              ? (auth.displayName && auth.email ? auth.email : 'Synced across your devices')
+              ? (auth.displayName && auth.email ? auth.email : t('settings.account.syncedAcrossDevices'))
               : auth.status === 'not_configured'
-                ? 'Stash works fully offline'
-                : 'Sign in to back up & sync'}
+                ? t('settings.account.worksOffline')
+                : t('settings.account.signInToBackup')}
           </Text>
         </View>
         {auth.status !== 'not_configured' ? (
@@ -283,7 +296,7 @@ export default function SettingsScreen() {
             size="sm"
             onPress={() => router.push('/account')}
           >
-            {isAuthenticated ? 'Manage' : 'Sign in'}
+            {isAuthenticated ? t('common.manage') : t('common.signIn')}
           </Button>
         ) : null}
       </Card>
@@ -296,7 +309,7 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="sync"
-          label="Sync"
+          label={t('settings.sync.label')}
           value={syncSummary}
           last
           onPress={canSync ? () => void syncNow() : undefined}
@@ -316,11 +329,11 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="sparkles-outline"
-          label="Review AI suggestions"
+          label={t('settings.review.label')}
           value={
             pendingSuggestionCount > 0
-              ? `${pendingSuggestionCount} to review`
-              : 'Nothing to review'
+              ? t('settings.review.toReview', { count: pendingSuggestionCount })
+              : t('settings.review.nothing')
           }
           badge={pendingSuggestionCount > 0 ? pendingSuggestionCount : undefined}
           onPress={() => router.push('/review')}
@@ -329,16 +342,16 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="library-outline"
-          label="Library"
-          value={`${inbox.length} in inbox · ${archived.length} archived`}
+          label={t('settings.library.label')}
+          value={t('settings.library.value', { inbox: inbox.length, archived: archived.length })}
           onPress={() => router.push('/archived')}
         />
         <Row
           styles={styles}
           palette={palette}
           icon="chatbubble-ellipses-outline"
-          label="Report a problem"
-          value="Send a bug or idea"
+          label={t('settings.report.label')}
+          value={t('settings.report.value')}
           last
           onPress={() => router.push('/report')}
         />
@@ -350,13 +363,13 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="download-outline"
-          label="Export my data"
+          label={t('settings.export.label')}
           value={
             exporting
-              ? 'Preparing export…'
+              ? t('settings.export.preparing')
               : totalBookmarks === 0
-                ? 'Nothing to export yet'
-                : 'Download a bookmarks file or full backup'
+                ? t('settings.export.nothing')
+                : t('settings.export.value')
           }
           right={exporting ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
           onPress={
@@ -367,17 +380,14 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="enter-outline"
-          label="Import data"
-          value={importing ? 'Importing…' : "Restore a backup or another app's bookmarks"}
+          label={t('settings.import.label')}
+          value={importing ? t('settings.import.importing') : t('settings.import.value')}
           last
           right={importing ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
           onPress={importing ? undefined : () => setImportSheetOpen(true)}
         />
       </Group>
-      <Text style={styles.exportNote}>
-        Your bookmarks are yours. Export a standard HTML file any browser or bookmark app can
-        import, a CSV for spreadsheets, or a full JSON backup — anytime, even offline.
-      </Text>
+      <Text style={styles.exportNote}>{t('settings.dataNote')}</Text>
 
       {/* Sharing behavior */}
       <Group styles={styles}>
@@ -385,11 +395,11 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="share-outline"
-          label="Open Inbox after sharing"
+          label={t('settings.share.label')}
           value={
             shareBehavior === 'inbox'
-              ? 'Shared links open the Inbox'
-              : 'Shared links just show a toast'
+              ? t('settings.share.inbox')
+              : t('settings.share.toast')
           }
           last
           right={
@@ -403,14 +413,30 @@ export default function SettingsScreen() {
         />
       </Group>
 
+      {/* App language — follows the device by default, with a manual override. */}
+      <Group styles={styles}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="language-outline"
+          label={t('settings.language.label')}
+          value={t(
+            LANGUAGE_OPTIONS.find((option) => option.value === languagePref)?.labelKey ??
+              'settings.language.system',
+          )}
+          last
+          onPress={() => setLanguageSheetOpen(true)}
+        />
+      </Group>
+
       {/* Developer mode toggle */}
       <Group styles={styles}>
         <Row
           styles={styles}
           palette={palette}
           icon="construct-outline"
-          label="Developer mode"
-          value="Diagnostics, build info & sync queue"
+          label={t('settings.developer.label')}
+          value={t('settings.developer.value')}
           last
           right={
             <Switch
@@ -425,24 +451,24 @@ export default function SettingsScreen() {
 
       {developerMode ? (
         <>
-          <Text style={styles.sectionLabel}>Diagnostics</Text>
+          <Text style={styles.sectionLabel}>{t('settings.diagnostics.title')}</Text>
           <Group styles={styles}>
-            <InfoRow styles={styles} label="Supabase auth" value={auth.status} />
+            <InfoRow styles={styles} label={t('settings.diagnostics.supabaseAuth')} value={auth.status} />
             <InfoRow
               styles={styles}
-              label="Last pulled"
+              label={t('settings.diagnostics.lastPulled')}
               value={
                 lastPulledAt
-                  ? new Date(lastPulledAt).toLocaleString()
-                  : 'Never — arrives on next sync'
+                  ? formatDate(lastPulledAt)
+                  : t('settings.diagnostics.lastPulledNever')
               }
             />
-            <InfoRow styles={styles} label="App version" value={appVersion} />
+            <InfoRow styles={styles} label={t('settings.diagnostics.appVersion')} value={appVersion} />
             <Row
               styles={styles}
               palette={palette}
               icon="git-commit-outline"
-              label="Build"
+              label={t('settings.diagnostics.build')}
               value={describeBuild(build)}
               last
               onPress={
@@ -451,9 +477,9 @@ export default function SettingsScreen() {
             />
           </Group>
 
-          <Text style={styles.sectionLabel}>Pending sync queue</Text>
+          <Text style={styles.sectionLabel}>{t('settings.queue.title')}</Text>
           {queue.length === 0 ? (
-            <Text style={styles.emptyQueue}>The offline queue is empty.</Text>
+            <Text style={styles.emptyQueue}>{t('settings.queue.empty')}</Text>
           ) : (
             <Group styles={styles}>
               {queue.map((entry, index) => (
@@ -465,8 +491,14 @@ export default function SettingsScreen() {
                     {entry.payload.url ?? entry.payload.shared_text ?? entry.local_id}
                   </Text>
                   <Text style={styles.queueMeta}>
-                    {`${entry.operation} · ${entry.sync_status} · retries ${entry.retry_count}`}
-                    {entry.last_error ? `\nlast error: ${entry.last_error}` : ''}
+                    {t('settings.queue.meta', {
+                      operation: entry.operation,
+                      status: entry.sync_status,
+                      retries: entry.retry_count,
+                    })}
+                    {entry.last_error
+                      ? `\n${t('settings.queue.lastError', { error: entry.last_error })}`
+                      : ''}
                   </Text>
                 </View>
               ))}
@@ -477,24 +509,24 @@ export default function SettingsScreen() {
 
       <ActionSheet
         visible={exportSheetOpen}
-        title="Export my data"
+        title={t('settings.exportSheet.title')}
         onClose={() => setExportSheetOpen(false)}
         actions={[
           {
             key: 'html',
-            label: 'Bookmarks file (HTML)',
+            label: t('settings.exportSheet.html'),
             icon: 'globe-outline',
             onPress: () => void runExport('html'),
           },
           {
             key: 'csv',
-            label: 'Spreadsheet (CSV)',
+            label: t('settings.exportSheet.csv'),
             icon: 'grid-outline',
             onPress: () => void runExport('csv'),
           },
           {
             key: 'json',
-            label: 'Full backup (JSON)',
+            label: t('settings.exportSheet.json'),
             icon: 'code-slash-outline',
             onPress: () => void runExport('json'),
           },
@@ -503,22 +535,37 @@ export default function SettingsScreen() {
 
       <ActionSheet
         visible={importSheetOpen}
-        title="Import data"
+        title={t('settings.importSheet.title')}
         onClose={() => setImportSheetOpen(false)}
         actions={[
           {
             key: 'html',
-            label: 'Bookmarks file (HTML)',
+            label: t('settings.importSheet.html'),
             icon: 'globe-outline',
             onPress: () => void runImport('html'),
           },
           {
             key: 'json',
-            label: 'Stash backup (JSON)',
+            label: t('settings.importSheet.json'),
             icon: 'code-slash-outline',
             onPress: () => void runImport('json'),
           },
         ]}
+      />
+
+      <ActionSheet
+        visible={languageSheetOpen}
+        title={t('settings.language.sheetTitle')}
+        onClose={() => setLanguageSheetOpen(false)}
+        actions={LANGUAGE_OPTIONS.map((option) => ({
+          key: option.value,
+          label: t(option.labelKey),
+          selected: option.value === languagePref,
+          onPress: () => {
+            setLocalePreference(option.value);
+            setLanguageSheetOpen(false);
+          },
+        }))}
       />
     </ScrollView>
   );

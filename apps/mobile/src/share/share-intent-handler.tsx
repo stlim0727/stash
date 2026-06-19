@@ -9,6 +9,7 @@ import {
   type ShareBehavior,
 } from '@/domain/share-behavior';
 import { extractFirstUrl } from '@/domain/urls';
+import { useT } from '@/i18n';
 import { getPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -31,6 +32,7 @@ export function ShareIntentHandler() {
   const { addBookmark, isLoading } = useBookmarks();
   const router = useRouter();
   const { show } = useCaptureToast();
+  const t = useT();
 
   // A share copied out of expo-share-intent, held until the store has loaded.
   // We capture it immediately (and release the OS intent) so a
@@ -73,7 +75,7 @@ export function ShareIntentHandler() {
     }
     if (pendingShare.url) {
       const result = addBookmark({ url: pendingShare.url, title: pendingShare.title });
-      show(result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash');
+      show(result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved'));
       // Respect the user's post-share preference: by default the toast is the
       // whole interaction and we stay put; only jump to the Inbox when opted
       // in. The leaked `stash://dataUrl=...` deep link is cleared by the global
@@ -87,10 +89,10 @@ export function ShareIntentHandler() {
         })
         .catch(() => {});
     } else {
-      show('No link found to stash');
+      show(t('toast.noLink'));
     }
     setPendingShare(null);
-  }, [pendingShare, isLoading, addBookmark, router, show]);
+  }, [pendingShare, isLoading, addBookmark, router, show, t]);
 
   return null;
 }
