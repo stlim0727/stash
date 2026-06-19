@@ -9,6 +9,7 @@ import {
   type ShareBehavior,
 } from '@/domain/share-behavior';
 import { extractFirstUrl } from '@/domain/urls';
+import { dismissAfterShare } from '@/share/dismiss';
 import { getPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -19,9 +20,14 @@ import { useCaptureToast } from '@/ui/capture-toast';
  * for sync) and confirm with the shared capture toast — never opening the full
  * editor and never waiting on the network.
  *
- * By default a share doesn't navigate: the toast is the whole interaction, so
- * it doesn't yank you into the Inbox. Users who prefer to land on the Inbox can
- * opt in via Settings (see `share-behavior`).
+ * By default (toast mode) a share gets straight back out of the way: it does
+ * not yank you into the Inbox, and — crucially — it never leaves you stranded
+ * on the stale Bookmark Detail or Settings screen the app happened to resume
+ * onto. On Android we dismiss Stash entirely so you return to the app you
+ * shared from (the closest we can get to "don't show Stash at all"); where the
+ * OS won't let the app self-dismiss we land on the Inbox, a clean and relevant
+ * screen. Users who prefer to always jump to the Inbox can opt in via Settings
+ * (see `share-behavior`).
  *
  * Renders nothing (the toast lives in the shared `CaptureToastProvider`); the
  * native share module is a no-op on web.
@@ -71,25 +77,60 @@ export function ShareIntentHandler() {
     if (!pendingShare || isLoading) {
       return;
     }
-    if (pendingShare.url) {
-      const result = addBookmark({ url: pendingShare.url, title: pendingShare.title });
-      show(result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash');
-      // Respect the user's post-share preference: by default the toast is the
-      // whole interaction and we stay put; only jump to the Inbox when opted
-      // in. The leaked `stash://dataUrl=...` deep link is cleared by the global
-      // +not-found absorber regardless, so toast mode never strands the user.
-      getPreference(SHARE_BEHAVIOR_PREF_KEY)
-        .then((raw) => {
-          behavior.current = parseShareBehavior(raw);
-          if (behavior.current === 'inbox') {
-            router.replace('/');
-          }
-        })
-        .catch(() => {});
-    } else {
-      show('No link found to stash');
-    }
+    const share = pendingShare;
+    // Clear right away so a re-render can't double-handle the same capture.
     setPendingShare(null);
+
+    let message = 'No link found to stash';
+    let persisted: Promise<boolean> | undefined;
+    if (share.url) {
+      const result = addBookmark({ url: share.url, title: share.title });
+      if (result.status !== 'invalid') {
+        message = result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash';
+        persisted = result.persisted;
+      }
+    }
+
+    // Resolve the post-share behavior, then either jump to the Inbox (inbox
+    // mode) or get back out of the way (toast mode). Reading the preference is
+    // async, which conveniently lets toast mode also await the durable write
+    // before tearing the app down so backgrounding can never cut off an
+    // in-flight capture. Capture is sacred.
+    void (async () => {
+      let behaviorPref = DEFAULT_SHARE_BEHAVIOR;
+      try {
+        behaviorPref = parseShareBehavior(await getPreference(SHARE_BEHAVIOR_PREF_KEY));
+      } catch {
+        // Storage hiccup — fall back to the default behavior.
+      }
+      behavior.current = behaviorPref;
+
+      if (behaviorPref === 'inbox') {
+        // Jump to the Inbox so the freshly stashed item is immediately visible.
+        show(message);
+        router.replace('/');
+        return;
+      }
+
+      // Toast mode: wait for the durable write, then dismiss Stash entirely
+      // where the OS allows it (Android) so the user returns to the app they
+      // shared from. Otherwise land on the Inbox rather than the stale
+      // Detail/Settings screen the share happened to resume onto. The leaked
+      // `stash://dataUrl=...` deep link is cleared by the +not-found absorber
+      // regardless, so neither path strands the user.
+      //
+      // Crucially, only background the app once the capture is DURABLY written
+      // (`persisted === true`). If the write failed, the row lives only in
+      // optimistic in-memory state, so exiting would lose it — keep the user
+      // in-app instead. `undefined` means nothing was saved (no link), which is
+      // safe to dismiss on. Capture is sacred.
+      const durable = await persisted;
+      if (durable !== false && dismissAfterShare(message)) {
+        return;
+      }
+      show(message);
+      router.replace('/');
+    })();
   }, [pendingShare, isLoading, addBookmark, router, show]);
 
   return null;

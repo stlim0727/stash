@@ -63,7 +63,20 @@ import {
 } from '@/sync/sync-bookmarks';
 
 export type AddBookmarkResult =
-  | { status: 'created' | 'duplicate'; bookmark: Bookmark }
+  | {
+      status: 'created' | 'duplicate';
+      bookmark: Bookmark;
+      /**
+       * Resolves once the optimistic save has been flushed to durable storage:
+       * `true` when it was written, `false` when the write failed (the row then
+       * survives only in optimistic React state + the in-memory queue). It never
+       * rejects — storage errors are logged. Callers that tear the app down right
+       * after a capture (e.g. the share handler backgrounding the app on Android)
+       * MUST await this and only proceed on `true`, so a capture is never lost to
+       * an in-flight or failed SQLite write. Capture is sacred.
+       */
+      persisted: Promise<boolean>;
+    }
   | { status: 'invalid'; error: string };
 
 /** Outcome counts from re-ingesting an imported file. */
@@ -513,10 +526,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setBookmarks((current) =>
           (current ?? []).map((bookmark) => (bookmark.id === existing.id ? updated : bookmark)),
         );
-        ensureRepositoryReady()
+        const persisted = ensureRepositoryReady()
           .then(() => repository.updateBookmark(updated))
-          .catch((error) => logStorageError('duplicate save', error));
-        return { status: 'duplicate', bookmark: existing };
+          .then(() => true)
+          .catch((error) => {
+            logStorageError('duplicate save', error);
+            return false;
+          });
+        return { status: 'duplicate', bookmark: existing, persisted };
       }
 
       const bookmark: Bookmark = {
@@ -566,16 +583,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // capture never waits on storage or (later) the network.
       setBookmarks((current) => [bookmark, ...(current ?? [])]);
       setQueue((current) => [...current, queueEntry]);
-      ensureRepositoryReady()
+      const persisted = ensureRepositoryReady()
         .then(() =>
           Promise.all([repository.insertBookmark(bookmark), repository.enqueue(queueEntry)]),
         )
-        .catch((error) => logStorageError('new bookmark', error));
+        .then(() => true)
+        .catch((error) => {
+          logStorageError('new bookmark', error);
+          return false;
+        });
 
       // Enrich after the bookmark is already visible and persisted.
       enrichInBackground(bookmark);
 
-      return { status: 'created', bookmark };
+      return { status: 'created', bookmark, persisted };
     },
     [loadedBookmarks, enrichInBackground],
   );
