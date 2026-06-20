@@ -9,3 +9,14 @@
 alter table public.ai_enrichments
   add column if not exists degraded boolean not null default false,
   add column if not exists degraded_reason text;
+
+-- Backfill rows produced by the heuristic fallback before this migration: the
+-- edge function already saved those with model = 'dummy-v0' (no model key, or a
+-- live rate-limit/outage), so they are exactly the silently-degraded outputs the
+-- new signal is meant to expose. The original cause wasn't recorded, so leave
+-- degraded_reason null — the app shows the generic "basic suggestions" note when
+-- the reason is null. Idempotent: the column defaults to false, so this only
+-- touches existing dummy rows and is a no-op on re-run.
+update public.ai_enrichments
+  set degraded = true
+  where model = 'dummy-v0' and degraded = false;
