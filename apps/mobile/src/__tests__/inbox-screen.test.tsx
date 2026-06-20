@@ -31,6 +31,7 @@ jest.mock('expo-router', () => ({
 
 import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
+import { INBOX_VIEW_PREF_KEY } from '@/domain/view-mode';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
@@ -229,6 +230,36 @@ test('a tag route param filters the Inbox to that tag on load', async () => {
 
   expect(screen.queryByText('Unrelated note')).toBeNull();
   expect(screen.getByText('#design · 1')).toBeTruthy();
+});
+
+test('a routed tag facet overrides a saved Tag-cloud preference and shows the bookmarks', async () => {
+  const tagged = '7e64cf1e-0000-4000-8000-000000000071';
+  const untagged = '7e64cf1e-0000-4000-8000-000000000072';
+  mockParams = { tag: 't-design' };
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: tagged, title: 'Design system' }),
+      makeStoredBookmark({ id: untagged, title: 'Unrelated note' }),
+    ],
+    {
+      tags: [makeTag('t-design', 'design')],
+      bookmarkTags: [
+        { bookmark_id: tagged, tag_id: 't-design', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+  // The user's saved layout is the tag cloud …
+  await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'cloud');
+
+  const screen = await renderInbox();
+
+  // … but a routed tag facet drills into a bookmark layout so the linked-to
+  // bookmark is visible, rather than leaving the global cloud on screen.
+  await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
+  expect(screen.getByText('Design system')).toBeTruthy();
+  expect(screen.queryByText('Unrelated note')).toBeNull();
+  expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
 });
 
 test('cards show inline collection and tag metadata', async () => {

@@ -190,9 +190,17 @@ export default function InboxScreen() {
       });
     getPreference(INBOX_VIEW_PREF_KEY)
       .then((raw) => {
-        if (active) {
-          setViewMode(parseViewMode(raw));
+        if (!active) {
+          return;
         }
+        const stored = parseViewMode(raw);
+        // Cold-starting via a tag/collection deep link forces a bookmark layout
+        // (see the routed-facet effect); don't let a restored Tag-cloud
+        // preference land afterwards and hide the linked-to bookmarks.
+        if (stored === 'cloud' && (paramTag || paramCollection)) {
+          return;
+        }
+        setViewMode(stored);
       })
       .catch(() => {})
       .finally(() => {
@@ -223,11 +231,14 @@ export default function InboxScreen() {
     ? params.collection[0]
     : params.collection;
   useEffect(() => {
-    if (paramTag) {
-      setFilter({ kind: 'tag', id: paramTag });
-    } else if (paramCollection) {
-      setFilter({ kind: 'collection', id: paramCollection });
+    if (!paramTag && !paramCollection) {
+      return;
     }
+    setFilter(paramTag ? { kind: 'tag', id: paramTag } : { kind: 'collection', id: paramCollection! });
+    // A routed facet wants the matching bookmarks in view; the tag cloud is a
+    // global overview that ignores the facet, so drop back to a bookmark layout
+    // (same drill-in as tapping a tag inside the cloud).
+    setViewMode((mode) => (mode === 'cloud' ? 'card' : mode));
   }, [paramTag, paramCollection]);
 
   const tagIdsFor = useCallback(
