@@ -14,6 +14,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useColorScheme,
   View,
 } from 'react-native';
 
@@ -135,11 +136,35 @@ function ItemIcon({
 // FlatList's generic item typing (Animated.FlatList erases it to `any`).
 const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
 
+// Pre-rendered brand wordmark (in place of bundled display fonts): the Gothic A1
+// "Stash" and Gowun Dodum 스태시 baked into PNGs. Two locale forms — plain
+// "Stash" vs the bilingual "Stash | 스태시" lockup — each with a light/dark
+// variant. `ratio` is the asset's intrinsic width/height so the Image can be
+// sized by height alone.
+const WORDMARK = {
+  en: {
+    ratio: 3.118,
+    light: require('../../assets/images/wordmark-en-light.png'),
+    dark: require('../../assets/images/wordmark-en-dark.png'),
+  },
+  local: {
+    ratio: 6.158,
+    light: require('../../assets/images/wordmark-ko-light.png'),
+    dark: require('../../assets/images/wordmark-ko-dark.png'),
+  },
+};
+
 export default function InboxScreen() {
   const palette = usePalette();
   const t = useT();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  // Pick the wordmark: bilingual lockup when the locale has a native form
+  // (app.nameLocal differs from app.name), and the variant that matches the
+  // active light/dark theme.
+  const scheme = useColorScheme();
+  const wmSet = t('app.nameLocal') !== t('app.name') ? WORDMARK.local : WORDMARK.en;
+  const wordmark = { source: scheme === 'dark' ? wmSet.dark : wmSet.light, ratio: wmSet.ratio };
   const {
     inbox,
     isLoading,
@@ -491,20 +516,19 @@ export default function InboxScreen() {
       >
         <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
           <View style={styles.heroTitleBlock}>
-            <View style={styles.heroTitleRow}>
-              <Text style={[styles.heroTitle, { color: palette.text }]}>{t('app.name')}</Text>
-              {/* In locales with a native wordmark (e.g. 스태시), show it after a
-                  thin divider; elsewhere app.nameLocal equals app.name, so the
-                  brand stands alone. */}
-              {t('app.nameLocal') !== t('app.name') ? (
-                <>
-                  <View style={[styles.heroTitleDivider, { backgroundColor: palette.border }]} />
-                  <Text style={[styles.heroTitleLocal, { color: palette.textSecondary }]}>
-                    {t('app.nameLocal')}
-                  </Text>
-                </>
-              ) : null}
-            </View>
+            {/* The brand wordmark is a pre-rendered image (Gothic A1 "Stash" +
+                Gowun Dodum 스태시) rather than bundled fonts — a few KB of PNG
+                instead of multi-MB font files. Locales with a native wordmark
+                (app.nameLocal differs from app.name) use the bilingual lockup;
+                others use the plain "Stash". A light/dark variant matches the
+                theme. */}
+            <Image
+              accessibilityRole="header"
+              accessibilityLabel={t('app.name')}
+              source={wordmark.source}
+              resizeMode="contain"
+              style={[styles.heroWordmark, { aspectRatio: wordmark.ratio }]}
+            />
             <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
               {t('app.tagline')}
             </Text>
@@ -924,27 +948,10 @@ const styles = StyleSheet.create({
     gap: 10,
     marginLeft: 12,
   },
-  heroTitleRow: {
-    flexDirection: 'row',
-    // Baseline-align so the smaller native wordmark sits on the same line as the
-    // brand; the divider (a plain View) aligns its bottom edge to that baseline.
-    alignItems: 'baseline',
-  },
-  heroTitle: {
-    fontFamily: 'GothicA1_800ExtraBold',
-    fontSize: 34,
-    letterSpacing: -0.8,
-  },
-  heroTitleDivider: {
-    width: 1.5,
-    height: 22,
-    borderRadius: 1,
-    marginHorizontal: 12,
-  },
-  heroTitleLocal: {
-    fontFamily: 'GowunDodum_400Regular',
-    fontSize: 20,
-    letterSpacing: -0.2,
+  heroWordmark: {
+    // Height drives the size; width follows from the asset's aspectRatio.
+    height: 32,
+    alignSelf: 'flex-start',
   },
   heroSubtitle: {
     fontSize: 15,

@@ -10,12 +10,6 @@ importers:
 
   apps/mobile:
     dependencies:
-      '@expo-google-fonts/gothic-a1':
-        specifier: ^0.4.1
-        version: 0.4.1
-      '@expo-google-fonts/gowun-dodum':
-        specifier: ^0.4.1
-        version: 0.4.1
       '@expo/vector-icons':
         specifier: ^15.1.1
         version: 15.1.1(expo-font@56.0.6)(react-native@0.85.3(@babel/core@7.29.7)(@react-native/jest-preset@0.85.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.0(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
@@ -40,9 +34,6 @@ importers:
       expo-file-system:
         specifier: ~56.0.8
         version: 56.0.8(expo@56.0.11)(react-native@0.85.3(@babel/core@7.29.7)(@react-native/jest-preset@0.85.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.0(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))
-      expo-font:
-        specifier: ~56.0.6
-        version: 56.0.6(expo@56.0.11)(react-native@0.85.3(@babel/core@7.29.7)(@react-native/jest-preset@0.85.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.0(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       expo-linking:
         specifier: ~56.0.14
         version: 56.0.14(expo@56.0.11)(react-native@0.85.3(@babel/core@7.29.7)(@react-native/jest-preset@0.85.3(@babel/core@7.29.7)(react@19.2.3))(@react-native/metro-config@0.86.0(@babel/core@7.29.7))(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
@@ -584,12 +575,6 @@ packages:
 
   '@bcoe/v8-coverage@0.2.3':
     resolution: {integrity: sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==}
-
-  '@expo-google-fonts/gothic-a1@0.4.1':
-    resolution: {integrity: sha512-0KyXlxHUyismP2kBQGLs3dQtub+1Ye3QzD/Z/64XZHw7koVRiQl653Pch0u41rZaUtmu+6txjj3wxNPPkJE5jw==}
-
-  '@expo-google-fonts/gowun-dodum@0.4.1':
-    resolution: {integrity: sha512-De9v4TRISd9344Nbdikz+sMVVqPyoOQQ4GzXLwQvOh9SjK3HRFpKn5gmaGtG5iGIkMSTs7mv1bDd5k5QXDggzA==}
 
   '@expo-google-fonts/material-symbols@0.4.38':
     resolution: {integrity: sha512-IJkBtN1o8u9BW5fvSii1MyHPQ7Q0HxbWcVBvOrOzgMLpVtZw7R2w94wBTVR7kZwv3w1JNTESMmLA5Sqn1+Z36A==}
@@ -4556,10 +4541,6 @@ snapshots:
       '@babel/helper-validator-identifier': 7.29.7
 
   '@bcoe/v8-coverage@0.2.3': {}
-
-  '@expo-google-fonts/gothic-a1@0.4.1': {}
-
-  '@expo-google-fonts/gowun-dodum@0.4.1': {}
 
   '@expo-google-fonts/material-symbols@0.4.38': {}
 
