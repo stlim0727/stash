@@ -32,6 +32,12 @@ import type {
 import { sanitizeTagData } from '@/domain/tag-data';
 import { normalizeTag } from '@/domain/tag-input';
 import {
+  addReviewedNames,
+  parseReviewedMap,
+  reviewedNamesFor,
+  type ReviewedSuggestionMap,
+} from '@/domain/ai-suggestions';
+import {
   applyPendingTagOps,
   applyTagOp,
   dequeueTagOp,
@@ -138,6 +144,16 @@ interface BookmarksContextValue {
   isEnriching: (bookmarkId: string) => boolean;
   /** Accept AI-suggested tags (linked with source 'ai'). Resolves to an error, or null. */
   acceptSuggestedTags: (bookmarkId: string, suggestions: SuggestedTag[]) => Promise<string | null>;
+  /**
+   * Suggestion names the user has already reviewed (accepted or dismissed) for
+   * a bookmark, lowercased. Pass to `pendingSuggestions` so the "✨" badge
+   * counts only *unreviewed* suggestions — accepting then removing a tag does
+   * not bring the badge back.
+   */
+  getReviewedSuggestions: (bookmarkId: string) => Set<string>;
+  /** Mark suggestion names as reviewed for a bookmark (durable). Accepting tags
+   *  records this automatically; dismissing a suggestion calls it directly. */
+  markSuggestionsReviewed: (bookmarkId: string, names: string[]) => void;
   /** Move a bookmark into a collection (or out, with null). Local-first. */
   assignCollection: (bookmarkId: string, collectionId: string | null) => void;
   /** Create a cloud collection. Resolves to the collection or an error message. */
@@ -153,6 +169,11 @@ const PENDING_TAG_OPS_KEY = 'pending_tag_ops';
  *  AI enrichment. Persisted so a kill during the metadata-fetch window doesn't
  *  drop the auto-trigger — the marker is re-hydrated and fired on next launch. */
 const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
+
+/** Durable key (JSON `{ [bookmarkId]: string[] }` in meta) for AI suggestion
+ *  names the user has reviewed (accepted or dismissed). Drives the "✨" badge so
+ *  it reflects *unreviewed* suggestions rather than merely *un-applied* ones. */
+const REVIEWED_SUGGESTIONS_KEY = 'reviewed_ai_suggestions';
 
 function parseIdSet(raw: string | null): Set<string> {
   if (!raw) {
@@ -251,6 +272,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // tagData is the server snapshot with these layered on top.
   const [pendingTagOps, setPendingTagOps] = useState<PendingTagOp[]>([]);
   const pendingTagOpsRef = useRef<PendingTagOp[]>([]);
+  // Suggestion names the user has reviewed (accepted or dismissed) per bookmark.
+  // The ref mirrors state so the accept path can merge synchronously.
+  const [reviewedSuggestions, setReviewedSuggestions] = useState<ReviewedSuggestionMap>({});
+  const reviewedSuggestionsRef = useRef<ReviewedSuggestionMap>({});
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -321,6 +346,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .then(() => repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)))
       .catch((error) => logStorageError('tag ops', error));
   }, []);
+
+  // Apply + persist the reviewed-suggestions map (ref updated synchronously so
+  // a follow-up read in the same tick sees the latest).
+  const applyReviewedSuggestions = useCallback((next: ReviewedSuggestionMap) => {
+    reviewedSuggestionsRef.current = next;
+    setReviewedSuggestions(next);
+    ensureRepositoryReady()
+      .then(() => repository.setMeta(REVIEWED_SUGGESTIONS_KEY, JSON.stringify(next)))
+      .catch((error) => logStorageError('reviewed suggestions', error));
+  }, []);
+
+  const markSuggestionsReviewed = useCallback(
+    (bookmarkId: string, names: string[]) => {
+      const next = addReviewedNames(reviewedSuggestionsRef.current, bookmarkId, names);
+      // addReviewedNames returns the same reference when nothing new was added.
+      if (next !== reviewedSuggestionsRef.current) {
+        applyReviewedSuggestions(next);
+      }
+    },
+    [applyReviewedSuggestions],
+  );
+
+  const getReviewedSuggestions = useCallback(
+    (bookmarkId: string) => reviewedNamesFor(reviewedSuggestions, bookmarkId),
+    [reviewedSuggestions],
+  );
 
   // Mirror the deferred AI-trigger set to durable meta after a ref mutation.
   const persistPendingAiTrigger = useCallback(() => {
@@ -438,6 +489,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedPulledAt,
             storedTagOpsRaw,
             storedAiTriggerRaw,
+            storedReviewedRaw,
           ] = await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
@@ -446,6 +498,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.getMeta(LAST_PULLED_AT_KEY),
             repository.getMeta(PENDING_TAG_OPS_KEY),
             repository.getMeta(PENDING_AI_TRIGGER_KEY),
+            repository.getMeta(REVIEWED_SUGGESTIONS_KEY),
           ]);
           if (!cancelled) {
             // Re-hydrate deferred AI triggers so a bookmark whose create synced
@@ -454,6 +507,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             for (const id of parseIdSet(storedAiTriggerRaw)) {
               pendingAiTrigger.current.add(id);
             }
+            // Re-hydrate the per-bookmark reviewed-suggestions map so the "✨"
+            // badge stays hidden for suggestions the user already acted on.
+            const storedReviewed = parseReviewedMap(storedReviewedRaw);
+            reviewedSuggestionsRef.current = storedReviewed;
+            setReviewedSuggestions(storedReviewed);
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
@@ -1075,10 +1133,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       applyTagData(nextData);
       applyTagOps(nextOps);
+      // Accepting a suggestion counts as reviewing it, so removing the tag later
+      // won't bring the "✨" badge back for a name the user already decided on.
+      markSuggestionsReviewed(
+        bookmarkId,
+        valid.map((suggestion) => suggestion.name),
+      );
       void syncTagOps();
       return null;
     },
-    [auth.userId, applyTagData, applyTagOps, syncTagOps],
+    [auth.userId, applyTagData, applyTagOps, markSuggestionsReviewed, syncTagOps],
   );
 
   const assignCollection = useCallback(
@@ -1501,6 +1565,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       requestAiEnrichment,
       isEnriching,
       acceptSuggestedTags,
+      getReviewedSuggestions,
+      markSuggestionsReviewed,
       assignCollection,
       createCollection,
     }),
@@ -1527,6 +1593,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       requestAiEnrichment,
       isEnriching,
       acceptSuggestedTags,
+      getReviewedSuggestions,
+      markSuggestionsReviewed,
       assignCollection,
       createCollection,
     ],
