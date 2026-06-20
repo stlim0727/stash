@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   detectCharset,
+  fetchPageMetadata,
   normalizeCharsetLabel,
   oembedEndpoint,
   parseOembed,
@@ -12,6 +13,20 @@ import {
 
 function bytes(str: string): Uint8Array {
   return new Uint8Array([...str].map((ch) => ch.charCodeAt(0)));
+}
+
+/** A minimal fetch Response stub for the metadata fetcher. */
+function htmlResponse(
+  html: string,
+  opts: { url?: string; contentType?: string } = {},
+): Response {
+  const body = bytes(html);
+  return {
+    ok: true,
+    url: opts.url ?? '',
+    headers: { get: (name: string) => (name.toLowerCase() === 'content-type' ? opts.contentType ?? 'text/html; charset=utf-8' : null) },
+    arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+  } as unknown as Response;
 }
 
 const sampleHtml = `
@@ -96,6 +111,38 @@ test('parseOembed ignores blank/non-string fields', () => {
   assert.equal(meta.title, undefined);
   assert.equal(meta.site_name, undefined);
   assert.equal(meta.preview_image_url, undefined);
+});
+
+test('fetchPageMetadata sends a browser User-Agent so portals do not block it', async () => {
+  const originalFetch = globalThis.fetch;
+  let sentHeaders: Record<string, string> = {};
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    sentHeaders = (init?.headers as Record<string, string>) ?? {};
+    return htmlResponse('<head><meta property="og:title" content="OK"></head>');
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://naver.me/GmpU1du7');
+    assert.equal(meta?.title, 'OK');
+    // Header lookup is case-insensitive in spirit; we set the canonical casing.
+    assert.match(sentHeaders['User-Agent'] ?? '', /Mozilla\/5\.0/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata resolves relative URLs against the final redirected URL', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    // naver.me short links 302 to the real article; resolve against that.
+    htmlResponse('<head><meta property="og:image" content="/img/cover.jpg"></head>', {
+      url: 'https://m.blog.naver.com/someblog/12345',
+    })) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://naver.me/GmpU1du7');
+    assert.equal(meta?.preview_image_url, 'https://m.blog.naver.com/img/cover.jpg');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('detectCharset prefers the Content-Type header', () => {
