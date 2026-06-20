@@ -156,11 +156,13 @@ export class SupabaseFeedbackApi implements FeedbackApi {
           {
             httpMethod: 'POST',
             uploadType: FileSystemUploadType.BINARY_CONTENT,
+            // No x-upsert: report ids are freshly minted per submit, so paths
+            // are always unique — overwrite never applies, and upsert would
+            // require an UPDATE Storage policy we deliberately do not grant.
             headers: {
               apikey: config.config.anonKey,
               Authorization: `Bearer ${this.session.access_token}`,
               'Content-Type': file.mimeType || 'application/octet-stream',
-              'x-upsert': 'true',
             },
           },
         );
