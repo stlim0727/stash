@@ -14,6 +14,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useColorScheme,
   View,
 } from 'react-native';
 
@@ -135,11 +136,38 @@ function ItemIcon({
 // FlatList's generic item typing (Animated.FlatList erases it to `any`).
 const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
 
+// Pre-rendered brand wordmark (in place of bundled display fonts): the Gothic A1
+// "Stash" and Gowun Dodum 스태시 baked into PNGs. Two locale forms — plain
+// "Stash" vs the bilingual "Stash | 스태시" lockup — each with a light/dark
+// variant. `ratio` is the asset's intrinsic width/height so the Image can be
+// sized by height alone.
+const WORDMARK = {
+  en: {
+    ratio: 3.118,
+    light: require('../../assets/images/wordmark-en-light.png'),
+    dark: require('../../assets/images/wordmark-en-dark.png'),
+  },
+  local: {
+    ratio: 6.158,
+    light: require('../../assets/images/wordmark-ko-light.png'),
+    dark: require('../../assets/images/wordmark-ko-dark.png'),
+  },
+};
+
 export default function InboxScreen() {
   const palette = usePalette();
   const t = useT();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  // Pick the wordmark: bilingual lockup when the locale has a native form
+  // (app.nameLocal differs from app.name), and the variant that matches the
+  // active light/dark theme. The a11y label mirrors what sighted users see, so
+  // screen readers announce the native wordmark too (e.g. "Stash 스태시").
+  const scheme = useColorScheme();
+  const hasLocalName = t('app.nameLocal') !== t('app.name');
+  const wmSet = hasLocalName ? WORDMARK.local : WORDMARK.en;
+  const wordmark = { source: scheme === 'dark' ? wmSet.dark : wmSet.light, ratio: wmSet.ratio };
+  const wordmarkLabel = hasLocalName ? `${t('app.name')} ${t('app.nameLocal')}` : t('app.name');
   const {
     inbox,
     isLoading,
@@ -491,7 +519,19 @@ export default function InboxScreen() {
       >
         <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
           <View style={styles.heroTitleBlock}>
-            <Text style={[styles.heroTitle, { color: palette.text }]}>{t('app.name')}</Text>
+            {/* The brand wordmark is a pre-rendered image (Gothic A1 "Stash" +
+                Gowun Dodum 스태시) rather than bundled fonts — a few KB of PNG
+                instead of multi-MB font files. Locales with a native wordmark
+                (app.nameLocal differs from app.name) use the bilingual lockup;
+                others use the plain "Stash". A light/dark variant matches the
+                theme. */}
+            <Image
+              accessibilityRole="header"
+              accessibilityLabel={wordmarkLabel}
+              source={wordmark.source}
+              resizeMode="contain"
+              style={[styles.heroWordmark, { aspectRatio: wordmark.ratio }]}
+            />
             <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
               {t('app.tagline')}
             </Text>
@@ -911,10 +951,10 @@ const styles = StyleSheet.create({
     gap: 10,
     marginLeft: 12,
   },
-  heroTitle: {
-    fontSize: 34,
-    fontWeight: '800',
-    letterSpacing: -0.8,
+  heroWordmark: {
+    // Height drives the size; width follows from the asset's aspectRatio.
+    height: 32,
+    alignSelf: 'flex-start',
   },
   heroSubtitle: {
     fontSize: 15,

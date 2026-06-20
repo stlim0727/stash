@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="430" viewBox="0 0 1040 430" font-family="-apple-system, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <filter id="s" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#101828" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+  <rect width="1040" height="430" fill="#eef2f8"/>
+  <text x="40" y="50" font-size="24" font-weight="800" fill="#101828" letter-spacing="-0.5">Shipped — Gothic A1 (Stash) + Gowun Dodum (스태시)</text>
+
+  <!-- English locale -->
+  <g transform="translate(40,86)">
+    <rect width="460" height="300" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#s)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">LOCALE: EN</text>
+    <text x="28" y="150" font-family="Gothic A1" font-weight="800" font-size="56" fill="#101828" letter-spacing="-1.3">Stash</text>
+    <text x="28" y="190" font-size="20" fill="#667085">Save now. Organize later.</text>
+    <text x="28" y="226" font-size="17" font-weight="600" fill="#667085">12 saved</text>
+  </g>
+
+  <!-- Korean locale -->
+  <g transform="translate(540,86)">
+    <rect width="460" height="300" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#s)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">LOCALE: KO</text>
+    <text x="28" y="150" font-family="Gothic A1" font-weight="800" font-size="56" fill="#101828" letter-spacing="-1.3">Stash</text>
+    <rect x="214" y="113" width="2.5" height="36" rx="1.2" fill="#cdd5e0"/>
+    <text x="236" y="146" font-family="Gowun Dodum" font-weight="400" font-size="32" fill="#667085" letter-spacing="-0.3">스태시</text>
+    <text x="28" y="190" font-size="20" fill="#667085">지금 저장하고, 정리는 나중에.</text>
+    <text x="28" y="226" font-size="17" font-weight="600" fill="#667085">12개 저장됨</text>
+  </g>
+</svg>

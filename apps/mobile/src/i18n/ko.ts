@@ -8,6 +8,8 @@ import type { Catalog } from '@/i18n/messages';
  * The brand name "Stash" is intentionally left untranslated.
  */
 export const ko: Catalog = {
+  // Native Hangul wordmark, shown after "Stash" with a thin divider.
+  'app.nameLocal': '스태시',
   'app.tagline': '지금 저장하고, 정리는 나중에.',
 
   'common.cancel': '취소',
