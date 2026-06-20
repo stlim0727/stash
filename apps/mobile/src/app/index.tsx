@@ -161,10 +161,13 @@ export default function InboxScreen() {
   const router = useRouter();
   // Pick the wordmark: bilingual lockup when the locale has a native form
   // (app.nameLocal differs from app.name), and the variant that matches the
-  // active light/dark theme.
+  // active light/dark theme. The a11y label mirrors what sighted users see, so
+  // screen readers announce the native wordmark too (e.g. "Stash 스태시").
   const scheme = useColorScheme();
-  const wmSet = t('app.nameLocal') !== t('app.name') ? WORDMARK.local : WORDMARK.en;
+  const hasLocalName = t('app.nameLocal') !== t('app.name');
+  const wmSet = hasLocalName ? WORDMARK.local : WORDMARK.en;
   const wordmark = { source: scheme === 'dark' ? wmSet.dark : wmSet.light, ratio: wmSet.ratio };
+  const wordmarkLabel = hasLocalName ? `${t('app.name')} ${t('app.nameLocal')}` : t('app.name');
   const {
     inbox,
     isLoading,
@@ -524,7 +527,7 @@ export default function InboxScreen() {
                 theme. */}
             <Image
               accessibilityRole="header"
-              accessibilityLabel={t('app.name')}
+              accessibilityLabel={wordmarkLabel}
               source={wordmark.source}
               resizeMode="contain"
               style={[styles.heroWordmark, { aspectRatio: wordmark.ratio }]}
