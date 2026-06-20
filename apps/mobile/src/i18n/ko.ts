@@ -188,6 +188,11 @@ export const ko: Catalog = {
   'detail.aiSuggest': 'AI로 제안받기',
   'detail.aiNeedsSync': '이 북마크가 동기화되면 AI 제안을 사용할 수 있습니다.',
   'detail.aiNoNew': '지금은 새로운 제안이 없습니다.',
+  'detail.aiDegradedRateLimited':
+    'AI가 지금 혼잡하여 기본 제안을 표시합니다. 잠시 후 새로고침해 보세요.',
+  'detail.aiDegradedUnavailable':
+    '지금 AI에 연결할 수 없어 기본 제안을 표시합니다. 새로고침해 보세요.',
+  'detail.aiDegradedBasic': '기본 제안을 표시합니다 — 지금은 AI를 사용할 수 없습니다.',
   'detail.detailsShow': '▸  상세 정보',
   'detail.detailsHide': '▾  상세 정보',
   'detail.toggleDetailsA11y': '상세 정보 토글',

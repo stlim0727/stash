@@ -88,6 +88,8 @@ test('buildJsonBackup captures tags, enrichment, and a collection name', () => {
     model: 'test-model',
     status: 'complete',
     confidence: 0.9,
+    degraded: false,
+    degraded_reason: null,
     created_at: '2026-01-04T00:00:00.000Z',
     updated_at: '2026-01-04T00:00:00.000Z',
   };

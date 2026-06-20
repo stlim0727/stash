@@ -53,6 +53,8 @@ function makeEnrichment(overrides: Partial<AIEnrichment> = {}): AIEnrichment {
     model: 'cloud-pipeline',
     status: 'complete',
     confidence: null,
+    degraded: false,
+    degraded_reason: null,
     created_at: now,
     updated_at: now,
     ...overrides,

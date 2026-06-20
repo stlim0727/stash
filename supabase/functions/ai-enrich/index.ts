@@ -60,6 +60,25 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** Why an enrichment fell back to the deterministic heuristics. `not_configured`
+ *  means no model API key is set; the rest classify a live-call failure so the
+ *  app can tell a transient outage/limit apart from a permanent config gap. */
+type DegradedReason = 'not_configured' | 'rate_limited' | 'timeout' | 'provider_error';
+
+/** Map a thrown provider error to a coarse, app-facing degraded reason. The
+ *  Gemini provider throws `Gemini request failed (429): …` on rate limits and
+ *  `Gemini request timed out after …ms` on timeouts (see gemini-provider.ts). */
+function classifyDegradedReason(err: unknown): DegradedReason {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/\b429\b|RESOURCE_EXHAUSTED|rate limit|quota|limit:\s*0/i.test(message)) {
+    return 'rate_limited';
+  }
+  if (/timed out|timeout|abort/i.test(message)) {
+    return 'timeout';
+  }
+  return 'provider_error';
+}
+
 interface BookmarkRow {
   id: string;
   user_id: string;
@@ -94,6 +113,11 @@ Deno.serve(async (req) => {
   if (typeof bookmarkId !== 'string' || !bookmarkId) {
     return json({ error: 'bookmark_id is required' }, 400);
   }
+
+  // The user's locale, so a model-backed provider writes the summary/tags in
+  // their language (M12). Optional — the provider falls back to English.
+  const locale =
+    typeof body.locale === 'string' && body.locale.trim() ? body.locale.trim() : undefined;
 
   // The client may send the freshest local metadata it has (title/site/etc.).
   // The cloud row can lag behind on-device OpenGraph enrichment — a bookmark
@@ -148,13 +172,19 @@ Deno.serve(async (req) => {
       site_name: overlay(bookmark.site_name, 'site_name'),
       content_type: overlay(bookmark.content_type, 'content_type') ?? bookmark.content_type,
       collections: collections.map((col) => col.name),
+      locale,
     };
 
     // Run the configured provider; if a live model call fails (rate limit,
     // outage, bad response), degrade to the deterministic heuristics rather
-    // than failing the whole request.
+    // than failing the whole request. `degraded` records that the result came
+    // from the fallback — and why — so the app can show a clear, non-error
+    // signal instead of silently passing off heuristics as real AI (issue #101,
+    // where the free-tier `limit:0` case masked the cause).
     let output: EnrichmentOutput;
     let usedModel = provider.model;
+    let degraded = provider === fallbackProvider;
+    let degradedReason: DegradedReason | null = degraded ? 'not_configured' : null;
     try {
       output = await provider.enrich(input);
     } catch (err) {
@@ -164,6 +194,8 @@ Deno.serve(async (req) => {
       console.error('Primary enrichment provider failed; using fallback:', err);
       output = await fallbackProvider.enrich(input);
       usedModel = fallbackProvider.model;
+      degraded = true;
+      degradedReason = classifyDegradedReason(err);
     }
 
     // Resolve the collection NAME hint to one of the user's existing
@@ -185,6 +217,8 @@ Deno.serve(async (req) => {
       model: usedModel,
       status: 'complete',
       confidence: output.confidence,
+      degraded,
+      degraded_reason: degradedReason,
       updated_at: now,
     };
 

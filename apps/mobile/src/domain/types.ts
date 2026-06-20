@@ -15,6 +15,18 @@ export type TagSource = 'user' | 'ai' | 'system';
 
 export type EnrichmentStatus = 'pending' | 'complete' | 'failed' | 'stale';
 
+/**
+ * Why an AI enrichment fell back to the deterministic heuristics instead of the
+ * configured model. `not_configured` = no model key set; the rest classify a
+ * live-call failure so the UI can tell a transient outage/limit (worth retrying)
+ * apart from a permanent config gap. Mirrors the edge function's reasons.
+ */
+export type EnrichmentDegradedReason =
+  | 'not_configured'
+  | 'rate_limited'
+  | 'timeout'
+  | 'provider_error';
+
 export interface Bookmark {
   id: string;
   user_id: string;
@@ -88,6 +100,12 @@ export interface AIEnrichment {
   model: string | null;
   status: EnrichmentStatus;
   confidence: number | null;
+  /** True when this enrichment came from the heuristic fallback rather than the
+   *  configured model (a rate-limit/outage, or no model key). Surfaced in-app as
+   *  a non-error "basic suggestions" signal so degraded mode is never silent. */
+  degraded: boolean;
+  /** The coarse cause of {@link degraded}, or null when not degraded. */
+  degraded_reason: EnrichmentDegradedReason | null;
   created_at: string;
   updated_at: string;
 }

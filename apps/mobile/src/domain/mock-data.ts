@@ -159,6 +159,8 @@ export const mockEnrichments: AIEnrichment[] = [
     model: 'future-ai-pipeline',
     status: 'complete',
     confidence: 0.9,
+    degraded: false,
+    degraded_reason: null,
     created_at: '2026-06-02T18:30:00.000Z',
     updated_at: '2026-06-02T18:30:00.000Z',
   },
