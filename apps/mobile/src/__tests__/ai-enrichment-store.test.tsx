@@ -315,3 +315,20 @@ test('markSuggestionsReviewed (dismiss path) persists across a remount', async (
   await waitFor(() => expect(remounted.current!.getReviewedSuggestions(SYNCED_ID).has('video')));
   expect(remounted.current!.getReviewedSuggestions(SYNCED_ID).has('video')).toBe(true);
 });
+
+test('clearReviewedSuggestions forgets dismissals so a manual re-run can reconsider', async () => {
+  const store = await renderReady();
+
+  await act(async () => {
+    store.current!.markSuggestionsReviewed(SYNCED_ID, ['design', 'video']);
+  });
+  expect(store.current!.getReviewedSuggestions(SYNCED_ID).size).toBe(2);
+
+  await act(async () => {
+    store.current!.clearReviewedSuggestions(SYNCED_ID);
+  });
+
+  expect(store.current!.getReviewedSuggestions(SYNCED_ID).size).toBe(0);
+  // Persisted, so the cleared state survives a relaunch too.
+  await waitFor(() => expect(fakeRepo.__meta('reviewed_ai_suggestions')).toBe('{}'));
+});

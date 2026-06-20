@@ -154,6 +154,9 @@ interface BookmarksContextValue {
   /** Mark suggestion names as reviewed for a bookmark (durable). Accepting tags
    *  records this automatically; dismissing a suggestion calls it directly. */
   markSuggestionsReviewed: (bookmarkId: string, names: string[]) => void;
+  /** Forget a bookmark's reviewed names so a manual AI re-run can re-surface
+   *  previously-dismissed suggestions. Background sync never clears them. */
+  clearReviewedSuggestions: (bookmarkId: string) => void;
   /** Move a bookmark into a collection (or out, with null). Local-first. */
   assignCollection: (bookmarkId: string, collectionId: string | null) => void;
   /** Create a cloud collection. Resolves to the collection or an error message. */
@@ -371,6 +374,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const getReviewedSuggestions = useCallback(
     (bookmarkId: string) => reviewedNamesFor(reviewedSuggestions, bookmarkId),
     [reviewedSuggestions],
+  );
+
+  // Forget a bookmark's reviewed names so a *manual* AI re-run can re-surface
+  // suggestions the user previously dismissed (accepted ones stay applied, so
+  // they're filtered by appliedTagNames regardless). Background sync never
+  // calls this — only an explicit "Suggest with AI" tap.
+  const clearReviewedSuggestions = useCallback(
+    (bookmarkId: string) => {
+      const current = reviewedSuggestionsRef.current;
+      if (!(bookmarkId in current)) {
+        return;
+      }
+      const next = { ...current };
+      delete next[bookmarkId];
+      applyReviewedSuggestions(next);
+    },
+    [applyReviewedSuggestions],
   );
 
   // Mirror the deferred AI-trigger set to durable meta after a ref mutation.
@@ -1567,6 +1587,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       acceptSuggestedTags,
       getReviewedSuggestions,
       markSuggestionsReviewed,
+      clearReviewedSuggestions,
       assignCollection,
       createCollection,
     }),
@@ -1595,6 +1616,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       acceptSuggestedTags,
       getReviewedSuggestions,
       markSuggestionsReviewed,
+      clearReviewedSuggestions,
       assignCollection,
       createCollection,
     ],
