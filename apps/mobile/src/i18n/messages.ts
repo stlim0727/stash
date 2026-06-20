@@ -222,6 +222,7 @@ export const en = {
   'detail.aiRefresh': 'Refresh AI suggestions',
   'detail.aiSuggest': 'Suggest with AI',
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
+  'detail.aiRateLimited': 'AI suggestions have hit their limit for now — try again a little later.',
   'detail.aiNoNew': 'No new suggestions right now.',
   'detail.detailsShow': '▸  Details',
   'detail.detailsHide': '▾  Details',

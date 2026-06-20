@@ -84,7 +84,7 @@ jest.mock('@/api/bookmarks', () => {
   };
 });
 
-import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
+import { AI_RATE_LIMITED, BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { SupabaseRequestError } from '@/supabase/client';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -154,8 +154,8 @@ test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
 test('requestAiEnrichment surfaces a calm message when rate limited (429)', async () => {
   // The backend ai-enrich function caps per-user calls and returns 429 when the
   // window is exhausted (e.g. a bulk import auto-firing many enrichments). The
-  // store should translate that into a friendly message rather than a raw error,
-  // and must NOT write a (non-existent) enrichment.
+  // store should surface the localizable rate-limit sentinel rather than a raw
+  // error, and must NOT write a (non-existent) enrichment.
   const store = await renderReady();
   apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
     throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
@@ -166,7 +166,7 @@ test('requestAiEnrichment surfaces a calm message when rate limited (429)', asyn
     error = await store.current!.requestAiEnrichment(SYNCED_ID);
   });
 
-  expect(error).toMatch(/hit their limit/i);
+  expect(error).toBe(AI_RATE_LIMITED);
   expect(store.current!.getEnrichment(SYNCED_ID)).toBeUndefined();
 });
 

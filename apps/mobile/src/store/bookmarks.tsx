@@ -178,6 +178,13 @@ const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
  *  it reflects *unreviewed* suggestions rather than merely *un-applied* ones. */
 const REVIEWED_SUGGESTIONS_KEY = 'reviewed_ai_suggestions';
 
+/** Opaque sentinel `requestAiEnrichment` returns when the AI endpoint rate-limits
+ *  (HTTP 429). The store is i18n-free, so it can't localize the message itself;
+ *  the Detail screen maps this to a translated string. Any non-UI caller (the
+ *  deferred auto-trigger) only checks for a non-null error, so the value is
+ *  inert there. */
+export const AI_RATE_LIMITED = 'ai-rate-limited';
+
 function parseIdSet(raw: string | null): Set<string> {
   if (!raw) {
     return new Set();
@@ -1101,11 +1108,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return null;
       } catch (error) {
         // Rate limited (429): expected when many bookmarks are captured at once.
-        // Surface a calm message instead of a raw error; the deferred auto-trigger
-        // ignores this string and keeps its durable marker, so it retries on a
-        // later launch once the window clears (and won't retry-storm this session).
+        // Return a sentinel the Detail screen localizes into a calm message; the
+        // deferred auto-trigger ignores this value and keeps its durable marker,
+        // so it retries on a later launch (and won't retry-storm this session).
         if (error instanceof SupabaseRequestError && error.status === 429) {
-          return 'AI suggestions have hit their limit for now — try again a little later.';
+          return AI_RATE_LIMITED;
         }
         return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
       } finally {

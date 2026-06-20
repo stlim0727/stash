@@ -26,7 +26,7 @@ import { TagField } from '@/ui/TagField';
 import { hostFromUrl } from '@/domain/item-icon';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { hashtagSuggestions } from '@/domain/hashtags';
-import { useBookmarks } from '@/store/bookmarks';
+import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
@@ -268,7 +268,12 @@ export default function BookmarkDetailScreen() {
   // model can surface tags it still recommends (accepted tags stay applied).
   const handleSuggestAi = () => {
     clearReviewedSuggestions(bookmark.id);
-    void runOrganizeAction(() => requestAiEnrichment(bookmark.id));
+    void runOrganizeAction(async () => {
+      const error = await requestAiEnrichment(bookmark.id);
+      // The store is i18n-free and signals rate-limiting with a sentinel; localize
+      // it here so the message respects the user's locale.
+      return error === AI_RATE_LIMITED ? t('detail.aiRateLimited') : error;
+    });
   };
 
   const handleAcceptCollection = () => {
