@@ -312,6 +312,49 @@ describe('ShareIntentHandler', () => {
     }
   });
 
+  it('saves a no-link shared text (e.g. a KakaoTalk message) as a text note', async () => {
+    // KakaoTalk and similar apps often share plain text with no URL. Rather than
+    // dropping it with a "no link" toast, the handler saves it as a text note so
+    // deliberately shared content is never lost. Capture is sacred.
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: null, text: '내일 3시에 회의 있습니다' },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    const entry = fakeRepo.__queue()[0];
+    expect(entry.payload.url).toBeUndefined();
+    expect(entry.payload.shared_text).toBe('내일 3시에 회의 있습니다');
+    const stored = await fakeRepo.repository.listBookmarks();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].url).toBeNull();
+    expect(stored[0].content_type).toBe('text');
+    expect(stored[0].description).toBe('내일 3시에 회의 있습니다');
+    unmount();
+  });
+
+  it('shows "no link" and saves nothing for a genuinely empty share', async () => {
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: null, text: '   ' },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('No link found to stash');
+    await waitFor(() => expect(mockShareIntent.resetShareIntent).toHaveBeenCalled());
+    expect(fakeRepo.__queue()).toHaveLength(0);
+    expect(await fakeRepo.repository.listBookmarks()).toHaveLength(0);
+    unmount();
+  });
+
   it('inbox mode jumps to the Inbox and never dismisses the app', async () => {
     fakeRepo.__reset([]);
     await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');

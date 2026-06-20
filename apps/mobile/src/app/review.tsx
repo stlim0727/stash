@@ -4,6 +4,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { displayTitle } from '@/domain/item-display';
 import { useBookmarks } from '@/store/bookmarks';
 import type { SuggestedTag } from '@/domain/types';
 
@@ -34,7 +35,7 @@ export default function ReviewScreen() {
       if (suggestions.length > 0) {
         result.push({
           id: bookmark.id,
-          title: bookmark.title ?? bookmark.url ?? t('common.untitled'),
+          title: displayTitle(bookmark) ?? t('common.untitled'),
           suggestions,
         });
       }

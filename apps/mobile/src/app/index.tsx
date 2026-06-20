@@ -26,6 +26,7 @@ import { Chip } from '@/ui/Chip';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
 import { MONOGRAM_COLORS, itemIcon, monogramColorIndex, monogramIcon } from '@/domain/item-icon';
+import { displayTitle } from '@/domain/item-display';
 import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
 import {
   DEFAULT_SORT,
@@ -488,7 +489,7 @@ export default function InboxScreen() {
   const menuTitle =
     menuMode === 'move'
       ? t('inbox.moveToCollectionTitle')
-      : (menuItem?.title ?? menuItem?.url ?? t('common.untitled'));
+      : ((menuItem ? displayTitle(menuItem) : null) ?? t('common.untitled'));
 
   const renderChip = (key: string, label: string, target: InboxFilter) => {
     const active = sameFilter(target, filter);
@@ -789,7 +790,7 @@ export default function InboxScreen() {
                     style={[styles.listTitle, { color: palette.text }]}
                     numberOfLines={1}
                   >
-                    {item.title ?? item.url ?? t('common.untitled')}
+                    {displayTitle(item) ?? t('common.untitled')}
                   </Text>
                   {item.url ? (
                     <Text style={[styles.listUrl, { color: palette.textSecondary }]} numberOfLines={1}>
@@ -844,7 +845,7 @@ export default function InboxScreen() {
                     style={[styles.cardTitle, { color: palette.text }]}
                     numberOfLines={1}
                   >
-                    {item.title ?? item.url ?? t('common.untitled')}
+                    {displayTitle(item) ?? t('common.untitled')}
                   </Text>
                   {suggestionCount > 0 ? (
                     <View

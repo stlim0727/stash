@@ -113,7 +113,13 @@ interface BookmarksContextValue {
   getCollection: (id: string | null) => Collection | undefined;
   getEnrichment: (bookmarkId: string) => AIEnrichment | undefined;
   /** Local-first creation: the bookmark is visible immediately with pending states. */
-  addBookmark: (input: { url: string; title?: string; notes?: string }) => AddBookmarkResult;
+  addBookmark: (input: {
+    url?: string;
+    title?: string;
+    notes?: string;
+    /** Shared text with no usable URL — saved as a text note. */
+    shared_text?: string;
+  }) => AddBookmarkResult;
   /**
    * Re-ingest items parsed from an imported file. Local-first like addBookmark:
    * each URL is added with pending states, deduped against the existing library
@@ -661,13 +667,93 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const addBookmark = useCallback(
-    ({ url, title, notes }: { url: string; title?: string; notes?: string }): AddBookmarkResult => {
-      const normalized = normalizeUrl(url);
+    ({
+      url,
+      title,
+      notes,
+      shared_text,
+    }: {
+      url?: string;
+      title?: string;
+      notes?: string;
+      shared_text?: string;
+    }): AddBookmarkResult => {
+      const normalized = url ? normalizeUrl(url) : null;
       if (!normalized) {
-        return {
-          status: 'invalid',
-          error: 'Enter a valid web address, like example.com or https://example.com.',
+        // No usable URL. If the share carried text (e.g. a KakaoTalk message
+        // with no link), save it as a text note rather than dropping deliberately
+        // shared content — capture is sacred. Reject only when there is nothing
+        // at all to save.
+        const text = shared_text?.trim() || null;
+        if (!text) {
+          return {
+            status: 'invalid',
+            error: 'Enter a valid web address, like example.com or https://example.com.',
+          };
+        }
+
+        const noteNow = new Date().toISOString();
+        // Text notes have no canonical key, so we don't dedupe them — re-sharing
+        // the same message is plausibly intentional, so each share is its own note.
+        const note: Bookmark = {
+          id: makeLocalId(),
+          user_id: mockUserId,
+          url: null,
+          canonical_url: null,
+          url_hash: null,
+          title: title?.trim() ? title.trim() : null,
+          // The shared text is the note's body. Stored as the description to
+          // mirror the cloud API (which maps shared_text → description), so a
+          // pulled-back note matches the locally captured one.
+          description: text,
+          notes: notes?.trim() ? notes.trim() : null,
+          source_app: null,
+          content_type: 'text',
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          collection_id: null,
+          is_archived: false,
+          created_at: noteNow,
+          updated_at: noteNow,
+          last_saved_at: noteNow,
+          metadata_status: 'pending',
+          sync_status: 'pending',
         };
+
+        const noteEntry: LocalPendingBookmark = {
+          local_id: note.id,
+          remote_id: null,
+          operation: 'create',
+          payload: {
+            title: note.title ?? undefined,
+            notes: note.notes ?? undefined,
+            shared_text: text,
+          },
+          sync_status: 'pending',
+          retry_count: 0,
+          last_error: null,
+          created_at: noteNow,
+          updated_at: noteNow,
+        };
+
+        setBookmarks((current) => [note, ...(current ?? [])]);
+        setQueue((current) => [...current, noteEntry]);
+        const persisted = ensureRepositoryReady()
+          .then(() =>
+            Promise.all([repository.insertBookmark(note), repository.enqueue(noteEntry)]),
+          )
+          .then(() => true)
+          .catch((error) => {
+            logStorageError('new text note', error);
+            return false;
+          });
+
+        // No URL to derive metadata from; this transitions metadata_status to
+        // 'skipped' via the existing, tested enrichment path.
+        enrichInBackground(note);
+
+        return { status: 'created', bookmark: note, persisted };
       }
 
       const now = new Date().toISOString();

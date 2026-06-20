@@ -24,6 +24,7 @@ import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
 import { TagField } from '@/ui/TagField';
 import { hostFromUrl } from '@/domain/item-icon';
+import { displayTitle } from '@/domain/item-display';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
@@ -90,7 +91,7 @@ export default function BookmarkDetailScreen() {
   // this from the URL/"Untitled" to a long title while the screen stays
   // mounted, so re-measure whenever it changes — otherwise the stale line
   // count leaves an overlong title clamped with no "Show more" toggle.
-  const displayedTitle = bookmark?.title ?? bookmark?.url ?? t('common.untitled');
+  const displayedTitle = (bookmark ? displayTitle(bookmark) : null) ?? t('common.untitled');
   useEffect(() => {
     setTitleLineCount(null);
     setTitleExpanded(false);
@@ -186,7 +187,11 @@ export default function BookmarkDetailScreen() {
   const details = [
     bookmark.url ? { label: t('detail.rowUrl'), value: bookmark.url } : null,
     bookmark.site_name ? { label: t('detail.rowSite'), value: bookmark.site_name } : null,
-    bookmark.description ? { label: t('detail.rowDescription'), value: bookmark.description } : null,
+    // Skip the Description row for a text note whose body is already the header
+    // title, so the same text doesn't appear twice.
+    bookmark.description && bookmark.description !== displayedTitle
+      ? { label: t('detail.rowDescription'), value: bookmark.description }
+      : null,
     { label: t('detail.rowSaved'), value: formatDate(bookmark.created_at) },
     bookmark.source_app ? { label: t('detail.rowFrom'), value: bookmark.source_app } : null,
   ].filter((row): row is { label: string; value: string } => row !== null);

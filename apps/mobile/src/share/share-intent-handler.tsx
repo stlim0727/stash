@@ -45,9 +45,11 @@ export function ShareIntentHandler() {
   // resetOnBackground — or the user backing out during a slow SQLite load —
   // can never drop a capture; the save itself waits for the store so dedupe
   // sees the bookmarks already on the device. Capture is sacred.
-  const [pendingShare, setPendingShare] = useState<{ url: string | null; title?: string } | null>(
-    null,
-  );
+  const [pendingShare, setPendingShare] = useState<{
+    url: string | null;
+    title?: string;
+    text?: string;
+  } | null>(null);
   // Guards against re-copying the same intent across renders before the reset
   // propagates; cleared once the intent goes away so a later share is captured.
   const capturedRef = useRef(false);
@@ -69,6 +71,9 @@ export function ShareIntentHandler() {
     setPendingShare({
       url: shareIntent.webUrl ?? extractFirstUrl(shareIntent.text),
       title: shareIntent.meta?.title ?? undefined,
+      // Keep the raw shared text so a no-link share (e.g. a KakaoTalk message)
+      // can still be saved as a text note instead of being dropped.
+      text: shareIntent.text ?? undefined,
     });
     resetShareIntent();
   }, [hasShareIntent, shareIntent, resetShareIntent]);
@@ -85,12 +90,15 @@ export function ShareIntentHandler() {
 
     let message = t('toast.noLink');
     let persisted: Promise<boolean> | undefined;
-    if (share.url) {
-      const result = addBookmark({ url: share.url, title: share.title });
-      if (result.status !== 'invalid') {
-        message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
-        persisted = result.persisted;
-      }
+    // Save the link when there is one; otherwise fall back to saving the shared
+    // text as a note. addBookmark returns 'invalid' when there's neither, which
+    // keeps the "nothing to save" toast for a genuinely empty share.
+    const result = share.url
+      ? addBookmark({ url: share.url, title: share.title })
+      : addBookmark({ shared_text: share.text, title: share.title });
+    if (result.status !== 'invalid') {
+      message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
+      persisted = result.persisted;
     }
 
     // Resolve the post-share behavior, then either jump to the Inbox (inbox
