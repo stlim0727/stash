@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import {
   Alert,
   Animated,
@@ -37,12 +37,13 @@ import {
 import {
   DEFAULT_VIEW_MODE,
   INBOX_VIEW_PREF_KEY,
+  VIEW_MODES,
   describeViewMode,
-  nextViewMode,
   parseViewMode,
   serializeViewMode,
   type ViewMode,
 } from '@/domain/view-mode';
+import { buildTagCloud, tagCloudFontSize } from '@/domain/tag-cloud';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
@@ -64,6 +65,13 @@ interface FacetChip {
   label: string;
   filter: InboxFilter;
 }
+
+// Glyph for each layout in the view-mode segmented control.
+const VIEW_MODE_ICON: Record<ViewMode, ComponentProps<typeof Ionicons>['name']> = {
+  card: 'albums-outline',
+  list: 'list-outline',
+  cloud: 'pricetags-outline',
+};
 
 /**
  * The bookmark's leading glyph — its favicon when known, otherwise a colored
@@ -257,6 +265,26 @@ export default function InboxScreen() {
       .map(({ id, name }) => ({ key: `t:${id}`, label: `#${name}`, filter: { kind: 'tag', id } }));
     return { chips: [...collectionChips, ...tagChips], hasUncollected: uncollected };
   }, [inbox, getTagsForBookmark, getCollection]);
+
+  // Tag cloud derived from the whole Inbox (not the active facet/search): a
+  // frequency-ranked overview of every tag, sized by how many bookmarks carry
+  // it. Tapping one drills in by applying that tag filter.
+  const tagCloud = useMemo(() => {
+    const counts = new Map<string, { name: string; count: number }>();
+    for (const bookmark of inbox) {
+      for (const tag of getTagsForBookmark(bookmark.id)) {
+        const existing = counts.get(tag.id);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          counts.set(tag.id, { name: tag.name, count: 1 });
+        }
+      }
+    }
+    return buildTagCloud(
+      [...counts.entries()].map(([id, { name, count }]) => ({ id, name, count })),
+    );
+  }, [inbox, getTagsForBookmark]);
 
   // If the active facet disappears (last member removed/unfiled), fall back to
   // All rather than stranding the user on an empty filtered view.
@@ -513,18 +541,28 @@ export default function InboxScreen() {
               {sort.dir === 'asc' ? '↑ Asc' : '↓ Desc'}
             </Text>
           </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`View as ${describeViewMode(nextViewMode(viewMode))}`}
-            accessibilityState={{ selected: viewMode === 'list' }}
-            testID="inbox-view-toggle"
-            onPress={() => setViewMode((mode) => nextViewMode(mode))}
-            style={[styles.viewToggle, { backgroundColor: palette.surface, borderColor: palette.border }]}
-          >
-            <Text style={[styles.viewToggleIcon, { color: palette.text }]}>
-              {viewMode === 'card' ? '☰' : '▦'}
-            </Text>
-          </Pressable>
+          <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+            {VIEW_MODES.map((mode) => {
+              const active = viewMode === mode;
+              return (
+                <Pressable
+                  key={mode}
+                  accessibilityRole="button"
+                  accessibilityLabel={`View as ${describeViewMode(mode)}`}
+                  accessibilityState={{ selected: active }}
+                  testID={`inbox-view-${mode}`}
+                  onPress={() => setViewMode(mode)}
+                  style={[styles.viewSegmentButton, active ? { backgroundColor: palette.accentSoft } : null]}
+                >
+                  <Ionicons
+                    name={VIEW_MODE_ICON[mode]}
+                    size={18}
+                    color={active ? palette.accent : palette.textSecondary}
+                  />
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
         {showShelf ? (
           <ScrollView
@@ -540,6 +578,57 @@ export default function InboxScreen() {
           </ScrollView>
         ) : null}
       </Animated.View>
+      {viewMode === 'cloud' ? (
+        <Animated.ScrollView
+          testID="inbox-tag-cloud"
+          onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+            useNativeDriver: true,
+          })}
+          scrollEventThrottle={16}
+          scrollIndicatorInsets={{ top: headerHeight }}
+          contentContainerStyle={[
+            styles.list,
+            { paddingTop: headerHeight + 8, paddingBottom: insets.bottom + 96 },
+          ]}
+        >
+          <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
+            {`Tags · ${tagCloud.length}`}
+          </Text>
+          {tagCloud.length > 0 ? (
+            <View style={styles.cloudWrap}>
+              {tagCloud.map((entry) => (
+                <Pressable
+                  key={entry.id}
+                  testID="inbox-cloud-tag"
+                  accessibilityRole="button"
+                  accessibilityLabel={`#${entry.name}, ${entry.count} bookmark${entry.count === 1 ? '' : 's'}`}
+                  // Drill into the tag: apply its filter, then drop back to cards
+                  // so the matching bookmarks are immediately visible.
+                  onPress={() => {
+                    setFilter({ kind: 'tag', id: entry.id });
+                    setViewMode('card');
+                  }}
+                  style={[styles.cloudTag, { backgroundColor: palette.mutedSurface }]}
+                >
+                  <Text
+                    style={{
+                      color: palette.accentText,
+                      fontSize: tagCloudFontSize(entry.weight),
+                      fontWeight: '700',
+                    }}
+                  >
+                    {`#${entry.name}`}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : (
+            <Text style={[styles.empty, { color: palette.textSecondary }]}>
+              {isLoading ? 'Loading your bookmarks…' : 'No tags yet. Tag a bookmark to see it here.'}
+            </Text>
+          )}
+        </Animated.ScrollView>
+      ) : (
       <AnimatedFlatList
         data={visible}
         keyExtractor={(item) => item.id}
@@ -720,6 +809,7 @@ export default function InboxScreen() {
           );
         }}
       />
+      )}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Add bookmark"
@@ -859,18 +949,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
   },
-  viewToggle: {
+  viewSegment: {
     marginLeft: 'auto',
+    flexDirection: 'row',
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
+    overflow: 'hidden',
+  },
+  viewSegmentButton: {
     width: 38,
     height: 38,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  viewToggleIcon: {
-    fontSize: 17,
-    fontWeight: '700',
   },
   shelf: {
     flexGrow: 0,
@@ -893,6 +983,18 @@ const styles = StyleSheet.create({
     // that would clip the chips' bottom edge on Android.
     minHeight: 42,
     gap: 8,
+  },
+  cloudWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 10,
+    paddingTop: 4,
+  },
+  cloudTag: {
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
   },
   card: {
     borderRadius: 24,
