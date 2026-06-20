@@ -21,6 +21,9 @@ expo-env.d.ts
 # Metro
 .metro-health-check*
 
+# Generated test artifacts (e.g. the tag-cloud SVG preview)
+.artifacts/
+
 # debug
 npm-debug.*
 yarn-debug.*
