@@ -8,9 +8,14 @@ and re-reads it on the next pull sync.
 ```
 POST /functions/v1/ai-enrich
 Authorization: Bearer <user JWT>
-{ "bookmark_id": "<uuid>" }
+{ "bookmark_id": "<uuid>", "locale": "ko", "metadata": { ...freshest fields } }
 → 200 { ...ai_enrichment row }
 ```
+
+`locale` (optional) is the user's active language; a model-backed provider writes
+the summary and tags in it (defaults to English). `metadata` (optional) carries
+the device's freshest content fields so the model reasons about the real
+title/site even when the stored row still lags behind on-device enrichment.
 
 The caller's JWT is forwarded to PostgREST, so Row Level Security scopes every
 read and write to the bookmark's owner. The function holds no service-role key.
@@ -64,9 +69,19 @@ function selectProvider(): EnrichmentProvider {
 - **`GEMINI_API_KEY` set** → a single structured-output Gemini call produces the
   note (summary), topics, tags-with-confidence, and a collection routing hint.
   The user's existing collection names are passed in so the model routes into a
-  bucket that already exists. If the live call fails (rate limit / outage /
-  malformed response), the request degrades to the heuristics instead of
-  erroring, and the saved `model` reflects which provider actually ran.
+  bucket that already exists. The summary/tags/topics are requested in the
+  caller's `locale`; the collection name is not (it must match an existing name
+  verbatim). If the live call fails (rate limit / outage / malformed response),
+  the request degrades to the heuristics instead of erroring, and the saved
+  `model` reflects which provider actually ran.
+
+### Degraded mode (visible, not silent)
+
+When the result comes from the heuristic fallback, the row records `degraded =
+true` and a coarse `degraded_reason` — `not_configured` (no key), `rate_limited`
+(429 / free-tier `limit:0`), `timeout`, or `provider_error`. The app reads these
+to show a calm "basic suggestions" note with the cause, so a rate-limit/outage is
+never mistaken for real AI output (issue #101).
 
 ### Configuration
 

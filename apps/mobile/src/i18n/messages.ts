@@ -224,6 +224,14 @@ export const en = {
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
   'detail.aiRateLimited': 'AI suggestions have hit their limit for now — try again a little later.',
   'detail.aiNoNew': 'No new suggestions right now.',
+  // Degraded mode: the result came from the basic heuristics, not the AI model.
+  // Shown as a calm, non-error note so the cause is never hidden (M12).
+  'detail.aiDegradedRateLimited':
+    'AI is busy right now, so these are basic suggestions. Try refreshing in a little while.',
+  'detail.aiDegradedUnavailable':
+    'Couldn’t reach the AI just now, so these are basic suggestions. Try refreshing.',
+  'detail.aiDegradedBasic':
+    'Showing basic suggestions — smart AI isn’t available right now.',
   'detail.detailsShow': '▸  Details',
   'detail.detailsHide': '▾  Details',
   'detail.toggleDetailsA11y': 'Toggle details',

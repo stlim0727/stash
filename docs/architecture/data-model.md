@@ -87,6 +87,8 @@ Stores AI-generated metadata separately from user-authored bookmark fields.
 | model | text | AI model or process identifier. |
 | status | text | `pending`, `complete`, `failed`, or `stale`. |
 | confidence | numeric | Optional overall confidence. |
+| degraded | boolean | True when produced by the heuristic fallback instead of the configured model (rate-limit/outage, or no model key). Surfaced in-app so degraded mode is never silent. |
+| degraded_reason | text | Coarse cause when `degraded`: `not_configured`, `rate_limited`, `timeout`, or `provider_error`. |
 | created_at | timestamptz | Creation timestamp. |
 | updated_at | timestamptz | Update timestamp. |
 

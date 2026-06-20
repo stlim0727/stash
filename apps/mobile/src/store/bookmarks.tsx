@@ -45,6 +45,7 @@ import {
   reconcileSyncedAdd,
   type PendingTagOp,
 } from '@/domain/pending-tags';
+import { useI18n } from '@/i18n';
 import { recordLog } from '@/observability/log-buffer';
 import { repository } from '@/storage/repository';
 import type { EnrichmentMetadataHint } from '@/api/bookmarks';
@@ -274,6 +275,10 @@ function mergeById<T>(current: T[], loaded: T[], key: (item: T) => string): T[] 
 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
+  // The active language, sent with AI enrichment requests so the model answers
+  // in the user's locale (M12). Read through a ref so requestAiEnrichment stays
+  // stable as the locale changes — it just picks up the latest value when fired.
+  const { locale } = useI18n();
   const [bookmarks, setBookmarks] = useState<Bookmark[] | null>(null);
   const [queue, setQueue] = useState<LocalPendingBookmark[]>([]);
   const [enrichments, setEnrichments] = useState<AIEnrichment[]>([]);
@@ -337,6 +342,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     enrichmentsRef.current = enrichments;
   }, [enrichments]);
+  const localeRef = useRef(locale);
+  useEffect(() => {
+    localeRef.current = locale;
+  }, [locale]);
 
   // Apply + persist a new tag-data snapshot in one step. The ref is updated
   // synchronously so a follow-up tag op in the same tick reads the latest.
@@ -1081,15 +1090,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               content_type: latest.content_type,
             }
           : undefined;
+        const activeLocale = localeRef.current;
         let enrichment: AIEnrichment;
         try {
-          enrichment = await createSyncApi(session).requestEnrichment(bookmarkId, metadata);
+          enrichment = await createSyncApi(session).requestEnrichment(
+            bookmarkId,
+            metadata,
+            activeLocale,
+          );
         } catch (error) {
           // If the server still rejects the token (rotation / clock skew),
           // force a refresh and retry once before surfacing the error.
           if (error instanceof SupabaseRequestError && error.status === 401) {
             const refreshed = (await auth.ensureAnonymousSession(true)) ?? session;
-            enrichment = await createSyncApi(refreshed).requestEnrichment(bookmarkId, metadata);
+            enrichment = await createSyncApi(refreshed).requestEnrichment(
+              bookmarkId,
+              metadata,
+              activeLocale,
+            );
           } else {
             throw error;
           }

@@ -18,7 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useI18n } from '@/i18n';
-import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
+import { enrichmentDegradedLabel, metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
@@ -466,7 +466,25 @@ export default function BookmarkDetailScreen() {
         />
       </View>
 
-      {/* Tags sit directly under the note as a compact token field (its own
+      {/* Collection — no title; the folder-icon picker speaks for itself.
+          It leads the organize controls, directly above the tag field. */}
+      <View style={styles.collectionBlock}>
+        <CollectionPicker
+          collections={collections.map((item) => ({ id: item.id, name: item.name }))}
+          currentId={bookmark.collection_id}
+          currentName={collection?.name ?? null}
+          busy={busy}
+          onSelect={(value) => assignCollection(bookmark.id, value)}
+          onCreate={handleCreateCollection}
+        />
+        {collection && !collections.some((item) => item.id === collection.id) ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            {t('detail.currentlyIn', { name: collection.name })}
+          </Text>
+        ) : null}
+      </View>
+
+      {/* Tags sit under the folder as a compact token field (its own
           "Add tags…" placeholder labels it), not a separate titled panel. */}
       <TagField
         tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
@@ -483,23 +501,6 @@ export default function BookmarkDetailScreen() {
           canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
         }
       />
-
-      {/* Collection — no title; the folder-icon picker speaks for itself. */}
-      <View style={styles.collectionBlock}>
-        <CollectionPicker
-          collections={collections.map((item) => ({ id: item.id, name: item.name }))}
-          currentId={bookmark.collection_id}
-          currentName={collection?.name ?? null}
-          busy={busy}
-          onSelect={(value) => assignCollection(bookmark.id, value)}
-          onCreate={handleCreateCollection}
-        />
-        {collection && !collections.some((item) => item.id === collection.id) ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            {t('detail.currentlyIn', { name: collection.name })}
-          </Text>
-        ) : null}
-      </View>
 
       {/* AI suggestions — no redundant header; the action button names itself. */}
       <Card elevated={false} style={styles.field}>
@@ -524,6 +525,15 @@ export default function BookmarkDetailScreen() {
 
         {enrichment?.status === 'stale' ? (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
+        ) : null}
+
+        {enrichment?.degraded && !aiWorking ? (
+          <Text
+            accessibilityRole="text"
+            style={[styles.hint, { color: palette.textSecondary }]}
+          >
+            {enrichmentDegradedLabel(t, enrichment.degraded_reason)}
+          </Text>
         ) : null}
 
         {enrichment?.summary ? (

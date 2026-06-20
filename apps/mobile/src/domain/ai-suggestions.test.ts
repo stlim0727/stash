@@ -23,6 +23,8 @@ function makeEnrichment(suggested_tags: SuggestedTag[]): AIEnrichment {
     model: 'dummy-v0',
     status: 'complete',
     confidence: null,
+    degraded: false,
+    degraded_reason: null,
     created_at: now,
     updated_at: now,
   };

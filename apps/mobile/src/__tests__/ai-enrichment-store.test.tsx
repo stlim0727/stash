@@ -47,6 +47,8 @@ jest.mock('@/api/bookmarks', () => {
     model: 'dummy-v0',
     status: 'complete',
     confidence: 0.8,
+    degraded: false,
+    degraded_reason: null,
     created_at: '2026-06-13T00:00:00.000Z',
     updated_at: '2026-06-13T00:00:00.000Z',
   }));
@@ -147,7 +149,9 @@ test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
   });
 
   expect(error).toBeNull();
-  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(SYNCED_ID, undefined);
+  // The active locale (English in tests, no provider) rides along so the model
+  // answers in the user's language (M12).
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(SYNCED_ID, undefined, 'en');
   expect(store.current!.getEnrichment(SYNCED_ID)?.summary).toBe('Generated summary');
 });
 
@@ -191,6 +195,7 @@ test('requestAiEnrichment forwards the device\'s freshest metadata', async () =>
   expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
     SYNCED_ID,
     expect.objectContaining({ title: 'Tender steak', site_name: 'YouTube', content_type: 'url' }),
+    'en',
   );
 });
 
@@ -215,7 +220,11 @@ test('a freshly captured bookmark gets AI suggestions automatically once it sync
   await waitFor(() => expect(apiMock.__spies.createBookmark).toHaveBeenCalled());
   // ...and the AI enrichment fires for it WITHOUT any manual requestAiEnrichment.
   await waitFor(() =>
-    expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(REMOTE_ID, expect.anything()),
+    expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
+      REMOTE_ID,
+      expect.anything(),
+      'en',
+    ),
   );
   await waitFor(() => expect(store.current!.getEnrichment(REMOTE_ID)).toBeDefined());
 });
@@ -232,7 +241,11 @@ test('re-hydrates a persisted deferred AI trigger and fires it after a restart',
 
   // The deferred trigger fires on launch (no manual tap needed)...
   await waitFor(() =>
-    expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(SYNCED_ID, expect.anything()),
+    expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
+      SYNCED_ID,
+      expect.anything(),
+      'en',
+    ),
   );
   // ...and the durable marker is cleared once it succeeds, so it won't re-fire.
   await waitFor(() => expect(fakeRepo.__meta('pending_ai_trigger')).toBe('[]'));
@@ -276,6 +289,8 @@ test('isEnriching reports true while a request is in flight, false once it settl
       model: 'dummy-v0',
       status: 'complete',
       confidence: null,
+      degraded: false,
+      degraded_reason: null,
       created_at: '2026-06-13T00:00:00.000Z',
       updated_at: '2026-06-13T00:00:00.000Z',
     };
