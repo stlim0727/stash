@@ -67,7 +67,7 @@
   <g transform="translate(40,800)">
     <rect width="460" height="320" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#cardShadow)"/>
     <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">5 · HIGHLIGHT SWASH</text>
-    <rect x="26" y="120" width="166" height="20" rx="6" fill="#d9ecff"/>
+    <rect x="24" y="122" width="184" height="30" rx="7" fill="#d9ecff"/>
     <text x="28" y="150" font-size="56" font-weight="800" fill="#101828" letter-spacing="-2">Stash</text>
     <text x="28" y="186" font-size="20" fill="#667085">Save now. Organize later.</text>
     <text x="28" y="222" font-size="17" font-weight="600" fill="#667085">12 saved</text>
