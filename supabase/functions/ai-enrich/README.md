@@ -15,6 +15,27 @@ Authorization: Bearer <user JWT>
 The caller's JWT is forwarded to PostgREST, so Row Level Security scopes every
 read and write to the bookmark's owner. The function holds no service-role key.
 
+## Rate limiting
+
+Because every received bookmark auto-fires an enrichment and the app is
+anonymous-first (anyone can mint a session), the function enforces a per-user
+limit before calling a billable provider. The check is a DB function
+(`request_ai_enrichment_slot`, see
+`supabase/migrations/20260620000000_ai_enrichment_rate_limit.sql`) that atomically
+records a slot against a sliding window — so it is race-free and scoped to
+`auth.uid()` via the forwarded JWT. Over the limit returns `429` with a
+`Retry-After` header; the client surfaces a calm message and lets the durable
+auto-trigger retry later.
+
+| Window       | Signed-in | Anonymous |
+| ------------ | --------- | --------- |
+| rolling hour | 30        | 10        |
+| rolling day  | 200       | 50        |
+
+The limit is **only** enforced when `GEMINI_API_KEY` is set (a real, billable
+provider). With no key the network-free `DummyProvider` runs unthrottled, and a
+missing/failing rate-limit function fails **open** so suggestions never break.
+
 ## Files
 
 | File                 | Role                                                            |
@@ -22,7 +43,7 @@ read and write to the bookmark's owner. The function holds no service-role key.
 | `provider.ts`        | `EnrichmentProvider` interface + I/O types — the swappable seam |
 | `dummy-provider.ts`  | `DummyProvider`: deterministic keyword heuristics, no network   |
 | `gemini-provider.ts` | `GeminiProvider`: structured-output call to the Google Gemini API |
-| `index.ts`           | Deno HTTP shell: auth → load bookmark → provider → upsert row    |
+| `index.ts`           | Deno HTTP shell: auth → load bookmark → rate-limit → provider → upsert row |
 | `*.test.ts`          | Node unit tests for the providers (run by `pnpm test`)          |
 
 ## Provider selection

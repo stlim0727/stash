@@ -1100,6 +1100,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         return null;
       } catch (error) {
+        // Rate limited (429): expected when many bookmarks are captured at once.
+        // Surface a calm message instead of a raw error; the deferred auto-trigger
+        // ignores this string and keeps its durable marker, so it retries on a
+        // later launch once the window clears (and won't retry-storm this session).
+        if (error instanceof SupabaseRequestError && error.status === 429) {
+          return 'AI suggestions have hit their limit for now — try again a little later.';
+        }
         return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
       } finally {
         aiEnriching.current.delete(bookmarkId);
@@ -1298,22 +1305,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // Enrichment may have completed in the meantime, so apply only the
             // sync-owned fields (identity + status) onto the LATEST row instead
             // of writing the stale snapshot back.
-            let merged: Bookmark | null = null;
-            setBookmarks((current) =>
-              (current ?? []).map((bookmark) => {
-                if (bookmark.id !== previousId) {
-                  return bookmark;
-                }
-                merged = {
-                  ...bookmark,
+            //
+            // Compute `merged` from the ref SYNCHRONOUSLY — never from inside the
+            // setBookmarks updater. A functional updater doesn't run until React's
+            // next render, so reading a variable it assigns right after the call
+            // sees the pre-update value (null). That silently skipped this whole
+            // block, so neither the metadata-reconciliation update nor the AI
+            // auto-trigger ever fired after a create synced.
+            const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === previousId);
+            const merged: Bookmark | null = latest
+              ? {
+                  ...latest,
                   id: replacement.id,
                   sync_status: replacement.sync_status,
                   updated_at: replacement.updated_at,
-                };
-                return merged;
-              }),
-            );
+                }
+              : null;
             if (merged) {
+              setBookmarks((current) =>
+                (current ?? []).map((bookmark) =>
+                  bookmark.id === previousId ? merged : bookmark,
+                ),
+              );
               // replaceBookmark (not update) so a concurrent enrichment persist
               // that resurrected the old local-ID row gets cleaned up too.
               const persisted: Bookmark = merged;

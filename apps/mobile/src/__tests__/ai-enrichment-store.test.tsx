@@ -63,11 +63,17 @@ jest.mock('@/api/bookmarks', () => {
   // Reconfigurable so a test can let the pull keep a seeded row in state
   // (the default empty list otherwise diffs it away as a remote deletion).
   const listBookmarkIds = jest.fn(async () => [] as string[]);
+  // Sync upload: a create returns the remote id the local row adopts. Spied so
+  // the auto-enrich-on-receive test can drive the full capture→sync→trigger path.
+  const createBookmark = jest.fn(async () => ({
+    bookmark_id: '7e64cf1e-0000-4000-8000-0000000000aa',
+  }));
   return {
-    __spies: { requestEnrichment, addTags, listBookmarkIds },
+    __spies: { requestEnrichment, addTags, listBookmarkIds, createBookmark },
     createBookmarkApi: () => ({
       requestEnrichment,
       addTags,
+      createBookmark,
       listBookmarksUpdatedSince: empty,
       listBookmarkIds,
       listEnrichmentsUpdatedSince: empty,
@@ -79,16 +85,24 @@ jest.mock('@/api/bookmarks', () => {
 });
 
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
+import { SupabaseRequestError } from '@/supabase/client';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeStoredBookmark } from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 const apiMock = jest.requireMock('@/api/bookmarks') as {
-  __spies: { requestEnrichment: jest.Mock; addTags: jest.Mock; listBookmarkIds: jest.Mock };
+  __spies: {
+    requestEnrichment: jest.Mock;
+    addTags: jest.Mock;
+    listBookmarkIds: jest.Mock;
+    createBookmark: jest.Mock;
+  };
 };
 
 const SYNCED_ID = '7e64cf1e-0000-4000-8000-000000000001';
+// The remote id a synced create adopts (must match the mock's createBookmark).
+const REMOTE_ID = '7e64cf1e-0000-4000-8000-0000000000aa';
 
 type Store = ReturnType<typeof useBookmarks>;
 
@@ -121,6 +135,7 @@ beforeEach(() => {
   apiMock.__spies.addTags.mockClear();
   apiMock.__spies.listBookmarkIds.mockReset();
   apiMock.__spies.listBookmarkIds.mockResolvedValue([]);
+  apiMock.__spies.createBookmark.mockClear();
 });
 
 test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
@@ -134,6 +149,25 @@ test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
   expect(error).toBeNull();
   expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(SYNCED_ID, undefined);
   expect(store.current!.getEnrichment(SYNCED_ID)?.summary).toBe('Generated summary');
+});
+
+test('requestAiEnrichment surfaces a calm message when rate limited (429)', async () => {
+  // The backend ai-enrich function caps per-user calls and returns 429 when the
+  // window is exhausted (e.g. a bulk import auto-firing many enrichments). The
+  // store should translate that into a friendly message rather than a raw error,
+  // and must NOT write a (non-existent) enrichment.
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+
+  let error: string | null = 'unset';
+  await act(async () => {
+    error = await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  expect(error).toMatch(/hit their limit/i);
+  expect(store.current!.getEnrichment(SYNCED_ID)).toBeUndefined();
 });
 
 test('requestAiEnrichment forwards the device\'s freshest metadata', async () => {
@@ -158,6 +192,32 @@ test('requestAiEnrichment forwards the device\'s freshest metadata', async () =>
     SYNCED_ID,
     expect.objectContaining({ title: 'Tender steak', site_name: 'YouTube', content_type: 'url' }),
   );
+});
+
+test('a freshly captured bookmark gets AI suggestions automatically once it syncs (no manual tap)', async () => {
+  // The core "auto-suggest on receive" promise: capture a bookmark, and once it
+  // syncs and its metadata settles, suggestions should appear on their own —
+  // the user should NOT have to tap "Suggest with AI". This drives the full real
+  // path (addBookmark → create upload → remote-id swap → deferred trigger).
+  fakeRepo.__reset([]);
+  // The synced row must survive the pull's deletion diff (which would otherwise
+  // treat an id it can't see remotely as a remote deletion).
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([REMOTE_ID]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await act(async () => {
+    store.current!.addBookmark({ url: 'example.com/auto-suggest' });
+  });
+
+  // The create uploads and the local row adopts the remote id...
+  await waitFor(() => expect(apiMock.__spies.createBookmark).toHaveBeenCalled());
+  // ...and the AI enrichment fires for it WITHOUT any manual requestAiEnrichment.
+  await waitFor(() =>
+    expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(REMOTE_ID, expect.anything()),
+  );
+  await waitFor(() => expect(store.current!.getEnrichment(REMOTE_ID)).toBeDefined());
 });
 
 test('re-hydrates a persisted deferred AI trigger and fires it after a restart', async () => {
