@@ -19,6 +19,8 @@ import { buildDiagnosticsContext, formatDiagnosticsReport } from '@/domain/diagn
 import type { DiagnosticsContext } from '@/domain/diagnostics';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { getLogEntries } from '@/observability/log-buffer';
+import { useT } from '@/i18n';
+import type { MessageKey } from '@/i18n/messages';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { usePalette } from '@/theme';
@@ -30,10 +32,10 @@ function recentLogLines(limit = 80): string[] {
     .map((entry) => `${entry.t} [${entry.level}] ${entry.message}`);
 }
 
-const CATEGORIES: Array<{ value: FeedbackCategory; label: string }> = [
-  { value: 'bug', label: 'Bug' },
-  { value: 'idea', label: 'Idea' },
-  { value: 'other', label: 'Other' },
+const CATEGORIES: Array<{ value: FeedbackCategory; labelKey: MessageKey }> = [
+  { value: 'bug', labelKey: 'report.categoryBug' },
+  { value: 'idea', labelKey: 'report.categoryIdea' },
+  { value: 'other', labelKey: 'report.categoryOther' },
 ];
 
 type SubmitState =
@@ -52,6 +54,7 @@ export interface ReportScreenProps {
 
 export default function ReportScreen({ createApi = createFeedbackApi }: ReportScreenProps = {}) {
   const palette = usePalette();
+  const t = useT();
   const insets = useSafeAreaInsets();
   const auth = useSupabaseAuth();
   const pathname = usePathname();
@@ -129,7 +132,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       // with "JWT expired".
       const session = (await auth.ensureAnonymousSession()) ?? auth.session;
       if (!session) {
-        throw new Error('You need an active session to submit a report.');
+        throw new Error(t('report.errorNoSession'));
       }
       const api: FeedbackApi = createApi(session);
       await api.submitReport({
@@ -144,7 +147,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     } catch (error) {
       setSubmit({
         status: 'error',
-        message: error instanceof Error ? error.message : 'Could not submit your report.',
+        message: error instanceof Error ? error.message : t('report.errorSubmit'),
       });
     }
   };
@@ -154,25 +157,24 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       <ScrollView contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}>
         <View style={[styles.field, { backgroundColor: palette.card }]}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-            Cloud reporting unavailable
+            {t('report.cloudUnavailableTitle')}
           </Text>
           <Text style={[styles.fieldValue, { color: palette.text }]}>
-            Submitting to the cloud isn’t configured on this build, but you can still share a
-            diagnostics report (including recent logs) to send manually.
+            {t('report.cloudUnavailableBody')}
           </Text>
         </View>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Share diagnostics"
+          accessibilityLabel={t('report.shareDiagnosticsA11y')}
           style={[styles.secondaryButton, { borderColor: palette.border }]}
           onPress={() => void handleShare()}
         >
           <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-            {`Share diagnostics & logs (${logCount})`}
+            {t('report.shareWithCount', { count: logCount })}
           </Text>
         </Pressable>
         <Text
-          accessibilityLabel="Diagnostic context preview"
+          accessibilityLabel={t('report.contextPreviewA11y')}
           style={[styles.code, { color: palette.text, borderColor: palette.border }]}
         >
           {contextPreview}
@@ -187,7 +189,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       keyboardShouldPersistTaps="handled"
     >
       <View style={[styles.field, { backgroundColor: palette.card }]}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Category</Text>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{t('report.categoryLabel')}</Text>
         <View style={styles.chipRow}>
           {CATEGORIES.map((item) => {
             const selected = item.value === category;
@@ -204,7 +206,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
                 onPress={() => setCategory(item.value)}
               >
                 <Text style={[styles.chipLabel, { color: selected ? '#ffffff' : palette.text }]}>
-                  {item.label}
+                  {t(item.labelKey)}
                 </Text>
               </Pressable>
             );
@@ -213,15 +215,15 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       </View>
 
       <View style={[styles.field, { backgroundColor: palette.card }]}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>What happened?</Text>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{t('report.whatHappened')}</Text>
         <TextInput
-          accessibilityLabel="Problem description"
+          accessibilityLabel={t('report.descriptionA11y')}
           style={[
             styles.input,
             styles.multiline,
             { color: palette.text, borderColor: palette.border },
           ]}
-          placeholder="Describe the problem or idea"
+          placeholder={t('report.descriptionPlaceholder')}
           placeholderTextColor={palette.textSecondary}
           multiline
           value={message}
@@ -231,39 +233,37 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
 
       <View style={[styles.field, { backgroundColor: palette.card }]}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-          Diagnostic context
+          {t('report.diagnosticContext')}
         </Text>
         <Text style={[styles.privacyNote, { color: palette.textSecondary }]}>
-          {`Includes app diagnostics and ${logCount} recent log line(s) to aid debugging — not your bookmark list.`}
+          {t('report.privacyNote', { count: logCount })}
         </Text>
         <Text
-          accessibilityLabel="Diagnostic context preview"
+          accessibilityLabel={t('report.contextPreviewA11y')}
           style={[styles.code, { color: palette.text, borderColor: palette.border }]}
         >
           {contextPreview}
         </Text>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Share diagnostics"
+          accessibilityLabel={t('report.shareDiagnosticsA11y')}
           style={[styles.secondaryButton, { borderColor: palette.border }]}
           onPress={() => void handleShare()}
         >
           <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-            Share diagnostics &amp; logs
+            {t('report.share')}
           </Text>
         </Pressable>
       </View>
 
       {submit.status === 'success' ? (
-        <Text style={[styles.success, { color: palette.accent }]}>
-          Thanks — your report was sent.
-        </Text>
+        <Text style={[styles.success, { color: palette.accent }]}>{t('report.success')}</Text>
       ) : null}
       {submit.status === 'error' ? <Text style={styles.error}>{submit.message}</Text> : null}
 
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Submit report"
+        accessibilityLabel={t('report.submitA11y')}
         accessibilityState={{ disabled: !canSubmit }}
         disabled={!canSubmit}
         style={[
@@ -274,7 +274,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         onPress={() => void handleSubmit()}
       >
         <Text style={styles.submitButtonLabel}>
-          {submit.status === 'submitting' ? 'Sending…' : 'Submit report'}
+          {submit.status === 'submitting' ? t('report.submitting') : t('report.submit')}
         </Text>
       </Pressable>
     </ScrollView>

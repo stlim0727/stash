@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
+import { useT } from '@/i18n';
+import type { MessageKey } from '@/i18n/messages';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import type { OAuthProvider } from '@/supabase/types';
 
-const PROVIDERS: { id: OAuthProvider; label: string }[] = [
-  { id: 'apple', label: 'Sign in with Apple' },
-  { id: 'google', label: 'Sign in with Google' },
+const PROVIDERS: { id: OAuthProvider; labelKey: MessageKey }[] = [
+  { id: 'apple', labelKey: 'account.signInApple' },
+  { id: 'google', labelKey: 'account.signInGoogle' },
 ];
 
 /**
@@ -18,6 +20,7 @@ const PROVIDERS: { id: OAuthProvider; label: string }[] = [
  */
 export function AccountControls({ onDone }: { onDone?: () => void }) {
   const palette = usePalette();
+  const t = useT();
   const auth = useSupabaseAuth();
   const [busy, setBusy] = useState<OAuthProvider | 'signout' | null>(null);
 
@@ -30,8 +33,8 @@ export function AccountControls({ onDone }: { onDone?: () => void }) {
       }
     } catch (error) {
       Alert.alert(
-        'Sign in failed',
-        error instanceof Error ? error.message : 'Could not complete sign in.',
+        t('account.signInFailedTitle'),
+        error instanceof Error ? error.message : t('account.signInFailedBody'),
       );
     } finally {
       setBusy(null);
@@ -51,8 +54,7 @@ export function AccountControls({ onDone }: { onDone?: () => void }) {
   if (auth.status === 'not_configured') {
     return (
       <Text style={[styles.note, { color: palette.textSecondary }]}>
-        Cloud sync isn’t configured on this build, so account sign-in is
-        unavailable. Stash still works fully offline.
+        {t('account.cloudNotConfigured')}
       </Text>
     );
   }
@@ -61,13 +63,13 @@ export function AccountControls({ onDone }: { onDone?: () => void }) {
     return (
       <View style={styles.group}>
         <Text style={[styles.heading, { color: palette.text }]}>
-          {auth.email ? `Signed in as ${auth.email}` : 'Signed in'}
+          {auth.email ? t('account.signedInAs', { email: auth.email }) : t('account.signedIn')}
         </Text>
         <Text style={[styles.subheading, { color: palette.textSecondary }]}>
-          Your bookmarks sync to this account across devices.
+          {t('account.syncSubtitle')}
         </Text>
         <Button variant="ghost" size="lg" disabled={busy !== null} onPress={() => void handleSignOut()}>
-          {busy === 'signout' ? <ActivityIndicator color={palette.text} /> : 'Sign out'}
+          {busy === 'signout' ? <ActivityIndicator color={palette.text} /> : t('common.signOut')}
         </Button>
       </View>
     );
@@ -76,21 +78,20 @@ export function AccountControls({ onDone }: { onDone?: () => void }) {
   // anonymous / loading / error — offer sign-in.
   return (
     <View style={styles.group}>
-      <Text style={[styles.heading, { color: palette.text }]}>Sign in to sync across devices</Text>
+      <Text style={[styles.heading, { color: palette.text }]}>{t('account.signInHeading')}</Text>
       <Text style={[styles.subheading, { color: palette.textSecondary }]}>
-        You’re browsing anonymously. Sign in to back up your stash and keep it in
-        sync — your current bookmarks come with you.
+        {t('account.signInSubtitle')}
       </Text>
-      {PROVIDERS.map(({ id, label }) => (
+      {PROVIDERS.map(({ id, labelKey }) => (
         <Button
           key={id}
           variant="ghost"
           size="lg"
-          accessibilityLabel={label}
+          accessibilityLabel={t(labelKey)}
           disabled={busy !== null}
           onPress={() => void handleSignIn(id)}
         >
-          {busy === id ? <ActivityIndicator color={palette.text} /> : label}
+          {busy === id ? <ActivityIndicator color={palette.text} /> : t(labelKey)}
         </Button>
       ))}
     </View>

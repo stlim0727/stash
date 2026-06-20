@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 
 export interface SheetAction {
@@ -42,6 +43,7 @@ export function ActionSheet({
   onClose: () => void;
 }) {
   const palette = usePalette();
+  const t = useT();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
   // Cap the scrollable action list so a long list (e.g. many collections in
@@ -53,7 +55,7 @@ export function ActionSheet({
       <Pressable
         style={styles.backdrop}
         accessibilityRole="button"
-        accessibilityLabel="Dismiss menu"
+        accessibilityLabel={t('actionSheet.dismissA11y')}
         onPress={onClose}
       >
         {/* Swallow presses so tapping the sheet body doesn't dismiss it. */}
@@ -111,11 +113,11 @@ export function ActionSheet({
           </ScrollView>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Cancel"
+            accessibilityLabel={t('common.cancel')}
             onPress={onClose}
             style={[styles.cancel, { borderColor: palette.border }]}
           >
-            <Text style={[styles.cancelLabel, { color: palette.textSecondary }]}>Cancel</Text>
+            <Text style={[styles.cancelLabel, { color: palette.textSecondary }]}>{t('common.cancel')}</Text>
           </Pressable>
         </Pressable>
       </Pressable>

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { isDuplicateTag, readTagInput } from '@/domain/tag-input';
 
@@ -52,6 +53,7 @@ export function TagField({
   disabledHint,
 }: TagFieldProps) {
   const palette = usePalette();
+  const t = useT();
   const [value, setValue] = useState('');
 
   const commit = async (raw: string) => {
@@ -93,14 +95,14 @@ export function TagField({
           <View key={tag.id} style={[styles.chip, { backgroundColor: palette.accentSoft }]}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Browse #${tag.name}`}
+              accessibilityLabel={t('tagField.browseA11y', { name: tag.name })}
               onPress={() => onBrowse(tag.id)}
             >
               <Text style={[styles.chipLabel, { color: palette.accentText }]}>{tag.name}</Text>
             </Pressable>
             {editable ? (
               <Pressable
-                accessibilityLabel={`Remove tag ${tag.name}`}
+                accessibilityLabel={t('tagField.removeA11y', { name: tag.name })}
                 disabled={busy}
                 hitSlop={6}
                 onPress={() => onRemove(tag.name)}
@@ -112,9 +114,9 @@ export function TagField({
         ))}
         {editable ? (
           <TextInput
-            accessibilityLabel="Add a tag"
+            accessibilityLabel={t('tagField.addTagA11y')}
             style={[styles.input, { color: palette.text }]}
-            placeholder={tags.length === 0 ? 'Add tags…' : 'Add…'}
+            placeholder={tags.length === 0 ? t('tagField.placeholderEmpty') : t('tagField.placeholderMore')}
             placeholderTextColor={palette.textSecondary}
             autoCapitalize="none"
             autoCorrect={false}
@@ -132,7 +134,7 @@ export function TagField({
           />
         ) : tags.length === 0 ? (
           <Text style={[styles.placeholder, { color: palette.textSecondary }]}>
-            {disabledHint ?? 'No tags yet'}
+            {disabledHint ?? t('tagField.noTags')}
           </Text>
         ) : null}
       </View>
@@ -147,7 +149,7 @@ export function TagField({
             <View key={suggestion.name} style={[styles.ghostChip, { borderColor: palette.accent }]}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Accept suggested tag ${suggestion.name}`}
+                accessibilityLabel={t('tagField.acceptSuggestionA11y', { name: suggestion.name })}
                 disabled={busy}
                 onPress={() => onAcceptSuggestion(suggestion.name)}
               >
@@ -156,7 +158,7 @@ export function TagField({
                 </Text>
               </Pressable>
               <Pressable
-                accessibilityLabel={`Dismiss suggested tag ${suggestion.name}`}
+                accessibilityLabel={t('tagField.dismissSuggestionA11y', { name: suggestion.name })}
                 disabled={busy}
                 hitSlop={6}
                 onPress={() => onDismissSuggestion(suggestion.name)}
@@ -168,14 +170,14 @@ export function TagField({
           {onDismissAllSuggestions && suggestions.length > 1 ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Dismiss all suggestions"
+              accessibilityLabel={t('tagField.dismissAllA11y')}
               disabled={busy}
               hitSlop={6}
               style={styles.dismissAll}
               onPress={onDismissAllSuggestions}
             >
               <Text style={[styles.dismissAllLabel, { color: palette.textSecondary }]}>
-                Dismiss all
+                {t('tagField.dismissAll')}
               </Text>
             </Pressable>
           ) : null}

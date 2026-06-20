@@ -9,6 +9,7 @@ import {
   type ShareBehavior,
 } from '@/domain/share-behavior';
 import { extractFirstUrl } from '@/domain/urls';
+import { useT } from '@/i18n';
 import { dismissAfterShare } from '@/share/dismiss';
 import { getPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
@@ -37,6 +38,7 @@ export function ShareIntentHandler() {
   const { addBookmark, isLoading } = useBookmarks();
   const router = useRouter();
   const { show } = useCaptureToast();
+  const t = useT();
 
   // A share copied out of expo-share-intent, held until the store has loaded.
   // We capture it immediately (and release the OS intent) so a
@@ -81,12 +83,12 @@ export function ShareIntentHandler() {
     // Clear right away so a re-render can't double-handle the same capture.
     setPendingShare(null);
 
-    let message = 'No link found to stash';
+    let message = t('toast.noLink');
     let persisted: Promise<boolean> | undefined;
     if (share.url) {
       const result = addBookmark({ url: share.url, title: share.title });
       if (result.status !== 'invalid') {
-        message = result.status === 'duplicate' ? 'Already in Stash' : 'Saved to Stash';
+        message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
         persisted = result.persisted;
       }
     }
@@ -131,7 +133,7 @@ export function ShareIntentHandler() {
       show(message);
       router.replace('/');
     })();
-  }, [pendingShare, isLoading, addBookmark, router, show]);
+  }, [pendingShare, isLoading, addBookmark, router, show, t]);
 
   return null;
 }

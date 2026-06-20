@@ -104,6 +104,13 @@ beforeEach(async () => {
 });
 
 describe('ShareIntentHandler', () => {
+  // These cover the cold-start / slow-load capture paths with real timers and a
+  // gated repository load. Each is <300ms locally, but on the constrained CI
+  // runner — where heavier suites (e.g. the tag-cloud inbox screen) run
+  // concurrently — the default 5s jest timeout can be starved. Give the
+  // async-heavy suite more headroom so contention can't flake it.
+  jest.setTimeout(15000);
+
   it('does not duplicate a URL already stashed when shared on cold start', async () => {
     // The store starts empty in memory and loads this row asynchronously —
     // exactly the cold-start window in which a share used to dedupe against an

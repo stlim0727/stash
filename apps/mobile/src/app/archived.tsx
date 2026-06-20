@@ -1,12 +1,14 @@
 import { useRouter } from 'expo-router';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { useBookmarks } from '@/store/bookmarks';
 
 export default function ArchivedScreen() {
   const palette = usePalette();
   const router = useRouter();
+  const t = useT();
   const { archived } = useBookmarks();
 
   return (
@@ -16,10 +18,7 @@ export default function ArchivedScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
-          <Text style={[styles.empty, { color: palette.textSecondary }]}>
-            Nothing archived. Archived bookmarks stay out of your Inbox but remain searchable
-            and restorable here.
-          </Text>
+          <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('archived.empty')}</Text>
         }
         renderItem={({ item }) => (
           <Pressable
@@ -27,7 +26,7 @@ export default function ArchivedScreen() {
             onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
           >
             <Text style={[styles.cardTitle, { color: palette.text }]}>
-              {item.title ?? item.url ?? 'Untitled'}
+              {item.title ?? item.url ?? t('common.untitled')}
             </Text>
             {item.url ? (
               <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>

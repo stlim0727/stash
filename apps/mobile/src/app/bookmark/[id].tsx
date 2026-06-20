@@ -17,6 +17,8 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useI18n } from '@/i18n';
+import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
@@ -32,6 +34,7 @@ const TITLE_COLLAPSED_LINES = 4;
 
 export default function BookmarkDetailScreen() {
   const palette = usePalette();
+  const { t, formatDate } = useI18n();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
@@ -87,7 +90,7 @@ export default function BookmarkDetailScreen() {
   // this from the URL/"Untitled" to a long title while the screen stays
   // mounted, so re-measure whenever it changes — otherwise the stale line
   // count leaves an overlong title clamped with no "Show more" toggle.
-  const displayedTitle = bookmark?.title ?? bookmark?.url ?? 'Untitled';
+  const displayedTitle = bookmark?.title ?? bookmark?.url ?? t('common.untitled');
   useEffect(() => {
     setTitleLineCount(null);
     setTitleExpanded(false);
@@ -97,7 +100,7 @@ export default function BookmarkDetailScreen() {
     return (
       <View style={styles.missing}>
         <Text style={[styles.missingText, { color: palette.textSecondary }]}>
-          This bookmark could not be found.
+          {t('detail.notFound')}
         </Text>
       </View>
     );
@@ -181,21 +184,21 @@ export default function BookmarkDetailScreen() {
   // One tidy "Details" section instead of a card per field. Only rows with a
   // real value show, so a sparse bookmark doesn't render mostly-empty cards.
   const details = [
-    bookmark.url ? { label: 'URL', value: bookmark.url } : null,
-    bookmark.site_name ? { label: 'Site', value: bookmark.site_name } : null,
-    bookmark.description ? { label: 'Description', value: bookmark.description } : null,
-    { label: 'Saved', value: new Date(bookmark.created_at).toLocaleString() },
-    bookmark.source_app ? { label: 'From', value: bookmark.source_app } : null,
+    bookmark.url ? { label: t('detail.rowUrl'), value: bookmark.url } : null,
+    bookmark.site_name ? { label: t('detail.rowSite'), value: bookmark.site_name } : null,
+    bookmark.description ? { label: t('detail.rowDescription'), value: bookmark.description } : null,
+    { label: t('detail.rowSaved'), value: formatDate(bookmark.created_at) },
+    bookmark.source_app ? { label: t('detail.rowFrom'), value: bookmark.source_app } : null,
   ].filter((row): row is { label: string; value: string } => row !== null);
 
   // Sync/metadata are de-emphasized: only surfaced as small chips when they
   // are noteworthy (not yet synced / still enriching), never as full cards.
   const statusChips: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    statusChips.push(`sync ${bookmark.sync_status}`);
+    statusChips.push(syncStatusLabel(t, bookmark.sync_status));
   }
   if (bookmark.metadata_status !== 'complete') {
-    statusChips.push(`metadata ${bookmark.metadata_status}`);
+    statusChips.push(metadataStatusLabel(t, bookmark.metadata_status));
   }
 
   const host = hostFromUrl(bookmark.url);
@@ -209,7 +212,7 @@ export default function BookmarkDetailScreen() {
       url: bookmark.url,
       title: bookmark.title ?? undefined,
     }).catch(() => {
-      setOrganizeError('Could not open the share sheet.');
+      setOrganizeError(t('detail.errorShare'));
     });
   };
 
@@ -281,13 +284,13 @@ export default function BookmarkDetailScreen() {
         assignCollection(bookmark.id, result.collection.id);
         return null;
       }
-      return result.error ?? 'Could not create the collection.';
+      return result.error ?? t('detail.errorCreateCollection');
     });
 
   const handleOpenLink = () => {
     if (bookmark.url) {
       void Linking.openURL(bookmark.url).catch(() => {
-        setOrganizeError('Could not open this link.');
+        setOrganizeError(t('detail.errorOpen'));
       });
     }
   };
@@ -299,14 +302,14 @@ export default function BookmarkDetailScreen() {
     };
     if (Platform.OS === 'web') {
       // Alert.alert has no button support on web.
-      if (typeof confirm === 'undefined' || confirm('Delete this bookmark permanently?')) {
+      if (typeof confirm === 'undefined' || confirm(t('detail.deleteConfirmWeb'))) {
         remove();
       }
       return;
     }
-    Alert.alert('Delete bookmark', 'This permanently removes the bookmark from this device.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: remove },
+    Alert.alert(t('bookmark.deleteTitle'), t('bookmark.deleteMessage'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('common.delete'), style: 'destructive', onPress: remove },
     ]);
   };
 
@@ -319,7 +322,7 @@ export default function BookmarkDetailScreen() {
         bookmark.url ? (
           <Pressable
             accessibilityRole="link"
-            accessibilityLabel="Open link"
+            accessibilityLabel={t('common.openLink')}
             onPress={handleOpenLink}
           >
             <Image
@@ -344,7 +347,7 @@ export default function BookmarkDetailScreen() {
           </View>
         ) : null}
         <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
-          {host ?? 'Saved'}
+          {host ?? t('detail.savedByline')}
           {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
         </Text>
       </View>
@@ -370,7 +373,7 @@ export default function BookmarkDetailScreen() {
             // Announce the title itself (not just the action) so screen-reader
             // users still hear the primary content; the edit affordance is a hint.
             accessibilityLabel={displayedTitle}
-            accessibilityHint="Edits the title"
+            accessibilityHint={t('detail.editTitleHint')}
             onPress={() => setDraftTitle(bookmark.title ?? '')}
           >
             <Text
@@ -392,23 +395,23 @@ export default function BookmarkDetailScreen() {
           {titleLineCount !== null && titleLineCount > TITLE_COLLAPSED_LINES ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={titleExpanded ? 'Show less of the title' : 'Show the full title'}
+              accessibilityLabel={titleExpanded ? t('detail.showLessTitleA11y') : t('detail.showFullTitleA11y')}
               hitSlop={8}
               onPress={() => setTitleExpanded((value) => !value)}
             >
               <Text style={[styles.titleToggle, { color: palette.accent }]}>
-                {titleExpanded ? 'Show less' : 'Show more'}
+                {titleExpanded ? t('detail.showLess') : t('detail.showMore')}
               </Text>
             </Pressable>
           ) : null}
         </View>
       ) : (
         <TextInput
-          accessibilityLabel="Edit title"
+          accessibilityLabel={t('detail.editTitleA11y')}
           autoFocus
           multiline
           style={[styles.title, styles.titleInput, { color: palette.text, borderColor: palette.border }]}
-          placeholder="Untitled — metadata pending"
+          placeholder={t('detail.titlePlaceholder')}
           placeholderTextColor={palette.textSecondary}
           value={draftTitle}
           onChangeText={setDraftTitle}
@@ -418,18 +421,18 @@ export default function BookmarkDetailScreen() {
 
       <View style={styles.actionBar}>
         {bookmark.url ? (
-          <ActionButton icon="open-outline" label="Open" tint={palette.accent} onPress={handleOpenLink} />
+          <ActionButton icon="open-outline" label={t('common.open')} tint={palette.accent} onPress={handleOpenLink} />
         ) : null}
         {bookmark.url ? (
-          <ActionButton icon="share-social" label="Share" tint={palette.text} onPress={handleShare} />
+          <ActionButton icon="share-social" label={t('common.share')} tint={palette.text} onPress={handleShare} />
         ) : null}
         <ActionButton
           icon={bookmark.is_archived ? 'arrow-undo' : 'archive'}
-          label={bookmark.is_archived ? 'Unarchive' : 'Archive'}
+          label={bookmark.is_archived ? t('common.unarchive') : t('common.archive')}
           tint={palette.text}
           onPress={() => archiveBookmark(bookmark.id, !bookmark.is_archived)}
         />
-        <ActionButton icon="trash" label="Delete" tint={palette.danger} onPress={handleDelete} />
+        <ActionButton icon="trash" label={t('common.delete')} tint={palette.danger} onPress={handleDelete} />
       </View>
 
       {/* Notes — a pencil affordance + filled field so it reads as editable
@@ -447,9 +450,9 @@ export default function BookmarkDetailScreen() {
           style={styles.notesIcon}
         />
         <TextInput
-          accessibilityLabel="Notes"
+          accessibilityLabel={t('detail.notesA11y')}
           style={[styles.notesInput, { color: palette.text }]}
-          placeholder="Add a note…"
+          placeholder={t('detail.notesPlaceholder')}
           placeholderTextColor={palette.textSecondary}
           multiline
           value={notesValue}
@@ -472,7 +475,7 @@ export default function BookmarkDetailScreen() {
         onDismissSuggestion={handleDismissTag}
         onDismissAllSuggestions={handleDismissAll}
         disabledHint={
-          canOrganizeRemotely ? undefined : 'Tags can be edited once this bookmark has synced.'
+          canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
         }
       />
 
@@ -488,7 +491,7 @@ export default function BookmarkDetailScreen() {
         />
         {collection && !collections.some((item) => item.id === collection.id) ? (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            Currently in: {collection.name}
+            {t('detail.currentlyIn', { name: collection.name })}
           </Text>
         ) : null}
       </View>
@@ -501,7 +504,7 @@ export default function BookmarkDetailScreen() {
               <View style={styles.aiWorking}>
                 <ActivityIndicator size="small" color={palette.accent} />
                 <Text style={[styles.aiWorkingLabel, { color: palette.textSecondary }]}>
-                  Working…
+                  {t('detail.aiWorking')}
                 </Text>
               </View>
             ) : (
@@ -515,10 +518,7 @@ export default function BookmarkDetailScreen() {
         ) : null}
 
         {enrichment?.status === 'stale' ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            These suggestions may be out of date since you edited this bookmark — refresh to update
-            them.
-          </Text>
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
         ) : null}
 
         {enrichment?.summary ? (
@@ -526,20 +526,18 @@ export default function BookmarkDetailScreen() {
         ) : null}
 
         {pending.length > 0 ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            Suggested tags are in the Tags field above — tap a “＋” chip to add.
-          </Text>
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiTagsHint')}</Text>
         ) : null}
 
         {showCollectionSuggestion ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`File into ${suggestedCollection!.name}`}
+            accessibilityLabel={t('detail.aiFileIntoA11y', { name: suggestedCollection!.name })}
             disabled={busy}
             onPress={handleAcceptCollection}
           >
             <Text style={[styles.link, { color: palette.accent }]}>
-              Suggested collection: file into “{suggestedCollection!.name}”
+              {t('detail.aiSuggestedCollection', { name: suggestedCollection!.name })}
             </Text>
           </Pressable>
         ) : null}
@@ -556,37 +554,33 @@ export default function BookmarkDetailScreen() {
               <View style={styles.aiWorking}>
                 <ActivityIndicator size="small" color={palette.accent} />
                 <Text style={[styles.actionLabel, { color: palette.accent }]}>
-                  Generating suggestions…
+                  {t('detail.aiGenerating')}
                 </Text>
               </View>
             ) : (
               <Text style={[styles.actionLabel, { color: palette.accent }]}>
-                {enrichment ? 'Refresh AI suggestions' : 'Suggest with AI'}
+                {enrichment ? t('detail.aiRefresh') : t('detail.aiSuggest')}
               </Text>
             )}
           </Pressable>
         ) : (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            AI suggestions are available once this bookmark has synced.
-          </Text>
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiNeedsSync')}</Text>
         )}
 
         {enrichment && pending.length === 0 && !showCollectionSuggestion ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            No new suggestions right now.
-          </Text>
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiNoNew')}</Text>
         ) : null}
       </Card>
 
       <View style={styles.detailsSection}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Toggle details"
+          accessibilityLabel={t('detail.toggleDetailsA11y')}
           onPress={() => setShowDetails((value) => !value)}
           style={styles.detailsToggle}
         >
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-            {showDetails ? '▾  Details' : '▸  Details'}
+            {showDetails ? t('detail.detailsHide') : t('detail.detailsShow')}
           </Text>
         </Pressable>
         {showDetails ? (

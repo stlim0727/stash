@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { useBookmarks } from '@/store/bookmarks';
@@ -14,6 +15,7 @@ interface ReviewItem {
 
 export default function ReviewScreen() {
   const palette = usePalette();
+  const t = useT();
   const { inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions, acceptSuggestedTags } =
     useBookmarks();
   const [busy, setBusy] = useState(false);
@@ -32,13 +34,13 @@ export default function ReviewScreen() {
       if (suggestions.length > 0) {
         result.push({
           id: bookmark.id,
-          title: bookmark.title ?? bookmark.url ?? 'Untitled',
+          title: bookmark.title ?? bookmark.url ?? t('common.untitled'),
           suggestions,
         });
       }
     }
     return result;
-  }, [inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions]);
+  }, [inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions, t]);
 
   const accept = (id: string, suggestions: SuggestedTag[]) => {
     setBusy(true);
@@ -48,9 +50,7 @@ export default function ReviewScreen() {
   if (items.length === 0) {
     return (
       <View style={styles.emptyWrap}>
-        <Text style={[styles.empty, { color: palette.textSecondary }]}>
-          No suggestions to review.
-        </Text>
+        <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('review.empty')}</Text>
       </View>
     );
   }
@@ -58,7 +58,7 @@ export default function ReviewScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-        {`Pending suggestions · ${items.length} bookmark${items.length > 1 ? 's' : ''}`}
+        {t('review.pendingHeader', { count: items.length })}
       </Text>
       {items.map((item) => (
         <View key={item.id} style={[styles.card, { backgroundColor: palette.card }]}>
@@ -70,7 +70,10 @@ export default function ReviewScreen() {
               <Pressable
                 key={suggestion.name}
                 accessibilityRole="button"
-                accessibilityLabel={`Accept suggested tag ${suggestion.name} for ${item.title}`}
+                accessibilityLabel={t('review.acceptTagA11y', {
+                  name: suggestion.name,
+                  title: item.title,
+                })}
                 disabled={busy}
                 style={[styles.chip, { borderColor: palette.accent }]}
                 onPress={() => accept(item.id, [suggestion])}
@@ -79,7 +82,7 @@ export default function ReviewScreen() {
                   ＋ {suggestion.name}
                 </Text>
                 <Text style={[styles.confidence, { color: palette.textSecondary }]}>
-                  {Math.round(suggestion.confidence * 100)}%
+                  {t('review.confidence', { percent: Math.round(suggestion.confidence * 100) })}
                 </Text>
               </Pressable>
             ))}
@@ -87,11 +90,11 @@ export default function ReviewScreen() {
           {item.suggestions.length > 1 ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Accept all suggested tags for ${item.title}`}
+              accessibilityLabel={t('review.acceptAllA11y', { title: item.title })}
               disabled={busy}
               onPress={() => accept(item.id, item.suggestions)}
             >
-              <Text style={[styles.link, { color: palette.accent }]}>Accept all</Text>
+              <Text style={[styles.link, { color: palette.accent }]}>{t('review.acceptAll')}</Text>
             </Pressable>
           ) : null}
         </View>

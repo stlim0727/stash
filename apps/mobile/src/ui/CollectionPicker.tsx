@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { normalizeTag } from '@/domain/tag-input';
 
@@ -36,6 +37,7 @@ export function CollectionPicker({
   onCreate,
 }: CollectionPickerProps) {
   const palette = usePalette();
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -60,13 +62,13 @@ export function CollectionPicker({
     <View style={styles.wrapper}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Change collection"
+        accessibilityLabel={t('collectionPicker.changeA11y')}
         disabled={busy}
         onPress={() => setOpen((value) => !value)}
         style={[styles.row, { backgroundColor: palette.surface, borderColor: palette.border }]}
       >
         <Text style={[styles.rowValue, { color: palette.text }]} numberOfLines={1}>
-          {'📁  ' + (currentName ?? 'Inbox')}
+          {t('collectionPicker.current', { name: currentName ?? t('collectionPicker.inbox') })}
         </Text>
         <Text style={[styles.chevron, { color: palette.textSecondary }]}>{open ? '▾' : '›'}</Text>
       </Pressable>
@@ -74,9 +76,9 @@ export function CollectionPicker({
       {open ? (
         <View style={[styles.panel, { backgroundColor: palette.surface, borderColor: palette.border }]}>
           <TextInput
-            accessibilityLabel="Find or create a collection"
+            accessibilityLabel={t('collectionPicker.findOrCreateA11y')}
             style={[styles.search, { color: palette.text, borderColor: palette.border }]}
-            placeholder="Find or create…"
+            placeholder={t('collectionPicker.findOrCreatePlaceholder')}
             placeholderTextColor={palette.textSecondary}
             autoCapitalize="none"
             value={query}
@@ -92,7 +94,7 @@ export function CollectionPicker({
             }}
             style={styles.option}
           >
-            <Text style={[styles.optionLabel, { color: palette.text }]}>Inbox (none)</Text>
+            <Text style={[styles.optionLabel, { color: palette.text }]}>{t('collectionPicker.inboxNone')}</Text>
             {currentId === null ? <Text style={{ color: palette.accent }}>✓</Text> : null}
           </Pressable>
 
@@ -117,7 +119,7 @@ export function CollectionPicker({
           {trimmed.length > 0 && !exactMatch ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Create collection ${trimmed}`}
+              accessibilityLabel={t('collectionPicker.createA11y', { name: trimmed })}
               disabled={busy}
               onPress={async () => {
                 // Only collapse/clear once the create succeeds; on failure keep
@@ -130,7 +132,7 @@ export function CollectionPicker({
               style={styles.option}
             >
               <Text style={[styles.optionLabel, { color: palette.accent }]} numberOfLines={1}>
-                ＋ Create “{trimmed}”
+                {t('collectionPicker.create', { name: trimmed })}
               </Text>
             </Pressable>
           ) : null}
