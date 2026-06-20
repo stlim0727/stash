@@ -70,3 +70,18 @@ test('produces a summary for a URL and none for a text-only share', async () => 
   const textOnly = await provider.enrich(input({ url: null, notes: 'just a thought' }));
   assert.equal(textOnly.summary, null);
 });
+
+test('localizes heuristic tags and topics for a Korean locale', async () => {
+  const out = await provider.enrich(
+    input({ url: 'https://github.com/facebook/react', title: 'React', locale: 'ko' }),
+  );
+  const names = out.suggested_tags.map((tag) => tag.name);
+  assert.ok(names.includes('프로그래밍'), `expected Korean tag, got: ${names.join(', ')}`);
+  assert.ok(!names.includes('programming'), 'English tag should not leak through');
+  assert.ok(out.topics.includes('프로그래밍'), `topics not localized: ${out.topics.join(', ')}`);
+});
+
+test('keeps English heuristic tags when locale is English or absent', async () => {
+  const out = await provider.enrich(input({ url: 'https://github.com/facebook/react', locale: 'en' }));
+  assert.ok(out.suggested_tags.map((tag) => tag.name).includes('programming'));
+});
