@@ -24,3 +24,6 @@ pnpm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# Downloaded fonts for scripts/generate-wordmark.mjs
+scripts/.wordmark-cache/
