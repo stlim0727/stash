@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="440" viewBox="0 0 1040 440" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <filter id="s" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#101828" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+  <rect width="1040" height="440" fill="#eef2f8"/>
+  <text x="40" y="52" font-size="24" font-weight="800" fill="#101828" letter-spacing="-0.5">Shipped result — divider shows only when a locale has a native wordmark</text>
+
+  <!-- English locale -->
+  <g transform="translate(40,90)">
+    <rect width="460" height="300" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#s)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">LOCALE: EN</text>
+    <text x="28" y="150" font-size="56" font-weight="800" fill="#101828" letter-spacing="-1.3">Stash</text>
+    <text x="28" y="190" font-size="20" fill="#667085">Save now. Organize later.</text>
+    <text x="28" y="226" font-size="17" font-weight="600" fill="#667085">12 saved</text>
+  </g>
+
+  <!-- Korean locale: Stash | 스태시 -->
+  <g transform="translate(540,90)">
+    <rect width="460" height="300" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#s)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">LOCALE: KO</text>
+    <text x="28" y="150" font-size="56" font-weight="800" fill="#101828" letter-spacing="-1.3">Stash</text>
+    <rect x="212" y="113" width="2.5" height="36" rx="1.2" fill="#e6eaf0"/>
+    <text x="234" y="146" font-family="'Noto Sans KR'" font-weight="500" font-size="33" fill="#667085" letter-spacing="-0.3">스태시</text>
+    <text x="28" y="190" font-size="20" fill="#667085">지금 저장하고, 정리는 나중에.</text>
+    <text x="28" y="226" font-size="17" font-weight="600" fill="#667085">12개 저장됨</text>
+  </g>
+</svg>

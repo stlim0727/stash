@@ -491,7 +491,20 @@ export default function InboxScreen() {
       >
         <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
           <View style={styles.heroTitleBlock}>
-            <Text style={[styles.heroTitle, { color: palette.text }]}>{t('app.name')}</Text>
+            <View style={styles.heroTitleRow}>
+              <Text style={[styles.heroTitle, { color: palette.text }]}>{t('app.name')}</Text>
+              {/* In locales with a native wordmark (e.g. 스태시), show it after a
+                  thin divider; elsewhere app.nameLocal equals app.name, so the
+                  brand stands alone. */}
+              {t('app.nameLocal') !== t('app.name') ? (
+                <>
+                  <View style={[styles.heroTitleDivider, { backgroundColor: palette.border }]} />
+                  <Text style={[styles.heroTitleLocal, { color: palette.textSecondary }]}>
+                    {t('app.nameLocal')}
+                  </Text>
+                </>
+              ) : null}
+            </View>
             <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
               {t('app.tagline')}
             </Text>
@@ -911,10 +924,27 @@ const styles = StyleSheet.create({
     gap: 10,
     marginLeft: 12,
   },
+  heroTitleRow: {
+    flexDirection: 'row',
+    // Baseline-align so the smaller native wordmark sits on the same line as the
+    // brand; the divider (a plain View) aligns its bottom edge to that baseline.
+    alignItems: 'baseline',
+  },
   heroTitle: {
     fontSize: 34,
     fontWeight: '800',
     letterSpacing: -0.8,
+  },
+  heroTitleDivider: {
+    width: 1.5,
+    height: 22,
+    borderRadius: 1,
+    marginHorizontal: 12,
+  },
+  heroTitleLocal: {
+    fontSize: 20,
+    fontWeight: '500',
+    letterSpacing: -0.2,
   },
   heroSubtitle: {
     fontSize: 15,
