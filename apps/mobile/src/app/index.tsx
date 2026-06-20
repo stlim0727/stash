@@ -931,8 +931,8 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
   },
   heroTitle: {
+    fontFamily: 'GothicA1_800ExtraBold',
     fontSize: 34,
-    fontWeight: '800',
     letterSpacing: -0.8,
   },
   heroTitleDivider: {
@@ -942,8 +942,8 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
   },
   heroTitleLocal: {
+    fontFamily: 'GowunDodum_400Regular',
     fontSize: 20,
-    fontWeight: '500',
     letterSpacing: -0.2,
   },
   heroSubtitle: {

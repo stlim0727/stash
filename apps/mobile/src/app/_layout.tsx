@@ -1,6 +1,11 @@
+import { GothicA1_700Bold, GothicA1_800ExtraBold } from '@expo-google-fonts/gothic-a1';
+import { GowunDodum_400Regular } from '@expo-google-fonts/gowun-dodum';
+import { useFonts } from 'expo-font';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { ShareIntentProvider } from 'expo-share-intent';
+import { useEffect } from 'react';
 import { useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -20,6 +25,10 @@ installConsoleCapture();
 // Start crash & error monitoring as early as possible — a no-op until a DSN is
 // configured (see observability/sentry-config).
 initSentry();
+
+// Hold the native splash until the hero wordmark fonts are ready, so the title
+// never flashes from the system font to Gothic A1 / Gowun Dodum on first paint.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 // The navigator lives in its own component so it can read the active locale
 // from `I18nProvider` (a hook can't run in the same component that mounts the
@@ -43,6 +52,27 @@ function RootStack() {
 
 function RootLayout() {
   const colorScheme = useColorScheme();
+
+  // Hero wordmark fonts: Gothic A1 for "Stash", Gowun Dodum for the native
+  // wordmark (e.g. 스태시). Loaded once at the root and referenced by family
+  // name in the Inbox hero.
+  const [fontsLoaded, fontError] = useFonts({
+    GothicA1_800ExtraBold,
+    GothicA1_700Bold,
+    GowunDodum_400Regular,
+  });
+
+  // Reveal the app once fonts resolve. A load *error* still releases the splash
+  // (and falls back to the system font) so a font hiccup can never brick boot.
+  useEffect(() => {
+    if (fontsLoaded || fontError) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [fontsLoaded, fontError]);
+
+  if (!fontsLoaded && !fontError) {
+    return null;
+  }
 
   return (
     <SafeAreaProvider>
