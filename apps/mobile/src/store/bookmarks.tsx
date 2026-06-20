@@ -179,6 +179,13 @@ const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
  *  it reflects *unreviewed* suggestions rather than merely *un-applied* ones. */
 const REVIEWED_SUGGESTIONS_KEY = 'reviewed_ai_suggestions';
 
+/** Opaque sentinel `requestAiEnrichment` returns when the AI endpoint rate-limits
+ *  (HTTP 429). The store is i18n-free, so it can't localize the message itself;
+ *  the Detail screen maps this to a translated string. Any non-UI caller (the
+ *  deferred auto-trigger) only checks for a non-null error, so the value is
+ *  inert there. */
+export const AI_RATE_LIMITED = 'ai-rate-limited';
+
 function parseIdSet(raw: string | null): Set<string> {
   if (!raw) {
     return new Set();
@@ -1118,6 +1125,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         return null;
       } catch (error) {
+        // Rate limited (429): expected when many bookmarks are captured at once.
+        // Return a sentinel the Detail screen localizes into a calm message; the
+        // deferred auto-trigger ignores this value and keeps its durable marker,
+        // so it retries on a later launch (and won't retry-storm this session).
+        if (error instanceof SupabaseRequestError && error.status === 429) {
+          return AI_RATE_LIMITED;
+        }
         return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
       } finally {
         aiEnriching.current.delete(bookmarkId);
@@ -1316,22 +1330,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // Enrichment may have completed in the meantime, so apply only the
             // sync-owned fields (identity + status) onto the LATEST row instead
             // of writing the stale snapshot back.
-            let merged: Bookmark | null = null;
-            setBookmarks((current) =>
-              (current ?? []).map((bookmark) => {
-                if (bookmark.id !== previousId) {
-                  return bookmark;
-                }
-                merged = {
-                  ...bookmark,
+            //
+            // Compute `merged` from the ref SYNCHRONOUSLY — never from inside the
+            // setBookmarks updater. A functional updater doesn't run until React's
+            // next render, so reading a variable it assigns right after the call
+            // sees the pre-update value (null). That silently skipped this whole
+            // block, so neither the metadata-reconciliation update nor the AI
+            // auto-trigger ever fired after a create synced.
+            const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === previousId);
+            const merged: Bookmark | null = latest
+              ? {
+                  ...latest,
                   id: replacement.id,
                   sync_status: replacement.sync_status,
                   updated_at: replacement.updated_at,
-                };
-                return merged;
-              }),
-            );
+                }
+              : null;
             if (merged) {
+              setBookmarks((current) =>
+                (current ?? []).map((bookmark) =>
+                  bookmark.id === previousId ? merged : bookmark,
+                ),
+              );
               // replaceBookmark (not update) so a concurrent enrichment persist
               // that resurrected the old local-ID row gets cleaned up too.
               const persisted: Bookmark = merged;

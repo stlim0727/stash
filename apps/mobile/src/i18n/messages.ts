@@ -222,6 +222,7 @@ export const en = {
   'detail.aiRefresh': 'Refresh AI suggestions',
   'detail.aiSuggest': 'Suggest with AI',
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
+  'detail.aiRateLimited': 'AI suggestions have hit their limit for now — try again a little later.',
   'detail.aiNoNew': 'No new suggestions right now.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
   // Shown as a calm, non-error note so the cause is never hidden (M12).

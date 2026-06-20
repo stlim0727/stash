@@ -42,6 +42,12 @@ function selectProvider(): EnrichmentProvider {
 }
 
 const provider: EnrichmentProvider = selectProvider();
+
+// Only throttle when a real, billable model is configured. With no API key the
+// pipeline runs the network-free DummyProvider, which costs nothing and has no
+// upstream quota to protect — rate-limiting it would just hobble local-only
+// deployments and the verify script for no benefit.
+const enforceRateLimit = provider !== fallbackProvider;
 // ────────────────────────────────────────────────────────────────────────────
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
@@ -53,11 +59,18 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-function json(body: unknown, status = 200): Response {
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json', ...extraHeaders },
   });
+}
+
+/** Verdict shape returned by the `request_ai_enrichment_slot` DB function. */
+interface RateLimitVerdict {
+  allowed: boolean;
+  reason?: string;
+  retry_after?: number;
 }
 
 /** Why an enrichment fell back to the deterministic heuristics. `not_configured`
@@ -162,6 +175,40 @@ Deno.serve(async (req) => {
     const colRes = await rest(`/collections?select=id,name`);
     if (colRes.ok) {
       collections = (await colRes.json()) as Array<{ id: string; name: string }>;
+    }
+
+    // Per-user rate limit (enforced atomically in Postgres). Checked only after
+    // the bookmark is confirmed to exist — an invalid request shouldn't spend a
+    // slot — and only when a billable provider is configured. The DB function
+    // scopes the count to the caller via the forwarded JWT (auth.uid()), so a
+    // user can only ever exhaust their own quota.
+    if (enforceRateLimit) {
+      let verdict: RateLimitVerdict | null = null;
+      try {
+        const rlRes = await rest(`/rpc/request_ai_enrichment_slot`, {
+          method: 'POST',
+          headers: { Prefer: 'return=representation' },
+          body: '{}',
+        });
+        if (rlRes.ok) {
+          verdict = (await rlRes.json()) as RateLimitVerdict;
+        } else {
+          // Fail OPEN: a missing function (migration not yet deployed) or a
+          // transient error must not break AI suggestions for everyone. The
+          // limit is a protection layer, not a correctness requirement.
+          console.error('Rate-limit check failed; allowing request:', rlRes.status);
+        }
+      } catch (err) {
+        console.error('Rate-limit check threw; allowing request:', err);
+      }
+      if (verdict && !verdict.allowed) {
+        const retryAfter = Math.max(1, Math.floor(verdict.retry_after ?? 60));
+        return json(
+          { error: 'rate_limited', reason: verdict.reason ?? 'rate_limited', retry_after: retryAfter },
+          429,
+          { 'Retry-After': String(retryAfter) },
+        );
+      }
     }
 
     const input = {

@@ -187,6 +187,7 @@ export const ko: Catalog = {
   'detail.aiRefresh': 'AI 제안 새로고침',
   'detail.aiSuggest': 'AI로 제안받기',
   'detail.aiNeedsSync': '이 북마크가 동기화되면 AI 제안을 사용할 수 있습니다.',
+  'detail.aiRateLimited': 'AI 제안이 현재 한도에 도달했습니다 — 잠시 후 다시 시도해 주세요.',
   'detail.aiNoNew': '지금은 새로운 제안이 없습니다.',
   'detail.aiDegradedRateLimited':
     'AI가 지금 혼잡하여 기본 제안을 표시합니다. 잠시 후 새로고침해 보세요.',
