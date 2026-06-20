@@ -50,6 +50,14 @@ begin
     return jsonb_build_object('allowed', false, 'reason', 'unauthenticated');
   end if;
 
+  -- Serialize the check-then-insert for THIS user. Under read-committed, a burst
+  -- of concurrent RPC calls (bulk import / abuse) could each read the same
+  -- pre-insert counts and all insert, blowing past the cap. A transaction-scoped
+  -- advisory lock keyed by the user makes the window check + insert atomic per
+  -- user (and only per user — different users never contend); it releases
+  -- automatically when this RPC's transaction ends.
+  perform pg_advisory_xact_lock(hashtextextended(v_user_id::text, 0));
+
   -- Signed-in users get the comfortable cap; anonymous sessions a tighter one.
   if v_is_anonymous then
     v_hour_limit := 10;
