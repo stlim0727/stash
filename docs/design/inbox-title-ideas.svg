@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="1180" viewBox="0 0 1040 1180" font-family="-apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="brandGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#208aef"/>
+      <stop offset="1" stop-color="#0f5ea8"/>
+    </linearGradient>
+    <linearGradient id="tileGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4ca6f5"/>
+      <stop offset="1" stop-color="#208aef"/>
+    </linearGradient>
+    <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#101828" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <rect width="1040" height="1180" fill="#eef2f8"/>
+  <text x="40" y="56" font-size="26" font-weight="800" fill="#101828" letter-spacing="-0.5">Inbox title — visual ideas</text>
+  <text x="40" y="86" font-size="15" fill="#667085">Real palette · accent #208aef · text #101828 · bg #f7f9fc</text>
+
+  <!-- ============ Card template positions ============ -->
+  <!-- Row coords: col x = 40 / 540 ; widths 460 ; height 320 ; row y = 120 / 460 / 800 -->
+
+  <!-- 1. CURRENT (baseline) -->
+  <g transform="translate(40,120)">
+    <rect width="460" height="320" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#cardShadow)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">1 · CURRENT</text>
+    <text x="28" y="150" font-size="56" font-weight="800" fill="#101828" letter-spacing="-2">Stash</text>
+    <text x="28" y="186" font-size="20" fill="#667085">Save now. Organize later.</text>
+    <text x="28" y="222" font-size="17" font-weight="600" fill="#667085">12 saved</text>
+  </g>
+
+  <!-- 2. GRADIENT WORDMARK -->
+  <g transform="translate(540,120)">
+    <rect width="460" height="320" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#cardShadow)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">2 · GRADIENT WORDMARK</text>
+    <text x="28" y="150" font-size="56" font-weight="800" fill="url(#brandGrad)" letter-spacing="-2">Stash</text>
+    <text x="28" y="186" font-size="20" fill="#667085">Save now. Organize later.</text>
+    <text x="28" y="222" font-size="17" font-weight="600" fill="#667085">12 saved</text>
+  </g>
+
+  <!-- 3. ACCENT DOT -->
+  <g transform="translate(40,460)">
+    <rect width="460" height="320" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#cardShadow)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">3 · ACCENT DOT</text>
+    <text x="28" y="150" font-size="56" font-weight="800" fill="#101828" letter-spacing="-2">Stash<tspan fill="#208aef">.</tspan></text>
+    <text x="28" y="186" font-size="20" fill="#667085">Save now. Organize later.</text>
+    <text x="28" y="222" font-size="17" font-weight="600" fill="#667085">12 saved</text>
+  </g>
+
+  <!-- 4. ICON LOCKUP (stacked layers tile) -->
+  <g transform="translate(540,460)">
+    <rect width="460" height="320" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#cardShadow)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">4 · ICON LOCKUP</text>
+    <!-- layers glyph -->
+    <g transform="translate(28,108)">
+      <rect x="0" y="0" width="56" height="56" rx="16" fill="url(#tileGrad)"/>
+      <path d="M28 14 L44 22 L28 30 L12 22 Z" fill="#ffffff"/>
+      <path d="M12 30 L28 38 L44 30" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>
+      <path d="M12 38 L28 46 L44 38" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" opacity="0.6"/>
+    </g>
+    <text x="100" y="150" font-size="48" font-weight="800" fill="#101828" letter-spacing="-1.6">Stash</text>
+    <text x="28" y="206" font-size="20" fill="#667085">Save now. Organize later.</text>
+    <text x="28" y="242" font-size="17" font-weight="600" fill="#667085">12 saved</text>
+  </g>
+
+  <!-- 5. UNDERLINE SWASH -->
+  <g transform="translate(40,800)">
+    <rect width="460" height="320" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#cardShadow)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">5 · HIGHLIGHT SWASH</text>
+    <rect x="26" y="120" width="166" height="20" rx="6" fill="#d9ecff"/>
+    <text x="28" y="150" font-size="56" font-weight="800" fill="#101828" letter-spacing="-2">Stash</text>
+    <text x="28" y="186" font-size="20" fill="#667085">Save now. Organize later.</text>
+    <text x="28" y="222" font-size="17" font-weight="600" fill="#667085">12 saved</text>
+  </g>
+
+  <!-- 6. LOWERCASE MODERN -->
+  <g transform="translate(540,800)">
+    <rect width="460" height="320" rx="22" fill="#f7f9fc" stroke="#e6eaf0" filter="url(#cardShadow)"/>
+    <text x="28" y="40" font-size="13" font-weight="700" fill="#208aef" letter-spacing="1">6 · LOWERCASE MODERN</text>
+    <text x="28" y="150" font-size="58" font-weight="700" fill="#101828" letter-spacing="-3">stash</text>
+    <text x="28" y="186" font-size="20" fill="#667085">save now · organize later</text>
+    <text x="28" y="222" font-size="15" font-weight="700" fill="#208aef" letter-spacing="0.5">12 SAVED</text>
+  </g>
+</svg>
