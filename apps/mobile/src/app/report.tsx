@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
-import { usePathname } from 'expo-router';
+import * as DocumentPicker from 'expo-document-picker';
+import { useRouter, usePathname } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
   Platform,
@@ -14,7 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { createFeedbackApi } from '@/api/feedback';
-import type { FeedbackApi, FeedbackCategory } from '@/api/feedback';
+import type { FeedbackApi, FeedbackCategory, SelectedAttachment } from '@/api/feedback';
 import { buildDiagnosticsContext, formatDiagnosticsReport } from '@/domain/diagnostics';
 import type { DiagnosticsContext } from '@/domain/diagnostics';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
@@ -55,11 +56,43 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const insets = useSafeAreaInsets();
   const auth = useSupabaseAuth();
   const pathname = usePathname();
+  const router = useRouter();
   const { queue, isSyncing, lastPulledAt } = useBookmarks();
 
   const [category, setCategory] = useState<FeedbackCategory>('bug');
   const [message, setMessage] = useState('');
+  const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
   const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
+
+  const handlePickAttachments = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/*', 'video/*'],
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled) {
+        return;
+      }
+      const picked: SelectedAttachment[] = result.assets.map((asset) => ({
+        uri: asset.uri,
+        name: asset.name,
+        mimeType: asset.mimeType ?? null,
+        size: asset.size ?? null,
+      }));
+      // De-dupe by uri so picking twice doesn't attach the same file again.
+      setAttachments((prev) => {
+        const seen = new Set(prev.map((a) => a.uri));
+        return [...prev, ...picked.filter((a) => !seen.has(a.uri))];
+      });
+    } catch {
+      // Picker dismissed or unavailable — nothing to do.
+    }
+  };
+
+  const removeAttachment = (uri: string) => {
+    setAttachments((prev) => prev.filter((a) => a.uri !== uri));
+  };
 
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
   const platform = Platform.OS;
@@ -138,9 +171,11 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         context: collectContext(),
         app_version: appVersion,
         platform,
+        attachments,
       });
       setSubmit({ status: 'success' });
       setMessage('');
+      setAttachments([]);
     } catch (error) {
       setSubmit({
         status: 'error',
@@ -230,6 +265,41 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       </View>
 
       <View style={[styles.field, { backgroundColor: palette.card }]}>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>Attachments</Text>
+        <Text style={[styles.privacyNote, { color: palette.textSecondary }]}>
+          Add screenshots or a short video to show the problem.
+        </Text>
+        {attachments.map((file) => (
+          <View key={file.uri} style={styles.attachmentRow}>
+            <Text
+              numberOfLines={1}
+              style={[styles.attachmentName, { color: palette.text }]}
+              accessibilityLabel={`Attachment ${file.name}`}
+            >
+              {file.name}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Remove ${file.name}`}
+              onPress={() => removeAttachment(file.uri)}
+            >
+              <Text style={[styles.attachmentRemove, { color: palette.accent }]}>Remove</Text>
+            </Pressable>
+          </View>
+        ))}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Add attachment"
+          style={[styles.secondaryButton, { borderColor: palette.border }]}
+          onPress={() => void handlePickAttachments()}
+        >
+          <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+            {attachments.length > 0 ? 'Add another file' : 'Add screenshot or video'}
+          </Text>
+        </Pressable>
+      </View>
+
+      <View style={[styles.field, { backgroundColor: palette.card }]}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
           Diagnostic context
         </Text>
@@ -275,6 +345,17 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       >
         <Text style={styles.submitButtonLabel}>
           {submit.status === 'submitting' ? 'Sending…' : 'Submit report'}
+        </Text>
+      </Pressable>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="View my reports"
+        style={styles.linkButton}
+        onPress={() => router.push('/my-reports')}
+      >
+        <Text style={[styles.linkButtonLabel, { color: palette.accent }]}>
+          View my reports & replies
         </Text>
       </Pressable>
     </ScrollView>
@@ -366,6 +447,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   secondaryButtonLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  attachmentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  attachmentName: {
+    flex: 1,
+    fontSize: 14,
+  },
+  attachmentRemove: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  linkButton: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  linkButtonLabel: {
     fontSize: 15,
     fontWeight: '600',
   },

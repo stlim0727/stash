@@ -28,6 +28,42 @@ implementing `ReportSink` and point that line at it. The database, the webhook,
 and the app all stay unchanged. This mirrors the `EnrichmentProvider` seam in
 `ai-enrich`.
 
+## Two-layer collaboration model (in progress)
+
+The feedback system is being grown into a two-layer tester ⇄ developer loop. The
+`feedback_reports` table now carries both **tester-facing** fields and
+**internal** fields, and the two never mix:
+
+| Field                              | Who writes it          | Visible to tester? |
+| ---------------------------------- | ---------------------- | ------------------ |
+| `message`, `attachments`, `context`| tester (on insert)     | yes (their own)    |
+| `status`                           | developer side         | yes                |
+| `developer_reply`, `resolution`    | developer side         | yes (curated)      |
+| `external_ref`                     | developer side         | **no** — internal  |
+
+- **Tester layer (app):** the report screen captures the message + screenshots/
+  videos (`feedback-attachments` Storage bucket, owner-scoped RLS), and the
+  **My reports** screen shows only the tester-safe projection
+  (`summarizeReportForTester` in `apps/mobile/src/domain/feedback.ts`), which
+  omits `external_ref` and the diagnostics `context`. A DB trigger forces every
+  privileged field to a safe value on a tester insert, and testers have no
+  UPDATE policy — so internal discussion can never be set or read by a reporter.
+- **Internal layer (planned):** a **GitHub Issues `ReportSink`** opens an issue
+  per report (where developers + Claude/Codex collaborate with full detail),
+  then writes the issue URL back to `external_ref`. Developers move `status` and
+  publish `developer_reply` / `resolution`; only those surface to the tester.
+
+### Next slices (not yet implemented)
+
+1. **`github-sink.ts`** — `ReportSink` that creates an issue (category → label,
+   diagnostics in a collapsed block, attachments linked), stores `external_ref`,
+   and reflects selected issue state back to `status` / `developer_reply`.
+2. **Tester notifications** — currently in-app only (the My reports screen).
+   Push (e.g. `expo-notifications`) on resolve/conclusion is a follow-up; it
+   needs a native module + dev build.
+3. **Attachment display** — signed URLs so testers can re-open their own
+   uploads from My reports.
+
 ## Files
 
 | File                  | Role                                                              |

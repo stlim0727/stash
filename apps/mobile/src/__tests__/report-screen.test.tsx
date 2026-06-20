@@ -56,6 +56,7 @@ jest.mock('@/api/bookmarks', () => {
 
 jest.mock('expo-router', () => ({
   usePathname: () => '/report',
+  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn() }),
 }));
 
 import ReportScreen from '@/app/report';
