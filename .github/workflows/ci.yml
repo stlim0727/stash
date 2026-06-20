@@ -27,4 +27,6 @@ jobs:
         with:
           name: tag-cloud-preview
           path: apps/mobile/.artifacts/*.svg
+          # .artifacts is a dotted (hidden) dir; v4 skips hidden files otherwise.
+          include-hidden-files: true
           if-no-files-found: warn
