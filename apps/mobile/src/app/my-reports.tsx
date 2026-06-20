@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -31,27 +31,53 @@ export default function MyReportsScreen({
   const insets = useSafeAreaInsets();
   const auth = useSupabaseAuth();
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  // Bumped by the retry button to re-run the load effect on demand.
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const load = useCallback(async () => {
-    setState({ status: 'loading' });
-    try {
-      const session = (await auth.ensureAnonymousSession?.()) ?? auth.session;
-      if (!session) {
-        throw new Error('You need an active session to see your reports.');
-      }
-      const reports = await createApi(session).listMyReports();
-      setState({ status: 'ready', reports });
-    } catch (error) {
-      setState({
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Could not load your reports.',
-      });
-    }
-  }, [auth, createApi]);
+  const status = auth.status;
+  const accessToken = auth.session?.access_token ?? null;
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (status === 'not_configured') {
+      return;
+    }
+    let cancelled = false;
+
+    async function run() {
+      setState({ status: 'loading' });
+      try {
+        // Prefer the session already on the provider; only mint/restore one when
+        // there is none, so opening this screen does not flip auth status and
+        // retrigger this effect in a loop.
+        const session = auth.session ?? (await auth.ensureAnonymousSession?.()) ?? null;
+        if (!session) {
+          throw new Error('You need an active session to see your reports.');
+        }
+        const reports = await createApi(session).listMyReports();
+        if (!cancelled) {
+          setState({ status: 'ready', reports });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setState({
+            status: 'error',
+            message: error instanceof Error ? error.message : 'Could not load your reports.',
+          });
+        }
+      }
+    }
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+    // Depend on stable auth signals (status + token) rather than the whole auth
+    // object, so a benign provider re-render does not refetch. eslint has no
+    // config in this repo; `auth` is intentionally read fresh inside run().
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, accessToken, createApi, reloadKey]);
+
+  const reload = () => setReloadKey((key) => key + 1);
 
   if (auth.status === 'not_configured') {
     return (
@@ -80,7 +106,7 @@ export default function MyReportsScreen({
             accessibilityRole="button"
             accessibilityLabel="Retry loading reports"
             style={[styles.retry, { borderColor: palette.border }]}
-            onPress={() => void load()}
+            onPress={reload}
           >
             <Text style={[styles.retryLabel, { color: palette.text }]}>Try again</Text>
           </Pressable>

@@ -63,9 +63,11 @@ export function isClosedStatus(status: string | null | undefined): boolean {
 }
 
 /**
- * A raw `feedback_reports` row as returned by Supabase REST. Internal fields
- * (`external_ref`) are present here but must be projected away before reaching a
- * tester — see `summarizeReportForTester`.
+ * A raw `feedback_reports` row as returned by Supabase REST. Internal-only data
+ * (the GitHub issue link) lives in a separate `feedback_report_internal` table
+ * that reporters cannot read, so it never appears here. The diagnostics
+ * `context` is still projected away before reaching a tester — see
+ * `summarizeReportForTester`.
  */
 export interface FeedbackReportRow {
   id: string;
@@ -77,7 +79,6 @@ export interface FeedbackReportRow {
   status?: string | null;
   developer_reply?: string | null;
   resolution?: string | null;
-  external_ref?: string | null;
   app_version?: string | null;
   platform?: string | null;
   created_at: string;
@@ -86,10 +87,10 @@ export interface FeedbackReportRow {
 
 /**
  * The tester-facing projection of a report. This is the ONLY shape that should
- * be rendered to a reporter. It intentionally excludes `external_ref` and the
- * diagnostics `context` (operational internals), surfacing only what a tester
- * needs to follow their report: the words they wrote, how many files they
- * attached, the current status, and any developer reply / resolution.
+ * be rendered to a reporter. It intentionally excludes the diagnostics
+ * `context` (operational internals), surfacing only what a tester needs to
+ * follow their report: the words they wrote, how many files they attached, the
+ * current status, and any developer reply / resolution.
  */
 export interface TesterReport {
   id: string;

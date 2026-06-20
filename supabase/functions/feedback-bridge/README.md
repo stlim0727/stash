@@ -34,12 +34,19 @@ The feedback system is being grown into a two-layer tester ⇄ developer loop. T
 `feedback_reports` table now carries both **tester-facing** fields and
 **internal** fields, and the two never mix:
 
-| Field                              | Who writes it          | Visible to tester? |
-| ---------------------------------- | ---------------------- | ------------------ |
-| `message`, `attachments`, `context`| tester (on insert)     | yes (their own)    |
-| `status`                           | developer side         | yes                |
-| `developer_reply`, `resolution`    | developer side         | yes (curated)      |
-| `external_ref`                     | developer side         | **no** — internal  |
+| Field                              | Table                          | Visible to tester? |
+| ---------------------------------- | ------------------------------ | ------------------ |
+| `message`, `attachments`, `context`| `feedback_reports` (tester ins)| yes (their own)    |
+| `status`                           | `feedback_reports` (dev side)  | yes                |
+| `developer_reply`, `resolution`    | `feedback_reports` (dev side)  | yes (curated)      |
+| `external_ref` (GitHub issue link) | `feedback_report_internal`     | **no** — internal  |
+
+`external_ref` lives in a **separate `feedback_report_internal` table** with RLS
+enabled and no policies: anon/authenticated roles read zero rows from it through
+PostgREST, while the service role (the bridge / developer tooling) bypasses RLS.
+RLS is row-level, not column-level — keeping the link in a column of the
+reporter-readable `feedback_reports` table would expose it to a direct REST
+query even though the client projection omits it.
 
 - **Tester layer (app):** the report screen captures the message + screenshots/
   videos (`feedback-attachments` Storage bucket, owner-scoped RLS), and the
@@ -50,14 +57,16 @@ The feedback system is being grown into a two-layer tester ⇄ developer loop. T
   UPDATE policy — so internal discussion can never be set or read by a reporter.
 - **Internal layer (planned):** a **GitHub Issues `ReportSink`** opens an issue
   per report (where developers + Claude/Codex collaborate with full detail),
-  then writes the issue URL back to `external_ref`. Developers move `status` and
-  publish `developer_reply` / `resolution`; only those surface to the tester.
+  then writes the issue URL to `feedback_report_internal.external_ref`.
+  Developers move `status` and publish `developer_reply` / `resolution` on
+  `feedback_reports`; only those surface to the tester.
 
 ### Next slices (not yet implemented)
 
 1. **`github-sink.ts`** — `ReportSink` that creates an issue (category → label,
-   diagnostics in a collapsed block, attachments linked), stores `external_ref`,
-   and reflects selected issue state back to `status` / `developer_reply`.
+   diagnostics in a collapsed block, attachments linked), stores the issue URL
+   in `feedback_report_internal`, and reflects selected issue state back to
+   `feedback_reports.status` / `developer_reply`.
 2. **Tester notifications** — currently in-app only (the My reports screen).
    Push (e.g. `expo-notifications`) on resolve/conclusion is a follow-up; it
    needs a native module + dev build.

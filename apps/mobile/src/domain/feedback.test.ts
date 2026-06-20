@@ -22,7 +22,6 @@ function rowFixture(overrides: Partial<FeedbackReportRow> = {}): FeedbackReportR
     status: 'in_progress',
     developer_reply: 'Thanks, looking into it.',
     resolution: null,
-    external_ref: 'https://github.com/acme/app/issues/42',
     created_at: '2026-06-20T00:00:00.000Z',
     updated_at: '2026-06-20T01:00:00.000Z',
     ...overrides,
@@ -51,10 +50,12 @@ test('isClosedStatus is true only for resolved/closed', () => {
 
 test('summarizeReportForTester drops internal fields (external_ref, context)', () => {
   const view = summarizeReportForTester(rowFixture());
-  // Internal fields must not appear on the tester projection at all.
+  // Operational internals must not appear on the tester projection at all.
+  // (The GitHub issue link lives in a separate table reporters cannot read, so
+  // it never reaches this projection in the first place.)
   const keys = view as unknown as Record<string, unknown>;
-  assert.equal('external_ref' in keys, false);
   assert.equal('context' in keys, false);
+  assert.equal('external_ref' in keys, false);
   // Tester-facing fields are carried through.
   assert.equal(view.status, 'in_progress');
   assert.equal(view.statusLabel, 'In progress');

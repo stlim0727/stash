@@ -1,22 +1,26 @@
 -- Feedback collaboration: attachments, lifecycle status, and a tester-visible
--- developer reply / resolution, plus a link to the internal issue thread.
+-- developer reply / resolution. Internal-only data lives in a separate table.
 --
 -- Visibility model (mirrors apps/mobile/src/domain/feedback.ts):
---   * Testers can READ their own rows and INSERT new ones, but a trigger forces
---     every privileged field to a safe value on insert and there is no UPDATE
---     policy for them — so status, developer_reply, resolution, and external_ref
---     are only ever written by the developer side (service role / the
---     feedback-bridge function). Internal discussion can never be set or edited
---     by a reporter.
---   * `external_ref` links to the internal GitHub issue where developers and
---     agents (Claude/Codex) collaborate; it is never projected to testers.
+--   * `feedback_reports` holds only fields a reporter is allowed to see. Testers
+--     can READ their own rows and INSERT new ones, but a trigger forces every
+--     privileged field to a safe value on insert and there is no UPDATE policy
+--     for them — so status, developer_reply, and resolution are only ever
+--     written by the developer side (service role / the feedback-bridge
+--     function).
+--   * Internal-only data (the link to the GitHub issue where developers and
+--     agents collaborate) lives in `feedback_report_internal`, which has RLS
+--     enabled and NO policies — so anon/authenticated roles cannot read it
+--     through PostgREST at all, while the service role bypasses RLS. RLS is
+--     row-level, not column-level, so keeping internals in a column of a
+--     reporter-readable table would leak them to a direct REST query even
+--     though the client projection omits the field.
 
 alter table public.feedback_reports
   add column if not exists attachments jsonb not null default '[]'::jsonb,
   add column if not exists status text not null default 'open',
   add column if not exists developer_reply text,
   add column if not exists resolution text,
-  add column if not exists external_ref text,
   add column if not exists updated_at timestamptz not null default now();
 
 alter table public.feedback_reports
@@ -39,7 +43,6 @@ begin
     new.status := 'open';
     new.developer_reply := null;
     new.resolution := null;
-    new.external_ref := null;
     new.updated_at := now();
   end if;
   return new;
@@ -88,3 +91,18 @@ create policy "Feedback attachments are writable by their owner"
     bucket_id = 'feedback-attachments'
     and (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- Internal-only side table. Holds the link to the GitHub issue (and any future
+-- internal metadata) where developers and agents collaborate. RLS is enabled
+-- with NO policies, so anon/authenticated roles get zero rows through PostgREST;
+-- only the service role (which bypasses RLS) — i.e. the feedback-bridge function
+-- and developer tooling — can read or write it. This keeps internals out of any
+-- reporter-readable row.
+create table if not exists public.feedback_report_internal (
+  report_id uuid primary key references public.feedback_reports(id) on delete cascade,
+  external_ref text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.feedback_report_internal enable row level security;
