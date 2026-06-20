@@ -17,6 +17,12 @@ alter table public.ai_enrichments
 -- degraded_reason null — the app shows the generic "basic suggestions" note when
 -- the reason is null. Idempotent: the column defaults to false, so this only
 -- touches existing dummy rows and is a no-op on re-run.
+--
+-- updated_at is bumped to now() on purpose: pull sync is incremental by an
+-- updated_at watermark (overlapped by only ~5 min for clock skew), so without
+-- this the changed rows would sit far behind every already-synced device's
+-- watermark and never be re-pulled — the backfill would only ever reach a client
+-- doing a full resync. Bumping it lands the change in the next incremental pull.
 update public.ai_enrichments
-  set degraded = true
+  set degraded = true, updated_at = now()
   where model = 'dummy-v0' and degraded = false;
