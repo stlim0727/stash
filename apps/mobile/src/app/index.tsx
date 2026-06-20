@@ -24,7 +24,7 @@ import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
-import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
+import { MONOGRAM_COLORS, itemIcon, monogramColorIndex, monogramIcon } from '@/domain/item-icon';
 import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
 import {
   DEFAULT_SORT,
@@ -607,31 +607,44 @@ export default function InboxScreen() {
           </Text>
           {tagCloud.length > 0 ? (
             <View style={styles.cloudWrap}>
-              {tagCloud.map((entry) => (
-                <Pressable
-                  key={entry.id}
-                  testID="inbox-cloud-tag"
-                  accessibilityRole="button"
-                  accessibilityLabel={`#${entry.name}, ${entry.count} bookmark${entry.count === 1 ? '' : 's'}`}
-                  // Drill into the tag: apply its filter, then drop back to cards
-                  // so the matching bookmarks are immediately visible.
-                  onPress={() => {
-                    setFilter({ kind: 'tag', id: entry.id });
-                    setViewMode('card');
-                  }}
-                  style={[styles.cloudTag, { backgroundColor: palette.mutedSurface }]}
-                >
-                  <Text
-                    style={{
-                      color: palette.accentText,
-                      fontSize: tagCloudFontSize(entry.weight),
-                      fontWeight: '700',
-                    }}
-                  >
-                    {`#${entry.name}`}
-                  </Text>
-                </Pressable>
-              ))}
+              {/* Render alphabetically so big/small words intersperse into a
+                  cloud rather than a frequency-sorted descending wedge; size +
+                  weight + a stable per-tag color carry the frequency signal. */}
+              {[...tagCloud]
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((entry) => {
+                  const size = tagCloudFontSize(entry.weight);
+                  const color = MONOGRAM_COLORS[monogramColorIndex(entry.name)];
+                  return (
+                    <Pressable
+                      key={entry.id}
+                      testID="inbox-cloud-tag"
+                      accessibilityRole="button"
+                      accessibilityLabel={`#${entry.name}, ${entry.count} bookmark${entry.count === 1 ? '' : 's'}`}
+                      hitSlop={6}
+                      // Drill into the tag: apply its filter, then drop back to
+                      // cards so the matching bookmarks are immediately visible.
+                      onPress={() => {
+                        setFilter({ kind: 'tag', id: entry.id });
+                        setViewMode('card');
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color,
+                          fontSize: size,
+                          lineHeight: Math.round(size * 1.12),
+                          letterSpacing: -0.3,
+                          fontWeight: entry.weight > 0.66 ? '800' : entry.weight > 0.33 ? '700' : '600',
+                          // Lighter tags recede a touch so the heavy ones pop.
+                          opacity: 0.55 + 0.45 * entry.weight,
+                        }}
+                      >
+                        {`#${entry.name}`}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
             </View>
           ) : (
             <Text style={[styles.empty, { color: palette.textSecondary }]}>
@@ -999,13 +1012,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
-    gap: 10,
-    paddingTop: 4,
-  },
-  cloudTag: {
-    borderRadius: 999,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    justifyContent: 'center',
+    columnGap: 14,
+    rowGap: 6,
+    paddingTop: 8,
+    paddingHorizontal: 6,
   },
   card: {
     borderRadius: 24,

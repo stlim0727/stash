@@ -23,7 +23,7 @@ export interface TagCloudEntry {
 /** Smallest tag pill font (the least-used tag). */
 export const TAG_CLOUD_MIN_FONT = 14;
 /** Largest tag pill font (the most-used tag). */
-export const TAG_CLOUD_MAX_FONT = 30;
+export const TAG_CLOUD_MAX_FONT = 34;
 
 /**
  * Build the cloud: drop blank-named tags, sort by frequency (desc) then name
