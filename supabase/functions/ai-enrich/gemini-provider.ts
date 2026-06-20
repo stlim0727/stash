@@ -68,16 +68,24 @@ function languageFor(locale: string | null | undefined): string {
   return LOCALE_LANGUAGE[base] ?? LOCALE_LANGUAGE.en;
 }
 
-const SYSTEM_INSTRUCTION = [
-  'You organize a user\'s saved bookmarks.',
-  'Given a bookmark\'s metadata, assess its content and return:',
-  '- summary: one or two neutral sentences describing what the bookmark is (a usable note). Null if there is too little to go on.',
-  '- topics: a few short lowercase subject keywords.',
-  '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1.',
-  '- suggested_collection: the single best-fit collection NAME. Strongly prefer an exact name from the provided existing collections; only propose a new concise name when none fit; null if unsure.',
-  '- confidence: your overall confidence from 0 to 1.',
-  'Base every field only on the supplied metadata. Do not fabricate specifics you were not given.',
-].join('\n');
+/** Build the system instruction for a request. The language directive lives
+ *  here (not just in the user prompt) and up front, so the model treats it as
+ *  authoritative: short keyword tags otherwise tend to come back in the source
+ *  content's language (e.g. English tags for an English page) even when a
+ *  trailing "write in Korean" line is present. */
+function buildSystemInstruction(language: string): string {
+  return [
+    'You organize a user\'s saved bookmarks.',
+    `Write the natural-language fields — summary, topics, and suggested_tags — in ${language}, regardless of the language of the bookmark's title, URL, site, or description. Translate the concepts into ${language}; do not copy words from the source language. (suggested_collection is the one exception — see below.)`,
+    'Given a bookmark\'s metadata, assess its content and return:',
+    '- summary: one or two neutral sentences describing what the bookmark is (a usable note). Null if there is too little to go on.',
+    '- topics: a few short lowercase subject keywords.',
+    '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1.',
+    '- suggested_collection: the single best-fit collection NAME copied verbatim from the provided existing collections — do NOT translate it; only propose a new concise name when none fit; null if unsure.',
+    '- confidence: your overall confidence from 0 to 1.',
+    'Base every field only on the supplied metadata. Do not fabricate specifics you were not given.',
+  ].join('\n');
+}
 
 /** Gemini's responseSchema (OpenAPI subset) — forces well-formed JSON back. */
 const RESPONSE_SCHEMA = {
@@ -228,7 +236,9 @@ export class GeminiProvider implements EnrichmentProvider {
     const modelName = this.model.replace(/^gemini:/, '');
     const url = `${this.baseUrl}/models/${modelName}:generateContent`;
     const body = JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+      systemInstruction: {
+        parts: [{ text: buildSystemInstruction(languageFor(input.locale)) }],
+      },
       contents: [{ role: 'user', parts: [{ text: buildPrompt(input) }] }],
       generationConfig: {
         temperature: 0.2,

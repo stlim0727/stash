@@ -115,6 +115,9 @@ test('asks the model to answer in the user locale when one is given', async () =
   // The free-text fields are requested in Korean; the collection name is not
   // (it must match an existing name verbatim).
   assert.match(calls[0].init?.body ?? '', /summary, suggested_tags, and topics in Korean/);
+  // …and the directive is also in the system instruction, authoritatively, so
+  // short keyword tags don't come back in the source content's language.
+  assert.match(calls[0].init?.body ?? '', /regardless of the language of the bookmark/);
 });
 
 test('defaults to English when the locale is missing or unknown', async () => {

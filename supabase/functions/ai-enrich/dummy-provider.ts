@@ -64,6 +64,41 @@ const RULES: Rule[] = [
 
 const MAX_TAGS = 5;
 
+// Localized labels for the heuristic rule tags, so the fallback also answers in
+// the user's language (M12). Only the rule tags above are translated; a
+// host-derived fallback tag (e.g. "kittens") is a proper noun and stays as-is,
+// and the collection hint stays English so it still matches the user's existing
+// collection names — same reasoning as the Gemini provider.
+const TAG_LABELS: Record<string, Record<string, string>> = {
+  ko: {
+    programming: '프로그래밍',
+    design: '디자인',
+    video: '비디오',
+    reading: '읽을거리',
+    research: '연구',
+    news: '뉴스',
+    reference: '참고자료',
+    shopping: '쇼핑',
+    social: '소셜',
+  },
+};
+
+/** Resolve the active locale's base subtag (e.g. 'ko-KR' → 'ko'), or '' when
+ *  none/unknown so callers fall through to the English defaults. */
+function localeBase(locale: string | null | undefined): string {
+  if (!locale) {
+    return '';
+  }
+  const base = locale.toLowerCase().split(/[-_]/)[0];
+  return base in TAG_LABELS ? base : '';
+}
+
+/** Translate a heuristic rule tag for the locale, defaulting to the English
+ *  tag when there is no mapping (or the locale is English/unknown). */
+function localizeTag(tag: string, base: string): string {
+  return (base && TAG_LABELS[base]?.[tag]) || tag;
+}
+
 function hostOf(url: string | null): string {
   if (!url) {
     return '';
@@ -101,6 +136,8 @@ export class DummyProvider implements EnrichmentProvider {
       .join(' ')
       .toLowerCase();
 
+    const base = localeBase(input.locale);
+
     const matched = RULES.map((rule, index) => ({
       rule,
       index,
@@ -109,7 +146,7 @@ export class DummyProvider implements EnrichmentProvider {
 
     const suggested_tags: SuggestedTag[] = matched
       .map(({ rule, index, hits }) => ({
-        name: rule.tag,
+        name: localizeTag(rule.tag, base),
         // More keyword hits → higher confidence; later rules decay slightly.
         confidence: round2(Math.min(0.9, 0.55 + 0.1 * hits - 0.03 * index)),
       }))
@@ -122,7 +159,7 @@ export class DummyProvider implements EnrichmentProvider {
       suggested_tags.push({ name: label, confidence: 0.4 });
     }
 
-    const topics = matched.map((entry) => entry.rule.tag);
+    const topics = matched.map((entry) => localizeTag(entry.rule.tag, base));
     const suggested_collection =
       matched.find((entry) => entry.rule.collection)?.rule.collection ?? null;
 
@@ -134,9 +171,13 @@ export class DummyProvider implements EnrichmentProvider {
       : null;
 
     const summary = input.url
-      ? `${capitalize(input.content_type)} from ${host || 'an unknown site'}` +
-        (input.title ? ` — “${input.title}”` : '') +
-        `. Auto-categorized by ${this.model}; review the suggested tags below.`
+      ? base === 'ko'
+        ? `${host || '알 수 없는 사이트'}의 항목` +
+          (input.title ? ` — “${input.title}”` : '') +
+          `. ${this.model}이(가) 자동 분류했습니다. 아래 제안 태그를 확인하세요.`
+        : `${capitalize(input.content_type)} from ${host || 'an unknown site'}` +
+          (input.title ? ` — “${input.title}”` : '') +
+          `. Auto-categorized by ${this.model}; review the suggested tags below.`
       : null;
 
     return { summary, topics, suggested_tags, suggested_collection, confidence };
