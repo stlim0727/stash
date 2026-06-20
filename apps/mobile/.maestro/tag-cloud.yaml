@@ -1,0 +1,18 @@
+# Smoke + screenshot flow for the Inbox tag-cloud layout (view mode #124).
+# Runs on a CI Android emulator (see .github/workflows/android-screenshots.yml).
+#
+# Like inbox.yaml this renders the deterministic first-run seed (which carries
+# the mock tags design / read-later / local-first), then switches the layout
+# segmented control to Tag cloud and captures it — the one layout that unit
+# tests and the web export can't show on a real Android surface.
+appId: com.stash.app
+---
+- launchApp:
+    clearState: true
+- assertVisible: 'Stash'
+# The layout segmented control: tap the Tag-cloud segment (testID maps to the
+# Android resource-id). The cloud renders every seed tag as "#name".
+- tapOn:
+    id: 'inbox-view-cloud'
+- assertVisible: '#design'
+- takeScreenshot: tag-cloud
