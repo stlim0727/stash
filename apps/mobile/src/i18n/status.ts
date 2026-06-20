@@ -6,6 +6,7 @@
  */
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
+import type { EnrichmentDegradedReason } from '@/domain/types';
 
 const SYNC_STATUS_KEYS: Record<string, MessageKey> = {
   pending: 'status.pending',
@@ -32,4 +33,24 @@ export function syncStatusLabel(t: TFunction, value: string): string {
 
 export function metadataStatusLabel(t: TFunction, value: string): string {
   return t('status.metadataPrefix', { status: word(t, METADATA_STATUS_KEYS, value) });
+}
+
+/**
+ * The non-error note shown when an AI enrichment came from the basic heuristics
+ * instead of the model (M12). A transient rate-limit reads differently from a
+ * general outage or a missing model key, so the cause is never hidden. Unknown
+ * reasons fall back to the generic "basic suggestions" copy.
+ */
+const DEGRADED_REASON_KEYS: Record<EnrichmentDegradedReason, MessageKey> = {
+  rate_limited: 'detail.aiDegradedRateLimited',
+  timeout: 'detail.aiDegradedUnavailable',
+  provider_error: 'detail.aiDegradedUnavailable',
+  not_configured: 'detail.aiDegradedBasic',
+};
+
+export function enrichmentDegradedLabel(
+  t: TFunction,
+  reason: EnrichmentDegradedReason | null,
+): string {
+  return t((reason && DEGRADED_REASON_KEYS[reason]) || 'detail.aiDegradedBasic');
 }

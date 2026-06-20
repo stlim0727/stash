@@ -101,6 +101,36 @@ test('sends the api key header and existing collection names in the prompt', asy
   assert.match(calls[0].init?.body ?? '', /Development, Reading/);
 });
 
+test('asks the model to answer in the user locale when one is given', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await provider.enrich(input({ locale: 'ko-KR' }));
+  // The free-text fields are requested in Korean; the collection name is not
+  // (it must match an existing name verbatim).
+  assert.match(calls[0].init?.body ?? '', /summary, suggested_tags, and topics in Korean/);
+});
+
+test('defaults to English when the locale is missing or unknown', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await provider.enrich(input({ locale: 'fr' }));
+  assert.match(calls[0].init?.body ?? '', /summary, suggested_tags, and topics in English/);
+});
+
 test('aborts and throws when the endpoint hangs past the timeout', async () => {
   // A fetch that never resolves on its own, but rejects when the signal aborts.
   const fetchImpl: FetchLike = (_url, init) =>

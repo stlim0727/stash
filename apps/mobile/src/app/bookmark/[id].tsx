@@ -18,7 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useI18n } from '@/i18n';
-import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
+import { enrichmentDegradedLabel, metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
@@ -520,6 +520,15 @@ export default function BookmarkDetailScreen() {
 
         {enrichment?.status === 'stale' ? (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
+        ) : null}
+
+        {enrichment?.degraded && !aiWorking ? (
+          <Text
+            accessibilityRole="text"
+            style={[styles.hint, { color: palette.textSecondary }]}
+          >
+            {enrichmentDegradedLabel(t, enrichment.degraded_reason)}
+          </Text>
         ) : null}
 
         {enrichment?.summary ? (

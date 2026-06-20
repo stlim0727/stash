@@ -158,6 +158,11 @@ function enrichmentFromRemote(row: RemoteAIEnrichment): AIEnrichment {
     suggested_tags: Array.isArray(row.suggested_tags)
       ? (row.suggested_tags as SuggestedTag[])
       : [],
+    // Tolerate pre-M12 rows (and any backend without the columns yet): absent →
+    // not degraded. The column defaults to false server-side, but the mapper
+    // stays defensive so a missing field can never read as `undefined`.
+    degraded: row.degraded === true,
+    degraded_reason: row.degraded ? row.degraded_reason ?? null : null,
   };
 }
 
@@ -583,15 +588,24 @@ export class BookmarkApi {
    * lag behind on-device OpenGraph enrichment (a just-captured bookmark is often
    * still a bare URL server-side), so passing them lets the model reason about
    * the real title/site instead of an empty row and return useful suggestions.
+   *
+   * `locale` is the user's active language (e.g. 'ko'), so the model writes the
+   * summary and tags in their language (M12). Optional — the server defaults to
+   * English.
    */
   async requestEnrichment(
     bookmarkId: string,
     metadata?: EnrichmentMetadataHint,
+    locale?: string,
   ): Promise<AIEnrichment> {
     const row = await this.client.request<RemoteAIEnrichment>('/functions/v1/ai-enrich', {
       method: 'POST',
       accessToken: this.session.access_token,
-      body: { bookmark_id: bookmarkId, ...(metadata ? { metadata } : {}) },
+      body: {
+        bookmark_id: bookmarkId,
+        ...(metadata ? { metadata } : {}),
+        ...(locale ? { locale } : {}),
+      },
     });
     return enrichmentFromRemote(row);
   }

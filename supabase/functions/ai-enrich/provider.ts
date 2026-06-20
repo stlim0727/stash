@@ -22,6 +22,10 @@ export interface EnrichmentInput {
    *  inventing a new name. Optional: heuristic providers ignore it, and the
    *  caller still resolves `suggested_collection` to a real id (or null). */
   collections?: string[];
+  /** BCP-47-ish locale of the requesting user (e.g. 'en', 'ko'), so a
+   *  model-backed provider can return the summary and tags in their language.
+   *  Optional: heuristic providers ignore it and the caller defaults sensibly. */
+  locale?: string;
 }
 
 export interface SuggestedTag {

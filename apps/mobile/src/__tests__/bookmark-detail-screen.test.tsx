@@ -192,6 +192,28 @@ test('a stale enrichment shows an out-of-date hint', async () => {
   expect(screen.getByText(/may be out of date since you edited this bookmark/)).toBeTruthy();
 });
 
+test('a degraded enrichment shows a non-error "basic suggestions" note', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'A url from example.com.',
+        model: 'dummy-v0',
+        degraded: true,
+        degraded_reason: 'rate_limited',
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  expect(screen.getByText(/AI is busy right now, so these are basic suggestions/)).toBeTruthy();
+});
+
 test('dismissing a suggested tag removes it from the list', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(

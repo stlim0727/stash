@@ -50,6 +50,24 @@ const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TAGS = 5;
 
+/** Human-readable language names for the locales the app ships, so the model is
+ *  told plainly what language to write in. Unknown/absent locales fall through
+ *  to English — the same fallback the rest of the app uses. */
+const LOCALE_LANGUAGE: Record<string, string> = {
+  en: 'English',
+  ko: 'Korean (한국어)',
+};
+
+/** Resolve a request locale (e.g. 'ko', 'ko-KR') to a language name for the
+ *  prompt, defaulting to English when unknown. Matches on the base subtag. */
+function languageFor(locale: string | null | undefined): string {
+  if (!locale) {
+    return LOCALE_LANGUAGE.en;
+  }
+  const base = locale.toLowerCase().split(/[-_]/)[0];
+  return LOCALE_LANGUAGE[base] ?? LOCALE_LANGUAGE.en;
+}
+
 const SYSTEM_INSTRUCTION = [
   'You organize a user\'s saved bookmarks.',
   'Given a bookmark\'s metadata, assess its content and return:',
@@ -116,6 +134,12 @@ function buildPrompt(input: EnrichmentInput): string {
   } else {
     lines.push('Existing collections: (none yet)');
   }
+  const language = languageFor(input.locale);
+  // Ask for the free-text fields in the user's language. suggested_collection is
+  // deliberately excluded: it must match an existing collection NAME verbatim
+  // (resolved by exact name in the edge function), so translating it would break
+  // the lookup. The JSON keys themselves stay English so parsing is unchanged.
+  lines.push(`Write the summary, suggested_tags, and topics in ${language}.`);
   return `Assess this bookmark and return the structured fields.\n\n${lines.join('\n')}`;
 }
 
