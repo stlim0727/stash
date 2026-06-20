@@ -50,6 +50,7 @@ export default function BookmarkDetailScreen() {
     acceptSuggestedTags,
     getReviewedSuggestions,
     markSuggestionsReviewed,
+    clearReviewedSuggestions,
     assignCollection,
     createCollection,
   } = useBookmarks();
@@ -243,8 +244,29 @@ export default function BookmarkDetailScreen() {
       markSuggestionsReviewed(bookmark.id, [name]);
     }
   };
+  // One-tap "no thanks" for the whole row: session-dismiss every chip, and
+  // persist the AI ones as reviewed (same rule as a single dismiss).
+  const handleDismissAll = () => {
+    const names = tagSuggestions.map((suggestion) => suggestion.name);
+    setDismissed((prev) => {
+      const next = new Set(prev);
+      for (const name of names) {
+        next.add(name.toLowerCase());
+      }
+      return next;
+    });
+    const aiNames = names.filter((name) => aiSuggestionNames.has(name.toLowerCase()));
+    if (aiNames.length > 0) {
+      markSuggestionsReviewed(bookmark.id, aiNames);
+    }
+  };
 
-  const handleSuggestAi = () => void runOrganizeAction(() => requestAiEnrichment(bookmark.id));
+  // A manual re-run is a deliberate "reconsider": forget prior dismissals so the
+  // model can surface tags it still recommends (accepted tags stay applied).
+  const handleSuggestAi = () => {
+    clearReviewedSuggestions(bookmark.id);
+    void runOrganizeAction(() => requestAiEnrichment(bookmark.id));
+  };
 
   const handleAcceptCollection = () => {
     if (suggestedCollection) {
@@ -448,6 +470,7 @@ export default function BookmarkDetailScreen() {
         onBrowse={(tagId) => router.navigate({ pathname: '/', params: { tag: tagId } })}
         onAcceptSuggestion={handleAcceptSuggestion}
         onDismissSuggestion={handleDismissTag}
+        onDismissAllSuggestions={handleDismissAll}
         disabledHint={
           canOrganizeRemotely ? undefined : 'Tags can be edited once this bookmark has synced.'
         }
