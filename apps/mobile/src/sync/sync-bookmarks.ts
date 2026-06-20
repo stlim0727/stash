@@ -1,5 +1,6 @@
 import { createBookmarkApi } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
+import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
 import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
 import type { SupabaseAuthSession } from '@/supabase/types';
@@ -278,18 +279,17 @@ export function reconcileOrphanedQueueEntries(
       entries.push(makeMutationEntry(bookmark.id, 'update'));
       continue;
     }
-    if (!bookmark.url) {
+    // Rebuild the create payload from the stored row — for a URL-less text note
+    // this carries its body back as shared_text so it isn't stranded unsynced.
+    const payload = createPayloadFromBookmark(bookmark);
+    if (!isUploadableCreate(payload)) {
       continue;
     }
     entries.push({
       local_id: bookmark.id,
       remote_id: null,
       operation: 'create',
-      payload: {
-        url: bookmark.url,
-        title: bookmark.title ?? undefined,
-        notes: bookmark.notes ?? undefined,
-      },
+      payload,
       sync_status: 'pending',
       retry_count: 0,
       last_error: null,

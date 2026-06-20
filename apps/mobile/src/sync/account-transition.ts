@@ -19,6 +19,7 @@
  * takes its dependencies injected so the planner stays independently testable.
  */
 
+import { createPayloadFromBookmark } from '@/domain/create-payload';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import { recordLog } from '@/observability/log-buffer';
 import type { BookmarkRepository } from '@/storage/types';
@@ -99,11 +100,9 @@ export async function applyAccountTransition(
         local_id: newId,
         remote_id: null,
         operation: 'create',
-        payload: {
-          url: old.url ?? undefined,
-          title: old.title ?? undefined,
-          notes: old.notes ?? undefined,
-        },
+        // Rebuild from the stored row, carrying a text note's body back as
+        // shared_text so URL-less notes still upload to the new account.
+        payload: createPayloadFromBookmark(old),
         sync_status: 'pending',
         retry_count: 0,
         last_error: null,
