@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { displayTitle } from '@/domain/item-display';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { useBookmarks } from '@/store/bookmarks';
@@ -26,7 +27,7 @@ export default function ArchivedScreen() {
             onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
           >
             <Text style={[styles.cardTitle, { color: palette.text }]}>
-              {item.title ?? item.url ?? t('common.untitled')}
+              {displayTitle(item) ?? t('common.untitled')}
             </Text>
             {item.url ? (
               <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>

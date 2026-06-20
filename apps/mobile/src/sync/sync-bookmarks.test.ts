@@ -349,6 +349,30 @@ test('reconcileOrphanedQueueEntries skips a url-less local bookmark', () => {
   assert.deepEqual(reconcileOrphanedQueueEntries([orphan], []), []);
 });
 
+test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its body as shared_text', () => {
+  // A text note whose queue entry was lost (row written, enqueue failed) must
+  // still self-heal: re-send the note body (stored in description) as shared_text
+  // so the server accepts the create instead of rejecting a url-less, text-less one.
+  const orphan = makeBookmark({
+    id: 'local-note',
+    url: null,
+    content_type: 'text',
+    description: '내일 3시에 회의 있습니다',
+    title: 'Reminder',
+    sync_status: 'pending',
+  });
+
+  const entries = reconcileOrphanedQueueEntries([orphan], []);
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.operation, 'create');
+  assert.deepEqual(entries[0]?.payload, {
+    title: 'Reminder',
+    notes: undefined,
+    shared_text: '내일 3시에 회의 있습니다',
+  });
+});
+
 test('reconcileOrphanedQueueEntries leaves synced and already-queued bookmarks alone', () => {
   const synced = makeBookmark({ id: 'local-synced', sync_status: 'synced' });
   const alreadyQueued = makeBookmark({ id: 'local-queued', sync_status: 'pending' });
