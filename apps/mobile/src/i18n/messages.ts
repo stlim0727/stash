@@ -92,10 +92,17 @@ export const en = {
   'inbox.addBookmark': 'Add bookmark',
   'inbox.openExternal': 'Open ↗',
   'inbox.settingsA11y': 'Settings',
+  'inbox.tagCloudHeader': 'Tags · {count}',
+  'inbox.tagCloudTagA11y': {
+    one: '#{name}, {count} bookmark',
+    other: '#{name}, {count} bookmarks',
+  },
+  'inbox.tagCloudEmpty': 'No tags yet. Tag a bookmark to see it here.',
 
   // View-mode labels (Inbox layout density).
   'viewMode.card': 'Cards',
   'viewMode.list': 'List',
+  'viewMode.cloud': 'Tag cloud',
 
   // Add bookmark.
   'add.urlLabel': 'URL',

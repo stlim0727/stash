@@ -75,9 +75,13 @@ export const ko: Catalog = {
   'inbox.addBookmark': '북마크 추가',
   'inbox.openExternal': '열기 ↗',
   'inbox.settingsA11y': '설정',
+  'inbox.tagCloudHeader': '태그 · {count}',
+  'inbox.tagCloudTagA11y': { other: '#{name}, 북마크 {count}개' },
+  'inbox.tagCloudEmpty': '아직 태그가 없습니다. 북마크에 태그를 달면 여기에 표시됩니다.',
 
   'viewMode.card': '카드',
   'viewMode.list': '목록',
+  'viewMode.cloud': '태그 클라우드',
 
   'add.urlLabel': 'URL',
   'add.urlPlaceholder': 'https://',

@@ -20,3 +20,26 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:components
+      # The logic lane writes a rendered SVG preview of the tag cloud; rasterize
+      # it to PNG (system librsvg, no repo dependency) and publish both so the
+      # layout can be eyeballed without the Android emulator job.
+      - name: Rasterize tag-cloud preview to PNG
+        if: always()
+        # Never fail the build over the preview: it's a nice-to-have artifact.
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y librsvg2-bin
+          if [ -f apps/mobile/.artifacts/tag-cloud-example.svg ]; then
+            rsvg-convert -w 1520 apps/mobile/.artifacts/tag-cloud-example.svg \
+              -o apps/mobile/.artifacts/tag-cloud-example.png
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tag-cloud-preview
+          path: |
+            apps/mobile/.artifacts/tag-cloud-example.png
+            apps/mobile/.artifacts/tag-cloud-example.svg
+          # .artifacts is a dotted (hidden) dir; v4 skips hidden files otherwise.
+          include-hidden-files: true
+          if-no-files-found: warn
