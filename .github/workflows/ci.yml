@@ -20,3 +20,11 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:components
+      # The logic lane writes a rendered SVG preview of the tag cloud; publish it
+      # so the layout can be eyeballed without the Android emulator job.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tag-cloud-preview
+          path: apps/mobile/.artifacts/*.svg
+          if-no-files-found: warn
