@@ -51,6 +51,9 @@ export default function BookmarkDetailScreen() {
     requestAiEnrichment,
     isEnriching,
     acceptSuggestedTags,
+    getReviewedSuggestions,
+    markSuggestionsReviewed,
+    clearReviewedSuggestions,
     assignCollection,
     createCollection,
   } = useBookmarks();
@@ -131,7 +134,10 @@ export default function BookmarkDetailScreen() {
   // (centralized in @/domain/ai-suggestions) and not dismissed this session,
   // plus a collection that differs from where the bookmark currently lives.
   const appliedTagNames = new Set(tags.map((tag) => tag.name.toLowerCase()));
-  const pending = pendingSuggestions(enrichment, appliedTagNames).filter(
+  // Reviewed = accepted or dismissed in a past session (durable); `dismissed` is
+  // this session's not-yet-persisted dismissals (and covers hashtag chips too).
+  const reviewedNames = getReviewedSuggestions(bookmark.id);
+  const pending = pendingSuggestions(enrichment, appliedTagNames, reviewedNames).filter(
     (suggestion) => !dismissed.has(suggestion.name.toLowerCase()),
   );
   const suggestedCollection = getCollection(enrichment?.suggested_collection_id ?? null);
@@ -232,10 +238,38 @@ export default function BookmarkDetailScreen() {
       void runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
     }
   };
-  const handleDismissTag = (name: string) =>
+  const handleDismissTag = (name: string) => {
     setDismissed((prev) => new Set(prev).add(name.toLowerCase()));
+    // Dismissing an AI suggestion is a review decision — persist it so the "✨"
+    // badge stays gone across sessions. Hashtag chips aren't AI suggestions, so
+    // they only get the session-local dismissal above.
+    if (aiSuggestionNames.has(name.toLowerCase())) {
+      markSuggestionsReviewed(bookmark.id, [name]);
+    }
+  };
+  // One-tap "no thanks" for the whole row: session-dismiss every chip, and
+  // persist the AI ones as reviewed (same rule as a single dismiss).
+  const handleDismissAll = () => {
+    const names = tagSuggestions.map((suggestion) => suggestion.name);
+    setDismissed((prev) => {
+      const next = new Set(prev);
+      for (const name of names) {
+        next.add(name.toLowerCase());
+      }
+      return next;
+    });
+    const aiNames = names.filter((name) => aiSuggestionNames.has(name.toLowerCase()));
+    if (aiNames.length > 0) {
+      markSuggestionsReviewed(bookmark.id, aiNames);
+    }
+  };
 
-  const handleSuggestAi = () => void runOrganizeAction(() => requestAiEnrichment(bookmark.id));
+  // A manual re-run is a deliberate "reconsider": forget prior dismissals so the
+  // model can surface tags it still recommends (accepted tags stay applied).
+  const handleSuggestAi = () => {
+    clearReviewedSuggestions(bookmark.id);
+    void runOrganizeAction(() => requestAiEnrichment(bookmark.id));
+  };
 
   const handleAcceptCollection = () => {
     if (suggestedCollection) {
@@ -439,6 +473,7 @@ export default function BookmarkDetailScreen() {
         onBrowse={(tagId) => router.navigate({ pathname: '/', params: { tag: tagId } })}
         onAcceptSuggestion={handleAcceptSuggestion}
         onDismissSuggestion={handleDismissTag}
+        onDismissAllSuggestions={handleDismissAll}
         disabledHint={
           canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
         }

@@ -217,6 +217,31 @@ test('dismissing a suggested tag removes it from the list', async () => {
   expect(screen.getByLabelText('Accept suggested tag video')).toBeTruthy();
 });
 
+test('dismiss all clears every suggestion at once', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        suggested_tags: [
+          { name: 'design', confidence: 0.8 },
+          { name: 'video', confidence: 0.6 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Accept suggested tag design')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Dismiss all suggestions'));
+
+  expect(screen.queryByLabelText('Accept suggested tag design')).toBeNull();
+  expect(screen.queryByLabelText('Accept suggested tag video')).toBeNull();
+});
+
 test('offers hashtags from the title as one-tap tag suggestions', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset([

@@ -27,6 +27,8 @@ interface TagFieldProps {
   onBrowse: (tagId: string) => void;
   onAcceptSuggestion: (name: string) => void;
   onDismissSuggestion: (name: string) => void;
+  /** Dismiss every current suggestion at once (the low-effort escape hatch). */
+  onDismissAllSuggestions?: () => void;
   /** Shown in place of the input when not editable. */
   disabledHint?: string;
 }
@@ -47,6 +49,7 @@ export function TagField({
   onBrowse,
   onAcceptSuggestion,
   onDismissSuggestion,
+  onDismissAllSuggestions,
   disabledHint,
 }: TagFieldProps) {
   const palette = usePalette();
@@ -164,6 +167,20 @@ export function TagField({
               </Pressable>
             </View>
           ))}
+          {onDismissAllSuggestions && suggestions.length > 1 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('tagField.dismissAllA11y')}
+              disabled={busy}
+              hitSlop={6}
+              style={styles.dismissAll}
+              onPress={onDismissAllSuggestions}
+            >
+              <Text style={[styles.dismissAllLabel, { color: palette.textSecondary }]}>
+                {t('tagField.dismissAll')}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -240,5 +257,15 @@ const styles = StyleSheet.create({
   ghostRemove: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  dismissAll: {
+    justifyContent: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+  },
+  dismissAllLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
 });

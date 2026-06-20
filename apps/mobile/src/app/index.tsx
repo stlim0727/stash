@@ -131,6 +131,7 @@ export default function InboxScreen() {
     getTagsForBookmark,
     getCollection,
     getEnrichment,
+    getReviewedSuggestions,
     collections,
     archiveBookmark,
     deleteBookmark,
@@ -596,6 +597,7 @@ export default function InboxScreen() {
           const suggestionCount = pendingSuggestions(
             getEnrichment(item.id),
             appliedNames,
+            getReviewedSuggestions(item.id),
           ).length;
           const openDetail = () =>
             router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });

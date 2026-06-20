@@ -305,6 +305,8 @@ export const en = {
   'tagField.removeA11y': 'Remove tag {name}',
   'tagField.acceptSuggestionA11y': 'Accept suggested tag {name}',
   'tagField.dismissSuggestionA11y': 'Dismiss suggested tag {name}',
+  'tagField.dismissAll': 'Dismiss all',
+  'tagField.dismissAllA11y': 'Dismiss all suggestions',
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof en;

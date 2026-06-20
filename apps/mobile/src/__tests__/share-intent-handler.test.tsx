@@ -36,8 +36,18 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+  useRouter: () => mockRouter,
+}));
+
+// dismissAfterShare backgrounds the app on platforms that allow it. The handler
+// branch only cares about its boolean result, so stub it here and drive the
+// "could self-dismiss" vs "couldn't" cases per test (real native dismissal is
+// covered by on-device verification).
+const mockDismiss = jest.fn<boolean, [string]>();
+jest.mock('@/share/dismiss', () => ({
+  dismissAfterShare: (message: string) => mockDismiss(message),
 }));
 
 // Controllable share-intent context: a cold-start share has hasShareIntent
@@ -51,6 +61,7 @@ jest.mock('expo-share-intent', () => ({
   useShareIntentContext: () => mockShareIntent,
 }));
 
+import { SHARE_BEHAVIOR_PREF_KEY } from '@/domain/share-behavior';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
@@ -71,9 +82,20 @@ function renderHandler() {
   return render(handlerTree);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   mockLoadGate.hold = false;
   mockLoadGate.release = null;
+  mockRouter.push.mockClear();
+  mockRouter.navigate.mockClear();
+  mockRouter.replace.mockClear();
+  mockRouter.back.mockClear();
+  // Default: the OS won't let us self-dismiss, so toast mode lands on the Inbox
+  // and the in-app toast is shown (which the existing assertions rely on).
+  mockDismiss.mockReset();
+  mockDismiss.mockReturnValue(false);
+  // Reset the persisted share-behavior preference to the default between tests
+  // (the fake repo's meta store outlives a single test).
+  await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'toast');
   mockShareIntent = {
     hasShareIntent: false,
     shareIntent: { webUrl: null, text: null },
@@ -211,6 +233,92 @@ describe('ShareIntentHandler', () => {
     await findByText('Already in Stash');
     expect(fakeRepo.__queue()).toHaveLength(1);
     expect(await fakeRepo.repository.listBookmarks()).toHaveLength(1);
+    unmount();
+  });
+
+  it('toast mode lands on the Inbox when the app cannot self-dismiss', async () => {
+    // iOS/web can't background the app, so a toast-mode share must not strand
+    // the user on whatever stale screen the app resumed onto — it lands on the
+    // Inbox and shows the in-app toast instead.
+    fakeRepo.__reset([]);
+    mockDismiss.mockReturnValue(false);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/toast', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+    expect(mockDismiss).toHaveBeenCalledWith('Saved to Stash');
+    unmount();
+  });
+
+  it('toast mode dismisses the app (no navigation) when the OS allows it', async () => {
+    // Android can self-dismiss: after the capture is durably written we hand
+    // control back to the previous app — no in-app navigation, and crucially
+    // the save is already enqueued before we leave (capture is sacred).
+    fakeRepo.__reset([]);
+    mockDismiss.mockReturnValue(true);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/bg', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { unmount } = await renderHandler();
+
+    await waitFor(() => expect(mockDismiss).toHaveBeenCalledWith('Saved to Stash'));
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('toast mode does not dismiss the app when the durable write fails', async () => {
+    // If the only copy of a freshly shared bookmark is still in optimistic
+    // in-memory state because the SQLite write failed, backgrounding the app
+    // would lose it. The handler must keep the user in-app (Inbox) instead —
+    // even though the OS *could* self-dismiss. Capture is sacred.
+    fakeRepo.__reset([]);
+    mockDismiss.mockReturnValue(true);
+    const originalInsert = fakeRepo.repository.insertBookmark;
+    fakeRepo.repository.insertBookmark = jest.fn(async () => {
+      throw new Error('simulated storage failure');
+    });
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/fail', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    try {
+      const { findByText, unmount } = await renderHandler();
+
+      await findByText('Saved to Stash');
+      await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+      expect(mockDismiss).not.toHaveBeenCalled();
+      unmount();
+    } finally {
+      fakeRepo.repository.insertBookmark = originalInsert;
+    }
+  });
+
+  it('inbox mode jumps to the Inbox and never dismisses the app', async () => {
+    fakeRepo.__reset([]);
+    await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/inbox', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+    expect(mockDismiss).not.toHaveBeenCalled();
     unmount();
   });
 });

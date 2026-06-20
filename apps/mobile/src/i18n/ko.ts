@@ -263,4 +263,6 @@ export const ko: Catalog = {
   'tagField.removeA11y': '태그 {name} 제거',
   'tagField.acceptSuggestionA11y': '제안된 태그 {name} 수락',
   'tagField.dismissSuggestionA11y': '제안된 태그 {name} 무시',
+  'tagField.dismissAll': '모두 무시',
+  'tagField.dismissAllA11y': '모든 제안 무시',
 };
