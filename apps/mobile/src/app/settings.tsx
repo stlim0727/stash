@@ -62,6 +62,7 @@ export default function SettingsScreen() {
     collections,
     getTagsForBookmark,
     getEnrichment,
+    getReviewedSuggestions,
     importBookmarks,
   } = useBookmarks();
   const auth = useSupabaseAuth();
@@ -225,10 +226,15 @@ export default function SettingsScreen() {
     );
   }, [shareBehavior]);
 
-  // Total high-confidence, un-applied suggestions waiting in the review queue.
+  // Total high-confidence suggestions still waiting to be reviewed (un-applied
+  // and not yet accepted/dismissed) — matches the Inbox/Review counts.
   const pendingSuggestionCount = inbox.reduce((total, bookmark) => {
     const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
-    return total + pendingSuggestions(getEnrichment(bookmark.id), applied).length;
+    return (
+      total +
+      pendingSuggestions(getEnrichment(bookmark.id), applied, getReviewedSuggestions(bookmark.id))
+        .length
+    );
   }, 0);
 
   const waiting = queue.filter((entry) => entry.sync_status !== 'synced').length;
