@@ -461,7 +461,25 @@ export default function BookmarkDetailScreen() {
         />
       </View>
 
-      {/* Tags sit directly under the note as a compact token field (its own
+      {/* Collection — no title; the folder-icon picker speaks for itself.
+          It leads the organize controls, directly above the tag field. */}
+      <View style={styles.collectionBlock}>
+        <CollectionPicker
+          collections={collections.map((item) => ({ id: item.id, name: item.name }))}
+          currentId={bookmark.collection_id}
+          currentName={collection?.name ?? null}
+          busy={busy}
+          onSelect={(value) => assignCollection(bookmark.id, value)}
+          onCreate={handleCreateCollection}
+        />
+        {collection && !collections.some((item) => item.id === collection.id) ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            {t('detail.currentlyIn', { name: collection.name })}
+          </Text>
+        ) : null}
+      </View>
+
+      {/* Tags sit under the folder as a compact token field (its own
           "Add tags…" placeholder labels it), not a separate titled panel. */}
       <TagField
         tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
@@ -478,23 +496,6 @@ export default function BookmarkDetailScreen() {
           canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
         }
       />
-
-      {/* Collection — no title; the folder-icon picker speaks for itself. */}
-      <View style={styles.collectionBlock}>
-        <CollectionPicker
-          collections={collections.map((item) => ({ id: item.id, name: item.name }))}
-          currentId={bookmark.collection_id}
-          currentName={collection?.name ?? null}
-          busy={busy}
-          onSelect={(value) => assignCollection(bookmark.id, value)}
-          onCreate={handleCreateCollection}
-        />
-        {collection && !collections.some((item) => item.id === collection.id) ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            {t('detail.currentlyIn', { name: collection.name })}
-          </Text>
-        ) : null}
-      </View>
 
       {/* AI suggestions — no redundant header; the action button names itself. */}
       <Card elevated={false} style={styles.field}>
