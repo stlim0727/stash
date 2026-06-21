@@ -113,7 +113,7 @@ test('parseOembed ignores blank/non-string fields', () => {
   assert.equal(meta.preview_image_url, undefined);
 });
 
-test('fetchPageMetadata sends a browser User-Agent so portals do not block it', async () => {
+test('fetchPageMetadata sends an identifiable User-Agent so portals do not block it', async () => {
   const originalFetch = globalThis.fetch;
   let sentHeaders: Record<string, string> = {};
   globalThis.fetch = (async (_url: string, init?: RequestInit) => {
@@ -123,8 +123,8 @@ test('fetchPageMetadata sends a browser User-Agent so portals do not block it', 
   try {
     const meta = await fetchPageMetadata('https://naver.me/GmpU1du7');
     assert.equal(meta?.title, 'OK');
-    // Header lookup is case-insensitive in spirit; we set the canonical casing.
-    assert.match(sentHeaders['User-Agent'] ?? '', /Mozilla\/5\.0/);
+    // An honest, identifiable bot UA (not a browser impersonation).
+    assert.match(sentHeaders['User-Agent'] ?? '', /StashBot/);
   } finally {
     globalThis.fetch = originalFetch;
   }

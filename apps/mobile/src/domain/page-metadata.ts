@@ -10,24 +10,30 @@ const FETCH_TIMEOUT_MS = 8000;
 const MAX_HTML_BYTES = 512 * 1024;
 
 /**
- * A browser-like User-Agent. Many sites — notably Naver and other large CJK
- * portals — serve a 403 or a content-free JS shell to header-less, bot-looking
- * requests, leaving their OpenGraph tags unreachable; the preview then fell
- * back to the bare URL slug (e.g. a `naver.me/<code>` short link yielded the
- * code as the title and no image). Sending a real UA + Accept-Language makes
- * them return the same HTML a browser sees.
+ * An honest, identifiable User-Agent. A header-less fetch looks like an
+ * anonymous bot, and some sites — notably Naver and other large CJK portals —
+ * answer those with a 403 or a content-free JS shell, leaving their OpenGraph
+ * tags unreachable (the preview then fell back to the bare URL slug, e.g. a
+ * `naver.me/<code>` short link yielded the code as the title and no image).
+ *
+ * Rather than impersonate a browser, we identify ourselves the way reputable
+ * link-unfurlers do (facebookexternalhit / Slackbot / Twitterbot): a
+ * `Mozilla/5.0 (compatible; …)` token plus the app name and a URL, so any site
+ * admin can recognize — and, if they wish, block — the fetcher. Sites that gate
+ * previews strictly on a real browser UA may still refuse this; that is their
+ * choice and enrichment degrades gracefully to URL-derived metadata.
  */
-const BROWSER_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const REQUEST_USER_AGENT =
+  'Mozilla/5.0 (compatible; StashBot/1.0; +https://github.com/stlim0727/stash) link-preview fetcher';
 
 const HTML_HEADERS: Record<string, string> = {
-  'User-Agent': BROWSER_USER_AGENT,
+  'User-Agent': REQUEST_USER_AGENT,
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'Accept-Language': 'en;q=0.9,*;q=0.5',
 };
 
 const OEMBED_HEADERS: Record<string, string> = {
-  'User-Agent': BROWSER_USER_AGENT,
+  'User-Agent': REQUEST_USER_AGENT,
   Accept: 'application/json',
 };
 
