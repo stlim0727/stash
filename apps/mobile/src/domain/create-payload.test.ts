@@ -35,14 +35,36 @@ test('rebuilds a URL bookmark payload from its row', () => {
   const payload = createPayloadFromBookmark(
     bookmark({ url: 'https://example.com/x', title: 'T', notes: 'N' }),
   );
-  assert.deepEqual(payload, { url: 'https://example.com/x', title: 'T', notes: 'N' });
+  assert.deepEqual(payload, {
+    url: 'https://example.com/x',
+    title: 'T',
+    notes: 'N',
+    client_id: undefined,
+  });
 });
 
 test('carries a text note body back as shared_text (not url)', () => {
   const payload = createPayloadFromBookmark(
     bookmark({ url: null, content_type: 'text', description: 'a thought', title: 'Note' }),
   );
-  assert.deepEqual(payload, { title: 'Note', notes: undefined, shared_text: 'a thought' });
+  assert.deepEqual(payload, {
+    title: 'Note',
+    notes: undefined,
+    shared_text: 'a thought',
+    client_id: undefined,
+  });
+});
+
+test('carries the row client_id so a rebuilt create stays idempotent', () => {
+  const urlPayload = createPayloadFromBookmark(
+    bookmark({ url: 'https://example.com/x', client_id: 'cid-1' }),
+  );
+  assert.equal(urlPayload.client_id, 'cid-1');
+
+  const textPayload = createPayloadFromBookmark(
+    bookmark({ url: null, content_type: 'text', description: 'a thought', client_id: 'cid-2' }),
+  );
+  assert.equal(textPayload.client_id, 'cid-2');
 });
 
 test('isUploadableCreate accepts a URL payload', () => {

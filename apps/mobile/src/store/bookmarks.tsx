@@ -224,6 +224,25 @@ function makeLocalId() {
 }
 
 /**
+ * A UUID-format capture id for {@link Bookmark.client_id}. Prefers the platform
+ * crypto when present (web, modern Hermes, the Node test runner) and otherwise
+ * falls back to a Math.random v4 — this is a server-side dedupe key, not a
+ * secret, so it only needs to be unique, not cryptographically strong. The
+ * cloud `bookmarks.client_id` column is `uuid`, so the format must be valid.
+ */
+function makeClientId(): string {
+  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (cryptoObj?.randomUUID) {
+    return cryptoObj.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const rand = (Math.random() * 16) | 0;
+    const value = char === 'x' ? rand : (rand & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
+/**
  * The current canonical dedupe key for an already-stored bookmark. Recomputed
  * from the URL rather than trusting the persisted `url_hash`, so a row saved by
  * an older build — whose hash predates a canonicalization change (e.g. the
@@ -708,14 +727,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
 
         const noteNow = new Date().toISOString();
-        // Text notes have no canonical key, so we don't dedupe them — re-sharing
-        // the same message is plausibly intentional, so each share is its own note.
+        // Text notes have no canonical URL key, so distinct shares are distinct
+        // notes by design. The client_id below is NOT a content key: it's this
+        // capture's stable id, resent on every retry so an interrupted upload
+        // dedupes against its own first attempt instead of inserting a twin.
+        const noteClientId = makeClientId();
         const note: Bookmark = {
           id: makeLocalId(),
           user_id: mockUserId,
           url: null,
           canonical_url: null,
           url_hash: null,
+          client_id: noteClientId,
           title: title?.trim() ? title.trim() : null,
           // The shared text is the note's body. Stored as the description to
           // mirror the cloud API (which maps shared_text → description), so a
@@ -744,6 +767,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             title: note.title ?? undefined,
             notes: note.notes ?? undefined,
             shared_text: text,
+            client_id: noteClientId,
           },
           sync_status: 'pending',
           retry_count: 0,
@@ -792,6 +816,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return { status: 'duplicate', bookmark: existing, persisted };
       }
 
+      const clientId = makeClientId();
       const bookmark: Bookmark = {
         id: makeLocalId(),
         user_id: mockUserId,
@@ -800,6 +825,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Canonical dedupe key (tracking params/fragment stripped). canonical_url
         // stays null until enrichment resolves a real rel=canonical / og:url.
         url_hash: dedupeKey,
+        client_id: clientId,
         // A title provided at capture (e.g. from the share payload) counts as
         // user-authored; enrichment only fills it when still null.
         title: title?.trim() ? title.trim() : null,
@@ -827,6 +853,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           url: normalized,
           title: bookmark.title ?? undefined,
           notes: bookmark.notes ?? undefined,
+          client_id: clientId,
         },
         sync_status: 'pending',
         retry_count: 0,

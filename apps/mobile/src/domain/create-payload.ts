@@ -10,17 +10,24 @@ import type { Bookmark, CreateBookmarkInput } from '@/domain/types';
  * note would never upload.
  */
 export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInput {
+  // Carry the row's stable capture id so a rebuilt create stays idempotent: if
+  // the original upload actually reached the cloud, resending the same client_id
+  // dedupes against it instead of inserting a duplicate (the failure mode text
+  // notes are most exposed to, having no url_hash key).
+  const clientId = bookmark.client_id ?? undefined;
   if (bookmark.url) {
     return {
       url: bookmark.url,
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
+      client_id: clientId,
     };
   }
   return {
     title: bookmark.title ?? undefined,
     notes: bookmark.notes ?? undefined,
     shared_text: bookmark.description ?? undefined,
+    client_id: clientId,
   };
 }
 

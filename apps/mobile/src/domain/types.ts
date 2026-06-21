@@ -35,6 +35,13 @@ export interface Bookmark {
   canonical_url: string | null;
   /** Hash of the canonical or normalized URL, used for dedupe. */
   url_hash: string | null;
+  /**
+   * Device-generated stable capture id. Resent unchanged on every sync retry so
+   * the server can make `create` idempotent for rows that have no `url_hash`
+   * (text notes), where retrying an interrupted upload would otherwise insert a
+   * duplicate. Optional/null for rows captured before this field existed.
+   */
+  client_id?: string | null;
   title: string | null;
   description: string | null;
   /** User-authored private notes. */
@@ -118,6 +125,13 @@ export interface CreateBookmarkInput {
   notes?: string;
   source_app?: string;
   shared_text?: string;
+  /**
+   * Stable device-generated capture id (see {@link Bookmark.client_id}). Carried
+   * in the queue payload so an interrupted upload's retry reuses the same id and
+   * the server dedupes instead of inserting a second row — the only idempotency
+   * key text notes have, since they carry no `url`.
+   */
+  client_id?: string;
 }
 
 /** What a queue entry asks the sync service to do remotely. */
