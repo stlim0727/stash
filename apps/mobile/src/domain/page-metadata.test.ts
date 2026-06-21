@@ -4,10 +4,12 @@ import { test } from 'node:test';
 import {
   detectCharset,
   fetchPageMetadata,
+  htmlHeadSummary,
   normalizeCharsetLabel,
   oembedEndpoint,
   parseOembed,
   parsePageMetadata,
+  previewSourceUrl,
   youtubeVideoId,
 } from './page-metadata.ts';
 import { clearLogEntries, getLogEntries } from '../observability/log-buffer.ts';
@@ -21,7 +23,7 @@ function htmlResponse(
   html: string,
   opts: { url?: string; contentType?: string } = {},
 ): Response {
-  const body = bytes(html);
+  const body = new TextEncoder().encode(html);
   return {
     ok: true,
     url: opts.url ?? '',
@@ -151,6 +153,86 @@ test('fetchPageMetadata retries as a browser when the bot UA is refused (403)', 
     assert.match(userAgents[1], /Chrome/);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('previewSourceUrl maps a Naver Map place entry to its server-rendered page', () => {
+  assert.equal(
+    previewSourceUrl('https://map.naver.com/p/entry/place/1887843614'),
+    'https://m.place.naver.com/place/1887843614/home',
+  );
+  // Also the older direct place host, with extra path segments.
+  assert.equal(
+    previewSourceUrl('https://pcmap.place.naver.com/place/1887843614/home'),
+    'https://m.place.naver.com/place/1887843614/home',
+  );
+});
+
+test('previewSourceUrl returns null for non-place Naver URLs and other hosts', () => {
+  assert.equal(previewSourceUrl('https://blog.naver.com/someblog/12345'), null);
+  assert.equal(previewSourceUrl('https://example.com/place/123'), null);
+  assert.equal(previewSourceUrl('not a url'), null);
+});
+
+test('fetchPageMetadata recovers a Naver Map place via the server-rendered sibling', async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  globalThis.fetch = (async (target: string) => {
+    requested.push(target);
+    // The short link / map wrapper resolves to a title-less SPA shell.
+    if (target.includes('naver.me') || target.includes('map.naver.com')) {
+      return htmlResponse('<head><meta charset="utf-8"></head>', {
+        url: 'https://map.naver.com/p/entry/place/1887843614',
+      });
+    }
+    // The m.place sibling serves the real place name + image.
+    return htmlResponse(
+      '<head><meta property="og:title" content="스타벅스 강남점"><meta property="og:image" content="/place.jpg"></head>',
+      { url: 'https://m.place.naver.com/place/1887843614/home' },
+    );
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://naver.me/F3EkvSh3');
+    assert.equal(meta?.title, '스타벅스 강남점');
+    assert.equal(meta?.preview_image_url, 'https://m.place.naver.com/place.jpg');
+    assert.ok(
+      requested.some((u) => u === 'https://m.place.naver.com/place/1887843614/home'),
+      'expected a fetch to the server-rendered place page',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('htmlHeadSummary reports meta count, og/twitter keys, and title presence', () => {
+  assert.equal(htmlHeadSummary('<head></head>'), 'metas=0 og/tw=[] title=false');
+  assert.equal(
+    htmlHeadSummary(
+      '<head><title>x</title><meta property="og:image" content="/i.jpg"><meta name="twitter:card" content="summary"><meta name="viewport" content="x"></head>',
+    ),
+    'metas=3 og/tw=[og:image,twitter:card] title=true',
+  );
+});
+
+test('the no_title diagnostic includes a structural head summary', async () => {
+  clearLogEntries();
+  const originalFetch = globalThis.fetch;
+  // A shell that DID carry og:image but no title — the summary must reveal it
+  // so we can tell "parser/title gap" from "genuinely empty shell".
+  globalThis.fetch = (async () =>
+    htmlResponse('<head><meta property="og:image" content="/i.jpg"></head>', {
+      url: 'https://example.com/spa',
+    })) as typeof fetch;
+  try {
+    await fetchPageMetadata('https://example.com/spa');
+    const errors = getLogEntries().filter((e) => e.level === 'error');
+    assert.ok(
+      errors.some((e) => /og\/tw=\[og:image\]/.test(e.message) && /title=false/.test(e.message)),
+      'expected the failure log to carry the head summary',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearLogEntries();
   }
 });
 

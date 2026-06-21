@@ -133,14 +133,40 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
 }
 
 /**
+ * A short, privacy-safe summary of a page's <head> for the failure diagnostic:
+ * how many <meta> tags it had, which og:/twitter: *keys* were present (the key
+ * names are standardized tokens, not user content), and whether a <title> tag
+ * existed at all. This is what distinguishes a genuinely empty JS shell
+ * (`metas=0 og/tw=[]`) from a page our parser failed to read (e.g.
+ * `og/tw=[og:image] title=false` → had cards but no title) — so a failed
+ * preview tells us *why* from the logs/Sentry alone, without re-capturing HTML.
+ */
+export function htmlHeadSummary(html: string): string {
+  const head = html.slice(0, MAX_HTML_BYTES);
+  const metaTags = head.match(/<meta\b[^>]*>/gi) ?? [];
+  const keys: string[] = [];
+  for (const tag of metaTags) {
+    const key = (attribute(tag, '(?:property|name)') ?? '').toLowerCase();
+    if (/^(og:|twitter:)/.test(key) && !keys.includes(key)) {
+      keys.push(key);
+    }
+  }
+  const hasTitleTag = /<title[^>]*>/i.test(head);
+  return `metas=${metaTags.length} og/tw=[${keys.join(',')}] title=${hasTitleTag}`;
+}
+
+/**
  * The result of one HTML fetch attempt: the parsed metadata (null on any
  * failure) plus a short, log-safe `outcome` tag describing what happened
  * (`ok`, `no_title`, `http_403`, `non_html:application/json`, `error:AbortError`,
- * …) so callers can record *why* a preview could not be extracted.
+ * …) so callers can record *why* a preview could not be extracted. `finalUrl`
+ * is the post-redirect URL (when we got that far), so callers can react to where
+ * a short link actually landed.
  */
 interface HtmlFetchResult {
   metadata: FetchedMetadata | null;
   outcome: string;
+  finalUrl?: string;
 }
 
 /** Fetch and parse a page's HTML metadata with a specific User-Agent. */
@@ -170,15 +196,50 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     const metadata = parsePageMetadata(html, finalUrl);
     if (!metadata.title) {
       // A 200 with no parseable title is the classic "content-free JS shell".
-      // Note the final URL so a redirect chain (e.g. naver.me → m.blog…) shows.
-      return { metadata, outcome: `no_title@${finalUrl}` };
+      // Note the final URL (so a redirect chain like naver.me → m.place shows)
+      // and a structural head summary so the failure log says *why* on its own.
+      const detail = `${htmlHeadSummary(html)} bytes=${bytes.length} ct=${contentType.split(';')[0] || 'unknown'}`;
+      return { metadata, outcome: `no_title@${finalUrl} {${detail}}`, finalUrl };
     }
-    return { metadata, outcome: 'ok' };
+    return { metadata, outcome: 'ok', finalUrl };
   } catch (err) {
     return { metadata: null, outcome: `error:${err instanceof Error ? err.name : 'unknown'}` };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Some pages are pure client-side SPAs whose initial HTML is a title-less shell
+ * (so regex scraping yields nothing), but expose a *server-rendered* sibling
+ * page with OpenGraph/`<title>` tags for link sharing. Given the URL we actually
+ * landed on, return such a sibling to fetch instead, or null when there isn't a
+ * known one.
+ *
+ * Currently handles Naver Map place entries: `map.naver.com/p/entry/place/{id}`
+ * (the new SPA wrapper) → `m.place.naver.com/place/{id}/home`, which serves the
+ * place name + image as OG meta. Also accepts the older direct `place.naver.com`
+ * hosts.
+ */
+export function previewSourceUrl(rawUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.replace(/^www\./, '');
+  const isNaver = host === 'naver.com' || host.endsWith('.naver.com');
+  if (!isNaver) {
+    return null;
+  }
+  // A numeric place id from either the map wrapper (/p/entry/place/{id}) or a
+  // direct place host (/place/{id}/…).
+  const placeId = parsed.pathname.match(/\/place\/(\d+)(?:\/|$)/)?.[1];
+  if (placeId) {
+    return `https://m.place.naver.com/place/${placeId}/home`;
+  }
+  return null;
 }
 
 /**
@@ -190,6 +251,10 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
  * title — retry once impersonating a browser. This keeps us transparent by
  * default and falls back to impersonation only for sites that actively gate
  * previews on a real browser UA (notably Naver and other CJK portals).
+ *
+ * SPA fallback: if both attempts land on a title-less shell with a known
+ * server-rendered sibling (see `previewSourceUrl`, e.g. a Naver Map place), we
+ * fetch that sibling for the real metadata.
  *
  * Diagnostics: the happy path (a title on the first try) is silent, but any
  * fallback or outright failure is logged. A run that yields no title at all is
@@ -219,13 +284,30 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // browser. Keep the bot result as a fallback so we never discard usable
   // partial metadata (e.g. a favicon) the browser retry can't improve on.
   const browser = await fetchHtmlMetadata(url, BROWSER_USER_AGENT);
-  const result = browser.metadata ?? bot.metadata;
+  let result = browser.metadata ?? bot.metadata;
+
+  // SPA shell with no title: if we landed on a page that has a server-rendered
+  // sibling (e.g. a Naver Map place entry), fetch that for the real metadata.
+  let spa: HtmlFetchResult | null = null;
+  if (!result?.title) {
+    const landedOn = browser.finalUrl ?? bot.finalUrl;
+    const altUrl = landedOn ? previewSourceUrl(landedOn) : null;
+    if (altUrl) {
+      spa = await fetchHtmlMetadata(altUrl, BROWSER_USER_AGENT);
+      if (spa.metadata?.title) {
+        recordLog('info', `preview: recovered via ${altUrl} for ${url}`);
+        return spa.metadata;
+      }
+      result = result ?? spa.metadata;
+    }
+  }
 
   if (!result?.title) {
-    // Full failure: no title from either attempt. Error level → Sentry.
+    // Full failure: no title from any attempt. Error level → Sentry.
+    const spaPart = spa ? `, spa=${spa.outcome}` : '';
     recordLog(
       'error',
-      `preview: no title for ${url} (bot=${bot.outcome}, browser=${browser.outcome})`,
+      `preview: no title for ${url} (bot=${bot.outcome}, browser=${browser.outcome}${spaPart})`,
     );
   } else {
     // Recovered via the browser fallback; keep an info breadcrumb in-app.
