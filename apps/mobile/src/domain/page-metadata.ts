@@ -9,6 +9,44 @@ const FETCH_TIMEOUT_MS = 8000;
 /** Metadata lives in <head>; don't parse unbounded documents. */
 const MAX_HTML_BYTES = 512 * 1024;
 
+/**
+ * Our honest, identifiable User-Agent — the default. A header-less fetch looks
+ * like an anonymous bot, and some sites answer those with a 403 or a
+ * content-free JS shell, leaving their OpenGraph tags unreachable (the preview
+ * then fell back to the bare URL slug, e.g. a `naver.me/<code>` short link
+ * yielded the code as the title and no image).
+ *
+ * Rather than impersonate a browser up front, we identify ourselves the way
+ * reputable link-unfurlers do (facebookexternalhit / Slackbot / Twitterbot): a
+ * `Mozilla/5.0 (compatible; …)` token plus the app name and a URL, so any site
+ * admin can recognize — and, if they wish, block — the fetcher.
+ */
+const BOT_USER_AGENT =
+  'Mozilla/5.0 (compatible; StashBot/1.0; +https://github.com/stlim0727/stash) link-preview fetcher';
+
+/**
+ * A browser User-Agent used only as a fallback. Some portals (notably Naver and
+ * other large CJK sites) gate previews strictly on a real browser UA and refuse
+ * the honest bot. We retry with this *only after* such a site has actively
+ * refused the honest request, so we stay transparent by default and impersonate
+ * a browser solely when that is the minimum needed to coax out a preview.
+ */
+const BROWSER_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+function htmlHeaders(userAgent: string): Record<string, string> {
+  return {
+    'User-Agent': userAgent,
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en;q=0.9,*;q=0.5',
+  };
+}
+
+const OEMBED_HEADERS: Record<string, string> = {
+  'User-Agent': BOT_USER_AGENT,
+  Accept: 'application/json',
+};
+
 export interface FetchedMetadata {
   title?: string;
   site_name?: string;
@@ -91,9 +129,49 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
   };
 }
 
+/** Fetch and parse a page's HTML metadata with a specific User-Agent. */
+async function fetchHtmlMetadata(
+  url: string,
+  userAgent: string,
+): Promise<FetchedMetadata | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: htmlHeaders(userAgent),
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('html')) {
+      return null;
+    }
+    // Read raw bytes and decode with the page's real charset. Many Korean/CJK
+    // sites serve legacy encodings (EUC-KR, Shift_JIS, …), often declared only
+    // in a <meta> tag, so decoding as UTF-8 produces mojibake.
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const charset = detectCharset(contentType, bytes);
+    const html = await decodeHtml(bytes, charset);
+    // Redirects may have moved us; resolve relative URLs against the final URL.
+    return parsePageMetadata(html, response.url || url);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Fetches a page and extracts its metadata. Resolves to null on timeout,
  * non-OK responses, non-HTML content, or any other failure — never throws.
+ *
+ * Hybrid User-Agent strategy: try the honest bot UA first, and only when a site
+ * refuses it — a 403/non-OK that yields null, or a content-free shell with no
+ * title — retry once impersonating a browser. This keeps us transparent by
+ * default and falls back to impersonation only for sites that actively gate
+ * previews on a real browser UA (notably Naver and other CJK portals).
  */
 export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | null> {
   // Some sites (YouTube especially) serve a consent/JS-only shell to bare
@@ -108,33 +186,33 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
     }
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const fromBot = await fetchHtmlMetadata(url, BOT_USER_AGENT);
+  if (fromBot?.title) {
+    return fromBot;
+  }
+  // The honest request was refused or returned a title-less shell; try once as a
+  // browser. Keep the bot result as a fallback so we never discard usable
+  // partial metadata (e.g. a favicon) the browser retry can't improve on.
+  const fromBrowser = await fetchHtmlMetadata(url, BROWSER_USER_AGENT);
+  return fromBrowser ?? fromBot;
+}
+
+/**
+ * Decode raw HTML bytes for the detected charset. UTF-8 (the overwhelming
+ * majority of pages) uses the built-in decoder, so the common path never pulls
+ * in the heavy legacy encoding tables; only legacy charsets (euc-kr, shift_jis,
+ * …) lazy-load `legacy-decoder`. If that chunk can't be loaded, fall back to a
+ * best-effort UTF-8 decode rather than losing all metadata.
+ */
+async function decodeHtml(bytes: Uint8Array, charset: string): Promise<string> {
+  if (charset === 'utf-8') {
+    return new TextDecoder('utf-8').decode(bytes);
+  }
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { Accept: 'text/html,application/xhtml+xml' },
-    });
-    if (!response.ok) {
-      return null;
-    }
-    const contentType = response.headers.get('content-type') ?? '';
-    if (!contentType.includes('html')) {
-      return null;
-    }
-    // Read raw bytes and decode with the page's real charset. Many Korean/CJK
-    // sites serve legacy encodings (EUC-KR, Shift_JIS, …), often declared only
-    // in a <meta> tag, so decoding as UTF-8 produces mojibake.
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    const charset = detectCharset(contentType, bytes);
-    const { decodeBytes } = await import('./legacy-decoder');
-    const html = decodeBytes(bytes, charset);
-    // Redirects may have moved us; resolve relative URLs against the final URL.
-    return parsePageMetadata(html, response.url || url);
+    const { decodeBytes } = await import('./legacy-decoder.ts');
+    return decodeBytes(bytes, charset);
   } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
+    return new TextDecoder('utf-8').decode(bytes);
   }
 }
 
@@ -270,7 +348,7 @@ async function fetchOembed(endpoint: string): Promise<FetchedMetadata | null> {
   try {
     const response = await fetch(endpoint, {
       signal: controller.signal,
-      headers: { Accept: 'application/json' },
+      headers: OEMBED_HEADERS,
     });
     if (!response.ok) {
       return null;
