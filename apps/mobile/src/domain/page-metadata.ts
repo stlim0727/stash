@@ -133,6 +133,29 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
 }
 
 /**
+ * A short, privacy-safe summary of a page's <head> for the failure diagnostic:
+ * how many <meta> tags it had, which og:/twitter: *keys* were present (the key
+ * names are standardized tokens, not user content), and whether a <title> tag
+ * existed at all. This is what distinguishes a genuinely empty JS shell
+ * (`metas=0 og/tw=[]`) from a page our parser failed to read (e.g.
+ * `og/tw=[og:image] title=false` → had cards but no title) — so a failed
+ * preview tells us *why* from the logs/Sentry alone, without re-capturing HTML.
+ */
+export function htmlHeadSummary(html: string): string {
+  const head = html.slice(0, MAX_HTML_BYTES);
+  const metaTags = head.match(/<meta\b[^>]*>/gi) ?? [];
+  const keys: string[] = [];
+  for (const tag of metaTags) {
+    const key = (attribute(tag, '(?:property|name)') ?? '').toLowerCase();
+    if (/^(og:|twitter:)/.test(key) && !keys.includes(key)) {
+      keys.push(key);
+    }
+  }
+  const hasTitleTag = /<title[^>]*>/i.test(head);
+  return `metas=${metaTags.length} og/tw=[${keys.join(',')}] title=${hasTitleTag}`;
+}
+
+/**
  * The result of one HTML fetch attempt: the parsed metadata (null on any
  * failure) plus a short, log-safe `outcome` tag describing what happened
  * (`ok`, `no_title`, `http_403`, `non_html:application/json`, `error:AbortError`,
@@ -173,8 +196,10 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     const metadata = parsePageMetadata(html, finalUrl);
     if (!metadata.title) {
       // A 200 with no parseable title is the classic "content-free JS shell".
-      // Note the final URL so a redirect chain (e.g. naver.me → m.blog…) shows.
-      return { metadata, outcome: `no_title@${finalUrl}`, finalUrl };
+      // Note the final URL (so a redirect chain like naver.me → m.place shows)
+      // and a structural head summary so the failure log says *why* on its own.
+      const detail = `${htmlHeadSummary(html)} bytes=${bytes.length} ct=${contentType.split(';')[0] || 'unknown'}`;
+      return { metadata, outcome: `no_title@${finalUrl} {${detail}}`, finalUrl };
     }
     return { metadata, outcome: 'ok', finalUrl };
   } catch (err) {

@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   detectCharset,
   fetchPageMetadata,
+  htmlHeadSummary,
   normalizeCharsetLabel,
   oembedEndpoint,
   parseOembed,
@@ -200,6 +201,38 @@ test('fetchPageMetadata recovers a Naver Map place via the server-rendered sibli
     );
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('htmlHeadSummary reports meta count, og/twitter keys, and title presence', () => {
+  assert.equal(htmlHeadSummary('<head></head>'), 'metas=0 og/tw=[] title=false');
+  assert.equal(
+    htmlHeadSummary(
+      '<head><title>x</title><meta property="og:image" content="/i.jpg"><meta name="twitter:card" content="summary"><meta name="viewport" content="x"></head>',
+    ),
+    'metas=3 og/tw=[og:image,twitter:card] title=true',
+  );
+});
+
+test('the no_title diagnostic includes a structural head summary', async () => {
+  clearLogEntries();
+  const originalFetch = globalThis.fetch;
+  // A shell that DID carry og:image but no title — the summary must reveal it
+  // so we can tell "parser/title gap" from "genuinely empty shell".
+  globalThis.fetch = (async () =>
+    htmlResponse('<head><meta property="og:image" content="/i.jpg"></head>', {
+      url: 'https://example.com/spa',
+    })) as typeof fetch;
+  try {
+    await fetchPageMetadata('https://example.com/spa');
+    const errors = getLogEntries().filter((e) => e.level === 'error');
+    assert.ok(
+      errors.some((e) => /og\/tw=\[og:image\]/.test(e.message) && /title=false/.test(e.message)),
+      'expected the failure log to carry the head summary',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearLogEntries();
   }
 });
 
