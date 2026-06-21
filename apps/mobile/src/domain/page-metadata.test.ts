@@ -113,18 +113,60 @@ test('parseOembed ignores blank/non-string fields', () => {
   assert.equal(meta.preview_image_url, undefined);
 });
 
-test('fetchPageMetadata sends an identifiable User-Agent so portals do not block it', async () => {
+test('fetchPageMetadata sends the honest bot UA first and does not retry on success', async () => {
   const originalFetch = globalThis.fetch;
-  let sentHeaders: Record<string, string> = {};
+  const userAgents: string[] = [];
   globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-    sentHeaders = (init?.headers as Record<string, string>) ?? {};
+    userAgents.push((init?.headers as Record<string, string>)?.['User-Agent'] ?? '');
     return htmlResponse('<head><meta property="og:title" content="OK"></head>');
   }) as typeof fetch;
   try {
-    const meta = await fetchPageMetadata('https://naver.me/GmpU1du7');
+    const meta = await fetchPageMetadata('https://example.com/article');
     assert.equal(meta?.title, 'OK');
-    // An honest, identifiable bot UA (not a browser impersonation).
-    assert.match(sentHeaders['User-Agent'] ?? '', /StashBot/);
+    // Only one request, with the honest bot UA — no browser fallback.
+    assert.equal(userAgents.length, 1);
+    assert.match(userAgents[0], /StashBot/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata retries as a browser when the bot UA is refused (403)', async () => {
+  const originalFetch = globalThis.fetch;
+  const userAgents: string[] = [];
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const ua = (init?.headers as Record<string, string>)?.['User-Agent'] ?? '';
+    userAgents.push(ua);
+    if (/StashBot/.test(ua)) {
+      return { ok: false, status: 403, url: '', headers: { get: () => null } } as unknown as Response;
+    }
+    return htmlResponse('<head><meta property="og:title" content="Naver post"></head>');
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://naver.me/GmpU1du7');
+    assert.equal(meta?.title, 'Naver post');
+    assert.equal(userAgents.length, 2);
+    assert.match(userAgents[0], /StashBot/);
+    assert.match(userAgents[1], /Chrome/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata retries as a browser when the bot gets a title-less shell', async () => {
+  const originalFetch = globalThis.fetch;
+  const userAgents: string[] = [];
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const ua = (init?.headers as Record<string, string>)?.['User-Agent'] ?? '';
+    userAgents.push(ua);
+    return /StashBot/.test(ua)
+      ? htmlResponse('<head><meta charset="utf-8"></head>') // content-free shell, no title
+      : htmlResponse('<head><meta property="og:title" content="Real title"></head>');
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://naver.me/GmpU1du7');
+    assert.equal(meta?.title, 'Real title');
+    assert.equal(userAgents.length, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }
