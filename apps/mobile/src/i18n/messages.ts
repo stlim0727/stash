@@ -217,25 +217,22 @@ export const en = {
   'detail.tagsDisabledHint': 'Tags can be edited once this bookmark has synced.',
   'detail.currentlyIn': 'Currently in: {name}',
   'detail.aiWorking': 'Working…',
-  'detail.aiStale':
-    'These suggestions may be out of date since you edited this bookmark — refresh to update them.',
-  'detail.aiTagsHint': 'Suggested tags are in the Tags field above — tap a “＋” chip to add.',
-  'detail.aiSuggestedCollection': 'Suggested collection: file into “{name}”',
+  'detail.aiStale': 'Edited since these suggestions — refresh to update.',
+  // Suggested folder, shown as a one-tap chip next to the collection picker.
+  'detail.aiSuggestCollectionChip': '📁 ＋ {name}',
   'detail.aiFileIntoA11y': 'File into {name}',
+  'detail.aiDismissCollectionA11y': 'Dismiss suggested collection {name}',
   'detail.aiGenerating': 'Generating suggestions…',
   'detail.aiRefresh': 'Refresh AI suggestions',
   'detail.aiSuggest': 'Suggest with AI',
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
   'detail.aiRateLimited': 'AI suggestions have hit their limit for now — try again a little later.',
-  'detail.aiNoNew': 'No new suggestions right now.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
-  // Shown as a calm, non-error note so the cause is never hidden (M12).
-  'detail.aiDegradedRateLimited':
-    'AI is busy right now, so these are basic suggestions. Try refreshing in a little while.',
-  'detail.aiDegradedUnavailable':
-    'Couldn’t reach the AI just now, so these are basic suggestions. Try refreshing.',
-  'detail.aiDegradedBasic':
-    'Showing basic suggestions — smart AI isn’t available right now.',
+  // Shown as a calm, non-error note so the cause is never hidden (M12); the
+  // precise cause is forwarded to monitoring rather than spelled out in full.
+  'detail.aiDegradedRateLimited': 'AI is busy — showing basic suggestions.',
+  'detail.aiDegradedUnavailable': 'Couldn’t reach AI — showing basic suggestions.',
+  'detail.aiDegradedBasic': 'Showing basic suggestions.',
   'detail.detailsShow': '▸  Details',
   'detail.detailsHide': '▾  Details',
   'detail.toggleDetailsA11y': 'Toggle details',
@@ -325,6 +322,8 @@ export const en = {
   'tagField.removeA11y': 'Remove tag {name}',
   'tagField.acceptSuggestionA11y': 'Accept suggested tag {name}',
   'tagField.dismissSuggestionA11y': 'Dismiss suggested tag {name}',
+  'tagField.addAll': 'Add all',
+  'tagField.addAllA11y': 'Add all suggestions',
   'tagField.dismissAll': 'Dismiss all',
   'tagField.dismissAllA11y': 'Dismiss all suggestions',
 } satisfies Record<string, Message>;

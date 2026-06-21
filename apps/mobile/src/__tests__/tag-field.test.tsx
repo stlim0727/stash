@@ -53,6 +53,24 @@ test('a suggestion chip accepts via its accessible label', async () => {
   expect(onAcceptSuggestion).toHaveBeenCalledWith('dinner');
 });
 
+test('"Add all" accepts every suggestion at once (shown only for 2+)', async () => {
+  const onAcceptAllSuggestions = jest.fn();
+  // One suggestion: the bulk action stays hidden.
+  const single = await setup({ onAcceptAllSuggestions });
+  expect(single.screen.queryByLabelText('Add all suggestions')).toBeNull();
+
+  // Two suggestions: the bulk action appears and fires the handler.
+  const multi = await setup({
+    onAcceptAllSuggestions,
+    suggestions: [
+      { name: 'dinner', confidence: 0.8 },
+      { name: 'korean', confidence: 0.7 },
+    ],
+  });
+  await fireEvent.press(multi.screen.getByLabelText('Add all suggestions'));
+  expect(onAcceptAllSuggestions).toHaveBeenCalledTimes(1);
+});
+
 test('read-only mode hides the input and shows the hint', async () => {
   const { screen } = await setup({
     editable: false,
