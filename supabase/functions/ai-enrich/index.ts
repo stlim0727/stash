@@ -326,26 +326,18 @@ Deno.serve(async (req) => {
       updated_at: now,
     };
 
-    // Upsert the latest enrichment for this bookmark: patch in place if one
-    // exists, otherwise insert. Keeps a single live row per bookmark.
-    const existingRes = await rest(
-      `/ai_enrichments?bookmark_id=eq.${bookmarkId}&select=id&order=created_at.desc&limit=1`,
-    );
-    const [existing] = existingRes.ok
-      ? ((await existingRes.json()) as Array<{ id: string }>)
-      : [];
-
-    const saveRes = existing
-      ? await rest(`/ai_enrichments?id=eq.${existing.id}`, {
-          method: 'PATCH',
-          headers: { Prefer: 'return=representation' },
-          body: JSON.stringify(row),
-        })
-      : await rest(`/ai_enrichments`, {
-          method: 'POST',
-          headers: { Prefer: 'return=representation' },
-          body: JSON.stringify({ ...row, created_at: now }),
-        });
+    // Atomic single-row upsert keyed by the unique ai_enrichments.bookmark_id.
+    // The preflight skip above wins the common (sequential) case; this handles
+    // the rare race where the app and server triggers both pass the check before
+    // either writes — ON CONFLICT updates in place instead of inserting a second
+    // row, so the one-row-per-bookmark invariant holds without a follow-up read.
+    // created_at is intentionally omitted: the column default fills it on insert
+    // and merge-duplicates leaves it untouched on update.
+    const saveRes = await rest(`/ai_enrichments?on_conflict=bookmark_id`, {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify(row),
+    });
 
     if (!saveRes.ok) {
       return json({ error: 'Failed to save enrichment' }, saveRes.status);

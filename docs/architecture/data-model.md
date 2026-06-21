@@ -78,7 +78,7 @@ Stores AI-generated metadata separately from user-authored bookmark fields.
 | Column | Type | Notes |
 | --- | --- | --- |
 | id | uuid | Primary key. |
-| bookmark_id | uuid | Bookmark reference. |
+| bookmark_id | uuid | Bookmark reference. **Unique** — one enrichment row per bookmark (the edge function upserts on conflict). |
 | user_id | uuid | Owner. |
 | summary | text | AI-generated summary. |
 | topics | jsonb | Topic labels or structured taxonomy. |
