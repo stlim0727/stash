@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { PixelRatio, Pressable, StyleSheet, Text, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { usePalette } from '@/theme';
 
@@ -8,6 +9,11 @@ type ChipVariant = 'default' | 'selected' | 'accent' | 'danger';
 interface ChipProps extends Omit<PressableProps, 'style'> {
   children: ReactNode;
   variant?: ChipVariant;
+  // Optional leading glyph. Used by the Inbox browse shelf to mark what KIND of
+  // facet a chip is — a folder for collections (and a tray for the "no
+  // collection" set) — so they read as collection filters rather than being
+  // confused with the bare "#tag" chips beside them.
+  icon?: keyof typeof Ionicons.glyphMap;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -19,7 +25,7 @@ const LABEL_FONT_SIZE = 14;
 // font/display size.
 const LABEL_LINE_RATIO = 1.57;
 
-export function Chip({ children, variant = 'default', disabled, style, ...props }: ChipProps) {
+export function Chip({ children, variant = 'default', icon, disabled, style, ...props }: ChipProps) {
   const palette = usePalette();
   const colors = {
     default: { backgroundColor: palette.surface, borderColor: palette.border, color: palette.text },
@@ -45,6 +51,9 @@ export function Chip({ children, variant = 'default', disabled, style, ...props 
       ]}
       {...props}
     >
+      {icon ? (
+        <Ionicons name={icon} size={13} color={colors.color} style={styles.icon} testID={`chip-icon-${icon}`} />
+      ) : null}
       <Text style={[styles.label, { color: colors.color, lineHeight }]}>{children}</Text>
     </Pressable>
   );
@@ -63,8 +72,12 @@ const styles = StyleSheet.create({
     minHeight: 34,
     paddingVertical: 6,
     paddingHorizontal: 13,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  icon: {
+    marginRight: 5,
   },
   label: {
     fontSize: LABEL_FONT_SIZE,
