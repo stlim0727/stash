@@ -378,6 +378,35 @@ test('files into an existing collection when the proposed name matches one (id u
   await waitFor(() => expect(screen.queryByLabelText('File into Recipes')).toBeNull());
 });
 
+test('matches a live collection that differs only in spacing/punctuation (no duplicate create)', async () => {
+  mockRouteId = SYNCED_ID;
+  // Existing folder "Watch Later"; the AI proposed "watch-later" with no id.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        {
+          id: 'col-watch',
+          user_id: 'user-test',
+          name: 'Watch Later',
+          description: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+          updated_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+    },
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_name: 'watch-later' })],
+  );
+
+  const screen = await renderDetail();
+
+  // Resolves to the existing folder — file in, never offer to create a duplicate.
+  await waitFor(() => expect(screen.getByLabelText('File into Watch Later')).toBeTruthy());
+  expect(screen.queryByLabelText('Create collection watch-later and file into it')).toBeNull();
+});
+
 test('the create-collection suggestion can be dismissed', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(

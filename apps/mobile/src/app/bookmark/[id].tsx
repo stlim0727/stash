@@ -26,8 +26,8 @@ import { TagField } from '@/ui/TagField';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { collectionMatchKey } from '@/domain/collection-match';
 import { hashtagSuggestions } from '@/domain/hashtags';
-import { normalizeTag } from '@/domain/tag-input';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
@@ -68,9 +68,9 @@ export default function BookmarkDetailScreen() {
   // Suggested collection id the user dismissed this session (local-only). A new
   // enrichment proposing a different collection re-surfaces the chip.
   const [dismissedCollectionId, setDismissedCollectionId] = useState<string | null>(null);
-  // Normalized name of a "create this collection" suggestion dismissed this
-  // session (local-only); a later enrichment proposing a different name shows again.
-  const [dismissedCollectionName, setDismissedCollectionName] = useState<string | null>(null);
+  // Match-key of a "create this collection" suggestion dismissed this session
+  // (local-only); a later enrichment proposing a different name shows again.
+  const [dismissedCollectionKey, setDismissedCollectionKey] = useState<string | null>(null);
   // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
@@ -181,8 +181,13 @@ export default function BookmarkDetailScreen() {
   // the user made since the enrichment ran is offered as "file in" rather than a
   // duplicate "create".
   const suggestedByName = enrichment?.suggested_collection_name?.trim() || null;
-  const localNameMatch = suggestedByName
-    ? collections.find((item) => normalizeTag(item.name) === normalizeTag(suggestedByName))
+  // Re-match against the live collection list with the SAME tolerant key the
+  // edge function used, so a folder the user created since the enrichment ran
+  // (e.g. "watch-later") still resolves a suggestion of "Watch Later" to "file
+  // into" rather than offering a duplicate "create".
+  const suggestedNameKey = suggestedByName ? collectionMatchKey(suggestedByName) : '';
+  const localNameMatch = suggestedNameKey
+    ? collections.find((item) => collectionMatchKey(item.name) === suggestedNameKey)
     : undefined;
   const suggestedCollection =
     getCollection(enrichment?.suggested_collection_id ?? null) ?? localNameMatch ?? null;
@@ -192,9 +197,7 @@ export default function BookmarkDetailScreen() {
     suggestedCollection.id !== dismissedCollectionId;
   // Offer to create a brand-new collection only when nothing existing matched.
   const showCreateCollectionSuggestion =
-    !suggestedCollection &&
-    !!suggestedByName &&
-    normalizeTag(suggestedByName) !== dismissedCollectionName;
+    !suggestedCollection && !!suggestedByName && suggestedNameKey !== dismissedCollectionKey;
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
@@ -604,7 +607,7 @@ export default function BookmarkDetailScreen() {
                 accessibilityLabel={t('detail.aiDismissCollectionA11y', { name: suggestedByName! })}
                 disabled={busy}
                 hitSlop={6}
-                onPress={() => setDismissedCollectionName(normalizeTag(suggestedByName!))}
+                onPress={() => setDismissedCollectionKey(suggestedNameKey)}
               >
                 <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
               </Pressable>
