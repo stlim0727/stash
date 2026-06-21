@@ -21,8 +21,19 @@ import { BackHandler, Platform, ToastAndroid } from 'react-native';
  * navigate (the in-app UI is going away); when `false` it should land on the
  * Inbox and show its own in-app toast.
  */
+/**
+ * Whether `dismissAfterShare` will actually self-dismiss on this platform —
+ * only Android can. Callers use this to decide, *before* the app exits,
+ * whether the user will be left without an in-app confirmation (and so needs a
+ * "confirm on next open" record). It's the single source of truth for that
+ * condition, shared with `dismissAfterShare` below.
+ */
+export function canDismissAfterShare(): boolean {
+  return Platform.OS === 'android';
+}
+
 export function dismissAfterShare(message: string): boolean {
-  if (Platform.OS !== 'android') {
+  if (!canDismissAfterShare()) {
     return false;
   }
   // Fire the confirmation before we leave so it survives the activity finishing.

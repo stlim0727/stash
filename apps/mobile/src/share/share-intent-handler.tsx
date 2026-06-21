@@ -11,7 +11,7 @@ import {
 import { pickSharedImage, type SharedImage } from '@/domain/image-share';
 import { extractFirstUrl } from '@/domain/urls';
 import { useT } from '@/i18n';
-import { dismissAfterShare } from '@/share/dismiss';
+import { canDismissAfterShare, dismissAfterShare } from '@/share/dismiss';
 import { recordPendingShareConfirm } from '@/share/pending-confirm';
 import { getPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
@@ -151,8 +151,11 @@ export function ShareIntentHandler() {
         // to the other app — the same reason we awaited the durable write
         // above. `dismissAfterShare` calls `exitApp()` synchronously, so a
         // fire-and-forget write here could be cut off and leave the reopened
-        // app with nothing to confirm. Only a brand-new save is recorded.
-        if (isNewSave) {
+        // app with nothing to confirm. Only record it when the app will
+        // actually self-dismiss (Android): on iOS/web we fall through to an
+        // in-app toast + Inbox below, which already confirms the save, so a
+        // record there would surface a stale "saved" toast on the next launch.
+        if (isNewSave && canDismissAfterShare()) {
           await recordPendingShareConfirm();
         }
         if (dismissAfterShare(message)) {
