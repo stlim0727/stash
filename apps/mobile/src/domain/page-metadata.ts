@@ -5,6 +5,9 @@
  * fall back to URL-derived metadata.
  */
 
+// Relative .ts import (not the @ alias) so Node's test runner can resolve it.
+import { recordLog } from '../observability/log-buffer.ts';
+
 const FETCH_TIMEOUT_MS = 8000;
 /** Metadata lives in <head>; don't parse unbounded documents. */
 const MAX_HTML_BYTES = 512 * 1024;
@@ -129,11 +132,19 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
   };
 }
 
+/**
+ * The result of one HTML fetch attempt: the parsed metadata (null on any
+ * failure) plus a short, log-safe `outcome` tag describing what happened
+ * (`ok`, `no_title`, `http_403`, `non_html:application/json`, `error:AbortError`,
+ * …) so callers can record *why* a preview could not be extracted.
+ */
+interface HtmlFetchResult {
+  metadata: FetchedMetadata | null;
+  outcome: string;
+}
+
 /** Fetch and parse a page's HTML metadata with a specific User-Agent. */
-async function fetchHtmlMetadata(
-  url: string,
-  userAgent: string,
-): Promise<FetchedMetadata | null> {
+async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFetchResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -142,11 +153,11 @@ async function fetchHtmlMetadata(
       headers: htmlHeaders(userAgent),
     });
     if (!response.ok) {
-      return null;
+      return { metadata: null, outcome: `http_${response.status}` };
     }
     const contentType = response.headers.get('content-type') ?? '';
     if (!contentType.includes('html')) {
-      return null;
+      return { metadata: null, outcome: `non_html:${contentType.split(';')[0] || 'unknown'}` };
     }
     // Read raw bytes and decode with the page's real charset. Many Korean/CJK
     // sites serve legacy encodings (EUC-KR, Shift_JIS, …), often declared only
@@ -155,9 +166,16 @@ async function fetchHtmlMetadata(
     const charset = detectCharset(contentType, bytes);
     const html = await decodeHtml(bytes, charset);
     // Redirects may have moved us; resolve relative URLs against the final URL.
-    return parsePageMetadata(html, response.url || url);
-  } catch {
-    return null;
+    const finalUrl = response.url || url;
+    const metadata = parsePageMetadata(html, finalUrl);
+    if (!metadata.title) {
+      // A 200 with no parseable title is the classic "content-free JS shell".
+      // Note the final URL so a redirect chain (e.g. naver.me → m.blog…) shows.
+      return { metadata, outcome: `no_title@${finalUrl}` };
+    }
+    return { metadata, outcome: 'ok' };
+  } catch (err) {
+    return { metadata: null, outcome: `error:${err instanceof Error ? err.name : 'unknown'}` };
   } finally {
     clearTimeout(timer);
   }
@@ -172,6 +190,13 @@ async function fetchHtmlMetadata(
  * title — retry once impersonating a browser. This keeps us transparent by
  * default and falls back to impersonation only for sites that actively gate
  * previews on a real browser UA (notably Naver and other CJK portals).
+ *
+ * Diagnostics: the happy path (a title on the first try) is silent, but any
+ * fallback or outright failure is logged. A run that yields no title at all is
+ * logged at `error` level so it reaches Sentry (URL-scrubbed there; full detail
+ * stays in the in-app diagnostics buffer) — that is exactly the "no proper
+ * preview" symptom, annotated with the per-UA outcomes so we can see whether a
+ * portal returned a 403, a shell, a redirect, or a network error.
  */
 export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | null> {
   // Some sites (YouTube especially) serve a consent/JS-only shell to bare
@@ -186,15 +211,30 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
     }
   }
 
-  const fromBot = await fetchHtmlMetadata(url, BOT_USER_AGENT);
-  if (fromBot?.title) {
-    return fromBot;
+  const bot = await fetchHtmlMetadata(url, BOT_USER_AGENT);
+  if (bot.metadata?.title) {
+    return bot.metadata;
   }
   // The honest request was refused or returned a title-less shell; try once as a
   // browser. Keep the bot result as a fallback so we never discard usable
   // partial metadata (e.g. a favicon) the browser retry can't improve on.
-  const fromBrowser = await fetchHtmlMetadata(url, BROWSER_USER_AGENT);
-  return fromBrowser ?? fromBot;
+  const browser = await fetchHtmlMetadata(url, BROWSER_USER_AGENT);
+  const result = browser.metadata ?? bot.metadata;
+
+  if (!result?.title) {
+    // Full failure: no title from either attempt. Error level → Sentry.
+    recordLog(
+      'error',
+      `preview: no title for ${url} (bot=${bot.outcome}, browser=${browser.outcome})`,
+    );
+  } else {
+    // Recovered via the browser fallback; keep an info breadcrumb in-app.
+    recordLog(
+      'info',
+      `preview: recovered via browser UA for ${url} (bot=${bot.outcome})`,
+    );
+  }
+  return result;
 }
 
 /**

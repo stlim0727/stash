@@ -10,6 +10,7 @@ import {
   parsePageMetadata,
   youtubeVideoId,
 } from './page-metadata.ts';
+import { clearLogEntries, getLogEntries } from '../observability/log-buffer.ts';
 
 function bytes(str: string): Uint8Array {
   return new Uint8Array([...str].map((ch) => ch.charCodeAt(0)));
@@ -150,6 +151,31 @@ test('fetchPageMetadata retries as a browser when the bot UA is refused (403)', 
     assert.match(userAgents[1], /Chrome/);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata records an error diagnostic with outcomes when no preview is found', async () => {
+  clearLogEntries();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const ua = (init?.headers as Record<string, string>)?.['User-Agent'] ?? '';
+    // Bot gets 403; browser also fails (network error) — total failure.
+    if (/StashBot/.test(ua)) {
+      return { ok: false, status: 403, url: '', headers: { get: () => null } } as unknown as Response;
+    }
+    throw new Error('boom');
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://naver.me/GmpU1du7');
+    assert.equal(meta, null);
+    const errors = getLogEntries().filter((e) => e.level === 'error');
+    assert.ok(
+      errors.some((e) => /preview: no title/.test(e.message) && /bot=http_403/.test(e.message)),
+      'expected an error log annotated with the per-UA outcomes',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    clearLogEntries();
   }
 });
 
