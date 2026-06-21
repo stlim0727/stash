@@ -6,12 +6,17 @@
 // it. The client picks the result up immediately from the response and again
 // on its next pull sync.
 //
-// Auth: the caller's Supabase JWT is forwarded straight to PostgREST, so Row
-// Level Security scopes every read/write to the bookmark's owner — this
-// function holds no elevated privileges. It is deployed with verify_jwt = false
-// (see supabase/config.toml) so the gateway does not pre-reject the app's
-// anonymous-session tokens; authorization is enforced by RLS via the forwarded
-// token, and a missing token is rejected below.
+// Auth has two paths (see request-auth.ts):
+//   * App requests forward the user's Supabase JWT; it goes straight to
+//     PostgREST so Row Level Security scopes every read/write to the bookmark's
+//     owner and this function holds no elevated privilege.
+//   * The database trigger (dispatch_ai_enrichment) fires server-side once a
+//     bookmark's metadata settles, with no user session to forward. It proves
+//     itself with the shared `x-ai-enrich-secret` header; we then use the
+//     service-role key and scope the work to the bookmark's owner by user_id.
+// Deployed with verify_jwt = false (see supabase/config.toml) so the gateway
+// neither pre-rejects the app's anonymous-session tokens nor blocks the
+// secret-authenticated trigger; authorization is enforced here.
 //
 // To ship a real model: implement EnrichmentProvider in a new module and
 // change the single `provider` assignment below. Nothing else in the function,
@@ -20,6 +25,7 @@
 import { DummyProvider } from './dummy-provider.ts';
 import { GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
+import { resolveCallerAuth } from './request-auth.ts';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
 // Use the Gemini-backed provider when an API key is configured; otherwise fall
@@ -52,6 +58,12 @@ const enforceRateLimit = provider !== fallbackProvider;
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+// Auto-injected by Supabase into every edge function; used only on the trusted
+// server-trigger path (never with a client-forwarded token).
+const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+// The shared secret the dispatch_ai_enrichment trigger sends. Set out-of-band
+// (`supabase secrets set AI_ENRICH_TRIGGER_SECRET=…`); unset ⇒ no server path.
+const TRIGGER_SECRET = Deno.env.get('AI_ENRICH_TRIGGER_SECRET') ?? '';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -111,9 +123,19 @@ Deno.serve(async (req) => {
     return json({ error: 'Method not allowed' }, 405);
   }
 
-  const authorization = req.headers.get('Authorization');
-  if (!authorization) {
-    return json({ error: 'Missing Authorization header' }, 401);
+  const caller = resolveCallerAuth({
+    authorization: req.headers.get('Authorization'),
+    secretHeader: req.headers.get('x-ai-enrich-secret'),
+    triggerSecret: TRIGGER_SECRET || null,
+  });
+  if (caller.kind === 'unauthorized') {
+    return json({ error: 'Unauthorized' }, 401);
+  }
+  const serverPath = caller.kind === 'server';
+  if (serverPath && !SERVICE_ROLE_KEY) {
+    // The trigger authenticated, but the function isn't configured to act for it.
+    console.error('Server-path request but SUPABASE_SERVICE_ROLE_KEY is unset');
+    return json({ error: 'Server path not configured' }, 500);
   }
 
   let body: Record<string, unknown>;
@@ -144,13 +166,20 @@ Deno.serve(async (req) => {
     return typeof provided === 'string' && provided.trim() ? provided.trim() : dbValue;
   };
 
-  // PostgREST as the calling user (RLS enforced).
+  // PostgREST auth: the app path forwards the user's token (RLS enforced); the
+  // server path uses the service-role key (RLS bypassed) and must therefore
+  // scope every query to the bookmark's owner by hand (user_id filters below).
+  // Narrow on caller.kind (not the serverPath boolean) so the type checker sees
+  // `authorization` is present on the app branch.
+  const restAuth =
+    caller.kind === 'server'
+      ? { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` }
+      : { apikey: ANON_KEY, Authorization: caller.authorization };
   const rest = (path: string, init: RequestInit = {}) =>
     fetch(`${SUPABASE_URL}/rest/v1${path}`, {
       ...init,
       headers: {
-        apikey: ANON_KEY,
-        Authorization: authorization,
+        ...restAuth,
         'Content-Type': 'application/json',
         ...(init.headers ?? {}),
       },
@@ -168,11 +197,30 @@ Deno.serve(async (req) => {
       return json({ error: 'Bookmark not found' }, 404);
     }
 
+    // On the server path nothing has enriched this bookmark unless a prior
+    // dispatch (or the app) already did — in which case skip before spending a
+    // rate-limit slot or calling the model. This is the dedupe seam with the
+    // client trigger: whichever fires first wins. (The app path always runs, so
+    // a manual "refresh AI suggestions" can re-enrich.)
+    if (serverPath) {
+      const existing = await rest(
+        `/ai_enrichments?bookmark_id=eq.${bookmarkId}&select=id&limit=1`,
+      );
+      if (existing.ok) {
+        const [row] = (await existing.json()) as Array<{ id: string }>;
+        if (row) {
+          return json({ skipped: 'already_enriched' }, 200);
+        }
+      }
+    }
+
     // Load the user's collections up front: their names guide the provider
     // toward an existing bucket, and the same list resolves the returned name
     // hint to a real id below — never inventing or creating a collection here.
+    // Scoped to the owner explicitly so the service-role path can't leak another
+    // user's collection names (a no-op on the RLS-scoped app path).
     let collections: Array<{ id: string; name: string }> = [];
-    const colRes = await rest(`/collections?select=id,name`);
+    const colRes = await rest(`/collections?user_id=eq.${bookmark.user_id}&select=id,name`);
     if (colRes.ok) {
       collections = (await colRes.json()) as Array<{ id: string; name: string }>;
     }
@@ -185,11 +233,20 @@ Deno.serve(async (req) => {
     if (enforceRateLimit) {
       let verdict: RateLimitVerdict | null = null;
       try {
-        const rlRes = await rest(`/rpc/request_ai_enrichment_slot`, {
-          method: 'POST',
-          headers: { Prefer: 'return=representation' },
-          body: '{}',
-        });
+        // The app path's RPC scopes to the caller via the forwarded JWT
+        // (auth.uid()); the server path has no token, so the service-role-only
+        // variant takes the owner id explicitly.
+        const rlRes = serverPath
+          ? await rest(`/rpc/request_ai_enrichment_slot_for`, {
+              method: 'POST',
+              headers: { Prefer: 'return=representation' },
+              body: JSON.stringify({ p_user_id: bookmark.user_id }),
+            })
+          : await rest(`/rpc/request_ai_enrichment_slot`, {
+              method: 'POST',
+              headers: { Prefer: 'return=representation' },
+              body: '{}',
+            });
         if (rlRes.ok) {
           verdict = (await rlRes.json()) as RateLimitVerdict;
         } else {
@@ -269,26 +326,18 @@ Deno.serve(async (req) => {
       updated_at: now,
     };
 
-    // Upsert the latest enrichment for this bookmark: patch in place if one
-    // exists, otherwise insert. Keeps a single live row per bookmark.
-    const existingRes = await rest(
-      `/ai_enrichments?bookmark_id=eq.${bookmarkId}&select=id&order=created_at.desc&limit=1`,
-    );
-    const [existing] = existingRes.ok
-      ? ((await existingRes.json()) as Array<{ id: string }>)
-      : [];
-
-    const saveRes = existing
-      ? await rest(`/ai_enrichments?id=eq.${existing.id}`, {
-          method: 'PATCH',
-          headers: { Prefer: 'return=representation' },
-          body: JSON.stringify(row),
-        })
-      : await rest(`/ai_enrichments`, {
-          method: 'POST',
-          headers: { Prefer: 'return=representation' },
-          body: JSON.stringify({ ...row, created_at: now }),
-        });
+    // Atomic single-row upsert keyed by the unique ai_enrichments.bookmark_id.
+    // The preflight skip above wins the common (sequential) case; this handles
+    // the rare race where the app and server triggers both pass the check before
+    // either writes — ON CONFLICT updates in place instead of inserting a second
+    // row, so the one-row-per-bookmark invariant holds without a follow-up read.
+    // created_at is intentionally omitted: the column default fills it on insert
+    // and merge-duplicates leaves it untouched on update.
+    const saveRes = await rest(`/ai_enrichments?on_conflict=bookmark_id`, {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify(row),
+    });
 
     if (!saveRes.ok) {
       return json({ error: 'Failed to save enrichment' }, saveRes.status);

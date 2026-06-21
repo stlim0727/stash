@@ -18,7 +18,54 @@ the device's freshest content fields so the model reasons about the real
 title/site even when the stored row still lags behind on-device enrichment.
 
 The caller's JWT is forwarded to PostgREST, so Row Level Security scopes every
-read and write to the bookmark's owner. The function holds no service-role key.
+read and write to the bookmark's owner. On this app path the function holds no
+service-role key.
+
+## Server-side trigger (enrich even when the app is away)
+
+The app only fires this function while it is running. A link shared and then
+dismissed — or a bookmark owned by another device — could sit in the cloud with
+no suggestions until the owning app next opens. A database trigger closes that
+gap: when a bookmark's `metadata_status` transitions out of `pending` (the model
+now has a real title/site, not the bare captured URL) and nothing has enriched
+it yet, `dispatch_ai_enrichment` (see
+`supabase/migrations/20260621000000_ai_enrich_server_trigger.sql`) calls this
+function over `pg_net`.
+
+A trigger has no user session, so it authenticates with a shared secret header
+instead of a JWT:
+
+```
+POST /functions/v1/ai-enrich
+x-ai-enrich-secret: <shared secret>
+{ "bookmark_id": "<uuid>", "user_id": "<uuid>" }
+→ 200 { ...ai_enrichment row }  |  200 { "skipped": "already_enriched" }
+```
+
+On this path the function uses the service-role key (auto-injected as
+`SUPABASE_SERVICE_ROLE_KEY`) and scopes all work to the bookmark's owner by
+`user_id` by hand. The secret is compared in constant time (`request-auth.ts`);
+a wrong secret is `401` and never downgraded to the app path. The same per-user
+rate limit applies, via the `service_role`-only `request_ai_enrichment_slot_for`
+variant. The client and trigger dedupe on the "already enriched?" check, so
+whichever fires first wins and the other is a cheap no-op. Server-triggered
+enrichment runs in English (a trigger has no per-user locale); in-app requests
+still pass `locale`.
+
+**Setup.** Set the function secret and tell the database where to call:
+
+```bash
+# 1. The shared secret the function checks for.
+supabase secrets set AI_ENRICH_TRIGGER_SECRET="$(openssl rand -hex 32)"
+
+# 2. The same secret + the function URL, in Vault, for the trigger to read.
+#    Run in the SQL editor (service-role):
+#    select vault.create_secret('https://<ref>.functions.supabase.co/ai-enrich', 'ai_enrich_url');
+#    select vault.create_secret('<same secret as step 1>', 'ai_enrich_secret');
+```
+
+Until both Vault secrets exist the trigger is a safe no-op (it never aborts a
+bookmark write), so the migration can deploy ahead of the secret being set.
 
 ## Rate limiting
 
@@ -48,8 +95,9 @@ missing/failing rate-limit function fails **open** so suggestions never break.
 | `provider.ts`        | `EnrichmentProvider` interface + I/O types — the swappable seam |
 | `dummy-provider.ts`  | `DummyProvider`: deterministic keyword heuristics, no network   |
 | `gemini-provider.ts` | `GeminiProvider`: structured-output call to the Google Gemini API |
+| `request-auth.ts`    | Pure caller-auth decision: app JWT vs server-trigger shared secret |
 | `index.ts`           | Deno HTTP shell: auth → load bookmark → rate-limit → provider → upsert row |
-| `*.test.ts`          | Node unit tests for the providers (run by `pnpm test`)          |
+| `*.test.ts`          | Node unit tests for the providers + auth (run by `pnpm test`)   |
 
 ## Provider selection
 
