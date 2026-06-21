@@ -33,6 +33,7 @@ export const en = {
   'common.share': 'Share',
   'common.open': 'Open',
   'common.openLink': 'Open link',
+  'common.view': 'View',
   'common.archive': 'Archive',
   'common.unarchive': 'Unarchive',
   'common.back': '‹ Back',

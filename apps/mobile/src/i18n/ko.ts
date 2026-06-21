@@ -17,6 +17,7 @@ export const ko: Catalog = {
   'common.share': '공유',
   'common.open': '열기',
   'common.openLink': '링크 열기',
+  'common.view': '보기',
   'common.archive': '보관',
   'common.unarchive': '보관 해제',
   'common.back': '‹ 뒤로',

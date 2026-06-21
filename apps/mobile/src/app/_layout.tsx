@@ -7,6 +7,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { I18nProvider, useT } from '@/i18n';
 import { initSentry, wrapWithSentry } from '@/observability/sentry';
 import { installConsoleCapture } from '@/observability/log-buffer';
+import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
@@ -53,6 +54,7 @@ function RootLayout() {
               <BookmarksProvider>
                 <CaptureToastProvider>
                   <ShareIntentHandler />
+                  <ShareConfirmHandler />
                   <RootStack />
                   <StatusBar style="auto" />
                 </CaptureToastProvider>

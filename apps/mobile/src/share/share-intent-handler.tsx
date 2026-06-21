@@ -12,6 +12,7 @@ import { pickSharedImage, type SharedImage } from '@/domain/image-share';
 import { extractFirstUrl } from '@/domain/urls';
 import { useT } from '@/i18n';
 import { dismissAfterShare } from '@/share/dismiss';
+import { recordPendingShareConfirm } from '@/share/pending-confirm';
 import { getPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -103,6 +104,9 @@ export function ShareIntentHandler() {
       : share.image
         ? addBookmark({ image: share.image, title: share.title })
         : addBookmark({ shared_text: share.text, title: share.title });
+    // Only a genuinely new save is worth confirming on the next open; a
+    // duplicate already lived in the library and a no-link share saved nothing.
+    const isNewSave = result.status === 'created';
     if (result.status !== 'invalid') {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
       persisted = result.persisted;
@@ -142,8 +146,18 @@ export function ShareIntentHandler() {
       // in-app instead. `undefined` means nothing was saved (no link), which is
       // safe to dismiss on. Capture is sacred.
       const durable = await persisted;
-      if (durable !== false && dismissAfterShare(message)) {
-        return;
+      if (durable !== false) {
+        // Persist the "confirm on next open" record BEFORE we hand control back
+        // to the other app — the same reason we awaited the durable write
+        // above. `dismissAfterShare` calls `exitApp()` synchronously, so a
+        // fire-and-forget write here could be cut off and leave the reopened
+        // app with nothing to confirm. Only a brand-new save is recorded.
+        if (isNewSave) {
+          await recordPendingShareConfirm();
+        }
+        if (dismissAfterShare(message)) {
+          return;
+        }
       }
       show(message);
       router.replace('/');
