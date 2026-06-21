@@ -24,3 +24,6 @@ output is crisp and reproducible — re-run after any tweak:
 pip install Pillow
 python3 design/icon-source/generate.py
 ```
+
+`mockup.py` renders a home-screen preview (to `/tmp/stash-home-mockup.png`)
+placing the icon among other apps, for sanity-checking how it stands out.
