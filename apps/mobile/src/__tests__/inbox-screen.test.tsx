@@ -428,6 +428,39 @@ test('the tag cloud view lists tags and tapping one filters to that tag', async 
   expect(screen.getByText('Local-first software')).toBeTruthy();
 });
 
+test('the tag cloud scopes to the active folder facet', async () => {
+  const work = '7e64cf1e-0000-4000-8000-000000000071';
+  const home = '7e64cf1e-0000-4000-8000-000000000072';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: work, title: 'Local-first software', collection_id: 'col-work' }),
+      makeStoredBookmark({ id: home, title: 'Kimchi jjigae', collection_id: 'col-home' }),
+    ],
+    {
+      tags: [makeTag('t-reading', 'reading'), makeTag('t-cooking', 'cooking')],
+      bookmarkTags: [
+        { bookmark_id: work, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: home, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [makeCollection('col-work', 'Work'), makeCollection('col-home', 'Home')],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  // Whole-Inbox cloud shows both folders' tags …
+  await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+  expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy();
+  expect(screen.getByLabelText('#cooking, 1 bookmark')).toBeTruthy();
+
+  // … picking the Work folder chip narrows the cloud to that folder's tags.
+  await fireEvent.press(screen.getByText('Work'));
+  await waitFor(() => expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy());
+  expect(screen.queryByLabelText('#cooking, 1 bookmark')).toBeNull();
+});
+
 test('blank-named tags and collections do not produce empty filter chips', async () => {
   const id = '7e64cf1e-0000-4000-8000-000000000050';
   fakeRepo.__reset(

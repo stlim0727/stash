@@ -324,12 +324,19 @@ export default function InboxScreen() {
     return { chips: [...collectionChips, ...tagChips], hasUncollected: uncollected };
   }, [inbox, getTagsForBookmark, getCollection]);
 
-  // Tag cloud derived from the whole Inbox (not the active facet/search): a
-  // frequency-ranked overview of every tag, sized by how many bookmarks carry
-  // it. Tapping one drills in by applying that tag filter.
+  const facetFiltered = useMemo(
+    () => filterByFacet(inbox, filter, tagIdsFor),
+    [inbox, filter, tagIdsFor],
+  );
+
+  // Tag cloud derived from the facet-filtered Inbox (so the browse-shelf chips
+  // scope it — e.g. picking a folder chip narrows the cloud to that folder's
+  // tags): a frequency-ranked overview sized by how many of those bookmarks
+  // carry each tag. Search is left out on purpose — the cloud is the navigation
+  // surface, not a result of it. Tapping a tag drills in by applying its filter.
   const tagCloud = useMemo(() => {
     const counts = new Map<string, { name: string; count: number }>();
-    for (const bookmark of inbox) {
+    for (const bookmark of facetFiltered) {
       for (const tag of getTagsForBookmark(bookmark.id)) {
         const existing = counts.get(tag.id);
         if (existing) {
@@ -342,7 +349,7 @@ export default function InboxScreen() {
     return buildTagCloud(
       [...counts.entries()].map(([id, { name, count }]) => ({ id, name, count })),
     );
-  }, [inbox, getTagsForBookmark]);
+  }, [facetFiltered, getTagsForBookmark]);
 
   // If the active facet disappears (last member removed/unfiled), fall back to
   // All rather than stranding the user on an empty filtered view.
@@ -363,10 +370,6 @@ export default function InboxScreen() {
     }
   }, [filter, chips, hasUncollected, isLoading]);
 
-  const facetFiltered = useMemo(
-    () => filterByFacet(inbox, filter, tagIdsFor),
-    [inbox, filter, tagIdsFor],
-  );
   const filtered = useMemo(() => filterBookmarks(facetFiltered, query), [facetFiltered, query]);
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
   const searching = query.trim().length > 0;
