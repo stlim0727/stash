@@ -84,6 +84,7 @@ export function makeEnrichment(overrides: Partial<AIEnrichment> = {}): AIEnrichm
     topics: [],
     suggested_tags: [],
     suggested_collection_id: null,
+    suggested_collection_name: null,
     model: 'dummy-v0',
     status: 'complete',
     confidence: null,

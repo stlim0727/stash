@@ -183,6 +183,8 @@ export const ko: Catalog = {
   'detail.aiStale': '편집 이후 제안이 오래되었습니다 — 새로고침하세요.',
   'detail.aiSuggestCollectionChip': '📁 ＋ {name}',
   'detail.aiFileIntoA11y': '{name}에 정리',
+  'detail.aiCreateCollectionChip': '📁 ＋ “{name}” 만들기',
+  'detail.aiCreateCollectionA11y': '컬렉션 {name}을(를) 만들고 정리',
   'detail.aiDismissCollectionA11y': '제안된 컬렉션 {name} 무시',
   'detail.aiGenerating': '제안 생성 중…',
   'detail.aiRefresh': 'AI 제안 새로고침',

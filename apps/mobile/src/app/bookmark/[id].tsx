@@ -27,6 +27,7 @@ import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { hashtagSuggestions } from '@/domain/hashtags';
+import { normalizeTag } from '@/domain/tag-input';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
@@ -67,6 +68,9 @@ export default function BookmarkDetailScreen() {
   // Suggested collection id the user dismissed this session (local-only). A new
   // enrichment proposing a different collection re-surfaces the chip.
   const [dismissedCollectionId, setDismissedCollectionId] = useState<string | null>(null);
+  // Normalized name of a "create this collection" suggestion dismissed this
+  // session (local-only); a later enrichment proposing a different name shows again.
+  const [dismissedCollectionName, setDismissedCollectionName] = useState<string | null>(null);
   // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
@@ -170,11 +174,27 @@ export default function BookmarkDetailScreen() {
   const pending = pendingSuggestions(enrichment, appliedTagNames, reviewedNames).filter(
     (suggestion) => !dismissed.has(suggestion.name.toLowerCase()),
   );
-  const suggestedCollection = getCollection(enrichment?.suggested_collection_id ?? null);
+  // The AI proposes a collection by name. The edge function resolves it to an
+  // existing collection id when one fits (tolerant of case/spacing); when none
+  // did, it passes the raw name through so we can offer to *create* it. We also
+  // re-check that name against the live collection list here, so a collection
+  // the user made since the enrichment ran is offered as "file in" rather than a
+  // duplicate "create".
+  const suggestedByName = enrichment?.suggested_collection_name?.trim() || null;
+  const localNameMatch = suggestedByName
+    ? collections.find((item) => normalizeTag(item.name) === normalizeTag(suggestedByName))
+    : undefined;
+  const suggestedCollection =
+    getCollection(enrichment?.suggested_collection_id ?? null) ?? localNameMatch ?? null;
   const showCollectionSuggestion =
     !!suggestedCollection &&
     bookmark.collection_id !== suggestedCollection.id &&
     suggestedCollection.id !== dismissedCollectionId;
+  // Offer to create a brand-new collection only when nothing existing matched.
+  const showCreateCollectionSuggestion =
+    !suggestedCollection &&
+    !!suggestedByName &&
+    normalizeTag(suggestedByName) !== dismissedCollectionName;
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
@@ -560,6 +580,31 @@ export default function BookmarkDetailScreen() {
                 disabled={busy}
                 hitSlop={6}
                 onPress={() => setDismissedCollectionId(suggestedCollection!.id)}
+              >
+                <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+        {/* No existing folder fits the AI's hint — offer to create it and file in. */}
+        {showCreateCollectionSuggestion ? (
+          <View style={styles.suggestionRow}>
+            <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('detail.aiCreateCollectionA11y', { name: suggestedByName! })}
+                disabled={busy}
+                onPress={() => void handleCreateCollection(suggestedByName!)}
+              >
+                <Text style={[styles.ghostLabel, { color: palette.accent }]}>
+                  {t('detail.aiCreateCollectionChip', { name: suggestedByName! })}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel={t('detail.aiDismissCollectionA11y', { name: suggestedByName! })}
+                disabled={busy}
+                hitSlop={6}
+                onPress={() => setDismissedCollectionName(normalizeTag(suggestedByName!))}
               >
                 <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
               </Pressable>

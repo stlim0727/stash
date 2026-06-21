@@ -25,6 +25,7 @@
 import { DummyProvider } from './dummy-provider.ts';
 import { GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
+import { matchSuggestedCollection } from './collection-match.ts';
 import { resolveCallerAuth } from './request-auth.ts';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
@@ -303,12 +304,18 @@ Deno.serve(async (req) => {
     }
 
     // Resolve the collection NAME hint to one of the user's existing
-    // collections; never create one here.
-    const suggestedCollectionId = output.suggested_collection
-      ? collections.find(
-          (col) => col.name.toLowerCase() === output.suggested_collection!.toLowerCase(),
-        )?.id ?? null
-      : null;
+    // collections (tolerant of case/spacing/punctuation); never create one here.
+    // When nothing fits we keep the raw proposed name so the app can offer to
+    // create that collection — that's the difference between "file into an
+    // existing folder" and "make a new one", surfaced as distinct chips client-
+    // side. The name is null when the resolution found an existing match (the id
+    // covers it) or the provider proposed nothing.
+    const matchedCollection = matchSuggestedCollection(collections, output.suggested_collection);
+    const suggestedCollectionId = matchedCollection?.id ?? null;
+    const suggestedCollectionName =
+      !matchedCollection && output.suggested_collection?.trim()
+        ? output.suggested_collection.trim()
+        : null;
 
     const now = new Date().toISOString();
     const row = {
@@ -318,6 +325,7 @@ Deno.serve(async (req) => {
       topics: output.topics,
       suggested_tags: output.suggested_tags,
       suggested_collection_id: suggestedCollectionId,
+      suggested_collection_name: suggestedCollectionName,
       model: usedModel,
       status: 'complete',
       confidence: output.confidence,
