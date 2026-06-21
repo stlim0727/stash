@@ -8,6 +8,7 @@ import {
   SHARE_BEHAVIOR_PREF_KEY,
   type ShareBehavior,
 } from '@/domain/share-behavior';
+import { pickSharedImage, type SharedImage } from '@/domain/image-share';
 import { extractFirstUrl } from '@/domain/urls';
 import { useT } from '@/i18n';
 import { dismissAfterShare } from '@/share/dismiss';
@@ -49,6 +50,7 @@ export function ShareIntentHandler() {
     url: string | null;
     title?: string;
     text?: string;
+    image: SharedImage | null;
   } | null>(null);
   // Guards against re-copying the same intent across renders before the reset
   // propagates; cleared once the intent goes away so a later share is captured.
@@ -74,6 +76,8 @@ export function ShareIntentHandler() {
       // Keep the raw shared text so a no-link share (e.g. a KakaoTalk message)
       // can still be saved as a text note instead of being dropped.
       text: shareIntent.text ?? undefined,
+      // A shared image (e.g. a screenshot) — captured when there is no link.
+      image: pickSharedImage(shareIntent.files),
     });
     resetShareIntent();
   }, [hasShareIntent, shareIntent, resetShareIntent]);
@@ -90,12 +94,15 @@ export function ShareIntentHandler() {
 
     let message = t('toast.noLink');
     let persisted: Promise<boolean> | undefined;
-    // Save the link when there is one; otherwise fall back to saving the shared
-    // text as a note. addBookmark returns 'invalid' when there's neither, which
-    // keeps the "nothing to save" toast for a genuinely empty share.
+    // Save the link when there is one; otherwise capture a shared image, and
+    // failing that fall back to saving the shared text as a note. addBookmark
+    // returns 'invalid' only when there is none of the three, which keeps the
+    // "nothing to save" toast for a genuinely empty share.
     const result = share.url
       ? addBookmark({ url: share.url, title: share.title })
-      : addBookmark({ shared_text: share.text, title: share.title });
+      : share.image
+        ? addBookmark({ image: share.image, title: share.title })
+        : addBookmark({ shared_text: share.text, title: share.title });
     if (result.status !== 'invalid') {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
       persisted = result.persisted;

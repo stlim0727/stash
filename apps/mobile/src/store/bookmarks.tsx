@@ -19,6 +19,11 @@ import {
 } from '@/domain/mock-data';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
+import {
+  imageTitleFromFileName,
+  localImageFileName,
+  type SharedImage,
+} from '@/domain/image-share';
 import type { ImportItem } from '@/domain/import';
 import type {
   AIEnrichment,
@@ -48,6 +53,7 @@ import {
 import { useI18n } from '@/i18n';
 import { recordLog } from '@/observability/log-buffer';
 import { repository } from '@/storage/repository';
+import { copyImageToLibrary } from '@/storage/image-store';
 import type { EnrichmentMetadataHint } from '@/api/bookmarks';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
@@ -119,6 +125,8 @@ interface BookmarksContextValue {
     notes?: string;
     /** Shared text with no usable URL — saved as a text note. */
     shared_text?: string;
+    /** A shared image to capture as an image bookmark (local-only for now). */
+    image?: SharedImage;
   }) => AddBookmarkResult;
   /**
    * Re-ingest items parsed from an imported file. Local-first like addBookmark:
@@ -687,12 +695,74 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       title,
       notes,
       shared_text,
+      image,
     }: {
       url?: string;
       title?: string;
       notes?: string;
       shared_text?: string;
+      image?: SharedImage;
     }): AddBookmarkResult => {
+      // A shared image becomes an image bookmark: capture is local-first and
+      // local-only for now (cloud upload of the binary is deferred to 0.3.x), so
+      // it is never enqueued for sync. We mark it 'synced' precisely because
+      // there is no cloud work pending — that also keeps the startup orphan
+      // reconciler from re-enqueuing it and the Inbox/Detail from showing a
+      // misleading "sync pending" chip. Capture is sacred: the durable file copy
+      // is folded into `persisted` so the share handler only dismisses once it
+      // has actually landed on disk.
+      if (image) {
+        const now = new Date().toISOString();
+        const id = makeLocalId();
+        const fileName = localImageFileName(id, image);
+        const imageBookmark: Bookmark = {
+          id,
+          user_id: mockUserId,
+          url: null,
+          canonical_url: null,
+          url_hash: null,
+          // A title typed at capture is user-authored; otherwise derive a
+          // readable one from the shared filename (may be null → "Untitled").
+          title: title?.trim() ? title.trim() : imageTitleFromFileName(image.fileName),
+          description: null,
+          notes: notes?.trim() ? notes.trim() : null,
+          source_app: null,
+          content_type: 'image',
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          collection_id: null,
+          is_archived: false,
+          created_at: now,
+          updated_at: now,
+          last_saved_at: now,
+          // No URL/text to derive metadata from — nothing to enrich.
+          metadata_status: 'skipped',
+          sync_status: 'synced',
+          // Temporary share URI for the optimistic render; swapped for the
+          // durable copy once `copyImageToLibrary` resolves below.
+          local_image_uri: image.uri,
+        };
+
+        setBookmarks((current) => [imageBookmark, ...(current ?? [])]);
+        const persisted = ensureRepositoryReady()
+          .then(() => copyImageToLibrary(image.uri, fileName))
+          .then((durableUri) => {
+            const stored: Bookmark = { ...imageBookmark, local_image_uri: durableUri };
+            setBookmarks((current) =>
+              current === null ? current : current.map((b) => (b.id === id ? stored : b)),
+            );
+            return repository.insertBookmark(stored);
+          })
+          .then(() => true)
+          .catch((error) => {
+            logStorageError('new image bookmark', error);
+            return false;
+          });
+
+        return { status: 'created', bookmark: imageBookmark, persisted };
+      }
+
       const normalized = url ? normalizeUrl(url) : null;
       if (!normalized) {
         // No usable URL. If the share carried text (e.g. a KakaoTalk message

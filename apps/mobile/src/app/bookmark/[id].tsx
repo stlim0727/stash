@@ -402,27 +402,25 @@ export default function BookmarkDetailScreen() {
       style={{ backgroundColor: palette.background }}
       contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 32 }]}
     >
-      {bookmark.preview_image_url ? (
-        bookmark.url ? (
+      {/* Prefer a captured image's local URI (image bookmarks) over a fetched
+          preview; either renders the same hero. */}
+      {(() => {
+        const previewUri = bookmark.local_image_uri ?? bookmark.preview_image_url;
+        if (!previewUri) {
+          return null;
+        }
+        return bookmark.url ? (
           <Pressable
             accessibilityRole="link"
             accessibilityLabel={t('common.openLink')}
             onPress={handleOpenLink}
           >
-            <Image
-              source={{ uri: bookmark.preview_image_url }}
-              style={styles.preview}
-              resizeMode="cover"
-            />
+            <Image source={{ uri: previewUri }} style={styles.preview} resizeMode="cover" />
           </Pressable>
         ) : (
-          <Image
-            source={{ uri: bookmark.preview_image_url }}
-            style={styles.preview}
-            resizeMode="cover"
-          />
-        )
-      ) : null}
+          <Image source={{ uri: previewUri }} style={styles.preview} resizeMode="cover" />
+        );
+      })()}
       {/* Compact byline: favicon · host · status, instead of a header card. */}
       <View style={styles.byline}>
         {bookmark.favicon_url ? (

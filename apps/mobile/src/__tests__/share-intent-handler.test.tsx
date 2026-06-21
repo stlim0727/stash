@@ -36,6 +36,15 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+// Copying the shared image into durable app storage is native-only; stub it so
+// the capture path can be exercised without expo-file-system, returning a
+// deterministic durable URI the test can assert on.
+const mockCopyImage = jest.fn(
+  async (_sourceUri: string, fileName: string) => `file:///docs/stash-images/${fileName}`,
+);
+jest.mock('@/storage/image-store', () => ({
+  copyImageToLibrary: (sourceUri: string, fileName: string) => mockCopyImage(sourceUri, fileName),
+}));
 const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => ({
   useRouter: () => mockRouter,
@@ -54,7 +63,12 @@ jest.mock('@/share/dismiss', () => ({
 // true from the very first render, before the durable store has loaded.
 let mockShareIntent: {
   hasShareIntent: boolean;
-  shareIntent: { webUrl: string | null; text: string | null; meta?: { title?: string } };
+  shareIntent: {
+    webUrl: string | null;
+    text: string | null;
+    meta?: { title?: string };
+    files?: Array<{ path: string; mimeType: string; fileName: string }> | null;
+  };
   resetShareIntent: jest.Mock;
 };
 jest.mock('expo-share-intent', () => ({
@@ -93,6 +107,7 @@ beforeEach(async () => {
   // and the in-app toast is shown (which the existing assertions rely on).
   mockDismiss.mockReset();
   mockDismiss.mockReturnValue(false);
+  mockCopyImage.mockClear();
   // Reset the persisted share-behavior preference to the default between tests
   // (the fake repo's meta store outlives a single test).
   await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'toast');
@@ -352,6 +367,44 @@ describe('ShareIntentHandler', () => {
     await waitFor(() => expect(mockShareIntent.resetShareIntent).toHaveBeenCalled());
     expect(fakeRepo.__queue()).toHaveLength(0);
     expect(await fakeRepo.repository.listBookmarks()).toHaveLength(0);
+    unmount();
+  });
+
+  it('captures a shared image as a local-only image bookmark', async () => {
+    // Sharing a screenshot/photo arrives as shareIntent.files (no webUrl). The
+    // handler copies it into durable storage and saves an image bookmark; cloud
+    // upload is deferred, so it is NOT enqueued for sync.
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: null,
+        text: null,
+        files: [{ path: 'file:///tmp/share/IMG_042.png', mimeType: 'image/png', fileName: 'IMG_0042.png' }],
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Stash');
+    // The temp file was copied into the document directory under <id>.png.
+    await waitFor(() => expect(mockCopyImage).toHaveBeenCalledTimes(1));
+    const [sourceUri, fileName] = mockCopyImage.mock.calls[0];
+    expect(sourceUri).toBe('file:///tmp/share/IMG_042.png');
+    expect(fileName).toMatch(/\.png$/);
+
+    const stored = await fakeRepo.repository.listBookmarks();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].url).toBeNull();
+    expect(stored[0].content_type).toBe('image');
+    expect(stored[0].metadata_status).toBe('skipped');
+    expect(stored[0].local_image_uri).toBe(`file:///docs/stash-images/${fileName}`);
+    // Title derived from the shared filename.
+    expect(stored[0].title).toBe('IMG 0042');
+    // Local-only: nothing queued for cloud sync, and no misleading pending chip.
+    expect(fakeRepo.__queue()).toHaveLength(0);
+    expect(stored[0].sync_status).toBe('synced');
     unmount();
   });
 
