@@ -180,6 +180,26 @@ test('the collection chip filters the Inbox to that collection', async () => {
   expect(screen.queryByText('Work doc')).toBeNull();
 });
 
+test('facet chips carry icons that distinguish collections from tags (#142)', async () => {
+  // The "No collection" chip used to sit unmarked among bare collection-name
+  // chips and "#tag" chips, so its meaning read as ambiguous (issue #142).
+  // Collections now carry a folder icon and the no-collection set a tray icon,
+  // so the shelf groups collection filters apart from the "#tag" chips.
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-00000000000a', collection_id: 'col-work' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-00000000000b', collection_id: null }),
+    ],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Work')).toBeTruthy());
+
+  expect(screen.getByTestId('chip-icon-file-tray-outline')).toBeTruthy();
+  expect(screen.getByTestId('chip-icon-folder-outline')).toBeTruthy();
+});
+
 test('the tag chip filters the Inbox to bookmarks with that tag', async () => {
   const tagged = '7e64cf1e-0000-4000-8000-00000000000c';
   const untagged = '7e64cf1e-0000-4000-8000-00000000000d';

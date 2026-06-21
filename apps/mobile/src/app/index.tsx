@@ -69,6 +69,7 @@ interface FacetChip {
   key: string;
   label: string;
   filter: InboxFilter;
+  icon?: keyof typeof Ionicons.glyphMap;
 }
 
 // Glyph for each layout in the view-mode segmented control.
@@ -307,7 +308,12 @@ export default function InboxScreen() {
       .map((id) => ({ id, name: getCollection(id)?.name?.trim() }))
       .filter((entry): entry is { id: string; name: string } => Boolean(entry.name))
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map(({ id, name }) => ({ key: `c:${id}`, label: name, filter: { kind: 'collection', id } }));
+      .map(({ id, name }) => ({
+        key: `c:${id}`,
+        label: name,
+        filter: { kind: 'collection', id },
+        icon: 'folder-outline' as const,
+      }));
     const tagChips: FacetChip[] = [...tagsById.entries()]
       // Drop tags whose name is empty/whitespace so they don't render as blank
       // pills (AI enrichment or a partial sync can leave a tag with no name).
@@ -491,7 +497,12 @@ export default function InboxScreen() {
       ? t('inbox.moveToCollectionTitle')
       : ((menuItem ? displayTitle(menuItem) : null) ?? t('common.untitled'));
 
-  const renderChip = (key: string, label: string, target: InboxFilter) => {
+  const renderChip = (
+    key: string,
+    label: string,
+    target: InboxFilter,
+    icon?: keyof typeof Ionicons.glyphMap,
+  ) => {
     const active = sameFilter(target, filter);
     return (
       <Chip
@@ -500,6 +511,7 @@ export default function InboxScreen() {
         accessibilityState={{ selected: active }}
         onPress={() => setFilter(target)}
         variant={active ? 'selected' : 'default'}
+        icon={icon}
       >
         {label}
       </Chip>
@@ -644,8 +656,10 @@ export default function InboxScreen() {
             contentContainerStyle={styles.shelfContent}
           >
             {renderChip('all', t('inbox.filterAll'), ALL_FILTER)}
-            {hasUncollected ? renderChip('uncollected', t('inbox.filterNoCollection'), { kind: 'uncollected' }) : null}
-            {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter))}
+            {hasUncollected
+              ? renderChip('uncollected', t('inbox.filterNoCollection'), { kind: 'uncollected' }, 'file-tray-outline')
+              : null}
+            {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter, chip.icon))}
           </ScrollView>
         ) : null}
       </Animated.View>
