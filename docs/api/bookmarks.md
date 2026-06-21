@@ -144,6 +144,14 @@ Expected sequence:
   for `url_hash` on both the client and the server, so `…?utm_source=x` and the
   bare URL collapse to one active row. The server's active-URL unique index is
   on this canonical `url_hash`.
+- URL-less rows (text notes) carry no `url_hash`, so they dedupe on `client_id`
+  instead — a stable device-generated id the capturing client sets once and the
+  sync queue resends unchanged on every retry. This makes a text-note `create`
+  idempotent: an interrupted upload (or an orphan-reconciliation re-enqueue) that
+  retries resolves to the original row via the per-user `(user_id, client_id)`
+  unique index instead of inserting a duplicate. Two *deliberately* separate text
+  shares are distinct captures with distinct `client_id`s, so they remain two
+  notes by design.
 - Invalid payloads should fail fast with a non-blocking toast.
 - Authorization failures should pause sync and prompt account recovery in the main app.
 

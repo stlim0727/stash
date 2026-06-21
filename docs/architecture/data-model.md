@@ -17,6 +17,7 @@ Stores saved URLs and shared content.
 | url | text | Original saved URL. Nullable if shared content is text-only. |
 | canonical_url | text | Normalized canonical URL when known. |
 | url_hash | text | Hash of canonical URL or normalized URL for dedupe. |
+| client_id | uuid | Device-generated capture id; idempotency key for `create` on URL-less rows (text notes), which have no `url_hash`. Resent unchanged on retry. Nullable for rows captured before this column existed. |
 | title | text | User-visible title. |
 | description | text | Page description or user-provided description. |
 | notes | text | User-authored private notes. |
@@ -116,6 +117,8 @@ The mobile app should maintain a local queue for share intake and offline operat
 Recommended database constraints:
 
 - Unique active bookmark per `user_id` and `url_hash` when `url_hash` is not null.
+- Unique bookmark per `user_id` and `client_id` when `client_id` is not null
+  (all rows, not just active ones — a capture id is a one-time identity).
 - Unique tag per `user_id` and `slug`.
 - Index bookmarks by `user_id`, `created_at`, `updated_at`, `is_archived`, and `collection_id`.
 - Index bookmark full-text search fields later when search expands beyond simple client-side filtering.

@@ -141,6 +141,28 @@ test('create: uploads the LATEST title/notes, not the payload captured at save',
   assert.equal(result.uploadedPayload?.title, 'Edited title');
 });
 
+test('create: forwards the payload client_id so a retried text note stays idempotent', async () => {
+  const { repository } = fakeRepository();
+  const sent: Array<{ client_id?: string }> = [];
+  const api = fakeApi({
+    createBookmark: async (input: { client_id?: string }) => {
+      sent.push(input);
+      return { bookmark_id: 'remote-1', status: 'created', metadata_status: 'skipped' };
+    },
+  });
+  // A text note: no URL, body in description, idempotency rests on client_id.
+  const note = makeBookmark({ url: null, content_type: 'text', description: 'a thought' });
+
+  await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { shared_text: 'a thought', client_id: 'cid-text' } }),
+    () => note,
+  );
+
+  assert.equal(sent[0].client_id, 'cid-text');
+});
+
 test('create: failure stays retryable with the error recorded', async () => {
   const { repository } = fakeRepository();
   const api = fakeApi({
@@ -323,6 +345,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded local bookmark', () =>
     url: 'https://example.com/a',
     title: 'Stranded',
     notes: 'keep me',
+    client_id: undefined,
   });
 });
 
@@ -359,6 +382,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its
     content_type: 'text',
     description: '내일 3시에 회의 있습니다',
     title: 'Reminder',
+    client_id: 'cid-note',
     sync_status: 'pending',
   });
 
@@ -366,10 +390,13 @@ test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its
 
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.operation, 'create');
+  // The rebuilt create carries the row's client_id so re-enqueuing a note that
+  // actually reached the cloud resolves to a duplicate instead of a second row.
   assert.deepEqual(entries[0]?.payload, {
     title: 'Reminder',
     notes: undefined,
     shared_text: '내일 3시에 회의 있습니다',
+    client_id: 'cid-note',
   });
 });
 

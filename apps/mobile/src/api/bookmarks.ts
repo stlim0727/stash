@@ -215,17 +215,25 @@ export class BookmarkApi {
     // raw normalized URL here would let `…?utm_source=x` and the bare URL
     // become two separate cloud rows.
     const urlHash = payload.url ? canonicalizeUrl(payload.url) : null;
+    const clientId = input.client_id ?? null;
 
-    if (urlHash) {
-      const existing = await this.findActiveBookmarkByUrlHash(urlHash);
-      if (existing) {
-        await this.updateBookmark(existing.id, { last_saved_at: timestamp });
-        return {
-          bookmark_id: existing.id,
-          status: 'duplicate',
-          metadata_status: existing.metadata_status,
-        };
-      }
+    // Idempotent saves: reuse the existing row rather than inserting a twin. URL
+    // saves dedupe on the canonical url_hash. URL-less rows (text notes) have no
+    // such key, so they dedupe on the device-generated client_id — which a
+    // retried upload resends unchanged, closing the gap that let an interrupted
+    // text-note sync create a duplicate.
+    const existing = urlHash
+      ? await this.findActiveBookmarkByUrlHash(urlHash)
+      : clientId
+        ? await this.findBookmarkByClientId(clientId)
+        : null;
+    if (existing) {
+      await this.updateBookmark(existing.id, { last_saved_at: timestamp });
+      return {
+        bookmark_id: existing.id,
+        status: 'duplicate',
+        metadata_status: existing.metadata_status,
+      };
     }
 
     const createBody = {
@@ -233,6 +241,7 @@ export class BookmarkApi {
       url: payload.url,
       canonical_url: null,
       url_hash: urlHash,
+      client_id: clientId,
       title,
       description,
       notes,
@@ -258,11 +267,17 @@ export class BookmarkApi {
         body: createBody,
       });
     } catch (error) {
-      // If another client created the same active URL between our lookup and
-      // insert, treat the unique-index conflict as the documented duplicate
-      // save behavior.
-      if (urlHash && error instanceof SupabaseRequestError && error.status === 409) {
-        const duplicate = await this.findActiveBookmarkByUrlHash(urlHash);
+      // If a concurrent (or retried) insert won the race between our lookup and
+      // our own insert, treat the unique-index conflict as the documented
+      // duplicate save. Try the active-URL key first, then fall back to the
+      // client_id key: a retried URL create whose original was archived in the
+      // meantime conflicts on the all-rows client_id index (not the active-only
+      // url_hash one), so the url_hash lookup alone would miss the archived
+      // original and leave the entry failing forever.
+      if (error instanceof SupabaseRequestError && error.status === 409) {
+        const duplicate =
+          (urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null) ??
+          (clientId ? await this.findBookmarkByClientId(clientId) : null);
         if (duplicate) {
           return {
             bookmark_id: duplicate.id,
@@ -641,6 +656,29 @@ export class BookmarkApi {
           user_id: `eq.${this.session.user.id}`,
           url_hash: `eq.${urlHash}`,
           is_archived: 'eq.false',
+          limit: '1',
+        }),
+      ),
+      { accessToken: this.session.access_token },
+    );
+
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Looks up a row by its device-generated capture id. Unlike the URL lookup
+   * this is NOT filtered to active rows: client_id is globally unique per user,
+   * so a retried create must resolve to its original row even if it was archived
+   * in between — re-inserting would violate the unique index anyway.
+   */
+  private async findBookmarkByClientId(clientId: string): Promise<RemoteBookmark | null> {
+    const rows = await this.client.request<RemoteBookmark[]>(
+      appendSearchParams(
+        '/rest/v1/bookmarks',
+        new URLSearchParams({
+          select: '*',
+          user_id: `eq.${this.session.user.id}`,
+          client_id: `eq.${clientId}`,
           limit: '1',
         }),
       ),
