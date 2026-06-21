@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Image,
   Linking,
@@ -22,6 +21,7 @@ import { enrichmentDegradedLabel, metadataStatusLabel, syncStatusLabel } from '@
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
+import { SuggestionSkeleton } from '@/ui/SuggestionSkeleton';
 import { TagField } from '@/ui/TagField';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
@@ -51,6 +51,7 @@ export default function BookmarkDetailScreen() {
     removeTagFromBookmark,
     requestAiEnrichment,
     isEnriching,
+    isManuallyEnriching,
     acceptSuggestedTags,
     getReviewedSuggestions,
     markSuggestionsReviewed,
@@ -127,9 +128,12 @@ export default function BookmarkDetailScreen() {
   const collection = getCollection(bookmark.collection_id);
   const enrichment = getEnrichment(bookmark.id);
   const canOrganizeRemotely = hasRemoteIdentity(bookmark.id);
-  // True while an AI enrichment request is in flight for this bookmark, so the
-  // section can show a "working" indicator (auto-trigger or manual refresh).
+  // Any enrichment in flight (auto-trigger or manual) → show the ambient
+  // "filling in" skeleton. The manual-only flag drives the explicit button
+  // state, so the auto-trigger never makes the section look like a blocking
+  // wait the user has to sit through.
   const aiWorking = isEnriching(bookmark.id);
+  const aiManual = isManuallyEnriching(bookmark.id);
 
   // AI suggestions: surface only high-confidence tags not already applied
   // (centralized in @/domain/ai-suggestions) and not dismissed this session,
@@ -509,22 +513,18 @@ export default function BookmarkDetailScreen() {
 
       {/* AI suggestions — no redundant header; the action button names itself. */}
       <Card elevated={false} style={styles.field}>
-        {aiWorking || enrichment?.model ? (
+        {aiWorking ? (
+          // Ambient placeholder: suggestions are filling in. Deliberately not a
+          // centered spinner + "working…" label, which reads as a modal wait —
+          // the screen stays fully interactive while this pulses.
+          <SuggestionSkeleton style={styles.suggestHeader} />
+        ) : enrichment?.model ? (
           <View style={styles.suggestHeader}>
-            {aiWorking ? (
-              <View style={styles.aiWorking}>
-                <ActivityIndicator size="small" color={palette.accent} />
-                <Text style={[styles.aiWorkingLabel, { color: palette.textSecondary }]}>
-                  {t('detail.aiWorking')}
-                </Text>
-              </View>
-            ) : (
-              <View style={[styles.aiBadge, { borderColor: palette.border }]}>
-                <Text style={[styles.aiBadgeLabel, { color: palette.textSecondary }]}>
-                  {enrichment!.model}
-                </Text>
-              </View>
-            )}
+            <View style={[styles.aiBadge, { borderColor: palette.border }]}>
+              <Text style={[styles.aiBadgeLabel, { color: palette.textSecondary }]}>
+                {enrichment.model}
+              </Text>
+            </View>
           </View>
         ) : null}
 
@@ -565,23 +565,20 @@ export default function BookmarkDetailScreen() {
         {canOrganizeRemotely ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityState={{ disabled: busy || aiWorking, busy: aiWorking }}
-            disabled={busy || aiWorking}
+            // Gate only on a manual request — an auto-trigger must leave the
+            // control live so the section never feels like it's blocking.
+            accessibilityState={{ disabled: busy || aiManual, busy: aiManual }}
+            disabled={busy || aiManual}
             style={[styles.suggestButton, { borderColor: palette.border }]}
             onPress={() => void handleSuggestAi()}
           >
-            {aiWorking ? (
-              <View style={styles.aiWorking}>
-                <ActivityIndicator size="small" color={palette.accent} />
-                <Text style={[styles.actionLabel, { color: palette.accent }]}>
-                  {t('detail.aiGenerating')}
-                </Text>
-              </View>
-            ) : (
-              <Text style={[styles.actionLabel, { color: palette.accent }]}>
-                {enrichment ? t('detail.aiRefresh') : t('detail.aiSuggest')}
-              </Text>
-            )}
+            <Text style={[styles.actionLabel, { color: palette.accent }]}>
+              {aiManual
+                ? t('detail.aiGenerating')
+                : enrichment
+                  ? t('detail.aiRefresh')
+                  : t('detail.aiSuggest')}
+            </Text>
           </Pressable>
         ) : (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiNeedsSync')}</Text>
@@ -839,15 +836,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   aiBadgeLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  aiWorking: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  aiWorkingLabel: {
     fontSize: 11,
     fontWeight: '600',
   },

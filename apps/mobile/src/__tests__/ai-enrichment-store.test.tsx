@@ -303,12 +303,60 @@ test('isEnriching reports true while a request is in flight, false once it settl
     pending = store.current!.requestAiEnrichment(SYNCED_ID);
   });
   expect(store.current!.isEnriching(SYNCED_ID)).toBe(true);
+  // A default (manual) request also flags the manual-only state that drives the
+  // explicit "Generating…" button feedback.
+  expect(store.current!.isManuallyEnriching(SYNCED_ID)).toBe(true);
 
   await act(async () => {
     release();
     await pending;
   });
   expect(store.current!.isEnriching(SYNCED_ID)).toBe(false);
+  expect(store.current!.isManuallyEnriching(SYNCED_ID)).toBe(false);
+});
+
+test("an 'auto' enrichment is in flight but not flagged as manual", async () => {
+  const store = await renderReady();
+
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) => {
+    await gate;
+    return {
+      id: 'enrichment-auto',
+      bookmark_id: bookmarkId,
+      user_id: 'user-test',
+      summary: 'Generated summary',
+      topics: [],
+      suggested_tags: [],
+      suggested_collection_id: null,
+      model: 'dummy-v0',
+      status: 'complete',
+      confidence: null,
+      degraded: false,
+      degraded_reason: null,
+      created_at: '2026-06-13T00:00:00.000Z',
+      updated_at: '2026-06-13T00:00:00.000Z',
+    };
+  });
+
+  let pending: Promise<string | null>;
+  await act(async () => {
+    pending = store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  // The ambient placeholder still shows (isEnriching), but the section never
+  // looks like a blocking wait the user must sit through (not manual).
+  expect(store.current!.isEnriching(SYNCED_ID)).toBe(true);
+  expect(store.current!.isManuallyEnriching(SYNCED_ID)).toBe(false);
+
+  await act(async () => {
+    release();
+    await pending;
+  });
+  expect(store.current!.isEnriching(SYNCED_ID)).toBe(false);
+  expect(store.current!.isManuallyEnriching(SYNCED_ID)).toBe(false);
 });
 
 test('acceptSuggestedTags links the tag with source ai and its confidence', async () => {
