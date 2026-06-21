@@ -59,8 +59,32 @@ test('suggests no tag (and null confidence) when nothing matches, rather than ho
   assert.deepEqual(out.suggested_tags, []);
   assert.equal(out.suggested_collection, null);
   assert.equal(out.confidence, null);
-  // The summary still grounds the bookmark even with no tags to suggest.
+  // The summary still grounds the bookmark even with no tags to suggest, but it
+  // must NOT tell the user to review tags that aren't there.
   assert.match(out.summary ?? '', /dummy-v0/);
+  assert.doesNotMatch(out.summary ?? '', /review the suggested tags/);
+});
+
+test('drops sub-threshold rule hits the app would hide (and the summary stops promising them)', async () => {
+  // A lone "blog" keyword fires the reading rule at 0.56 confidence — below the
+  // app's 0.6 surface threshold — so no tag is emitted, even though the
+  // collection hint still resolves. The summary must not point at absent tags.
+  const out = await provider.enrich(
+    input({ url: 'https://blog.naver.com/recipe', title: 'Recipe', locale: 'ko' }),
+  );
+  assert.deepEqual(out.suggested_tags, []);
+  assert.equal(out.confidence, null);
+  assert.equal(out.suggested_collection, 'Reading');
+  assert.match(out.summary ?? '', /dummy-v0/);
+  assert.doesNotMatch(out.summary ?? '', /아래 제안 태그를 확인하세요/);
+});
+
+test('still points at the suggested tags when at least one will surface', async () => {
+  const out = await provider.enrich(
+    input({ url: 'https://github.com/facebook/react', title: 'React' }),
+  );
+  assert.ok(out.suggested_tags.length > 0);
+  assert.match(out.summary ?? '', /review the suggested tags below/);
 });
 
 test('produces a summary for a URL and none for a text-only share', async () => {
