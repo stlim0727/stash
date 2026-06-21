@@ -68,7 +68,9 @@ function selectProvider(): EnrichmentProvider {
   to configure; the pipeline works out of the box. The heuristic tags/topics and
   summary are localized to the caller's `locale` (currently en/ko) so the
   fallback — including the degraded path below — still answers in the user's
-  language; the host-derived fallback tag and the collection hint stay as-is.
+  language; the collection hint stays as-is. When no keyword rule matches, the
+  fallback suggests no tag at all rather than inventing a low-confidence
+  host-derived one the app would only filter out as noise.
 - **`GEMINI_API_KEY` set** → a single structured-output Gemini call produces the
   note (summary), topics, tags-with-confidence, and a collection routing hint.
   The user's existing collection names are passed in so the model routes into a

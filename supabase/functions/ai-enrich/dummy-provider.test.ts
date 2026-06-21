@@ -54,13 +54,13 @@ test('caps suggestions at five tags', async () => {
   assert.ok(out.suggested_tags.length <= 5);
 });
 
-test('falls back to a host-derived tag when nothing matches', async () => {
+test('suggests no tag (and null confidence) when nothing matches, rather than host noise', async () => {
   const out = await provider.enrich(input({ url: 'https://kittens.example/page' }));
-  assert.deepEqual(
-    out.suggested_tags.map((tag) => tag.name),
-    ['kittens'],
-  );
+  assert.deepEqual(out.suggested_tags, []);
   assert.equal(out.suggested_collection, null);
+  assert.equal(out.confidence, null);
+  // The summary still grounds the bookmark even with no tags to suggest.
+  assert.match(out.summary ?? '', /dummy-v0/);
 });
 
 test('produces a summary for a URL and none for a text-only share', async () => {

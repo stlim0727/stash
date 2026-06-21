@@ -65,9 +65,8 @@ const RULES: Rule[] = [
 const MAX_TAGS = 5;
 
 // Localized labels for the heuristic rule tags, so the fallback also answers in
-// the user's language (M12). Only the rule tags above are translated; a
-// host-derived fallback tag (e.g. "kittens") is a proper noun and stays as-is,
-// and the collection hint stays English so it still matches the user's existing
+// the user's language (M12). Only the rule tags above are translated; the
+// collection hint stays English so it still matches the user's existing
 // collection names — same reasoning as the Gemini provider.
 const TAG_LABELS: Record<string, Record<string, string>> = {
   ko: {
@@ -144,6 +143,13 @@ export class DummyProvider implements EnrichmentProvider {
       hits: rule.keywords.filter((keyword) => haystack.includes(keyword)).length,
     })).filter((entry) => entry.hits > 0);
 
+    // Only keyword-rule matches become tags. We deliberately do NOT invent a
+    // host-derived fallback tag (e.g. "example.com" → "example") when nothing
+    // matches: it landed at 0.4 confidence, below the app's 0.6 surface
+    // threshold (see domain/ai-suggestions.ts), so it was never shown — it only
+    // bloated the enrichment row with noise. A bare bookmark with no confident
+    // tag is fine; the summary and degraded_reason still tell the user what
+    // happened, and an empty tag list is honest about having nothing to suggest.
     const suggested_tags: SuggestedTag[] = matched
       .map(({ rule, index, hits }) => ({
         name: localizeTag(rule.tag, base),
@@ -151,13 +157,6 @@ export class DummyProvider implements EnrichmentProvider {
         confidence: round2(Math.min(0.9, 0.55 + 0.1 * hits - 0.03 * index)),
       }))
       .slice(0, MAX_TAGS);
-
-    // Nothing matched: fall back to a low-confidence tag from the host label
-    // (e.g. "example.com" → "example") so a bookmark is never left bare.
-    if (suggested_tags.length === 0 && host) {
-      const label = host.split('.').slice(-2, -1)[0] ?? host;
-      suggested_tags.push({ name: label, confidence: 0.4 });
-    }
 
     const topics = matched.map((entry) => localizeTag(entry.rule.tag, base));
     const suggested_collection =

@@ -145,10 +145,21 @@ interface BookmarksContextValue {
   addTagsToBookmark: (bookmarkId: string, names: string[]) => Promise<string | null>;
   /** Remove a tag from a synced bookmark. Resolves to an error message, or null. */
   removeTagFromBookmark: (bookmarkId: string, tagName: string) => Promise<string | null>;
-  /** Generate AI suggestions for a synced bookmark. Resolves to an error, or null. */
-  requestAiEnrichment: (bookmarkId: string) => Promise<string | null>;
-  /** True while AI suggestions are being generated for this bookmark. */
+  /** Generate AI suggestions for a synced bookmark. Resolves to an error, or
+   *  null. `source` defaults to 'manual' (an explicit user tap); the deferred
+   *  post-capture auto-trigger passes 'auto' so the UI can stay silent for work
+   *  the user never asked to wait on. */
+  requestAiEnrichment: (
+    bookmarkId: string,
+    source?: 'auto' | 'manual',
+  ) => Promise<string | null>;
+  /** True while ANY AI request (auto or manual) is in flight for this bookmark —
+   *  drives the ambient "filling in" placeholder. */
   isEnriching: (bookmarkId: string) => boolean;
+  /** True only while a user-initiated ("Suggest with AI"/refresh) request is in
+   *  flight — drives the explicit button feedback, so the auto-trigger never
+   *  makes the section look like it's blocking on a wait. */
+  isManuallyEnriching: (bookmarkId: string) => boolean;
   /** Accept AI-suggested tags (linked with source 'ai'). Resolves to an error, or null. */
   acceptSuggestedTags: (bookmarkId: string, suggestions: SuggestedTag[]) => Promise<string | null>;
   /**
@@ -321,9 +332,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // render while a marker lingers (e.g. after a failed request). In-memory on
   // purpose: a fresh launch retries a marker that never succeeded.
   const aiTriggerAttempted = useRef(new Set<string>());
-  // Reactive mirror of `aiEnriching` so the UI can show an "AI is working"
-  // indicator while a request (auto-triggered or manual) is in flight.
+  // Reactive mirror of `aiEnriching` so the UI can show an ambient "filling in"
+  // placeholder while a request (auto-triggered or manual) is in flight.
   const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(new Set());
+  // Subset of `enrichingIds` started by an explicit user action, so the UI can
+  // give direct button feedback for a manual tap while keeping the auto-trigger
+  // silent (it should just fill suggestions in, not look like a blocking wait).
+  const [manualEnrichingIds, setManualEnrichingIds] = useState<ReadonlySet<string>>(new Set());
   // Tombstones for deleted local bookmarks. The sync loop iterates over a
   // snapshot, so a delete that lands mid-run must be visible to it — both
   // before uploading an entry and before applying an upload's result.
@@ -1142,7 +1157,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // immediately rather than waiting for the next pull. Fire-and-forget safe:
   // failures (e.g. the function isn't deployed yet) just return a message.
   const requestAiEnrichment = useCallback(
-    async (bookmarkId: string): Promise<string | null> => {
+    async (bookmarkId: string, source: 'auto' | 'manual' = 'manual'): Promise<string | null> => {
       if (!auth.session) {
         return 'AI suggestions need the cloud — Supabase is not available right now.';
       }
@@ -1154,6 +1169,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       aiEnriching.current.add(bookmarkId);
       setEnrichingIds((prev) => new Set(prev).add(bookmarkId));
+      if (source === 'manual') {
+        setManualEnrichingIds((prev) => new Set(prev).add(bookmarkId));
+      }
       try {
         // The edge function forwards this access token to PostgREST, which 401s
         // on a stale one. The token can expire while the app sits idle, so
@@ -1221,14 +1239,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
       } finally {
         aiEnriching.current.delete(bookmarkId);
-        setEnrichingIds((prev) => {
+        const remove = (prev: ReadonlySet<string>): ReadonlySet<string> => {
           if (!prev.has(bookmarkId)) {
             return prev;
           }
           const next = new Set(prev);
           next.delete(bookmarkId);
           return next;
-        });
+        };
+        setEnrichingIds(remove);
+        if (source === 'manual') {
+          setManualEnrichingIds(remove);
+        }
       }
     },
     [auth],
@@ -1239,6 +1261,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const isEnriching = useCallback(
     (bookmarkId: string): boolean => enrichingIds.has(bookmarkId),
     [enrichingIds],
+  );
+
+  // True only for a user-initiated request, so the button can show explicit
+  // feedback without the auto-trigger ever making the section feel like a wait.
+  const isManuallyEnriching = useCallback(
+    (bookmarkId: string): boolean => manualEnrichingIds.has(bookmarkId),
+    [manualEnrichingIds],
   );
 
   // Accept AI-suggested tags: ensure + link them with `source: 'ai'` so their
@@ -1626,7 +1655,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Clear the durable marker only on success; a failure keeps it so the
       // next launch retries (the in-memory attempt guard prevents a same-session
       // retry storm).
-      void requestAiEnrichment(id).then((error) => {
+      void requestAiEnrichment(id, 'auto').then((error) => {
         if (!error) {
           clearPendingAiTrigger(id);
         }
@@ -1708,6 +1737,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       removeTagFromBookmark,
       requestAiEnrichment,
       isEnriching,
+      isManuallyEnriching,
       acceptSuggestedTags,
       getReviewedSuggestions,
       markSuggestionsReviewed,
@@ -1737,6 +1767,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       removeTagFromBookmark,
       requestAiEnrichment,
       isEnriching,
+      isManuallyEnriching,
       acceptSuggestedTags,
       getReviewedSuggestions,
       markSuggestionsReviewed,
