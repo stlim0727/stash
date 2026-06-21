@@ -64,6 +64,9 @@ export default function BookmarkDetailScreen() {
   const [busy, setBusy] = useState(false);
   // Suggested tag names the user dismissed this session (local-only).
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  // Suggested collection id the user dismissed this session (local-only). A new
+  // enrichment proposing a different collection re-surfaces the chip.
+  const [dismissedCollectionId, setDismissedCollectionId] = useState<string | null>(null);
   // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
@@ -97,6 +100,28 @@ export default function BookmarkDetailScreen() {
     setTitleLineCount(null);
     setTitleExpanded(false);
   }, [displayedTitle]);
+
+  // Forward genuine AI outages (provider error / timeout) to monitoring once per
+  // enrichment, so the section can stay quiet in the common case and we still
+  // see when the model actually fails. Rate-limits and missing-config are
+  // expected fallbacks, not incidents, so they're left out. console.error is the
+  // Sentry bridge (observability/sentry.ts); the message carries no content.
+  const reportedDegradedRef = useRef<Set<string>>(new Set());
+  const reportEnrichment = id ? getEnrichment(id) : undefined;
+  useEffect(() => {
+    if (!reportEnrichment?.degraded) {
+      return;
+    }
+    const reason = reportEnrichment.degraded_reason;
+    if (reason !== 'provider_error' && reason !== 'timeout') {
+      return;
+    }
+    if (reportedDegradedRef.current.has(reportEnrichment.id)) {
+      return;
+    }
+    reportedDegradedRef.current.add(reportEnrichment.id);
+    console.error(`[stash] AI enrichment degraded (${reason})`);
+  }, [reportEnrichment?.id, reportEnrichment?.degraded, reportEnrichment?.degraded_reason]);
 
   if (!bookmark) {
     return (
@@ -147,7 +172,9 @@ export default function BookmarkDetailScreen() {
   );
   const suggestedCollection = getCollection(enrichment?.suggested_collection_id ?? null);
   const showCollectionSuggestion =
-    !!suggestedCollection && bookmark.collection_id !== suggestedCollection.id;
+    !!suggestedCollection &&
+    bookmark.collection_id !== suggestedCollection.id &&
+    suggestedCollection.id !== dismissedCollectionId;
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
@@ -255,6 +282,26 @@ export default function BookmarkDetailScreen() {
     if (aiSuggestionNames.has(name.toLowerCase())) {
       markSuggestionsReviewed(bookmark.id, [name]);
     }
+  };
+  // One-tap "yes to all" mirror of dismiss-all: apply every chip at once. AI
+  // suggestions go through acceptSuggestedTags (records the accept review);
+  // hashtag chips become plain user tags.
+  const handleAcceptAll = () => {
+    const hashtagNames = tagSuggestions
+      .filter((suggestion) => !aiSuggestionNames.has(suggestion.name.toLowerCase()))
+      .map((suggestion) => suggestion.name);
+    void runOrganizeAction(async () => {
+      if (pending.length > 0) {
+        const error = await acceptSuggestedTags(bookmark.id, pending);
+        if (error) {
+          return error;
+        }
+      }
+      if (hashtagNames.length > 0) {
+        return addTagsToBookmark(bookmark.id, hashtagNames);
+      }
+      return null;
+    });
   };
   // One-tap "no thanks" for the whole row: session-dismiss every chip, and
   // persist the AI ones as reviewed (same rule as a single dismiss).
@@ -491,6 +538,34 @@ export default function BookmarkDetailScreen() {
             {t('detail.currentlyIn', { name: collection.name })}
           </Text>
         ) : null}
+        {/* Suggested folder lives next to the picker as a one-tap chip, the same
+            shape as a suggested tag: tap to file in, ✕ to dismiss. */}
+        {showCollectionSuggestion ? (
+          <View style={styles.suggestionRow}>
+            <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('detail.aiFileIntoA11y', { name: suggestedCollection!.name })}
+                disabled={busy}
+                onPress={handleAcceptCollection}
+              >
+                <Text style={[styles.ghostLabel, { color: palette.accent }]}>
+                  {t('detail.aiSuggestCollectionChip', { name: suggestedCollection!.name })}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel={t('detail.aiDismissCollectionA11y', {
+                  name: suggestedCollection!.name,
+                })}
+                disabled={busy}
+                hitSlop={6}
+                onPress={() => setDismissedCollectionId(suggestedCollection!.id)}
+              >
+                <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
       </View>
 
       {/* Tags sit under the folder as a compact token field (its own
@@ -505,6 +580,7 @@ export default function BookmarkDetailScreen() {
         onBrowse={(tagId) => router.navigate({ pathname: '/', params: { tag: tagId } })}
         onAcceptSuggestion={handleAcceptSuggestion}
         onDismissSuggestion={handleDismissTag}
+        onAcceptAllSuggestions={handleAcceptAll}
         onDismissAllSuggestions={handleDismissAll}
         disabledHint={
           canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
@@ -545,23 +621,6 @@ export default function BookmarkDetailScreen() {
           <Text style={[styles.fieldValue, { color: palette.text }]}>{enrichment.summary}</Text>
         ) : null}
 
-        {pending.length > 0 ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiTagsHint')}</Text>
-        ) : null}
-
-        {showCollectionSuggestion ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('detail.aiFileIntoA11y', { name: suggestedCollection!.name })}
-            disabled={busy}
-            onPress={handleAcceptCollection}
-          >
-            <Text style={[styles.link, { color: palette.accent }]}>
-              {t('detail.aiSuggestedCollection', { name: suggestedCollection!.name })}
-            </Text>
-          </Pressable>
-        ) : null}
-
         {canOrganizeRemotely ? (
           <Pressable
             accessibilityRole="button"
@@ -583,10 +642,6 @@ export default function BookmarkDetailScreen() {
         ) : (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiNeedsSync')}</Text>
         )}
-
-        {enrichment && pending.length === 0 && !showCollectionSuggestion ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiNoNew')}</Text>
-        ) : null}
       </Card>
 
       <View style={styles.detailsSection}>
@@ -839,9 +894,30 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
-  link: {
+  suggestionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  ghostChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingVertical: 5,
+    paddingHorizontal: 11,
+    borderStyle: 'dashed',
+  },
+  ghostLabel: {
     fontSize: 14,
     fontWeight: '600',
+    lineHeight: 18,
+    includeFontPadding: false,
+  },
+  ghostRemove: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   suggestButton: {
     borderWidth: StyleSheet.hairlineWidth,

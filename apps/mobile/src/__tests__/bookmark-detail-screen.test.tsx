@@ -189,7 +189,7 @@ test('a stale enrichment shows an out-of-date hint', async () => {
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
 
-  expect(screen.getByText(/may be out of date since you edited this bookmark/)).toBeTruthy();
+  expect(screen.getByText(/Edited since these suggestions/)).toBeTruthy();
 });
 
 test('a degraded enrichment shows a non-error "basic suggestions" note', async () => {
@@ -211,7 +211,7 @@ test('a degraded enrichment shows a non-error "basic suggestions" note', async (
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
 
-  expect(screen.getByText(/AI is busy right now, so these are basic suggestions/)).toBeTruthy();
+  expect(screen.getByText(/AI is busy — showing basic suggestions/)).toBeTruthy();
 });
 
 test('dismissing a suggested tag removes it from the list', async () => {
@@ -262,6 +262,83 @@ test('dismiss all clears every suggestion at once', async () => {
 
   expect(screen.queryByLabelText('Accept suggested tag design')).toBeNull();
   expect(screen.queryByLabelText('Accept suggested tag video')).toBeNull();
+});
+
+test('add all applies every suggested tag at once', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        suggested_tags: [
+          { name: 'design', confidence: 0.8 },
+          { name: 'video', confidence: 0.6 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Add all suggestions')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Add all suggestions'));
+
+  // Both suggestions become real, browsable tags and are no longer offered.
+  await waitFor(() => expect(screen.getByLabelText('Browse #design')).toBeTruthy());
+  expect(screen.getByLabelText('Browse #video')).toBeTruthy();
+  expect(screen.queryByLabelText('Accept suggested tag design')).toBeNull();
+});
+
+function collectionTagData() {
+  return {
+    tags: [],
+    bookmarkTags: [],
+    collections: [
+      {
+        id: 'col-recipes',
+        user_id: 'user-test',
+        name: 'Recipes',
+        description: null,
+        created_at: '2026-06-12T00:00:00.000Z',
+        updated_at: '2026-06-12T00:00:00.000Z',
+      },
+    ],
+  };
+}
+
+test('shows the suggested folder as a chip beside the picker and files into it', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes' })],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('File into Recipes'));
+
+  // Once filed in, the suggestion (a different folder than current) is gone.
+  await waitFor(() => expect(screen.queryByLabelText('File into Recipes')).toBeNull());
+});
+
+test('the suggested folder chip can be dismissed', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes' })],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Recipes'));
+
+  expect(screen.queryByLabelText('File into Recipes')).toBeNull();
 });
 
 test('offers hashtags from the title as one-tap tag suggestions', async () => {

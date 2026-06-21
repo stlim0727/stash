@@ -27,6 +27,8 @@ interface TagFieldProps {
   onBrowse: (tagId: string) => void;
   onAcceptSuggestion: (name: string) => void;
   onDismissSuggestion: (name: string) => void;
+  /** Accept every current suggestion at once (mirror of "dismiss all"). */
+  onAcceptAllSuggestions?: () => void;
   /** Dismiss every current suggestion at once (the low-effort escape hatch). */
   onDismissAllSuggestions?: () => void;
   /** Shown in place of the input when not editable. */
@@ -49,6 +51,7 @@ export function TagField({
   onBrowse,
   onAcceptSuggestion,
   onDismissSuggestion,
+  onAcceptAllSuggestions,
   onDismissAllSuggestions,
   disabledHint,
 }: TagFieldProps) {
@@ -167,16 +170,30 @@ export function TagField({
               </Pressable>
             </View>
           ))}
+          {onAcceptAllSuggestions && suggestions.length > 1 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('tagField.addAllA11y')}
+              disabled={busy}
+              hitSlop={6}
+              style={styles.bulkAction}
+              onPress={onAcceptAllSuggestions}
+            >
+              <Text style={[styles.bulkActionLabel, { color: palette.accent }]}>
+                {t('tagField.addAll')}
+              </Text>
+            </Pressable>
+          ) : null}
           {onDismissAllSuggestions && suggestions.length > 1 ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={t('tagField.dismissAllA11y')}
               disabled={busy}
               hitSlop={6}
-              style={styles.dismissAll}
+              style={styles.bulkAction}
               onPress={onDismissAllSuggestions}
             >
-              <Text style={[styles.dismissAllLabel, { color: palette.textSecondary }]}>
+              <Text style={[styles.bulkActionLabel, { color: palette.textSecondary }]}>
                 {t('tagField.dismissAll')}
               </Text>
             </Pressable>
@@ -258,12 +275,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  dismissAll: {
+  bulkAction: {
     justifyContent: 'center',
     paddingVertical: 5,
     paddingHorizontal: 6,
   },
-  dismissAllLabel: {
+  bulkActionLabel: {
     fontSize: 13,
     fontWeight: '600',
     textDecorationLine: 'underline',
