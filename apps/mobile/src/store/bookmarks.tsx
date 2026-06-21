@@ -1333,6 +1333,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (error instanceof SupabaseRequestError && error.status === 429) {
           return AI_RATE_LIMITED;
         }
+        // Anything else is a genuine failure the user can't act on (e.g. the
+        // ai-enrich edge function returning 400/500). It was only ever surfaced
+        // in the Detail UI; record it so it also lands in the in-app diagnostics
+        // buffer and reaches Sentry (URL/email-scrubbed at the bridge), the way
+        // preview-fetch failures already do — otherwise an outage is invisible.
+        const detail = error instanceof Error ? error.message : String(error);
+        const status = error instanceof SupabaseRequestError ? ` (HTTP ${error.status})` : '';
+        recordLog('error', `ai-enrich failed${status}: ${detail}`);
         return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
       } finally {
         aiEnriching.current.delete(bookmarkId);
