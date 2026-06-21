@@ -263,14 +263,15 @@ export class BookmarkApi {
     } catch (error) {
       // If a concurrent (or retried) insert won the race between our lookup and
       // our own insert, treat the unique-index conflict as the documented
-      // duplicate save: the active-URL index catches URL saves, the client_id
-      // index catches URL-less text notes.
+      // duplicate save. Try the active-URL key first, then fall back to the
+      // client_id key: a retried URL create whose original was archived in the
+      // meantime conflicts on the all-rows client_id index (not the active-only
+      // url_hash one), so the url_hash lookup alone would miss the archived
+      // original and leave the entry failing forever.
       if (error instanceof SupabaseRequestError && error.status === 409) {
-        const duplicate = urlHash
-          ? await this.findActiveBookmarkByUrlHash(urlHash)
-          : clientId
-            ? await this.findBookmarkByClientId(clientId)
-            : null;
+        const duplicate =
+          (urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null) ??
+          (clientId ? await this.findBookmarkByClientId(clientId) : null);
         if (duplicate) {
           return {
             bookmark_id: duplicate.id,
