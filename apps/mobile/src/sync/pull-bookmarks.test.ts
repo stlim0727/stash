@@ -50,6 +50,7 @@ function makeEnrichment(overrides: Partial<AIEnrichment> = {}): AIEnrichment {
     topics: [],
     suggested_tags: [],
     suggested_collection_id: null,
+    suggested_collection_name: null,
     model: 'cloud-pipeline',
     status: 'complete',
     confidence: null,

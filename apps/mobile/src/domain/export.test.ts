@@ -85,6 +85,7 @@ test('buildJsonBackup captures tags, enrichment, and a collection name', () => {
     topics: ['tech'],
     suggested_tags: [{ name: 'ai', confidence: 0.9 }],
     suggested_collection_id: null,
+    suggested_collection_name: null,
     model: 'test-model',
     status: 'complete',
     confidence: 0.9,

@@ -81,7 +81,7 @@ function buildSystemInstruction(language: string): string {
     '- summary: one or two neutral sentences describing what the bookmark is (a usable note). Null if there is too little to go on.',
     '- topics: a few short lowercase subject keywords.',
     '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1.',
-    '- suggested_collection: the single best-fit collection NAME copied verbatim from the provided existing collections — do NOT translate it; only propose a new concise name when none fit; null if unsure.',
+    '- suggested_collection: a single best-fit collection NAME for filing this bookmark. If one of the provided existing collections fits, copy its NAME verbatim (do NOT translate it). If none fit, propose a concise, reusable new collection name in Title Case (a broad theme, not a one-off). Use null only when the content is too sparse to categorize at all.',
     '- confidence: your overall confidence from 0 to 1.',
     'Base every field only on the supplied metadata. Do not fabricate specifics you were not given.',
   ].join('\n');

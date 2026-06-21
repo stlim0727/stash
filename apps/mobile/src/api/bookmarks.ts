@@ -163,6 +163,10 @@ function enrichmentFromRemote(row: RemoteAIEnrichment): AIEnrichment {
     // stays defensive so a missing field can never read as `undefined`.
     degraded: row.degraded === true,
     degraded_reason: row.degraded ? row.degraded_reason ?? null : null,
+    // Tolerate rows from before the column existed: absent → no new-collection
+    // suggestion. (RemoteAIEnrichment spreads the column through; this just
+    // guarantees null over undefined.)
+    suggested_collection_name: row.suggested_collection_name ?? null,
   };
 }
 

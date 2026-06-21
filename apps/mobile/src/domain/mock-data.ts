@@ -156,6 +156,7 @@ export const mockEnrichments: AIEnrichment[] = [
     topics: ['local-first', 'sync', 'software architecture'],
     suggested_tags: [{ name: 'local-first', confidence: 0.93 }],
     suggested_collection_id: 'collection-research',
+    suggested_collection_name: null,
     model: 'future-ai-pipeline',
     status: 'complete',
     confidence: 0.9,

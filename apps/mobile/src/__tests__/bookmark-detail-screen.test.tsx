@@ -341,6 +341,90 @@ test('the suggested folder chip can be dismissed', async () => {
   expect(screen.queryByLabelText('File into Recipes')).toBeNull();
 });
 
+test('offers to create a brand-new collection when the AI suggests one that does not exist', async () => {
+  mockRouteId = SYNCED_ID;
+  // No seeded collections: the enrichment carries only a proposed NAME, so the
+  // suggestion is "create it" rather than "file into" an existing folder.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    undefined,
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_name: 'Recipes' })],
+  );
+
+  const screen = await renderDetail();
+
+  expect(
+    await waitFor(() => screen.getByLabelText('Create collection Recipes and file into it')),
+  ).toBeTruthy();
+  // It's a create suggestion, not a "file into existing" one.
+  expect(screen.queryByLabelText('File into Recipes')).toBeNull();
+});
+
+test('files into an existing collection when the proposed name matches one (id unresolved)', async () => {
+  mockRouteId = SYNCED_ID;
+  // The proposed name matches a real collection (differing only in case), even
+  // though the server left suggested_collection_id null — file in, don't create.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_name: 'recipes' })],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
+  expect(screen.queryByLabelText('Create collection recipes and file into it')).toBeNull();
+
+  await fireEvent.press(screen.getByLabelText('File into Recipes'));
+  await waitFor(() => expect(screen.queryByLabelText('File into Recipes')).toBeNull());
+});
+
+test('matches a live collection that differs only in spacing/punctuation (no duplicate create)', async () => {
+  mockRouteId = SYNCED_ID;
+  // Existing folder "Watch Later"; the AI proposed "watch-later" with no id.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        {
+          id: 'col-watch',
+          user_id: 'user-test',
+          name: 'Watch Later',
+          description: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+          updated_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+    },
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_name: 'watch-later' })],
+  );
+
+  const screen = await renderDetail();
+
+  // Resolves to the existing folder — file in, never offer to create a duplicate.
+  await waitFor(() => expect(screen.getByLabelText('File into Watch Later')).toBeTruthy());
+  expect(screen.queryByLabelText('Create collection watch-later and file into it')).toBeNull();
+});
+
+test('the create-collection suggestion can be dismissed', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    undefined,
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_name: 'Recipes' })],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() =>
+    expect(screen.getByLabelText('Create collection Recipes and file into it')).toBeTruthy(),
+  );
+
+  await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Recipes'));
+
+  expect(screen.queryByLabelText('Create collection Recipes and file into it')).toBeNull();
+});
+
 test('offers hashtags from the title as one-tap tag suggestions', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset([

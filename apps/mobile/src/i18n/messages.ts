@@ -221,6 +221,9 @@ export const en = {
   // Suggested folder, shown as a one-tap chip next to the collection picker.
   'detail.aiSuggestCollectionChip': '📁 ＋ {name}',
   'detail.aiFileIntoA11y': 'File into {name}',
+  // Shown when no existing folder matches the AI's hint: create it and file in.
+  'detail.aiCreateCollectionChip': '📁 ＋ Create “{name}”',
+  'detail.aiCreateCollectionA11y': 'Create collection {name} and file into it',
   'detail.aiDismissCollectionA11y': 'Dismiss suggested collection {name}',
   'detail.aiGenerating': 'Generating suggestions…',
   'detail.aiRefresh': 'Refresh AI suggestions',

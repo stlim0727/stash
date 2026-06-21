@@ -96,6 +96,11 @@ export interface AIEnrichment {
   topics: string[];
   suggested_tags: SuggestedTag[];
   suggested_collection_id: string | null;
+  /** A proposed collection NAME to create when no existing collection fit the
+   *  model's hint (the edge function leaves this null once it resolves the hint
+   *  to an existing {@link suggested_collection_id}). Lets the app offer "create
+   *  this collection & file in" instead of silently dropping the suggestion. */
+  suggested_collection_name: string | null;
   /** AI model or process identifier. */
   model: string | null;
   status: EnrichmentStatus;

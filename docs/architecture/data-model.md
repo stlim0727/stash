@@ -83,7 +83,8 @@ Stores AI-generated metadata separately from user-authored bookmark fields.
 | summary | text | AI-generated summary. |
 | topics | jsonb | Topic labels or structured taxonomy. |
 | suggested_tags | jsonb | Suggested tag names and confidence. |
-| suggested_collection_id | uuid | Optional suggested collection. |
+| suggested_collection_id | uuid | Optional suggested collection, resolved to one of the user's existing collections. |
+| suggested_collection_name | text | Optional proposed collection NAME when the model's hint matched no existing collection — lets the app offer to create it. Null once an existing collection resolved `suggested_collection_id`. |
 | model | text | AI model or process identifier. |
 | status | text | `pending`, `complete`, `failed`, or `stale`. |
 | confidence | numeric | Optional overall confidence. |
