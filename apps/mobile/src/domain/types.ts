@@ -53,6 +53,14 @@ export interface Bookmark {
   metadata_status: MetadataStatus;
   /** Local-only field while the bookmark lives on device. */
   sync_status: SyncStatus;
+  /**
+   * Local-only durable on-device URI of a captured image (content_type
+   * 'image'). Set when an image is shared into the app; never sent to the
+   * cloud. Cloud upload of the binary (and the synced `image_path` it will map
+   * to) is deferred to 0.3.x — see docs/architecture/sync-account-switching.md.
+   * Optional so existing rows and remote-mapped rows need no migration.
+   */
+  local_image_uri?: string | null;
 }
 
 export interface Tag {

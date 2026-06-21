@@ -16,7 +16,9 @@ import { createSupabaseClient, SupabaseRequestError } from '@/supabase/client';
 import type { StashSupabaseClient } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
-export type RemoteBookmark = Omit<Bookmark, 'sync_status'>;
+// `local_image_uri` is a device-only field (a captured image's on-disk URI),
+// so it is never part of a remote row, alongside the local-only `sync_status`.
+export type RemoteBookmark = Omit<Bookmark, 'sync_status' | 'local_image_uri'>;
 
 export interface CreateBookmarkOutput {
   bookmark_id: string;

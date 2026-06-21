@@ -847,10 +847,10 @@ export default function InboxScreen() {
           return (
             <Card style={styles.card}>
               <Pressable onPress={openDetail} onLongPress={() => setMenuItem(item)}>
-                {item.preview_image_url ? (
+                {item.local_image_uri ?? item.preview_image_url ? (
                   <Image
                     testID="inbox-card-preview"
-                    source={{ uri: item.preview_image_url }}
+                    source={{ uri: (item.local_image_uri ?? item.preview_image_url)! }}
                     style={styles.cardPreview}
                   />
                 ) : null}
