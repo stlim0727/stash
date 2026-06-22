@@ -104,6 +104,57 @@ test('shows an AI suggestion badge for pending (un-applied) suggested tags', asy
   expect(screen.getByLabelText('2 AI suggestions')).toBeTruthy();
 });
 
+test('announces suggestions that arrived unseen with a banner, dismissable via ✕', async () => {
+  const id = '7e64cf1e-0000-4000-8000-00000000000d';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Arrived while away' })],
+    undefined,
+    [makeEnrichment({ bookmark_id: id, suggested_tags: [{ name: 'design', confidence: 0.8 }] })],
+  );
+  // Simulate a suggestion that landed while the user wasn't looking (persisted
+  // unseen marker re-hydrated on launch).
+  fakeRepo.__setMeta('unseen_ai_suggestions', JSON.stringify([id]));
+
+  const screen = await renderInbox();
+
+  const banner = await waitFor(() => screen.getByTestId('new-suggestions-banner'));
+  expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
+
+  // The ✕ clears the markers, so the banner goes away.
+  fireEvent.press(screen.getByLabelText('Dismiss new AI suggestions'));
+  await waitFor(() => expect(screen.queryByTestId('new-suggestions-banner')).toBeNull());
+  expect(banner).toBeTruthy();
+});
+
+test('the unseen banner ignores items whose suggestions were already applied', async () => {
+  const id = '7e64cf1e-0000-4000-8000-00000000000e';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Already handled' })],
+    // The suggested "design" tag is already applied to this bookmark.
+    {
+      tags: [makeTag('tag-design', 'design')],
+      bookmarkTags: [
+        {
+          bookmark_id: id,
+          tag_id: 'tag-design',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [],
+    },
+    [makeEnrichment({ bookmark_id: id, suggested_tags: [{ name: 'design', confidence: 0.8 }] })],
+  );
+  fakeRepo.__setMeta('unseen_ai_suggestions', JSON.stringify([id]));
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Already handled')).toBeTruthy());
+  // No live pending suggestion remains, so the banner never shows.
+  expect(screen.queryByTestId('new-suggestions-banner')).toBeNull();
+});
+
 test('search filters the list and shows the match count', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({

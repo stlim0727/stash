@@ -93,6 +93,16 @@ export const en = {
   'inbox.moveToCollectionTitle': 'Move to collection',
   'inbox.inboxNoCollection': 'Inbox (no collection)',
   'inbox.aiSuggestionsA11y': { one: '{count} AI suggestion', other: '{count} AI suggestions' },
+  'inbox.newSuggestions': {
+    one: '✨ {count} new AI suggestion',
+    other: '✨ {count} new AI suggestions',
+  },
+  'inbox.newSuggestionsReview': 'Review',
+  'inbox.newSuggestionsA11y': {
+    one: 'Review {count} new AI suggestion',
+    other: 'Review {count} new AI suggestions',
+  },
+  'inbox.newSuggestionsDismiss': 'Dismiss new AI suggestions',
   'inbox.inCollection': 'in {name}',
   'inbox.addBookmark': 'Add bookmark',
   'inbox.openExternal': 'Open ↗',

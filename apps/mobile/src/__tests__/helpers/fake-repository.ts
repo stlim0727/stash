@@ -7,6 +7,8 @@ export interface FakeRepositoryModule {
   __reset: (rows?: Bookmark[], seedTagData?: TagData, seedEnrichments?: AIEnrichment[]) => void;
   __queue: () => LocalPendingBookmark[];
   __meta: (key: string) => string | null;
+  /** Test hook: pre-seed a durable meta value (e.g. the unseen-suggestions set). */
+  __setMeta: (key: string, value: string) => void;
 }
 
 /**
@@ -71,6 +73,9 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
     },
     __queue: () => [...queue],
     __meta: (key: string) => meta[key] ?? null,
+    __setMeta: (key: string, value: string) => {
+      meta = { ...meta, [key]: value };
+    },
   };
 }
 

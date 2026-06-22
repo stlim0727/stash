@@ -71,15 +71,18 @@ jest.mock('@/api/bookmarks', () => {
   const createBookmark = jest.fn(async () => ({
     bookmark_id: '7e64cf1e-0000-4000-8000-0000000000aa',
   }));
+  // Pull's enrichment feed. Spied so a test can simulate another device
+  // refreshing AI suggestions (a row arriving via pull rather than a local tap).
+  const listEnrichmentsUpdatedSince = jest.fn(async () => [] as unknown[]);
   return {
-    __spies: { requestEnrichment, addTags, listBookmarkIds, createBookmark },
+    __spies: { requestEnrichment, addTags, listBookmarkIds, createBookmark, listEnrichmentsUpdatedSince },
     createBookmarkApi: () => ({
       requestEnrichment,
       addTags,
       createBookmark,
       listBookmarksUpdatedSince: empty,
       listBookmarkIds,
-      listEnrichmentsUpdatedSince: empty,
+      listEnrichmentsUpdatedSince,
       listTags: empty,
       listBookmarkTags: empty,
       listCollections: empty,
@@ -91,7 +94,7 @@ import { AI_RATE_LIMITED, BookmarksProvider, useBookmarks } from '@/store/bookma
 import { SupabaseRequestError } from '@/supabase/client';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
-import { makeStoredBookmark } from './helpers/fake-repository';
+import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 const apiMock = jest.requireMock('@/api/bookmarks') as {
@@ -100,6 +103,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
     addTags: jest.Mock;
     listBookmarkIds: jest.Mock;
     createBookmark: jest.Mock;
+    listEnrichmentsUpdatedSince: jest.Mock;
   };
 };
 
@@ -139,6 +143,8 @@ beforeEach(() => {
   apiMock.__spies.listBookmarkIds.mockReset();
   apiMock.__spies.listBookmarkIds.mockResolvedValue([]);
   apiMock.__spies.createBookmark.mockClear();
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockReset();
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValue([]);
 });
 
 test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
@@ -457,4 +463,97 @@ test('clearReviewedSuggestions forgets dismissals so a manual re-run can reconsi
   expect(store.current!.getReviewedSuggestions(SYNCED_ID).size).toBe(0);
   // Persisted, so the cleared state survives a relaunch too.
   await waitFor(() => expect(fakeRepo.__meta('reviewed_ai_suggestions')).toBe('{}'));
+});
+
+test('a background auto enrichment flags the bookmark as an unseen suggestion', async () => {
+  const store = await renderReady();
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(false);
+
+  // The deferred post-capture trigger fires with source 'auto' — the user isn't
+  // looking at this bookmark, so its new suggestion drives the Inbox banner.
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(true);
+  // Persisted so a suggestion that landed in an abandoned session re-announces.
+  expect(fakeRepo.__meta('unseen_ai_suggestions')).toContain(SYNCED_ID);
+});
+
+test('a manual enrichment is witnessed, so it is never flagged as unseen', async () => {
+  const store = await renderReady();
+
+  // A manual "Suggest with AI" tap happens on the Detail screen — the user is
+  // already looking — so it must not surface the Inbox "new suggestions" banner.
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(false);
+});
+
+test('markSuggestionsSeen and clearUnseenSuggestions clear the unseen flag', async () => {
+  const store = await renderReady();
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(true);
+
+  // Opening the bookmark's Detail witnesses the suggestion.
+  await act(async () => {
+    store.current!.markSuggestionsSeen(SYNCED_ID);
+  });
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(false);
+  expect(fakeRepo.__meta('unseen_ai_suggestions')).toBe('[]');
+
+  // Re-flag, then clear all at once (the Review screen does this on entry).
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  expect(store.current!.unseenSuggestionIds.size).toBe(1);
+  await act(async () => {
+    store.current!.clearUnseenSuggestions();
+  });
+  expect(store.current!.unseenSuggestionIds.size).toBe(0);
+});
+
+test('a pull that refreshes an existing enrichment (same id, newer timestamp) re-flags it', async () => {
+  // Another device re-runs AI suggestions: the edge function upserts on
+  // bookmark_id and keeps the same enrichment id, so gating on a brand-new id
+  // would miss the changed suggestions. The pull compares updated_at instead.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID })],
+    undefined,
+    [
+      makeEnrichment({
+        id: 'enrich-1',
+        bookmark_id: SYNCED_ID,
+        updated_at: '2026-06-13T00:00:00.000Z',
+        suggested_tags: [{ name: 'design', confidence: 0.8 }],
+      }),
+    ],
+  );
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  // The initial pull carried no updated enrichments, so nothing is flagged: the
+  // seeded row was a bulk load, not a fresh arrival.
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(false);
+
+  // A later pull brings the same enrichment id back with a newer timestamp.
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({
+      id: 'enrich-1',
+      bookmark_id: SYNCED_ID,
+      updated_at: '2026-06-20T00:00:00.000Z',
+      suggested_tags: [{ name: 'design', confidence: 0.8 }],
+    }),
+  ]);
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(true);
 });
