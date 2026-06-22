@@ -134,7 +134,7 @@ export const en = {
   // Settings.
   'settings.account.signedIn': 'Signed in',
   'settings.account.signIn': 'Sign In',
-  'settings.account.logOut': 'Log out',
+  'settings.account.signOut': 'Sign out',
   'settings.account.cloudUnavailable': 'Cloud sync unavailable',
   'settings.account.worksOffline': 'Stash works fully offline',
   'settings.sync.label': 'Sync',

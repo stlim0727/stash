@@ -102,7 +102,7 @@ export const ko: Catalog = {
 
   'settings.account.signedIn': '로그인됨',
   'settings.account.signIn': '로그인',
-  'settings.account.logOut': '로그아웃',
+  'settings.account.signOut': '로그아웃',
   'settings.account.cloudUnavailable': '클라우드 동기화 사용 불가',
   'settings.account.worksOffline': 'Stash는 오프라인에서도 완전히 작동합니다',
   'settings.sync.label': '동기화',

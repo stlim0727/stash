@@ -50,10 +50,15 @@ const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
 
 type AppPalette = ReturnType<typeof usePalette>;
 
-/** Sign-in providers, in display order (Google first), with a11y label keys. */
-const AUTH_PROVIDERS: { id: OAuthProvider; label: string; a11yKey: MessageKey }[] = [
-  { id: 'google', label: 'Google', a11yKey: 'account.signInGoogle' },
-  { id: 'apple', label: 'Apple', a11yKey: 'account.signInApple' },
+/** Sign-in providers, in display order (Google first), with logo + a11y keys. */
+const AUTH_PROVIDERS: {
+  id: OAuthProvider;
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  a11yKey: MessageKey;
+}[] = [
+  { id: 'google', label: 'Google', icon: 'logo-google', a11yKey: 'account.signInGoogle' },
+  { id: 'apple', label: 'Apple', icon: 'logo-apple', a11yKey: 'account.signInApple' },
 ];
 
 /** The language-preference options, in display order, with their label keys. */
@@ -333,7 +338,7 @@ export default function SettingsScreen() {
                 disabled={authBusy !== null}
                 onPress={() => void handleSignOut()}
               >
-                {t('settings.account.logOut')}
+                {t('settings.account.signOut')}
               </Button>
             </>
           ) : auth.status === 'not_configured' ? (
@@ -353,11 +358,12 @@ export default function SettingsScreen() {
                 </Text>
               </View>
               <View style={styles.authButtons}>
-                {AUTH_PROVIDERS.map(({ id, label, a11yKey }) => (
+                {AUTH_PROVIDERS.map(({ id, label, icon, a11yKey }) => (
                   <Button
                     key={id}
                     variant="ghost"
                     size="sm"
+                    icon={icon}
                     accessibilityLabel={t(a11yKey)}
                     disabled={authBusy !== null}
                     onPress={() => void handleSignIn(id)}

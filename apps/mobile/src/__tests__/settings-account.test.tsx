@@ -66,7 +66,7 @@ test('anonymous: shows Sign In with provider buttons, and "all backed up" sync',
   expect(mockAuth.signIn).toHaveBeenCalledWith('google');
 });
 
-test('authenticated: shows the email and a Log out button that signs out', async () => {
+test('authenticated: shows the email and a Sign out button that signs out', async () => {
   mockAuth.status = 'authenticated';
   mockAuth.email = 'me@example.com';
   const screen = await renderSettings();
@@ -75,7 +75,7 @@ test('authenticated: shows the email and a Log out button that signs out', async
   expect(screen.queryByLabelText('Sign in with Google')).toBeNull();
 
   await act(async () => {
-    fireEvent.press(screen.getByText('Log out'));
+    fireEvent.press(screen.getByText('Sign out'));
   });
   expect(mockAuth.signOut).toHaveBeenCalledTimes(1);
 });
@@ -87,5 +87,5 @@ test('not configured: sync is local-only and no sign-in buttons are shown', asyn
 
   await waitFor(() => expect(screen.getByText('Local only')).toBeTruthy());
   expect(screen.queryByLabelText('Sign in with Apple')).toBeNull();
-  expect(screen.queryByText('Log out')).toBeNull();
+  expect(screen.queryByText('Sign out')).toBeNull();
 });
