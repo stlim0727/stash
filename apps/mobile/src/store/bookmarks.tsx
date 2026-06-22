@@ -109,10 +109,10 @@ interface BookmarksContextValue {
   isLoading: boolean;
   /** Set when the durable store failed to load and in-memory fallback is used. */
   loadError: boolean;
-  /** Active (non-archived) bookmarks, newest first. */
+  /** Active (non-trashed) bookmarks, newest first. */
   inbox: Bookmark[];
-  /** Archived bookmarks, most recently archived (updated) first. */
-  archived: Bookmark[];
+  /** Trashed bookmarks, most recently trashed first. */
+  trash: Bookmark[];
   /** Offline sync queue, oldest first — exposed for inspection until sync exists. */
   queue: LocalPendingBookmark[];
   getBookmark: (id: string) => Bookmark | undefined;
@@ -136,8 +136,12 @@ interface BookmarksContextValue {
    * the source are not restored yet — see the import UI copy.
    */
   importBookmarks: (items: ImportItem[]) => ImportSummary;
-  /** Archive or unarchive a bookmark (preferred over permanent deletion). */
-  archiveBookmark: (id: string, archived: boolean) => void;
+  /** Move a bookmark to the trash (soft delete). */
+  trashBookmark: (id: string) => void;
+  /** Restore a trashed bookmark back to the inbox. */
+  restoreBookmark: (id: string) => void;
+  /** Permanently delete all trashed bookmarks. */
+  emptyTrash: () => void;
   /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
   updateBookmarkFields: (id: string, fields: { title?: string; notes?: string }) => void;
   /** Permanently remove a bookmark and any pending queue entry for it. */
@@ -855,6 +859,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           site_name: null,
           collection_id: null,
           is_archived: false,
+          deleted_at: null,
           created_at: now,
           updated_at: now,
           last_saved_at: now,
@@ -925,6 +930,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           site_name: null,
           collection_id: null,
           is_archived: false,
+          deleted_at: null,
           created_at: noteNow,
           updated_at: noteNow,
           last_saved_at: noteNow,
@@ -1011,6 +1017,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         site_name: null,
         collection_id: null,
         is_archived: false,
+        deleted_at: null,
         created_at: now,
         updated_at: now,
         last_saved_at: now,
@@ -1108,6 +1115,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           site_name: null,
           collection_id: null,
           is_archived: false,
+          deleted_at: null,
           created_at: now,
           updated_at: now,
           last_saved_at: now,
@@ -1185,8 +1193,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [enqueueMutation],
   );
 
-  const archiveBookmark = useCallback(
-    (id: string, archived: boolean) => applyBookmarkUpdate(id, { is_archived: archived }),
+  const trashBookmark = useCallback(
+    (id: string) => applyBookmarkUpdate(id, { deleted_at: new Date().toISOString() }),
+    [applyBookmarkUpdate],
+  );
+
+  const restoreBookmark = useCallback(
+    (id: string) => applyBookmarkUpdate(id, { deleted_at: null }),
     [applyBookmarkUpdate],
   );
 
@@ -1252,6 +1265,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [enqueueMutation],
   );
+
+  const emptyTrash = useCallback(() => {
+    const trashed = (bookmarksRef.current ?? []).filter((b) => b.deleted_at !== null);
+    for (const bookmark of trashed) {
+      deleteBookmark(bookmark.id);
+    }
+  }, [deleteBookmark]);
 
   // Push queued tag ops to the server when online: ensure tags exist, reconcile
   // the optimistic local tag id to the server one, and drop the op on success.
@@ -1946,11 +1966,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isLoading: bookmarks === null,
       loadError,
       inbox: loadedBookmarks
-        .filter((bookmark) => !bookmark.is_archived)
+        .filter((bookmark) => !bookmark.deleted_at)
         .sort((a, b) => b.created_at.localeCompare(a.created_at)),
-      archived: loadedBookmarks
-        .filter((bookmark) => bookmark.is_archived)
-        .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+      trash: loadedBookmarks
+        .filter((bookmark) => bookmark.deleted_at !== null && bookmark.deleted_at !== undefined)
+        .sort((a, b) => (b.deleted_at ?? '').localeCompare(a.deleted_at ?? '')),
       queue,
       getBookmark,
       getTagsForBookmark,
@@ -1958,7 +1978,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getEnrichment,
       addBookmark,
       importBookmarks,
-      archiveBookmark,
+      trashBookmark,
+      restoreBookmark,
+      emptyTrash,
       updateBookmarkFields,
       deleteBookmark,
       isSyncing,
@@ -1991,7 +2013,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getEnrichment,
       addBookmark,
       importBookmarks,
-      archiveBookmark,
+      trashBookmark,
+      restoreBookmark,
+      emptyTrash,
       updateBookmarkFields,
       deleteBookmark,
       isSyncing,

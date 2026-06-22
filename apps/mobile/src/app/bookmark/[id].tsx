@@ -44,7 +44,8 @@ export default function BookmarkDetailScreen() {
     getTagsForBookmark,
     getCollection,
     getEnrichment,
-    archiveBookmark,
+    trashBookmark,
+    restoreBookmark,
     updateBookmarkFields,
     deleteBookmark,
     collections,
@@ -519,13 +520,21 @@ export default function BookmarkDetailScreen() {
         {bookmark.url ? (
           <ActionButton icon="share-social" label={t('common.share')} tint={palette.text} onPress={handleShare} />
         ) : null}
-        <ActionButton
-          icon={bookmark.is_archived ? 'arrow-undo' : 'archive'}
-          label={bookmark.is_archived ? t('common.unarchive') : t('common.archive')}
-          tint={palette.text}
-          onPress={() => archiveBookmark(bookmark.id, !bookmark.is_archived)}
-        />
-        <ActionButton icon="trash" label={t('common.delete')} tint={palette.danger} onPress={handleDelete} />
+        {bookmark.deleted_at ? (
+          <ActionButton
+            icon="arrow-undo"
+            label={t('common.restore')}
+            tint={palette.text}
+            onPress={() => { restoreBookmark(bookmark.id); router.back(); }}
+          />
+        ) : (
+          <ActionButton
+            icon="trash"
+            label={t('common.trash')}
+            tint={palette.danger}
+            onPress={() => { trashBookmark(bookmark.id); router.back(); }}
+          />
+        )}
       </View>
 
       {/* Notes — a pencil affordance + filled field so it reads as editable

@@ -30,6 +30,7 @@ function bookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     site_name: null,
     collection_id: null,
     is_archived: false,
+    deleted_at: null,
     created_at: '2026-01-02T03:04:05.000Z',
     updated_at: '2026-01-03T03:04:05.000Z',
     last_saved_at: '2026-01-02T03:04:05.000Z',

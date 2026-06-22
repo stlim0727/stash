@@ -81,7 +81,7 @@ export default function SettingsScreen() {
     isSyncing,
     syncNow,
     inbox,
-    archived,
+    trash,
     lastPulledAt,
     collections,
     getTagsForBookmark,
@@ -123,7 +123,7 @@ export default function SettingsScreen() {
   const [exportSheetOpen, setExportSheetOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [languageSheetOpen, setLanguageSheetOpen] = useState(false);
-  const totalBookmarks = inbox.length + archived.length;
+  const totalBookmarks = inbox.length;
 
   const runExport = async (kind: 'html' | 'json' | 'csv') => {
     setExportSheetOpen(false);
@@ -132,7 +132,7 @@ export default function SettingsScreen() {
     }
     setExporting(true);
     try {
-      const bookmarks = [...inbox, ...archived];
+      const bookmarks = [...inbox];
       const tagsByBookmark: ExportInput['tagsByBookmark'] = {};
       const enrichmentByBookmark: NonNullable<ExportInput['enrichmentByBookmark']> = {};
       for (const bookmark of bookmarks) {
@@ -418,11 +418,11 @@ export default function SettingsScreen() {
         <Row
           styles={styles}
           palette={palette}
-          icon="library-outline"
-          label={t('settings.library.label')}
-          value={t('settings.library.value', { inbox: inbox.length, archived: archived.length })}
+          icon="trash-outline"
+          label={t('settings.trash.label')}
+          value={t('settings.trash.value', { count: trash.length })}
           last
-          onPress={() => router.push('/archived')}
+          onPress={() => router.push('/trash')}
         />
       </Group>
 

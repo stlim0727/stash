@@ -34,8 +34,8 @@ export const en = {
   'common.open': 'Open',
   'common.openLink': 'Open link',
   'common.view': 'View',
-  'common.archive': 'Archive',
-  'common.unarchive': 'Unarchive',
+  'common.trash': 'Move to Trash',
+  'common.restore': 'Restore',
   'common.back': '‹ Back',
   'common.signOut': 'Sign out',
   'common.untitled': 'Untitled',
@@ -57,7 +57,7 @@ export const en = {
   'nav.account': 'Account',
   'nav.review': 'Review AI suggestions',
   'nav.report': 'Report a problem',
-  'nav.archived': 'Archived',
+  'nav.trash': 'Trash',
   'nav.bookmark': 'Bookmark',
   'nav.apiKeys': 'API Keys',
 
@@ -153,8 +153,8 @@ export const en = {
   'settings.review.label': 'Review AI suggestions',
   'settings.review.toReview': '{count} to review',
   'settings.review.nothing': 'Nothing to review',
-  'settings.library.label': 'Library',
-  'settings.library.value': '{inbox} in inbox · {archived} archived',
+  'settings.trash.label': 'Trash',
+  'settings.trash.value': '{count} items',
   'settings.report.label': 'Report a problem',
   'settings.report.value': 'Send a bug or idea',
   'settings.export.label': 'Export my data',
@@ -208,8 +208,16 @@ export const en = {
   'settings.import.failedBody': 'Could not import that file. Please try again.',
 
   // Archived.
-  'archived.empty':
-    'Nothing archived. Archived bookmarks stay out of your Inbox but remain searchable and restorable here.',
+  'trash.empty': 'Trash is empty.',
+  'trash.emptyButton': 'Empty Trash',
+  'trash.emptyTitle': 'Empty Trash?',
+  'trash.emptyBody': 'This permanently deletes all items in the trash. This cannot be undone.',
+  'trash.emptyConfirm': 'Delete All',
+  'trash.restore': 'Restore',
+
+  'update.title': 'Update Required',
+  'update.body': 'This version of Stash is no longer supported. Please update to continue.',
+  'update.button': 'Download Update',
 
   // Bookmark detail.
   'detail.notFound': 'This bookmark could not be found.',

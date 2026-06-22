@@ -181,7 +181,7 @@ export default function InboxScreen() {
     unseenSuggestionIds,
     clearUnseenSuggestions,
     collections,
-    archiveBookmark,
+    trashBookmark,
     deleteBookmark,
     assignCollection,
   } = useBookmarks();
@@ -504,26 +504,17 @@ export default function InboxScreen() {
       onPress: () => setMenuMode('move'),
     });
     actions.push({
-      key: 'archive',
-      label: t('common.archive'),
-      icon: 'archive-outline',
-      onPress: () => {
-        closeMenu();
-        archiveBookmark(item.id, true);
-      },
-    });
-    actions.push({
-      key: 'delete',
-      label: t('common.delete'),
+      key: 'trash',
+      label: t('common.trash'),
       icon: 'trash-outline',
       destructive: true,
       onPress: () => {
         closeMenu();
-        confirmDelete(item);
+        trashBookmark(item.id);
       },
     });
     return actions;
-  }, [menuItem, menuMode, collections, assignCollection, archiveBookmark, confirmDelete, closeMenu, t]);
+  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, closeMenu, t]);
 
   const menuTitle =
     menuMode === 'move'
