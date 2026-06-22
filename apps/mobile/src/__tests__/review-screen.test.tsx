@@ -1,5 +1,8 @@
-import { render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
+
+// `mock`-prefixed so jest's hoisted factory may close over it.
+const mockRouterPush = jest.fn();
 
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
@@ -19,7 +22,7 @@ jest.mock('@/domain/enrichment', () => ({
 }));
 jest.mock('expo-router', () => ({
   Link: ({ children }: { children: ReactNode }) => children,
-  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+  useRouter: () => ({ push: mockRouterPush, navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
   useLocalSearchParams: () => ({}),
 }));
 
@@ -37,6 +40,10 @@ function renderReview() {
     </BookmarksProvider>,
   );
 }
+
+beforeEach(() => {
+  mockRouterPush.mockClear();
+});
 
 test('lists bookmarks with pending high-confidence suggestions and their chips', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000a1';
@@ -72,4 +79,70 @@ test('shows the empty state when nothing is pending', async () => {
   const screen = await renderReview();
 
   await waitFor(() => expect(screen.getByText('No suggestions to review.')).toBeTruthy());
+});
+
+test('tapping the card title navigates to the bookmark detail', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000b1';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Open me' })],
+    undefined,
+    [makeEnrichment({ bookmark_id: id, suggested_tags: [{ name: 'design', confidence: 0.9 }] })],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Open me')).toBeTruthy());
+  await fireEvent.press(screen.getByLabelText('Go to Open me'));
+
+  expect(mockRouterPush).toHaveBeenCalledWith({ pathname: '/bookmark/[id]', params: { id } });
+});
+
+test('"Dismiss all" clears the card without applying any tags', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000b2';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Dismiss me' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        suggested_tags: [
+          { name: 'design', confidence: 0.9 },
+          { name: 'video', confidence: 0.8 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Dismiss me')).toBeTruthy());
+  await fireEvent.press(screen.getByLabelText('Dismiss all suggested tags for Dismiss me'));
+
+  // The card drops out, and dismissing applies no tags (the chips just vanish).
+  await waitFor(() => expect(screen.queryByText('Dismiss me')).toBeNull());
+  expect(screen.queryByText('＋ design')).toBeNull();
+});
+
+test('"Accept all" clears the card', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000b3';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Accept me' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        suggested_tags: [
+          { name: 'design', confidence: 0.9 },
+          { name: 'video', confidence: 0.8 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Accept me')).toBeTruthy());
+  await fireEvent.press(screen.getByLabelText('Accept all suggested tags for Accept me'));
+
+  await waitFor(() => expect(screen.queryByText('Accept me')).toBeNull());
 });

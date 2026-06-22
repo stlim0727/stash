@@ -221,8 +221,11 @@ export const ko: Catalog = {
   'review.empty': '검토할 제안이 없습니다.',
   'review.pendingHeader': { other: '대기 중인 제안 · 북마크 {count}개' },
   'review.acceptAll': '모두 수락',
+  'review.dismissAll': '모두 무시',
   'review.acceptTagA11y': '{title}에 대해 제안된 태그 {name} 수락',
   'review.acceptAllA11y': '{title}에 대해 제안된 태그 모두 수락',
+  'review.dismissAllA11y': '{title}에 대해 제안된 태그 모두 무시',
+  'review.goToA11y': '{title}(으)로 이동',
   'review.confidence': '{percent}%',
 
   'report.categoryBug': '버그',
