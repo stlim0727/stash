@@ -26,3 +26,8 @@ verify_jwt = false
 # Standard JWT verification — this function only accepts authenticated user
 # sessions; anonymous sessions and service-role calls are not needed here.
 verify_jwt = true
+
+[functions.public-api]
+# API key authentication is handled in the handler — JWT pre-verification is
+# disabled because callers use stash_ API keys, not Supabase JWTs.
+verify_jwt = false
