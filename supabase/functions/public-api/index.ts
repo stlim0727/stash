@@ -1,7 +1,6 @@
 // Supabase Edge Function: public-api
 //
-// Public REST API for external AI client integration (e.g. ChatGPT Custom GPT,
-// Claude Projects). Authenticated by API key issued from the api-keys function.
+// Public REST API. Authenticated by API key issued from the api-keys function.
 //
 // Routes:
 //   GET    /functions/v1/public-api/bookmarks              list (paginated, searchable)
@@ -438,7 +437,7 @@ async function listTags(userId: string): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// Router
+// OpenAPI spec
 // ---------------------------------------------------------------------------
 
 function buildOpenApiSpec(baseUrl: string): unknown {
@@ -448,7 +447,7 @@ function buildOpenApiSpec(baseUrl: string): unknown {
     info: {
       title: 'Stash API',
       description:
-        'Read and organize your Stash bookmarks from any AI tool. Authenticate with an API key from Settings → API Keys in the Stash app.',
+        'Read and organize your Stash bookmarks. Authenticate with an API key from Settings → API Keys in the Stash app.',
       version: '1.0.0',
     },
     servers: [{ url: serverUrl }],
@@ -575,11 +574,11 @@ function buildOpenApiSpec(baseUrl: string): unknown {
         },
       },
       '/bookmarks/{id}': {
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
         get: {
           operationId: 'getBookmark',
           summary: 'Get a bookmark',
           description: 'Returns full bookmark detail including tags and collection.',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
           responses: {
             '200': { description: 'Bookmark detail', content: { 'application/json': { schema: { '$ref': '#/components/schemas/BookmarkDetail' } } } },
             '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
@@ -590,6 +589,7 @@ function buildOpenApiSpec(baseUrl: string): unknown {
           operationId: 'updateBookmark',
           summary: 'Update a bookmark',
           description: 'Updates user-authored fields. Use add_tags / remove_tags to manage tags inline.',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
           requestBody: {
             content: { 'application/json': { schema: {
               type: 'object',
@@ -614,7 +614,10 @@ function buildOpenApiSpec(baseUrl: string): unknown {
           operationId: 'deleteBookmark',
           summary: 'Archive or delete a bookmark',
           description: 'Archives the bookmark by default (recoverable). Pass ?permanent=true to permanently delete.',
-          parameters: [{ name: 'permanent', in: 'query', schema: { type: 'boolean', default: false } }],
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'permanent', in: 'query', schema: { type: 'boolean', default: false } },
+          ],
           responses: {
             '204': { description: 'Success' },
             '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
@@ -623,10 +626,10 @@ function buildOpenApiSpec(baseUrl: string): unknown {
         },
       },
       '/bookmarks/{id}/tags': {
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
         post: {
           operationId: 'addTags',
           summary: 'Add tags to a bookmark',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
           requestBody: {
             required: true,
             content: { 'application/json': { schema: {
@@ -644,6 +647,7 @@ function buildOpenApiSpec(baseUrl: string): unknown {
         delete: {
           operationId: 'removeTags',
           summary: 'Remove tags from a bookmark',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
           requestBody: {
             required: true,
             content: { 'application/json': { schema: {
@@ -717,7 +721,7 @@ Deno.serve(async (req: Request) => {
   // OpenAPI spec is public — no auth needed
   const isOpenApi = (url.pathname.endsWith('/openapi.json') || url.pathname.endsWith('/openapi')) && req.method === 'GET';
   if (isOpenApi) {
-    const baseUrl = `${url.protocol}//${url.host}`;
+    const baseUrl = `https://${url.host}`;
     return new Response(JSON.stringify(buildOpenApiSpec(baseUrl), null, 2), {
       headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
     });
