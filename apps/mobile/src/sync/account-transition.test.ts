@@ -25,14 +25,13 @@ function bookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     site_name: null,
     collection_id: null,
     is_archived: false,
-    deleted_at: null,
     created_at: now,
     updated_at: now,
     last_saved_at: now,
     metadata_status: 'complete',
     sync_status: 'synced',
     ...overrides,
-  };
+  } as Bookmark;
 }
 
 test('first sync has nothing to reconcile', () => {

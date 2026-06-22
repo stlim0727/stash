@@ -22,14 +22,13 @@ function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     site_name: null,
     collection_id: null,
     is_archived: false,
-    deleted_at: null,
     created_at: now,
     updated_at: now,
     last_saved_at: now,
     metadata_status: 'pending',
     sync_status: 'pending',
     ...overrides,
-  };
+  } as Bookmark;
 }
 
 test('deriveMetadata builds title and site from the URL', () => {
