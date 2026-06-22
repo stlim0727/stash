@@ -225,9 +225,9 @@ test('the no_title diagnostic includes a structural head summary', async () => {
     })) as typeof fetch;
   try {
     await fetchPageMetadata('https://example.com/spa');
-    const errors = getLogEntries().filter((e) => e.level === 'error');
+    const warns = getLogEntries().filter((e) => e.level === 'warn');
     assert.ok(
-      errors.some((e) => /og\/tw=\[og:image\]/.test(e.message) && /title=false/.test(e.message)),
+      warns.some((e) => /og\/tw=\[og:image\]/.test(e.message) && /title=false/.test(e.message)),
       'expected the failure log to carry the head summary',
     );
   } finally {
@@ -236,7 +236,7 @@ test('the no_title diagnostic includes a structural head summary', async () => {
   }
 });
 
-test('fetchPageMetadata records an error diagnostic with outcomes when no preview is found', async () => {
+test('fetchPageMetadata records a warn diagnostic with outcomes when no preview is found', async () => {
   clearLogEntries();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string, init?: RequestInit) => {
@@ -250,10 +250,10 @@ test('fetchPageMetadata records an error diagnostic with outcomes when no previe
   try {
     const meta = await fetchPageMetadata('https://naver.me/GmpU1du7');
     assert.equal(meta, null);
-    const errors = getLogEntries().filter((e) => e.level === 'error');
+    const warns = getLogEntries().filter((e) => e.level === 'warn');
     assert.ok(
-      errors.some((e) => /preview: no title/.test(e.message) && /bot=http_403/.test(e.message)),
-      'expected an error log annotated with the per-UA outcomes',
+      warns.some((e) => /preview: no title/.test(e.message) && /bot=http_403/.test(e.message)),
+      'expected a warn log annotated with the per-UA outcomes',
     );
   } finally {
     globalThis.fetch = originalFetch;
