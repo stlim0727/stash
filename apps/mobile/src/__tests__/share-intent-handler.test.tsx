@@ -351,6 +351,75 @@ describe('ShareIntentHandler', () => {
     }
   });
 
+  it('recovers a webUrl carrying interior whitespace instead of silently dropping it', async () => {
+    // A source app (e.g. welaaa) can hand over a `webUrl` that `normalizeUrl`
+    // rejects — here a link with a title appended after a space. The handler used
+    // to pass it straight to addBookmark, which returned `invalid`, so the share
+    // was lost and (in toast mode) the app dismissed back to the source app.
+    // Routing webUrl through extractFirstUrl recovers the real link and saves it.
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: 'https://www.welaaa.com/ebook/detail/180284?appRedirect=true 윌라',
+        text: null,
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    expect(fakeRepo.__queue()[0].payload.url).toBe(
+      'https://www.welaaa.com/ebook/detail/180284?appRedirect=true',
+    );
+    unmount();
+  });
+
+  it('falls back to the shared text when webUrl is a non-http scheme', async () => {
+    // A custom-scheme webUrl (e.g. an in-app deep link) is not a saveable web
+    // URL, but the share still carries a usable link in its text. The handler
+    // must extract that rather than treating the deep link as the URL and
+    // dropping the capture.
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: 'welaaa://ebook/180284',
+        text: 'https://www.welaaa.com/ebook/detail/180284',
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    expect(fakeRepo.__queue()[0].payload.url).toBe('https://www.welaaa.com/ebook/detail/180284');
+    unmount();
+  });
+
+  it('does not dismiss the app for a genuinely empty share even when the OS allows it', async () => {
+    // With nothing to save, backgrounding back to the source app would read as a
+    // silent failure. The handler lands on the Inbox and shows the "no link"
+    // toast instead of dismissing.
+    fakeRepo.__reset([]);
+    mockDismiss.mockReturnValue(true);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: null, text: '   ' },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('No link found to stash');
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+    expect(mockDismiss).not.toHaveBeenCalled();
+    unmount();
+  });
+
   it('saves a no-link shared text (e.g. a KakaoTalk message) as a text note', async () => {
     // KakaoTalk and similar apps often share plain text with no URL. Rather than
     // dropping it with a "no link" toast, the handler saves it as a text note so

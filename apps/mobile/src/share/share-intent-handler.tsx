@@ -72,7 +72,17 @@ export function ShareIntentHandler() {
     }
     capturedRef.current = true;
     setPendingShare({
-      url: shareIntent.webUrl ?? extractFirstUrl(shareIntent.text),
+      // `webUrl` is expo-share-intent's best guess, but it can still be a value
+      // our capture path rejects: a non-http scheme, or a link carrying interior
+      // whitespace (a source app that appends a title after the URL, or a query
+      // value with a space). `normalizeUrl` — which addBookmark runs — returns
+      // null for those, so handing such a webUrl straight through made addBookmark
+      // return `invalid`; the share was then dropped and, in toast mode, the app
+      // dismissed back to the source app with nothing saved. Run BOTH candidates
+      // through extractFirstUrl so share.url is always a normalized, saveable URL
+      // or null — falling through to the text-note path below rather than losing
+      // the capture. Capture is sacred.
+      url: extractFirstUrl(shareIntent.webUrl) ?? extractFirstUrl(shareIntent.text),
       title: shareIntent.meta?.title ?? undefined,
       // Keep the raw shared text so a no-link share (e.g. a KakaoTalk message)
       // can still be saved as a text note instead of being dropped.
@@ -104,10 +114,11 @@ export function ShareIntentHandler() {
       : share.image
         ? addBookmark({ image: share.image, title: share.title })
         : addBookmark({ shared_text: share.text, title: share.title });
+    const saved = result.status !== 'invalid';
     // Only a genuinely new save is worth confirming on the next open; a
     // duplicate already lived in the library and a no-link share saved nothing.
     const isNewSave = result.status === 'created';
-    if (result.status !== 'invalid') {
+    if (saved) {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
       persisted = result.persisted;
     }
@@ -140,13 +151,14 @@ export function ShareIntentHandler() {
       // `stash://dataUrl=...` deep link is cleared by the +not-found absorber
       // regardless, so neither path strands the user.
       //
-      // Crucially, only background the app once the capture is DURABLY written
-      // (`persisted === true`). If the write failed, the row lives only in
-      // optimistic in-memory state, so exiting would lose it — keep the user
-      // in-app instead. `undefined` means nothing was saved (no link), which is
-      // safe to dismiss on. Capture is sacred.
+      // Only background the app once a capture has DURABLY landed. `saved` gates
+      // the genuinely-empty share: with nothing captured, dismissing back to the
+      // source app would just look like a silent failure, so land on the Inbox
+      // and show the "no link" toast instead. When something was saved, the
+      // durability gate still applies (`durable === false` means the row survives
+      // only in memory — keep the user in-app). Capture is sacred.
       const durable = await persisted;
-      if (durable !== false) {
+      if (saved && durable !== false) {
         // Persist the "confirm on next open" record BEFORE we hand control back
         // to the other app — the same reason we awaited the durable write
         // above. `dismissAfterShare` calls `exitApp()` synchronously, so a

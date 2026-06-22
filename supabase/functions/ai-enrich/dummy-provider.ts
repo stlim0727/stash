@@ -64,6 +64,13 @@ const RULES: Rule[] = [
 
 const MAX_TAGS = 5;
 
+// Mirror of the app's surface threshold (domain/ai-suggestions.ts ->
+// SUGGESTION_MIN_CONFIDENCE). A tag below this is hidden by both the Inbox
+// "✨ N" badge and the Bookmark Detail card, so the provider must not emit it
+// or claim it in the summary — otherwise the row says "review the tags below"
+// while the client shows none. Kept in sync by hand across the edge/app seam.
+const SURFACE_MIN_CONFIDENCE = 0.6;
+
 // Localized labels for the heuristic rule tags, so the fallback also answers in
 // the user's language (M12). Only the rule tags above are translated; the
 // collection hint stays English so it still matches the user's existing
@@ -143,19 +150,22 @@ export class DummyProvider implements EnrichmentProvider {
       hits: rule.keywords.filter((keyword) => haystack.includes(keyword)).length,
     })).filter((entry) => entry.hits > 0);
 
-    // Only keyword-rule matches become tags. We deliberately do NOT invent a
-    // host-derived fallback tag (e.g. "example.com" → "example") when nothing
-    // matches: it landed at 0.4 confidence, below the app's 0.6 surface
-    // threshold (see domain/ai-suggestions.ts), so it was never shown — it only
-    // bloated the enrichment row with noise. A bare bookmark with no confident
-    // tag is fine; the summary and degraded_reason still tell the user what
-    // happened, and an empty tag list is honest about having nothing to suggest.
+    // Only keyword-rule matches become tags, and only those the app will
+    // actually surface (>= SURFACE_MIN_CONFIDENCE). We deliberately do NOT
+    // invent a host-derived fallback tag (e.g. "example.com" → "example") when
+    // nothing matches, and we drop sub-threshold rule hits (e.g. a lone "blog"
+    // keyword at 0.56) for the same reason: the client hides them, so emitting
+    // them only bloats the row with noise and makes the summary promise tags
+    // that never appear. A bare bookmark with no confident tag is fine; the
+    // summary and degraded_reason still tell the user what happened, and an
+    // empty tag list is honest about having nothing to suggest.
     const suggested_tags: SuggestedTag[] = matched
       .map(({ rule, index, hits }) => ({
         name: localizeTag(rule.tag, base),
         // More keyword hits → higher confidence; later rules decay slightly.
         confidence: round2(Math.min(0.9, 0.55 + 0.1 * hits - 0.03 * index)),
       }))
+      .filter((tag) => tag.confidence >= SURFACE_MIN_CONFIDENCE)
       .slice(0, MAX_TAGS);
 
     const topics = matched.map((entry) => localizeTag(entry.rule.tag, base));
@@ -169,14 +179,19 @@ export class DummyProvider implements EnrichmentProvider {
         )
       : null;
 
+    // Only point the user at the suggested tags when there is at least one to
+    // review; otherwise the summary would promise tags the client never shows.
+    const hasTags = suggested_tags.length > 0;
     const summary = input.url
       ? base === 'ko'
         ? `${host || '알 수 없는 사이트'}의 항목` +
           (input.title ? ` — “${input.title}”` : '') +
-          `. ${this.model}이(가) 자동 분류했습니다. 아래 제안 태그를 확인하세요.`
+          `. ${this.model}이(가) 자동 분류했습니다.` +
+          (hasTags ? ' 아래 제안 태그를 확인하세요.' : '')
         : `${capitalize(input.content_type)} from ${host || 'an unknown site'}` +
           (input.title ? ` — “${input.title}”` : '') +
-          `. Auto-categorized by ${this.model}; review the suggested tags below.`
+          `. Auto-categorized by ${this.model}` +
+          (hasTags ? '; review the suggested tags below.' : '.')
       : null;
 
     return { summary, topics, suggested_tags, suggested_collection, confidence };
