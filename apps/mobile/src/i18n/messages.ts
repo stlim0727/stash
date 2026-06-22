@@ -234,8 +234,10 @@ export const en = {
   // Degraded mode: the result came from the basic heuristics, not the AI model.
   // Shown as a calm, non-error note so the cause is never hidden (M12); the
   // precise cause is forwarded to monitoring rather than spelled out in full.
-  'detail.aiDegradedRateLimited': 'AI is busy — showing basic suggestions.',
-  'detail.aiDegradedUnavailable': 'Couldn’t reach AI — showing basic suggestions.',
+  'detail.aiDegradedRateLimited':
+    'AI is over capacity right now — showing basic suggestions. Try again shortly for AI suggestions.',
+  'detail.aiDegradedUnavailable':
+    'Couldn’t reach AI — showing basic suggestions for now. Refresh to try again.',
   'detail.aiDegradedBasic': 'Showing basic suggestions.',
   'detail.detailsShow': '▸  Details',
   'detail.detailsHide': '▾  Details',

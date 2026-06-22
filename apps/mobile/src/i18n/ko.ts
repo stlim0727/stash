@@ -192,8 +192,10 @@ export const ko: Catalog = {
   'detail.aiSuggest': 'AI로 제안받기',
   'detail.aiNeedsSync': '이 북마크가 동기화되면 AI 제안을 사용할 수 있습니다.',
   'detail.aiRateLimited': 'AI 제안이 현재 한도에 도달했습니다 — 잠시 후 다시 시도해 주세요.',
-  'detail.aiDegradedRateLimited': 'AI가 혼잡합니다 — 기본 제안을 표시합니다.',
-  'detail.aiDegradedUnavailable': 'AI에 연결할 수 없습니다 — 기본 제안을 표시합니다.',
+  'detail.aiDegradedRateLimited':
+    'AI 사용량이 많아 지금은 기본 제안을 표시합니다 — 잠시 후 다시 시도하면 AI 제안을 받을 수 있어요.',
+  'detail.aiDegradedUnavailable':
+    'AI에 연결할 수 없어 지금은 기본 제안을 표시합니다. 새로고침해 다시 시도해 주세요.',
   'detail.aiDegradedBasic': '기본 제안을 표시합니다.',
   'detail.detailsShow': '▸  상세 정보',
   'detail.detailsHide': '▾  상세 정보',
