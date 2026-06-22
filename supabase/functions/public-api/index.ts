@@ -22,10 +22,16 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // Helpers
 // ---------------------------------------------------------------------------
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+};
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
   });
 }
 
@@ -702,20 +708,26 @@ function buildOpenApiSpec(baseUrl: string): unknown {
 // ---------------------------------------------------------------------------
 
 Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
   const url = new URL(req.url);
 
   // OpenAPI spec is public — no auth needed
-  const path = url.pathname.replace(/^\/functions\/v1\/public-api\/?/, '');
-  if ((path === 'openapi.json' || path === 'openapi') && req.method === 'GET') {
+  const isOpenApi = (url.pathname.endsWith('/openapi.json') || url.pathname.endsWith('/openapi')) && req.method === 'GET';
+  if (isOpenApi) {
     const baseUrl = `${url.protocol}//${url.host}`;
     return new Response(JSON.stringify(buildOpenApiSpec(baseUrl), null, 2), {
-      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
     });
   }
 
   const userId = await resolveUserIdFromApiKey(req.headers.get('Authorization'));
   if (!userId) return json({ error: 'Unauthorized' }, 401);
 
+  // Runtime strips /functions/v1 but keeps the function name, so pathname is /public-api/...
+  const path = url.pathname.replace(/^\/[^/]+\/?/, '');
   const parts = path.split('/').filter(Boolean);
   // parts: [] | ['bookmarks'] | ['bookmarks', ':id'] | ['bookmarks', ':id', 'tags'] | ['collections'] | ['tags']
 

@@ -281,6 +281,13 @@ export const ko: Catalog = {
   'settings.apiKeys.value': 'ChatGPT, Claude 등 AI 도구 연결',
   'apiKeys.description':
     'API 키를 사용하면 ChatGPT나 Claude 같은 AI 도구가 내 북마크를 읽고 정리할 수 있어요. 키는 발급 시 한 번만 표시되니 안전한 곳에 복사해 두세요.',
+  'apiKeys.guide.title': 'AI 도구 연결 방법',
+  'apiKeys.guide.step1': '아래에서 키를 발급하고, 표시될 때 복사해 두세요.',
+  'apiKeys.guide.step2':
+    'ChatGPT: GPT Builder → 구성 → Actions → "URL에서 가져오기"를 선택하고 아래 OpenAPI URL을 붙여넣으세요.',
+  'apiKeys.guide.step3':
+    '인증 방식을 Bearer Token으로 설정하고 발급받은 키를 붙여넣으세요. Claude 등 다른 도구에서는 Authorization 헤더에 키를 입력하세요.',
+  'apiKeys.guide.copyUrlA11y': 'OpenAPI URL 복사',
   'apiKeys.namePlaceholder': '키 이름 (예: "내 ChatGPT")',
   'apiKeys.create': '발급',
   'apiKeys.creating': '발급 중…',

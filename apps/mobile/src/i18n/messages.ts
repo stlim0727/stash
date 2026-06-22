@@ -341,6 +341,13 @@ export const en = {
   'settings.apiKeys.value': 'Connect ChatGPT, Claude, and other AI tools',
   'apiKeys.description':
     'API keys let external AI tools (like ChatGPT or Claude) read and organize your bookmarks. Each key is shown only once — copy it somewhere safe.',
+  'apiKeys.guide.title': 'How to connect an AI tool',
+  'apiKeys.guide.step1': 'Create a key below and copy it when shown.',
+  'apiKeys.guide.step2':
+    'In ChatGPT: open GPT Builder → Configure → Actions → "Import from URL" and paste the OpenAPI URL below.',
+  'apiKeys.guide.step3':
+    'Set authentication to Bearer Token and paste your key. In Claude or other tools, pass the key as the Authorization header.',
+  'apiKeys.guide.copyUrlA11y': 'Copy OpenAPI URL',
   'apiKeys.namePlaceholder': 'Key name (e.g. "My ChatGPT")',
   'apiKeys.create': 'Create',
   'apiKeys.creating': 'Creating…',
