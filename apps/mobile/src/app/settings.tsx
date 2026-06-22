@@ -15,6 +15,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
@@ -286,6 +287,7 @@ export default function SettingsScreen() {
     );
   }, 0);
 
+  const insets = useSafeAreaInsets();
   const isAuthenticated = auth.status === 'authenticated';
 
   // Sync row is status-led: the right-hand glyph is the action/state.
@@ -316,7 +318,7 @@ export default function SettingsScreen() {
   return (
     <ScrollView
       style={{ backgroundColor: palette.background }}
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 24 }]}
     >
       {/* Account & sync — identity, sign in/out, and sync status in one card.
           The auth control sits beside the identity (sign in with a provider, or
@@ -419,16 +421,8 @@ export default function SettingsScreen() {
           icon="library-outline"
           label={t('settings.library.label')}
           value={t('settings.library.value', { inbox: inbox.length, archived: archived.length })}
-          onPress={() => router.push('/archived')}
-        />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="key-outline"
-          label={t('settings.apiKeys.label')}
-          value={t('settings.apiKeys.value')}
           last
-          onPress={() => router.push('/api-keys')}
+          onPress={() => router.push('/archived')}
         />
       </Group>
 
@@ -464,7 +458,7 @@ export default function SettingsScreen() {
       </Group>
       <Text style={styles.exportNote}>{t('settings.dataNote')}</Text>
 
-      {/* Sharing behavior */}
+      {/* Preferences — sharing behavior and language in one group */}
       <Group styles={styles}>
         <Row
           styles={styles}
@@ -476,7 +470,6 @@ export default function SettingsScreen() {
               ? t('settings.share.inbox')
               : t('settings.share.toast')
           }
-          last
           right={
             <Switch
               value={shareBehavior === 'inbox'}
@@ -486,10 +479,6 @@ export default function SettingsScreen() {
             />
           }
         />
-      </Group>
-
-      {/* App language — follows the device by default, with a manual override. */}
-      <Group styles={styles}>
         <Row
           styles={styles}
           palette={palette}
@@ -526,6 +515,18 @@ export default function SettingsScreen() {
 
       {developerMode ? (
         <>
+          <Group styles={styles}>
+            <Row
+              styles={styles}
+              palette={palette}
+              icon="key-outline"
+              label={t('settings.apiKeys.label')}
+              value={t('settings.apiKeys.value')}
+              last
+              onPress={() => router.push('/api-keys')}
+            />
+          </Group>
+
           <Text style={styles.sectionLabel}>{t('settings.diagnostics.title')}</Text>
           <Group styles={styles}>
             <InfoRow styles={styles} label={t('settings.diagnostics.supabaseAuth')} value={auth.status} />
