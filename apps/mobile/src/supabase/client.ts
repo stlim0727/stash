@@ -90,9 +90,16 @@ async function parseResponse(response: Response): Promise<unknown> {
   }
 }
 
-function errorMessageFrom(payload: unknown, status: number): string {
+export function errorMessageFrom(payload: unknown, status: number): string {
   if (typeof payload === 'object' && payload !== null) {
-    for (const key of ['msg', 'message', 'error_description'] as const) {
+    // GoTrue uses msg/error_description; PostgREST uses message; our edge
+    // functions (ai-enrich, feedback-bridge) return { error: '…' }. Without
+    // `error` here every edge-function failure collapsed to the opaque
+    // "…HTTP <status>" fallback, hiding the real reason from the UI and the
+    // diagnostics buffer (e.g. an ai-enrich save failure read as a bare 400).
+    // error_description stays ahead of error so GoTrue's human-readable text
+    // wins over its machine code (`{ error: 'invalid_grant', error_description }`).
+    for (const key of ['msg', 'message', 'error_description', 'error'] as const) {
       const value = (payload as Record<string, unknown>)[key];
       if (typeof value === 'string' && value) {
         return value;
