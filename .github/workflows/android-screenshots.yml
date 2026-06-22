@@ -10,16 +10,18 @@ name: Android Screenshots
 # flow also asserts that key UI is visible, so a crash or a missing Browse shelf
 # fails the job (a real, if coarse, signal).
 #
-# Cost note: booting an emulator is ~3-5 min and occasionally flaky, so this
-# runs only on PRs that touch the mobile app (plus manual dispatch), not on
-# every push.
+# Cost note: booting an emulator is ~3-5 min and occasionally flaky, and most
+# PRs don't need a native render, so this is OPT-IN rather than automatic. It
+# runs only when explicitly asked for:
+#   - add the `screenshots` label to a PR (re-runs on each push while labelled), or
+#   - trigger it manually from the Actions tab (workflow_dispatch).
+# The `pull_request` trigger fires on every PR event below, but the job's `if`
+# guard skips it unless the label is present — so unlabelled PRs cost nothing.
 
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - 'apps/mobile/**'
-      - '.github/workflows/android-screenshots.yml'
+    types: [labeled, synchronize, reopened]
 
 # One emulator run per ref; cancel superseded runs on rapid pushes.
 concurrency:
@@ -28,6 +30,11 @@ concurrency:
 
 jobs:
   screenshots:
+    # Opt-in: only run when a PR carries the `screenshots` label, or on manual
+    # dispatch. Every other PR event is skipped (no emulator minutes spent).
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.labels.*.name, 'screenshots')
     runs-on: ubuntu-latest
     # A full run is ~12-15 min; cap well above that so a hung emulator can't
     # silently burn Actions minutes (the default job timeout is 6 hours).
