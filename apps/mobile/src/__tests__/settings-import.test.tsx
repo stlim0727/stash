@@ -75,7 +75,7 @@ test('imports bookmarks from a Stash JSON backup and reports the count', async (
   const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 
   const view = await renderSettings();
-  await waitFor(() => view.getByText('0 in inbox · 0 archived'));
+  await waitFor(() => view.getByText('Nothing to export yet'));
 
   await fireEvent.press(view.getByLabelText('Import data'));
   await waitFor(() => view.getByLabelText('Stash backup (JSON)'));
@@ -86,7 +86,7 @@ test('imports bookmarks from a Stash JSON backup and reports the count', async (
   expect(alertSpy.mock.calls[0][0]).toBe('Import complete');
   expect(alertSpy.mock.calls[0][1]).toContain('Added 2 bookmarks.');
   // The library reflects the freshly imported items.
-  await waitFor(() => view.getByText('2 in inbox · 0 archived'));
+  await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
   alertSpy.mockRestore();
 });
@@ -103,7 +103,7 @@ test('imports an HTML bookmarks file and dedupes against the existing library', 
   const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 
   const view = await renderSettings();
-  await waitFor(() => view.getByText('0 in inbox · 0 archived'));
+  await waitFor(() => view.getByText('Nothing to export yet'));
 
   // Save one of the two URLs first so the import sees it as a duplicate.
   // (The JSON path already covers fresh imports; here we exercise dedupe.)
@@ -113,14 +113,14 @@ test('imports an HTML bookmarks file and dedupes against the existing library', 
   await fireEvent.press(view.getByLabelText('Import data'));
   await waitFor(() => view.getByLabelText('Stash backup (JSON)'));
   await fireEvent.press(view.getByLabelText('Stash backup (JSON)'));
-  await waitFor(() => view.getByText('1 in inbox · 0 archived'));
+  await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
   // Now import the HTML file: one URL overlaps (duplicate), one is new.
   await fireEvent.press(view.getByLabelText('Import data'));
   await waitFor(() => view.getByLabelText('Bookmarks file (HTML)'));
   await fireEvent.press(view.getByLabelText('Bookmarks file (HTML)'));
 
-  await waitFor(() => view.getByText('2 in inbox · 0 archived'));
+  await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
   const lastMessage = alertSpy.mock.calls.at(-1)?.[1] as string;
   expect(lastMessage).toContain('Added 1 bookmark.');
   expect(lastMessage).toContain('1 already in your library.');
