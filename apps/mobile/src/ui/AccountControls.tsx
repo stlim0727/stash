@@ -14,11 +14,21 @@ const PROVIDERS: { id: OAuthProvider; labelKey: MessageKey }[] = [
 ];
 
 /**
- * Self-contained account/auth UI shared by the Account modal and Settings.
- * Renders provider sign-in when anonymous, account details + sign out when
- * authenticated, and a short note when the cloud isn't configured.
+ * Self-contained account/auth UI used inline in Settings. Renders provider
+ * sign-in when anonymous, account details + sign out when authenticated, and a
+ * short note when the cloud isn't configured.
+ *
+ * In `compact` mode it drops the heading/subtitle (the surrounding Settings
+ * card already shows the account status) and renders nothing when the cloud is
+ * not configured, so it can sit directly beneath the account row.
  */
-export function AccountControls({ onDone }: { onDone?: () => void }) {
+export function AccountControls({
+  onDone,
+  compact = false,
+}: {
+  onDone?: () => void;
+  compact?: boolean;
+}) {
   const palette = usePalette();
   const t = useT();
   const auth = useSupabaseAuth();
@@ -52,6 +62,9 @@ export function AccountControls({ onDone }: { onDone?: () => void }) {
   };
 
   if (auth.status === 'not_configured') {
+    if (compact) {
+      return null;
+    }
     return (
       <Text style={[styles.note, { color: palette.textSecondary }]}>
         {t('account.cloudNotConfigured')}
@@ -62,12 +75,16 @@ export function AccountControls({ onDone }: { onDone?: () => void }) {
   if (auth.status === 'authenticated') {
     return (
       <View style={styles.group}>
-        <Text style={[styles.heading, { color: palette.text }]}>
-          {auth.email ? t('account.signedInAs', { email: auth.email }) : t('account.signedIn')}
-        </Text>
-        <Text style={[styles.subheading, { color: palette.textSecondary }]}>
-          {t('account.syncSubtitle')}
-        </Text>
+        {compact ? null : (
+          <>
+            <Text style={[styles.heading, { color: palette.text }]}>
+              {auth.email ? t('account.signedInAs', { email: auth.email }) : t('account.signedIn')}
+            </Text>
+            <Text style={[styles.subheading, { color: palette.textSecondary }]}>
+              {t('account.syncSubtitle')}
+            </Text>
+          </>
+        )}
         <Button variant="ghost" size="lg" disabled={busy !== null} onPress={() => void handleSignOut()}>
           {busy === 'signout' ? <ActivityIndicator color={palette.text} /> : t('common.signOut')}
         </Button>
@@ -78,10 +95,16 @@ export function AccountControls({ onDone }: { onDone?: () => void }) {
   // anonymous / loading / error — offer sign-in.
   return (
     <View style={styles.group}>
-      <Text style={[styles.heading, { color: palette.text }]}>{t('account.signInHeading')}</Text>
-      <Text style={[styles.subheading, { color: palette.textSecondary }]}>
-        {t('account.signInSubtitle')}
-      </Text>
+      {compact ? null : (
+        <>
+          <Text style={[styles.heading, { color: palette.text }]}>
+            {t('account.signInHeading')}
+          </Text>
+          <Text style={[styles.subheading, { color: palette.textSecondary }]}>
+            {t('account.signInSubtitle')}
+          </Text>
+        </>
+      )}
       {PROVIDERS.map(({ id, labelKey }) => (
         <Button
           key={id}

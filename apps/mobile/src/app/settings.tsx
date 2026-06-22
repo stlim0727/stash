@@ -17,8 +17,8 @@ import {
 } from 'react-native';
 
 import { usePalette } from '@/theme';
+import { AccountControls } from '@/ui/AccountControls';
 import { Avatar } from '@/ui/Avatar';
-import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { ActionSheet } from '@/ui/ActionSheet';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
@@ -277,47 +277,40 @@ export default function SettingsScreen() {
       style={{ backgroundColor: palette.background }}
       contentContainerStyle={styles.container}
     >
-      {/* Account header */}
-      <Card style={styles.accountCard}>
-        <Avatar size={56} uri={auth.avatarUrl} email={auth.email} authed={isAuthenticated} />
-        <View style={styles.accountText}>
-          <Text style={styles.accountName} numberOfLines={1}>
-            {isAuthenticated
-              ? (auth.displayName ?? auth.email ?? t('settings.account.signedIn'))
-              : auth.status === 'not_configured'
-                ? t('settings.account.cloudUnavailable')
-                : t('settings.account.notSignedIn')}
-          </Text>
-          <Text style={styles.accountMeta} numberOfLines={1}>
-            {isAuthenticated
-              ? (auth.displayName && auth.email ? auth.email : t('settings.account.syncedAcrossDevices'))
-              : auth.status === 'not_configured'
-                ? t('settings.account.worksOffline')
-                : t('settings.account.signInToBackup')}
-          </Text>
+      {/* Account & sync — identity, the sync action, and sign in/out all live
+          in one card. Sign-in/out happens inline (no separate screen): the
+          account row shows who you are, the sync row syncs (upload-then-pull),
+          and the controls below sign you in (provider buttons) or out. */}
+      <Card style={styles.account} elevated={false}>
+        <View style={styles.accountHeader}>
+          <Avatar size={56} uri={auth.avatarUrl} email={auth.email} authed={isAuthenticated} />
+          <View style={styles.accountText}>
+            <Text style={styles.accountName} numberOfLines={1}>
+              {isAuthenticated
+                ? (auth.displayName ?? auth.email ?? t('settings.account.signedIn'))
+                : auth.status === 'not_configured'
+                  ? t('settings.account.cloudUnavailable')
+                  : t('settings.account.notSignedIn')}
+            </Text>
+            <Text style={styles.accountMeta} numberOfLines={1}>
+              {isAuthenticated
+                ? (auth.displayName && auth.email ? auth.email : t('settings.account.syncedAcrossDevices'))
+                : auth.status === 'not_configured'
+                  ? t('settings.account.worksOffline')
+                  : t('settings.account.signInToBackup')}
+            </Text>
+          </View>
         </View>
-        {auth.status !== 'not_configured' ? (
-          <Button
-            variant={isAuthenticated ? 'ghost' : 'primary'}
-            size="sm"
-            onPress={() => router.push('/account')}
-          >
-            {isAuthenticated ? t('common.manage') : t('common.signIn')}
-          </Button>
-        ) : null}
-      </Card>
 
-      {/* Sync — status and the sync action are one row: the summary is the
-          value and tapping the row syncs (upload-then-pull). A trailing refresh
-          glyph signals it's tappable; it spins to a spinner while syncing. */}
-      <Group styles={styles}>
+        {/* Sync — the summary is the value and tapping the row syncs. A trailing
+            refresh glyph signals it's tappable; it spins while syncing. */}
         <Row
           styles={styles}
           palette={palette}
           icon="sync"
           label={t('settings.sync.label')}
           value={syncSummary}
-          last
+          last={auth.status === 'not_configured'}
           onPress={canSync ? () => void syncNow() : undefined}
           right={
             isSyncing ? (
@@ -327,7 +320,13 @@ export default function SettingsScreen() {
             ) : undefined
           }
         />
-      </Group>
+
+        {auth.status !== 'not_configured' ? (
+          <View style={styles.accountActions}>
+            <AccountControls compact />
+          </View>
+        ) : null}
+      </Card>
 
       {/* Library & tools */}
       <Group styles={styles}>
@@ -689,11 +688,23 @@ const makeStyles = (palette: AppPalette) =>
       padding: 16,
       gap: 18,
     },
-    accountCard: {
+    account: {
+      paddingHorizontal: 0,
+      paddingVertical: 0,
+      overflow: 'hidden',
+    },
+    accountHeader: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 14,
       padding: 16,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: palette.border,
+    },
+    accountActions: {
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      gap: 12,
     },
     accountText: {
       flex: 1,

@@ -21,9 +21,7 @@ export const ko: Catalog = {
   'common.archive': '보관',
   'common.unarchive': '보관 해제',
   'common.back': '‹ 뒤로',
-  'common.signIn': '로그인',
   'common.signOut': '로그아웃',
-  'common.manage': '관리',
   'common.untitled': '제목 없음',
 
   'status.syncPrefix': '동기화 {status}',

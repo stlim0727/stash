@@ -37,9 +37,7 @@ export const en = {
   'common.archive': 'Archive',
   'common.unarchive': 'Unarchive',
   'common.back': '‹ Back',
-  'common.signIn': 'Sign in',
   'common.signOut': 'Sign out',
-  'common.manage': 'Manage',
   'common.untitled': 'Untitled',
 
   // Status words (sync/metadata), composed via the prefixes below.
