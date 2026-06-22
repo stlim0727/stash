@@ -23,15 +23,21 @@ export default function ReviewScreen() {
     getEnrichment,
     getReviewedSuggestions,
     acceptSuggestedTags,
+    unseenSuggestionIds,
     clearUnseenSuggestions,
   } = useBookmarks();
   const [busy, setBusy] = useState(false);
 
   // Entering Review means the user is witnessing every pending suggestion, so
-  // clear the "new AI suggestions" markers that drive the Inbox banner.
+  // clear the "new AI suggestions" markers that drive the Inbox banner. Keyed on
+  // `unseenSuggestionIds` (not just the stable callback) so it also fires when
+  // the persisted marker set finishes hydrating *after* this screen mounted —
+  // e.g. a cold start / web reload landing straight on /review, where the store
+  // is still loading on the first render. clearUnseenSuggestions no-ops on the
+  // empty set, so the extra runs are cheap and it self-settles.
   useEffect(() => {
     clearUnseenSuggestions();
-  }, [clearUnseenSuggestions]);
+  }, [unseenSuggestionIds, clearUnseenSuggestions]);
 
   // Every inbox bookmark that still has at least one high-confidence,
   // un-applied suggestion — the centralized rule lives in @/domain/ai-suggestions.

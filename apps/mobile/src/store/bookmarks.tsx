@@ -1792,14 +1792,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           ]);
         }
         if (result.enrichments.length > 0) {
-          // Flag genuinely new enrichments (e.g. a server-side trigger's result,
-          // or another device's) for the Inbox banner — these always arrive
-          // unwitnessed. Compare by id against what's already in state so the
-          // pull's watermark-overlap re-fetch of a known row doesn't re-surface a
-          // suggestion the user has already seen.
-          const knownIds = new Set(enrichmentsRef.current.map((enrichment) => enrichment.id));
+          // Flag enrichments that arrived unwitnessed (a server-side trigger's
+          // result, or another device's) for the Inbox banner. Flag a row when
+          // it's brand new OR a genuine update — the edge function upserts on
+          // `bookmark_id` and keeps the same enrichment id, so a re-enrichment
+          // from another device reuses the id; gating on id novelty alone would
+          // miss those changed suggestions. Compare `updated_at` so a true update
+          // flags while the pull's watermark-overlap re-fetch of an *unchanged*
+          // row (same timestamp) doesn't re-surface a suggestion already seen.
+          const knownById = new Map(
+            enrichmentsRef.current.map((enrichment) => [enrichment.id, enrichment] as const),
+          );
           for (const enrichment of result.enrichments) {
-            if (!knownIds.has(enrichment.id)) {
+            const known = knownById.get(enrichment.id);
+            if (!known || enrichment.updated_at > known.updated_at) {
               noteUnseenSuggestions(enrichment);
             }
           }
