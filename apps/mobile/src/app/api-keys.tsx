@@ -39,22 +39,19 @@ export default function ApiKeysScreen() {
   const [creating, setCreating] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const api =
-    auth.status === 'authenticated' && auth.session
-      ? createApiKeysApi(auth.session)
-      : null;
-
   const publicApiBase = getPublicApiBase();
   const openApiUrl = publicApiBase ? `${publicApiBase}/openapi.json` : '';
 
   useEffect(() => {
-    if (!api) return;
     let active = true;
-    api
-      .list()
-      .then((data) => { if (active) setKeys(data); })
-      .catch(() => {})
-      .finally(() => { if (active) setLoading(false); });
+    auth.ensureAnonymousSession().then((session) => {
+      if (!active || !session) return;
+      createApiKeysApi(session)
+        .list()
+        .then((data) => { if (active) setKeys(data); })
+        .catch(() => {})
+        .finally(() => { if (active) setLoading(false); });
+    }).catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status]);
@@ -66,10 +63,13 @@ export default function ApiKeysScreen() {
   };
 
   const handleCreate = async () => {
-    if (!api || !newKeyName.trim() || creating) return;
+    if (!newKeyName.trim() || creating) return;
     setCreating(true);
     try {
-      const created = await api.create(newKeyName.trim());
+      const session = await auth.ensureAnonymousSession();
+      if (!session) throw new Error('No session');
+      const freshApi = createApiKeysApi(session);
+      const created = await freshApi.create(newKeyName.trim());
       setKeys((prev) => [
         { id: created.id, name: created.name, created_at: created.created_at, last_used_at: null },
         ...prev,
@@ -94,7 +94,6 @@ export default function ApiKeysScreen() {
   };
 
   const handleRevoke = (key: ApiKey) => {
-    if (!api) return;
     Alert.alert(
       t('apiKeys.revoke.title'),
       t('apiKeys.revoke.body', { name: key.name }),
@@ -105,7 +104,9 @@ export default function ApiKeysScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await api.revoke(key.id);
+              const session = await auth.ensureAnonymousSession();
+              if (!session) throw new Error('No session');
+              await createApiKeysApi(session).revoke(key.id);
               setKeys((prev) => prev.filter((k) => k.id !== key.id));
             } catch {
               Alert.alert(t('apiKeys.error.revokeTitle'), t('apiKeys.error.revokeBody'));
