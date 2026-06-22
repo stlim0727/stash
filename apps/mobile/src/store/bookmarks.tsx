@@ -1267,7 +1267,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const emptyTrash = useCallback(() => {
-    const trashed = (bookmarksRef.current ?? []).filter((b) => b.deleted_at !== null);
+    const trashed = (bookmarksRef.current ?? []).filter((b) => b.deleted_at != null);
     for (const bookmark of trashed) {
       deleteBookmark(bookmark.id);
     }
@@ -1966,10 +1966,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isLoading: bookmarks === null,
       loadError,
       inbox: loadedBookmarks
-        .filter((bookmark) => !bookmark.deleted_at)
+        .filter((bookmark) => !bookmark.deleted_at && !bookmark.is_archived)
         .sort((a, b) => b.created_at.localeCompare(a.created_at)),
       trash: loadedBookmarks
-        .filter((bookmark) => bookmark.deleted_at !== null && bookmark.deleted_at !== undefined)
+        .filter((bookmark) => bookmark.deleted_at != null)
         .sort((a, b) => (b.deleted_at ?? '').localeCompare(a.deleted_at ?? '')),
       queue,
       getBookmark,
