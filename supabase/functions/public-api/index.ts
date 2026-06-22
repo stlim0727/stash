@@ -715,8 +715,8 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
 
   // OpenAPI spec is public — no auth needed
-  const path = url.pathname.replace(/^\/functions\/v1\/public-api\/?/, '');
-  if ((path === 'openapi.json' || path === 'openapi') && req.method === 'GET') {
+  const isOpenApi = (url.pathname.endsWith('/openapi.json') || url.pathname.endsWith('/openapi')) && req.method === 'GET';
+  if (isOpenApi) {
     const baseUrl = `${url.protocol}//${url.host}`;
     return new Response(JSON.stringify(buildOpenApiSpec(baseUrl), null, 2), {
       headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
@@ -726,6 +726,7 @@ Deno.serve(async (req: Request) => {
   const userId = await resolveUserIdFromApiKey(req.headers.get('Authorization'));
   if (!userId) return json({ error: 'Unauthorized' }, 401);
 
+  const path = url.pathname.replace(/^\/functions\/v1\/public-api\/?/, '').replace(/^\//, '');
   const parts = path.split('/').filter(Boolean);
   // parts: [] | ['bookmarks'] | ['bookmarks', ':id'] | ['bookmarks', ':id', 'tags'] | ['collections'] | ['tags']
 
