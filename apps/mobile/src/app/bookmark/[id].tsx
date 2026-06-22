@@ -57,6 +57,7 @@ export default function BookmarkDetailScreen() {
     getReviewedSuggestions,
     markSuggestionsReviewed,
     clearReviewedSuggestions,
+    markSuggestionsSeen,
     assignCollection,
     createCollection,
   } = useBookmarks();
@@ -110,8 +111,18 @@ export default function BookmarkDetailScreen() {
   // see when the model actually fails. Rate-limits and missing-config are
   // expected fallbacks, not incidents, so they're left out. console.error is the
   // Sentry bridge (observability/sentry.ts); the message carries no content.
+  // Opening a bookmark's Detail means the user is now witnessing its AI
+  // suggestions, so clear the Inbox "new suggestions" flag for it. Keyed on the
+  // enrichment too, so a suggestion that lands *while* this screen is open
+  // (a background auto-enrichment finishing) is dismissed immediately rather
+  // than re-announcing it on the Inbox.
   const reportedDegradedRef = useRef<Set<string>>(new Set());
   const reportEnrichment = id ? getEnrichment(id) : undefined;
+  useEffect(() => {
+    if (id) {
+      markSuggestionsSeen(id);
+    }
+  }, [id, reportEnrichment, markSuggestionsSeen]);
   useEffect(() => {
     if (!reportEnrichment?.degraded) {
       return;

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useT } from '@/i18n';
@@ -17,9 +17,21 @@ interface ReviewItem {
 export default function ReviewScreen() {
   const palette = usePalette();
   const t = useT();
-  const { inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions, acceptSuggestedTags } =
-    useBookmarks();
+  const {
+    inbox,
+    getTagsForBookmark,
+    getEnrichment,
+    getReviewedSuggestions,
+    acceptSuggestedTags,
+    clearUnseenSuggestions,
+  } = useBookmarks();
   const [busy, setBusy] = useState(false);
+
+  // Entering Review means the user is witnessing every pending suggestion, so
+  // clear the "new AI suggestions" markers that drive the Inbox banner.
+  useEffect(() => {
+    clearUnseenSuggestions();
+  }, [clearUnseenSuggestions]);
 
   // Every inbox bookmark that still has at least one high-confidence,
   // un-applied suggestion — the centralized rule lives in @/domain/ai-suggestions.

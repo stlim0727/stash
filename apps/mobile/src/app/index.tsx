@@ -178,6 +178,8 @@ export default function InboxScreen() {
     getCollection,
     getEnrichment,
     getReviewedSuggestions,
+    unseenSuggestionIds,
+    clearUnseenSuggestions,
     collections,
     archiveBookmark,
     deleteBookmark,
@@ -187,6 +189,34 @@ export default function InboxScreen() {
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+
+  // How many inbox bookmarks have AI suggestions that arrived while the user
+  // wasn't looking (auto-enrichment, a server-side trigger, another device) and
+  // still carry an unreviewed suggestion. Drives the "new AI suggestions"
+  // banner. Intersect the unseen-id set with the *live* pending list so an item
+  // whose suggestions were since applied/dismissed stops counting even if its id
+  // lingers in the set.
+  const newSuggestionsCount = useMemo(() => {
+    if (unseenSuggestionIds.size === 0) {
+      return 0;
+    }
+    let count = 0;
+    for (const bookmark of inbox) {
+      if (!unseenSuggestionIds.has(bookmark.id)) {
+        continue;
+      }
+      const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
+      const pending = pendingSuggestions(
+        getEnrichment(bookmark.id),
+        applied,
+        getReviewedSuggestions(bookmark.id),
+      );
+      if (pending.length > 0) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [unseenSuggestionIds, inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions]);
 
   // Long-press action menu: which bookmark it targets, and whether it's showing
   // the top-level actions or the "move to collection" picker. Null item = closed.
@@ -584,6 +614,35 @@ export default function InboxScreen() {
               {t('inbox.storageError')}
             </Text>
           </Pressable>
+        ) : null}
+        {newSuggestionsCount > 0 ? (
+          <View
+            testID="new-suggestions-banner"
+            style={[styles.suggestBanner, { backgroundColor: palette.accentSoft }]}
+          >
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })}
+              onPress={() => router.push('/review')}
+              style={({ pressed }) => [styles.suggestBannerMain, { opacity: pressed ? 0.7 : 1 }]}
+            >
+              <Text style={[styles.suggestBannerText, { color: palette.accent }]} numberOfLines={1}>
+                {t('inbox.newSuggestions', { count: newSuggestionsCount })}
+              </Text>
+              <Text style={[styles.suggestBannerCta, { color: palette.accent }]}>
+                {t('inbox.newSuggestionsReview')}
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('inbox.newSuggestionsDismiss')}
+              hitSlop={8}
+              onPress={() => clearUnseenSuggestions()}
+              style={({ pressed }) => [styles.suggestBannerClose, { opacity: pressed ? 0.5 : 1 }]}
+            >
+              <Ionicons name="close" size={18} color={palette.accent} />
+            </Pressable>
+          </View>
         ) : null}
         <View style={styles.searchWrap}>
           <TextInput
@@ -1017,6 +1076,35 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     textAlign: 'center',
+  },
+  suggestBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 12,
+    paddingLeft: 14,
+    paddingRight: 6,
+  },
+  suggestBannerMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+  },
+  suggestBannerText: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  suggestBannerCta: {
+    fontSize: 13,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+  },
+  suggestBannerClose: {
+    padding: 8,
   },
   searchWrap: {
     paddingHorizontal: 16,

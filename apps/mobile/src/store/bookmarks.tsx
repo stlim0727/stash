@@ -39,6 +39,7 @@ import { normalizeTag } from '@/domain/tag-input';
 import {
   addReviewedNames,
   parseReviewedMap,
+  pendingSuggestions,
   reviewedNamesFor,
   type ReviewedSuggestionMap,
 } from '@/domain/ai-suggestions';
@@ -183,6 +184,21 @@ interface BookmarksContextValue {
   /** Forget a bookmark's reviewed names so a manual AI re-run can re-surface
    *  previously-dismissed suggestions. Background sync never clears them. */
   clearReviewedSuggestions: (bookmarkId: string) => void;
+  /**
+   * Bookmark ids whose AI suggestions arrived while the user wasn't looking
+   * (background auto-enrichment, a server-side trigger, or another device's
+   * enrichment pulled in). Drives the Inbox "new AI suggestions" banner. An id
+   * stays until the user witnesses it via {@link markSuggestionsSeen} or
+   * {@link clearUnseenSuggestions}; the banner intersects this with the live
+   * pending list, so an id whose suggestions were since applied stops counting.
+   */
+  unseenSuggestionIds: ReadonlySet<string>;
+  /** Forget that a bookmark's suggestions were "new" — called when the user
+   *  opens its Detail (witnesses the suggestions). Durable. */
+  markSuggestionsSeen: (bookmarkId: string) => void;
+  /** Clear every "new AI suggestions" marker at once — called when the user
+   *  opens the Review screen (witnesses them all). Durable. */
+  clearUnseenSuggestions: () => void;
   /** Move a bookmark into a collection (or out, with null). Local-first. */
   assignCollection: (bookmarkId: string, collectionId: string | null) => void;
   /** Create a cloud collection. Resolves to the collection or an error message. */
@@ -203,6 +219,16 @@ const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
  *  names the user has reviewed (accepted or dismissed). Drives the "✨" badge so
  *  it reflects *unreviewed* suggestions rather than merely *un-applied* ones. */
 const REVIEWED_SUGGESTIONS_KEY = 'reviewed_ai_suggestions';
+
+/** Durable key (JSON id array in meta) for bookmarks whose AI suggestions
+ *  arrived while the user wasn't looking — a background auto-enrichment, a
+ *  server-side trigger result, or another device's enrichment pulled in. Drives
+ *  the Inbox "new AI suggestions" banner so freshly-suggested items aren't
+ *  stranded behind a per-card badge the user has to scroll to find; an id is
+ *  cleared once the user witnesses it (opens its Detail, or visits Review).
+ *  Persisted so a suggestion that landed in a session the user never returned to
+ *  still announces itself on the next launch. */
+const UNSEEN_SUGGESTIONS_KEY = 'unseen_ai_suggestions';
 
 /** Opaque sentinel `requestAiEnrichment` returns when the AI endpoint rate-limits
  *  (HTTP 429). The store is i18n-free, so it can't localize the message itself;
@@ -335,6 +361,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // The ref mirrors state so the accept path can merge synchronously.
   const [reviewedSuggestions, setReviewedSuggestions] = useState<ReviewedSuggestionMap>({});
   const reviewedSuggestionsRef = useRef<ReviewedSuggestionMap>({});
+  // Bookmark ids whose AI suggestions arrived unwitnessed (drives the Inbox
+  // banner). The ref mirrors state so the arrival paths (auto enrichment, pull)
+  // can read-modify-write synchronously across back-to-back updates.
+  const [unseenSuggestionIds, setUnseenSuggestionIds] = useState<ReadonlySet<string>>(new Set());
+  const unseenSuggestionIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -457,6 +488,70 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [applyReviewedSuggestions],
   );
 
+  // Apply + persist the "unseen AI suggestions" id set (ref updated
+  // synchronously so back-to-back arrivals accumulate correctly).
+  const applyUnseenSuggestions = useCallback((next: ReadonlySet<string>) => {
+    unseenSuggestionIdsRef.current = next;
+    setUnseenSuggestionIds(next);
+    ensureRepositoryReady()
+      .then(() => repository.setMeta(UNSEEN_SUGGESTIONS_KEY, JSON.stringify([...next])))
+      .catch((error) => logStorageError('unseen suggestions', error));
+  }, []);
+
+  // The bookmark's currently-applied tag names, lowercased — read off the ref so
+  // it's usable from the synchronous arrival paths (mirrors getTagsForBookmark's
+  // cloud-link lookup, without the seeded-sample fallback those rows don't need).
+  const appliedTagNamesRef = useCallback((bookmarkId: string): Set<string> => {
+    const data = tagDataRef.current;
+    const linkedIds = new Set(
+      data.bookmarkTags.filter((link) => link.bookmark_id === bookmarkId).map((l) => l.tag_id),
+    );
+    return new Set(
+      data.tags.filter((tag) => linkedIds.has(tag.id)).map((tag) => tag.name.toLowerCase()),
+    );
+  }, []);
+
+  // Record that an enrichment arrived unwitnessed: flag its bookmark for the
+  // Inbox banner, but only if it actually carries a suggestion the user hasn't
+  // already applied or reviewed (an enrichment that's all summary / already
+  // handled tags is not worth announcing).
+  const noteUnseenSuggestions = useCallback(
+    (enrichment: AIEnrichment) => {
+      const id = enrichment.bookmark_id;
+      if (unseenSuggestionIdsRef.current.has(id)) {
+        return;
+      }
+      const applied = appliedTagNamesRef(id);
+      const reviewed = reviewedNamesFor(reviewedSuggestionsRef.current, id);
+      if (pendingSuggestions(enrichment, applied, reviewed).length === 0) {
+        return;
+      }
+      const next = new Set(unseenSuggestionIdsRef.current);
+      next.add(id);
+      applyUnseenSuggestions(next);
+    },
+    [appliedTagNamesRef, applyUnseenSuggestions],
+  );
+
+  const markSuggestionsSeen = useCallback(
+    (bookmarkId: string) => {
+      if (!unseenSuggestionIdsRef.current.has(bookmarkId)) {
+        return;
+      }
+      const next = new Set(unseenSuggestionIdsRef.current);
+      next.delete(bookmarkId);
+      applyUnseenSuggestions(next);
+    },
+    [applyUnseenSuggestions],
+  );
+
+  const clearUnseenSuggestions = useCallback(() => {
+    if (unseenSuggestionIdsRef.current.size === 0) {
+      return;
+    }
+    applyUnseenSuggestions(new Set());
+  }, [applyUnseenSuggestions]);
+
   // Mirror the deferred AI-trigger set to durable meta after a ref mutation.
   const persistPendingAiTrigger = useCallback(() => {
     const ids = [...pendingAiTrigger.current];
@@ -574,6 +669,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedTagOpsRaw,
             storedAiTriggerRaw,
             storedReviewedRaw,
+            storedUnseenRaw,
           ] = await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
@@ -583,6 +679,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.getMeta(PENDING_TAG_OPS_KEY),
             repository.getMeta(PENDING_AI_TRIGGER_KEY),
             repository.getMeta(REVIEWED_SUGGESTIONS_KEY),
+            repository.getMeta(UNSEEN_SUGGESTIONS_KEY),
           ]);
           if (!cancelled) {
             // Re-hydrate deferred AI triggers so a bookmark whose create synced
@@ -596,6 +693,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             const storedReviewed = parseReviewedMap(storedReviewedRaw);
             reviewedSuggestionsRef.current = storedReviewed;
             setReviewedSuggestions(storedReviewed);
+            // Re-hydrate the "unseen AI suggestions" set so a suggestion that
+            // landed in a session the user never returned to still drives the
+            // Inbox banner on this launch.
+            const storedUnseen = parseIdSet(storedUnseenRaw);
+            unseenSuggestionIdsRef.current = storedUnseen;
+            setUnseenSuggestionIds(storedUnseen);
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
@@ -1318,6 +1421,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           enrichment,
           ...current.filter((item) => item.bookmark_id !== bookmarkId),
         ]);
+        // A background auto-enrichment lands without the user looking at this
+        // bookmark, so flag it for the Inbox "new suggestions" banner. A manual
+        // "Suggest with AI" tap happens on the Detail screen — the user is
+        // already witnessing it — so it doesn't (and Detail clears the flag).
+        if (source === 'auto') {
+          noteUnseenSuggestions(enrichment);
+        }
         try {
           await ensureRepositoryReady();
           await repository.upsertEnrichments([enrichment]);
@@ -1358,7 +1468,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [auth],
+    [auth, noteUnseenSuggestions],
   );
 
   // True while an AI enrichment request for this bookmark is in flight (whether
@@ -1682,6 +1792,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           ]);
         }
         if (result.enrichments.length > 0) {
+          // Flag genuinely new enrichments (e.g. a server-side trigger's result,
+          // or another device's) for the Inbox banner — these always arrive
+          // unwitnessed. Compare by id against what's already in state so the
+          // pull's watermark-overlap re-fetch of a known row doesn't re-surface a
+          // suggestion the user has already seen.
+          const knownIds = new Set(enrichmentsRef.current.map((enrichment) => enrichment.id));
+          for (const enrichment of result.enrichments) {
+            if (!knownIds.has(enrichment.id)) {
+              noteUnseenSuggestions(enrichment);
+            }
+          }
           setEnrichments((current) =>
             mergeById(
               result.enrichments,
@@ -1709,7 +1830,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncInFlight.current = false;
       setIsSyncing(false);
     }
-  }, [auth, queue, enqueueMutation, requestAiEnrichment, syncTagOps]);
+  }, [auth, queue, enqueueMutation, requestAiEnrichment, syncTagOps, noteUnseenSuggestions]);
 
   // Background enrichment: once local data is loaded, enrich any bookmark
   // whose metadata is still pending (seeded items, or saves from a previous
@@ -1847,6 +1968,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getReviewedSuggestions,
       markSuggestionsReviewed,
       clearReviewedSuggestions,
+      unseenSuggestionIds,
+      markSuggestionsSeen,
+      clearUnseenSuggestions,
       assignCollection,
       createCollection,
     }),
@@ -1877,6 +2001,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getReviewedSuggestions,
       markSuggestionsReviewed,
       clearReviewedSuggestions,
+      unseenSuggestionIds,
+      markSuggestionsSeen,
+      clearUnseenSuggestions,
       assignCollection,
       createCollection,
     ],

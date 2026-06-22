@@ -458,3 +458,55 @@ test('clearReviewedSuggestions forgets dismissals so a manual re-run can reconsi
   // Persisted, so the cleared state survives a relaunch too.
   await waitFor(() => expect(fakeRepo.__meta('reviewed_ai_suggestions')).toBe('{}'));
 });
+
+test('a background auto enrichment flags the bookmark as an unseen suggestion', async () => {
+  const store = await renderReady();
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(false);
+
+  // The deferred post-capture trigger fires with source 'auto' — the user isn't
+  // looking at this bookmark, so its new suggestion drives the Inbox banner.
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(true);
+  // Persisted so a suggestion that landed in an abandoned session re-announces.
+  expect(fakeRepo.__meta('unseen_ai_suggestions')).toContain(SYNCED_ID);
+});
+
+test('a manual enrichment is witnessed, so it is never flagged as unseen', async () => {
+  const store = await renderReady();
+
+  // A manual "Suggest with AI" tap happens on the Detail screen — the user is
+  // already looking — so it must not surface the Inbox "new suggestions" banner.
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(false);
+});
+
+test('markSuggestionsSeen and clearUnseenSuggestions clear the unseen flag', async () => {
+  const store = await renderReady();
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(true);
+
+  // Opening the bookmark's Detail witnesses the suggestion.
+  await act(async () => {
+    store.current!.markSuggestionsSeen(SYNCED_ID);
+  });
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(false);
+  expect(fakeRepo.__meta('unseen_ai_suggestions')).toBe('[]');
+
+  // Re-flag, then clear all at once (the Review screen does this on entry).
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  expect(store.current!.unseenSuggestionIds.size).toBe(1);
+  await act(async () => {
+    store.current!.clearUnseenSuggestions();
+  });
+  expect(store.current!.unseenSuggestionIds.size).toBe(0);
+});
