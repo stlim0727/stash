@@ -437,6 +437,277 @@ async function listTags(userId: string): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
+// OpenAPI spec
+// ---------------------------------------------------------------------------
+
+function buildOpenApiSpec(baseUrl: string): unknown {
+  const serverUrl = `${baseUrl}/functions/v1/public-api`;
+  return {
+    openapi: '3.1.0',
+    info: {
+      title: 'Stash API',
+      description:
+        'Read and organize your Stash bookmarks. Authenticate with an API key from Settings → API Keys in the Stash app.',
+      version: '1.0.0',
+    },
+    servers: [{ url: serverUrl }],
+    security: [{ ApiKeyAuth: [] }],
+    components: {
+      securitySchemes: {
+        ApiKeyAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'stash_<key>',
+          description: 'API key issued from the Stash app (Settings → API Keys).',
+        },
+      },
+      schemas: {
+        Bookmark: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            url: { type: 'string', nullable: true },
+            title: { type: 'string', nullable: true },
+            description: { type: 'string', nullable: true },
+            notes: { type: 'string', nullable: true },
+            content_type: { type: 'string', enum: ['url', 'article', 'image', 'video', 'text', 'unknown'] },
+            collection_id: { type: 'string', format: 'uuid', nullable: true },
+            is_archived: { type: 'boolean' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        BookmarkDetail: {
+          type: 'object',
+          properties: {
+            bookmark: { '$ref': '#/components/schemas/Bookmark' },
+            tags: { type: 'array', items: { '$ref': '#/components/schemas/Tag' } },
+            collection: { '$ref': '#/components/schemas/Collection', nullable: true },
+          },
+        },
+        Collection: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            name: { type: 'string' },
+            description: { type: 'string', nullable: true },
+            created_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        Tag: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            name: { type: 'string' },
+            slug: { type: 'string' },
+          },
+        },
+        Error: {
+          type: 'object',
+          properties: { error: { type: 'string' } },
+        },
+      },
+    },
+    paths: {
+      '/bookmarks': {
+        get: {
+          operationId: 'listBookmarks',
+          summary: 'List bookmarks',
+          description: 'Returns a paginated list of bookmarks. Defaults to non-archived bookmarks sorted by newest first.',
+          parameters: [
+            { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Full-text search across title, URL, notes, and description.' },
+            { name: 'collection_id', in: 'query', schema: { type: 'string' }, description: 'Filter by collection UUID, or "null" for uncollected bookmarks.' },
+            { name: 'is_archived', in: 'query', schema: { type: 'boolean' }, description: 'Include archived bookmarks (default: false).' },
+            { name: 'sort', in: 'query', schema: { type: 'string', enum: ['created_at_desc', 'created_at_asc', 'updated_at_desc', 'updated_at_asc'] } },
+            { name: 'limit', in: 'query', schema: { type: 'integer', default: 50, maximum: 100 } },
+            { name: 'offset', in: 'query', schema: { type: 'integer', default: 0 } },
+          ],
+          responses: {
+            '200': {
+              description: 'Paginated bookmark list',
+              content: { 'application/json': { schema: {
+                type: 'object',
+                properties: {
+                  bookmarks: { type: 'array', items: { '$ref': '#/components/schemas/Bookmark' } },
+                  limit: { type: 'integer' },
+                  offset: { type: 'integer' },
+                },
+              } } },
+            },
+            '401': { description: 'Invalid or missing API key', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+        post: {
+          operationId: 'createBookmark',
+          summary: 'Create a bookmark',
+          description: 'Saves a new bookmark. If the URL already exists in the library, returns the existing bookmark ID with status "duplicate".',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: {
+              type: 'object',
+              properties: {
+                url: { type: 'string', description: 'The URL to bookmark.' },
+                title: { type: 'string' },
+                description: { type: 'string' },
+                notes: { type: 'string', description: 'Private notes (user-authored, never overwritten by AI).' },
+                collection_id: { type: 'string', format: 'uuid' },
+                tags: { type: 'array', items: { type: 'string' }, description: 'Tag names to attach.' },
+                shared_text: { type: 'string', description: 'Raw text note (use instead of url for non-URL bookmarks).' },
+              },
+            } } },
+          },
+          responses: {
+            '201': {
+              description: 'Bookmark created',
+              content: { 'application/json': { schema: {
+                type: 'object',
+                properties: {
+                  bookmark_id: { type: 'string', format: 'uuid' },
+                  status: { type: 'string', enum: ['created', 'duplicate'] },
+                  metadata_status: { type: 'string' },
+                },
+              } } },
+            },
+            '400': { description: 'Missing required fields', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+            '401': { description: 'Invalid or missing API key', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+      },
+      '/bookmarks/{id}': {
+        get: {
+          operationId: 'getBookmark',
+          summary: 'Get a bookmark',
+          description: 'Returns full bookmark detail including tags and collection.',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          responses: {
+            '200': { description: 'Bookmark detail', content: { 'application/json': { schema: { '$ref': '#/components/schemas/BookmarkDetail' } } } },
+            '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+            '404': { description: 'Not found', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+        patch: {
+          operationId: 'updateBookmark',
+          summary: 'Update a bookmark',
+          description: 'Updates user-authored fields. Use add_tags / remove_tags to manage tags inline.',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: {
+            content: { 'application/json': { schema: {
+              type: 'object',
+              properties: {
+                title: { type: 'string', nullable: true },
+                description: { type: 'string', nullable: true },
+                notes: { type: 'string', nullable: true },
+                collection_id: { type: 'string', format: 'uuid', nullable: true },
+                is_archived: { type: 'boolean' },
+                add_tags: { type: 'array', items: { type: 'string' }, description: 'Tag names to add.' },
+                remove_tags: { type: 'array', items: { type: 'string' }, description: 'Tag names to remove.' },
+              },
+            } } },
+          },
+          responses: {
+            '200': { description: 'Updated bookmark', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Bookmark' } } } },
+            '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+            '404': { description: 'Not found', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+        delete: {
+          operationId: 'deleteBookmark',
+          summary: 'Archive or delete a bookmark',
+          description: 'Archives the bookmark by default (recoverable). Pass ?permanent=true to permanently delete.',
+          parameters: [
+            { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+            { name: 'permanent', in: 'query', schema: { type: 'boolean', default: false } },
+          ],
+          responses: {
+            '204': { description: 'Success' },
+            '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+            '404': { description: 'Not found', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+      },
+      '/bookmarks/{id}/tags': {
+        post: {
+          operationId: 'addTags',
+          summary: 'Add tags to a bookmark',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: {
+              type: 'object',
+              required: ['tags'],
+              properties: { tags: { type: 'array', items: { type: 'string' } } },
+            } } },
+          },
+          responses: {
+            '200': { description: 'Tags added', content: { 'application/json': { schema: { type: 'object', properties: { added: { type: 'array', items: { type: 'string' } } } } } } },
+            '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+            '404': { description: 'Not found', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+        delete: {
+          operationId: 'removeTags',
+          summary: 'Remove tags from a bookmark',
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: {
+              type: 'object',
+              required: ['tags'],
+              properties: { tags: { type: 'array', items: { type: 'string' } } },
+            } } },
+          },
+          responses: {
+            '204': { description: 'Tags removed' },
+            '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+            '404': { description: 'Not found', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+      },
+      '/collections': {
+        get: {
+          operationId: 'listCollections',
+          summary: 'List collections',
+          responses: {
+            '200': { description: 'Collections', content: { 'application/json': { schema: { type: 'array', items: { '$ref': '#/components/schemas/Collection' } } } } },
+            '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+        post: {
+          operationId: 'createCollection',
+          summary: 'Create a collection',
+          requestBody: {
+            required: true,
+            content: { 'application/json': { schema: {
+              type: 'object',
+              required: ['name'],
+              properties: {
+                name: { type: 'string' },
+                description: { type: 'string' },
+              },
+            } } },
+          },
+          responses: {
+            '201': { description: 'Collection created', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Collection' } } } },
+            '400': { description: 'Missing name', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+            '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+      },
+      '/tags': {
+        get: {
+          operationId: 'listTags',
+          summary: 'List tags',
+          responses: {
+            '200': { description: 'Tags', content: { 'application/json': { schema: { type: 'array', items: { '$ref': '#/components/schemas/Tag' } } } } },
+            '401': { description: 'Unauthorized', content: { 'application/json': { schema: { '$ref': '#/components/schemas/Error' } } } },
+          },
+        },
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -446,6 +717,15 @@ Deno.serve(async (req: Request) => {
   }
 
   const url = new URL(req.url);
+
+  // OpenAPI spec is public — no auth needed
+  const isOpenApi = (url.pathname.endsWith('/openapi.json') || url.pathname.endsWith('/openapi')) && req.method === 'GET';
+  if (isOpenApi) {
+    const baseUrl = `https://${url.host}`;
+    return new Response(JSON.stringify(buildOpenApiSpec(baseUrl), null, 2), {
+      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+    });
+  }
 
   const userId = await resolveUserIdFromApiKey(req.headers.get('Authorization'));
   if (!userId) return json({ error: 'Unauthorized' }, 401);
