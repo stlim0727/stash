@@ -427,16 +427,8 @@ export default function SettingsScreen() {
           icon="key-outline"
           label={t('settings.apiKeys.label')}
           value={t('settings.apiKeys.value')}
-          onPress={() => router.push('/api-keys')}
-        />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="chatbubble-ellipses-outline"
-          label={t('settings.report.label')}
-          value={t('settings.report.value')}
           last
-          onPress={() => router.push('/report')}
+          onPress={() => router.push('/api-keys')}
         />
       </Group>
 
@@ -589,6 +581,15 @@ export default function SettingsScreen() {
           )}
         </>
       ) : null}
+
+      <Pressable
+        onPress={() => router.push('/report')}
+        style={styles.reportLink}
+        accessibilityRole="link"
+        accessibilityLabel={t('settings.report.label')}
+      >
+        <Text style={styles.reportLinkText}>{t('settings.report.label')}</Text>
+      </Pressable>
 
       <ActionSheet
         visible={exportSheetOpen}
@@ -883,6 +884,15 @@ const makeStyles = (palette: AppPalette) =>
     queueMeta: {
       fontSize: 12,
       color: palette.textSecondary,
+    },
+    reportLink: {
+      alignItems: 'center',
+      paddingVertical: 8,
+    },
+    reportLinkText: {
+      fontSize: 13,
+      color: palette.textSecondary,
+      textDecorationLine: 'underline',
     },
     emptyQueue: {
       fontSize: 14,
