@@ -70,6 +70,13 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+async function validateCollectionOwnership(userId: string, collectionId: string): Promise<boolean> {
+  const res = await db('GET', `collections?id=eq.${collectionId}&user_id=eq.${userId}&select=id&limit=1`);
+  if (!res.ok) return false;
+  const rows: unknown[] = await res.json();
+  return rows.length > 0;
+}
+
 // URL utilities (ported from apps/mobile/src/domain/urls.ts)
 const TRACKING_PARAMS = new Set([
   'fbclid','gclid','gbraid','wbraid','dclid','yclid','msclkid','mc_eid','mc_cid',
@@ -211,7 +218,9 @@ async function createBookmark(userId: string, body: Record<string, unknown>): Pr
     notes: typeof body.notes === 'string' ? body.notes.trim() || null : null,
     source_app: typeof body.source_app === 'string' ? body.source_app.trim() || null : 'api',
     content_type: url ? 'url' : 'text',
-    collection_id: typeof body.collection_id === 'string' ? body.collection_id : null,
+    collection_id: typeof body.collection_id === 'string'
+      ? (await validateCollectionOwnership(userId, body.collection_id) ? body.collection_id : null)
+      : null,
     is_archived: false,
     created_at: timestamp,
     updated_at: timestamp,
@@ -270,10 +279,21 @@ async function getBookmark(userId: string, bookmarkId: string): Promise<Response
 }
 
 async function updateBookmark(userId: string, bookmarkId: string, body: Record<string, unknown>): Promise<Response> {
-  const allowed = ['title', 'description', 'notes', 'collection_id', 'is_archived'];
+  const allowed = ['title', 'description', 'notes', 'is_archived'];
   const patch: Record<string, unknown> = { updated_at: nowIso() };
   for (const key of allowed) {
     if (key in body) patch[key] = body[key];
+  }
+
+  // Validate collection_id ownership before writing — service-role key bypasses RLS
+  if ('collection_id' in body) {
+    if (body.collection_id === null) {
+      patch.collection_id = null;
+    } else if (typeof body.collection_id === 'string') {
+      const owned = await validateCollectionOwnership(userId, body.collection_id);
+      if (!owned) return json({ error: 'collection_id not found' }, 400);
+      patch.collection_id = body.collection_id;
+    }
   }
 
   // Handle tags separately
