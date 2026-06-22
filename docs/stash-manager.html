@@ -22,29 +22,94 @@ const { useState, useEffect, useRef } = React;
 
 const BASE_URL = "https://stzutoejnhzxzhjsjtsi.supabase.co/functions/v1/public-api";
 const CLAUDE_PROXY = "https://stzutoejnhzxzhjsjtsi.supabase.co/functions/v1/claude-proxy";
-const API_KEY = "YOUR_STASH_API_KEY"; // paste your stash_ key here
-const HEADERS = {
-  "Authorization": `Bearer ${API_KEY}`,
-  "Content-Type": "application/json",
-};
+const LS_KEY = "stash_api_key";
 
-async function api(path, options = {}) {
-  const res = await fetch(`${BASE_URL}${path}`, { headers: HEADERS, ...options });
+function getApiKey() { return localStorage.getItem(LS_KEY) || ""; }
+function setApiKey(k) { localStorage.setItem(LS_KEY, k); }
+
+function makeHeaders(apiKey) {
+  return { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" };
+}
+
+async function api(path, options = {}, apiKey) {
+  const res = await fetch(`${BASE_URL}${path}`, { headers: makeHeaders(apiKey), ...options });
   if (res.status === 204) return null;
   return res.json();
 }
 
-async function callClaude(system, messages) {
+async function callClaude(system, messages, apiKey) {
   const res = await fetch(CLAUDE_PROXY, {
     method: "POST",
-    headers: { ...HEADERS },
+    headers: makeHeaders(apiKey),
     body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, system, messages }),
   });
   const data = await res.json();
   return data.content?.[0]?.text || "응답 없음";
 }
 
-function StashManager() {
+function ApiKeyGate({ onUnlock }) {
+  const [input, setInput] = React.useState("");
+  const [error, setError] = React.useState("");
+  const [testing, setTesting] = React.useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const key = input.trim();
+    if (!key.startsWith("stash_")) { setError("stash_ 로 시작하는 키를 입력하세요."); return; }
+    setTesting(true);
+    setError("");
+    try {
+      const res = await fetch(`${BASE_URL}/bookmarks?limit=1`, { headers: makeHeaders(key) });
+      if (!res.ok) { setError(`인증 실패 (${res.status}). 키를 확인하세요.`); setTesting(false); return; }
+      setApiKey(key);
+      onUnlock(key);
+    } catch (e) {
+      setError(`연결 실패: ${e.message}`);
+    }
+    setTesting(false);
+  }
+
+  const s = {
+    page: { fontFamily: "'Inter', -apple-system, sans-serif", background: "#0f0f13", minHeight: "100vh", color: "#e2e2e8", display: "flex", alignItems: "center", justifyContent: "center" },
+    box: { background: "#18181f", border: "1px solid #2a2a35", borderRadius: 14, padding: "32px 28px", width: "100%", maxWidth: 400 },
+    input: { background: "#0f0f13", border: "1px solid #2a2a35", borderRadius: 8, padding: "10px 13px", color: "#e2e2e8", fontSize: 14, outline: "none", width: "100%", boxSizing: "border-box" },
+    btn: { border: "none", borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 600, padding: "10px 0", width: "100%", background: "linear-gradient(135deg, #6366f1, #8b5cf6)", color: "#fff" },
+  };
+
+  return (
+    <div style={s.page}>
+      <form onSubmit={handleSubmit} style={s.box}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+          <div style={{ width: 36, height: 36, background: "linear-gradient(135deg, #6366f1, #8b5cf6)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🔖</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: "#fff" }}>Stash Manager</div>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>API 키를 입력해 시작하세요</div>
+          </div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6 }}>Stash API Key</div>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            placeholder="stash_..."
+            type="password"
+            autoFocus
+            style={s.input}
+          />
+        </div>
+        {error && <div style={{ color: "#f87171", fontSize: 12, marginBottom: 10 }}>⚠️ {error}</div>}
+        <button type="submit" disabled={testing || !input.trim()} style={{ ...s.btn, opacity: testing || !input.trim() ? 0.5 : 1 }}>
+          {testing ? "확인 중..." : "시작하기"}
+        </button>
+        <div style={{ fontSize: 11, color: "#4b5563", marginTop: 14, textAlign: "center" }}>
+          키는 브라우저 localStorage에만 저장되며 외부로 전송되지 않습니다.
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function StashManager({ apiKey, onLogout }) {
   const [bookmarks, setBookmarks] = useState([]);
   const [tags, setTags] = useState([]);
   const [collections, setCollections] = useState([]);
@@ -74,9 +139,9 @@ function StashManager() {
     setError(null);
     try {
       const [bmData, tagData, colData] = await Promise.all([
-        api(`/bookmarks?limit=${LIMIT}&offset=0`),
-        api("/tags"),
-        api("/collections"),
+        api(`/bookmarks?limit=${LIMIT}&offset=0`, {}, apiKey),
+        api("/tags", {}, apiKey),
+        api("/collections", {}, apiKey),
       ]);
       setBookmarks(bmData?.bookmarks || []);
       setHasMore((bmData?.bookmarks || []).length === LIMIT);
@@ -94,7 +159,7 @@ function StashManager() {
       const params = new URLSearchParams({ limit: LIMIT, offset });
       if (searchQuery) params.set("q", searchQuery);
       if (filterCollection) params.set("collection_id", filterCollection);
-      const data = await api(`/bookmarks?${params}`);
+      const data = await api(`/bookmarks?${params}`, {}, apiKey);
       const items = data?.bookmarks || [];
       setBookmarks(prev => [...prev, ...items]);
       setHasMore(items.length === LIMIT);
@@ -109,7 +174,7 @@ function StashManager() {
       const params = new URLSearchParams({ limit: LIMIT, offset: 0 });
       if (searchQuery) params.set("q", searchQuery);
       if (filterCollection) params.set("collection_id", filterCollection);
-      const data = await api(`/bookmarks?${params}`);
+      const data = await api(`/bookmarks?${params}`, {}, apiKey);
       setBookmarks(data?.bookmarks || []);
       setHasMore((data?.bookmarks || []).length === LIMIT);
       setOffset(LIMIT);
@@ -138,7 +203,7 @@ function StashManager() {
       await api(`/bookmarks/${editingBookmark.id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
-      });
+      }, apiKey);
       setEditingBookmark(null);
       await loadAll();
     } catch (e) {
@@ -150,7 +215,7 @@ function StashManager() {
   async function archiveBookmark(id) {
     if (!confirm("이 북마크를 보관함으로 이동할까요?")) return;
     try {
-      await api(`/bookmarks/${id}`, { method: "DELETE" });
+      await api(`/bookmarks/${id}`, { method: "DELETE" }, apiKey);
       setBookmarks(prev => prev.filter(b => b.id !== id));
     } catch (e) {
       setError(`삭제 실패: ${e.message}`);
@@ -180,7 +245,8 @@ function StashManager() {
     try {
       const result = await callClaude(
         "You are a bookmark organization expert. Analyze the user's bookmarks and respond in Korean with clear emoji-headed sections: 1) 📊 현재 상태 요약 2) 🏷️ 태그 정리 제안 (중복/유사 태그 병합) 3) 📁 컬렉션 분류 제안 4) ✅ 액션 아이템 5가지. Be specific with actual tag/title names.",
-        [{ role: "user", content: `북마크 ${bookmarks.length}개 (최대 80개):\n${JSON.stringify(sample)}\n\n현재 태그: ${tags.map(t => t.name).join(", ")}\n현재 컬렉션: ${collections.map(c => c.name).join(", ")}` }]
+        [{ role: "user", content: `북마크 ${bookmarks.length}개 (최대 80개):\n${JSON.stringify(sample)}\n\n현재 태그: ${tags.map(t => t.name).join(", ")}\n현재 컬렉션: ${collections.map(c => c.name).join(", ")}` }],
+        apiKey
       );
       setAnalysis(result);
     } catch (e) {
@@ -203,7 +269,8 @@ function StashManager() {
     try {
       const reply = await callClaude(
         `당신은 북마크 정리를 도와주는 AI입니다. 사용자의 Stash에는 북마크 ${bookmarks.length}개, 태그 ${tags.length}개, 컬렉션 ${collections.length}개가 있습니다.\n북마크: ${JSON.stringify(sample)}\n태그: ${tags.map(t => t.name).join(", ")}\n컬렉션: ${collections.map(c => c.name).join(", ")}\n한국어로 답하세요.`,
-        newChat.map(m => ({ role: m.role, content: m.content }))
+        newChat.map(m => ({ role: m.role, content: m.content })),
+        apiKey
       );
       setChat([...newChat, { role: "assistant", content: reply }]);
     } catch (e) {
@@ -255,6 +322,7 @@ function StashManager() {
           <div style={{ fontSize: 11, color: "#6b7280" }}>{bookmarks.length}개 북마크 · {tags.length}개 태그 · {collections.length}개 컬렉션</div>
         </div>
         <button onClick={loadAll} style={{ ...s.btn(), marginLeft: "auto" }}>새로고침</button>
+        <button onClick={onLogout} style={{ ...s.btn("danger"), fontSize: 11, padding: "6px 12px" }}>로그아웃</button>
       </div>
 
       <div style={s.tabs}>
@@ -464,8 +532,18 @@ function StashManager() {
   );
 }
 
+function App() {
+  const [apiKey, setApiKey] = React.useState(() => getApiKey());
+
+  function handleUnlock(key) { setApiKey(key); }
+  function handleLogout() { localStorage.removeItem(LS_KEY); setApiKey(""); }
+
+  if (!apiKey) return <ApiKeyGate onUnlock={handleUnlock} />;
+  return <StashManager apiKey={apiKey} onLogout={handleLogout} />;
+}
+
 const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(<StashManager />);
+root.render(<App />);
 </script>
 </body>
 </html>
