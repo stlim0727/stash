@@ -234,7 +234,7 @@ export const en = {
   // Shown as a calm, non-error note so the cause is never hidden (M12); the
   // precise cause is forwarded to monitoring rather than spelled out in full.
   'detail.aiDegradedRateLimited':
-    'AI is at capacity right now — showing basic suggestions for now. Refresh to try again later.',
+    'AI is over capacity right now — showing basic suggestions. Try again shortly for AI suggestions.',
   'detail.aiDegradedUnavailable':
     'Couldn’t reach AI — showing basic suggestions for now. Refresh to try again.',
   'detail.aiDegradedBasic': 'Showing basic suggestions.',
