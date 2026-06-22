@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -17,12 +18,14 @@ interface ReviewItem {
 export default function ReviewScreen() {
   const palette = usePalette();
   const t = useT();
+  const router = useRouter();
   const {
     inbox,
     getTagsForBookmark,
     getEnrichment,
     getReviewedSuggestions,
     acceptSuggestedTags,
+    markSuggestionsReviewed,
     unseenSuggestionIds,
     clearUnseenSuggestions,
   } = useBookmarks();
@@ -66,6 +69,17 @@ export default function ReviewScreen() {
     void acceptSuggestedTags(id, suggestions).finally(() => setBusy(false));
   };
 
+  // Dismiss every pending suggestion for a bookmark: record the names as
+  // reviewed so they stop driving the "✨" badge / this list, without applying
+  // any tags. Synchronous — the reviewed-map update re-derives `items`, so the
+  // card drops out on the next render.
+  const dismiss = (id: string, suggestions: SuggestedTag[]) => {
+    markSuggestionsReviewed(
+      id,
+      suggestions.map((suggestion) => suggestion.name),
+    );
+  };
+
   if (items.length === 0) {
     return (
       <View style={styles.emptyWrap}>
@@ -81,9 +95,17 @@ export default function ReviewScreen() {
       </Text>
       {items.map((item) => (
         <View key={item.id} style={[styles.card, { backgroundColor: palette.card }]}>
-          <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={2}>
-            {item.title}
-          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('review.goToA11y', { title: item.title })}
+            style={styles.titleRow}
+            onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
+          >
+            <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={2}>
+              {item.title}
+            </Text>
+            <Text style={[styles.titleChevron, { color: palette.textSecondary }]}>›</Text>
+          </Pressable>
           <View style={styles.chipRow}>
             {item.suggestions.map((suggestion) => (
               <Pressable
@@ -106,16 +128,28 @@ export default function ReviewScreen() {
               </Pressable>
             ))}
           </View>
-          {item.suggestions.length > 1 ? (
+          <View style={styles.actionRow}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={t('review.acceptAllA11y', { title: item.title })}
               disabled={busy}
+              hitSlop={6}
               onPress={() => accept(item.id, item.suggestions)}
             >
               <Text style={[styles.link, { color: palette.accent }]}>{t('review.acceptAll')}</Text>
             </Pressable>
-          ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('review.dismissAllA11y', { title: item.title })}
+              disabled={busy}
+              hitSlop={6}
+              onPress={() => dismiss(item.id, item.suggestions)}
+            >
+              <Text style={[styles.link, { color: palette.textSecondary }]}>
+                {t('review.dismissAll')}
+              </Text>
+            </Pressable>
+          </View>
         </View>
       ))}
     </ScrollView>
@@ -148,9 +182,20 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   cardTitle: {
+    flex: 1,
     fontSize: 16,
     fontWeight: '600',
+  },
+  titleChevron: {
+    fontSize: 24,
+    fontWeight: '400',
+    lineHeight: 24,
   },
   chipRow: {
     flexDirection: 'row',
@@ -173,6 +218,11 @@ const styles = StyleSheet.create({
   confidence: {
     fontSize: 11,
     fontWeight: '600',
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 20,
   },
   link: {
     fontSize: 14,

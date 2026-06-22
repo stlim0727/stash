@@ -275,8 +275,11 @@ export const en = {
     other: 'Pending suggestions · {count} bookmarks',
   },
   'review.acceptAll': 'Accept all',
+  'review.dismissAll': 'Dismiss all',
   'review.acceptTagA11y': 'Accept suggested tag {name} for {title}',
   'review.acceptAllA11y': 'Accept all suggested tags for {title}',
+  'review.dismissAllA11y': 'Dismiss all suggested tags for {title}',
+  'review.goToA11y': 'Go to {title}',
   'review.confidence': '{percent}%',
 
   // Report a problem.
