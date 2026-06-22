@@ -37,9 +37,7 @@ export const en = {
   'common.archive': 'Archive',
   'common.unarchive': 'Unarchive',
   'common.back': '‹ Back',
-  'common.signIn': 'Sign in',
   'common.signOut': 'Sign out',
-  'common.manage': 'Manage',
   'common.untitled': 'Untitled',
   'common.ok': 'OK',
 
@@ -137,23 +135,21 @@ export const en = {
 
   // Settings.
   'settings.account.signedIn': 'Signed in',
+  'settings.account.signIn': 'Sign In',
+  'settings.account.signOut': 'Sign out',
   'settings.account.cloudUnavailable': 'Cloud sync unavailable',
-  'settings.account.notSignedIn': 'Not signed in',
-  'settings.account.syncedAcrossDevices': 'Synced across your devices',
   'settings.account.worksOffline': 'Stash works fully offline',
-  'settings.account.signInToBackup': 'Sign in to back up & sync',
   'settings.sync.label': 'Sync',
   'settings.sync.syncing': {
     one: 'Syncing {count} item…',
     other: 'Syncing {count} items…',
   },
-  'settings.sync.upToDate': 'Up to date',
+  'settings.sync.allBackedUp': 'All backed up',
   'settings.sync.localOnly': 'Local only',
   'settings.sync.waiting': {
     one: '{count} item waiting to upload',
     other: '{count} items waiting to upload',
   },
-  'settings.sync.queuedOffline': '{count} queued — offline',
   'settings.review.label': 'Review AI suggestions',
   'settings.review.toReview': '{count} to review',
   'settings.review.nothing': 'Nothing to review',
@@ -307,17 +303,9 @@ export const en = {
   'report.errorNoSession': 'You need an active session to submit a report.',
   'report.errorSubmit': 'Could not submit your report.',
 
-  // Account / auth controls.
+  // Account / auth controls (sign-in is inline in Settings).
   'account.signInApple': 'Sign in with Apple',
   'account.signInGoogle': 'Sign in with Google',
-  'account.cloudNotConfigured':
-    'Cloud sync isn’t configured on this build, so account sign-in is unavailable. Stash still works fully offline.',
-  'account.signedInAs': 'Signed in as {email}',
-  'account.signedIn': 'Signed in',
-  'account.syncSubtitle': 'Your bookmarks sync to this account across devices.',
-  'account.signInHeading': 'Sign in to sync across devices',
-  'account.signInSubtitle':
-    'You’re browsing anonymously. Sign in to back up your stash and keep it in sync — your current bookmarks come with you.',
   'account.signInFailedTitle': 'Sign in failed',
   'account.signInFailedBody': 'Could not complete sign in.',
 

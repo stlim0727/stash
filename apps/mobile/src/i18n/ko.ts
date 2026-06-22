@@ -21,9 +21,7 @@ export const ko: Catalog = {
   'common.archive': '보관',
   'common.unarchive': '보관 해제',
   'common.back': '‹ 뒤로',
-  'common.signIn': '로그인',
   'common.signOut': '로그아웃',
-  'common.manage': '관리',
   'common.untitled': '제목 없음',
 
   'status.syncPrefix': '동기화 {status}',
@@ -104,17 +102,15 @@ export const ko: Catalog = {
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
 
   'settings.account.signedIn': '로그인됨',
+  'settings.account.signIn': '로그인',
+  'settings.account.signOut': '로그아웃',
   'settings.account.cloudUnavailable': '클라우드 동기화 사용 불가',
-  'settings.account.notSignedIn': '로그인되지 않음',
-  'settings.account.syncedAcrossDevices': '기기 간 동기화됨',
   'settings.account.worksOffline': 'Stash는 오프라인에서도 완전히 작동합니다',
-  'settings.account.signInToBackup': '백업 및 동기화하려면 로그인',
   'settings.sync.label': '동기화',
   'settings.sync.syncing': { other: '{count}개 항목 동기화 중…' },
-  'settings.sync.upToDate': '최신 상태',
+  'settings.sync.allBackedUp': '모두 백업됨',
   'settings.sync.localOnly': '로컬 전용',
   'settings.sync.waiting': { other: '{count}개 항목 업로드 대기 중' },
-  'settings.sync.queuedOffline': '{count}개 대기 중 — 오프라인',
   'settings.review.label': 'AI 제안 검토',
   'settings.review.toReview': '검토할 항목 {count}개',
   'settings.review.nothing': '검토할 항목 없음',
@@ -254,14 +250,6 @@ export const ko: Catalog = {
 
   'account.signInApple': 'Apple로 로그인',
   'account.signInGoogle': 'Google로 로그인',
-  'account.cloudNotConfigured':
-    '이 빌드에는 클라우드 동기화가 구성되어 있지 않아 계정 로그인을 사용할 수 없습니다. Stash는 오프라인에서도 완전히 작동합니다.',
-  'account.signedInAs': '{email}(으)로 로그인됨',
-  'account.signedIn': '로그인됨',
-  'account.syncSubtitle': '북마크가 기기 간에 이 계정으로 동기화됩니다.',
-  'account.signInHeading': '기기 간 동기화하려면 로그인',
-  'account.signInSubtitle':
-    '익명으로 사용 중입니다. 로그인하면 스태시를 백업하고 동기화 상태로 유지할 수 있습니다 — 현재 북마크도 함께 이동합니다.',
   'account.signInFailedTitle': '로그인 실패',
   'account.signInFailedBody': '로그인을 완료할 수 없습니다.',
 

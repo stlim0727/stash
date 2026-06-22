@@ -17,7 +17,6 @@ import {
 } from 'react-native';
 
 import { usePalette } from '@/theme';
-import { Avatar } from '@/ui/Avatar';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { ActionSheet } from '@/ui/ActionSheet';
@@ -45,10 +44,22 @@ import { deliverExport } from '@/share/export-data';
 import { pickImportFile } from '@/share/import-data';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
+import type { OAuthProvider } from '@/supabase/types';
 
 const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
 
 type AppPalette = ReturnType<typeof usePalette>;
+
+/** Sign-in providers, in display order (Google first), with logo + a11y keys. */
+const AUTH_PROVIDERS: {
+  id: OAuthProvider;
+  label: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  a11yKey: MessageKey;
+}[] = [
+  { id: 'google', label: 'Google', icon: 'logo-google', a11yKey: 'account.signInGoogle' },
+  { id: 'apple', label: 'Apple', icon: 'logo-apple', a11yKey: 'account.signInApple' },
+];
 
 /** The language-preference options, in display order, with their label keys. */
 const LANGUAGE_OPTIONS: { value: LocalePreference; labelKey: MessageKey }[] = [
@@ -78,6 +89,31 @@ export default function SettingsScreen() {
     importBookmarks,
   } = useBookmarks();
   const auth = useSupabaseAuth();
+
+  // Sign in / out happens inline in the account card (no separate screen).
+  // `authBusy` disables the auth buttons while a provider flow or sign-out runs.
+  const [authBusy, setAuthBusy] = useState<OAuthProvider | 'signout' | null>(null);
+  const handleSignIn = async (provider: OAuthProvider) => {
+    setAuthBusy(provider);
+    try {
+      await auth.signIn(provider);
+    } catch (error) {
+      Alert.alert(
+        t('account.signInFailedTitle'),
+        error instanceof Error ? error.message : t('account.signInFailedBody'),
+      );
+    } finally {
+      setAuthBusy(null);
+    }
+  };
+  const handleSignOut = async () => {
+    setAuthBusy('signout');
+    try {
+      await auth.signOut();
+    } finally {
+      setAuthBusy(null);
+    }
+  };
 
   // Data export: build a portable file from the on-device library and hand it
   // to the platform delivery shim (browser download on web, share sheet on
@@ -250,22 +286,27 @@ export default function SettingsScreen() {
     );
   }, 0);
 
-  const waiting = queue.filter((entry) => entry.sync_status !== 'synced').length;
-  // Sync is upload-then-pull, so it is useful even with nothing to upload
-  // (another device or cloud AI enrichment may have changed data).
-  const canSync = auth.isSignedIn && !isSyncing;
-
   const isAuthenticated = auth.status === 'authenticated';
+
+  // Sync row is status-led: the right-hand glyph is the action/state.
+  //  - cloud reachable + something queued → tappable refresh (upload-then-pull)
+  //  - syncing → spinner
+  //  - cloud reachable + nothing queued → a static "all backed up" checkmark
+  //  - no cloud session (anonymous works, only "not configured" lacks one) →
+  //    "local only", no glyph. Pulls still happen automatically (on sign-in /
+  //    account switch / when work is queued), so there is no manual-pull button.
+  const waiting = queue.filter((entry) => entry.sync_status !== 'synced').length;
+  const cloudAvailable = auth.isSignedIn; // anonymous OR authenticated session
+  const hasPending = waiting > 0;
+  const canSync = cloudAvailable && hasPending && !isSyncing;
 
   const syncSummary = isSyncing
     ? t('settings.sync.syncing', { count: waiting })
-    : waiting === 0
-      ? auth.isSignedIn
-        ? t('settings.sync.upToDate')
-        : t('settings.sync.localOnly')
-      : auth.isSignedIn
+    : !cloudAvailable
+      ? t('settings.sync.localOnly')
+      : hasPending
         ? t('settings.sync.waiting', { count: waiting })
-        : t('settings.sync.queuedOffline', { count: waiting });
+        : t('settings.sync.allBackedUp');
 
   const build = getBuildInfo();
   const appVersion = `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
@@ -277,40 +318,66 @@ export default function SettingsScreen() {
       style={{ backgroundColor: palette.background }}
       contentContainerStyle={styles.container}
     >
-      {/* Account header */}
-      <Card style={styles.accountCard}>
-        <Avatar size={56} uri={auth.avatarUrl} email={auth.email} authed={isAuthenticated} />
-        <View style={styles.accountText}>
-          <Text style={styles.accountName} numberOfLines={1}>
-            {isAuthenticated
-              ? (auth.displayName ?? auth.email ?? t('settings.account.signedIn'))
-              : auth.status === 'not_configured'
-                ? t('settings.account.cloudUnavailable')
-                : t('settings.account.notSignedIn')}
-          </Text>
-          <Text style={styles.accountMeta} numberOfLines={1}>
-            {isAuthenticated
-              ? (auth.displayName && auth.email ? auth.email : t('settings.account.syncedAcrossDevices'))
-              : auth.status === 'not_configured'
-                ? t('settings.account.worksOffline')
-                : t('settings.account.signInToBackup')}
-          </Text>
+      {/* Account & sync — identity, sign in/out, and sync status in one card.
+          The auth control sits beside the identity (sign in with a provider, or
+          log out); the sync row below shows backup status. All inline — no
+          separate screen. */}
+      <Card style={styles.account} elevated={false}>
+        <View style={styles.accountHeader}>
+          {isAuthenticated ? (
+            <>
+              <View style={styles.accountText}>
+                <Text style={styles.accountMeta}>{t('settings.account.signedIn')}</Text>
+                <Text style={styles.accountName} numberOfLines={1}>
+                  {auth.email ?? auth.displayName ?? t('settings.account.signedIn')}
+                </Text>
+              </View>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={authBusy !== null}
+                onPress={() => void handleSignOut()}
+              >
+                {t('settings.account.signOut')}
+              </Button>
+            </>
+          ) : auth.status === 'not_configured' ? (
+            <View style={styles.accountText}>
+              <Text style={styles.accountName} numberOfLines={1}>
+                {t('settings.account.cloudUnavailable')}
+              </Text>
+              <Text style={styles.accountMeta} numberOfLines={1}>
+                {t('settings.account.worksOffline')}
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.accountText}>
+                <Text style={styles.accountName} numberOfLines={1}>
+                  {t('settings.account.signIn')}
+                </Text>
+              </View>
+              <View style={styles.authButtons}>
+                {AUTH_PROVIDERS.map(({ id, label, icon, a11yKey }) => (
+                  <Button
+                    key={id}
+                    variant="ghost"
+                    size="sm"
+                    icon={icon}
+                    accessibilityLabel={t(a11yKey)}
+                    disabled={authBusy !== null}
+                    onPress={() => void handleSignIn(id)}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </View>
+            </>
+          )}
         </View>
-        {auth.status !== 'not_configured' ? (
-          <Button
-            variant={isAuthenticated ? 'ghost' : 'primary'}
-            size="sm"
-            onPress={() => router.push('/account')}
-          >
-            {isAuthenticated ? t('common.manage') : t('common.signIn')}
-          </Button>
-        ) : null}
-      </Card>
 
-      {/* Sync — status and the sync action are one row: the summary is the
-          value and tapping the row syncs (upload-then-pull). A trailing refresh
-          glyph signals it's tappable; it spins to a spinner while syncing. */}
-      <Group styles={styles}>
+        {/* Sync — status-led: the right glyph is the state. Tappable only when
+            there is queued work to upload; otherwise a static checkmark. */}
         <Row
           styles={styles}
           palette={palette}
@@ -324,10 +391,12 @@ export default function SettingsScreen() {
               <ActivityIndicator color={palette.textSecondary} />
             ) : canSync ? (
               <Ionicons name="refresh" size={18} color={palette.accent} />
+            ) : cloudAvailable ? (
+              <Ionicons name="checkmark-circle" size={20} color={palette.success} />
             ) : undefined
           }
         />
-      </Group>
+      </Card>
 
       {/* Library & tools */}
       <Group styles={styles}>
@@ -697,11 +766,23 @@ const makeStyles = (palette: AppPalette) =>
       padding: 16,
       gap: 18,
     },
-    accountCard: {
+    account: {
+      paddingHorizontal: 0,
+      paddingVertical: 0,
+      overflow: 'hidden',
+    },
+    accountHeader: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 14,
+      gap: 12,
       padding: 16,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: palette.border,
+    },
+    authButtons: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
     },
     accountText: {
       flex: 1,
