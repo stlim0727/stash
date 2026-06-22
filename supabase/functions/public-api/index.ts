@@ -726,7 +726,8 @@ Deno.serve(async (req: Request) => {
   const userId = await resolveUserIdFromApiKey(req.headers.get('Authorization'));
   if (!userId) return json({ error: 'Unauthorized' }, 401);
 
-  const path = url.pathname.replace(/^\/functions\/v1\/public-api\/?/, '').replace(/^\//, '');
+  // Runtime strips /functions/v1 but keeps the function name, so pathname is /public-api/...
+  const path = url.pathname.replace(/^\/[^/]+\/?/, '');
   const parts = path.split('/').filter(Boolean);
   // parts: [] | ['bookmarks'] | ['bookmarks', ':id'] | ['bookmarks', ':id', 'tags'] | ['collections'] | ['tags']
 
