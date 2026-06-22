@@ -55,8 +55,13 @@ jest.mock('expo-router', () => ({
 // "could self-dismiss" vs "couldn't" cases per test (real native dismissal is
 // covered by on-device verification).
 const mockDismiss = jest.fn<boolean, [string]>();
+// `canDismissAfterShare` gates the "confirm on next open" record so it's only
+// written on the Android self-dismiss path. It shares Android-ness with
+// `dismissAfterShare`, so the tests drive the two together per platform.
+const mockCanDismiss = jest.fn<boolean, []>();
 jest.mock('@/share/dismiss', () => ({
   dismissAfterShare: (message: string) => mockDismiss(message),
+  canDismissAfterShare: () => mockCanDismiss(),
 }));
 
 // Controllable share-intent context: a cold-start share has hasShareIntent
@@ -76,6 +81,7 @@ jest.mock('expo-share-intent', () => ({
 }));
 
 import { SHARE_BEHAVIOR_PREF_KEY } from '@/domain/share-behavior';
+import { parsePendingShareConfirm, SHARE_CONFIRM_PREF_KEY } from '@/domain/share-confirm';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
@@ -107,10 +113,16 @@ beforeEach(async () => {
   // and the in-app toast is shown (which the existing assertions rely on).
   mockDismiss.mockReset();
   mockDismiss.mockReturnValue(false);
+  // Default to "can't self-dismiss" (iOS/web), matching the default dismiss
+  // result; Android tests opt both into true.
+  mockCanDismiss.mockReset();
+  mockCanDismiss.mockReturnValue(false);
   mockCopyImage.mockClear();
   // Reset the persisted share-behavior preference to the default between tests
   // (the fake repo's meta store outlives a single test).
   await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'toast');
+  // Clear any pending "confirm on next open" record the meta store carried over.
+  await fakeRepo.repository.setMeta(SHARE_CONFIRM_PREF_KEY, JSON.stringify({ savedCount: 0 }));
   mockShareIntent = {
     hasShareIntent: false,
     shareIntent: { webUrl: null, text: null },
@@ -264,6 +276,7 @@ describe('ShareIntentHandler', () => {
     // Inbox and shows the in-app toast instead.
     fakeRepo.__reset([]);
     mockDismiss.mockReturnValue(false);
+    mockCanDismiss.mockReturnValue(false);
     mockShareIntent = {
       hasShareIntent: true,
       shareIntent: { webUrl: 'https://example.com/toast', text: null },
@@ -275,6 +288,9 @@ describe('ShareIntentHandler', () => {
     await findByText('Saved to Stash');
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
     expect(mockDismiss).toHaveBeenCalledWith('Saved to Stash');
+    // The in-app toast + Inbox already confirmed the save in this session, so no
+    // "confirm on next open" record is left behind to re-confirm on next launch.
+    expect(parsePendingShareConfirm(await fakeRepo.repository.getMeta(SHARE_CONFIRM_PREF_KEY))).toBeNull();
     unmount();
   });
 
@@ -284,6 +300,7 @@ describe('ShareIntentHandler', () => {
     // the save is already enqueued before we leave (capture is sacred).
     fakeRepo.__reset([]);
     mockDismiss.mockReturnValue(true);
+    mockCanDismiss.mockReturnValue(true);
     mockShareIntent = {
       hasShareIntent: true,
       shareIntent: { webUrl: 'https://example.com/bg', text: null },
@@ -295,6 +312,13 @@ describe('ShareIntentHandler', () => {
     await waitFor(() => expect(mockDismiss).toHaveBeenCalledWith('Saved to Stash'));
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     expect(mockRouter.replace).not.toHaveBeenCalled();
+    // The system toast is gone by the time the app reopens, so a record is left
+    // for the next foreground to confirm this brand-new save.
+    await waitFor(() =>
+      expect(fakeRepo.repository.getMeta(SHARE_CONFIRM_PREF_KEY)).resolves.toBe(
+        JSON.stringify({ savedCount: 1 }),
+      ),
+    );
     unmount();
   });
 
