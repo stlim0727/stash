@@ -34,7 +34,7 @@ export type FetchLike = (
 
 export interface GeminiProviderConfig {
   apiKey: string;
-  /** Defaults to a fast, free-tier-friendly Flash model. */
+  /** Defaults to the cheapest free-tier-friendly Flash model (Flash-Lite). */
   model?: string;
   /** Override the API base (e.g. for a proxy). Defaults to the public endpoint. */
   baseUrl?: string;
@@ -45,7 +45,7 @@ export interface GeminiProviderConfig {
   fetchImpl?: FetchLike;
 }
 
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TAGS = 5;
