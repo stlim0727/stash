@@ -355,6 +355,14 @@ export default function SettingsScreen() {
         <Row
           styles={styles}
           palette={palette}
+          icon="key-outline"
+          label={t('settings.apiKeys.label')}
+          value={t('settings.apiKeys.value')}
+          onPress={() => router.push('/api-keys')}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
           icon="chatbubble-ellipses-outline"
           label={t('settings.report.label')}
           value={t('settings.report.value')}

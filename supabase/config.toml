@@ -21,3 +21,13 @@ enable_anonymous_sign_ins = true
 # tokens with 401 "Invalid JWT" and blocks the secret-authenticated trigger before
 # the function runs. Authorization is enforced in the handler either way.
 verify_jwt = false
+
+[functions.api-keys]
+# Standard JWT verification — this function only accepts authenticated user
+# sessions; anonymous sessions and service-role calls are not needed here.
+verify_jwt = true
+
+[functions.public-api]
+# API key authentication is handled in the handler — JWT pre-verification is
+# disabled because callers use stash_ API keys, not Supabase JWTs.
+verify_jwt = false
