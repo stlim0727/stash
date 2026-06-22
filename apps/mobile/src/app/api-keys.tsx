@@ -1,3 +1,4 @@
+import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import {
@@ -5,7 +6,6 @@ import {
   Alert,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -19,6 +19,13 @@ import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
+import { getSupabaseConfigState } from '@/supabase/config';
+
+function getPublicApiBase(): string {
+  const state = getSupabaseConfigState();
+  if (state.status !== 'configured') return '';
+  return `${state.config.url}/functions/v1/public-api`;
+}
 
 export default function ApiKeysScreen() {
   const palette = usePalette();
@@ -30,11 +37,15 @@ export default function ApiKeysScreen() {
   const [loading, setLoading] = useState(true);
   const [newKeyName, setNewKeyName] = useState('');
   const [creating, setCreating] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const api =
     auth.status === 'authenticated' && auth.session
       ? createApiKeysApi(auth.session)
       : null;
+
+  const publicApiBase = getPublicApiBase();
+  const openApiUrl = publicApiBase ? `${publicApiBase}/openapi.json` : '';
 
   useEffect(() => {
     if (!api) return;
@@ -47,6 +58,12 @@ export default function ApiKeysScreen() {
     return () => { active = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.status]);
+
+  const handleCopy = async (text: string, id: string) => {
+    await Clipboard.setStringAsync(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 2000);
+  };
 
   const handleCreate = async () => {
     if (!api || !newKeyName.trim() || creating) return;
@@ -64,7 +81,7 @@ export default function ApiKeysScreen() {
         [
           {
             text: t('apiKeys.created.copy'),
-            onPress: () => void Share.share({ message: created.key }),
+            onPress: () => void handleCopy(created.key, created.id),
           },
           { text: t('common.ok'), style: 'cancel' },
         ],
@@ -115,6 +132,38 @@ export default function ApiKeysScreen() {
     >
       <Text style={styles.description}>{t('apiKeys.description')}</Text>
 
+      {/* How to use guide */}
+      <Card style={styles.guideCard} elevated={false}>
+        <Text style={styles.guideTitle}>{t('apiKeys.guide.title')}</Text>
+        {(['1', '2', '3'] as const).map((n) => (
+          <View key={n} style={styles.guideStep}>
+            <View style={styles.guideBadge}>
+              <Text style={styles.guideBadgeText}>{n}</Text>
+            </View>
+            <Text style={styles.guideStepText}>
+              {t(`apiKeys.guide.step${n}` as 'apiKeys.guide.step1')}
+            </Text>
+          </View>
+        ))}
+        {openApiUrl ? (
+          <Pressable
+            style={({ pressed }) => [styles.urlRow, pressed && { opacity: 0.6 }]}
+            onPress={() => void handleCopy(openApiUrl, 'openapi-url')}
+            accessibilityRole="button"
+            accessibilityLabel={t('apiKeys.guide.copyUrlA11y')}
+          >
+            <Text style={styles.urlText} numberOfLines={1} ellipsizeMode="middle">
+              {openApiUrl}
+            </Text>
+            <Ionicons
+              name={copiedId === 'openapi-url' ? 'checkmark' : 'copy-outline'}
+              size={15}
+              color={copiedId === 'openapi-url' ? palette.accent : palette.textSecondary}
+            />
+          </Pressable>
+        ) : null}
+      </Card>
+
       {/* Create new key */}
       <Card style={styles.createCard} elevated={false}>
         <TextInput
@@ -163,7 +212,7 @@ export default function ApiKeysScreen() {
                 onPress={() => handleRevoke(key)}
                 accessibilityRole="button"
                 accessibilityLabel={t('apiKeys.revokeA11y', { name: key.name })}
-                style={({ pressed }) => [styles.revokeBtn, pressed && { opacity: 0.5 }]}
+                style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
               >
                 <Ionicons name="trash-outline" size={18} color={palette.textSecondary} />
               </Pressable>
@@ -193,6 +242,59 @@ const makeStyles = (palette: ReturnType<typeof usePalette>) =>
       fontSize: 14,
       color: palette.textSecondary,
       lineHeight: 20,
+    },
+    guideCard: {
+      gap: 10,
+      paddingHorizontal: 14,
+      paddingVertical: 14,
+    },
+    guideTitle: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: palette.text,
+      marginBottom: 2,
+    },
+    guideStep: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 10,
+    },
+    guideBadge: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: palette.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 1,
+      flexShrink: 0,
+    },
+    guideBadgeText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: '#fff',
+    },
+    guideStepText: {
+      flex: 1,
+      fontSize: 13,
+      color: palette.textSecondary,
+      lineHeight: 19,
+    },
+    urlRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      backgroundColor: palette.border,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      marginTop: 2,
+    },
+    urlText: {
+      flex: 1,
+      fontSize: 12,
+      color: palette.textSecondary,
+      fontFamily: 'monospace' as const,
     },
     createCard: {
       flexDirection: 'row',
@@ -238,7 +340,7 @@ const makeStyles = (palette: ReturnType<typeof usePalette>) =>
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: palette.border,
     },
-    revokeBtn: {
+    iconBtn: {
       padding: 4,
     },
     spinner: {

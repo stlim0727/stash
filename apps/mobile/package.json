@@ -7,6 +7,7 @@
     "@sentry/react-native": "^8.14.0",
     "@zxing/text-encoding": "^0.9.0",
     "expo": "~56.0.11",
+    "expo-clipboard": "^56.0.4",
     "expo-constants": "~56.0.18",
     "expo-crypto": "~56.0.4",
     "expo-document-picker": "~56.0.4",
