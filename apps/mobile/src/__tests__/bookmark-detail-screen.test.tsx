@@ -211,7 +211,7 @@ test('a degraded enrichment shows a non-error "basic suggestions" note', async (
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
 
-  expect(screen.getByText(/AI is busy — showing basic suggestions/)).toBeTruthy();
+  expect(screen.getByText(/AI is at capacity right now — showing basic suggestions/)).toBeTruthy();
 });
 
 test('dismissing a suggested tag removes it from the list', async () => {
