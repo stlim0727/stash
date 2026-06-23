@@ -1206,24 +1206,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // would wrongly re-send the row on the next sync). Just patch in memory and
   // persist locally, fire-and-forget.
   const markBookmarkAccessed = useCallback((id: string) => {
-    let updated: Bookmark | null = null;
-    setBookmarks((current) => {
-      if (current === null) {
-        return current;
-      }
-      return current.map((bookmark) => {
-        if (bookmark.id !== id) {
-          return bookmark;
-        }
-        updated = { ...bookmark, last_accessed_at: new Date().toISOString() };
-        return updated;
-      });
-    });
-    if (updated) {
-      ensureRepositoryReady()
-        .then(() => repository.updateBookmark(updated as Bookmark))
-        .catch((error) => logStorageError('bookmark access', error));
+    // Build the updated row from the ref, not inside the setBookmarks updater:
+    // the functional updater isn't guaranteed to run synchronously, so reading a
+    // value it assigned would race the durable write below and could skip it,
+    // leaving last_accessed_at lost after a reload.
+    const existing = bookmarksRef.current?.find((bookmark) => bookmark.id === id);
+    if (!existing) {
+      return;
     }
+    const updated: Bookmark = { ...existing, last_accessed_at: new Date().toISOString() };
+    setBookmarks((current) =>
+      current === null ? current : current.map((bookmark) => (bookmark.id === id ? updated : bookmark)),
+    );
+    ensureRepositoryReady()
+      .then(() => repository.updateBookmark(updated))
+      .catch((error) => logStorageError('bookmark access', error));
   }, []);
 
   const trashBookmark = useCallback(

@@ -53,6 +53,26 @@ test('addBookmark shows the bookmark immediately and queues a create', async () 
   expect(fakeRepo.__queue()[0]?.operation).toBe('create');
 });
 
+test('markBookmarkAccessed sets last_accessed_at and persists it durably', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ id: 'bm-access', last_accessed_at: null })]);
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await act(async () => {
+    result.current.markBookmarkAccessed('bm-access');
+  });
+
+  // Reflected in memory…
+  expect(result.current.inbox[0]?.last_accessed_at).toEqual(expect.any(String));
+  // …and written through to durable storage (not just the in-memory state),
+  // so the "Recently opened" order survives a reload.
+  const persisted = (await fakeRepo.repository.listBookmarks()).find((b) => b.id === 'bm-access');
+  expect(persisted?.last_accessed_at).toEqual(expect.any(String));
+
+  // It must not enqueue a sync mutation — last_accessed_at is local-only.
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
 test('saving the same URL twice reuses the existing bookmark', async () => {
   const { result } = await renderStore();
 
