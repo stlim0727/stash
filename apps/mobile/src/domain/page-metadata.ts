@@ -303,10 +303,12 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   }
 
   if (!result?.title) {
-    // Full failure: no title from any attempt. Error level → Sentry.
+    // Full failure: no title from any attempt. Warn level — enrichment is
+    // fire-and-forget and no-title is expected for JS-heavy or dead-link pages,
+    // so this does not warrant a Sentry error.
     const spaPart = spa ? `, spa=${spa.outcome}` : '';
     recordLog(
-      'error',
+      'warn',
       `preview: no title for ${url} (bot=${bot.outcome}, browser=${browser.outcome}${spaPart})`,
     );
   } else {
