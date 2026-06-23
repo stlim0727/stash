@@ -96,9 +96,11 @@ model output.
   explicit `CachedContent` resource is a later optimization. (#188)
 - **Clients**: the mobile chat screen (`apps/mobile/src/app/chat.tsx` +
   `src/api/chat.ts`) is done (#185) — message list, Approve/Reject confirm UI,
-  auth via the app's JWT. The separate web chat (#186) is still to come.
-  (To keep the confirm pause 1:1, the loop runs one tool call per turn —
-  `disable_parallel_tool_use` on Claude + a system-prompt nudge.)
+  auth via the app's JWT. It is also the **web** client: Expo Router serves the
+  same `/chat` route in the browser (verified via `expo export --platform web`),
+  so there's no separate web app (#186) and no separate logic to share (#187 —
+  one universal client). (To keep the confirm pause 1:1, the loop runs one tool
+  call per turn — `disable_parallel_tool_use` on Claude + a system-prompt nudge.)
 - ~~**Rate limiting**~~: done — migration `20260623120000_chat_rate_limit.sql`
   adds `request_chat_slot_for(uuid)` (service-role; sliding hour+day window) and
   the function consults it before the loop, returning 429 when over. Fails open
