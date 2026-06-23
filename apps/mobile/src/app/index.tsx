@@ -728,6 +728,14 @@ export default function InboxScreen() {
       {viewMode === 'cloud' ? (
         <Animated.ScrollView
           testID="inbox-tag-cloud"
+          // flex:1 so the cloud's scroll frame always fills the screen, exactly
+          // like the card/list FlatList. Without it the ScrollView frame hugs
+          // its content, so narrowing the cloud to a folder's few tags collapses
+          // and re-lays-out that frame under the floating header — which on
+          // Android drops the header's browse chips out of touch dispatch
+          // (zIndex touch ordering is unreliable when an overlapping sibling
+          // resizes), leaving the chips visible but untappable.
+          style={styles.cloudScroll}
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
             useNativeDriver: true,
           })}
@@ -1173,6 +1181,12 @@ const styles = StyleSheet.create({
     // that would clip the chips' bottom edge on Android.
     minHeight: 42,
     gap: 8,
+  },
+  cloudScroll: {
+    // Fill the screen so the scroll frame stays put when the cloud narrows to a
+    // facet's few tags (see the Animated.ScrollView comment) — a hugging frame
+    // re-lays-out under the floating header and breaks chip taps on Android.
+    flex: 1,
   },
   cloudWrap: {
     flexDirection: 'row',
