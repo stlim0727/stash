@@ -106,6 +106,102 @@ function str(input: Record<string, unknown>, key: string): string | null {
   return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
 
+// --- Tag helpers (mirror public-api's addTagsToBookmark / ensureTag) ---------
+// Kept in sync with the mobile app's domain/tag-normalize so a tag added via
+// chat collapses to the same slug as one added in the app.
+
+function normalizeText(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+function slugify(value: string): string {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function uniqueNormalizedTags(tags: unknown): Array<{ name: string; slug: string }> {
+  if (!Array.isArray(tags)) return [];
+  const seen = new Set<string>();
+  const result: Array<{ name: string; slug: string }> = [];
+  for (const raw of tags) {
+    if (typeof raw !== 'string') continue;
+    const name = normalizeText(raw);
+    const slug = slugify(name);
+    if (!name || !slug || seen.has(slug)) continue;
+    seen.add(slug);
+    result.push({ name, slug });
+  }
+  return result;
+}
+
+/** Find-or-create a tag for the user, returning its id. */
+async function ensureTag(userId: string, name: string, slug: string): Promise<string | null> {
+  const existing = await db(
+    'GET',
+    `tags?user_id=eq.${userId}&slug=eq.${encodeURIComponent(slug)}&select=id&limit=1`,
+  );
+  if (existing.ok) {
+    const rows: Array<{ id: string }> = await existing.json();
+    if (rows[0]) return rows[0].id;
+  }
+  const created = await db('POST', 'tags', {
+    user_id: userId,
+    name,
+    slug,
+    source: 'user',
+    created_at: nowIso(),
+  });
+  if (created.ok) {
+    const rows: Array<{ id: string }> = await created.json();
+    if (rows[0]) return rows[0].id;
+  }
+  // Lost a create race — re-read.
+  const raced = await db('GET', `tags?user_id=eq.${userId}&slug=eq.${encodeURIComponent(slug)}&select=id&limit=1`);
+  if (raced.ok) {
+    const rows: Array<{ id: string }> = await raced.json();
+    if (rows[0]) return rows[0].id;
+  }
+  return null;
+}
+
+/** Ensure each tag exists and link it to the bookmark (idempotent upsert). */
+async function addTagsToBookmark(userId: string, bookmarkId: string, tags: unknown): Promise<string[]> {
+  const normalized = uniqueNormalizedTags(tags);
+  if (normalized.length === 0) return [];
+  const linked: string[] = [];
+  const rows: Array<{ bookmark_id: string; tag_id: string; source: string; created_at: string }> = [];
+  const ts = nowIso();
+  for (const tag of normalized) {
+    const tagId = await ensureTag(userId, tag.name, tag.slug);
+    if (!tagId) continue;
+    rows.push({ bookmark_id: bookmarkId, tag_id: tagId, source: 'user', created_at: ts });
+    linked.push(tag.name);
+  }
+  if (rows.length === 0) return [];
+  // bookmark_tags has no user_id column; RLS is bypassed by the service role, so
+  // ownership is enforced by the caller verifying the bookmark first.
+  await fetch(`${SUPABASE_URL}/rest/v1/bookmark_tags`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      apikey: SERVICE_ROLE_KEY,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify(rows),
+  });
+  return linked;
+}
+
+async function ownsBookmark(userId: string, bookmarkId: string): Promise<boolean> {
+  const res = await db('GET', `bookmarks?id=eq.${bookmarkId}&user_id=eq.${userId}&select=id&limit=1`);
+  if (!res.ok) return false;
+  const rows: unknown[] = await res.json();
+  return rows.length > 0;
+}
+
 function makeExecutor(userId: string): ToolExecutor {
   return async (call: ToolCall): Promise<ToolResult> => {
     try {
@@ -171,10 +267,21 @@ function makeExecutor(userId: string): ToolExecutor {
           });
           if (!res.ok) return err(call, 'create failed');
           const rows = await res.json();
-          return ok(call, { bookmark_id: rows[0]?.id, status: 'created' });
+          const bookmarkId = rows[0]?.id;
+          let added: string[] = [];
+          if (bookmarkId && Array.isArray(call.input.tags)) {
+            added = await addTagsToBookmark(userId, bookmarkId, call.input.tags);
+          }
+          return ok(call, { bookmark_id: bookmarkId, status: 'created', tags: added });
         }
-        case 'add_tags':
-          return ok(call, { applied: 'add_tags not yet wired — see README TODO' });
+        case 'add_tags': {
+          const bookmarkId = str(call.input, 'bookmark_id');
+          if (!bookmarkId) return err(call, 'bookmark_id is required');
+          if (!(await ownsBookmark(userId, bookmarkId))) return err(call, 'not found');
+          const added = await addTagsToBookmark(userId, bookmarkId, call.input.tags);
+          if (added.length === 0) return err(call, 'no valid tags to add');
+          return ok(call, { added });
+        }
         case 'set_collection': {
           const bookmarkId = str(call.input, 'bookmark_id');
           if (!bookmarkId) return err(call, 'bookmark_id is required');

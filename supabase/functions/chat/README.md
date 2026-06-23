@@ -85,8 +85,9 @@ model output.
   must canonicalize (tracking-param stripping) to match `public-api` /
   `api/bookmarks.ts` so the chatbot and the app agree on duplicates. Consider
   factoring `canonicalizeUrl` into a shared module both functions import.
-- **`add_tags` executor**: stubbed — wire to the `tags` / `bookmark_tags`
-  upsert path (port from `public-api`'s `addTagsToBookmark`).
+- ~~**`add_tags` executor**~~: done — ports `public-api`'s find-or-create tag +
+  `bookmark_tags` merge-duplicates upsert; `create_bookmark` now applies its
+  `tags` too. (#183)
 - **Streaming**: replies are returned whole. For a chat UX, stream tokens (SSE)
   — the adapters would expose a streaming `complete`.
 - **Prompt caching**: enable provider caching on the system prompt + tool
