@@ -231,6 +231,12 @@ export const ko: Catalog = {
   'review.dismissAllA11y': '{title}에 대해 제안된 태그 모두 무시',
   'review.goToA11y': '{title}(으)로 이동',
   'review.confidence': '{percent}%',
+  'review.tagChip': '#{name}',
+  'review.folderChip': '📂 {name}',
+  'review.createFolderChip': '📂 “{name}” 만들기',
+  'review.acceptFolderA11y': '{title}을(를) {name}에 정리',
+  'review.createFolderA11y': '컬렉션 {name}을(를) 만들고 {title} 정리',
+  'review.dismissFolderA11y': '{title}의 제안된 컬렉션 {name} 무시',
 
   'report.categoryBug': '버그',
   'report.categoryIdea': '아이디어',

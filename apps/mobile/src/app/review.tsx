@@ -4,7 +4,8 @@ import { useRouter } from 'expo-router';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
-import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
+import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { displayTitle } from '@/domain/item-display';
 import { useBookmarks } from '@/store/bookmarks';
 import type { SuggestedTag } from '@/domain/types';
@@ -13,6 +14,7 @@ interface ReviewItem {
   id: string;
   title: string;
   suggestions: SuggestedTag[];
+  folder: SuggestedFolder | null;
 }
 
 export default function ReviewScreen() {
@@ -21,15 +23,22 @@ export default function ReviewScreen() {
   const router = useRouter();
   const {
     inbox,
+    collections,
     getTagsForBookmark,
     getEnrichment,
     getReviewedSuggestions,
     acceptSuggestedTags,
     markSuggestionsReviewed,
+    assignCollection,
+    createCollection,
     unseenSuggestionIds,
     clearUnseenSuggestions,
   } = useBookmarks();
   const [busy, setBusy] = useState(false);
+  // Folder suggestions have no durable "reviewed" record (accepting one files
+  // the bookmark in, which makes it stop suggesting on its own); a dismissal is
+  // session-only, mirroring the Detail screen. Keyed by bookmark id.
+  const [dismissedFolders, setDismissedFolders] = useState<ReadonlySet<string>>(new Set());
 
   // Entering Review means the user is witnessing every pending suggestion, so
   // clear the "new AI suggestions" markers that drive the Inbox banner. Keyed on
@@ -43,26 +52,40 @@ export default function ReviewScreen() {
   }, [unseenSuggestionIds, clearUnseenSuggestions]);
 
   // Every inbox bookmark that still has at least one high-confidence,
-  // un-applied suggestion — the centralized rule lives in @/domain/ai-suggestions.
+  // un-applied tag suggestion OR a pending folder recommendation — the
+  // centralized rules live in @/domain/ai-suggestions.
   const items = useMemo<ReviewItem[]>(() => {
     const result: ReviewItem[] = [];
     for (const bookmark of inbox) {
+      const enrichment = getEnrichment(bookmark.id);
       const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
       const suggestions = pendingSuggestions(
-        getEnrichment(bookmark.id),
+        enrichment,
         applied,
         getReviewedSuggestions(bookmark.id),
       );
-      if (suggestions.length > 0) {
+      const folder = dismissedFolders.has(bookmark.id)
+        ? null
+        : resolveSuggestedFolder(enrichment, collections, bookmark.collection_id);
+      if (suggestions.length > 0 || folder) {
         result.push({
           id: bookmark.id,
           title: displayTitle(bookmark) ?? t('common.untitled'),
           suggestions,
+          folder,
         });
       }
     }
     return result;
-  }, [inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions, t]);
+  }, [
+    inbox,
+    collections,
+    dismissedFolders,
+    getTagsForBookmark,
+    getEnrichment,
+    getReviewedSuggestions,
+    t,
+  ]);
 
   const accept = (id: string, suggestions: SuggestedTag[]) => {
     setBusy(true);
@@ -78,6 +101,34 @@ export default function ReviewScreen() {
       id,
       suggestions.map((suggestion) => suggestion.name),
     );
+  };
+
+  // File the bookmark into the suggested folder — assigning an existing one, or
+  // creating the proposed name first. Both paths are optimistic; once the
+  // bookmark lives in the folder the suggestion stops surfacing on its own.
+  const acceptFolder = (id: string, folder: SuggestedFolder) => {
+    if (folder.kind === 'existing') {
+      assignCollection(id, folder.id);
+      return;
+    }
+    setBusy(true);
+    void createCollection(folder.name)
+      .then((result) => {
+        if (result.collection) {
+          assignCollection(id, result.collection.id);
+        }
+      })
+      .finally(() => setBusy(false));
+  };
+
+  // Session-dismiss the folder recommendation (re-surfaces on a later enrichment
+  // proposing a different folder).
+  const dismissFolder = (id: string) => {
+    setDismissedFolders((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
   };
 
   if (items.length === 0) {
@@ -107,6 +158,46 @@ export default function ReviewScreen() {
             <Text style={[styles.titleChevron, { color: palette.textSecondary }]}>›</Text>
           </Pressable>
           <View style={styles.chipRow}>
+            {/* Folder recommendation leads the row, set apart by the 📂 prefix
+                and a ✕ dismiss; tag suggestions follow, prefixed with #. */}
+            {item.folder ? (
+              <View style={[styles.folderChip, { borderColor: palette.accent }]}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    item.folder.kind === 'existing'
+                      ? t('review.acceptFolderA11y', {
+                          name: item.folder.name,
+                          title: item.title,
+                        })
+                      : t('review.createFolderA11y', {
+                          name: item.folder.name,
+                          title: item.title,
+                        })
+                  }
+                  disabled={busy}
+                  onPress={() => acceptFolder(item.id, item.folder!)}
+                >
+                  <Text style={[styles.chipLabel, { color: palette.accent }]}>
+                    {item.folder.kind === 'existing'
+                      ? t('review.folderChip', { name: item.folder.name })
+                      : t('review.createFolderChip', { name: item.folder.name })}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t('review.dismissFolderA11y', {
+                    name: item.folder.name,
+                    title: item.title,
+                  })}
+                  disabled={busy}
+                  hitSlop={6}
+                  onPress={() => dismissFolder(item.id)}
+                >
+                  <Text style={[styles.folderDismiss, { color: palette.textSecondary }]}>✕</Text>
+                </Pressable>
+              </View>
+            ) : null}
             {item.suggestions.map((suggestion) => (
               <Pressable
                 key={suggestion.name}
@@ -120,7 +211,7 @@ export default function ReviewScreen() {
                 onPress={() => accept(item.id, [suggestion])}
               >
                 <Text style={[styles.chipLabel, { color: palette.accent }]}>
-                  ＋ {suggestion.name}
+                  {t('review.tagChip', { name: suggestion.name })}
                 </Text>
                 <Text style={[styles.confidence, { color: palette.textSecondary }]}>
                   {t('review.confidence', { percent: Math.round(suggestion.confidence * 100) })}
@@ -128,28 +219,32 @@ export default function ReviewScreen() {
               </Pressable>
             ))}
           </View>
-          <View style={styles.actionRow}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('review.acceptAllA11y', { title: item.title })}
-              disabled={busy}
-              hitSlop={6}
-              onPress={() => accept(item.id, item.suggestions)}
-            >
-              <Text style={[styles.link, { color: palette.accent }]}>{t('review.acceptAll')}</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('review.dismissAllA11y', { title: item.title })}
-              disabled={busy}
-              hitSlop={6}
-              onPress={() => dismiss(item.id, item.suggestions)}
-            >
-              <Text style={[styles.link, { color: palette.textSecondary }]}>
-                {t('review.dismissAll')}
-              </Text>
-            </Pressable>
-          </View>
+          {item.suggestions.length > 0 ? (
+            <View style={styles.actionRow}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('review.acceptAllA11y', { title: item.title })}
+                disabled={busy}
+                hitSlop={6}
+                onPress={() => accept(item.id, item.suggestions)}
+              >
+                <Text style={[styles.link, { color: palette.accent }]}>
+                  {t('review.acceptAll')}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('review.dismissAllA11y', { title: item.title })}
+                disabled={busy}
+                hitSlop={6}
+                onPress={() => dismiss(item.id, item.suggestions)}
+              >
+                <Text style={[styles.link, { color: palette.textSecondary }]}>
+                  {t('review.dismissAll')}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       ))}
     </ScrollView>
@@ -210,6 +305,19 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingVertical: 6,
     paddingHorizontal: 12,
+  },
+  folderChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  folderDismiss: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   chipLabel: {
     fontSize: 14,

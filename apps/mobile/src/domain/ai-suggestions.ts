@@ -6,6 +6,7 @@
  * filter live in exactly one place.
  */
 
+import { collectionMatchKey } from './collection-match.ts';
 import type { AIEnrichment, SuggestedTag } from './types';
 
 /**
@@ -39,6 +40,51 @@ export function pendingSuggestions(
       suggestion.confidence >= SUGGESTION_MIN_CONFIDENCE
     );
   });
+}
+
+/**
+ * The AI's folder (collection) recommendation for a bookmark, resolved against
+ * the user's live collection list. Either an existing collection to *file into*
+ * or a proposed name to *create*. `null` when there's nothing to suggest (no
+ * hint, or the bookmark already lives in the suggested folder).
+ */
+export type SuggestedFolder =
+  | { kind: 'existing'; id: string; name: string }
+  | { kind: 'create'; name: string };
+
+/**
+ * Resolve the AI folder suggestion the same way the Detail screen does: prefer
+ * the edge function's resolved `suggested_collection_id`, fall back to a tolerant
+ * name match against the live collections (so a folder created since the
+ * enrichment ran still counts as "file into" rather than a duplicate "create"),
+ * and otherwise offer to create the proposed name. Returns `null` when the
+ * bookmark already sits in the suggested collection or there's no hint at all.
+ *
+ * Pure so both the Review screen and tests can share one rule.
+ */
+export function resolveSuggestedFolder(
+  enrichment: AIEnrichment | undefined | null,
+  collections: ReadonlyArray<{ id: string; name: string }>,
+  currentCollectionId: string | null,
+): SuggestedFolder | null {
+  if (!enrichment) {
+    return null;
+  }
+  const suggestedByName = enrichment.suggested_collection_name?.trim() || null;
+  const suggestedNameKey = suggestedByName ? collectionMatchKey(suggestedByName) : '';
+  const byId = enrichment.suggested_collection_id
+    ? collections.find((collection) => collection.id === enrichment.suggested_collection_id)
+    : undefined;
+  const byName = suggestedNameKey
+    ? collections.find((collection) => collectionMatchKey(collection.name) === suggestedNameKey)
+    : undefined;
+  const existing = byId ?? byName;
+  if (existing) {
+    return existing.id === currentCollectionId
+      ? null
+      : { kind: 'existing', id: existing.id, name: existing.name };
+  }
+  return suggestedByName ? { kind: 'create', name: suggestedByName } : null;
 }
 
 /**
