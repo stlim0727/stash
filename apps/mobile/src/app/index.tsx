@@ -46,6 +46,7 @@ import {
 } from '@/domain/view-mode';
 import { buildTagCloud, tagCloudFontSize } from '@/domain/tag-cloud';
 import { getPreference, setPreference } from '@/storage/preferences';
+import { trackBreadcrumb } from '@/observability/sentry';
 import { useT } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
@@ -533,7 +534,21 @@ export default function InboxScreen() {
         key={key}
         accessibilityRole="button"
         accessibilityState={{ selected: active }}
-        onPress={() => setFilter(target)}
+        // Diagnostic trail for the "tag-cloud chips go dead after narrowing to a
+        // folder on Android" report: if this breadcrumb is ABSENT when the user
+        // says a chip tap did nothing, the touch never reached JS (a native
+        // hit-test issue with the floating header), not our filter logic. Ids
+        // are opaque UUIDs — no user content. See the cloud-tag tap for a
+        // positive control proving touches still reach the screen.
+        onPress={() => {
+          trackBreadcrumb('browse', 'chip tap', {
+            target: 'id' in target ? `${target.kind}:${target.id}` : target.kind,
+            view: viewMode,
+            cloud: tagCloud.length,
+            header: Math.round(headerHeight),
+          });
+          setFilter(target);
+        }}
         variant={active ? 'selected' : 'default'}
         icon={icon}
       >
@@ -752,6 +767,16 @@ export default function InboxScreen() {
                       // Drill into the tag: apply its filter, then drop back to
                       // cards so the matching bookmarks are immediately visible.
                       onPress={() => {
+                        // Positive control for the dead-chips report: a cloud-tag
+                        // tap and a browse-chip tap sit on the same screen, but
+                        // the cloud tag is inside the scroll body while the chips
+                        // are in the floating header. If, during an incident, this
+                        // breadcrumb appears but 'chip tap' doesn't, touches reach
+                        // the screen and only the header's chips are unhittable.
+                        trackBreadcrumb('browse', 'cloud tag tap', {
+                          view: viewMode,
+                          cloud: tagCloud.length,
+                        });
                         setFilter({ kind: 'tag', id: entry.id });
                         setViewMode('card');
                       }}
