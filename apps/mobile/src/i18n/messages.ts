@@ -283,6 +283,14 @@ export const en = {
   'review.dismissAllA11y': 'Dismiss all suggested tags for {title}',
   'review.goToA11y': 'Go to {title}',
   'review.confidence': '{percent}%',
+  // Chip prefixes that distinguish the two kinds of suggestion at a glance:
+  // 📂 for a folder (collection), # for a tag.
+  'review.tagChip': '#{name}',
+  'review.folderChip': '📂 {name}',
+  'review.createFolderChip': '📂 Create “{name}”',
+  'review.acceptFolderA11y': 'File {title} into {name}',
+  'review.createFolderA11y': 'Create collection {name} and file {title} into it',
+  'review.dismissFolderA11y': 'Dismiss suggested collection {name} for {title}',
 
   // Report a problem.
   'report.categoryBug': 'Bug',

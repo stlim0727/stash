@@ -5,6 +5,7 @@ import {
   addReviewedNames,
   parseReviewedMap,
   pendingSuggestions,
+  resolveSuggestedFolder,
   reviewedNamesFor,
   SUGGESTION_MIN_CONFIDENCE,
 } from './ai-suggestions.ts';
@@ -129,4 +130,51 @@ test('addReviewedNames returns the same reference when nothing is new', () => {
 
 test('addReviewedNames creates an entry for a new bookmark', () => {
   assert.deepEqual(addReviewedNames({}, 'b2', ['React']), { b2: ['react'] });
+});
+
+function makeFolderEnrichment(overrides: Partial<AIEnrichment>): AIEnrichment {
+  return { ...makeEnrichment([]), ...overrides };
+}
+
+const COLLECTIONS = [
+  { id: 'col-recipes', name: 'Recipes' },
+  { id: 'col-watch', name: 'Watch Later' },
+];
+
+test('resolveSuggestedFolder files into the collection resolved by id', () => {
+  const enrichment = makeFolderEnrichment({ suggested_collection_id: 'col-recipes' });
+  assert.deepEqual(resolveSuggestedFolder(enrichment, COLLECTIONS, null), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+  });
+});
+
+test('resolveSuggestedFolder re-matches a name tolerantly when no id resolved', () => {
+  // The edge function left the id null, but the user has a matching folder
+  // (different spacing/case) — file into it rather than offering to create.
+  const enrichment = makeFolderEnrichment({ suggested_collection_name: 'watch-later' });
+  assert.deepEqual(resolveSuggestedFolder(enrichment, COLLECTIONS, null), {
+    kind: 'existing',
+    id: 'col-watch',
+    name: 'Watch Later',
+  });
+});
+
+test('resolveSuggestedFolder offers to create when nothing matches', () => {
+  const enrichment = makeFolderEnrichment({ suggested_collection_name: 'Travel' });
+  assert.deepEqual(resolveSuggestedFolder(enrichment, COLLECTIONS, null), {
+    kind: 'create',
+    name: 'Travel',
+  });
+});
+
+test('resolveSuggestedFolder returns null when already in the suggested folder', () => {
+  const enrichment = makeFolderEnrichment({ suggested_collection_id: 'col-recipes' });
+  assert.equal(resolveSuggestedFolder(enrichment, COLLECTIONS, 'col-recipes'), null);
+});
+
+test('resolveSuggestedFolder returns null with no hint or no enrichment', () => {
+  assert.equal(resolveSuggestedFolder(null, COLLECTIONS, null), null);
+  assert.equal(resolveSuggestedFolder(makeFolderEnrichment({}), COLLECTIONS, null), null);
 });

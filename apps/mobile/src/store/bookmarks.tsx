@@ -40,6 +40,7 @@ import {
   addReviewedNames,
   parseReviewedMap,
   pendingSuggestions,
+  resolveSuggestedFolder,
   reviewedNamesFor,
   type ReviewedSuggestionMap,
 } from '@/domain/ai-suggestions';
@@ -522,9 +523,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Record that an enrichment arrived unwitnessed: flag its bookmark for the
-  // Inbox banner, but only if it actually carries a suggestion the user hasn't
-  // already applied or reviewed (an enrichment that's all summary / already
-  // handled tags is not worth announcing).
+  // Inbox banner, but only if it actually carries a recommendation the user
+  // hasn't already handled — a pending tag suggestion OR a folder suggestion
+  // (matching what makes a bookmark reviewable on the Review screen). An
+  // enrichment that's all summary / already-applied tags isn't worth announcing.
   const noteUnseenSuggestions = useCallback(
     (enrichment: AIEnrichment) => {
       const id = enrichment.bookmark_id;
@@ -533,7 +535,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       const applied = appliedTagNamesRef(id);
       const reviewed = reviewedNamesFor(reviewedSuggestionsRef.current, id);
-      if (pendingSuggestions(enrichment, applied, reviewed).length === 0) {
+      const bookmark = bookmarksRef.current?.find((item) => item.id === id);
+      const hasFolder =
+        resolveSuggestedFolder(
+          enrichment,
+          tagDataRef.current.collections,
+          bookmark?.collection_id ?? null,
+        ) !== null;
+      if (pendingSuggestions(enrichment, applied, reviewed).length === 0 && !hasFolder) {
         return;
       }
       const next = new Set(unseenSuggestionIdsRef.current);

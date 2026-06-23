@@ -480,6 +480,37 @@ test('a background auto enrichment flags the bookmark as an unseen suggestion', 
   expect(fakeRepo.__meta('unseen_ai_suggestions')).toContain(SYNCED_ID);
 });
 
+test('a folder-only auto enrichment (no tags) still flags the bookmark as unseen', async () => {
+  // The model proposed a folder but no high-confidence tags. That's reviewable
+  // on the Review screen, so an unwitnessed arrival must still raise the banner.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) => ({
+    id: 'enrichment-folder',
+    bookmark_id: bookmarkId,
+    user_id: 'user-test',
+    summary: 'Generated summary',
+    topics: [],
+    suggested_tags: [],
+    suggested_collection_id: null,
+    suggested_collection_name: 'Travel',
+    model: 'dummy-v0',
+    status: 'complete',
+    confidence: null,
+    degraded: false,
+    degraded_reason: null,
+    created_at: '2026-06-13T00:00:00.000Z',
+    updated_at: '2026-06-13T00:00:00.000Z',
+  }));
+
+  const store = await renderReady();
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(false);
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+
+  expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(true);
+});
+
 test('a manual enrichment is witnessed, so it is never flagged as unseen', async () => {
   const store = await renderReady();
 

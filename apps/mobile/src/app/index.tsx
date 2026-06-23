@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
-import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
 import { filterBookmarks } from '@/domain/search';
 import { MONOGRAM_COLORS, itemIcon, monogramColorIndex, monogramIcon } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
@@ -229,17 +229,24 @@ export default function InboxScreen() {
         continue;
       }
       const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
-      const pending = pendingSuggestions(
-        getEnrichment(bookmark.id),
-        applied,
-        getReviewedSuggestions(bookmark.id),
-      );
-      if (pending.length > 0) {
+      const enrichment = getEnrichment(bookmark.id);
+      const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
+      // A folder-only recommendation (no pending tags) is reviewable too, so it
+      // must keep the banner up — mirror the Review screen's inclusion rule.
+      const folder = resolveSuggestedFolder(enrichment, collections, bookmark.collection_id);
+      if (pending.length > 0 || folder) {
         count += 1;
       }
     }
     return count;
-  }, [unseenSuggestionIds, inbox, getTagsForBookmark, getEnrichment, getReviewedSuggestions]);
+  }, [
+    unseenSuggestionIds,
+    inbox,
+    collections,
+    getTagsForBookmark,
+    getEnrichment,
+    getReviewedSuggestions,
+  ]);
 
   // Long-press action menu: which bookmark it targets, and whether it's showing
   // the top-level actions or the "move to collection" picker. Null item = closed.
