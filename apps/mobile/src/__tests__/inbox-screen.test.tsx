@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { BackHandler, Linking } from 'react-native';
+import { BackHandler, Linking, Platform } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -538,6 +538,9 @@ test('the tag cloud scopes to the active folder facet', async () => {
 });
 
 test('the hardware back key returns from a drilled-in tag to the tag cloud', async () => {
+  // The handler only registers on Android (where hardware Back exists).
+  const originalOS = Platform.OS;
+  Platform.OS = 'android';
   // Capture the screen's hardwareBackPress handler so we can fire it directly
   // (there is no real device back button in the test environment).
   const handlers: Array<() => boolean> = [];
@@ -597,6 +600,7 @@ test('the hardware back key returns from a drilled-in tag to the tag cloud', asy
     expect(handled).toBe(false);
   } finally {
     addSpy.mockRestore();
+    Platform.OS = originalOS;
   }
 });
 

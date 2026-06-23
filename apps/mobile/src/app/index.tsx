@@ -223,6 +223,13 @@ export default function InboxScreen() {
   const cloudReturnRef = useRef<InboxFilter | null>(null);
   useFocusEffect(
     useCallback(() => {
+      // Hardware Back only exists on Android. Guard the registration there:
+      // react-native-web's BackHandler.addEventListener console.errors on every
+      // call (forwarded to Sentry by the console capture in _layout), and iOS
+      // would register a listener that can never fire.
+      if (Platform.OS !== 'android') {
+        return;
+      }
       const onBack = () => {
         const returnTo = cloudReturnRef.current;
         if (!returnTo) {
