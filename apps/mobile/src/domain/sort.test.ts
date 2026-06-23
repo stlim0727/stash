@@ -4,14 +4,22 @@ import { test } from 'node:test';
 import type { Bookmark } from '@/domain/types';
 import {
   DEFAULT_SORT,
+  SORT_PRESETS,
   describeSort,
   parseSort,
+  sameSort,
   serializeSort,
   sortBookmarks,
   type SortOption,
 } from './sort.ts';
 
-function make(id: string, title: string | null, created_at: string, url: string | null = null): Bookmark {
+function make(
+  id: string,
+  title: string | null,
+  created_at: string,
+  url: string | null = null,
+  last_accessed_at: string | null = null,
+): Bookmark {
   return {
     id,
     user_id: 'u',
@@ -32,6 +40,7 @@ function make(id: string, title: string | null, created_at: string, url: string 
     created_at,
     updated_at: created_at,
     last_saved_at: created_at,
+    last_accessed_at,
     metadata_status: 'complete',
     sync_status: 'synced',
   };
@@ -84,17 +93,51 @@ test('ties break deterministically (newest-first, then id)', () => {
   assert.deepEqual(ids(sortBookmarks([y, x], { field: 'name', dir: 'asc' })), ['x', 'y']);
 });
 
+test('accessed sort orders by last-opened time, newest-opened first', () => {
+  // a (opened Jan 20) > c (opened Jan 10) > b (never opened → falls back to its
+  // save date, Jan 1, so it sinks below the opened ones).
+  const aa = make('a', 'A', '2026-01-03T00:00:00.000Z', null, '2026-01-20T00:00:00.000Z');
+  const bb = make('b', 'B', '2026-01-01T00:00:00.000Z');
+  const cc = make('c', 'C', '2026-01-02T00:00:00.000Z', null, '2026-01-10T00:00:00.000Z');
+  assert.deepEqual(ids(sortBookmarks([bb, aa, cc], { field: 'accessed', dir: 'desc' })), ['a', 'c', 'b']);
+  // Ascending = least-recently-opened first.
+  assert.deepEqual(ids(sortBookmarks([bb, aa, cc], { field: 'accessed', dir: 'asc' })), ['b', 'c', 'a']);
+});
+
+test('accessed sort falls back to created_at when never opened', () => {
+  // Neither opened → ordered purely by save date (newest-saved first on desc).
+  const older = make('o', 'O', '2026-01-01T00:00:00.000Z');
+  const newer = make('n', 'N', '2026-01-05T00:00:00.000Z');
+  assert.deepEqual(ids(sortBookmarks([older, newer], { field: 'accessed', dir: 'desc' })), ['n', 'o']);
+});
+
 test('describeSort labels each option', () => {
   assert.equal(describeSort({ field: 'date', dir: 'desc' }), 'Newest');
   assert.equal(describeSort({ field: 'date', dir: 'asc' }), 'Oldest');
+  assert.equal(describeSort({ field: 'accessed', dir: 'desc' }), 'Recently opened');
+  assert.equal(describeSort({ field: 'accessed', dir: 'asc' }), 'Least recently opened');
   assert.equal(describeSort({ field: 'name', dir: 'asc' }), 'Name A–Z');
   assert.equal(describeSort({ field: 'name', dir: 'desc' }), 'Name Z–A');
+});
+
+test('SORT_PRESETS are unique and the default is among them', () => {
+  const seen = new Set(SORT_PRESETS.map(serializeSort));
+  assert.equal(seen.size, SORT_PRESETS.length);
+  assert.ok(SORT_PRESETS.some((option) => sameSort(option, DEFAULT_SORT)));
+});
+
+test('sameSort compares field and direction', () => {
+  assert.ok(sameSort({ field: 'date', dir: 'desc' }, { field: 'date', dir: 'desc' }));
+  assert.ok(!sameSort({ field: 'date', dir: 'desc' }, { field: 'date', dir: 'asc' }));
+  assert.ok(!sameSort({ field: 'date', dir: 'asc' }, { field: 'accessed', dir: 'asc' }));
 });
 
 test('serialize/parse round-trips and falls back to default', () => {
   const opts: SortOption[] = [
     { field: 'date', dir: 'desc' },
     { field: 'date', dir: 'asc' },
+    { field: 'accessed', dir: 'desc' },
+    { field: 'accessed', dir: 'asc' },
     { field: 'name', dir: 'asc' },
     { field: 'name', dir: 'desc' },
   ];

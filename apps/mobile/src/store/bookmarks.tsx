@@ -144,6 +144,12 @@ interface BookmarksContextValue {
   emptyTrash: () => void;
   /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
   updateBookmarkFields: (id: string, fields: { title?: string; notes?: string }) => void;
+  /**
+   * Record that the user opened a bookmark (viewed Detail or opened its link),
+   * setting its local-only `last_accessed_at`. Powers the "Recently opened"
+   * sort. Never synced and never bumps `updated_at`.
+   */
+  markBookmarkAccessed: (id: string) => void;
   /** Permanently remove a bookmark and any pending queue entry for it. */
   deleteBookmark: (id: string) => void;
   /** True while the background sync service is uploading queue entries. */
@@ -1193,6 +1199,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [enqueueMutation],
   );
 
+  // Record that the user just opened a bookmark (viewed its Detail or opened its
+  // link), powering the "Recently opened" Inbox sort. Deliberately NOT routed
+  // through applyBookmarkUpdate: last_accessed_at is a local-only field, so this
+  // must not flip sync_status, enqueue a sync mutation, or bump updated_at (which
+  // would wrongly re-send the row on the next sync). Just patch in memory and
+  // persist locally, fire-and-forget.
+  const markBookmarkAccessed = useCallback((id: string) => {
+    let updated: Bookmark | null = null;
+    setBookmarks((current) => {
+      if (current === null) {
+        return current;
+      }
+      return current.map((bookmark) => {
+        if (bookmark.id !== id) {
+          return bookmark;
+        }
+        updated = { ...bookmark, last_accessed_at: new Date().toISOString() };
+        return updated;
+      });
+    });
+    if (updated) {
+      ensureRepositoryReady()
+        .then(() => repository.updateBookmark(updated as Bookmark))
+        .catch((error) => logStorageError('bookmark access', error));
+    }
+  }, []);
+
   const trashBookmark = useCallback(
     (id: string) => applyBookmarkUpdate(id, { deleted_at: new Date().toISOString() }),
     [applyBookmarkUpdate],
@@ -1982,6 +2015,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       restoreBookmark,
       emptyTrash,
       updateBookmarkFields,
+      markBookmarkAccessed,
       deleteBookmark,
       isSyncing,
       syncNow,
@@ -2017,6 +2051,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       restoreBookmark,
       emptyTrash,
       updateBookmarkFields,
+      markBookmarkAccessed,
       deleteBookmark,
       isSyncing,
       syncNow,

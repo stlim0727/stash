@@ -47,6 +47,7 @@ export default function BookmarkDetailScreen() {
     trashBookmark,
     restoreBookmark,
     updateBookmarkFields,
+    markBookmarkAccessed,
     deleteBookmark,
     collections,
     addTagsToBookmark,
@@ -124,6 +125,13 @@ export default function BookmarkDetailScreen() {
       markSuggestionsSeen(id);
     }
   }, [id, reportEnrichment, markSuggestionsSeen]);
+  // Viewing a bookmark's Detail counts as opening it — record the access so the
+  // "Recently opened" Inbox sort reflects it. Once per id (a re-open remounts).
+  useEffect(() => {
+    if (id) {
+      markBookmarkAccessed(id);
+    }
+  }, [id, markBookmarkAccessed]);
   useEffect(() => {
     if (!reportEnrichment?.degraded) {
       return;
@@ -385,6 +393,7 @@ export default function BookmarkDetailScreen() {
 
   const handleOpenLink = () => {
     if (bookmark.url) {
+      markBookmarkAccessed(bookmark.id);
       void Linking.openURL(bookmark.url).catch(() => {
         setOrganizeError(t('detail.errorOpen'));
       });

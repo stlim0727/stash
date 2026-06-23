@@ -59,6 +59,14 @@ export interface Bookmark {
   updated_at: string;
   /** Last time the user attempted to save this content. */
   last_saved_at: string;
+  /**
+   * Local-only ISO timestamp of the last time the user opened this bookmark —
+   * either viewing its Detail screen or opening its link. Drives the "Recently
+   * opened" Inbox sort. Null/absent until first opened (and for rows captured
+   * before this field existed); never sent to the cloud. Optional so existing
+   * rows and remote-mapped rows need no migration.
+   */
+  last_accessed_at?: string | null;
   metadata_status: MetadataStatus;
   /** Local-only field while the bookmark lives on device. */
   sync_status: SyncStatus;
