@@ -126,6 +126,10 @@ export class ClaudeChatProvider implements ChatProvider {
           // enough, then kicks in automatically.)
           system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
           tools: tools.length > 0 ? toAnthropicTools(tools) : undefined,
+          // One tool call per turn so the confirm-before-acting pause is always
+          // 1:1 — a mutating call never shares a batch with calls left unresolved
+          // while we wait on the user (which the next request would reject).
+          tool_choice: tools.length > 0 ? { type: 'auto', disable_parallel_tool_use: true } : undefined,
           messages: toAnthropicMessages(transcript),
         }),
         signal: controller.signal,

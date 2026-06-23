@@ -405,6 +405,14 @@ export default function SettingsScreen() {
         <Row
           styles={styles}
           palette={palette}
+          icon="chatbubbles-outline"
+          label={t('settings.chat.label')}
+          value={t('settings.chat.value')}
+          onPress={() => router.push('/chat')}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
           icon="sparkles-outline"
           label={t('settings.review.label')}
           value={

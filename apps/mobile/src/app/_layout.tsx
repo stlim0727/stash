@@ -46,6 +46,7 @@ function RootStack() {
       <Stack.Screen name="settings" options={{ title: t('nav.settings') }} />
       <Stack.Screen name="account" options={{ title: t('nav.account'), presentation: 'modal' }} />
       <Stack.Screen name="review" options={{ title: t('nav.review') }} />
+      <Stack.Screen name="chat" options={{ title: t('nav.chat') }} />
       <Stack.Screen name="report" options={{ title: t('nav.report') }} />
       <Stack.Screen name="api-keys" options={{ title: t('nav.apiKeys') }} />
       <Stack.Screen name="trash" options={{ title: t('nav.trash') }} />

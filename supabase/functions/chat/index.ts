@@ -113,6 +113,7 @@ function buildSystemPrompt(): string {
     'tags, or collection names — read them with the list/search tools first.',
     'For any action that changes the library, the system will ask the user to confirm before it',
     'runs, so propose the action plainly and let the confirmation happen.',
+    'Use at most one tool at a time and wait for its result before the next.',
     'Be concise. When you have enough information to answer, answer.',
   ].join(' ');
 }
