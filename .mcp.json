@@ -2,7 +2,7 @@
   "mcpServers": {
     "gemini-composio": {
       "type": "http",
-      "url": "${GEMINI_COMPOSIO_MCP_URL}"
+      "url": "${GEMINI_COMPOSIO_MCP_URL:-https://gemini-composio-unset.invalid/mcp}"
     }
   }
 }
