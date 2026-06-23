@@ -106,7 +106,18 @@ export async function pullRemoteChanges(
     }
     const local = localById.get(remote.id);
     if (!local || remote.updated_at > local.updated_at) {
-      upserts.push(remote);
+      // Carry over device-only fields the remote row can't carry (they're never
+      // sent to the cloud), so a pull that overwrites a locally-opened row
+      // doesn't erase its last-opened time or captured-image URI.
+      upserts.push(
+        local
+          ? {
+              ...remote,
+              last_accessed_at: local.last_accessed_at,
+              local_image_uri: local.local_image_uri,
+            }
+          : remote,
+      );
     }
   }
 

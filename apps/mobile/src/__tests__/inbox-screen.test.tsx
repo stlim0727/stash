@@ -353,8 +353,8 @@ test('cards show inline collection and tag metadata', async () => {
   expect(screen.getAllByText('#design').length).toBeGreaterThan(0);
 });
 
-test('the sort control reorders the Inbox by date and name', async () => {
-  // Title order disagrees with date order so each toggle is observable:
+test('the sort menu reorders the Inbox by date and name', async () => {
+  // Title order disagrees with date order so each choice is observable:
   // 'apple' is the newest, 'Zebra' is the oldest.
   fakeRepo.__reset([
     makeStoredBookmark({
@@ -375,15 +375,18 @@ test('the sort control reorders the Inbox by date and name', async () => {
   const titles = () =>
     screen.getAllByTestId('inbox-card-title').map((node) => node.props.children);
 
-  // Default: newest-first by date → apple (Jan 3) before Zebra (Jan 1).
+  // Default: newest-first by date → apple (Jan 3) before Zebra (Jan 1). The
+  // sort pill shows the friendly active-order label.
   expect(titles()).toEqual(['apple', 'Zebra']);
 
-  // Flip direction → oldest-first by date → Zebra before apple.
-  await fireEvent.press(screen.getByText('↓ Desc'));
+  // Open the sort menu (pill labeled "Newest") and pick "Oldest" → oldest-first.
+  await fireEvent.press(screen.getByText('Newest'));
+  await fireEvent.press(screen.getByText('Oldest'));
   expect(titles()).toEqual(['Zebra', 'apple']);
 
-  // Switch field to Name (still ascending) → case-insensitive A–Z.
-  await fireEvent.press(screen.getByText('Newest'));
+  // Reopen (pill now labeled "Oldest") and pick "Name A–Z" → case-insensitive.
+  await fireEvent.press(screen.getByText('Oldest'));
+  await fireEvent.press(screen.getByText('Name A–Z'));
   expect(titles()).toEqual(['apple', 'Zebra']);
 });
 

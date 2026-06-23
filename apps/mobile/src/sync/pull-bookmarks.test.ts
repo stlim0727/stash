@@ -143,6 +143,35 @@ test('pull applies last-write-wins by updated_at', async () => {
   assert.equal(loses.upserts.length, 0);
 });
 
+test('a winning remote upsert preserves device-only fields from the local row', async () => {
+  const { repository } = fakeRepository();
+  // Local row was opened on this device (last_accessed_at) and the remote copy
+  // was edited elsewhere (newer updated_at) — the remote has no notion of either
+  // device-only field, so the upsert must carry them over rather than erase them.
+  const local = makeBookmark({
+    updated_at: '2026-06-12T00:00:00.000Z',
+    last_accessed_at: '2026-06-13T09:00:00.000Z',
+    local_image_uri: 'file:///stash-images/x.jpg',
+  });
+  const remote = makeBookmark({
+    updated_at: '2026-06-12T01:00:00.000Z',
+    last_accessed_at: undefined,
+    local_image_uri: undefined,
+    title: 'Edited elsewhere',
+  });
+  const api = fakeApi({
+    listBookmarksUpdatedSince: async () => [remote],
+    listBookmarkIds: async () => [remote.id],
+  });
+
+  const result = await pullRemoteChanges(api, repository, () => [local], () => false);
+
+  assert.equal(result.upserts.length, 1);
+  assert.equal(result.upserts[0]?.title, 'Edited elsewhere');
+  assert.equal(result.upserts[0]?.last_accessed_at, '2026-06-13T09:00:00.000Z');
+  assert.equal(result.upserts[0]?.local_image_uri, 'file:///stash-images/x.jpg');
+});
+
 test('pull never overwrites or deletes rows with queued local work', async () => {
   const { calls, repository } = fakeRepository();
   const local = makeBookmark({ updated_at: '2026-06-12T00:00:00.000Z' });

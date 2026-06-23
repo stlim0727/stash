@@ -31,7 +31,9 @@ import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domai
 import {
   DEFAULT_SORT,
   INBOX_SORT_PREF_KEY,
+  SORT_PRESETS,
   parseSort,
+  sameSort,
   serializeSort,
   sortBookmarks,
   type SortOption,
@@ -85,6 +87,24 @@ const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   card: 'viewMode.card',
   list: 'viewMode.list',
   cloud: 'viewMode.cloud',
+};
+
+// Friendly label + icon for each sort preset, keyed by its serialized form.
+// Phrasing each order as a whole choice ("Newest", "Recently opened") reads
+// kinder than a field pill plus an abstract ascending/descending toggle.
+const SORT_LABEL_KEY: Record<string, MessageKey> = {
+  'date:desc': 'inbox.sortNewest',
+  'date:asc': 'inbox.sortOldest',
+  'accessed:desc': 'inbox.sortRecentlyOpened',
+  'accessed:asc': 'inbox.sortLeastRecentlyOpened',
+  'name:asc': 'inbox.sortNameAsc',
+  'name:desc': 'inbox.sortNameDesc',
+};
+
+const SORT_ICON: Record<SortOption['field'], ComponentProps<typeof Ionicons>['name']> = {
+  date: 'calendar-outline',
+  accessed: 'time-outline',
+  name: 'text-outline',
 };
 
 /**
@@ -185,10 +205,12 @@ export default function InboxScreen() {
     trashBookmark,
     deleteBookmark,
     assignCollection,
+    markBookmarkAccessed,
   } = useBookmarks();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
 
   // How many inbox bookmarks have AI suggestions that arrived while the user
@@ -481,6 +503,7 @@ export default function InboxScreen() {
         icon: 'open-outline',
         onPress: () => {
           closeMenu();
+          markBookmarkAccessed(item.id);
           void Linking.openURL(item.url!).catch(() => {});
         },
       });
@@ -515,7 +538,7 @@ export default function InboxScreen() {
       },
     });
     return actions;
-  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, closeMenu, t]);
+  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, markBookmarkAccessed, closeMenu, t]);
 
   const menuTitle =
     menuMode === 'move'
@@ -666,31 +689,15 @@ export default function InboxScreen() {
           <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>{t('inbox.browse')}</Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={t('inbox.sortFieldA11y', {
-              field: t(sort.field === 'date' ? 'inbox.sortFieldDate' : 'inbox.sortFieldName'),
-            })}
-            onPress={() => setSort((s) => ({ ...s, field: s.field === 'date' ? 'name' : 'date' }))}
+            accessibilityLabel={t('inbox.sortA11y', { label: t(SORT_LABEL_KEY[serializeSort(sort)]) })}
+            onPress={() => setSortMenuOpen(true)}
             style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
           >
+            <Ionicons name={SORT_ICON[sort.field]} size={15} color={palette.textSecondary} />
             <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-              {sort.field === 'date' ? t('inbox.sortNewest') : t('inbox.sortName')}
+              {t(SORT_LABEL_KEY[serializeSort(sort)])}
             </Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('inbox.sortDirectionA11y', {
-              direction: t(
-                sort.dir === 'asc'
-                  ? 'inbox.sortDirectionAscending'
-                  : 'inbox.sortDirectionDescending',
-              ),
-            })}
-            onPress={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
-            style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
-          >
-            <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-              {sort.dir === 'asc' ? t('inbox.sortAsc') : t('inbox.sortDesc')}
-            </Text>
+            <Ionicons name="chevron-down" size={14} color={palette.textSecondary} />
           </Pressable>
           <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
             {VIEW_MODES.map((mode) => {
@@ -855,6 +862,7 @@ export default function InboxScreen() {
             router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
           const openLink = () => {
             if (item.url) {
+              markBookmarkAccessed(item.id);
               void Linking.openURL(item.url).catch(() => {});
             }
           };
@@ -1004,6 +1012,21 @@ export default function InboxScreen() {
         actions={menuActions}
         onClose={closeMenu}
       />
+      <ActionSheet
+        visible={sortMenuOpen}
+        title={t('inbox.sortMenuTitle')}
+        actions={SORT_PRESETS.map((option) => ({
+          key: serializeSort(option),
+          label: t(SORT_LABEL_KEY[serializeSort(option)]),
+          icon: SORT_ICON[option.field],
+          selected: sameSort(option, sort),
+          onPress: () => {
+            setSort(option);
+            setSortMenuOpen(false);
+          },
+        }))}
+        onClose={() => setSortMenuOpen(false)}
+      />
     </View>
   );
 }
@@ -1146,6 +1169,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   sortPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
     paddingVertical: 7,

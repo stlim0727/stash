@@ -144,6 +144,12 @@ interface BookmarksContextValue {
   emptyTrash: () => void;
   /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
   updateBookmarkFields: (id: string, fields: { title?: string; notes?: string }) => void;
+  /**
+   * Record that the user opened a bookmark (viewed Detail or opened its link),
+   * setting its local-only `last_accessed_at`. Powers the "Recently opened"
+   * sort. Never synced and never bumps `updated_at`.
+   */
+  markBookmarkAccessed: (id: string) => void;
   /** Permanently remove a bookmark and any pending queue entry for it. */
   deleteBookmark: (id: string) => void;
   /** True while the background sync service is uploading queue entries. */
@@ -1193,6 +1199,30 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [enqueueMutation],
   );
 
+  // Record that the user just opened a bookmark (viewed its Detail or opened its
+  // link), powering the "Recently opened" Inbox sort. Deliberately NOT routed
+  // through applyBookmarkUpdate: last_accessed_at is a local-only field, so this
+  // must not flip sync_status, enqueue a sync mutation, or bump updated_at (which
+  // would wrongly re-send the row on the next sync). Just patch in memory and
+  // persist locally, fire-and-forget.
+  const markBookmarkAccessed = useCallback((id: string) => {
+    // Build the updated row from the ref, not inside the setBookmarks updater:
+    // the functional updater isn't guaranteed to run synchronously, so reading a
+    // value it assigned would race the durable write below and could skip it,
+    // leaving last_accessed_at lost after a reload.
+    const existing = bookmarksRef.current?.find((bookmark) => bookmark.id === id);
+    if (!existing) {
+      return;
+    }
+    const updated: Bookmark = { ...existing, last_accessed_at: new Date().toISOString() };
+    setBookmarks((current) =>
+      current === null ? current : current.map((bookmark) => (bookmark.id === id ? updated : bookmark)),
+    );
+    ensureRepositoryReady()
+      .then(() => repository.updateBookmark(updated))
+      .catch((error) => logStorageError('bookmark access', error));
+  }, []);
+
   const trashBookmark = useCallback(
     (id: string) => applyBookmarkUpdate(id, { deleted_at: new Date().toISOString() }),
     [applyBookmarkUpdate],
@@ -1982,6 +2012,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       restoreBookmark,
       emptyTrash,
       updateBookmarkFields,
+      markBookmarkAccessed,
       deleteBookmark,
       isSyncing,
       syncNow,
@@ -2017,6 +2048,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       restoreBookmark,
       emptyTrash,
       updateBookmarkFields,
+      markBookmarkAccessed,
       deleteBookmark,
       isSyncing,
       syncNow,
