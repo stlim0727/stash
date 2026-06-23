@@ -81,10 +81,9 @@ model output.
 
 ## TODO (before production)
 
-- **`create_bookmark` dedup**: `index.ts` stores `url_hash = url` directly; it
-  must canonicalize (tracking-param stripping) to match `public-api` /
-  `api/bookmarks.ts` so the chatbot and the app agree on duplicates. Consider
-  factoring `canonicalizeUrl` into a shared module both functions import.
+- ~~**`create_bookmark` dedup**~~: done — `url_hash = canonicalizeUrl(url)` via
+  the shared `../_shared/urls.ts` (now used by `public-api` too), plus an
+  active-URL dedup lookup that reuses the existing row. (#184)
 - ~~**`add_tags` executor**~~: done — ports `public-api`'s find-or-create tag +
   `bookmark_tags` merge-duplicates upsert; `create_bookmark` now applies its
   `tags` too. (#183)

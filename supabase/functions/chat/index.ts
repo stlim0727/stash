@@ -19,6 +19,7 @@ import type { Decision, ToolCall, ToolResult, Turn } from './chat-protocol.ts';
 import type { ChatProvider } from './chat-provider.ts';
 import { ClaudeChatProvider } from './claude-chat-provider.ts';
 import { GeminiChatProvider } from './gemini-chat-provider.ts';
+import { canonicalizeUrl, normalizeUrl } from '../_shared/urls.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -245,14 +246,39 @@ function makeExecutor(userId: string): ToolExecutor {
           return ok(call, { tags: await res.json() });
         }
         case 'create_bookmark': {
-          const url = str(call.input, 'url');
+          const rawUrl = str(call.input, 'url');
+          const url = rawUrl ? normalizeUrl(rawUrl) : null;
+          if (rawUrl && !url) return err(call, 'that does not look like a valid URL');
           const sharedText = str(call.input, 'shared_text');
           if (!url && !sharedText) return err(call, 'url or shared_text is required');
+          // Dedupe on the canonical url_hash, the same key the app and public-api
+          // use, so re-saving a tracked variant reuses the existing row.
+          const urlHash = url ? canonicalizeUrl(url) : null;
           const ts = nowIso();
+          if (urlHash) {
+            const dup = await db(
+              'GET',
+              `bookmarks?user_id=eq.${userId}&url_hash=eq.${encodeURIComponent(urlHash)}&is_archived=eq.false&select=id&limit=1`,
+            );
+            if (dup.ok) {
+              const rows: Array<{ id: string }> = await dup.json();
+              if (rows[0]) {
+                await db('PATCH', `bookmarks?id=eq.${rows[0].id}&user_id=eq.${userId}`, {
+                  last_saved_at: ts,
+                  updated_at: ts,
+                });
+                let added: string[] = [];
+                if (Array.isArray(call.input.tags)) {
+                  added = await addTagsToBookmark(userId, rows[0].id, call.input.tags);
+                }
+                return ok(call, { bookmark_id: rows[0].id, status: 'duplicate', tags: added });
+              }
+            }
+          }
           const res = await db('POST', 'bookmarks', {
             user_id: userId,
             url,
-            url_hash: url, // NOTE: should canonicalize to match public-api dedup — see README.
+            url_hash: urlHash,
             title: str(call.input, 'title'),
             notes: str(call.input, 'notes'),
             description: sharedText,
