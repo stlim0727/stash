@@ -89,9 +89,10 @@ model output.
   `tags` too. (#183)
 - **Streaming**: replies are returned whole. For a chat UX, stream tokens (SSE)
   — the adapters would expose a streaming `complete`.
-- **Prompt caching**: enable provider caching on the system prompt + tool
-  schemas (Anthropic `cache_control`; Gemini context caching) — the main cost
-  lever at scale.
+- ~~**Prompt caching**~~: done for Claude — `cache_control` breakpoint on the
+  system block caches tools+system (kicks in once the prefix passes the
+  per-model minimum). Gemini Flash applies *implicit* caching automatically; an
+  explicit `CachedContent` resource is a later optimization. (#188)
 - **Clients**: a chat screen in `apps/mobile` and the separate web chat both
   consume this endpoint and own the confirm UI.
 - **Rate limiting**: reuse / extend the `ai-enrich` per-user slot limiter — an

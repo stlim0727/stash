@@ -117,9 +117,14 @@ export class ClaudeChatProvider implements ChatProvider {
         body: JSON.stringify({
           model: this.model,
           max_tokens: this.maxTokens,
-          system,
-          // System prompt + tool definitions are a stable prefix; caching them
-          // is the main cost lever for an agentic loop at scale.
+          // System prompt + tool definitions are a stable prefix that is resent
+          // on every model round-trip; a cache_control breakpoint on the system
+          // block caches tools+system together (tools render first), which is
+          // the main cost lever for an agentic loop at scale. (Anthropic only
+          // caches prefixes above a per-model minimum — ~4096 tokens on Haiku —
+          // so this is a no-op until the tool set / system prompt is large
+          // enough, then kicks in automatically.)
+          system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
           tools: tools.length > 0 ? toAnthropicTools(tools) : undefined,
           messages: toAnthropicMessages(transcript),
         }),
