@@ -27,5 +27,5 @@ create policy "anyone can read app_config"
 
 -- Seed the initial minimum version.
 insert into public.app_config (key, value)
-  values ('min_app_version', '0.2.0')
+  values ('min_app_version', '0.2.1')
   on conflict (key) do nothing;
