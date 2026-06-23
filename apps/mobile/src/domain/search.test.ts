@@ -28,7 +28,7 @@ function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     metadata_status: 'complete',
     sync_status: 'synced',
     ...overrides,
-  };
+  } as Bookmark;
 }
 
 const corpus = [

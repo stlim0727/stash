@@ -49,6 +49,7 @@ export interface UpdateBookmarkInput {
   notes?: string | null;
   collection_id?: string | null;
   is_archived?: boolean;
+  deleted_at?: string | null;
   // Generated metadata, pushed by sync once on-device enrichment completes so
   // other devices see the enriched title/site/favicon rather than the bare
   // create-time payload.

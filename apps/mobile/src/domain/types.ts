@@ -53,6 +53,8 @@ export interface Bookmark {
   site_name: string | null;
   collection_id: string | null;
   is_archived: boolean;
+  /** ISO timestamp when this bookmark was moved to the trash. Null = active. */
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
   /** Last time the user attempted to save this content. */

@@ -31,7 +31,7 @@ function bookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     metadata_status: 'complete',
     sync_status: 'synced',
     ...overrides,
-  };
+  } as Bookmark;
 }
 
 test('first sync has nothing to reconcile', () => {

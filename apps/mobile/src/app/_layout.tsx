@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ShareIntentProvider } from 'expo-share-intent';
@@ -7,11 +8,14 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { I18nProvider, useT } from '@/i18n';
 import { initSentry, wrapWithSentry } from '@/observability/sentry';
 import { installConsoleCapture } from '@/observability/log-buffer';
+import { compareSemver } from '@/domain/version';
 import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
+import { useMinAppVersion } from '@/supabase/use-min-app-version';
 import { CaptureToastProvider } from '@/ui/capture-toast';
+import { UpdateRequired } from '@/ui/UpdateRequired';
 
 // Capture console output into an in-memory buffer so the "Report a problem"
 // screen can attach real logs. Install before anything else so early errors
@@ -27,6 +31,13 @@ initSentry();
 // provider) and translate the Stack header titles.
 function RootStack() {
   const t = useT();
+  const minVersion = useMinAppVersion();
+  const appVersion = Constants.expoConfig?.version ?? '0.0.0';
+
+  if (minVersion !== null && compareSemver(appVersion, minVersion) < 0) {
+    return <UpdateRequired />;
+  }
+
   return (
     <Stack>
       <Stack.Screen name="index" options={{ headerShown: false }} />
@@ -37,7 +48,7 @@ function RootStack() {
       <Stack.Screen name="review" options={{ title: t('nav.review') }} />
       <Stack.Screen name="report" options={{ title: t('nav.report') }} />
       <Stack.Screen name="api-keys" options={{ title: t('nav.apiKeys') }} />
-      <Stack.Screen name="archived" options={{ title: t('nav.archived') }} />
+      <Stack.Screen name="trash" options={{ title: t('nav.trash') }} />
       <Stack.Screen name="bookmark/[id]" options={{ title: t('nav.bookmark') }} />
     </Stack>
   );

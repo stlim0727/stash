@@ -28,7 +28,7 @@ function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     metadata_status: 'pending',
     sync_status: 'pending',
     ...overrides,
-  };
+  } as Bookmark;
 }
 
 test('deriveMetadata builds title and site from the URL', () => {

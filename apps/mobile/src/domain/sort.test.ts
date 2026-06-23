@@ -28,6 +28,7 @@ function make(id: string, title: string | null, created_at: string, url: string 
     site_name: null,
     collection_id: null,
     is_archived: false,
+    deleted_at: null,
     created_at,
     updated_at: created_at,
     last_saved_at: created_at,

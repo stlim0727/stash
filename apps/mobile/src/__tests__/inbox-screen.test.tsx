@@ -537,7 +537,7 @@ test('blank-named tags and collections do not produce empty filter chips', async
   expect(screen.queryByRole('button', { name: '#   ' })).toBeNull();
 });
 
-test('long-pressing an inbox card opens the action menu and Archive removes the item', async () => {
+test('long-pressing an inbox card opens the action menu and Move to Trash removes the item', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-000000000061',
@@ -554,11 +554,10 @@ test('long-pressing an inbox card opens the action menu and Archive removes the 
   await fireEvent(screen.getByTestId('inbox-card-title'), 'longPress');
   expect(screen.getByText('Open link')).toBeTruthy();
   expect(screen.getByText('Move to collection…')).toBeTruthy();
-  expect(screen.getByText('Archive')).toBeTruthy();
-  expect(screen.getByText('Delete')).toBeTruthy();
+  expect(screen.getByText('Move to Trash')).toBeTruthy();
 
-  // Archiving files it away, so it drops out of the (non-archived) Inbox.
-  await fireEvent.press(screen.getByText('Archive'));
+  // Moving to trash files it away, so it drops out of the (non-archived) Inbox.
+  await fireEvent.press(screen.getByText('Move to Trash'));
   await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
 });
 
@@ -578,7 +577,7 @@ test('long-pressing the preview image (not just the title) opens the action menu
 
   // The whole card (image included) is the long-press target, not only the title.
   await fireEvent(screen.getByTestId('inbox-card-preview'), 'longPress');
-  expect(screen.getByText('Archive')).toBeTruthy();
+  expect(screen.getByText('Move to Trash')).toBeTruthy();
 });
 
 test('the action menu Open link opens the bookmark URL', async () => {

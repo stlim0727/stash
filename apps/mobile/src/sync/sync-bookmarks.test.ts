@@ -29,13 +29,14 @@ function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     site_name: null,
     collection_id: null,
     is_archived: false,
+    deleted_at: null,
     created_at: now,
     updated_at: now,
     last_saved_at: now,
     metadata_status: 'pending',
     sync_status: 'pending',
     ...overrides,
-  };
+  } as Bookmark;
 }
 
 function makeCreateEntry(overrides: Partial<LocalPendingBookmark> = {}): LocalPendingBookmark {
@@ -210,6 +211,7 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
       notes: 'edited after enqueue',
       collection_id: null,
       is_archived: true,
+      deleted_at: null,
       // Generated metadata rides along so enrichment reaches the cloud.
       site_name: 'example.com',
       favicon_url: 'https://example.com/favicon.ico',

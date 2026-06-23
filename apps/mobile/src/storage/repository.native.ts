@@ -9,6 +9,7 @@ interface BookmarkRow {
   data: string;
   created_at: string;
   is_archived: number;
+  deleted_at: string | null;
 }
 
 interface QueueRow {
@@ -92,7 +93,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         id TEXT PRIMARY KEY,
         data TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        is_archived INTEGER NOT NULL DEFAULT 0
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        deleted_at TEXT DEFAULT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_bookmarks_created_at ON bookmarks (created_at);
       CREATE TABLE IF NOT EXISTS tag_data (
@@ -128,6 +130,13 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       // Column already exists.
     }
 
+    // Databases created before the trash feature lack the deleted_at column.
+    try {
+      await db.execAsync('ALTER TABLE bookmarks ADD COLUMN deleted_at TEXT DEFAULT NULL');
+    } catch {
+      // Column already exists.
+    }
+
     const seeded = await db.getFirstAsync<{ value: string }>(
       "SELECT value FROM meta WHERE key = 'seeded'",
     );
@@ -156,8 +165,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   async insertBookmark(bookmark: Bookmark): Promise<void> {
     const db = await this.open();
     await db.runAsync(
-      'INSERT OR REPLACE INTO bookmarks (id, data, created_at, is_archived) VALUES (?, ?, ?, ?)',
-      [bookmark.id, JSON.stringify(bookmark), bookmark.created_at, bookmark.is_archived ? 1 : 0],
+      'INSERT OR REPLACE INTO bookmarks (id, data, created_at, is_archived, deleted_at) VALUES (?, ?, ?, ?, ?)',
+      [bookmark.id, JSON.stringify(bookmark), bookmark.created_at, bookmark.is_archived ? 1 : 0, bookmark.deleted_at ?? null],
     );
   }
 

@@ -34,7 +34,7 @@ function make(overrides: Partial<Bookmark> = {}): Bookmark {
     metadata_status: 'complete',
     sync_status: 'synced',
     ...overrides,
-  };
+  } as Bookmark;
 }
 
 test('uses the favicon when present', () => {

@@ -36,7 +36,7 @@ function bookmark(overrides: Partial<Bookmark> = {}): Bookmark {
     metadata_status: 'complete',
     sync_status: 'synced',
     ...overrides,
-  };
+  } as Bookmark;
 }
 
 function tag(name: string, overrides: Partial<Tag> = {}): Tag {

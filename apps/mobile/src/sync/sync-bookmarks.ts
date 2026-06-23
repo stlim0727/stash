@@ -86,6 +86,7 @@ export async function syncQueueEntry(
         notes: bookmark.notes,
         collection_id: bookmark.collection_id,
         is_archived: bookmark.is_archived,
+        deleted_at: bookmark.deleted_at,
         // Push generated metadata so enrichment done on this device reaches
         // the cloud (and, via pull, other devices).
         site_name: bookmark.site_name,

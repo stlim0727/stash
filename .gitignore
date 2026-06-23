@@ -27,3 +27,4 @@ pnpm-debug.log*
 
 # Downloaded fonts for scripts/generate-wordmark.mjs
 scripts/.wordmark-cache/
+.claude/worktrees/

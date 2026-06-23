@@ -107,7 +107,7 @@ test('invalid input is rejected with a message and saves nothing', async () => {
   expect(result.current.inbox).toHaveLength(0);
 });
 
-test('archiving moves a bookmark from inbox to archived and back', async () => {
+test('trashing moves a bookmark from inbox to trash and back', async () => {
   const { result } = await renderStore();
   await act(async () => {
     result.current.addBookmark({ url: 'example.com/b' });
@@ -116,16 +116,16 @@ test('archiving moves a bookmark from inbox to archived and back', async () => {
   const id = result.current.inbox[0]!.id;
 
   await act(async () => {
-    result.current.archiveBookmark(id, true);
+    result.current.trashBookmark(id);
   });
   expect(result.current.inbox).toHaveLength(0);
-  expect(result.current.archived).toHaveLength(1);
+  expect(result.current.trash).toHaveLength(1);
 
   await act(async () => {
-    result.current.archiveBookmark(id, false);
+    result.current.restoreBookmark(id);
   });
   expect(result.current.inbox).toHaveLength(1);
-  expect(result.current.archived).toHaveLength(0);
+  expect(result.current.trash).toHaveLength(0);
 });
 
 test('deleting a local bookmark also clears its queued upload', async () => {
