@@ -12,7 +12,7 @@ import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
 import type { ComponentType } from 'react';
 
-import { onConsoleEntry } from './log-buffer';
+import { onConsoleEntry, recordLog } from './log-buffer';
 import { buildSentryInitOptions, getSentryConfigState } from './sentry-config';
 import { buildConsoleErrorReport } from './sentry-report';
 
@@ -86,6 +86,30 @@ export function wrapWithSentry<P extends Record<string, unknown>>(
   component: ComponentType<P>,
 ): ComponentType<P> {
   return Sentry.wrap(component);
+}
+
+/**
+ * Record a low-severity diagnostic breadcrumb for a user interaction we want a
+ * trail of when something later goes wrong. It lands in two places: the in-app
+ * log buffer (so it ships with a "Report a problem" / "Share diagnostics"
+ * submission) and as a Sentry breadcrumb (attached to any event from this
+ * session). `info`-level, so it never fires a Sentry exception of its own.
+ *
+ * Pass only coarse, non-identifying values in `data` — never user content
+ * (titles, URLs, notes, search text). Opaque ids (tag/collection UUIDs) are ok.
+ */
+export function trackBreadcrumb(
+  category: string,
+  message: string,
+  data?: Record<string, string | number | boolean | null>,
+): void {
+  const suffix = data ? ` ${JSON.stringify(data)}` : '';
+  recordLog('info', `[${category}] ${message}${suffix}`);
+  try {
+    Sentry.addBreadcrumb({ category, message, level: 'info', data });
+  } catch {
+    // Breadcrumbs are best-effort; never let diagnostics break the UI.
+  }
 }
 
 /** Associate the current (anonymous) Supabase user id with future events.
