@@ -43,13 +43,26 @@ async function sha256(text: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function resolveUserIdFromApiKey(authorization: string | null): Promise<string | null> {
-  if (!authorization?.startsWith('Bearer stash_')) return null;
-  const hash = await sha256(authorization.slice('Bearer '.length));
-  const res = await db('GET', `api_keys?key_hash=eq.${hash}&revoked_at=is.null&select=user_id&limit=1`);
+// Resolve the caller's user id from either auth scheme:
+//   - `Bearer stash_…`  → an issued API key (external clients, e.g. a Custom GPT)
+//   - any other Bearer   → a Supabase session JWT (our own mobile / web clients)
+// so both the in-app chat and external integrations hit the same endpoint.
+async function resolveUserId(authorization: string | null): Promise<string | null> {
+  if (!authorization) return null;
+  if (authorization.startsWith('Bearer stash_')) {
+    const hash = await sha256(authorization.slice('Bearer '.length));
+    const res = await db('GET', `api_keys?key_hash=eq.${hash}&revoked_at=is.null&select=user_id&limit=1`);
+    if (!res.ok) return null;
+    const rows: Array<{ user_id: string }> = await res.json();
+    return rows[0]?.user_id ?? null;
+  }
+  // Supabase session JWT — validate it against GoTrue and read the user id.
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { Authorization: authorization, apikey: SERVICE_ROLE_KEY },
+  });
   if (!res.ok) return null;
-  const rows: Array<{ user_id: string }> = await res.json();
-  return rows[0]?.user_id ?? null;
+  const user = await res.json();
+  return user?.id ?? null;
 }
 
 function db(method: string, path: string, body?: unknown): Promise<Response> {
@@ -361,7 +374,7 @@ Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
 
-  const userId = await resolveUserIdFromApiKey(req.headers.get('Authorization'));
+  const userId = await resolveUserId(req.headers.get('Authorization'));
   if (!userId) return json({ error: 'Unauthorized' }, 401);
 
   let body: { messages?: Turn[]; decision?: Decision };

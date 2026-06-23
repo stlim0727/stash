@@ -1,8 +1,9 @@
 # `chat` edge function — assistant over your bookmarks
 
 A "chat with your bookmarks" assistant that can also **act** on the library
-(save, tag, file into collections, trash). Authenticated by the same `stash_`
-API key as `public-api`. Designed to serve many users cheaply: the model is
+(save, tag, file into collections, trash). Authenticated by either a Supabase
+session JWT (our own mobile / web clients) or a `stash_` API key (external
+clients, e.g. a Custom GPT). Designed to serve many users cheaply: the model is
 **swappable** behind a seam, and every mutating action is **confirmed by the
 user** before it runs.
 
