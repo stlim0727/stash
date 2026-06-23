@@ -126,6 +126,22 @@ test('announces suggestions that arrived unseen with a banner, dismissable via â
   expect(banner).toBeTruthy();
 });
 
+test('the unseen banner counts a folder-only recommendation (no tags)', async () => {
+  const id = '7e64cf1e-0000-4000-8000-00000000000f';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Folder only', collection_id: null })],
+    undefined,
+    // No tag suggestions, just a proposed (non-existent) collection name.
+    [makeEnrichment({ bookmark_id: id, suggested_tags: [], suggested_collection_name: 'Travel' })],
+  );
+  fakeRepo.__setMeta('unseen_ai_suggestions', JSON.stringify([id]));
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByTestId('new-suggestions-banner')).toBeTruthy());
+  expect(screen.getByText('âœ¨ 1 new AI suggestion')).toBeTruthy();
+});
+
 test('the unseen banner ignores items whose suggestions were already applied', async () => {
   const id = '7e64cf1e-0000-4000-8000-00000000000e';
   fakeRepo.__reset(
