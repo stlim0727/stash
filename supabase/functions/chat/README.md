@@ -95,8 +95,10 @@ model output.
   explicit `CachedContent` resource is a later optimization. (#188)
 - **Clients**: a chat screen in `apps/mobile` and the separate web chat both
   consume this endpoint and own the confirm UI.
-- **Rate limiting**: reuse / extend the `ai-enrich` per-user slot limiter — an
-  agentic loop is a bigger cost vector than a single enrichment.
+- ~~**Rate limiting**~~: done — migration `20260623120000_chat_rate_limit.sql`
+  adds `request_chat_slot_for(uuid)` (service-role; sliding hour+day window) and
+  the function consults it before the loop, returning 429 when over. Fails open
+  until the migration is applied. (#189)
 
 ## Tests
 

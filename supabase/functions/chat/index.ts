@@ -69,6 +69,28 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/** Consult the per-user chat rate limiter (request_chat_slot_for). Fails OPEN:
+ *  if the function is missing (migration not applied) or errors, the request
+ *  proceeds — the limiter must never be the reason a request hard-fails. */
+async function requestChatSlot(userId: string): Promise<{ allowed: boolean; verdict?: Record<string, unknown> }> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/request_chat_slot_for`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+        apikey: SERVICE_ROLE_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_user_id: userId }),
+    });
+    if (!res.ok) return { allowed: true };
+    const verdict = (await res.json()) as Record<string, unknown>;
+    return { allowed: verdict?.allowed !== false, verdict };
+  } catch {
+    return { allowed: true };
+  }
+}
+
 function buildSystemPrompt(): string {
   return [
     'You are Stash, a helpful assistant for the user\'s personal bookmark library.',
@@ -349,6 +371,11 @@ Deno.serve(async (req: Request) => {
     return json({ error: 'Invalid JSON body' }, 400);
   }
   if (!Array.isArray(body.messages)) return json({ error: 'messages[] is required' }, 400);
+
+  const slot = await requestChatSlot(userId);
+  if (!slot.allowed) {
+    return json({ error: 'rate_limited', ...slot.verdict }, 429);
+  }
 
   let provider: ChatProvider;
   try {
