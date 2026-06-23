@@ -35,11 +35,16 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
-jest.mock('expo-router', () => ({
-  Link: ({ children }: { children: ReactNode }) => children,
-  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
-  useLocalSearchParams: () => ({}),
-}));
+jest.mock('expo-router', () => {
+  const { useEffect } = require('react');
+  return {
+    Link: ({ children }: { children: ReactNode }) => children,
+    useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+    useLocalSearchParams: () => ({}),
+    // Run the focus callback as a mount effect; honours the returned cleanup.
+    useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, []),
+  };
+});
 
 import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';

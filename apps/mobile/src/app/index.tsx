@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import {
   Alert,
   Animated,
+  BackHandler,
   FlatList,
   Image,
   Linking,
@@ -212,6 +213,37 @@ export default function InboxScreen() {
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+
+  // Drilling into a tag from the cloud is a same-screen state change (filter +
+  // card layout), not a navigation push, so the Android hardware Back key would
+  // otherwise fall through and exit the app. Remember the cloud we came from —
+  // including the facet that scoped it — so Back returns there instead. Null
+  // whenever we're not in a cloud-drilled state (the user moved on via a chip or
+  // the view-mode control, both of which clear it).
+  const cloudReturnRef = useRef<InboxFilter | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      // Hardware Back only exists on Android. Guard the registration there:
+      // react-native-web's BackHandler.addEventListener console.errors on every
+      // call (forwarded to Sentry by the console capture in _layout), and iOS
+      // would register a listener that can never fire.
+      if (Platform.OS !== 'android') {
+        return;
+      }
+      const onBack = () => {
+        const returnTo = cloudReturnRef.current;
+        if (!returnTo) {
+          return false;
+        }
+        cloudReturnRef.current = null;
+        setFilter(returnTo);
+        setViewMode('cloud');
+        return true;
+      };
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
+      return () => sub.remove();
+    }, []),
+  );
 
   // How many inbox bookmarks have AI suggestions that arrived while the user
   // wasn't looking (auto-enrichment, a server-side trigger, another device) and
@@ -577,6 +609,8 @@ export default function InboxScreen() {
             cloud: tagCloud.length,
             header: Math.round(headerHeight),
           });
+          // Picking a facet directly ends the cloud-drill context.
+          cloudReturnRef.current = null;
           setFilter(target);
         }}
         variant={active ? 'selected' : 'default'}
@@ -716,7 +750,12 @@ export default function InboxScreen() {
                   accessibilityLabel={t('inbox.viewAsA11y', { mode: t(VIEW_MODE_LABEL_KEY[mode]) })}
                   accessibilityState={{ selected: active }}
                   testID={`inbox-view-${mode}`}
-                  onPress={() => setViewMode(mode)}
+                  onPress={() => {
+                    // A deliberate layout change ends the cloud-drill context,
+                    // so Back should no longer jump back to the cloud.
+                    cloudReturnRef.current = null;
+                    setViewMode(mode);
+                  }}
                   style={[styles.viewSegmentButton, active ? { backgroundColor: palette.accentSoft } : null]}
                 >
                   <Ionicons
@@ -791,6 +830,9 @@ export default function InboxScreen() {
                           view: viewMode,
                           cloud: tagCloud.length,
                         });
+                        // Let Back return to this cloud (and the facet that
+                        // scoped it) rather than exiting the app.
+                        cloudReturnRef.current = filter;
                         setFilter({ kind: 'tag', id: entry.id });
                         setViewMode('card');
                       }}

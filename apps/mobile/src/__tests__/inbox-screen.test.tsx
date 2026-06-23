@@ -1,6 +1,6 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Linking } from 'react-native';
+import { BackHandler, Linking, Platform } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -23,11 +23,17 @@ jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
 let mockParams: Record<string, string> = {};
-jest.mock('expo-router', () => ({
-  Link: ({ children }: { children: ReactNode }) => children,
-  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
-  useLocalSearchParams: () => mockParams,
-}));
+jest.mock('expo-router', () => {
+  const { useEffect } = require('react');
+  return {
+    Link: ({ children }: { children: ReactNode }) => children,
+    useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+    useLocalSearchParams: () => mockParams,
+    // Run the focus callback as a mount effect (the screen is always focused in
+    // these tests); honours the returned cleanup like the real hook.
+    useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, []),
+  };
+});
 
 import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
@@ -529,6 +535,73 @@ test('the tag cloud scopes to the active folder facet', async () => {
   await fireEvent.press(screen.getByText('Work'));
   await waitFor(() => expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy());
   expect(screen.queryByLabelText('#cooking, 1 bookmark')).toBeNull();
+});
+
+test('the hardware back key returns from a drilled-in tag to the tag cloud', async () => {
+  // The handler only registers on Android (where hardware Back exists).
+  const originalOS = Platform.OS;
+  Platform.OS = 'android';
+  // Capture the screen's hardwareBackPress handler so we can fire it directly
+  // (there is no real device back button in the test environment).
+  const handlers: Array<() => boolean> = [];
+  const addSpy = jest
+    .spyOn(BackHandler, 'addEventListener')
+    .mockImplementation((event, cb) => {
+      if (event === 'hardwareBackPress') {
+        handlers.push(cb as () => boolean);
+      }
+      return { remove: () => {} } as ReturnType<typeof BackHandler.addEventListener>;
+    });
+
+  try {
+    const cooked = '7e64cf1e-0000-4000-8000-000000000081';
+    const reading = '7e64cf1e-0000-4000-8000-000000000082';
+    fakeRepo.__reset(
+      [
+        makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
+        makeStoredBookmark({ id: reading, title: 'Local-first software' }),
+      ],
+      {
+        tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+        bookmarkTags: [
+          { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+          { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        ],
+        collections: [],
+      },
+    );
+
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+
+    // Open the cloud and drill into a tag → filtered cards, cloud gone.
+    await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+    await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+    await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
+    await waitFor(() => expect(screen.getByText('#cooking · 1')).toBeTruthy());
+    expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
+
+    const onBack = handlers[handlers.length - 1];
+    expect(onBack).toBeDefined();
+
+    // Back consumes the press and restores the tag cloud instead of exiting.
+    let handled: boolean | undefined;
+    await act(async () => {
+      handled = onBack();
+    });
+    expect(handled).toBe(true);
+    await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+
+    // A second press is no longer consumed — there is nothing left to undo, so
+    // the OS gets the press (app may background/exit) as usual.
+    await act(async () => {
+      handled = onBack();
+    });
+    expect(handled).toBe(false);
+  } finally {
+    addSpy.mockRestore();
+    Platform.OS = originalOS;
+  }
 });
 
 test('blank-named tags and collections do not produce empty filter chips', async () => {
