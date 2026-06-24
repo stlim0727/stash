@@ -360,6 +360,23 @@ export default function InboxScreen() {
     void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(viewMode)).catch(() => {});
   }, [viewMode]);
 
+  // The cloud and the card/list layouts use different scroll containers — an
+  // Animated.ScrollView vs the AnimatedFlatList — so crossing between them
+  // remounts the container at offset 0. They share one scrollY Animated.Value
+  // (it drives the floating header's collapse), though, so without a reset the
+  // *previous* container's scroll offset lingers: drilling into a tag from a
+  // cloud you'd scrolled down would carry that stale offset into the fresh card
+  // list, leaving diffClamp with the header translated fully off-screen above
+  // its header-sized top padding — a blank gap until you scroll up. Snap scrollY
+  // back to the top whenever we cross the cloud boundary so the header and the
+  // newly mounted list agree on offset 0. Keyed on the cloud boolean (not
+  // viewMode) so a card⇄list switch — which keeps the same FlatList and its
+  // scroll position — is left untouched.
+  const isCloud = viewMode === 'cloud';
+  useEffect(() => {
+    scrollY.setValue(0);
+  }, [isCloud, scrollY]);
+
   // Browse facet handed in by another screen (e.g. tapping a tag in Bookmark
   // Detail). Applying it on param change lets in-app links jump to a view.
   const params = useLocalSearchParams<{ tag?: string | string[]; collection?: string | string[] }>();
