@@ -186,7 +186,10 @@ export async function syncQueueEntry(
  *
  * Critically includes `deleted_at`: a bookmark trashed before it gained a
  * remote id uploads as an active create, so without this the cloud row stays
- * live and resurrects on other devices on the next pull.
+ * live and resurrects on other devices on the next pull. The `description`
+ * clause covers text notes, whose body uploads as `shared_text` and lands in
+ * the remote row's `description`: if the user edited the note before the create
+ * ran, the body diverged and must be re-pushed too.
  */
 export function createNeedsReconcileUpdate(
   persisted: Bookmark,
@@ -198,6 +201,7 @@ export function createNeedsReconcileUpdate(
     persisted.collection_id !== null ||
     persisted.title !== (uploadedPayload?.title ?? null) ||
     persisted.notes !== (uploadedPayload?.notes ?? null) ||
+    persisted.description !== (uploadedPayload?.shared_text ?? null) ||
     persisted.metadata_status !== 'pending' ||
     persisted.site_name !== null ||
     persisted.favicon_url !== null ||

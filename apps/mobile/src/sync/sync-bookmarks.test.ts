@@ -8,6 +8,7 @@ import {
   reconcileOrphanedQueueEntries,
   syncQueueEntry,
 } from './sync-bookmarks.ts';
+import { rekeyPendingTagOps, type PendingTagOp } from '@/domain/pending-tags';
 import type { BookmarkApi } from '@/api/bookmarks';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
@@ -310,6 +311,33 @@ test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up
   assert.equal(needs, false);
 });
 
+test('createNeedsReconcileUpdate: a text note whose body was edited before upload needs a follow-up', () => {
+  // A text note uploads its body as shared_text; the remote row stores it in
+  // description. If the user edited the body before the create ran, the uploaded
+  // shared_text is stale, so the divergence must trigger a follow-up update.
+  const persisted = makeBookmark({
+    id: 'remote-1',
+    url: null,
+    content_type: 'text',
+    description: 'edited body',
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, { shared_text: 'original body' });
+  assert.equal(needs, true);
+});
+
+test('createNeedsReconcileUpdate: a pristine text note (body unchanged) needs no follow-up', () => {
+  const persisted = makeBookmark({
+    id: 'remote-1',
+    url: null,
+    content_type: 'text',
+    description: 'a thought',
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, { shared_text: 'a thought' });
+  assert.equal(needs, false);
+});
+
 test('createNeedsReconcileUpdate: a row trashed before it had a remote id needs a follow-up', () => {
   // The genuine bug: trashBookmark on a local-only row sets deleted_at but
   // enqueues no update (no remote identity yet); the create uploads ACTIVE.
@@ -324,35 +352,97 @@ test('createNeedsReconcileUpdate: a row trashed before it had a remote id needs 
   assert.equal(needs, true);
 });
 
-test('create→sync round-trip: a trashed-before-remote-id create reconciles its trash to the cloud', async () => {
-  // Drive the real upload path with the sync fakes: the local row is already
-  // trashed when its create uploads, so the create payload omits deleted_at and
-  // the remote row is active. The reconcile decision (the same predicate the
-  // store uses) must then demand a follow-up update carrying the trash state.
+test('create→sync round-trip: a trashed-before-remote-id create lands deleted_at in the cloud', async () => {
+  // End-to-end through BOTH sync passes the store performs, asserting the fake
+  // cloud row ends trashed — not just that the reconcile predicate is true.
   const { repository } = fakeRepository();
+  const createReceived: unknown[] = [];
+  const updateReceived: Array<[string, Record<string, unknown>]> = [];
+  const api = fakeApi({
+    createBookmark: async (input: unknown) => {
+      createReceived.push(input);
+      return { bookmark_id: 'remote-1', status: 'created', metadata_status: 'pending' };
+    },
+    updateBookmark: async (id: string, input: Record<string, unknown>) => {
+      updateReceived.push([id, input]);
+      return makeBookmark({ id, sync_status: 'synced' });
+    },
+  });
+
+  // The local row is already trashed when its create uploads.
   const trashedLocal = makeBookmark({
     id: 'local-abc',
     deleted_at: '2026-06-24T00:00:00.000Z',
     sync_status: 'pending',
   });
 
-  const result = await syncQueueEntry(
-    fakeApi(),
-    repository,
-    makeCreateEntry(),
-    () => trashedLocal,
-  );
-
-  // The row adopted its remote id and the create payload carried no deleted_at.
-  const persisted = result.bookmarkReplacement?.bookmark;
+  // Pass 1: the create. The create payload omits deleted_at, so the freshly
+  // minted cloud row is ACTIVE — this is the bug's starting condition.
+  const created = await syncQueueEntry(api, repository, makeCreateEntry(), () => trashedLocal);
+  const persisted = created.bookmarkReplacement?.bookmark;
   assert.ok(persisted);
-  assert.equal(persisted.id, 'remote-1');
   assert.equal(persisted.deleted_at, '2026-06-24T00:00:00.000Z');
-  assert.equal(result.uploadedPayload?.url, 'https://example.com/a');
-  assert.equal('deleted_at' in (result.uploadedPayload ?? {}), false);
+  assert.equal('deleted_at' in (createReceived[0] as object), false);
 
-  // So a follow-up update MUST be enqueued to propagate the trash to the cloud.
-  assert.equal(createNeedsReconcileUpdate(persisted, result.uploadedPayload), true);
+  // The store's reconcile decides a follow-up update is needed (the fix), and
+  // enqueues makeMutationEntry(persisted.id, 'update').
+  assert.equal(createNeedsReconcileUpdate(persisted, created.uploadedPayload), true);
+  const followUp = makeMutationEntry(persisted.id, 'update');
+
+  // Pass 2: process that update against the (still trashed) remote-id row.
+  const remoteRow = makeBookmark({ id: 'remote-1', deleted_at: '2026-06-24T00:00:00.000Z' });
+  await syncQueueEntry(api, repository, followUp, () => remoteRow);
+
+  // The cloud row is now trashed: api.updateBookmark received deleted_at for it.
+  assert.equal(updateReceived.length, 1);
+  assert.equal(updateReceived[0]?.[0], 'remote-1');
+  assert.equal(updateReceived[0]?.[1]?.deleted_at, '2026-06-24T00:00:00.000Z');
+});
+
+test('create-sync tag re-key: a tag op parked on the local id moves to the remote id and becomes uploadable', async () => {
+  // Models the store's post-create reconcile (#2 fix). A tag op (carried over
+  // from account re-home, or added before the create synced) is queued against
+  // the local id. syncTagOps skips non-remote ids via hasRemoteIdentity, so
+  // without re-keying it would never upload. Drive the create, then apply the
+  // exact {previousId -> remote id} re-key the store performs.
+  const { repository } = fakeRepository();
+  const local = makeBookmark({ id: 'local-abc', sync_status: 'pending' });
+  // A real Supabase UUID so the re-keyed op passes the hasRemoteIdentity gate.
+  const remoteUuid = '7e64cf1e-0000-4000-8000-000000000001';
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: remoteUuid,
+      status: 'created',
+      metadata_status: 'pending',
+    }),
+  });
+
+  const result = await syncQueueEntry(api, repository, makeCreateEntry(), () => local);
+  const previousId = result.bookmarkReplacement?.previousId;
+  const remoteId = result.bookmarkReplacement?.bookmark.id;
+  assert.equal(previousId, 'local-abc');
+  assert.equal(remoteId, remoteUuid);
+
+  // The tag op was queued against the local id — not yet uploadable.
+  let tagOps: PendingTagOp[] = [
+    {
+      id: 'op-1',
+      bookmark_id: 'local-abc',
+      tag_name: 'design',
+      op: 'add',
+      source: 'user',
+      confidence: null,
+      created_at: '2026-06-12T00:00:00.000Z',
+    },
+  ];
+  assert.equal(hasRemoteIdentity(tagOps[0]!.bookmark_id), false);
+
+  // The reconcile re-keys it onto the new remote id…
+  tagOps = rekeyPendingTagOps(tagOps, new Map([[previousId!, remoteId!]]));
+
+  // …so it now targets a remote row and syncTagOps will actually upload it.
+  assert.equal(tagOps[0]?.bookmark_id, remoteUuid);
+  assert.equal(hasRemoteIdentity(tagOps[0]!.bookmark_id), true);
 });
 
 test('hasRemoteIdentity accepts only Supabase UUIDs', () => {

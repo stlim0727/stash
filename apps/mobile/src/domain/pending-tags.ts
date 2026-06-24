@@ -143,6 +143,22 @@ export function rekeyPendingTagOps(
 }
 
 /**
+ * Drop every pending tag op targeting one of `bookmarkIds`. Used on a real
+ * A→real B account switch: account A's queued tag ops must not survive into
+ * account B's session, where `syncTagOps` would upload them under B's auth.
+ */
+export function dropPendingTagOpsForBookmarks(
+  ops: PendingTagOp[],
+  bookmarkIds: string[],
+): PendingTagOp[] {
+  if (bookmarkIds.length === 0) {
+    return ops;
+  }
+  const drop = new Set(bookmarkIds);
+  return ops.filter((op) => !drop.has(op.bookmark_id));
+}
+
+/**
  * After the server confirms an added tag, swap the optimistic local tag id for
  * the server tag (and its id on every link), and ensure the server tag is
  * present. Idempotent.

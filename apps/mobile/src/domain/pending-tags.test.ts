@@ -5,6 +5,7 @@ import {
   applyPendingTagOps,
   applyTagOp,
   dequeueTagOp,
+  dropPendingTagOpsForBookmarks,
   enqueueTagOp,
   reconcileSyncedAdd,
   rekeyPendingTagOps,
@@ -43,6 +44,22 @@ test('rekeyPendingTagOps re-targets ops whose bookmark id was re-homed', () => {
 test('rekeyPendingTagOps returns the same list when the id map is empty', () => {
   const ops = [op({ bookmark_id: 'old-1' })];
   assert.equal(rekeyPendingTagOps(ops, new Map()), ops);
+});
+
+test('dropPendingTagOpsForBookmarks removes only ops for the dropped bookmark ids', () => {
+  const ops = [
+    op({ id: 'a', bookmark_id: 'drop-1' }),
+    op({ id: 'b', bookmark_id: 'keep-1' }),
+    op({ id: 'c', bookmark_id: 'drop-2' }),
+  ];
+  const next = dropPendingTagOpsForBookmarks(ops, ['drop-1', 'drop-2']);
+  assert.equal(next.length, 1);
+  assert.equal(next[0]?.bookmark_id, 'keep-1');
+});
+
+test('dropPendingTagOpsForBookmarks returns the same list when nothing is dropped', () => {
+  const ops = [op({ bookmark_id: 'keep-1' })];
+  assert.equal(dropPendingTagOpsForBookmarks(ops, []), ops);
 });
 
 test('add creates an optimistic local tag and link', () => {
