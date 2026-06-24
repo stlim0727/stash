@@ -252,7 +252,11 @@ test('a punctuation-only query is not a search (keeps the normal Inbox section)'
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '...');
 
   await waitFor(() => expect(screen.getByText('Recently saved')).toBeTruthy());
+  // Stays on the normal "Recently saved" section (not a results header) and the
+  // zero-result recovery card must NOT appear — it's not a search at all.
   expect(screen.queryByText(/result/)).toBeNull();
+  expect(screen.queryByTestId('inbox-empty-search')).toBeNull();
+  // The library is not filtered down.
   expect(screen.getByText('Local-first software')).toBeTruthy();
   expect(screen.getByText('Raindrop review')).toBeTruthy();
 });
@@ -798,6 +802,9 @@ test('shows the no-matches empty state for an unmatched search', async () => {
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'zzz');
 
   await waitFor(() => expect(screen.getByText('No bookmarks match your search.')).toBeTruthy());
+  // The recovery card stands alone — the "0 results" section label is suppressed
+  // so the screen doesn't double-label a zero-result search.
+  expect(screen.queryByText('0 results')).toBeNull();
 });
 
 test('a search result that matched on its site name shows a distinct site chip', async () => {

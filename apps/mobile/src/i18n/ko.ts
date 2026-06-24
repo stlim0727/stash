@@ -60,7 +60,7 @@ export const ko: Catalog = {
   'inbox.viewAsA11y': '{mode}로 보기',
   'inbox.filterAll': '전체',
   'inbox.filterNoCollection': '컬렉션 없음',
-  'inbox.sectionMatches': '검색 결과 {count}개',
+  'inbox.sectionMatches': { other: '검색 결과 {count}개' },
   'inbox.sectionNoCollection': '컬렉션 없음 · {count}',
   'inbox.sectionFacet': '{label} · {count}',
   'inbox.sectionRecent': '최근 저장됨',

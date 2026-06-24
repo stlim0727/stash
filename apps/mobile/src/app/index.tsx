@@ -1151,9 +1151,14 @@ export default function InboxScreen() {
           { paddingTop: headerHeight + 8, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
-          <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-            {sectionLabel}
-          </Text>
+          // On a zero-result search the empty-search recovery card already
+          // states "no matches"; suppress the "0 results" section label so the
+          // two don't stack into a redundant double-negative.
+          searching && visible.length === 0 ? null : (
+            <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
+              {sectionLabel}
+            </Text>
+          )
         }
         ListEmptyComponent={
           isLoading ? (

@@ -296,6 +296,8 @@ test('queryHasSearchTokens: punctuation/symbol-only queries yield no tokens', ()
   assert.equal(queryHasSearchTokens('!!!'), false);
   assert.equal(queryHasSearchTokens('  '), false);
   assert.equal(queryHasSearchTokens(''), false);
+  // A multi-char all-separator token (distinct code path from a single '-').
+  assert.equal(queryHasSearchTokens('---'), false);
 });
 
 test('queryHasSearchTokens: a query with at least one real token is a search', () => {
@@ -306,6 +308,9 @@ test('queryHasSearchTokens: a query with at least one real token is a search', (
   assert.equal(queryHasSearchTokens('design...'), true);
   // Non-Latin (Korean) text yields an ordinary term.
   assert.equal(queryHasSearchTokens('리액트'), true);
+  // A symbol+letter token (#design) is a real symbol term — the inverse of the
+  // all-punctuation drop.
+  assert.equal(queryHasSearchTokens('#design'), true);
 });
 
 // ── matchesQuery (the shared shelf ↔ results predicate, ST2-1) ─────────────
