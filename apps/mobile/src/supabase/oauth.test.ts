@@ -7,6 +7,7 @@ import {
   buildAuthorizeUrl,
   bytesToBase64,
   bytesToBase64Url,
+  isAuthStateValid,
   parseAuthRedirect,
 } from './oauth.ts';
 
@@ -34,6 +35,18 @@ test('buildAuthorizeQuery includes the PKCE params and encodes the redirect', ()
   assert.match(query, /code_challenge=abc-123/);
   assert.match(query, /code_challenge_method=s256/);
   assert.doesNotMatch(query, /skip_http_redirect/);
+  // No state passed -> none emitted (so we never send an empty/garbage nonce).
+  assert.doesNotMatch(query, /(^|&)state=/);
+});
+
+test('buildAuthorizeQuery includes the CSRF state when provided and url-encodes it', () => {
+  const query = buildAuthorizeQuery({
+    provider: 'google',
+    redirectTo: 'stash://auth/callback',
+    codeChallenge: 'abc-123',
+    state: 'nonce/with+special=chars',
+  });
+  assert.match(query, /(^|&)state=nonce%2Fwith%2Bspecial%3Dchars(&|$)/);
 });
 
 test('buildAuthorizeUrl trims a trailing slash and adds skip_http_redirect when asked', () => {
@@ -66,4 +79,31 @@ test('parseAuthRedirect surfaces provider errors', () => {
 test('parseAuthRedirect also reads a fragment response', () => {
   const result = parseAuthRedirect('stash://auth/callback#code=xyz');
   assert.equal(result.code, 'xyz');
+});
+
+test('parseAuthRedirect returns the echoed state', () => {
+  const result = parseAuthRedirect('stash://auth/callback?code=abc123&state=the-nonce');
+  assert.equal(result.code, 'abc123');
+  assert.equal(result.state, 'the-nonce');
+});
+
+test('parseAuthRedirect reports a null state when the provider omits it', () => {
+  const result = parseAuthRedirect('stash://auth/callback?code=abc123');
+  assert.equal(result.state, null);
+});
+
+test('isAuthStateValid accepts an exact match', () => {
+  assert.equal(isAuthStateValid('nonce-123', 'nonce-123'), true);
+});
+
+test('isAuthStateValid rejects a mismatch', () => {
+  assert.equal(isAuthStateValid('nonce-123', 'nonce-456'), false);
+});
+
+test('isAuthStateValid rejects a missing/empty state on either side', () => {
+  assert.equal(isAuthStateValid('nonce-123', null), false);
+  assert.equal(isAuthStateValid('nonce-123', undefined), false);
+  assert.equal(isAuthStateValid('nonce-123', ''), false);
+  assert.equal(isAuthStateValid(null, 'nonce-123'), false);
+  assert.equal(isAuthStateValid('', ''), false);
 });

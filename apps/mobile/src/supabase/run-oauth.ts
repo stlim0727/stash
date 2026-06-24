@@ -15,6 +15,7 @@ import {
   base64ToBase64Url,
   buildAuthorizeUrl,
   bytesToBase64Url,
+  isAuthStateValid,
   parseAuthRedirect,
 } from '@/supabase/oauth';
 import type { OAuthProvider, SupabaseAuthSession } from '@/supabase/types';
@@ -60,6 +61,11 @@ export async function runOAuthSignIn(
   );
   const codeChallenge = base64ToBase64Url(challengeBase64);
 
+  // CSRF: an opaque, high-entropy nonce bound to THIS attempt. GoTrue echoes it
+  // back on the redirect; we reject the response if it doesn't match. PKCE alone
+  // can't catch a forged/login-CSRF redirect carrying someone else's code.
+  const csrfState = bytesToBase64Url(Crypto.getRandomBytes(32));
+
   let authUrl: string;
   if (options.currentAccessToken) {
     try {
@@ -67,15 +73,26 @@ export async function runOAuthSignIn(
         provider,
         redirectTo,
         codeChallenge,
+        state: csrfState,
         accessToken: options.currentAccessToken,
       });
     } catch {
       // Linking can be disabled on the project (or the identity already belongs
       // to another user). Fall back to a normal sign-in rather than failing.
-      authUrl = buildAuthorizeUrl(state.config.url, { provider, redirectTo, codeChallenge });
+      authUrl = buildAuthorizeUrl(state.config.url, {
+        provider,
+        redirectTo,
+        codeChallenge,
+        state: csrfState,
+      });
     }
   } else {
-    authUrl = buildAuthorizeUrl(state.config.url, { provider, redirectTo, codeChallenge });
+    authUrl = buildAuthorizeUrl(state.config.url, {
+      provider,
+      redirectTo,
+      codeChallenge,
+      state: csrfState,
+    });
   }
 
   const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectTo);
@@ -86,6 +103,11 @@ export async function runOAuthSignIn(
   const redirect = parseAuthRedirect(result.url);
   if (redirect.error) {
     throw new Error(redirect.errorDescription ?? redirect.error);
+  }
+  // Reject before touching the code: a redirect whose state doesn't match the
+  // one we just generated isn't a response to this sign-in attempt.
+  if (!isAuthStateValid(csrfState, redirect.state)) {
+    throw new Error('OAuth redirect failed state verification; aborting sign-in.');
   }
   if (!redirect.code) {
     throw new Error('OAuth provider did not return an authorization code.');

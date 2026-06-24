@@ -44,6 +44,13 @@ export interface AuthorizeOptions {
   redirectTo: string;
   /** PKCE code challenge (base64url of SHA-256 of the verifier). */
   codeChallenge: string;
+  /**
+   * Opaque, high-entropy CSRF token bound to this sign-in attempt. GoTrue echoes
+   * it back on the redirect so we can confirm the response belongs to the request
+   * we started. PKCE only protects the code exchange, not the redirect itself, so
+   * without `state` a forged redirect could inject another user's code.
+   */
+  state?: string;
   /** Extra provider scopes, space-separated. */
   scopes?: string;
   /**
@@ -61,6 +68,9 @@ export function buildAuthorizeQuery(opts: AuthorizeOptions): string {
     `code_challenge=${encodeURIComponent(opts.codeChallenge)}`,
     'code_challenge_method=s256',
   ];
+  if (opts.state) {
+    parts.push(`state=${encodeURIComponent(opts.state)}`);
+  }
   if (opts.scopes) {
     parts.push(`scopes=${encodeURIComponent(opts.scopes)}`);
   }
@@ -77,6 +87,8 @@ export function buildAuthorizeUrl(supabaseUrl: string, opts: AuthorizeOptions): 
 
 export interface AuthRedirectResult {
   code: string | null;
+  /** The `state` GoTrue echoed back; compared against the value we sent up. */
+  state: string | null;
   error: string | null;
   errorDescription: string | null;
 }
@@ -110,7 +122,27 @@ export function parseAuthRedirect(url: string): AuthRedirectResult {
 
   return {
     code: params.get('code') ?? null,
+    state: params.get('state') ?? null,
     error: params.get('error') ?? null,
     errorDescription: params.get('error_description') ?? null,
   };
+}
+
+/**
+ * Confirm a redirect's `state` matches the value we generated for this attempt.
+ *
+ * Returns true only on a non-empty, exact match. A missing `expected` (we never
+ * sent one), a missing `received` (the provider dropped it), or any mismatch all
+ * fail — the redirect cannot be trusted and the sign-in must abort. Comparison
+ * is constant-time-ish length-then-equality; `state` is a public CSRF nonce, not
+ * a secret, so timing is not a concern here.
+ */
+export function isAuthStateValid(
+  expected: string | null | undefined,
+  received: string | null | undefined,
+): boolean {
+  if (!expected || !received) {
+    return false;
+  }
+  return expected === received;
 }

@@ -155,12 +155,14 @@ export class StashSupabaseClient {
     provider: OAuthProvider;
     redirectTo: string;
     codeChallenge: string;
+    state?: string;
     accessToken: string;
   }): Promise<string> {
     const query = buildAuthorizeQuery({
       provider: params.provider,
       redirectTo: params.redirectTo,
       codeChallenge: params.codeChallenge,
+      state: params.state,
       skipHttpRedirect: true,
     });
     const payload = await this.request<{ url?: string }>(`/auth/v1/authorize?${query}`, {
