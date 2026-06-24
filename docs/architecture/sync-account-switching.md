@@ -69,6 +69,18 @@ re-home path is the fallback for when linking can't happen.
 
 - Re-home carries the **bookmarks**; tag/collection/enrichment links that pointed
   at the old account's remote IDs are not re-homed (they refresh from the new
-  account on pull). Full tag/collection carry-over is a follow-up.
+  account on pull). Full tag/collection carry-over is a follow-up. Tag state
+  keyed by bookmark id (pending tag ops + optimistic tag links) IS kept in
+  lockstep with id changes, via `applyAccountTransition`'s `tagState` callbacks:
+  - **carry-over** (`tagState.rehome`) re-keys ops/links old→new local id, so
+    user-authored tags queued before sign-in still upload against the re-homed
+    row instead of an id the new account never had;
+  - **switch A→B** (`tagState.drop`) purges A's ops/links, so `syncTagOps`
+    (which runs next under B's auth) can't upload A's tags as B or surface them
+    in B's UI.
+  Separately, the post-create sync reconcile (`store/bookmarks.tsx`) re-keys tag
+  state from the local id to the freshly-minted remote id once a re-homed (or
+  any pre-sync) bookmark's create uploads — otherwise the carried-over op stays
+  parked on a non-remote id that `syncTagOps` skips and never uploads.
 - The lossless, no-data-movement path is identity linking; prefer enabling manual
   linking over relying on re-homing.

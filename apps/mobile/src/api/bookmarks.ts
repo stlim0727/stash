@@ -178,7 +178,11 @@ function enrichmentFromRemote(row: RemoteAIEnrichment): AIEnrichment {
 }
 
 function inFilter(values: string[]): string {
-  return `(${values.map((value) => `"${value.replaceAll('"', '\\"')}"`).join(',')})`;
+  // Escape backslashes first, then quotes — otherwise a trailing `\` combines
+  // with our injected `\"` and lets the value break out of its own quote.
+  return `(${values
+    .map((value) => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`)
+    .join(',')})`;
 }
 
 function sortParam(sort: ListBookmarksParams['sort']): PostgrestSort {

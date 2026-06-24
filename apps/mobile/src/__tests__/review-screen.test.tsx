@@ -123,7 +123,7 @@ test('"Dismiss all" clears the card without applying any tags', async () => {
   expect(screen.queryByText('#design')).toBeNull();
 });
 
-test('surfaces a folder recommendation (📂) alongside tags (#) and files in on tap', async () => {
+test('surfaces a folder recommendation (📁 ＋) alongside tags (#) and files in on tap', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000c1';
   const now = '2026-06-12T00:00:00.000Z';
   fakeRepo.__reset(
@@ -147,14 +147,14 @@ test('surfaces a folder recommendation (📂) alongside tags (#) and files in on
   const screen = await renderReview();
 
   await waitFor(() => expect(screen.getByText('Recipe page')).toBeTruthy());
-  // Folder gets the 📂 prefix, the tag gets #.
-  expect(screen.getByText('📂 Recipes')).toBeTruthy();
+  // Folder gets the 📁 ＋ prefix (matching Detail), the tag gets #.
+  expect(screen.getByText('📁 ＋ Recipes')).toBeTruthy();
   expect(screen.getByText('#cooking')).toBeTruthy();
 
   // Filing into the folder makes the recommendation stop surfacing; with no
   // other pending folder suggestion the chip drops out (the tag remains).
   await fireEvent.press(screen.getByLabelText('File Recipe page into Recipes'));
-  await waitFor(() => expect(screen.queryByText('📂 Recipes')).toBeNull());
+  await waitFor(() => expect(screen.queryByText('📁 ＋ Recipes')).toBeNull());
   expect(screen.getByText('#cooking')).toBeTruthy();
 });
 
@@ -170,7 +170,7 @@ test('lists a folder-only recommendation when no existing folder matches (create
   const screen = await renderReview();
 
   await waitFor(() => expect(screen.getByText('Lone link')).toBeTruthy());
-  expect(screen.getByText('📂 Create “Travel”')).toBeTruthy();
+  expect(screen.getByText('📁 ＋ Create “Travel”')).toBeTruthy();
   // No tag suggestions -> no tag action row.
   expect(screen.queryByText('Accept all')).toBeNull();
 

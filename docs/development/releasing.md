@@ -141,6 +141,34 @@ group aliases if you don't want the `testers` default.
 
 The rest of this doc covers the EAS-based path for store/internal builds.
 
+## Supabase edge functions & backend deploy
+
+Migrations under `supabase/migrations/` deploy automatically via the GitHub
+integration when changes land on the production branch (see `supabase/config.toml`).
+**Edge functions are a separate, manual step** — and crucially, deleting a
+function's *source* in a PR does **not** remove the already-**deployed** function
+from the live project. Until you delete it server-side it stays callable.
+
+Deploy-time checklist when function source changes:
+
+- **Removed a function in a merged PR?** Prune it from the live project, or it
+  keeps serving:
+  ```bash
+  supabase functions delete <name>
+  ```
+- **Removed `claude-proxy` (PR #195):** at deploy time, run
+  **`supabase functions delete claude-proxy`** AND
+  **rotate / unset the `ANTHROPIC_API_KEY` secret**
+  (`supabase secrets unset ANTHROPIC_API_KEY`). The proxy was an unmetered,
+  unvalidated passthrough to a billable Anthropic key — assume the key may have
+  been abused while the open proxy was live, so rotate it, don't just unset it.
+- **Changed/added a function?** Deploy it (`supabase functions deploy <name>`);
+  `verify_jwt` is read from `supabase/config.toml`.
+
+> There is currently **no CI step** that prunes deleted functions
+> (`functions deploy --prune` / `functions delete`), so this is a human
+> checklist item until that automation exists.
+
 ## EAS builds
 
 Stash uses [EAS Build](https://docs.expo.dev/build/introduction/) to produce

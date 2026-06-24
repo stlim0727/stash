@@ -26,7 +26,8 @@ import { DummyProvider } from './dummy-provider.ts';
 import { GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
 import { matchSuggestedCollection } from './collection-match.ts';
-import { resolveCallerAuth } from './request-auth.ts';
+import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
+import { isUuid } from './validation.ts';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
 // Use the Gemini-backed provider when an API key is configured; otherwise fall
@@ -116,6 +117,48 @@ interface BookmarkRow {
   content_type: string;
 }
 
+/**
+ * Look up whether a user is an anonymous Supabase account, via the GoTrue admin
+ * API (service-role). Used ONLY on the server-trigger path when the rate-limit
+ * verdict is unavailable, to decide fail-closed (anonymous owner) vs fail-open
+ * (real owner) — see shouldFailClosedOnRateLimit.
+ *
+ * No migration / schema change: GET /auth/v1/admin/users/{id} is a stable
+ * service-role endpoint that returns the user record incl. `is_anonymous`.
+ *
+ * Returns:
+ *   - true  → the owner is anonymous (or the record is missing → strict default)
+ *   - false → the owner is a confirmed real (non-anonymous) user
+ *   - undefined → the lookup failed/threw and anonymity is unknown; the caller
+ *     treats undefined as "fail closed" (the safe default).
+ */
+async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefined> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      headers: {
+        apikey: SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      },
+    });
+    if (res.status === 404) {
+      // No such user → treat as anonymous (strict), matching the DB default
+      // in request_ai_enrichment_slot_for (coalesce(is_anonymous, true)).
+      return true;
+    }
+    if (!res.ok) {
+      console.error('Owner anonymity lookup failed:', res.status);
+      return undefined;
+    }
+    const user = (await res.json()) as { is_anonymous?: unknown };
+    // Only an explicit `is_anonymous: false` counts as a real user; missing or
+    // non-boolean defaults to anonymous (strict).
+    return user.is_anonymous !== false;
+  } catch (err) {
+    console.error('Owner anonymity lookup threw:', err);
+    return undefined;
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
@@ -148,6 +191,14 @@ Deno.serve(async (req) => {
   const bookmarkId = body.bookmark_id;
   if (typeof bookmarkId !== 'string' || !bookmarkId) {
     return json({ error: 'bookmark_id is required' }, 400);
+  }
+  // Reject a non-UUID bookmark_id BEFORE it is interpolated into any
+  // id=eq.${bookmarkId} / bookmark_id=eq.${bookmarkId} PostgREST filter below.
+  // On the server path the service-role key bypasses RLS, so a forged id like
+  // `x&select=*&or=(...)` could otherwise smuggle arbitrary PostgREST params.
+  // Guarded here, before any DB call, so the function fails fast.
+  if (!isUuid(bookmarkId)) {
+    return json({ error: 'bookmark_id must be a UUID' }, 400);
   }
 
   // The user's locale, so a model-backed provider writes the summary/tags in
@@ -233,6 +284,10 @@ Deno.serve(async (req) => {
     // user can only ever exhaust their own quota.
     if (enforceRateLimit) {
       let verdict: RateLimitVerdict | null = null;
+      // Whether we actually obtained a verdict. Distinct from `verdict` so a
+      // null verdict that came back as "allowed: null" can't be confused with
+      // "couldn't reach the limiter".
+      let verdictObtained = false;
       try {
         // The app path's RPC scopes to the caller via the forwarded JWT
         // (auth.uid()); the server path has no token, so the service-role-only
@@ -250,16 +305,42 @@ Deno.serve(async (req) => {
             });
         if (rlRes.ok) {
           verdict = (await rlRes.json()) as RateLimitVerdict;
+          verdictObtained = true;
         } else {
-          // Fail OPEN: a missing function (migration not yet deployed) or a
-          // transient error must not break AI suggestions for everyone. The
-          // limit is a protection layer, not a correctness requirement.
-          console.error('Rate-limit check failed; allowing request:', rlRes.status);
+          console.error('Rate-limit check failed:', rlRes.status);
         }
       } catch (err) {
-        console.error('Rate-limit check threw; allowing request:', err);
+        console.error('Rate-limit check threw:', err);
       }
-      if (verdict && !verdict.allowed) {
+
+      if (!verdictObtained) {
+        // The verdict couldn't be obtained (missing function, transient error).
+        // Decide fail-closed vs fail-open by who owns the cost:
+        //  - anonymous caller         → CLOSED (limiter is the sole cost control)
+        //  - signed-in caller         → OPEN  (real account is a cost anchor)
+        //  - server/trigger path      → follows the TARGET BOOKMARK'S OWNER, since
+        //    the trigger fires for user rows: anonymous owner → CLOSED (an anon
+        //    user must not drive unthrottled server enrichment during an outage),
+        //    real owner → OPEN (don't break a real user's background enrichment).
+        // On the server path we resolve the owner's anonymity via the GoTrue
+        // admin API (service-role, no migration); undetermined ⇒ closed (safe).
+        let ownerIsAnonymous: boolean | undefined;
+        if (serverPath) {
+          ownerIsAnonymous = await fetchOwnerIsAnonymous(bookmark.user_id);
+        }
+        if (shouldFailClosedOnRateLimit(caller, ownerIsAnonymous)) {
+          console.error(
+            'Rate-limit verdict unavailable; failing closed',
+            serverPath ? `(server path, ownerIsAnonymous=${ownerIsAnonymous})` : '(anonymous caller)',
+          );
+          return json(
+            { error: 'rate_limit_unavailable', reason: 'rate_limit_unavailable', retry_after: 60 },
+            503,
+            { 'Retry-After': '60' },
+          );
+        }
+        console.error('Rate-limit verdict unavailable; allowing request (real-owner/signed-in path)');
+      } else if (verdict && !verdict.allowed) {
         const retryAfter = Math.max(1, Math.floor(verdict.retry_after ?? 60));
         return json(
           { error: 'rate_limited', reason: verdict.reason ?? 'rate_limited', retry_after: retryAfter },

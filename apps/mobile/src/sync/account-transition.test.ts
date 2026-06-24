@@ -1,8 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { planAccountTransition } from './account-transition.ts';
-import type { Bookmark } from '@/domain/types';
+import { applyAccountTransition, planAccountTransition } from './account-transition.ts';
+import {
+  dropPendingTagOpsForBookmarks,
+  rekeyPendingTagOps,
+  type PendingTagOp,
+} from '@/domain/pending-tags';
+import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type { BookmarkRepository } from '@/storage/types';
 
 const REMOTE_A = '7e64cf1e-0000-4000-8000-00000000000a';
 const REMOTE_B = '7e64cf1e-0000-4000-8000-00000000000b';
@@ -97,6 +103,145 @@ test('only cloud-owned rows are touched — local/seed rows are left alone', () 
     plan.rehome.map((b) => b.id),
     [REMOTE_A],
   );
+});
+
+function fakeRepository(): BookmarkRepository {
+  return {
+    init: async () => {},
+    listBookmarks: async () => [],
+    insertBookmark: async () => {},
+    updateBookmark: async () => {},
+    replaceBookmark: async () => {},
+    deleteBookmark: async () => {},
+    listQueue: async () => [],
+    enqueue: async () => {},
+    updateQueueEntry: async () => {},
+    removeQueueEntry: async () => {},
+    getMeta: async () => null,
+    setMeta: async () => {},
+    listEnrichments: async () => [],
+    upsertEnrichments: async () => {},
+    listTagData: async () => ({ tags: [], bookmarkTags: [], collections: [] }),
+    replaceTagData: async () => {},
+  };
+}
+
+test('applyAccountTransition re-keys pending tag ops from the old id to the new local id', async () => {
+  // Carry-over re-homes REMOTE_A to a fresh local id. A tag op queued against
+  // the OLD id would fire addTags against a bookmark the new account never had,
+  // silently dropping the carried-over tag. The re-home must re-key it.
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [bookmark({ id: REMOTE_A })],
+  );
+
+  let queue: LocalPendingBookmark[] = [];
+  let bookmarks: Bookmark[] | null = [bookmark({ id: REMOTE_A })];
+  let pendingTagOps: PendingTagOp[] = [
+    {
+      id: 'op-1',
+      bookmark_id: REMOTE_A,
+      tag_name: 'design',
+      op: 'add',
+      source: 'user',
+      confidence: null,
+      created_at: '2026-06-16T00:00:00.000Z',
+    },
+  ];
+
+  let counter = 0;
+  const makeLocalId = () => `local-rehomed-${(counter += 1)}`;
+
+  await applyAccountTransition(
+    plan,
+    fakeRepository(),
+    (updater) => {
+      bookmarks = updater(bookmarks);
+    },
+    (updater) => {
+      queue = updater(queue);
+    },
+    makeLocalId,
+    async () => {},
+    {
+      rehome: (idMap) => {
+        pendingTagOps = rekeyPendingTagOps(pendingTagOps, idMap);
+      },
+    },
+  );
+
+  // The re-homed bookmark's new local id…
+  const newId = bookmarks?.[0]?.id;
+  assert.ok(newId?.startsWith('local-rehomed-'));
+  assert.notEqual(newId, REMOTE_A);
+  // …is now what the carried-over tag op targets (not the orphaned old id).
+  assert.equal(pendingTagOps.length, 1);
+  assert.equal(pendingTagOps[0]?.bookmark_id, newId);
+  // And a fresh create entry was queued for the re-homed row.
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0]?.local_id, newId);
+  assert.equal(queue[0]?.operation, 'create');
+});
+
+test('applyAccountTransition (real A→real B) purges the dropped account’s tag state', async () => {
+  // The cross-account-leak fix: dropping account A's cached rows must also drop
+  // A's pending tag ops + tag links, or syncTagOps (running next under B's auth)
+  // uploads A's tags as B and surfaces them in B's UI.
+  const plan = planAccountTransition(
+    { id: 'A', isAnonymous: false },
+    { id: 'B', isAnonymous: false },
+    [bookmark({ id: REMOTE_A })],
+  );
+  assert.deepEqual(plan.drop, [REMOTE_A]); // sanity: REMOTE_A is account A's row
+
+  let pendingTagOps: PendingTagOp[] = [
+    {
+      id: 'op-A',
+      bookmark_id: REMOTE_A, // belongs to account A — must be purged
+      tag_name: 'secret-A',
+      op: 'add',
+      source: 'user',
+      confidence: null,
+      created_at: '2026-06-16T00:00:00.000Z',
+    },
+    {
+      id: 'op-keep',
+      bookmark_id: 'local-unrelated', // not dropped — must survive
+      tag_name: 'keep',
+      op: 'add',
+      source: 'user',
+      confidence: null,
+      created_at: '2026-06-16T00:00:00.000Z',
+    },
+  ];
+  let rehomeCalled = false;
+  let dropIds: string[] | null = null;
+
+  await applyAccountTransition(
+    plan,
+    fakeRepository(),
+    () => {},
+    () => {},
+    () => 'local-x',
+    async () => {},
+    {
+      rehome: () => {
+        rehomeCalled = true;
+      },
+      drop: (ids) => {
+        dropIds = ids;
+        pendingTagOps = dropPendingTagOpsForBookmarks(pendingTagOps, ids);
+      },
+    },
+  );
+
+  // A switch re-homes nothing, so the rehome callback never fires…
+  assert.equal(rehomeCalled, false);
+  // …but the drop callback gets account A's ids and purges only A's tag op.
+  assert.deepEqual(dropIds, [REMOTE_A]);
+  assert.equal(pendingTagOps.length, 1);
+  assert.equal(pendingTagOps[0]?.bookmark_id, 'local-unrelated');
 });
 
 test('re-homed/dropped rows no longer match — transition is self-idempotent', () => {

@@ -26,7 +26,7 @@ states. Each screen links to the section that specifies its behavior; see
 </tr>
 <tr>
 <td align="center" width="33%"><img src="assets/screens/settings.png" width="240" alt="Settings"><br><b>Settings</b> — account, sync, library, app version (here in local-only mode) (<a href="#8-account-and-sync-settings">§8</a>)</td>
-<td align="center" width="33%"><img src="assets/screens/archived.png" width="240" alt="Archived"><br><b>Archived</b> — bookmarks kept out of the Inbox (<a href="#4-archive">§4</a>)</td>
+<td align="center" width="33%"><img src="assets/screens/archived.png" width="240" alt="Trash"><br><b>Trash</b> — deleted bookmarks, restorable until emptied (<a href="#4-trash">§4</a>) <em>(screenshot predates the Archive→Trash rename)</em></td>
 <td align="center" width="33%"><img src="assets/screens/review.png" width="240" alt="Review AI suggestions"><br><b>Review AI suggestions</b> — batch accept queue (empty here, no cloud) (<a href="#7-ai-suggestions-auto-tagging">§7</a>)</td>
 </tr>
 <tr>
@@ -69,7 +69,7 @@ states. Each screen links to the section that specifies its behavior; see
 
 ## 2. Inbox
 
-- ✅ Lists active (non-archived) bookmarks, newest first by default.
+- ✅ Lists active (not trashed, not legacy-archived) bookmarks, newest first by default.
 - ✅ **Sort control**: a header row toggles the order — field (`Date` / `Name`)
   and direction (`↑ Asc` / `↓ Desc`). Date sorts by save time; Name is
   case-insensitive over the title (falling back to URL). The choice persists
@@ -114,18 +114,24 @@ states. Each screen links to the section that specifies its behavior; see
   suggestions" action regenerates them on demand for synced bookmarks.
 - ✅ When the bookmark has a URL, an "Open link ↗" button opens the page in
   the system browser; a failure to open surfaces a non-blocking inline error.
-- ✅ Archive/Unarchive toggles immediately (optimistic) and persists.
+- ✅ Move to Trash / Restore toggles immediately (optimistic) and persists,
+  then returns to the previous screen; a "Moved to Trash" toast offers Undo.
 - ✅ Delete asks for confirmation, permanently removes the bookmark, and
   returns to the previous screen.
 - ✅ Edit title/notes after capture (see §12).
 
-## 4. Archive
+## 4. Trash
 
-- ✅ Archived bookmarks leave the Inbox but remain in the durable store.
-- ✅ The Archived screen (Settings → Library) lists them, most recently
-  archived first; tapping opens detail where Unarchive restores them.
-- ✅ Archiving a cloud-synced bookmark propagates to Supabase (update
-  mutation, last write wins); the bookmark shows `sync pending` until it does.
+> Archive is retired as a user-facing concept; deleting moves a bookmark to
+> Trash. The `is_archived` column survives only to keep legacy archived rows
+> (and the dedupe index) out of the Inbox — it has no UI.
+
+- ✅ Trashed bookmarks (`deleted_at` set) leave the Inbox but remain in the
+  durable store, recoverable until the Trash is emptied.
+- ✅ The Trash screen (Settings → Trash) lists them with per-item Restore and
+  a footer "Empty Trash" (confirmation → permanent delete of all).
+- ✅ Trashing a cloud-synced bookmark propagates to Supabase (the sync upload
+  includes `deleted_at`, last write wins) so trash state reaches other devices.
 
 ## 5. Delete
 
@@ -175,7 +181,7 @@ states. Each screen links to the section that specifies its behavior; see
   (locally and persisted) — it never triggers the network. Bookmark Detail then
   shows an "out of date since you edited this bookmark — refresh to update them"
   hint above the suggestions; the existing **Refresh AI suggestions** button
-  regenerates them (status returns to `complete`). Collection/archive changes do
+  regenerates them (status returns to `complete`). Collection/trash changes do
   **not** mark suggestions stale, since they don't alter the enriched text.
 - ✅ **Confidence threshold**: only suggested tags with confidence
   `>= 0.6` (`SUGGESTION_MIN_CONFIDENCE` in `apps/mobile/src/domain/ai-suggestions.ts`)
@@ -199,7 +205,7 @@ states. Each screen links to the section that specifies its behavior; see
   automatically near expiry (including right before each sync run).
 - ✅ Settings shows: account state, sync status (counts of items waiting),
   Supabase auth state, a "Review AI suggestions" row (with the total pending
-  count, links to `/review` — see §7), library counts (link to Archived), app
+  count, links to `/review` — see §7), library counts (link to Trash), app
   version, the pending queue (per-entry operation, status, retries, last error),
   and a "Sync now" button whenever there is syncable work.
 - ✅ Without Supabase configuration the app is fully usable local-only and
@@ -207,7 +213,7 @@ states. Each screen links to the section that specifies its behavior; see
 
 ## 9. Cloud sync — upload (implemented)
 
-- ✅ New bookmarks, archive changes, and deletes upload automatically when
+- ✅ New bookmarks, trash changes, and deletes upload automatically when
   auth and local data are ready, and on every new save; failures are
   retryable with recorded errors; retries cannot create duplicate remote
   rows (server-side URL dedupe).
@@ -315,7 +321,7 @@ without leaving the app, with enough diagnostic context to act on.
 - ✅ EAS build profiles (development/preview/production) and release docs.
 - 🔶 On-device smoke test: the 7-step checklist in
   `docs/development/releasing.md` (save, restart-persistence, share intake,
-  archive/delete, sync) has not yet been run on a real device.
+  trash/delete, sync) has not yet been run on a real device.
 - ✅ App icons and splash: Stash bookmark-ribbon mark on the brand blue
   (#208AEF) — main icon, Android adaptive foreground/background/monochrome,
   splash glyph, and web favicon (generated; see `apps/mobile/assets/images`).

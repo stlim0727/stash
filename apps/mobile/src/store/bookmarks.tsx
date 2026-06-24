@@ -48,8 +48,10 @@ import {
   applyPendingTagOps,
   applyTagOp,
   dequeueTagOp,
+  dropPendingTagOpsForBookmarks,
   enqueueTagOp,
   reconcileSyncedAdd,
+  rekeyPendingTagOps,
   type PendingTagOp,
 } from '@/domain/pending-tags';
 import { useI18n } from '@/i18n';
@@ -68,6 +70,7 @@ import {
   pullRemoteChanges,
 } from '@/sync/pull-bookmarks';
 import {
+  createNeedsReconcileUpdate,
   createSyncApi,
   hasRemoteIdentity,
   isSyncable,
@@ -1788,21 +1791,35 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               ensureRepositoryReady()
                 .then(() => repository.replaceBookmark(previousId, persisted))
                 .catch((error) => logStorageError('post-sync merge', error));
+              // The bookmark row just changed local→remote id. Tag state (pending
+              // ops + optimistic links) is keyed by bookmark id, so re-key it onto
+              // the new remote id — otherwise any tag op queued before this sync
+              // (a carried-over op from account re-home, or a tag added while the
+              // create was uploading) stays parked on a dead local id that
+              // syncTagOps skips via hasRemoteIdentity, and never uploads.
+              if (previousId !== persisted.id) {
+                const idMap = new Map([[previousId, persisted.id]]);
+                applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
+                const links = tagDataRef.current.bookmarkTags.map((link) =>
+                  link.bookmark_id === previousId
+                    ? { ...link, bookmark_id: persisted.id }
+                    : link,
+                );
+                applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+                // The re-keyed op now targets a remote id; kick the uploader.
+                void syncTagOps();
+              }
               // The create payload only carries url/title/notes, and the remote
-              // row defaults to no generated metadata + pending status. If the
-              // local row has since diverged — archived, filed into a collection,
-              // edited, or enriched while the create was uploading — reconcile
-              // with a follow-up update so those changes reach the cloud.
+              // row defaults to no generated metadata + pending status + active.
+              // If the local row has since diverged — archived, filed into a
+              // collection, edited, enriched, or TRASHED while the create was
+              // uploading — reconcile with a follow-up update so those changes
+              // reach the cloud. Without the `deleted_at` arm, a bookmark trashed
+              // before it had a remote id would stay live in the cloud and
+              // resurrect on other devices.
               if (
                 entry.operation === 'create' &&
-                (persisted.is_archived ||
-                  persisted.collection_id !== null ||
-                  persisted.title !== (result.uploadedPayload?.title ?? null) ||
-                  persisted.notes !== (result.uploadedPayload?.notes ?? null) ||
-                  persisted.metadata_status !== 'pending' ||
-                  persisted.site_name !== null ||
-                  persisted.favicon_url !== null ||
-                  persisted.preview_image_url !== null)
+                createNeedsReconcileUpdate(persisted, result.uploadedPayload)
               ) {
                 enqueueMutation(persisted.id, 'update');
               }
@@ -1858,6 +1875,30 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           setQueue,
           makeLocalId,
           ensureRepositoryReady,
+          {
+            rehome: (idMap) => {
+              // Re-key tag state from the re-homed bookmarks' old ids onto their
+              // new local ids so the carried-over tags upload (via the syncTagOps
+              // call below) against the row that now exists in the new account.
+              applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
+              const links = tagDataRef.current.bookmarkTags.map((link) => {
+                const newId = idMap.get(link.bookmark_id);
+                return newId ? { ...link, bookmark_id: newId } : link;
+              });
+              applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+            },
+            drop: (ids) => {
+              // Real A→real B switch: purge A's pending tag ops + links so the
+              // syncTagOps call below (now under B's auth) can't upload A's tags
+              // as B or surface them in B's UI.
+              applyTagOps(dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids));
+              const dropped = new Set(ids);
+              const links = tagDataRef.current.bookmarkTags.filter(
+                (link) => !dropped.has(link.bookmark_id),
+              );
+              applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+            },
+          },
         );
       } catch (error) {
         logStorageError('account transition', error);

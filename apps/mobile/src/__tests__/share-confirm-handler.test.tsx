@@ -45,7 +45,7 @@ describe('ShareConfirmHandler', () => {
 
     // The confirmation appears on whatever screen we landed on — it does not
     // pull the user to the Inbox by itself.
-    await findByText('2 saved');
+    await findByText('2 saved to Stash');
     expect(mockRouter.replace).not.toHaveBeenCalled();
 
     // The record is drained so a later open won't re-confirm the same saves.

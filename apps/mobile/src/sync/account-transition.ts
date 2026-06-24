@@ -88,13 +88,34 @@ export async function applyAccountTransition(
   setQueue: (updater: (prev: LocalPendingBookmark[]) => LocalPendingBookmark[]) => void,
   makeLocalId: () => string,
   ensureRepositoryReady: () => Promise<void>,
+  /**
+   * Tag state (pending tag ops + optimistic tag links) is keyed by bookmark id,
+   * so an account transition that re-homes or drops bookmark ids must move that
+   * state in lockstep:
+   *  - `rehome(idMap)` re-keys old→new local id on carry-over. Without it a
+   *    re-homed bookmark's queued tag ops still target its OLD id — absent in
+   *    the new account — and `syncTagOps` fires `addTags` against a non-existent
+   *    bookmark, silently dropping the carried-over tags.
+   *  - `drop(ids)` purges tag state for the previous REAL account's rows on a
+   *    real A→real B switch. Without it, account A's pending tag ops and links
+   *    survive into account B's session and `syncTagOps` (which runs right after
+   *    under B's auth) uploads A's tags as B and surfaces them in B's UI — a
+   *    cross-account leak.
+   */
+  tagState: {
+    rehome?: (idMap: Map<string, string>) => void;
+    drop?: (ids: string[]) => void;
+  } = {},
 ): Promise<void> {
   if (plan.rehome.length > 0) {
     const now = new Date().toISOString();
     const rehomedById = new Map<string, Bookmark>();
+    /** old bookmark id -> new local id, for re-keying tag state below. */
+    const idMap = new Map<string, string>();
     const newEntries: LocalPendingBookmark[] = [];
     for (const old of plan.rehome) {
       const newId = makeLocalId();
+      idMap.set(old.id, newId);
       rehomedById.set(old.id, { ...old, id: newId, sync_status: 'pending', updated_at: now });
       newEntries.push({
         local_id: newId,
@@ -115,6 +136,10 @@ export async function applyAccountTransition(
       (current ?? []).map((bookmark) => rehomedById.get(bookmark.id) ?? bookmark),
     );
     setQueue((current) => [...current, ...newEntries]);
+    // Re-key tag ops/links onto the new local ids so the carried-over tags
+    // upload against the re-homed bookmark instead of an id the new account
+    // never had.
+    tagState.rehome?.(idMap);
     await ensureRepositoryReady();
     for (const [oldId, rehomed] of rehomedById) {
       await repository.replaceBookmark(oldId, rehomed);
@@ -127,6 +152,10 @@ export async function applyAccountTransition(
     const dropped = new Set(plan.drop);
     recordLog('warn', `account switch: dropping ${plan.drop.length} cached bookmark(s) from the previous account`);
     setBookmarks((current) => (current ?? []).filter((bookmark) => !dropped.has(bookmark.id)));
+    // Purge the dropped rows' tag state too, symmetric to the re-home re-key:
+    // otherwise account A's pending tag ops/links leak into account B's session
+    // and syncTagOps uploads them as B.
+    tagState.drop?.(plan.drop);
     await ensureRepositoryReady();
     await Promise.all(plan.drop.map((id) => repository.deleteBookmark(id)));
   }

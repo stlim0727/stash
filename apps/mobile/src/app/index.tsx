@@ -68,6 +68,7 @@ import type { TFunction } from '@/i18n/translate';
 import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
+import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
@@ -242,10 +243,12 @@ export default function InboxScreen() {
     clearUnseenSuggestions,
     collections,
     trashBookmark,
+    restoreBookmark,
     deleteBookmark,
     assignCollection,
     markBookmarkAccessed,
   } = useBookmarks();
+  const { show: showToast } = useCaptureToast();
   const [query, setQuery] = useState('');
   // The TextInput stays bound to `query` (instant echo), but the derived work —
   // filtering, sorting, the searching flag, the section label — keys off this
@@ -580,6 +583,17 @@ export default function InboxScreen() {
   // shelf — never the browse shelf. The browse shelf returns only on blur. This
   // also keeps it hidden in the typing-no-match case, where neither row shows.
   const showShelf = chips.length > 0 && !searchFocused;
+  // On a brand-new (empty) library the search/sort/view controls are just cold
+  // chrome over a "nothing here yet" screen — fold them away so the first run
+  // is all about the first save. Keyed on the unfiltered library, not the
+  // current view, so a search/filter that yields zero rows still keeps the
+  // controls (the user needs them to clear the query or facet).
+  const showControls = inbox.length > 0 || searching;
+  // The tag cloud is a navigation surface over existing items; on an empty
+  // library it has nothing to show AND its view segment is folded away (no way
+  // back to Cards), so an empty library always falls through to the onboarding
+  // card regardless of the saved view mode.
+  const showCloud = viewMode === 'cloud' && inbox.length > 0;
 
   // Record a submitted query into recents (trim + case-insensitive dedupe-to-
   // front + cap). The ONLY write path for recents — never on every keystroke.
@@ -736,10 +750,16 @@ export default function InboxScreen() {
       onPress: () => {
         closeMenu();
         trashBookmark(item.id);
+        // A trash is recoverable, but the recovery path (Settings → Trash) is
+        // not obvious — so offer an immediate one-tap Undo right where it happened.
+        showToast(t('toast.trashed'), {
+          label: t('common.undo'),
+          onPress: () => restoreBookmark(item.id),
+        });
       },
     });
     return actions;
-  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, markBookmarkAccessed, closeMenu, t]);
+  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, restoreBookmark, showToast, markBookmarkAccessed, closeMenu, t]);
 
   const menuTitle =
     menuMode === 'move'
@@ -880,38 +900,40 @@ export default function InboxScreen() {
             </Pressable>
           </View>
         ) : null}
-        <View style={styles.searchWrap}>
-          <TextInput
-            ref={searchRef}
-            style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
-            placeholder={t('inbox.searchPlaceholder')}
-            placeholderTextColor={palette.textSecondary}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={query}
-            onChangeText={setQuery}
-            onFocus={() => {
-              // A re-focus cancels any pending deferred hide from a prior blur.
-              clearBlurHide();
-              setSearchFocused(true);
-            }}
-            onBlur={() => {
-              // Defer the hide so a suggestion chip's onPress (which fires after
-              // the native blur) resolves against a still-mounted shelf. A real
-              // dismissal still settles on the next tick.
-              clearBlurHide();
-              blurHideTimer.current = setTimeout(() => {
-                blurHideTimer.current = null;
-                setSearchFocused(false);
-              }, 0);
-            }}
-            // Submit (keyboard "search"/return) is the only recents write path:
-            // the debounced search already reflects the text, so we just record.
-            returnKeyType="search"
-            onSubmitEditing={(event) => recordRecent(event.nativeEvent.text)}
-            clearButtonMode="while-editing"
-          />
-        </View>
+        {showControls ? (
+          <View style={styles.searchWrap}>
+            <TextInput
+              ref={searchRef}
+              style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
+              placeholder={t('inbox.searchPlaceholder')}
+              placeholderTextColor={palette.textSecondary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              value={query}
+              onChangeText={setQuery}
+              onFocus={() => {
+                // A re-focus cancels any pending deferred hide from a prior blur.
+                clearBlurHide();
+                setSearchFocused(true);
+              }}
+              onBlur={() => {
+                // Defer the hide so a suggestion chip's onPress (which fires after
+                // the native blur) resolves against a still-mounted shelf. A real
+                // dismissal still settles on the next tick.
+                clearBlurHide();
+                blurHideTimer.current = setTimeout(() => {
+                  blurHideTimer.current = null;
+                  setSearchFocused(false);
+                }, 0);
+              }}
+              // Submit (keyboard "search"/return) is the only recents write path:
+              // the debounced search already reflects the text, so we just record.
+              returnKeyType="search"
+              onSubmitEditing={(event) => recordRecent(event.nativeEvent.text)}
+              clearButtonMode="while-editing"
+            />
+          </View>
+        ) : null}
         {showSuggestions ? (
           <SearchSuggestionShelf
             suggestions={suggestions}
@@ -920,7 +942,7 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {showSuggestions ? null : (
+        {showControls && !showSuggestions ? (
         <View style={styles.sortRow}>
           <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>{t('inbox.browse')}</Text>
           <Pressable
@@ -963,7 +985,7 @@ export default function InboxScreen() {
             })}
           </View>
         </View>
-        )}
+        ) : null}
         {showShelf ? (
           <ScrollView
             horizontal
@@ -980,7 +1002,7 @@ export default function InboxScreen() {
           </ScrollView>
         ) : null}
       </Animated.View>
-      {viewMode === 'cloud' ? (
+      {showCloud ? (
         <Animated.ScrollView
           testID="inbox-tag-cloud"
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
@@ -1107,10 +1129,46 @@ export default function InboxScreen() {
                 </Text>
               </Pressable>
             </View>
+          ) : filter.kind !== 'all' ? (
+            // A facet/filter with zero rows: not the first-run case, so keep the
+            // terse "nothing in this view" line rather than the onboarding card.
+            <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('inbox.emptyView')}</Text>
           ) : (
-            <Text style={[styles.empty, { color: palette.textSecondary }]}>
-              {filter.kind !== 'all' ? t('inbox.emptyView') : t('inbox.emptyAll')}
-            </Text>
+            // First run: teach the share-sheet capture (the app's whole point),
+            // not just "add below" — otherwise Stash reads as a manual URL box.
+            <View style={styles.emptyState} testID="inbox-empty-onboarding">
+              <Ionicons
+                name="bookmarks-outline"
+                size={40}
+                color={palette.textSecondary}
+                style={styles.emptyGlyph}
+              />
+              <Text style={[styles.emptyTitle, { color: palette.text }]}>
+                {t('inbox.emptyTitle')}
+              </Text>
+              <View style={styles.emptyHintRow}>
+                <Ionicons
+                  name="share-outline"
+                  size={18}
+                  color={palette.accent}
+                  style={styles.emptyHintIcon}
+                />
+                <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                  {t('inbox.emptyHintShare')}
+                </Text>
+              </View>
+              <View style={styles.emptyHintRow}>
+                <Ionicons
+                  name="add-circle-outline"
+                  size={18}
+                  color={palette.accent}
+                  style={styles.emptyHintIcon}
+                />
+                <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                  {t('inbox.emptyHintAdd')}
+                </Text>
+              </View>
+            </View>
           )
         }
         extraData={`${viewMode}|${searching}|${debouncedQuery}`}
@@ -1167,16 +1225,31 @@ export default function InboxScreen() {
                     </Text>
                   ) : null}
                 </View>
-                {suggestionCount > 0 ? (
+                {/* While the "new AI suggestions" banner is announcing, suppress
+                    the per-card ✨ badge so the same item isn't shouted twice on
+                    one screen; dismissing the banner brings the badges back. */}
+                {suggestionCount > 0 && newSuggestionsCount === 0 ? (
                   <View
                     accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
-                    style={[styles.suggestBadge, { borderColor: palette.accent }]}
+                    style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
                   >
                     <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
                       ✨ {suggestionCount}
                     </Text>
                   </View>
                 ) : null}
+                {/* Explicit overflow so the move/share/trash actions aren't
+                    hidden behind a long-press only — the sole reach for a
+                    note/image row that has no ↗ open button. */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t('inbox.moreActions')}
+                  hitSlop={8}
+                  style={styles.moreButton}
+                  onPress={() => setMenuItem(item)}
+                >
+                  <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                </Pressable>
                 {item.url ? (
                   <Pressable
                     accessibilityRole="link"
@@ -1232,16 +1305,27 @@ export default function InboxScreen() {
                   >
                     {displayTitle(item) ?? t('common.untitled')}
                   </Text>
-                  {suggestionCount > 0 ? (
+                  {suggestionCount > 0 && newSuggestionsCount === 0 ? (
                     <View
                       accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
-                      style={[styles.suggestBadge, { borderColor: palette.accent }]}
+                      style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
                     >
                       <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
                         ✨ {suggestionCount}
                       </Text>
                     </View>
                   ) : null}
+                  {/* Always-present overflow: the discoverable way into
+                      move/share/trash, not a long-press a user must guess. */}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t('inbox.moreActions')}
+                    hitSlop={8}
+                    style={[styles.moreButton, styles.cardMoreButton]}
+                    onPress={() => setMenuItem(item)}
+                  >
+                    <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                  </Pressable>
                 </View>
                 {item.url ? (
                   <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
@@ -1439,6 +1523,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
   },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 24,
+  },
+  emptyGlyph: {
+    marginBottom: 16,
+    opacity: 0.7,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 20,
+  },
+  emptyHintRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    alignSelf: 'stretch',
+    maxWidth: 320,
+    marginBottom: 12,
+  },
+  emptyHintIcon: {
+    marginRight: 10,
+    marginTop: 1,
+  },
+  emptyHintText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+  },
   errorBanner: {
     fontSize: 13,
     paddingVertical: 10,
@@ -1591,6 +1705,16 @@ const styles = StyleSheet.create({
     height: 34,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  moreButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardMoreButton: {
+    marginLeft: 'auto',
   },
   cardPreview: {
     width: '100%',

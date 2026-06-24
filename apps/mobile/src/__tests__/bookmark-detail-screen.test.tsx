@@ -33,6 +33,7 @@ jest.mock('expo-router', () => ({
 
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import { BookmarksProvider } from '@/store/bookmarks';
+import { CaptureToastProvider } from '@/ui/capture-toast';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
@@ -43,7 +44,9 @@ const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModul
 function renderDetail() {
   return render(
     <BookmarksProvider>
-      <BookmarkDetailScreen />
+      <CaptureToastProvider>
+        <BookmarkDetailScreen />
+      </CaptureToastProvider>
     </BookmarksProvider>,
   );
 }
