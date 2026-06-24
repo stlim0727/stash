@@ -71,9 +71,35 @@ function symbolHaystack(value: string): string {
  * "c++"<->"cpp" would need an explicit synonym table, out of scope here.
  */
 const SYMBOL_FOLD = /[^\p{L}\p{N}\s]/u;
+const LETTER_OR_NUMBER = /[\p{L}\p{N}]/u;
+const SEPARATOR_SYMBOLS = /^[._-]+$/u;
+
+function isSeparatorTerm(value: string): boolean {
+  const chars = [...value];
+  if (
+    chars.length === 0 ||
+    !LETTER_OR_NUMBER.test(chars[0] ?? '') ||
+    !LETTER_OR_NUMBER.test(chars.at(-1) ?? '')
+  ) {
+    return false;
+  }
+  let symbolRun = '';
+  for (const char of chars) {
+    if (LETTER_OR_NUMBER.test(char) || /\s/u.test(char)) {
+      if (symbolRun && !SEPARATOR_SYMBOLS.test(symbolRun)) {
+        return false;
+      }
+      symbolRun = '';
+    } else {
+      symbolRun += char;
+    }
+  }
+  return !symbolRun || SEPARATOR_SYMBOLS.test(symbolRun);
+}
+
 function rawTerm(token: string): { value: string; hasSymbol: boolean } {
   const value = token.normalize('NFKC').toLowerCase();
-  return { value, hasSymbol: SYMBOL_FOLD.test(value) };
+  return { value, hasSymbol: SYMBOL_FOLD.test(value) && !isSeparatorTerm(value) };
 }
 
 /**
@@ -135,7 +161,11 @@ export function matchesQuery(candidateName: string, query: string): MatchRank {
   const haystack = normalizeHaystack(name);
   const symbolHay = symbolHaystack(name);
 
-  const normalizedMatch = terms.every((term) => haystack.includes(term));
+  const collapsedHaystack = haystack.replace(/ /g, '');
+  const collapsedSymbolHaystack = symbolHay.replace(/ /g, '');
+  const normalizedMatch = terms.every(
+    (term) => haystack.includes(term) || collapsedHaystack.includes(term),
+  );
   const symbolMatch = symbolTerms.every((term) => symbolHay.includes(term));
   if (!normalizedMatch || !symbolMatch) {
     return 'none';
@@ -144,7 +174,10 @@ export function matchesQuery(candidateName: string, query: string): MatchRank {
   // Rank on the separator-collapsed forms so "Design System" vs "designsystem"
   // compare as a clean exact/prefix. Symbol terms keep their symbols; ordinary
   // terms are punctuation-stripped — collapse each side the matching way.
-  const collapsedName = `${haystack.replace(/ /g, '')}${symbolHay.replace(/ /g, '')}`;
+  const collapsedName =
+    symbolTerms.length > 0 && terms.length === 0
+      ? collapsedSymbolHaystack
+      : collapsedHaystack + collapsedSymbolHaystack;
   // Reconstruct the collapsed query in the same families so the comparison is
   // apples-to-apples (normalized query tokens then symbol query tokens).
   const collapsedQuery = `${terms.join('')}${symbolTerms.join('')}`;
@@ -153,7 +186,7 @@ export function matchesQuery(candidateName: string, query: string): MatchRank {
   }
   // Use the normalized-only forms for exact/prefix when there are no symbol
   // terms (the common case), which keeps "des" → "design" a clean prefix.
-  const nameKey = symbolTerms.length === 0 ? haystack.replace(/ /g, '') : collapsedName;
+  const nameKey = symbolTerms.length === 0 ? collapsedHaystack : collapsedName;
   const queryKey = symbolTerms.length === 0 ? terms.join('') : collapsedQuery;
   if (nameKey === queryKey) {
     return 'exact';
