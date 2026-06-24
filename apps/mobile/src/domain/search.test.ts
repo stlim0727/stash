@@ -338,3 +338,21 @@ test('matchesQuery: symbol query "c++" matches a "C++" tag literally', () => {
   // …and does not bleed onto an unrelated bare word.
   assert.equal(matchesQuery('cooking', 'c++'), 'none');
 });
+
+test('separator punctuation in the query still matches spaced labels', () => {
+  const items = [makeBookmark({ id: 'sep', collection_id: 'col' })];
+  const resolvers: SearchResolvers = { collectionName: () => 'Watch Later' };
+
+  assert.deepEqual(
+    filterBookmarks(items, 'watch-later', resolvers).map((b) => b.id),
+    ['sep'],
+  );
+  assert.equal(matchesQuery('Watch Later', 'watch-later'), 'exact');
+});
+
+test('semantic symbol queries stay literal while separator punctuation normalizes', () => {
+  assert.equal(matchesQuery('C++', 'c++'), 'exact');
+  assert.equal(matchesQuery('Cooking', 'c++'), 'none');
+  assert.equal(matchesQuery('Networking', '.net'), 'none');
+  assert.notEqual(matchesQuery('expo dev', 'expo.dev'), 'none');
+});
