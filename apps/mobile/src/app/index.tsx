@@ -7,6 +7,7 @@ import {
   BackHandler,
   FlatList,
   Image,
+  Keyboard,
   Linking,
   Platform,
   Pressable,
@@ -272,10 +273,24 @@ export default function InboxScreen() {
     }
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
+  const searchRef = useRef<TextInput>(null);
+  // On Android, dismissing the keyboard with the hardware/gesture Back button (or
+  // an on-drag list scroll) does NOT fire the TextInput's onBlur — so without
+  // this the focused-only suggestion shelf would stay stranded on screen with no
+  // keyboard. When the keyboard hides, drop the focused state (and blur the field
+  // so its next focus re-fires onFocus cleanly). keyboardDidHide lands well after
+  // a chip's synchronous onPress, so it can't reintroduce the tap-into-void race.
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidHide', () => {
+      clearBlurHide();
+      setSearchFocused(false);
+      searchRef.current?.blur();
+    });
+    return () => sub.remove();
+  }, [clearBlurHide]);
   // The user's own recent searches (most-recent-first). Local-only: persisted in
   // the meta store as `pref.search.recents`, never enqueued or synced.
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const searchRef = useRef<TextInput>(null);
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -1103,6 +1118,12 @@ export default function InboxScreen() {
           useNativeDriver: true,
         })}
         scrollEventThrottle={16}
+        // Dragging the list dismisses the keyboard (→ keyboardDidHide drops the
+        // focused state and the suggestion shelf). `handled` keeps suggestion
+        // chips tappable while the field is still focused (their onPress fires
+        // before the tap would otherwise blur the field).
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
         // Keep the scrollbar clear of the floating header.
         scrollIndicatorInsets={{ top: headerHeight }}
         contentContainerStyle={[

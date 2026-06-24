@@ -1,4 +1,5 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { Keyboard } from 'react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -676,5 +677,47 @@ test('a filtered chip tap survives a blur fired first (Phase-2 typing race)', as
     });
   } finally {
     jest.useRealTimers();
+  }
+});
+
+// --- Keyboard dismissed without a blur (Android Back button) -----------------
+//
+// On Android, dismissing the keyboard with the hardware/gesture Back button (or
+// an on-drag list scroll) does NOT fire the TextInput's onBlur, so the focused-
+// only suggestion shelf would be stranded on screen with no keyboard. The screen
+// listens for `keyboardDidHide` and drops the focused state. This reproduces it
+// by capturing the registered handler and invoking it WITHOUT firing `blur`.
+test('keyboard-hide without a blur drops the stranded shelf (Android Back button)', async () => {
+  const handlers: Array<() => void> = [];
+  const addSpy = jest
+    .spyOn(Keyboard, 'addListener')
+    .mockImplementation(((event: string, cb: () => void) => {
+      if (event === 'keyboardDidHide') {
+        handlers.push(cb);
+      }
+      return { remove: jest.fn() };
+    }) as unknown as typeof Keyboard.addListener);
+  try {
+    seedTaggedLibrary();
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
+
+    const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+    await act(async () => {
+      fireEvent(input, 'focus');
+    });
+    await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+    // The keyboard hides but NO blur fires (the Android Back-button case).
+    expect(handlers.length).toBeGreaterThan(0);
+    await act(async () => {
+      handlers.forEach((cb) => cb());
+    });
+
+    // The shelf is gone and the browse shelf is restored — no longer stranded.
+    await waitFor(() => expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull());
+    expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+  } finally {
+    addSpy.mockRestore();
   }
 });
