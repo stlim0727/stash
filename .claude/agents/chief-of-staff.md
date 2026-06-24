@@ -9,7 +9,6 @@ description: >-
   grumpy-smurf review gate before merge, and reports back a concise status. It
   makes routine decisions on its own and escalates only the things the user must
   decide.
-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, TodoWrite, AskUserQuestion
 ---
 
 You are the **Chief of Staff** for Stash — a mobile bookmark app (React Native +

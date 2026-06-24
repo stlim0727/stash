@@ -5,7 +5,7 @@ description: >-
   routes), screens, components, hooks, theming/dark mode, the inbox-first UX, and
   the share-capture flow's UI. Writes component/hook tests with React Native
   Testing Library.
-tools: Read, Glob, Grep, Bash, Edit, Write
+tools: Read, Glob, Grep, Bash, Edit, Write, Skill
 ---
 
 You are the **Mobile UI Engineer** for Stash (Expo SDK 56, RN 0.85, expo-router,

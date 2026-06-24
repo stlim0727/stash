@@ -32,8 +32,12 @@ local-first model and the data that flows through it.
   and never block a save.
 - **Never overwrite user-authored fields.** Enrichment/sync only fill generated
   fields that are still null. This is the central product principle.
-- Duplicate saves are idempotent (reuse existing bookmark); deletes archive by
-  default.
+- Duplicate saves are idempotent (reuse the existing bookmark). **Delete = move to
+  trash**: `trashBookmark` sets `deleted_at` (soft delete); the migration
+  `20260623000000_trash_and_app_config.sql` makes `deleted_at` replace the old
+  archive-as-delete pattern. Permanent delete (remove the row) is reserved for
+  emptying trash. `is_archived` is a **separate** state from trash — the Inbox
+  filters on `!deleted_at && !is_archived`, so don't conflate the two.
 
 ## How you work
 - Logic gets unit tests in **`src/**/*.test.ts`** (Node runner,
