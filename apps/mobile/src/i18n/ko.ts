@@ -41,7 +41,6 @@ export const ko: Catalog = {
   'nav.report': '문제 신고',
   'nav.trash': '휴지통',
   'nav.bookmark': '북마크',
-  'nav.apiKeys': 'API 키',
 
   'inbox.savedCount': '{count}개 저장됨',
   'inbox.storageError':
@@ -312,35 +311,4 @@ export const ko: Catalog = {
   'tagField.addAllA11y': '모든 제안 추가',
   'tagField.dismissAll': '모두 무시',
   'tagField.dismissAllA11y': '모든 제안 무시',
-
-  'settings.apiKeys.label': 'API 키',
-  'settings.apiKeys.value': 'ChatGPT, Claude 등 AI 도구 연결',
-  'apiKeys.description':
-    'API 키를 사용하면 ChatGPT나 Claude 같은 AI 도구가 내 북마크를 읽고 정리할 수 있습니다. 키는 발급 시 한 번만 표시되니 안전한 곳에 복사해 두세요.',
-  'apiKeys.guide.title': 'AI 도구 연결 방법',
-  'apiKeys.guide.step1': '아래에서 키를 발급하고, 표시될 때 복사해 두세요.',
-  'apiKeys.guide.step2':
-    'ChatGPT: GPT Builder → 구성 → Actions → "URL에서 가져오기"를 선택하고 아래 OpenAPI URL을 붙여넣으세요.',
-  'apiKeys.guide.step3':
-    '인증 방식을 Bearer Token으로 설정하고 발급받은 키를 붙여넣으세요. Claude 등 다른 도구에서는 Authorization 헤더에 키를 입력하세요.',
-  'apiKeys.guide.copyUrlA11y': 'OpenAPI URL 복사',
-  'apiKeys.namePlaceholder': '키 이름 (예: "내 ChatGPT")',
-  'apiKeys.create': '발급',
-  'apiKeys.creating': '발급 중…',
-  'apiKeys.empty': '아직 API 키가 없습니다.',
-  'apiKeys.lastUsed': '마지막 사용: {date}',
-  'apiKeys.neverUsed': '사용 기록 없음',
-  'apiKeys.created.title': 'API 키 발급 완료',
-  'apiKeys.created.body': '지금 바로 키를 복사하세요 — 다시 표시되지 않습니다.\n\n{key}',
-  'apiKeys.created.copy': '키 복사',
-  'apiKeys.revoke.title': '키를 폐기할까요?',
-  'apiKeys.revoke.body': '"{name}"을 영구적으로 비활성화합니다. 이 키를 사용 중인 AI 도구가 즉시 차단됩니다.',
-  'apiKeys.revoke.confirm': '폐기',
-  'apiKeys.revokeA11y': '{name} 키 폐기',
-  'apiKeys.requiresAuth': 'API 키를 관리하려면 로그인하세요.',
-  'apiKeys.note': '키는 내 계정에만 적용됩니다. 폐기하면 해당 키를 사용하는 도구가 즉시 차단됩니다.',
-  'apiKeys.error.createTitle': '키 발급 실패',
-  'apiKeys.error.createBody': '다시 시도해 주세요.',
-  'apiKeys.error.revokeTitle': '키 폐기 실패',
-  'apiKeys.error.revokeBody': '다시 시도해 주세요.',
 };

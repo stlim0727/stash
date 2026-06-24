@@ -60,7 +60,6 @@ export const en = {
   'nav.report': 'Report a problem',
   'nav.trash': 'Trash',
   'nav.bookmark': 'Bookmark',
-  'nav.apiKeys': 'API Keys',
 
   // Inbox (home).
   'inbox.savedCount': '{count} saved',
@@ -382,39 +381,6 @@ export const en = {
   'tagField.addAllA11y': 'Add all suggestions',
   'tagField.dismissAll': 'Dismiss all',
   'tagField.dismissAllA11y': 'Dismiss all suggestions',
-
-  // API Keys screen (external AI client integration).
-  'settings.apiKeys.label': 'API Keys',
-  'settings.apiKeys.value': 'Connect ChatGPT, Claude, and other AI tools',
-  'apiKeys.description':
-    'API keys let external AI tools (like ChatGPT or Claude) read and organize your bookmarks. Each key is shown only once — copy it somewhere safe.',
-  'apiKeys.guide.title': 'How to connect an AI tool',
-  'apiKeys.guide.step1': 'Create a key below and copy it when shown.',
-  'apiKeys.guide.step2':
-    'In ChatGPT: open GPT Builder → Configure → Actions → "Import from URL" and paste the OpenAPI URL below.',
-  'apiKeys.guide.step3':
-    'Set authentication to Bearer Token and paste your key. In Claude or other tools, pass the key as the Authorization header.',
-  'apiKeys.guide.copyUrlA11y': 'Copy OpenAPI URL',
-  'apiKeys.namePlaceholder': 'Key name (e.g. "My ChatGPT")',
-  'apiKeys.create': 'Create',
-  'apiKeys.creating': 'Creating…',
-  'apiKeys.empty': 'No API keys yet.',
-  'apiKeys.lastUsed': 'Last used {date}',
-  'apiKeys.neverUsed': 'Never used',
-  'apiKeys.created.title': 'API key created',
-  'apiKeys.created.body':
-    'Copy your key now — it won\'t be shown again.\n\n{key}',
-  'apiKeys.created.copy': 'Copy key',
-  'apiKeys.revoke.title': 'Revoke key?',
-  'apiKeys.revoke.body': 'This will permanently disable "{name}". Any AI tool using it will stop working.',
-  'apiKeys.revoke.confirm': 'Revoke',
-  'apiKeys.revokeA11y': 'Revoke key {name}',
-  'apiKeys.requiresAuth': 'Sign in to manage API keys.',
-  'apiKeys.note': 'Keys are scoped to your account. Revoking a key immediately blocks any tool using it.',
-  'apiKeys.error.createTitle': 'Could not create key',
-  'apiKeys.error.createBody': 'Please try again.',
-  'apiKeys.error.revokeTitle': 'Could not revoke key',
-  'apiKeys.error.revokeBody': 'Please try again.',
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof en;
