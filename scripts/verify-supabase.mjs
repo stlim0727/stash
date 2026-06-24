@@ -222,6 +222,14 @@ try {
   }
   ok('pull queries (full, IDs, enrichments, incremental filter)');
 
+  // NOTE (review #6): this assert is intentionally archive-by-default, and is
+  // correct for the REST surface. The app-side `trashBookmark` performs a
+  // move-to-trash (sets `deleted_at`), but the REST `api.deleteBookmark`
+  // (apps/mobile/src/api/bookmarks.ts) only sets `is_archived` — it has NO
+  // trash/`deleted_at` semantics. So "archive-by-default delete" is the right
+  // expectation here; do NOT change it to assert `deleted_at`. Whether the REST
+  // API *should* gain move-to-trash semantics to match the app is a product
+  // decision flagged for the owner, not changed in this script.
   const archived = await api.deleteBookmark(created.bookmark_id);
   void archived;
   const detailAfterArchive = await api.getBookmark(created.bookmark_id);

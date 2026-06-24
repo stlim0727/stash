@@ -26,7 +26,7 @@ import { DummyProvider } from './dummy-provider.ts';
 import { GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
 import { matchSuggestedCollection } from './collection-match.ts';
-import { resolveCallerAuth } from './request-auth.ts';
+import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
 // Use the Gemini-backed provider when an API key is configured; otherwise fall
@@ -233,6 +233,10 @@ Deno.serve(async (req) => {
     // user can only ever exhaust their own quota.
     if (enforceRateLimit) {
       let verdict: RateLimitVerdict | null = null;
+      // Whether we actually obtained a verdict. Distinct from `verdict` so a
+      // null verdict that came back as "allowed: null" can't be confused with
+      // "couldn't reach the limiter".
+      let verdictObtained = false;
       try {
         // The app path's RPC scopes to the caller via the forwarded JWT
         // (auth.uid()); the server path has no token, so the service-role-only
@@ -250,16 +254,32 @@ Deno.serve(async (req) => {
             });
         if (rlRes.ok) {
           verdict = (await rlRes.json()) as RateLimitVerdict;
+          verdictObtained = true;
         } else {
-          // Fail OPEN: a missing function (migration not yet deployed) or a
-          // transient error must not break AI suggestions for everyone. The
-          // limit is a protection layer, not a correctness requirement.
-          console.error('Rate-limit check failed; allowing request:', rlRes.status);
+          console.error('Rate-limit check failed:', rlRes.status);
         }
       } catch (err) {
-        console.error('Rate-limit check threw; allowing request:', err);
+        console.error('Rate-limit check threw:', err);
       }
-      if (verdict && !verdict.allowed) {
+
+      if (!verdictObtained) {
+        // The verdict couldn't be obtained (missing function, transient error).
+        // Fail CLOSED only on the anonymous caller path: anonymous-first
+        // sign-ups make the limiter the sole cost control there, so a DB hiccup
+        // must not become an open faucet to the billable model. Signed-in users
+        // and the trusted server/trigger path stay fail-OPEN — a real account is
+        // a cost anchor, and breaking the server pipeline on a hiccup would
+        // silently halt background enrichment (see shouldFailClosedOnRateLimit).
+        if (shouldFailClosedOnRateLimit(caller)) {
+          console.error('Rate-limit verdict unavailable; failing closed for anonymous caller');
+          return json(
+            { error: 'rate_limit_unavailable', reason: 'rate_limit_unavailable', retry_after: 60 },
+            503,
+            { 'Retry-After': '60' },
+          );
+        }
+        console.error('Rate-limit verdict unavailable; allowing request (signed-in or server path)');
+      } else if (verdict && !verdict.allowed) {
         const retryAfter = Math.max(1, Math.floor(verdict.retry_after ?? 60));
         return json(
           { error: 'rate_limited', reason: verdict.reason ?? 'rate_limited', retry_after: retryAfter },
