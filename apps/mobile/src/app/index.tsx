@@ -462,7 +462,14 @@ export default function InboxScreen() {
     }
   }, [filter, chips, hasUncollected, isLoading]);
 
-  const filtered = useMemo(() => filterBookmarks(facetFiltered, query), [facetFiltered, query]);
+  const filtered = useMemo(
+    () =>
+      filterBookmarks(facetFiltered, query, {
+        tagNames: (b) => getTagsForBookmark(b.id).map((tag) => tag.name),
+        collectionName: (b) => getCollection(b.collection_id)?.name,
+      }),
+    [facetFiltered, query, getTagsForBookmark, getCollection],
+  );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
   const searching = query.trim().length > 0;
   const showShelf = chips.length > 0;

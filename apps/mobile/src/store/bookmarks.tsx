@@ -217,6 +217,9 @@ interface BookmarksContextValue {
 }
 
 const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
+// Shared empty result so getTagsForBookmark returns a stable reference for
+// bookmarks with no tags (avoids reallocating + breaking memo equality).
+const EMPTY_TAGS: Tag[] = [];
 
 /** Durable key for the local-first tag operation queue (JSON in meta). */
 const PENDING_TAG_OPS_KEY = 'pending_tag_ops';
@@ -791,21 +794,59 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [loadedBookmarks],
   );
 
-  const getTagsForBookmark = useCallback(
-    (id: string) => {
-      // Cloud tag links (refreshed by pull sync) win over seeded samples.
-      const cloudTagIds = new Set(
-        tagData.bookmarkTags.filter((link) => link.bookmark_id === id).map((link) => link.tag_id),
-      );
-      if (cloudTagIds.size > 0) {
-        return tagData.tags.filter((tag) => cloudTagIds.has(tag.id));
+  // Precompute bookmarkId -> Tag[] once per tagData change so search (which calls
+  // getTagsForBookmark for every bookmark on every keystroke) is an O(1) Map
+  // lookup instead of an O(N·M) scan + Set allocation per call. The per-bookmark
+  // verdict is unchanged: cloud tag links (refreshed by pull sync) win; a
+  // bookmark with no cloud links falls back to the seeded mock links.
+  const tagsByBookmark = useMemo(() => {
+    const map = new Map<string, Tag[]>();
+    const tagsById = new Map(tagData.tags.map((tag) => [tag.id, tag]));
+
+    // Group cloud links by bookmark, preserving first-seen order.
+    const cloudIdsByBookmark = new Map<string, string[]>();
+    for (const link of tagData.bookmarkTags) {
+      const list = cloudIdsByBookmark.get(link.bookmark_id);
+      if (list) {
+        list.push(link.tag_id);
+      } else {
+        cloudIdsByBookmark.set(link.bookmark_id, [link.tag_id]);
       }
-      const mockTagIds = mockBookmarkTags
-        .filter((link) => link.bookmark_id === id)
-        .map((link) => link.tag_id);
-      return mockTags.filter((tag) => mockTagIds.includes(tag.id));
-    },
-    [tagData],
+    }
+    for (const [bookmarkId, tagIds] of cloudIdsByBookmark) {
+      const tags = tagIds
+        .map((tagId) => tagsById.get(tagId))
+        .filter((tag): tag is Tag => Boolean(tag));
+      map.set(bookmarkId, tags);
+    }
+
+    // Seeded fallback only for bookmarks with no cloud links.
+    const mockTagsById = new Map(mockTags.map((tag) => [tag.id, tag]));
+    const mockIdsByBookmark = new Map<string, string[]>();
+    for (const link of mockBookmarkTags) {
+      const list = mockIdsByBookmark.get(link.bookmark_id);
+      if (list) {
+        list.push(link.tag_id);
+      } else {
+        mockIdsByBookmark.set(link.bookmark_id, [link.tag_id]);
+      }
+    }
+    for (const [bookmarkId, tagIds] of mockIdsByBookmark) {
+      if (map.has(bookmarkId)) {
+        continue;
+      }
+      const tags = tagIds
+        .map((tagId) => mockTagsById.get(tagId))
+        .filter((tag): tag is Tag => Boolean(tag));
+      map.set(bookmarkId, tags);
+    }
+
+    return map;
+  }, [tagData]);
+
+  const getTagsForBookmark = useCallback(
+    (id: string) => tagsByBookmark.get(id) ?? EMPTY_TAGS,
+    [tagsByBookmark],
   );
 
   const getCollection = useCallback(
