@@ -27,7 +27,9 @@ the app-UX-review epic, and the search chip shelf). The stable target is
 
 | Build | Date (UTC) | `main` SHA | What's new since last RC |
 | ----- | ---------- | ---------- | ------------------------ |
-| `v0.2.2-rc1` | _pending_ | _after the `0.2.2` bump lands on `main`_ | First build at version `0.2.2`. Same code as `v0.2.1-rc4` plus the version bump. |
+| `v0.2.2-rc3` | 2026-06-24 | `95c3ebf` | Search finishers (#207): punctuation/symbol-only query treated as not-a-search (no more "Matches (all)"); "Matches (N)" → "{count} results" / "검색 결과 {count}개"; zero-result label suppressed so it doesn't double-label the recovery card. |
+| `v0.2.2-rc2` | 2026-06-24 | `321a8be` | Fix (#204): the search suggestion shelf no longer gets stranded on screen when the keyboard is dismissed via the Android Back button / list scroll (keyboardDidHide → drop focus, deferred so chip taps still land). |
+| `v0.2.2-rc1` | 2026-06-24 | `7d330d3` | First build at version `0.2.2` — the `0.2.1` code (search chip shelf + UX epic) plus the version bump (#203). |
 
 ### 0.2.1 builds (superseded — never cut to a stable tag)
 
