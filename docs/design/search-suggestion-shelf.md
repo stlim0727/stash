@@ -1,10 +1,10 @@
 # Search Suggestion Shelf — Design Spec
 
-Status: **approved direction (Option A), Phase 1 ready to build**
+Status: **Phase 1 built & merged (`claude/search-functionality-issue-0w993x`); Phase 2 (live filter) specced & ready to build — see §13**
 Owner: Product & UX
 Surface: Inbox (`apps/mobile/src/app/index.tsx`)
 Related: `docs/design/ux-spec.md` §11 (Search & editing), §2 (browse facets); `AGENTS.md`
-Mocks: `scratchpad/phase1-shelf.png` (Phase 1 focused-empty, light + dark), `scratchpad/search-assist.png` (earlier exploration: typing-preview + overlay ideas)
+Mocks: `scratchpad/phase1-shelf.png` (Phase 1 focused-empty, light + dark), `scratchpad/phase2-shelf.png` (Phase 2 typing-with-matches, light + dark), `scratchpad/search-assist.png` (earlier exploration: typing-preview + overlay ideas)
 
 ---
 
@@ -153,18 +153,19 @@ The user has never searched, so the recents group is empty. Behavior:
   placeholder `inbox.searchPlaceholder` is the whole experience — same as a fresh
   install's browse shelf, which is also empty. We never show an empty container.
 
-### 4.3 Typing (Phase 2 preview — note the transition only)
+### 4.3 Typing (changed by Phase 2 — full spec in §13)
 
-In **Phase 1**, the moment the query becomes non-empty the suggestion shelf
-**hides** and the screen behaves exactly as today (the existing debounced
-filter + "Matches (N)" section). The browse shelf stays hidden while a query is
-present (current behavior is that the browse shelf is always shown; Phase 1 does
-**not** change that — see §9 open question Q1).
+In **Phase 1 (as built)**, the moment the query becomes non-empty the suggestion
+shelf **hides** and the screen behaves exactly as today (the existing debounced
+filter + "Matches (N)" section), with the browse shelf remaining visible while a
+query is present (§9 Q1).
 
-> **Phase 2 will replace this "hides on first keystroke" behavior** with a live
-> in-shelf filter (matching tags/folders/recents narrow as you type). Phase 1
-> should structure the component so this is a later swap of the data source, not
-> a rewrite (see ticket ST-1's prop shape).
+> **Phase 2 replaces this "hides on first keystroke" behavior** with a live
+> in-shelf filter: matching tags/folders/recents narrow as you type and the
+> shelf becomes an autocomplete rail rather than vanishing. The component is
+> already shaped for this (the builder takes a `query` seam; the hook threads it;
+> §13 turns the seam live). See **§13** for the complete Phase-2 spec, states,
+> and decisions.
 
 ### 4.4 Blurred (hidden)
 
@@ -356,16 +357,18 @@ now implemented as stated.
 
 ## 10. Phases 2–4 (outline)
 
-**Phase 2 — Live filter (the shelf reacts to typing).** Replace Phase 1's
-"hide on first keystroke" with a live narrowing: as the user types, the shelf's
-tag/folder/recent chips filter to those whose names contain the (debounced)
-query, reordered best-match-first, so the shelf becomes an autocomplete rail
-rather than vanishing. Tapping a filtered tag/folder chip applies the facet;
-tapping a "matched recent" re-runs it. The data-source swap is why ST-1 takes its
-suggestions as a prop/selector output rather than computing them inline. Keep the
-result list live underneath (typing still filters it via the existing debounced
-path), so the shelf and the list agree. No new persistence; reuses the same
-`useSearchSuggestions` hook with the query threaded in.
+**Phase 2 — Live filter (the shelf reacts to typing). → FULLY SPECCED in §13.**
+Replace Phase 1's "hide on first keystroke" with a live narrowing: as the user
+types, the shelf's tag/folder/recent chips filter to those whose names contain
+the (debounced) query, reordered best-match-first, so the shelf becomes an
+autocomplete rail rather than vanishing. Tapping a filtered tag/folder chip
+applies the facet; tapping a "matched recent" re-runs it. The data-source swap is
+why ST-1 takes its suggestions as a prop/selector output rather than computing
+them inline. Keep the result list live underneath (typing still filters it via
+the existing debounced path), so the shelf and the list agree. No new
+persistence; reuses the same `useSearchSuggestions` hook with the query threaded
+in. **The implementation-ready section — every state, ranking, microcopy, and
+the ticket breakdown — is §13 below.**
 
 **Phase 3 — "Did you mean" ribbon (generated, clearly distinct).** When a query
 returns **zero or few** results, offer a thin recovery ribbon above the empty
@@ -467,3 +470,386 @@ In `inbox-screen.test.tsx` (or a new `search-suggestion-shelf.test.tsx`):
 - [ ] Recents persist across app restart and never sync.
 - [ ] KO copy reads natural to a native speaker (not calque).
 - [ ] Empty library and no-recents-yet states show no empty container.
+
+---
+
+# Phase 2 — Live filter as you type (implementation-ready)
+
+## 13. Phase 2 spec
+
+Status: **specced, ready for mobile-ui-engineer.** Builds on the merged Phase 1
+wiring (`searchFocused`, `useSearchSuggestions(recents, query?)`,
+`buildSearchSuggestions({ …, query? })`, the deferred-blur-hide, `onPickSuggestion`).
+Mock: `scratchpad/phase2-shelf.png` (typing-with-matches, light + dark).
+
+### 13.1 What Phase 2 changes (one sentence)
+
+When the field is focused **and a query is being typed**, the suggestion shelf
+**stays mounted** and shows the user's tags/folders/recents **filtered to those
+that match the query** (best-match-first) — turning the shelf into an
+autocomplete rail that sits above the live results, instead of vanishing on the
+first keystroke as in Phase 1.
+
+Everything else from Phase 1 — placement inside the header cluster, the
+fill-vs-facet tap rule, recents persistence, field-separation, the reveal
+animation — is **unchanged and reused**. Phase 2 is a *gating + data-source*
+change, not a rewrite.
+
+### 13.2 Decision 1 — Typing-state layout (revisits §9 Q1)
+
+**The three surfaces and their relationship.** There are three header-region
+surfaces that can occupy the slot under the search field: the **suggestion
+shelf**, the **browse/facet shelf + sortRow**, and (always, below the header) the
+**live results list**. The rule:
+
+| Field state | Suggestion shelf | Browse shelf + sortRow | Results list |
+|---|---|---|---|
+| **Blurred** | hidden | **shown** (today's default) | full inbox / active facet |
+| **Focused + empty query** | **shown** (Phase-1 focus-empty: recents + top tags + top folders) | hidden | full inbox (unchanged) |
+| **Focused + typing, ≥1 match** | **shown, query-filtered** (matched recents + matching tags + matching folders, best-match-first) | **hidden** | live-filtered "Matches (N)" |
+| **Focused + typing, 0 shelf matches** | **hidden** | hidden | live-filtered "Matches (N)" (or zero-result state) |
+
+**This reverses the Phase-1 Q1 ruling for the typing state, on purpose.** Phase 1
+kept the browse shelf visible while typing (so you could pre-narrow by facet then
+search within it). In Phase 2 the suggestion shelf *becomes* the live-filter
+surface while typing, so the browse shelf would now be the **second chip row** —
+exactly the "two stacked chip rows in the header" we forbade in §3. We therefore
+extend the **mutual exclusion** rule to cover the whole focused state:
+
+> **While the field is focused, at most one chip row shows under it** — the
+> suggestion shelf when there is something to suggest (empty-focus *or* a query
+> with matches), the browse shelf never. The browse shelf returns only on blur.
+> Concretely: `showShelf = chips.length > 0 && !searchFocused` (Phase 1 had
+> `&& !showSuggestions`; Phase 2 widens the suppressor to the whole focused
+> state so the browse row can't reappear in the typing-no-match case).
+
+Why this is the right product call (not just the tidy one):
+
+- **Thumb-reachability / no stacking.** The header is an absolutely-positioned
+  collapsing cluster; stacking suggestion + browse rows pushes the results list
+  down ~70px and puts two competing chip rows under the keyboard. One row keeps
+  the hot path (read results, tap a chip) within thumb reach.
+- **The "pre-narrow by facet then type" use case is preserved, just reordered.**
+  The user can still tap a facet first (from the blurred browse shelf) **then**
+  focus and type — the query then filters *within* that facet via the existing
+  results path. What they lose is applying a *new* facet mid-type, which is rare
+  and now better served by the shelf itself surfacing the matching tag/folder as
+  an autocomplete chip ("type `des` → tap **#design**").
+- **"Jump to a tag/folder" stays distinct from "open a bookmark."** The shelf
+  chip is a *destination/filter* (horizontal pills, `#`/folder glyph, applies a
+  facet); a results row is a *bookmark* (vertical card, opens the detail). Phase
+  2 makes this contrast load-bearing — see Decision 3.
+
+### 13.3 Decision 2 — What gets filtered, ranked, and capped
+
+`buildSearchSuggestions({ recents, tagCounts, folders, query })` becomes
+**query-aware**. The matching must be **identical to the results search** so the
+shelf and the "Matches (N)" list never disagree about whether something matches.
+
+**Matching (reuse the exact search normalization).** Phase 2 filters each
+candidate name by the same per-token normalization the results use
+(`collectionMatchKey` / `domain/search.ts`'s `normalizeToken`): NFKC + lowercase
++ strip non-alphanumerics, tokenized on whitespace, **all query terms must match
+(AND)**, each term a **substring** of the candidate's normalized form. This means
+`des` matches `#design` and the `Design` folder; `design sys` matches `Design
+System` (both tokens hit); a stray symbol token (`c++`) simply finds no
+tag/folder and the shelf hides — consistent with results.
+
+> Implementation note: factor the per-candidate predicate so the builder and the
+> results path share one matcher. The cleanest seam is a small exported
+> `matchesQuery(candidateName, query)` in `domain/search.ts` (or a `queryTerms`
+> export reused by the builder) so there is a **single** normalization source of
+> truth. Do **not** re-implement normalization inside `search-suggestions.ts`.
+
+**What is matched per family:**
+
+- **Tags** — match against the bare tag name (not the `#` prefix). `des` →
+  `#design`. The `#` is presentation only.
+- **Folders** — match against the collection name. `des` → `Design`.
+- **Recents** — match against the raw recent string. Show a recent **only if it
+  matches the query** (it's a prefix-or-substring of an earlier search). A recent
+  that *equals* the current query text is dropped (you're already typing it —
+  re-offering it is noise).
+
+**Recents while typing — DECISION: keep matching recents, drop non-matching
+ones.** Two defensible options were on the table: (a) drop recents entirely once
+typing starts, or (b) keep only recents that match. **We choose (b).** Rationale:
+a matching recent is the single highest-intent autocomplete — "you typed `des`,
+you searched `design system` before, tap to complete it." Dropping all recents
+would throw away the best shortcut exactly when it's most useful. Non-matching
+recents are noise mid-type and are filtered out. Cap matching recents at **3**
+while typing (down from 6 in the empty state) so they never crowd out the
+tag/folder destinations, which are the more actionable Phase-2 affordance.
+
+**Ranking (best-match-first, within and across families).** Empty-state ordering
+was recents → tags → folders, each by recency/frequency. Typing ordering is
+**relevance-tiered**, because an autocomplete rail must put the likeliest
+completion first:
+
+1. **Within each family, rank by match quality then by the existing signal:**
+   - **Exact normalized match** (candidate normalized == query normalized) first,
+   - then **prefix match** (candidate starts with the query),
+   - then **substring match** (query appears later in the candidate),
+   - ties broken by the Phase-1 signal (recency for recents, frequency/count for
+     tags, count for folders), then alpha.
+2. **Across families, keep the Phase-1 family order: recents → tags → folders.**
+   We deliberately do **not** interleave families by score. Reason: the
+   *meaning* of each family (re-run a search vs. apply a tag vs. open a folder)
+   is more important to keep grouped and predictable than squeezing out a
+   marginally higher cross-family score. The icons + grouping let the eye skip to
+   the family it wants; a score-shuffled rail where a folder jumps ahead of a tag
+   on one keystroke and behind it on the next feels jittery. (Prefix-over-
+   substring *within* a family is enough relevance signal to feel smart.)
+
+**Caps while typing:** recents **3**, tags **8**, folders **8** (tags/folders
+unchanged from empty-state caps; the row still scrolls so there's no hard total).
+The visible un-scrolled portion is the most relevant by construction.
+
+**No-suggestion-match state — DECISION: hide the shelf, show only results.** If
+the query matches **zero** recents, tags, and folders, render **no shelf and no
+affordance label** (the same "never show an empty container" rule as §4.2). The
+focused field + the live "Matches (N)" results (or the zero-result state) are the
+whole experience. There is no "no suggestions" placeholder copy — an absent rail
+is silently absent, and the results list already communicates the query's effect.
+(This is also why the §13.2 gating uses `!searchFocused`, not `!showSuggestions`,
+to suppress the browse shelf: in the no-match typing state *neither* chip row
+shows.)
+
+### 13.4 Decision 3 — Interaction (shelf chip vs. results row)
+
+**Tap actions are unchanged from Phase 1 (§5) and reuse `onPickSuggestion`
+verbatim:**
+
+- **Matched recent → fill the query** (`setQuery(recent)`), keep focus/keyboard
+  so the user can keep editing. (It replaces the partial text with the full
+  earlier search — classic autocomplete completion.)
+- **Matching tag → apply the tag facet**, clear the query, blur (so the shelf
+  closes onto the facet-filtered list). Identical end-state to the browse shelf.
+- **Matching folder → apply the collection facet**, clear query, blur.
+
+The `applySuggestionFacet` path (reset `cloudReturnRef`, drop cloud→card,
+`setFilter`) and the synchronous-hide + `clearBlurHide()` already handle the
+dismissal correctly; **no `onPick` changes are needed for Phase 2.**
+
+**Why a user taps a shelf chip vs. scrolls the results (the affordance must stay
+distinct).** This is the make-or-break interaction of Phase 2:
+
+- **Tap a shelf chip = "narrow the whole list to this facet" / "complete my
+  search."** It's a *navigational/filtering* move: I want *everything* tagged
+  `#design`, not this one card. One tap, the list reshapes, I'm done. The chip is
+  a destination.
+- **Scroll/tap the results = "I can see the specific bookmark I want."** It's a
+  *retrieval* move: the thing I'm hunting is right there; open it.
+
+These must never feel redundant. They aren't: the shelf chip operates on the
+*set* (apply `#design` as a facet → persists as the active filter, survives
+clearing the query), while a results row operates on *one item*. The mock makes
+this legible — horizontal pills with tag/folder glyphs (filter the set) above
+vertical bookmark cards (open one). The "why it matched" accent-soft tag chip
+*on* a result card (`#design` promoted, from the existing `searchTerms` path) is a
+third, distinct thing: a read-only badge explaining the match, **not** tappable as
+a facet. Keep these three visually separated; if review finds them muddy, that's
+a blocker (see §13.9).
+
+### 13.5 Decision 4 — Perf / feel
+
+Phase 2 **adds no per-keystroke cost** beyond a memoized projection:
+
+- **Suggestions recompute off the DEBOUNCED query, not the raw input.** Thread
+  `debouncedQuery` (the existing `useDebouncedValue(query, 140)`) into
+  `useSearchSuggestions(recents, debouncedQuery)`. The TextInput still echoes the
+  raw `query` instantly (typing never feels laggy); the shelf re-filters on the
+  same ~140ms cadence as the results list, so **shelf and results update in the
+  same frame** and never momentarily disagree. This is the single most important
+  feel decision: a shelf that filtered off the raw query would update one frame
+  ahead of the results and read as a flicker.
+- **The filter is a memoized pure projection.** `buildSearchSuggestions` already
+  runs inside two `useMemo`s keyed on `[recents, tagCounts, folders, query]`;
+  adding the query predicate keeps it O(tags + folders + recents) per debounced
+  change — trivial against the cap-bounded inputs. No new state, no effect, no
+  fetch. Capture-is-sacred holds: **typing triggers no network/sync/enrichment**,
+  exactly as Phase 1.
+- **Focus/blur/deferred-hide machinery is preserved unchanged.** The
+  `blurHideTimer` deferred-hide (so a chip tap resolves before the native blur
+  unmounts the shelf), `clearBlurHide()` on re-focus/unmount, and the
+  opacity-reveal `Animated.Value` in `SearchSuggestionShelf` all carry over with
+  no edit. The shelf now *stays mounted* across the empty→typing transition
+  (rather than unmounting on first keystroke), so the reveal animation plays
+  **once** on focus and the typing transition is a pure content swap — no
+  re-mount, no re-fade, which feels calmer than Phase 1's mount/unmount churn
+  would have on every clear.
+
+### 13.6 Visual states (every one)
+
+All reuse Phase-1 tokens (`styles.shelf`/`shelfContent`, the `Chip` component,
+the affordance label). No new components, no new colors.
+
+- **Typing-with-matches** (the headline state; mock `phase2-shelf.png`). Field
+  focused with text; `JUMP TO` label; shelf shows query-filtered chips
+  best-match-first (matched recent(s) → matching tags → matching folders); browse
+  shelf + sortRow hidden; live "Matches (N)" results below with the existing
+  matched-tag accent badges. The partial last chip signals horizontal overflow
+  (no gradient, per §4.1).
+- **Typing-no-matches.** Field focused with text; **no shelf, no label, no browse
+  shelf**; just the live "Matches (N)" results (or the existing zero-result empty
+  state if N=0). The header is the field alone — calm, not a void.
+- **Focus-empty (UNCHANGED from Phase 1 §4.1).** Recents + top tags + top folders,
+  full caps (6/8/8). Phase 2 must not regress this; the only code touching it is
+  the gating widen, which still evaluates the same for empty query.
+- **Blurred (UNCHANGED, §4.4).** Shelf gone, browse shelf back.
+- **Dark mode.** Theme-driven via `usePalette()`; verified in the mock — filtered
+  chips read as quiet outlined pills on `#0b1220`, the matched-tag badge uses
+  `accentSoft`/`accentText`, the affordance label `textSecondary`. Nothing
+  hardcoded (the shelf component already has zero literal colors).
+
+### 13.7 Microcopy (EN + KO)
+
+Phase 2 introduces **no new visible strings** in the happy path — the affordance
+label stays `search.shelfAffordance` ("Jump to" / "바로가기") and chip labels are
+user content (raw recent, `#tag`, folder name), never translated. The existing
+a11y keys (`recentChipA11y`, `tagChipA11y`, `folderChipA11y`, `shelfA11y`,
+`removeRecentA11y`) apply unchanged to the filtered chips.
+
+**One new key**, reserved for a future a11y/section refinement and used to
+announce that the rail is now a *filtered* set (so a screen-reader user knows the
+shelf narrowed to their query rather than showing top items):
+
+| Key | EN | KO | Notes |
+|---|---|---|---|
+| `search.shelfFilteredA11y` | `Suggestions matching “{query}”` | `“{query}” 검색 추천` | Optional override for the ScrollView `accessibilityLabel` when a query is active (swap in place of `search.shelfA11y` while typing). KO: "“{query}” 검색 추천" = "search suggestions for {query}" — natural, mirrors the empty-state "검색 추천". |
+
+KO tone check: "“{query}” 검색 추천" reuses the already-approved "검색 추천"
+("search suggestions") with the query quoted in front, exactly how a Korean app
+would phrase "results/suggestions for X". No calque. This is a11y-only; it is the
+**only** copy Phase 2 adds, and it is optional polish — ship without it if the
+generic `shelfA11y` reads fine in testing, but the key is reserved so parity is
+clean. (The Node lane's "every `ko` key exists in `en`" guard applies.)
+
+### 13.8 Field-separation & capture-is-sacred (still non-negotiable)
+
+Phase 2 changes only *which* user-authored items show (it filters them) — it
+**adds no new source.** The shelf still draws from exactly the three §8 sources:
+the user's own recents, applied tags (`buildTagCloud`), and used folders.
+Filtering is a pure substring match over those user-authored names; **no AI,
+generated, fuzzy, or "did you mean" value enters here** — that remains Phase 3,
+which carries its own distinct outlined-neutral styling (§8). The query predicate
+must **never** be relaxed into fuzzy/typo-tolerant matching in Phase 2; it is an
+*exact* (normalized-substring) filter so that what the shelf shows is provably a
+thing the user authored that literally contains their query. Capture-is-sacred:
+the whole feature is a memoized pure projection — **focus and every keystroke fire
+zero network/sync/enrichment**.
+
+### 13.9 Phase-2 sign-off checklist (Product/UX, before merge)
+
+- [ ] Typing filters the shelf to matching tags/folders/recents, best-match-first,
+      and the set agrees with the "Matches (N)" results (same matcher).
+- [ ] Shelf and results update on the **same** debounced frame — no one-frame
+      flicker where the shelf leads the list.
+- [ ] No second chip row ever appears while focused (browse shelf stays gone
+      across empty / typing-match / typing-no-match).
+- [ ] Typing-no-match shows neither shelf nor browse shelf — field-only header,
+      no empty container, no placeholder copy.
+- [ ] Shelf stays mounted across empty→typing (reveal plays once; no re-fade
+      churn on each clear/keystroke).
+- [ ] Tapping a filtered tag/folder applies the facet + clears + blurs (Phase-1
+      behavior intact); tapping a matched recent fills + keeps focus.
+- [ ] Shelf chip (filter the set) reads as clearly distinct from a results row
+      (open one bookmark) and from the on-card matched-tag badge (read-only).
+- [ ] Capture-is-sacred: no fetch/sync/enrichment on any keystroke.
+- [ ] Only user-authored, literally-matching values appear — no fuzzy/AI/generated
+      suggestions leak in.
+- [ ] Dark mode reads correctly; nothing hardcoded.
+- [ ] Focus-empty (Phase-1) state is not regressed.
+
+### 13.10 Phase-2 ticket breakdown (for mobile-ui-engineer)
+
+Small, since Phase 1 left the seams in place. Build top-to-bottom.
+
+**ST2-1 — Shared matcher in `domain/search.ts` (Node lane).**
+Export a single normalized-substring predicate so the builder and the results
+path share one normalization source of truth. Either expose the existing
+`queryTerms`-style tokenizer or add `matchesQuery(candidateName: string, query:
+string): { matched: boolean; rank: 'exact' | 'prefix' | 'substring' | 'none' }`
+built on `normalizeToken`/`collectionMatchKey` (NFKC + lowercase + strip
+non-alphanumerics, AND across whitespace tokens, substring per token). Tests
+(`search.test.ts` or a new `query-match.test.ts`): `des`→`#design` prefix,
+`design sys`→`Design System` (two-token AND), no-match on `xyz`, symbol token
+finds nothing, exact-vs-prefix-vs-substring ranking is correctly classified.
+**Do not duplicate normalization in `search-suggestions.ts`.**
+
+**ST2-2 — `buildSearchSuggestions` query filtering + ranking (Node lane).**
+In `domain/search-suggestions.ts`, when `query.trim() !== ''`: filter each family
+with ST2-1's matcher; for **recents** keep only matches, drop a recent that
+equals the query, cap **3**; for **tags/folders** keep matches, cap 8/8. Sort
+within each family by match rank (exact → prefix → substring) then the existing
+signal (recency / count) then alpha; keep cross-family order recents → tags →
+folders. When `query` is empty, behavior is **exactly Phase 1** (no change).
+Extend `search-suggestions.test.ts`: typing filters to matches; ranking
+(prefix before substring; frequency tiebreak); recents cap 3 + drop-equal-query;
+no-match → empty array; empty query → unchanged Phase-1 output; still never emits
+a non-user value (input contract).
+
+**ST2-3 — Hook: thread the debounced query (component lane via ST2-5).**
+`useSearchSuggestions(recents, debouncedQuery)` — the signature already accepts
+`query`; just ensure the **debounced** value is passed and the `useMemo` deps
+include it (they do: `[recents, tagCounts, folders, query]`). No structural change.
+
+**ST2-4 — `index.tsx` gating.**
+- Pass `debouncedQuery` to the hook: `useSearchSuggestions(recentSearches,
+  debouncedQuery)`.
+- Change `showSuggestions` to drop the empty-query requirement:
+  `const showSuggestions = searchFocused && suggestions.length > 0;`
+  (suggestions are now empty when a non-empty query matches nothing, so this same
+  condition cleanly yields the typing-no-match "hide shelf" state).
+- Widen the browse-shelf suppressor to the whole focused state:
+  `const showShelf = chips.length > 0 && !searchFocused;` (was `&& !showSuggestions`).
+- The sortRow gate (`{showSuggestions ? null : (…)}`) already hides the sortRow
+  when the shelf shows; confirm it still reads right in the typing-no-match case
+  (both hidden is correct).
+- `onPickSuggestion`, `applySuggestionFacet`, the deferred-blur-hide, and
+  `onSubmitEditing → recordRecent` are **unchanged**. Verify `headerHeight`
+  re-measures across the empty↔typing content swap (the shelf stays mounted, only
+  its children change, so `onLayout` fires on the child-count change).
+
+**ST2-5 — i18n.**
+Add `search.shelfFilteredA11y` to `messages.ts` (EN) and `ko.ts` (KO) per §13.7
+(optional to wire into the ScrollView label, but add the key for parity). The
+Node "ko ⊇ en" guard enforces it.
+
+**ST2-6 — RNTL tests** (`src/__tests__/`, `.test.tsx`, jest lane). Extend the
+Phase-1 search-shelf test file:
+- **typing→filtered shelf:** seed a `#design` tag, a `Design` folder, a
+  `databases` tag, and a `design system` recent; type `des`; assert the shelf is
+  still shown, contains `suggestion-tag-…#design`, the `Design` folder, the
+  `design system` recent, and **does NOT** contain `databases`;
+- ordering: the matching recent appears before the matching tag before the folder;
+- **typing-no-match:** type `zzz`; assert `search-suggestion-shelf` is **not**
+  rendered and `browse-shelf` is also **not** rendered (focused);
+- tapping the filtered `#design` chip applies the tag facet + clears the query
+  (reuses Phase-1 assertion);
+- tapping the matched recent fills the query and keeps focus;
+- shelf and results agree: with `des` typed, a bookmark tagged `#design` is in the
+  results and `databases`-only bookmarks are not;
+- focus-empty still shows the full unfiltered shelf (Phase-1 regression guard).
+
+### 13.11 Decisions to confirm with the user before build
+
+These are mine to own per the brief, but two are worth an explicit nod because
+they change an already-shipped Phase-1 behavior or touch product feel:
+
+1. **Reversing Q1 for the typing state (browse shelf hidden while typing).**
+   Phase 1 *deliberately* kept the browse shelf visible while typing (§9 Q1,
+   "locked"). Phase 2 hides it (§13.2) to avoid two stacked chip rows. This is the
+   right call for the autocomplete-rail model, but it **overrides a previously
+   locked decision**, so flag it for the user to confirm rather than silently
+   reverse. *(Recommendation: approve the reversal.)*
+2. **Recents while typing: keep matching, cap 3 (vs. drop entirely).** A
+   reasonable product could argue recents are clutter mid-type and tags/folders
+   are the real autocomplete. I chose keep-matching-cap-3 (§13.3) because a
+   matching recent is the highest-intent completion. Low-risk, easily flipped to
+   "drop recents while typing" if testers find them noisy — worth a one-line
+   confirm. *(Recommendation: ship keep-matching; revisit if testing dislikes it.)*
+
+Not needing confirmation (clearly within UX ownership): the relevance ranking,
+the no-match hide-the-shelf state, debounced-query sourcing, and the shared
+matcher.
