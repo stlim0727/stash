@@ -28,3 +28,6 @@ pnpm-debug.log*
 # Downloaded fonts for scripts/generate-wordmark.mjs
 scripts/.wordmark-cache/
 .claude/worktrees/
+
+# ui-preview skill output (local scratch images, not source)
+scratchpad/
