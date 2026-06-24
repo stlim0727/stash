@@ -91,6 +91,20 @@ test('renders stored bookmarks with their titles', async () => {
   expect(screen.getByText('Raindrop review')).toBeTruthy();
 });
 
+test('folds the search/sort/view controls away on an empty library', async () => {
+  fakeRepo.__reset([]);
+
+  const screen = await renderInbox();
+
+  // Empty first run: the controls are cold chrome over "nothing here yet", so
+  // the first screen is all about the first save.
+  await waitFor(() =>
+    expect(screen.getByText('Nothing saved yet. Add your first bookmark below.')).toBeTruthy(),
+  );
+  expect(screen.queryByPlaceholderText('Search your stash')).toBeNull();
+  expect(screen.queryByTestId('inbox-view-card')).toBeNull();
+});
+
 test('shows an AI suggestion badge for pending (un-applied) suggested tags', async () => {
   const id = '7e64cf1e-0000-4000-8000-00000000000c';
   fakeRepo.__reset(
@@ -128,11 +142,16 @@ test('announces suggestions that arrived unseen with a banner, dismissable via �
 
   const banner = await waitFor(() => screen.getByTestId('new-suggestions-banner'));
   expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
+  // While the banner announces, the per-card ✨ badge is suppressed so the same
+  // item isn't shouted twice on one screen.
+  expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
 
   // The ✕ clears the markers, so the banner goes away.
   fireEvent.press(screen.getByLabelText('Dismiss new AI suggestions'));
   await waitFor(() => expect(screen.queryByTestId('new-suggestions-banner')).toBeNull());
   expect(banner).toBeTruthy();
+  // ...and with the banner gone, the per-card badge returns as the surviving cue.
+  await waitFor(() => expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy());
 });
 
 test('the unseen banner counts a folder-only recommendation (no tags)', async () => {

@@ -469,6 +469,12 @@ export default function InboxScreen() {
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
   const searching = query.trim().length > 0;
   const showShelf = chips.length > 0;
+  // On a brand-new (empty) library the search/sort/view controls are just cold
+  // chrome over a "nothing here yet" screen — fold them away so the first run
+  // is all about the first save. Keyed on the unfiltered library, not the
+  // current view, so a search/filter that yields zero rows still keeps the
+  // controls (the user needs them to clear the query or facet).
+  const showControls = inbox.length > 0 || searching;
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
   const sectionLabel = searching
@@ -723,18 +729,21 @@ export default function InboxScreen() {
             </Pressable>
           </View>
         ) : null}
-        <View style={styles.searchWrap}>
-          <TextInput
-            style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
-            placeholder={t('inbox.searchPlaceholder')}
-            placeholderTextColor={palette.textSecondary}
-            autoCapitalize="none"
-            autoCorrect={false}
-            value={query}
-            onChangeText={setQuery}
-            clearButtonMode="while-editing"
-          />
-        </View>
+        {showControls ? (
+          <View style={styles.searchWrap}>
+            <TextInput
+              style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
+              placeholder={t('inbox.searchPlaceholder')}
+              placeholderTextColor={palette.textSecondary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              value={query}
+              onChangeText={setQuery}
+              clearButtonMode="while-editing"
+            />
+          </View>
+        ) : null}
+        {showControls ? (
         <View style={styles.sortRow}>
           <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>{t('inbox.browse')}</Text>
           <Pressable
@@ -777,6 +786,7 @@ export default function InboxScreen() {
             })}
           </View>
         </View>
+        ) : null}
         {showShelf ? (
           <ScrollView
             horizontal
@@ -956,10 +966,13 @@ export default function InboxScreen() {
                     </Text>
                   ) : null}
                 </View>
-                {suggestionCount > 0 ? (
+                {/* While the "new AI suggestions" banner is announcing, suppress
+                    the per-card ✨ badge so the same item isn't shouted twice on
+                    one screen; dismissing the banner brings the badges back. */}
+                {suggestionCount > 0 && newSuggestionsCount === 0 ? (
                   <View
                     accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
-                    style={[styles.suggestBadge, { borderColor: palette.accent }]}
+                    style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
                   >
                     <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
                       ✨ {suggestionCount}
@@ -1005,10 +1018,10 @@ export default function InboxScreen() {
                   >
                     {displayTitle(item) ?? t('common.untitled')}
                   </Text>
-                  {suggestionCount > 0 ? (
+                  {suggestionCount > 0 && newSuggestionsCount === 0 ? (
                     <View
                       accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
-                      style={[styles.suggestBadge, { borderColor: palette.accent }]}
+                      style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
                     >
                       <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
                         ✨ {suggestionCount}
