@@ -97,10 +97,12 @@ test('folds the search/sort/view controls away on an empty library', async () =>
   const screen = await renderInbox();
 
   // Empty first run: the controls are cold chrome over "nothing here yet", so
-  // the first screen is all about the first save.
-  await waitFor(() =>
-    expect(screen.getByText('Nothing saved yet. Add your first bookmark below.')).toBeTruthy(),
-  );
+  // the first screen is all about the first save — an onboarding card that
+  // teaches the share-sheet capture, with the chrome folded away.
+  await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
+  expect(
+    screen.getByText('Share a link from any app and pick Stash to save it in a tap.'),
+  ).toBeTruthy();
   expect(screen.queryByPlaceholderText('Search your stash')).toBeNull();
   expect(screen.queryByTestId('inbox-view-card')).toBeNull();
 });

@@ -902,15 +902,51 @@ export default function InboxScreen() {
           </Text>
         }
         ListEmptyComponent={
-          <Text style={[styles.empty, { color: palette.textSecondary }]}>
-            {isLoading
-              ? t('inbox.loading')
-              : searching
-                ? t('inbox.emptySearch')
-                : filter.kind !== 'all'
-                  ? t('inbox.emptyView')
-                  : t('inbox.emptyAll')}
-          </Text>
+          isLoading || searching || filter.kind !== 'all' ? (
+            <Text style={[styles.empty, { color: palette.textSecondary }]}>
+              {isLoading
+                ? t('inbox.loading')
+                : searching
+                  ? t('inbox.emptySearch')
+                  : t('inbox.emptyView')}
+            </Text>
+          ) : (
+            // First run: teach the share-sheet capture (the app's whole point),
+            // not just "add below" — otherwise Stash reads as a manual URL box.
+            <View style={styles.emptyState} testID="inbox-empty-onboarding">
+              <Ionicons
+                name="bookmarks-outline"
+                size={40}
+                color={palette.textSecondary}
+                style={styles.emptyGlyph}
+              />
+              <Text style={[styles.emptyTitle, { color: palette.text }]}>
+                {t('inbox.emptyTitle')}
+              </Text>
+              <View style={styles.emptyHintRow}>
+                <Ionicons
+                  name="share-outline"
+                  size={18}
+                  color={palette.accent}
+                  style={styles.emptyHintIcon}
+                />
+                <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                  {t('inbox.emptyHintShare')}
+                </Text>
+              </View>
+              <View style={styles.emptyHintRow}>
+                <Ionicons
+                  name="add-circle-outline"
+                  size={18}
+                  color={palette.accent}
+                  style={styles.emptyHintIcon}
+                />
+                <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                  {t('inbox.emptyHintAdd')}
+                </Text>
+              </View>
+            </View>
+          )
         }
         extraData={viewMode}
         renderItem={({ item }) => {
@@ -1180,6 +1216,36 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: 'center',
     paddingVertical: 32,
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 24,
+  },
+  emptyGlyph: {
+    marginBottom: 16,
+    opacity: 0.7,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 20,
+  },
+  emptyHintRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    alignSelf: 'stretch',
+    maxWidth: 320,
+    marginBottom: 12,
+  },
+  emptyHintIcon: {
+    marginRight: 10,
+    marginTop: 1,
+  },
+  emptyHintText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
   },
   errorBanner: {
     fontSize: 13,
