@@ -223,9 +223,42 @@ test('search filters the list and shows the match count', async () => {
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'local-first');
 
   // The derived query is debounced, so the count/filter settle a beat later.
-  await waitFor(() => expect(screen.getByText('Matches (1)')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   expect(screen.getByText('Local-first software')).toBeTruthy();
   expect(screen.queryByText('Raindrop review')).toBeNull();
+});
+
+test('a punctuation-only query is not a search (keeps the normal Inbox section)', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-00000000000a',
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-00000000000b',
+      title: 'Raindrop review',
+      url: 'https://raindrop.io/',
+      url_hash: 'https://raindrop.io/',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Recently saved')).toBeTruthy());
+
+  // A query that normalizes to zero search tokens must NOT flip to the search
+  // (Matches/results) section, and must not filter the library down.
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '...');
+
+  await waitFor(() => expect(screen.getByText('Recently saved')).toBeTruthy());
+  // Stays on the normal "Recently saved" section (not a results header) and the
+  // zero-result recovery card must NOT appear — it's not a search at all.
+  expect(screen.queryByText(/result/)).toBeNull();
+  expect(screen.queryByTestId('inbox-empty-search')).toBeNull();
+  // The library is not filtered down.
+  expect(screen.getByText('Local-first software')).toBeTruthy();
+  expect(screen.getByText('Raindrop review')).toBeTruthy();
 });
 
 test('the card Open action opens the bookmark URL in the system browser', async () => {
@@ -769,6 +802,9 @@ test('shows the no-matches empty state for an unmatched search', async () => {
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'zzz');
 
   await waitFor(() => expect(screen.getByText('No bookmarks match your search.')).toBeTruthy());
+  // The recovery card stands alone — the "0 results" section label is suppressed
+  // so the screen doesn't double-label a zero-result search.
+  expect(screen.queryByText('0 results')).toBeNull();
 });
 
 test('a search result that matched on its site name shows a distinct site chip', async () => {
@@ -801,7 +837,7 @@ test('a search result that matched on its site name shows a distinct site chip',
 
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'wired');
 
-  await waitFor(() => expect(screen.getByText('Matches (1)')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   // The matched result surfaces its site name; the chip carries the generated
   // site value, kept visually distinct from user-authored chips.
   expect(screen.getByTestId('inbox-card-site')).toBeTruthy();
@@ -838,7 +874,7 @@ test('a 4th+ tag that matched the query is promoted into the shown tag chips', a
 
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'kubernetes');
 
-  await waitFor(() => expect(screen.getByText('Matches (1)')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   // The matched tag is promoted into the card's (max 3) shown meta chips — the
   // card meta chip uses accentText, distinguishing it from the browse-shelf
   // facet chip that also carries "#kubernetes". Without promotion the
@@ -881,7 +917,7 @@ test('the debounced query does not filter until typing settles', async () => {
     await act(async () => {
       jest.advanceTimersByTime(200);
     });
-    expect(screen.getByText('Matches (1)')).toBeTruthy();
+    expect(screen.getByText('1 result')).toBeTruthy();
     expect(screen.queryByText('Raindrop review')).toBeNull();
   } finally {
     jest.useRealTimers();

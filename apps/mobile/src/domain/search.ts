@@ -128,6 +128,26 @@ function splitQueryTerms(query: string): { terms: string[]; symbolTerms: string[
   return { terms, symbolTerms };
 }
 
+/**
+ * True iff the query carries at least one real search token — an ordinary
+ * (normalized) term OR a symbol-bearing term. A query made up only of
+ * punctuation/symbols that normalize away (`"..."`, `"-"`, `"!!!"`, whitespace)
+ * yields zero tokens and is therefore NOT a search: callers should treat it like
+ * an empty query (show the normal Inbox, not a "Matches (all)" view). Reuses
+ * {@link splitQueryTerms} so there is a single normalization source of truth.
+ */
+export function queryHasSearchTokens(query: string): boolean {
+  const { terms, symbolTerms } = splitQueryTerms(query);
+  if (terms.length > 0) {
+    return true;
+  }
+  // A symbol term only counts as a real token when it carries a letter or digit
+  // ("c++", ".net"). A degenerate all-punctuation token ("-", "!!!", "...")
+  // splits out as a symbol term too, but matches nothing meaningful — treat it
+  // like an empty query so the Inbox doesn't flip to a "Matches" view.
+  return symbolTerms.some((term) => LETTER_OR_NUMBER.test(term));
+}
+
 /** How well a candidate matched the query, best-match-first ranking signal. */
 export type MatchRank = 'exact' | 'prefix' | 'substring' | 'none';
 
@@ -216,7 +236,14 @@ export function filterBookmarks(
   // (punctuation-stripped) and keep the existing tolerant substring behavior. A
   // token like "c++" is therefore NOT also normalized to a broad "c" term — that
   // degenerate term is exactly the P2 bug being fixed.
-  const { terms, symbolTerms } = splitQueryTerms(query);
+  const split = splitQueryTerms(query);
+  const terms = split.terms;
+  // Drop degenerate all-punctuation symbol terms ("-", "!!!", "...") that carry
+  // no letter or digit: they split out as symbol terms but match nothing a user
+  // means to search for, and keeping them would filter the list while the header
+  // (gated on `queryHasSearchTokens`) reads as not-searching — the two would
+  // disagree. A meaningful symbol term ("c++", ".net") still carries through.
+  const symbolTerms = split.symbolTerms.filter((term) => LETTER_OR_NUMBER.test(term));
   if (terms.length === 0 && symbolTerms.length === 0) {
     return bookmarks;
   }

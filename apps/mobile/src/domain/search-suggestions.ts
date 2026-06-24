@@ -15,7 +15,7 @@ import {
   RECENT_SEARCHES_SHOWN,
   RECENT_SEARCHES_CAP,
 } from '@/domain/recent-searches';
-import { matchesQuery, type MatchRank } from '@/domain/search';
+import { matchesQuery, queryHasSearchTokens, type MatchRank } from '@/domain/search';
 import { collectionMatchKey } from '@/domain/collection-match';
 
 // Uncomposed Hangul jamo (lead consonant, vowel, trail) and compatibility jamo
@@ -118,7 +118,11 @@ export function buildSearchSuggestions(
   // Treat a partial jamo query as not-yet-committed: IME is still composing, so
   // no candidate can match the decomposed jamo — fall back to the focus-empty
   // (browse) shelf so the rail doesn't vanish while the user is mid-syllable.
-  const typing = query.length > 0 && !JAMO_REGEX.test(query);
+  // Likewise a punctuation/symbol-only query ("...", "-") yields no real search
+  // tokens, so `matchesQuery` rejects every candidate and live-filtering would
+  // empty the shelf; treat it as not-typing so the focus-empty shelf shows.
+  const typing =
+    query.length > 0 && !JAMO_REGEX.test(query) && queryHasSearchTokens(query);
 
   // ── Recents ──────────────────────────────────────────────────────────────
   // Empty query: keep the caller's recency order, cap at the empty-state count.

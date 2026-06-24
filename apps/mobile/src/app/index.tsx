@@ -37,7 +37,7 @@ import {
 import type { SearchSuggestion } from '@/domain/search-suggestions';
 import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
 import { collectionMatchKey } from '@/domain/collection-match';
-import { filterBookmarks } from '@/domain/search';
+import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramColorIndex, monogramIcon } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
@@ -602,7 +602,15 @@ export default function InboxScreen() {
     [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
-  const searching = debouncedQuery.trim().length > 0;
+  // A query is only a search when it produces at least one real search token. A
+  // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
+  // zero tokens, so `filterBookmarks` returns everything — treating that as a
+  // search would mislabel the full library as "Matches (all)". Gate the searching
+  // flag on real tokens so such a query falls back to the normal Inbox (recent/
+  // facet section + the focus-empty suggestion shelf). `searchTerms`, the site
+  // chip / matched-tag reason UI, the empty-search recovery, and the section
+  // label all key off this one flag, so they stay consistent.
+  const searching = queryHasSearchTokens(debouncedQuery);
   // Normalized terms of the settled query, used to surface WHY each result
   // matched (site-name chip, promoting a matched tag) when searching.
   const searchTerms = useMemo(
@@ -1143,9 +1151,14 @@ export default function InboxScreen() {
           { paddingTop: headerHeight + 8, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
-          <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-            {sectionLabel}
-          </Text>
+          // On a zero-result search the empty-search recovery card already
+          // states "no matches"; suppress the "0 results" section label so the
+          // two don't stack into a redundant double-negative.
+          searching && visible.length === 0 ? null : (
+            <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
+              {sectionLabel}
+            </Text>
+          )
         }
         ListEmptyComponent={
           isLoading ? (

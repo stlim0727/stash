@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { filterBookmarks, matchesQuery, type SearchResolvers } from './search.ts';
+import {
+  filterBookmarks,
+  matchesQuery,
+  queryHasSearchTokens,
+  type SearchResolvers,
+} from './search.ts';
 import type { Bookmark } from './types.ts';
 
 function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
@@ -279,6 +284,33 @@ test('".NET" is selective and does not match plain ".com" URLs', () => {
     filterBookmarks(items, '.NET').map((b) => b.id),
     ['net'],
   );
+});
+
+// ── queryHasSearchTokens (a symbol-only query is NOT a search) ─────────────
+
+test('queryHasSearchTokens: punctuation/symbol-only queries yield no tokens', () => {
+  // These normalize to zero ordinary terms AND zero symbol terms, so they are
+  // not a search — the Inbox should stay on its normal recent/facet view.
+  assert.equal(queryHasSearchTokens('...'), false);
+  assert.equal(queryHasSearchTokens('-'), false);
+  assert.equal(queryHasSearchTokens('!!!'), false);
+  assert.equal(queryHasSearchTokens('  '), false);
+  assert.equal(queryHasSearchTokens(''), false);
+  // A multi-char all-separator token (distinct code path from a single '-').
+  assert.equal(queryHasSearchTokens('---'), false);
+});
+
+test('queryHasSearchTokens: a query with at least one real token is a search', () => {
+  assert.equal(queryHasSearchTokens('design'), true);
+  // A symbol-bearing term still counts.
+  assert.equal(queryHasSearchTokens('c++'), true);
+  // Stray trailing punctuation alongside a real term still counts.
+  assert.equal(queryHasSearchTokens('design...'), true);
+  // Non-Latin (Korean) text yields an ordinary term.
+  assert.equal(queryHasSearchTokens('리액트'), true);
+  // A symbol+letter token (#design) is a real symbol term — the inverse of the
+  // all-punctuation drop.
+  assert.equal(queryHasSearchTokens('#design'), true);
 });
 
 // ── matchesQuery (the shared shelf ↔ results predicate, ST2-1) ─────────────
