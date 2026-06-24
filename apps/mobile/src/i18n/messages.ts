@@ -208,7 +208,7 @@ export const en = {
   'settings.import.failedTitle': 'Import failed',
   'settings.import.failedBody': 'Could not import that file. Please try again.',
 
-  // Archived.
+  // Trash.
   'trash.empty': 'Trash is empty.',
   'trash.emptyButton': 'Empty Trash',
   'trash.emptyTitle': 'Empty Trash?',
