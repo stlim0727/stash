@@ -23,6 +23,18 @@ test('every registered tool has a kind and a non-empty description', () => {
   }
 });
 
+test('no tool property uses a union `type` (Gemini rejects ["string","null"])', () => {
+  // Gemini's function-declaration schema requires a single string `type`;
+  // a JSON-Schema union like ['string','null'] gets a 400. Keep schemas to the
+  // intersection both Gemini and Anthropic accept.
+  for (const tool of CHAT_TOOLS) {
+    for (const [prop, schema] of Object.entries(tool.parameters.properties)) {
+      const type = (schema as { type?: unknown }).type;
+      assert.equal(typeof type, 'string', `${tool.name}.${prop} type must be a string`);
+    }
+  }
+});
+
 test('describeAction produces human confirm copy per mutating tool', () => {
   assert.match(describeAction('create_bookmark', { url: 'https://x.com' }), /https:\/\/x\.com/);
   assert.match(describeAction('add_tags', { tags: ['news', 'tech'] }), /news, tech/);

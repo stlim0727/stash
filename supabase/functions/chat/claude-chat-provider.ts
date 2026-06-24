@@ -6,7 +6,7 @@
 // Like the ai-enrich providers: dependency-free, runtime-agnostic, `fetch`
 // injected — runs unchanged in Deno and is unit-testable under Node with a stub.
 
-import type { Completion, ChatProvider, FetchLike } from './chat-provider.ts';
+import { ProviderError, type Completion, type ChatProvider, type FetchLike } from './chat-provider.ts';
 import type { ToolCall, Turn } from './chat-protocol.ts';
 import type { ToolSpec } from './chat-tools.ts';
 
@@ -136,7 +136,7 @@ export class ClaudeChatProvider implements ChatProvider {
       });
       const raw = await res.text();
       if (!res.ok) {
-        throw new Error(`Anthropic request failed (${res.status}): ${raw.slice(0, 500)}`);
+        throw new ProviderError(`Anthropic request failed (${res.status}): ${raw.slice(0, 500)}`, res.status);
       }
       return parseAnthropicCompletion(JSON.parse(raw));
     } finally {

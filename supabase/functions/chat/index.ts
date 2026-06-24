@@ -16,7 +16,7 @@
 
 import { runChatTurn, type ToolExecutor } from './chat-loop.ts';
 import type { Decision, ToolCall, ToolResult, Turn } from './chat-protocol.ts';
-import type { ChatProvider } from './chat-provider.ts';
+import { ProviderError, type ChatProvider } from './chat-provider.ts';
 import { ClaudeChatProvider } from './claude-chat-provider.ts';
 import { GeminiChatProvider } from './gemini-chat-provider.ts';
 import { canonicalizeUrl, normalizeUrl } from '../_shared/urls.ts';
@@ -347,8 +347,9 @@ function makeExecutor(userId: string): ToolExecutor {
         case 'set_collection': {
           const bookmarkId = str(call.input, 'bookmark_id');
           if (!bookmarkId) return err(call, 'bookmark_id is required');
+          // `str` returns null for an empty/whitespace string → unfile.
           const res = await db('PATCH', `bookmarks?id=eq.${bookmarkId}&user_id=eq.${userId}`, {
-            collection_id: call.input.collection_id ?? null,
+            collection_id: str(call.input, 'collection_id'),
             updated_at: nowIso(),
           });
           return res.ok ? ok(call, { filed: true }) : err(call, 'update failed');
@@ -408,6 +409,12 @@ Deno.serve(async (req: Request) => {
     });
     return json(result);
   } catch (e) {
+    // An upstream model throttle (free-tier quota, provider overload) is
+    // transient — surface it as 503 so the client can say "busy, try again"
+    // rather than treat it as a hard failure.
+    if (e instanceof ProviderError && (e.status === 429 || e.status === 503 || e.status === 529)) {
+      return json({ error: 'The assistant is busy right now. Please try again in a moment.', retryable: true }, 503);
+    }
     return json({ error: e instanceof Error ? e.message : 'chat failed' }, 500);
   }
 });

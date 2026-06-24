@@ -25,6 +25,19 @@ export interface ChatProvider {
   complete(system: string, transcript: Turn[], tools: ToolSpec[]): Promise<Completion>;
 }
 
+/** Thrown when the upstream model API returns a non-2xx, carrying its status so
+ *  the edge function can distinguish a transient throttle (429/503 — "busy, try
+ *  again") from a real error and map it to the right HTTP status. */
+export class ProviderError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ProviderError';
+  }
+}
+
 /** Minimal slice of `fetch` the HTTP-backed adapters rely on, so tests can
  *  supply a stub without DOM/Deno lib types (mirrors ai-enrich's FetchLike). */
 export type FetchLike = (

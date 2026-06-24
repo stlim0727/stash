@@ -6,7 +6,7 @@
 // Dependency-free, runtime-agnostic, `fetch` injected — mirrors the ai-enrich
 // Gemini provider so it runs in Deno and is unit-testable under Node.
 
-import type { Completion, ChatProvider, FetchLike } from './chat-provider.ts';
+import { ProviderError, type Completion, type ChatProvider, type FetchLike } from './chat-provider.ts';
 import type { ToolCall, Turn } from './chat-protocol.ts';
 import type { ToolSpec } from './chat-tools.ts';
 
@@ -130,7 +130,7 @@ export class GeminiChatProvider implements ChatProvider {
       });
       const raw = await res.text();
       if (!res.ok) {
-        throw new Error(`Gemini request failed (${res.status}): ${raw.slice(0, 500)}`);
+        throw new ProviderError(`Gemini request failed (${res.status}): ${raw.slice(0, 500)}`, res.status);
       }
       return parseGeminiCompletion(JSON.parse(raw));
     } finally {

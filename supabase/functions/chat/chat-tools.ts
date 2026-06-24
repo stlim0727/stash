@@ -109,13 +109,15 @@ export const CHAT_TOOLS: ToolSpec[] = [
     name: 'set_collection',
     kind: 'mutating',
     description:
-      'File a bookmark into a collection (or pass collection_id=null to remove it from its ' +
-      'collection). Use list_collections first to get a real id.',
+      'File a bookmark into a collection (or pass an empty string for collection_id to remove it ' +
+      'from its collection). Use list_collections first to get a real id.',
     parameters: {
       type: 'object',
       properties: {
         bookmark_id: { type: 'string' },
-        collection_id: { type: ['string', 'null'], description: 'Target collection id, or null to unfile.' },
+        // Single type only — Gemini's function-declaration schema rejects a
+        // ['string','null'] union. Empty string means "unfile".
+        collection_id: { type: 'string', description: 'Target collection id, or "" to unfile.' },
       },
       required: ['bookmark_id', 'collection_id'],
     },
