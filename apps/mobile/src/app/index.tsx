@@ -475,6 +475,11 @@ export default function InboxScreen() {
   // current view, so a search/filter that yields zero rows still keeps the
   // controls (the user needs them to clear the query or facet).
   const showControls = inbox.length > 0 || searching;
+  // The tag cloud is a navigation surface over existing items; on an empty
+  // library it has nothing to show AND its view segment is folded away (no way
+  // back to Cards), so an empty library always falls through to the onboarding
+  // card regardless of the saved view mode.
+  const showCloud = viewMode === 'cloud' && inbox.length > 0;
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
   const sectionLabel = searching
@@ -803,7 +808,7 @@ export default function InboxScreen() {
           </ScrollView>
         ) : null}
       </Animated.View>
-      {viewMode === 'cloud' ? (
+      {showCloud ? (
         <Animated.ScrollView
           testID="inbox-tag-cloud"
           onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {

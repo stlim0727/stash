@@ -349,6 +349,20 @@ test('a tag route param filters the Inbox to that tag on load', async () => {
   expect(screen.getByText('#design · 1')).toBeTruthy();
 });
 
+test('an empty library shows the onboarding card even with a saved Tag-cloud preference', async () => {
+  // The user last left the Inbox in Tag-cloud view, then trashed their last
+  // item. The view segment is folded away on an empty library, so if the cloud
+  // (with its own "no tags" empty message) kept rendering, there'd be no way
+  // back to Cards. The empty library must fall through to the onboarding card.
+  fakeRepo.__reset([]);
+  await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'cloud');
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
+  expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
+});
+
 test('a routed tag facet overrides a saved Tag-cloud preference and shows the bookmarks', async () => {
   const tagged = '7e64cf1e-0000-4000-8000-000000000071';
   const untagged = '7e64cf1e-0000-4000-8000-000000000072';
