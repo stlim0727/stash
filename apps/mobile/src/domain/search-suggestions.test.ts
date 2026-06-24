@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   SUGGESTION_FOLDERS_SHOWN,
+  SUGGESTION_RECENTS_TYPING,
   SUGGESTION_TAGS_SHOWN,
   buildSearchSuggestions,
   type SearchSuggestion,
@@ -145,12 +146,185 @@ test('empty library yields no suggestions at all', () => {
   assert.deepEqual(buildSearchSuggestions({ recents: [], tagCounts: [], folders: [] }), []);
 });
 
-test('the Phase-2 query seam is accepted and ignored in Phase 1', () => {
-  // Passing a query must not change the Phase-1 output (the shelf only shows on
-  // an empty query). The arg exists so Phase 2 can swap the data source.
-  const base = { recents: ['design'], tagCounts: [], folders: [] };
-  assert.deepEqual(
-    buildSearchSuggestions({ ...base, query: 'des' }),
-    buildSearchSuggestions(base),
-  );
+test('an empty/whitespace query yields the Phase-1 (unfiltered) output', () => {
+  // The empty-state behavior must be byte-for-byte the Phase-1 shelf — Phase 2
+  // only changes the NON-empty-query branch.
+  const base = { recents: ['design', 'recipes'], tagCounts: [], folders: [] };
+  assert.deepEqual(buildSearchSuggestions({ ...base, query: '' }), buildSearchSuggestions(base));
+  assert.deepEqual(buildSearchSuggestions({ ...base, query: '   ' }), buildSearchSuggestions(base));
+});
+
+// ── Phase 2: live filter as you type (§13.3) ──────────────────────────────
+
+test('typing filters each family to matches via the shared matcher', () => {
+  const result = buildSearchSuggestions({
+    recents: ['design system', 'recipes'],
+    tagCounts: [
+      { id: 't-design', name: 'design', count: 3 },
+      { id: 't-db', name: 'databases', count: 5 },
+    ],
+    folders: [
+      { id: 'c-design', name: 'Design', count: 2 },
+      { id: 'c-work', name: 'Work', count: 4 },
+    ],
+    query: 'des',
+  });
+  // "des" matches the recent "design system", #design, and the Design folder;
+  // "recipes", "databases", and "Work" are dropped.
+  assert.deepEqual(kinds(result), ['recent', 'tag', 'folder']);
+  assert.deepEqual(labels(result), ['design system', '#design', 'Design']);
+});
+
+test('typing-no-match yields an empty array (shelf hides)', () => {
+  const result = buildSearchSuggestions({
+    recents: ['design system'],
+    tagCounts: [{ id: 't', name: 'design', count: 1 }],
+    folders: [{ id: 'c', name: 'Design', count: 1 }],
+    query: 'zzz',
+  });
+  assert.deepEqual(result, []);
+});
+
+test('typing ranks prefix before substring within a family', () => {
+  const result = buildSearchSuggestions({
+    recents: [],
+    tagCounts: [
+      // Both contain "sign"; "signal" is a PREFIX match, "design" a substring.
+      { id: 't-design', name: 'design', count: 10 },
+      { id: 't-signal', name: 'signal', count: 1 },
+    ],
+    folders: [],
+    query: 'sign',
+  });
+  // Prefix (signal) ranks ahead of substring (design) despite far lower count.
+  assert.deepEqual(labels(result), ['#signal', '#design']);
+});
+
+test('typing breaks a same-rank tie by frequency desc then alpha', () => {
+  const result = buildSearchSuggestions({
+    recents: [],
+    tagCounts: [
+      // All three are prefix matches of "de"; rank ties → frequency desc, alpha.
+      { id: 't-design', name: 'design', count: 2 },
+      { id: 't-dev', name: 'dev', count: 5 },
+      { id: 't-deck', name: 'deck', count: 2 },
+    ],
+    folders: [],
+    query: 'de',
+  });
+  // dev (count 5) first; design & deck tie at 2 → alpha (deck before design).
+  assert.deepEqual(labels(result), ['#dev', '#deck', '#design']);
+});
+
+test('typing drops a recent that exactly equals the query, keeps other matches', () => {
+  const result = buildSearchSuggestions({
+    recents: ['design', 'design system'],
+    tagCounts: [],
+    folders: [],
+    query: 'design',
+  });
+  // "design" equals the query (already typed) → dropped; "design system" stays.
+  assert.deepEqual(labels(result), ['design system']);
+});
+
+test('typing caps matching recents at 3 (lower than the empty-state 6)', () => {
+  const recents = Array.from({ length: 6 }, (_, i) => `design ${i}`);
+  const result = buildSearchSuggestions({ recents, tagCounts: [], folders: [], query: 'design' });
+  assert.equal(result.filter((s) => s.kind === 'recent').length, SUGGESTION_RECENTS_TYPING);
+  assert.equal(SUGGESTION_RECENTS_TYPING, 3);
+});
+
+test('typing keeps tag/folder caps at 8', () => {
+  const tagCounts = Array.from({ length: 12 }, (_, i) => ({
+    id: `t${i}`,
+    name: `design${i}`,
+    count: 100 - i,
+  }));
+  const folders = Array.from({ length: 12 }, (_, i) => ({
+    id: `c${i}`,
+    name: `Design${i}`,
+    count: 100 - i,
+  }));
+  const result = buildSearchSuggestions({ recents: [], tagCounts, folders, query: 'design' });
+  assert.equal(result.filter((s) => s.kind === 'tag').length, SUGGESTION_TAGS_SHOWN);
+  assert.equal(result.filter((s) => s.kind === 'folder').length, SUGGESTION_FOLDERS_SHOWN);
+});
+
+test('typing keeps cross-family order recents → tags → folders (no score interleave)', () => {
+  const result = buildSearchSuggestions({
+    // A substring-only recent vs. an exact-match folder: even though the folder
+    // is a "better" match, families stay grouped (recents lead).
+    recents: ['my design notes'],
+    tagCounts: [{ id: 't', name: 'design', count: 1 }],
+    folders: [{ id: 'c', name: 'design', count: 1 }],
+    query: 'design',
+  });
+  assert.deepEqual(kinds(result), ['recent', 'tag', 'folder']);
+});
+
+test('a two-token query ANDs across tokens (both must hit the candidate)', () => {
+  const result = buildSearchSuggestions({
+    recents: [],
+    tagCounts: [],
+    folders: [
+      { id: 'c-ds', name: 'Design System', count: 1 },
+      { id: 'c-d', name: 'Design', count: 1 },
+    ],
+    query: 'design sys',
+  });
+  // "design sys" — both tokens must match; only "Design System" qualifies.
+  assert.deepEqual(labels(result), ['Design System']);
+});
+
+test('a query with uncomposed jamo falls back to the full focus-empty shelf', () => {
+  // iOS/Android Korean IME sends partial jamo (e.g. "ㄱ" U+3131) while the user
+  // is mid-syllable. NFKC does NOT decompose composed syllables to jamo, so no
+  // candidate can match — the correct UX is to show the browse shelf unfiltered,
+  // not an empty rail that confuses the user.
+  const result = buildSearchSuggestions({
+    recents: ['가나다'],
+    tagCounts: [{ id: 't', name: '가나', count: 1 }],
+    folders: [{ id: 'c', name: '나다', count: 1 }],
+    query: 'ㄱ', // jamo — still mid-composition
+  });
+  // Jamo detected → falls back to the focus-empty (browse) set: all recents +
+  // tags + folders, no filtering.
+  assert.equal(result.length, 3);
+  assert.deepEqual(kinds(result), ['recent', 'tag', 'folder']);
+});
+
+test('typing drops a recent whose NFKC-normalized form equals the query (fullwidth dedup)', () => {
+  // Grumpy bug #2: the old dedup used `.toLowerCase()` which disagrees with
+  // `collectionMatchKey` for NFKC-variant input. "ＤｅｓｉｇＮ" (fullwidth)
+  // lowercases to "ｄｅｓｉｇｎ" ≠ "design", so the exact-match guard missed it.
+  const result = buildSearchSuggestions({
+    recents: ['design', 'design system'],
+    tagCounts: [],
+    folders: [],
+    query: 'ＤｅｓｉｇＮ', // fullwidth — NFKC normalizes to "design"
+  });
+  // "design" NFKC-normalizes to the same key as the query → drop it.
+  assert.deepEqual(labels(result), ['design system']);
+});
+
+test('typing still emits only user-authored values (input contract holds)', () => {
+  // The builder takes ONLY user inputs; filtering can never introduce a non-user
+  // value. Every chip's label traces back to a supplied recent/tag/folder name.
+  const result = buildSearchSuggestions({
+    recents: ['design system'],
+    tagCounts: [{ id: 't', name: 'design', count: 1 }],
+    folders: [{ id: 'c', name: 'Design', count: 1 }],
+    query: 'des',
+  });
+  for (const chip of result) {
+    if (chip.kind === 'recent') {
+      assert.equal(chip.query, 'design system');
+    }
+    if (chip.kind === 'tag') {
+      assert.deepEqual(chip.filter, { kind: 'tag', id: 't' });
+    }
+    if (chip.kind === 'folder') {
+      assert.deepEqual(chip.filter, { kind: 'collection', id: 'c' });
+    }
+  }
 });

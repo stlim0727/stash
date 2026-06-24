@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { filterBookmarks, type SearchResolvers } from './search.ts';
+import { filterBookmarks, matchesQuery, type SearchResolvers } from './search.ts';
 import type { Bookmark } from './types.ts';
 
 function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
@@ -279,4 +279,62 @@ test('".NET" is selective and does not match plain ".com" URLs', () => {
     filterBookmarks(items, '.NET').map((b) => b.id),
     ['net'],
   );
+});
+
+// ── matchesQuery (the shared shelf ↔ results predicate, ST2-1) ─────────────
+
+test('matchesQuery: prefix match "des" → "design"', () => {
+  assert.equal(matchesQuery('design', 'des'), 'prefix');
+});
+
+test('matchesQuery: exact match (normalized) on the whole candidate', () => {
+  assert.equal(matchesQuery('design', 'Design'), 'exact');
+  // Punctuation/spacing/case fold to the same key: an exact match still.
+  assert.equal(matchesQuery('Watch-Later', 'watch later'), 'exact');
+});
+
+test('matchesQuery: substring match ranks below prefix', () => {
+  // "sign" appears mid-word in "design" → substring, not prefix.
+  assert.equal(matchesQuery('design', 'sign'), 'substring');
+  // …but is the prefix of "signal".
+  assert.equal(matchesQuery('signal', 'sign'), 'prefix');
+});
+
+test('matchesQuery: two-token query ANDs (both must hit the candidate)', () => {
+  // Both "design" and "sys" are substrings of "Design System" (collapsed).
+  assert.notEqual(matchesQuery('Design System', 'design sys'), 'none');
+  // "Design" alone is missing "sys".
+  assert.equal(matchesQuery('Design', 'design sys'), 'none');
+});
+
+test('matchesQuery: no match on an unrelated query', () => {
+  assert.equal(matchesQuery('design', 'xyz'), 'none');
+});
+
+test('matchesQuery: an empty / whitespace / symbol-only query never matches', () => {
+  assert.equal(matchesQuery('design', ''), 'none');
+  assert.equal(matchesQuery('design', '   '), 'none');
+  // A symbol-only token ("+++") has no normalized term and finds no plain tag.
+  assert.equal(matchesQuery('design', '+++'), 'none');
+});
+
+test('matchesQuery agrees with filterBookmarks on the same candidate name', () => {
+  // The shelf and the results must never disagree: a tag "design" matched by
+  // matchesQuery must also surface in filterBookmarks via the tag resolver.
+  const item = makeBookmark({ id: 'm1' });
+  const resolvers: SearchResolvers = { tagNames: () => ['design'] };
+  assert.notEqual(matchesQuery('design', 'des'), 'none');
+  assert.deepEqual(
+    filterBookmarks([item], 'des', resolvers).map((b) => b.id),
+    ['m1'],
+  );
+  // And both reject a non-match.
+  assert.equal(matchesQuery('design', 'zzz'), 'none');
+  assert.equal(filterBookmarks([item], 'zzz', resolvers).length, 0);
+});
+
+test('matchesQuery: symbol query "c++" matches a "C++" tag literally', () => {
+  assert.notEqual(matchesQuery('C++', 'c++'), 'none');
+  // …and does not bleed onto an unrelated bare word.
+  assert.equal(matchesQuery('cooking', 'c++'), 'none');
 });

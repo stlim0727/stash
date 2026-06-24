@@ -137,10 +137,14 @@ test('tapping a recent chip fills the query and keeps the field focused', async 
     fireEvent.press(screen.getByLabelText('Search again for “local-first”'));
   });
 
-  // The query is filled (the field echoes it) and the shelf closes because the
-  // query is no longer empty — but focus was never blurred.
+  // The query is filled (the field echoes it) and the field was never blurred —
+  // the recent fills + keeps focus so the user can keep editing. Phase 2: the
+  // shelf re-filters to the now-non-empty query (here "local-first" matches no
+  // tag/folder/other-recent, so it has nothing to suggest and hides) — the
+  // browse shelf must NOT reappear while still focused.
   expect(input.props.value).toBe('local-first');
   await waitFor(() => expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull());
+  expect(screen.queryByTestId('browse-shelf')).toBeNull();
 });
 
 test('tapping a tag chip applies the tag facet and clears the query', async () => {
@@ -447,4 +451,227 @@ test('a corrupt recents pref does not break the screen; tag/folder chips still s
   expect(screen.getByLabelText('Filter by tag design')).toBeTruthy();
   expect(screen.getByLabelText('Filter by folder Work')).toBeTruthy();
   expect(screen.queryByLabelText(/^Search again for/)).toBeNull();
+});
+
+// ── Phase 2: live filter as you type (§13) ───────────────────────────────
+//
+// Seed a library whose families exercise the filter: a `#design` tag and a
+// `databases` tag (so `des` keeps one, drops the other), a `Design` folder, and
+// a `design system` recent. Two bookmarks — one tagged `#design`, one tagged
+// only `databases` — so the shelf and the "Matches (N)" results can be checked
+// for agreement.
+function seedPhase2Library() {
+  const designed = '7e64cf1e-0000-4000-8000-0000000000e1';
+  const databased = '7e64cf1e-0000-4000-8000-0000000000e2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: designed, title: 'A design doc', collection_id: 'col-design' }),
+      makeStoredBookmark({ id: databased, title: 'A database doc', collection_id: null }),
+    ],
+    {
+      tags: [makeTag('t-design', 'design'), makeTag('t-databases', 'databases')],
+      bookmarkTags: [
+        {
+          bookmark_id: designed,
+          tag_id: 't-design',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+        {
+          bookmark_id: databased,
+          tag_id: 't-databases',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [makeCollection('col-design', 'Design')],
+    },
+  );
+  fakeRepo.__setMeta(RECENT_SEARCHES_PREF_KEY, JSON.stringify(['design system']));
+}
+
+// The TextInput element type, derived from what `getByPlaceholderText` returns
+// (RNTL's ReactTestInstance) — avoids depending on react-test-renderer types.
+type Input = ReturnType<Awaited<ReturnType<typeof renderInbox>>['getByPlaceholderText']>;
+async function typeQuery(input: Input, text: string) {
+  await act(async () => {
+    fireEvent.changeText(input, text);
+  });
+}
+
+test('typing filters the shelf to matches and drops non-matching chips', async () => {
+  seedPhase2Library();
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('A design doc')).toBeTruthy());
+  const input = await focusSearch(screen);
+  await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+  await typeQuery(input, 'des');
+
+  // The shelf stays mounted and (once the 140ms debounce settles) shows only the
+  // chips matching "des": the `design system` recent, the #design tag, and the
+  // Design folder — but NOT the `databases` tag. Wait on the non-match dropping
+  // out (that transition is what proves the debounced filter applied).
+  await waitFor(() => expect(screen.queryByLabelText('Filter by tag databases')).toBeNull());
+  expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy();
+  expect(screen.getByLabelText('Search again for “design system”')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by tag design')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by folder Design')).toBeTruthy();
+});
+
+test('typing orders the shelf recent → tag → folder (cross-family grouping)', async () => {
+  seedPhase2Library();
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('A design doc')).toBeTruthy());
+  const input = await focusSearch(screen);
+  await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+  await typeQuery(input, 'des');
+  // Wait for the debounced filter to land (the non-matching tag drops out).
+  await waitFor(() => expect(screen.queryByLabelText('Filter by tag databases')).toBeNull());
+
+  // The matching recent appears before the matching tag before the folder. Read
+  // the shelf's chip testIDs in tree order (getAllByTestId returns matches in
+  // document order) — recents → tags → folders.
+  const order = screen
+    .getAllByTestId(/^suggestion-(recent|tag|folder)-/)
+    .map((node) => node.props.testID as string);
+  const families = order.map((id) => id.split('-')[1]);
+  expect(families).toEqual(['recent', 'tag', 'folder']);
+});
+
+test('typing with no shelf match shows NEITHER the suggestion shelf NOR the browse shelf', async () => {
+  seedPhase2Library();
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('A design doc')).toBeTruthy());
+  const input = await focusSearch(screen);
+  await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+  await typeQuery(input, 'zzz');
+
+  // No recent/tag/folder matches "zzz" → the suggestion shelf hides; and while
+  // focused the browse shelf must NOT reappear. The field-only header.
+  await waitFor(() => expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull());
+  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  expect(screen.queryByText('Jump to')).toBeNull();
+  // The zero-result empty state MUST render — this guards against a regression
+  // where `searching` is computed from the raw query instead of debouncedQuery.
+  expect(screen.getByTestId('inbox-empty-search')).toBeTruthy();
+});
+
+test('tapping a filtered tag chip applies the facet and clears the query', async () => {
+  seedPhase2Library();
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('A design doc')).toBeTruthy());
+  const input = await focusSearch(screen);
+  await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+  await typeQuery(input, 'des');
+  await waitFor(() => expect(screen.getByLabelText('Filter by tag design')).toBeTruthy());
+  await act(async () => {
+    fireEvent.press(screen.getByLabelText('Filter by tag design'));
+  });
+
+  // The tag facet is applied (only the #design bookmark remains) and the query
+  // is cleared — identical Phase-1 end-state.
+  await waitFor(() => expect(screen.getByText('#design · 1')).toBeTruthy());
+  expect(screen.getByText('A design doc')).toBeTruthy();
+  expect(screen.queryByText('A database doc')).toBeNull();
+  expect(input.props.value).toBe('');
+});
+
+test('tapping a matched recent fills the query and keeps focus', async () => {
+  seedPhase2Library();
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('A design doc')).toBeTruthy());
+  const input = await focusSearch(screen);
+  await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+  await typeQuery(input, 'des');
+  await waitFor(() => expect(screen.getByLabelText('Search again for “design system”')).toBeTruthy());
+  await act(async () => {
+    fireEvent.press(screen.getByLabelText('Search again for “design system”'));
+  });
+
+  // The recent completes the query and never blurs the field. The shelf still
+  // shows (the full "design system" recent equals the query so it's dropped, but
+  // #design / Design still match) — the browse shelf stays hidden either way.
+  expect(input.props.value).toBe('design system');
+  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+});
+
+test('the shelf and the results agree on what matches the query', async () => {
+  seedPhase2Library();
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('A design doc')).toBeTruthy());
+  const input = await focusSearch(screen);
+  await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+  await typeQuery(input, 'des');
+
+  // Results: the #design-tagged bookmark matches (via its title/tag); the
+  // databases-only bookmark does not — exactly the set the shelf surfaced
+  // (#design shown, databases dropped). Same matcher, no disagreement. Wait for
+  // the debounced results filter to drop the non-match.
+  await waitFor(() => expect(screen.queryByText('A database doc')).toBeNull());
+  expect(screen.getByText('A design doc')).toBeTruthy();
+});
+
+test('focus-empty still shows the FULL unfiltered shelf (Phase-1 regression guard)', async () => {
+  seedPhase2Library();
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('A design doc')).toBeTruthy());
+  await focusSearch(screen);
+
+  // With an empty query the shelf is the Phase-1 focus-empty shelf: the recent,
+  // BOTH tags (design AND databases), and the folder — nothing filtered out.
+  await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+  expect(screen.getByLabelText('Search again for “design system”')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by tag design')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by tag databases')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by folder Design')).toBeTruthy();
+});
+
+// Phase-2 variant of the blur-during-tap race: the user has already typed a
+// query (shelf shows filtered chips), then blur fires before the tap resolves.
+// The deferred-hide mechanism must protect the chip just as it does from
+// the focus-empty state.
+test('a filtered chip tap survives a blur fired first (Phase-2 typing race)', async () => {
+  jest.useFakeTimers();
+  try {
+    seedPhase2Library();
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('A design doc')).toBeTruthy());
+    const input = await focusSearch(screen);
+    await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+    // Type “des” — shelf filters to the matching chips.
+    await act(async () => {
+      fireEvent.changeText(input, 'des');
+    });
+    await waitFor(() => expect(screen.queryByLabelText('Filter by tag databases')).toBeNull());
+
+    // Blur fires first (native tap-begin gesture), but the deferred hide keeps
+    // the shelf mounted on this same tick …
+    await act(async () => {
+      fireEvent(input, 'blur');
+    });
+    expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy();
+
+    // … so the filtered tag chip's press still reaches its handler.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Filter by tag design'));
+    });
+    // The facet is applied and the query clears — the tap succeeded.
+    await waitFor(() => expect(screen.getByText('#design · 1')).toBeTruthy());
+    expect(input.props.value).toBe('');
+
+    await act(async () => {
+      jest.runOnlyPendingTimers();
+    });
+  } finally {
+    jest.useRealTimers();
+  }
 });

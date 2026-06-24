@@ -90,12 +90,16 @@ export const ko: Catalog = {
   'search.shelfAffordance': '바로가기',
   'search.shelfA11y': '검색 추천',
   'search.recentChipA11y': '“{query}” 다시 검색',
+  // Phase 2: 검색어가 입력된 동안 추천 칩 영역의 접근성 라벨 (검색어로 좁혀졌음을 알림).
+  'search.shelfFilteredA11y': '“{query}” 검색 추천',
   'search.tagChipA11y': '태그 {name}(으)로 거르기',
   'search.folderChipA11y': '{name} 폴더 보기',
   // 최근 검색 칩의 개별 삭제(접근성 액션) 라벨.
   'search.removeRecentA11y': '최근 검색 “{query}” 삭제',
   // Phase-2 설정의 "기록 지우기" 일괄 삭제용으로 예약 — Phase 1 미사용.
   'search.clearRecentsA11y': '최근 검색 지우기',
+  // 최근 검색 서브그룹 라벨용으로 예약 (EN 파리티 선언).
+  'search.recentGroupA11y': '최근 검색',
 
   'viewMode.card': '카드',
   'viewMode.list': '목록',

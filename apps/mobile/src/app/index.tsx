@@ -563,17 +563,23 @@ export default function InboxScreen() {
     () => (searching ? queryTerms(debouncedQuery) : []),
     [searching, debouncedQuery],
   );
-  // Suggestion shelf (focused-empty state). A pure projection of already-loaded
-  // state — no fetch/sync fires on focus or keystroke. Phase 1 passes no query
-  // (the shelf only shows on an empty query); the arg is the Phase-2 seam.
-  const suggestions = useSearchSuggestions(recentSearches);
-  // Show the suggestion shelf only while focused with an empty query AND there
-  // is something to suggest; otherwise show the browse shelf as today. The two
-  // are mutually exclusive (never stack two chip rows).
-  const showSuggestions = searchFocused && query.trim() === '' && suggestions.length > 0;
-  // The browse shelf hides when the suggestion shelf takes its slot. Per Q1
-  // (locked), it stays visible while a non-empty query is being typed.
-  const showShelf = chips.length > 0 && !showSuggestions;
+  // Suggestion shelf. A pure projection of already-loaded state — no fetch/sync
+  // fires on focus or keystroke. Phase 2: thread the DEBOUNCED query so the shelf
+  // re-filters on the same ~140ms cadence as the results list and the two update
+  // in the same frame (never momentarily disagree). On an empty query the builder
+  // yields the Phase-1 focus-empty shelf; on a non-empty query it yields the
+  // query-filtered, best-match-first chips (or none when nothing matches).
+  const suggestions = useSearchSuggestions(recentSearches, debouncedQuery);
+  // Show the suggestion shelf whenever the field is focused and there is
+  // something to suggest. Phase 2 (§13.2) drops the empty-query requirement: a
+  // non-empty query that matches nothing yields zero suggestions, so this same
+  // condition cleanly produces the typing-no-match "hide the shelf" state.
+  const showSuggestions = searchFocused && suggestions.length > 0;
+  // The browse shelf is suppressed for the WHOLE focused state (§13.2, widening
+  // Phase-1 Q1): while focused at most one chip row may show — the suggestion
+  // shelf — never the browse shelf. The browse shelf returns only on blur. This
+  // also keeps it hidden in the typing-no-match case, where neither row shows.
+  const showShelf = chips.length > 0 && !searchFocused;
 
   // Record a submitted query into recents (trim + case-insensitive dedupe-to-
   // front + cap). The ONLY write path for recents — never on every keystroke.
@@ -911,6 +917,7 @@ export default function InboxScreen() {
             suggestions={suggestions}
             onPick={onPickSuggestion}
             onRemoveRecent={onRemoveRecentSuggestion}
+            query={debouncedQuery}
           />
         ) : null}
         {showSuggestions ? null : (

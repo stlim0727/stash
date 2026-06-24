@@ -77,22 +77,15 @@ function rawTerm(token: string): { value: string; hasSymbol: boolean } {
 }
 
 /**
- * Case-insensitive, punctuation-tolerant client-side search over the fields a
- * user remembers a bookmark by — title/description/notes/url/site_name plus
- * (when resolvers are supplied) tag names and the parent collection name.
- * Whitespace-separated query terms must all match (AND), each against any field.
+ * Split a raw query into its two term kinds, exactly as {@link filterBookmarks}
+ * does: ordinary tokens are normalized (NFKC + lowercase + punctuation-stripped),
+ * symbol-bearing tokens ("c++", "c#", ".net") keep their symbols and match
+ * literally. Factored out so the suggestion shelf and the results list tokenize a
+ * query through ONE code path — there must be a single normalization source of
+ * truth, or the shelf and the "Matches (N)" list could disagree about a match.
  */
-export function filterBookmarks(
-  bookmarks: Bookmark[],
-  query: string,
-  resolvers?: SearchResolvers,
-): Bookmark[] {
+function splitQueryTerms(query: string): { terms: string[]; symbolTerms: string[] } {
   const rawTokens = query.split(/\s+/).filter(Boolean);
-  // Split query tokens into two kinds. Symbol-bearing tokens ("c++", "c#",
-  // ".net") match LITERALLY against a punctuation-preserving haystack; ordinary
-  // tokens are normalized (punctuation-stripped) and keep the existing tolerant
-  // substring behavior. A token like "c++" is therefore NOT also normalized to a
-  // broad "c" term — that degenerate term is exactly the P2 bug being fixed.
   const symbolTerms: string[] = [];
   const terms: string[] = [];
   for (const token of rawTokens) {
@@ -106,6 +99,91 @@ export function filterBookmarks(
       }
     }
   }
+  return { terms, symbolTerms };
+}
+
+/** How well a candidate matched the query, best-match-first ranking signal. */
+export type MatchRank = 'exact' | 'prefix' | 'substring' | 'none';
+
+/**
+ * Does a single candidate NAME (a tag name, folder name, or recent search
+ * string) match the query, and — if so — how well? This is the suggestion
+ * shelf's per-candidate predicate, and it is built on the SAME tokenizer and
+ * normalization (`splitQueryTerms` → `normalizeToken` / `symbolHaystack`) that
+ * {@link filterBookmarks} uses for a bookmark's label fields, so a tag/folder the
+ * shelf surfaces for a query is provably one the results path would also match.
+ * Do NOT re-implement normalization elsewhere — call this.
+ *
+ * Matching is the same AND-across-whitespace-tokens, substring-per-token rule the
+ * results use (no fuzzy/typo tolerance — Phase 2 only filters user-authored
+ * values, it never relaxes to fuzzy/AI matching). The rank refines a matched
+ * candidate for ordering, comparing the whole (separator-collapsed) candidate
+ * against the whole (separator-collapsed) query:
+ *  - `exact`     — the collapsed candidate equals the collapsed query;
+ *  - `prefix`    — the collapsed candidate starts with the collapsed query;
+ *  - `substring` — it matched but is neither of the above;
+ *  - `none`      — it did not match.
+ */
+export function matchesQuery(candidateName: string, query: string): MatchRank {
+  const { terms, symbolTerms } = splitQueryTerms(query);
+  if (terms.length === 0 && symbolTerms.length === 0) {
+    return 'none';
+  }
+  const name = candidateName ?? '';
+  // Normalized haystack (per-token normalize, space-joined) for ordinary terms;
+  // symbol-preserving haystack for symbol terms — mirroring filterBookmarks.
+  const haystack = normalizeHaystack(name);
+  const symbolHay = symbolHaystack(name);
+
+  const normalizedMatch = terms.every((term) => haystack.includes(term));
+  const symbolMatch = symbolTerms.every((term) => symbolHay.includes(term));
+  if (!normalizedMatch || !symbolMatch) {
+    return 'none';
+  }
+
+  // Rank on the separator-collapsed forms so "Design System" vs "designsystem"
+  // compare as a clean exact/prefix. Symbol terms keep their symbols; ordinary
+  // terms are punctuation-stripped — collapse each side the matching way.
+  const collapsedName = `${haystack.replace(/ /g, '')}${symbolHay.replace(/ /g, '')}`;
+  // Reconstruct the collapsed query in the same families so the comparison is
+  // apples-to-apples (normalized query tokens then symbol query tokens).
+  const collapsedQuery = `${terms.join('')}${symbolTerms.join('')}`;
+  if (!collapsedQuery) {
+    return 'substring';
+  }
+  // Use the normalized-only forms for exact/prefix when there are no symbol
+  // terms (the common case), which keeps "des" → "design" a clean prefix.
+  const nameKey = symbolTerms.length === 0 ? haystack.replace(/ /g, '') : collapsedName;
+  const queryKey = symbolTerms.length === 0 ? terms.join('') : collapsedQuery;
+  if (nameKey === queryKey) {
+    return 'exact';
+  }
+  if (nameKey.startsWith(queryKey)) {
+    return 'prefix';
+  }
+  return 'substring';
+}
+
+/**
+ * Case-insensitive, punctuation-tolerant client-side search over the fields a
+ * user remembers a bookmark by — title/description/notes/url/site_name plus
+ * (when resolvers are supplied) tag names and the parent collection name.
+ * Whitespace-separated query terms must all match (AND), each against any field.
+ */
+export function filterBookmarks(
+  bookmarks: Bookmark[],
+  query: string,
+  resolvers?: SearchResolvers,
+): Bookmark[] {
+  const rawTokens = query.split(/\s+/).filter(Boolean);
+  // Split query tokens into two kinds via the shared tokenizer (the SAME one the
+  // suggestion shelf's `matchesQuery` uses — single normalization source of
+  // truth). Symbol-bearing tokens ("c++", "c#", ".net") match LITERALLY against a
+  // punctuation-preserving haystack; ordinary tokens are normalized
+  // (punctuation-stripped) and keep the existing tolerant substring behavior. A
+  // token like "c++" is therefore NOT also normalized to a broad "c" term — that
+  // degenerate term is exactly the P2 bug being fixed.
+  const { terms, symbolTerms } = splitQueryTerms(query);
   if (terms.length === 0 && symbolTerms.length === 0) {
     return bookmarks;
   }

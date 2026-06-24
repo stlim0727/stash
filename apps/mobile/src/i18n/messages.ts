@@ -124,6 +124,10 @@ export const en = {
   'search.shelfAffordance': 'Jump to',
   'search.shelfA11y': 'Search suggestions',
   'search.recentChipA11y': 'Search again for “{query}”',
+  // Phase 2 (§13.7): a11y region label for the shelf while a query is active, so
+  // a screen-reader user knows the rail narrowed to their query. Optional polish;
+  // the key is reserved for parity.
+  'search.shelfFilteredA11y': 'Suggestions matching “{query}”',
   'search.tagChipA11y': 'Filter by tag {name}',
   'search.folderChipA11y': 'Filter by folder {name}',
   // Per-entry delete, exposed as an accessibility action on a recent chip.
@@ -131,6 +135,8 @@ export const en = {
   // Reserved for the Phase-2 Settings "Clear history" bulk-clear control; not
   // wired in Phase 1 (per-chip removal uses removeRecentA11y above).
   'search.clearRecentsA11y': 'Clear recent searches',
+  // Reserved for a future recents sub-grouping label (pre-declared for parity).
+  'search.recentGroupA11y': 'Recent searches',
 
   // View-mode labels (Inbox layout density).
   'viewMode.card': 'Cards',

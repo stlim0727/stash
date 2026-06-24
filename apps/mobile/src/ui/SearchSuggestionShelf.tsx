@@ -25,6 +25,13 @@ interface SearchSuggestionShelfProps {
   onPick: (suggestion: SearchSuggestion) => void;
   /** Long-press a recent chip to remove just that entry (Phase-1 Q2). */
   onRemoveRecent?: (suggestion: SearchSuggestion) => void;
+  /**
+   * The active (debounced) query, when typing. Phase 2 (§13.7): swaps the
+   * ScrollView's a11y region label to announce the rail is a FILTERED set
+   * matching the query, rather than the generic "Search suggestions". Empty/
+   * absent in the focus-empty state, where the generic label is correct.
+   */
+  query?: string;
 }
 
 /**
@@ -42,6 +49,7 @@ export function SearchSuggestionShelf({
   suggestions,
   onPick,
   onRemoveRecent,
+  query = '',
 }: SearchSuggestionShelfProps) {
   const palette = usePalette();
   const t = useT();
@@ -72,7 +80,6 @@ export function SearchSuggestionShelf({
     <Animated.View style={{ opacity }}>
       <Text
         style={[styles.affordance, { color: palette.textSecondary }]}
-        accessibilityRole="header"
       >
         {t('search.shelfAffordance')}
       </Text>
@@ -80,15 +87,17 @@ export function SearchSuggestionShelf({
         horizontal
         showsHorizontalScrollIndicator={false}
         testID="search-suggestion-shelf"
-        accessibilityLabel={t('search.shelfA11y')}
+        accessibilityLabel={
+          query.trim() ? t('search.shelfFilteredA11y', { query: query.trim() }) : t('search.shelfA11y')
+        }
         style={styles.shelf}
         contentContainerStyle={styles.shelfContent}
       >
         {suggestions.map((suggestion) => {
-          const query = suggestion.query ?? suggestion.label;
+          const chipQuery = suggestion.query ?? suggestion.label;
           const a11yLabel =
             suggestion.kind === 'recent'
-              ? t('search.recentChipA11y', { query })
+              ? t('search.recentChipA11y', { query: chipQuery })
               : suggestion.kind === 'tag'
                 ? t('search.tagChipA11y', { name: suggestion.label.replace(/^#/, '') })
                 : t('search.folderChipA11y', { name: suggestion.label });
@@ -103,7 +112,7 @@ export function SearchSuggestionShelf({
               accessibilityRole="button"
               accessibilityLabel={a11yLabel}
               accessibilityActions={
-                removable ? [{ name: 'delete', label: t('search.removeRecentA11y', { query }) }] : undefined
+                removable ? [{ name: 'delete', label: t('search.removeRecentA11y', { query: chipQuery }) }] : undefined
               }
               onAccessibilityAction={
                 removable
