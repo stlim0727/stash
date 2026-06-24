@@ -66,7 +66,7 @@ export const en = {
   'inbox.storageError':
     'Couldn’t open local storage — showing sample data. Your saves this session may not persist. Tap to report ›',
   'inbox.reportStorageProblem': 'Report storage problem',
-  'inbox.searchPlaceholder': 'Search your stash',
+  'inbox.searchPlaceholder': 'Search titles, tags, folders',
   'inbox.browse': 'Browse',
   'inbox.sortA11y': 'Sort: {label}. Tap to change.',
   'inbox.sortMenuTitle': 'Sort by',
@@ -85,6 +85,14 @@ export const en = {
   'inbox.sectionRecent': 'Recently saved',
   'inbox.loading': 'Loading your bookmarks…',
   'inbox.emptySearch': 'No bookmarks match your search.',
+  // Recovery affordances shown beneath the empty-search message: a hint that the
+  // search reaches beyond titles, and a button to drop the query.
+  'inbox.emptySearchHint': 'Search also looks in tags, folders, and site names.',
+  'inbox.clearSearch': 'Clear search',
+  'inbox.clearSearchA11y': 'Clear search',
+  // Site-name chip on a search result (generated site metadata, not a user
+  // field). Marks WHY a result matched when nothing else on the card shows it.
+  'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': 'Nothing in this view yet.',
   'inbox.emptyAll': 'Nothing saved yet. Add your first bookmark below.',
   'inbox.moveToCollectionAction': 'Move to collection…',

@@ -25,7 +25,9 @@ import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
 import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
+import { collectionMatchKey } from '@/domain/collection-match';
 import { filterBookmarks } from '@/domain/search';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramColorIndex, monogramIcon } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
 import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
@@ -67,6 +69,32 @@ function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
     parts.push(metadataStatusLabel(t, 'pending'));
   }
   return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/**
+ * Normalize a query into the same per-token keys the search engine uses
+ * (`collectionMatchKey`: NFKC + lowercase + strip non-alphanumerics), so the
+ * card can tell WHICH of its values a result matched on. Mirrors the tokenizing
+ * in `@/domain/search` — kept in lockstep so "what we show as the reason" agrees
+ * with "what actually matched".
+ */
+function queryTerms(query: string): string[] {
+  return query
+    .split(/\s+/)
+    .map(collectionMatchKey)
+    .filter(Boolean);
+}
+
+/** Whether a single label value (tag, site name) is hit by any query term. */
+function valueMatchesTerms(value: string | null | undefined, terms: string[]): boolean {
+  if (!value || terms.length === 0) {
+    return false;
+  }
+  const key = collectionMatchKey(value);
+  if (!key) {
+    return false;
+  }
+  return terms.some((term) => key.includes(term));
 }
 
 interface FacetChip {
@@ -209,6 +237,11 @@ export default function InboxScreen() {
     markBookmarkAccessed,
   } = useBookmarks();
   const [query, setQuery] = useState('');
+  // The TextInput stays bound to `query` (instant echo), but the derived work —
+  // filtering, sorting, the searching flag, the section label — keys off this
+  // debounced copy so an O(C) collection lookup per bookmark doesn't re-run on
+  // every keystroke and the match count doesn't flicker mid-type.
+  const debouncedQuery = useDebouncedValue(query, 140);
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -464,14 +497,20 @@ export default function InboxScreen() {
 
   const filtered = useMemo(
     () =>
-      filterBookmarks(facetFiltered, query, {
+      filterBookmarks(facetFiltered, debouncedQuery, {
         tagNames: (b) => getTagsForBookmark(b.id).map((tag) => tag.name),
         collectionName: (b) => getCollection(b.collection_id)?.name,
       }),
-    [facetFiltered, query, getTagsForBookmark, getCollection],
+    [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
-  const searching = query.trim().length > 0;
+  const searching = debouncedQuery.trim().length > 0;
+  // Normalized terms of the settled query, used to surface WHY each result
+  // matched (site-name chip, promoting a matched tag) when searching.
+  const searchTerms = useMemo(
+    () => (searching ? queryTerms(debouncedQuery) : []),
+    [searching, debouncedQuery],
+  );
   const showShelf = chips.length > 0;
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
@@ -890,17 +929,41 @@ export default function InboxScreen() {
           </Text>
         }
         ListEmptyComponent={
-          <Text style={[styles.empty, { color: palette.textSecondary }]}>
-            {isLoading
-              ? t('inbox.loading')
-              : searching
-                ? t('inbox.emptySearch')
-                : filter.kind !== 'all'
-                  ? t('inbox.emptyView')
-                  : t('inbox.emptyAll')}
-          </Text>
+          isLoading ? (
+            <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('inbox.loading')}</Text>
+          ) : searching ? (
+            // A zero-result search is a recovery point, not a dead end: explain
+            // the broadened scope (tags/folders/sites are searchable) and offer
+            // a visible Clear control (Android's keyboard has no native one).
+            <View testID="inbox-empty-search" style={styles.emptySearch}>
+              <Text style={[styles.empty, styles.emptySearchTitle, { color: palette.textSecondary }]}>
+                {t('inbox.emptySearch')}
+              </Text>
+              <Text style={[styles.emptySearchHint, { color: palette.textSecondary }]}>
+                {t('inbox.emptySearchHint')}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('inbox.clearSearchA11y')}
+                onPress={() => setQuery('')}
+                style={({ pressed }) => [
+                  styles.clearSearchButton,
+                  { backgroundColor: palette.accentSoft, opacity: pressed ? 0.7 : 1 },
+                ]}
+              >
+                <Ionicons name="close-circle-outline" size={16} color={palette.accent} />
+                <Text style={[styles.clearSearchLabel, { color: palette.accent }]}>
+                  {t('inbox.clearSearch')}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Text style={[styles.empty, { color: palette.textSecondary }]}>
+              {filter.kind !== 'all' ? t('inbox.emptyView') : t('inbox.emptyAll')}
+            </Text>
+          )
         }
-        extraData={viewMode}
+        extraData={`${viewMode}|${searching}|${debouncedQuery}`}
         renderItem={({ item }) => {
           const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
@@ -979,10 +1042,26 @@ export default function InboxScreen() {
             );
           }
 
+          // In search mode, make sure a tag that the query matched is among the
+          // shown tags — otherwise a result matched via a 4th+ tag looks random.
+          // Promote matching tags to the front, then take the first three.
+          const orderedTags = searching
+            ? [...cardTags].sort((a, b) => {
+                const am = valueMatchesTerms(a.name, searchTerms) ? 0 : 1;
+                const bm = valueMatchesTerms(b.name, searchTerms) ? 0 : 1;
+                return am - bm;
+              })
+            : cardTags;
           const metaParts = [
             ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
-            ...cardTags.slice(0, 3).map((tag) => `#${tag.name}`),
+            ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
+          // Surface the site name only when it's the reason this result matched
+          // (generated site metadata, kept visually distinct from the user-
+          // authored chips above so we never blur the two). When the match came
+          // from the title or a tag, that's already explained — an unexplained
+          // site chip would just be noise competing with the user's own fields.
+          const showSiteChip = searching && valueMatchesTerms(item.site_name, searchTerms);
           return (
             <Card style={styles.card}>
               <Pressable onPress={openDetail} onLongPress={() => setMenuItem(item)}>
@@ -1028,6 +1107,24 @@ export default function InboxScreen() {
                         </Text>
                       </View>
                     ))}
+                  </View>
+                ) : null}
+                {showSiteChip ? (
+                  // Generated site metadata — styled as a neutral, outlined site
+                  // chip (not the filled accent meta chips) so it never reads as
+                  // a user-typed value.
+                  <View style={styles.siteChipRow}>
+                    <View
+                      testID="inbox-card-site"
+                      style={[styles.siteChip, { borderColor: palette.border, backgroundColor: palette.surface }]}
+                    >
+                      <Text
+                        style={[styles.siteChipLabel, { color: palette.textSecondary }]}
+                        numberOfLines={1}
+                      >
+                        {t('inbox.siteChip', { name: item.site_name! })}
+                      </Text>
+                    </View>
                   </View>
                 ) : null}
                   {status ? (
@@ -1165,6 +1262,32 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: 'center',
     paddingVertical: 32,
+  },
+  emptySearch: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    gap: 12,
+  },
+  emptySearchTitle: {
+    paddingVertical: 0,
+  },
+  emptySearchHint: {
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  clearSearchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    marginTop: 4,
+  },
+  clearSearchLabel: {
+    fontSize: 14,
+    fontWeight: '700',
   },
   errorBanner: {
     fontSize: 13,
@@ -1402,6 +1525,21 @@ const styles = StyleSheet.create({
   metaChipLabel: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  siteChipRow: {
+    flexDirection: 'row',
+    paddingRight: 72,
+  },
+  siteChip: {
+    flexShrink: 1,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 3,
+    paddingHorizontal: 9,
+  },
+  siteChipLabel: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   cardStatus: {
     fontSize: 12,
