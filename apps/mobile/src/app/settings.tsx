@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -38,6 +39,11 @@ import {
   type ExportInput,
 } from '@/domain/export';
 import { parseImport } from '@/domain/import';
+import {
+  RECENT_SEARCHES_PREF_KEY,
+  parseRecents,
+  serializeRecents,
+} from '@/domain/recent-searches';
 import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import { getPreference, setPreference } from '@/storage/preferences';
@@ -246,6 +252,54 @@ export default function SettingsScreen() {
     }
     void setPreference(DEVELOPER_MODE_PREF_KEY, developerMode ? 'true' : 'false').catch(() => {});
   }, [developerMode]);
+
+  // Recent-search count drives the "Clear search history" row (label + disabled
+  // state). Loaded the same way the Inbox loads recents — local-only meta store,
+  // never synced. Mirrors the `recentsLoaded`-style guard so the initial empty
+  // default can't clobber anything; here it just gates the load.
+  const [recentCount, setRecentCount] = useState(0);
+  useEffect(() => {
+    let active = true;
+    getPreference(RECENT_SEARCHES_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setRecentCount(parseRecents(raw).length);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Clear search history (A3): wipe the persisted recents after a confirm. The
+  // write is local-only and fire-and-forget (recents never sync); the row flips
+  // to its disabled empty state optimistically via `recentCount` → 0. The Inbox
+  // re-reads recents on focus, so returning there shows no recents.
+  const clearRecentSearches = () => {
+    setRecentCount(0);
+    void setPreference(RECENT_SEARCHES_PREF_KEY, serializeRecents([])).catch(() => {});
+  };
+  const confirmClearRecents = () => {
+    if (Platform.OS === 'web') {
+      if (typeof confirm === 'undefined' || confirm(t('settings.search.clearConfirmTitle'))) {
+        clearRecentSearches();
+      }
+      return;
+    }
+    Alert.alert(
+      t('settings.search.clearConfirmTitle'),
+      t('settings.search.clearConfirmBody'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('settings.search.clearConfirm'),
+          style: 'destructive',
+          onPress: clearRecentSearches,
+        },
+      ],
+    );
+  };
 
   // What happens after a URL is shared in from another app. Default is a
   // modeless toast (no navigation); opting in lands on the Inbox instead.
@@ -488,8 +542,26 @@ export default function SettingsScreen() {
             LANGUAGE_OPTIONS.find((option) => option.value === languagePref)?.labelKey ??
               'settings.language.system',
           )}
-          last
           onPress={() => setLanguageSheetOpen(true)}
+        />
+        {/* Clear search history (A3): the privacy escape hatch for the recents
+            shelf. Disabled (no onPress) and reading "No recent searches" when
+            there's nothing to clear. The a11y label is the reserved
+            `search.clearRecentsA11y` rather than the visible label. */}
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="time-outline"
+          label={t('settings.search.clearLabel')}
+          value={
+            recentCount > 0
+              ? t('settings.search.clearValue', { count: recentCount })
+              : t('settings.search.clearEmpty')
+          }
+          accessibilityLabel={t('search.clearRecentsA11y')}
+          last
+          disabled={recentCount === 0}
+          onPress={recentCount > 0 ? confirmClearRecents : undefined}
         />
       </Group>
 
@@ -685,6 +757,8 @@ function Row({
   badge,
   accent,
   last,
+  disabled,
+  accessibilityLabel,
 }: {
   styles: ReturnType<typeof makeStyles>;
   palette: AppPalette;
@@ -696,6 +770,10 @@ function Row({
   badge?: number;
   accent?: boolean;
   last?: boolean;
+  /** A non-pressable row that represents a DISABLED control (vs static info):
+   *  dims the row and announces a disabled button to assistive tech. */
+  disabled?: boolean;
+  accessibilityLabel?: string;
 }) {
   const rowStyle: StyleProp<ViewStyle> = [styles.row, !last && styles.divider];
   const labelColor = accent ? palette.accent : palette.text;
@@ -727,13 +805,28 @@ function Row({
   );
 
   if (!onPress) {
+    // A disabled control (e.g. "Clear search history" with no history): dim it so
+    // it reads as inert rather than tappable, and announce the disabled state to
+    // screen readers (a plain info row stays role-less and full-strength).
+    if (disabled) {
+      return (
+        <View
+          accessibilityRole="button"
+          accessibilityLabel={accessibilityLabel ?? label}
+          accessibilityState={{ disabled: true }}
+          style={[rowStyle, { opacity: 0.4 }]}
+        >
+          {content}
+        </View>
+      );
+    }
     return <View style={rowStyle}>{content}</View>;
   }
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       onPress={onPress}
       style={({ pressed }) => [rowStyle, pressed && { opacity: 0.6 }]}
     >
