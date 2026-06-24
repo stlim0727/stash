@@ -21,7 +21,6 @@
 const { useState, useEffect, useRef } = React;
 
 const BASE_URL = "https://stzutoejnhzxzhjsjtsi.supabase.co/functions/v1/public-api";
-const CLAUDE_PROXY = "https://stzutoejnhzxzhjsjtsi.supabase.co/functions/v1/claude-proxy";
 const API_KEY = "YOUR_STASH_API_KEY"; // paste your stash_ key here
 const HEADERS = {
   "Authorization": `Bearer ${API_KEY}`,
@@ -34,14 +33,35 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-async function callClaude(system, messages) {
-  const res = await fetch(CLAUDE_PROXY, {
-    method: "POST",
-    headers: { ...HEADERS },
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, system, messages }),
-  });
-  const data = await res.json();
-  return data.content?.[0]?.text || "응답 없음";
+// The `claude-proxy` edge function was an unmetered, unvalidated passthrough to a
+// billable Anthropic key and has been removed (see
+// https://github.com/stlim0727/stash/pull/195). The AI 분석 / AI 대화 tabs
+// depended on it, so they are gated behind AI_ENABLED below and render a neutral
+// "removed" notice — no dead endpoint calls, no enabled-but-broken buttons. The
+// bookmark/tag/collection management tabs are unaffected and use the public-api.
+const AI_ENABLED = false;
+const AI_DISABLED_MESSAGE =
+  "AI 기능은 비활성화되었습니다. claude-proxy 엔드포인트가 보안상의 이유로 제거되었습니다. " +
+  "(The claude-proxy endpoint was removed for security reasons; the AI analysis and chat features are no longer available.)";
+
+// A neutral, reusable notice block for the disabled AI tabs (info, not error).
+function AiDisabledNotice() {
+  return (
+    <div style={{ textAlign: "center", padding: "50px 16px", color: "#9ca3af" }}>
+      <div style={{ fontSize: 40, marginBottom: 14 }}>🚫</div>
+      <div style={{
+        maxWidth: 520, margin: "0 auto", lineHeight: 1.7, fontSize: 14, color: "#9ca3af",
+        background: "#18181f", border: "1px solid #2a2a35", borderRadius: 10, padding: "14px 18px",
+      }}>{AI_DISABLED_MESSAGE}</div>
+    </div>
+  );
+}
+
+// Defensive stub: the AI tabs are gated behind AI_ENABLED (false) so this is
+// unreachable today, but if someone flips AI_ENABLED back on without restoring a
+// vetted proxy, fail loudly here rather than call a dead/abusable endpoint.
+async function callClaude(_system, _messages) {
+  throw new Error(AI_DISABLED_MESSAGE);
 }
 
 function StashManager() {
@@ -169,6 +189,7 @@ function StashManager() {
   }
 
   async function analyzeBookmarks() {
+    if (!AI_ENABLED) return; // AI removed — the tab renders AiDisabledNotice instead.
     setAnalyzing(true);
     setActiveTab("analysis");
     const sample = bookmarks.slice(0, 80).map(b => ({
@@ -190,6 +211,7 @@ function StashManager() {
   }
 
   async function sendChat() {
+    if (!AI_ENABLED) return; // AI removed — the tab renders AiDisabledNotice instead.
     if (!chatInput.trim() || chatLoading) return;
     const userMsg = chatInput.trim();
     setChatInput("");
@@ -358,7 +380,9 @@ function StashManager() {
           </div>
         )}
 
-        {activeTab === "analysis" && (
+        {activeTab === "analysis" && !AI_ENABLED && <AiDisabledNotice />}
+
+        {activeTab === "analysis" && AI_ENABLED && (
           <div>
             {!analysis && !analyzing && (
               <div style={{ textAlign: "center", padding: "50px 0" }}>
@@ -388,7 +412,9 @@ function StashManager() {
           </div>
         )}
 
-        {activeTab === "chat" && (
+        {activeTab === "chat" && !AI_ENABLED && <AiDisabledNotice />}
+
+        {activeTab === "chat" && AI_ENABLED && (
           <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 230px)" }}>
             <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, paddingBottom: 10 }}>
               {chat.length === 0 && (
