@@ -685,6 +685,26 @@ test('long-pressing an inbox card opens the action menu and Move to Trash remove
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 });
 
+test('the visible ⋯ overflow button opens the action menu (no long-press needed)', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000062',
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  // Tapping the always-visible ⋯ surfaces the same actions as a long-press,
+  // so the move/share/trash menu is discoverable without a hidden gesture.
+  await fireEvent.press(screen.getByLabelText('More actions'));
+  expect(screen.getByText('Move to collection…')).toBeTruthy();
+  expect(screen.getByText('Move to Trash')).toBeTruthy();
+});
+
 test('long-pressing the preview image (not just the title) opens the action menu', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({

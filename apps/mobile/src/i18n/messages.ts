@@ -90,6 +90,7 @@ export const en = {
   'inbox.emptyTitle': 'Your stash is empty',
   'inbox.emptyHintShare': 'Share a link from any app and pick Stash to save it in a tap.',
   'inbox.emptyHintAdd': 'Or tap ＋ below to add one by hand.',
+  'inbox.moreActions': 'More actions',
   'inbox.moveToCollectionAction': 'Move to collection…',
   'inbox.moveToCollectionTitle': 'Move to collection',
   'inbox.inboxNoCollection': 'Inbox (no collection)',

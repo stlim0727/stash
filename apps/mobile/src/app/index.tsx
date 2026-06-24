@@ -1015,6 +1015,18 @@ export default function InboxScreen() {
                     </Text>
                   </View>
                 ) : null}
+                {/* Explicit overflow so the move/share/trash actions aren't
+                    hidden behind a long-press only — the sole reach for a
+                    note/image row that has no ↗ open button. */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t('inbox.moreActions')}
+                  hitSlop={8}
+                  style={styles.moreButton}
+                  onPress={() => setMenuItem(item)}
+                >
+                  <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                </Pressable>
                 {item.url ? (
                   <Pressable
                     accessibilityRole="link"
@@ -1064,6 +1076,17 @@ export default function InboxScreen() {
                       </Text>
                     </View>
                   ) : null}
+                  {/* Always-present overflow: the discoverable way into
+                      move/share/trash, not a long-press a user must guess. */}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t('inbox.moreActions')}
+                    hitSlop={8}
+                    style={[styles.moreButton, styles.cardMoreButton]}
+                    onPress={() => setMenuItem(item)}
+                  >
+                    <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                  </Pressable>
                 </View>
                 {item.url ? (
                   <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
@@ -1399,6 +1422,16 @@ const styles = StyleSheet.create({
     height: 34,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  moreButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardMoreButton: {
+    marginLeft: 'auto',
   },
   cardPreview: {
     width: '100%',

@@ -70,6 +70,7 @@ export const ko: Catalog = {
   'inbox.emptyTitle': '아직 비어 있어요',
   'inbox.emptyHintShare': '어떤 앱에서든 링크를 공유할 때 Stash를 선택하면 한 번에 저장돼요.',
   'inbox.emptyHintAdd': '또는 아래 ＋ 를 눌러 직접 추가하세요.',
+  'inbox.moreActions': '더보기',
   'inbox.moveToCollectionAction': '컬렉션으로 이동…',
   'inbox.moveToCollectionTitle': '컬렉션으로 이동',
   'inbox.inboxNoCollection': '받은함 (컬렉션 없음)',
