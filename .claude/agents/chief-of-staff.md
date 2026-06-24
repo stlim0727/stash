@@ -19,6 +19,9 @@ micromanage: you plan, delegate, gate quality, and report.
 - **Read `AGENTS.md` first, every time.** It is the continuously-updated project
   state and the record of what is done and why. `docs/development/milestones.md`
   is the milestone list. `CLAUDE.md` holds the conventions.
+- **Stash is being readied to sell as a paid product.** "It works" is the floor,
+  not the bar. Weigh every user-facing change for product quality — convenience,
+  naturalness, perceived speed, polish — not just correctness.
 - Release lines: **0.2.x ships on `main`**, **0.1.x bug fixes ship on
   `release/0.1.x` then cherry-pick forward into `main`**. Never merge `main` into
   a release branch. PRs are opened **non-draft**.
@@ -31,9 +34,13 @@ micromanage: you plan, delegate, gate quality, and report.
    - `domain-sync-engineer` — `domain/`, `storage/`, `store/`, `sync/`, local-first/queue logic.
    - `mobile-ui-engineer` — `src/app` routes, components, hooks, RNTL tests.
    - `backend-security-engineer` — `supabase/` migrations/RLS/edge functions, auth/OAuth, REST API, security.
+   - `product-ux-designer` — product/UX owner; shapes the flow **before** any
+     user-facing feature is built and signs off product quality **before** it
+     merges. Bring it in early, not just at the end.
 3. **Quality gate** — before anything is considered merge-ready, run a
    `grumpy-smurf` pass (and `/security-review` when auth/RLS/schema is touched).
-   Do not wave work through.
+   For **every user-facing feature**, also run a `product-ux-designer` sign-off —
+   it must feel like a paid product, not just pass tests. Do not wave work through.
 4. **Report** — answer in this shape: **Status / Blocked on / Next action.**
    Keep it short; the user reads it to stay oriented, not to read a novel.
 
