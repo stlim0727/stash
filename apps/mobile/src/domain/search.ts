@@ -39,6 +39,44 @@ function normalizeHaystack(value: string): string {
 }
 
 /**
+ * Symbol-preserving fold: NFKC + lowercase only, keeping punctuation. Used for
+ * query terms that are DEFINED by their symbols ("c++", "c#", ".net"). Those
+ * terms must NOT go through `normalizeToken`, which would strip the symbols and
+ * collapse them to a degenerate one/two-letter token ("c", "net") that substring-
+ * matches almost everything (a single "c" lives inside every collapsed ".com"
+ * URL). We still split on whitespace and re-join with spaces so a symbol query
+ * can't fuse across words — the per-term whitespace boundary is preserved exactly
+ * as in `normalizeHaystack`.
+ */
+function symbolHaystack(value: string): string {
+  return value
+    .split(/\s+/)
+    .map((token) => token.normalize('NFKC').toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+}
+
+/**
+ * A query term is "symbol-bearing" when its raw (NFKC + lowercased) form still
+ * contains characters that `normalizeToken` would strip, i.e. it carries meaning
+ * in punctuation/symbols ("c++", "c#", ".net", "f#"). These match LITERALLY
+ * against the symbol-preserving haystack instead of falling through to the broad
+ * punctuation-stripped substring match.
+ *
+ * TRADE-OFF (product call, flagged not decided silently): because a symbol term
+ * is matched literally, "c++" matches a field containing the text "c++" but does
+ * NOT match a tag stored as the bare word "cpp", and vice versa. We accept this:
+ * a user typing the symbol "++" clearly means the symbol form, and the cost of
+ * NOT doing this is the P2 bug where "c++" returns the entire inbox. Aliasing
+ * "c++"<->"cpp" would need an explicit synonym table, out of scope here.
+ */
+const SYMBOL_FOLD = /[^\p{L}\p{N}\s]/u;
+function rawTerm(token: string): { value: string; hasSymbol: boolean } {
+  const value = token.normalize('NFKC').toLowerCase();
+  return { value, hasSymbol: SYMBOL_FOLD.test(value) };
+}
+
+/**
  * Case-insensitive, punctuation-tolerant client-side search over the fields a
  * user remembers a bookmark by — title/description/notes/url/site_name plus
  * (when resolvers are supplied) tag names and the parent collection name.
@@ -49,11 +87,26 @@ export function filterBookmarks(
   query: string,
   resolvers?: SearchResolvers,
 ): Bookmark[] {
-  const terms = query
-    .split(/\s+/)
-    .map(normalizeToken)
-    .filter(Boolean);
-  if (terms.length === 0) {
+  const rawTokens = query.split(/\s+/).filter(Boolean);
+  // Split query tokens into two kinds. Symbol-bearing tokens ("c++", "c#",
+  // ".net") match LITERALLY against a punctuation-preserving haystack; ordinary
+  // tokens are normalized (punctuation-stripped) and keep the existing tolerant
+  // substring behavior. A token like "c++" is therefore NOT also normalized to a
+  // broad "c" term — that degenerate term is exactly the P2 bug being fixed.
+  const symbolTerms: string[] = [];
+  const terms: string[] = [];
+  for (const token of rawTokens) {
+    const raw = rawTerm(token);
+    if (raw.hasSymbol) {
+      symbolTerms.push(raw.value);
+    } else {
+      const normalized = normalizeToken(token);
+      if (normalized) {
+        terms.push(normalized);
+      }
+    }
+  }
+  if (terms.length === 0 && symbolTerms.length === 0) {
     return bookmarks;
   }
 
@@ -74,7 +127,11 @@ export function filterBookmarks(
   // Normalization (NFKC + lowercase + per-token punctuation strip, space kept as
   // the token separator) is identical for both groups; only the collapse
   // fallback differs.
-  const collapsedQuery = terms.length === 1 ? terms[0] : null;
+  // The collapse fallback ("watchlater" -> "Watch Later") is for a single
+  // whole-query token; it stays gated on the ORIGINAL token count so a query that
+  // also carries a symbol term doesn't accidentally qualify.
+  const collapsedQuery =
+    rawTokens.length === 1 && terms.length === 1 ? terms[0] : null;
 
   return bookmarks.filter((bookmark) => {
     const labelFields: Array<string | null | undefined> = [
@@ -89,26 +146,35 @@ export function filterBookmarks(
       bookmark.url,
     ];
 
-    const normalizedLabels = labelFields
-      .filter((value): value is string => Boolean(value))
-      .map(normalizeHaystack)
-      .filter(Boolean);
-    const normalizedProse = proseFields
-      .filter((value): value is string => Boolean(value))
-      .map(normalizeHaystack)
-      .filter(Boolean);
+    const presentLabels = labelFields.filter((value): value is string => Boolean(value));
+    const presentProse = proseFields.filter((value): value is string => Boolean(value));
 
+    const normalizedLabels = presentLabels.map(normalizeHaystack).filter(Boolean);
+    const normalizedProse = presentProse.map(normalizeHaystack).filter(Boolean);
     const haystack = [...normalizedLabels, ...normalizedProse].join(' ');
-    if (terms.every((term) => haystack.includes(term))) {
-      return true;
+
+    // Every NORMALIZED term must match, either directly in the punctuation-
+    // stripped haystack or (single-token query, label fields only) via the
+    // collapse fallback.
+    const normalizedTermsMatch = terms.every((term) => {
+      if (haystack.includes(term)) {
+        return true;
+      }
+      if (collapsedQuery === term) {
+        return normalizedLabels.some((field) => field.replace(/ /g, '').includes(term));
+      }
+      return false;
+    });
+    if (!normalizedTermsMatch) {
+      return false;
     }
-    if (collapsedQuery !== null) {
-      // Collapse separators within a single LABEL field (not across fields, not
-      // prose) and retry the single term.
-      return normalizedLabels.some((field) =>
-        field.replace(/ /g, '').includes(collapsedQuery),
-      );
+
+    // Every SYMBOL-bearing term must match LITERALLY against the punctuation-
+    // preserving haystack — never the stripped one — so "c++" stays selective.
+    if (symbolTerms.length > 0) {
+      const symbolHay = [...presentLabels, ...presentProse].map(symbolHaystack).join(' ');
+      return symbolTerms.every((term) => symbolHay.includes(term));
     }
-    return false;
+    return true;
   });
 }

@@ -228,3 +228,55 @@ test('multi-term query does not create cross-word false positives', () => {
   // queries, so this multi-token cross-word guard is preserved.
   assert.equal(filterBookmarks(corpus, 'local manager').length, 0);
 });
+
+test('symbol-bearing query "C++" matches a C++ bookmark and stays selective', () => {
+  // Regression for the P2 search bug: normalization collapses "C++" -> "c", and
+  // every collapsed ".com" URL contains a "c", so the symbol query used to return
+  // the entire inbox. It must now match ONLY items literally about C++.
+  const items = [
+    makeBookmark({ id: 'cpp', title: 'Learn C++ templates', url: 'https://cppref.com/x' }),
+    makeBookmark({ id: 'u1', title: 'Cooking blog', url: 'https://recipes.com/a' }),
+    makeBookmark({ id: 'u2', title: 'Climbing news', url: 'https://news.com/b' }),
+    makeBookmark({ id: 'u3', title: 'Docs', url: 'https://docs.com/c' }),
+  ];
+  assert.deepEqual(
+    filterBookmarks(items, 'C++').map((b) => b.id),
+    ['cpp'],
+  );
+  // Lowercase form behaves identically.
+  assert.deepEqual(
+    filterBookmarks(items, 'c++').map((b) => b.id),
+    ['cpp'],
+  );
+});
+
+test('symbol queries match symbol tags and do not collide across symbols', () => {
+  const items = [
+    makeBookmark({ id: 'cpp' }),
+    makeBookmark({ id: 'csharp' }),
+  ];
+  const tagsById: Record<string, string[]> = { cpp: ['C++'], csharp: ['C#'] };
+  const resolvers: SearchResolvers = { tagNames: (b) => tagsById[b.id] ?? [] };
+
+  // Tag "C++" is found by "C++"...
+  assert.deepEqual(
+    filterBookmarks(items, 'C++', resolvers).map((b) => b.id),
+    ['cpp'],
+  );
+  // ...and "C#" by "C#" — the two symbol forms do not match each other.
+  assert.deepEqual(
+    filterBookmarks(items, 'C#', resolvers).map((b) => b.id),
+    ['csharp'],
+  );
+});
+
+test('".NET" is selective and does not match plain ".com" URLs', () => {
+  const items = [
+    makeBookmark({ id: 'net', title: 'ASP.NET guide', url: 'https://learn.com/x' }),
+    makeBookmark({ id: 'other', title: 'Networking 101', url: 'https://example.com/y' }),
+  ];
+  assert.deepEqual(
+    filterBookmarks(items, '.NET').map((b) => b.id),
+    ['net'],
+  );
+});
