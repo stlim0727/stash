@@ -80,7 +80,7 @@ export const en = {
   'inbox.viewAsA11y': 'View as {mode}',
   'inbox.filterAll': 'All',
   'inbox.filterNoCollection': 'No collection',
-  'inbox.sectionMatches': 'Matches ({count})',
+  'inbox.sectionMatches': { one: '{count} result', other: '{count} results' },
   'inbox.sectionNoCollection': 'No collection · {count}',
   'inbox.sectionFacet': '{label} · {count}',
   'inbox.sectionRecent': 'Recently saved',
