@@ -325,26 +325,32 @@ stated here so it isn't crossed later by accident.
 
 ---
 
-## 9. Open questions (need the user before mobile-ui starts)
+## 9. Open questions — RESOLVED (locked at Phase-1 sign-off)
 
-- **Q1 — Browse shelf while typing.** Today the browse shelf is always visible.
-  Phase 1 hides it on focus-empty and restores it on blur. Should the browse
-  shelf also hide while a *non-empty query* is being typed (cleaner, search-
-  focused) or stay visible (lets the user pre-narrow by facet then search within
-  it)? **Recommendation:** keep it visible while typing in Phase 1 (no behavior
-  change beyond focus-empty), revisit in Phase 2 when the shelf itself becomes
-  the live-filter surface. *Low stakes — flag, default to "keep visible".*
-- **Q2 — Clearing recents.** Should Phase 1 ship a way to clear search history
-  (a trailing "Clear" chip or a long-press-to-remove on a recent chip)? A paying
-  user reasonably expects to delete an embarrassing/stale search.
-  **Recommendation:** ship a lightweight **long-press a recent chip → remove just
-  that entry** (no destructive confirm needed — it's one search string), and
-  defer a bulk "Clear history" to Settings later. Keys are reserved above
-  (`search.clearRecentsA11y`). *Worth a yes/no before build.*
-- **Q3 — Privacy of recents.** Recent searches persist in the local meta store
-  only (never synced, never sent anywhere), consistent with `pref.inbox.sort`.
-  Confirm that's the intended privacy posture (it should be — search strings are
-  user content). *Default: local-only, never synced.*
+All three questions below were resolved before mobile-ui built Phase 1. Each is
+now implemented as stated.
+
+- **Q1 — Browse shelf while typing. RESOLVED: keep it VISIBLE while typing.**
+  Phase 1 hides the browse shelf only in the focused-EMPTY state (where the
+  suggestion shelf takes its slot) and restores it on blur. While a *non-empty*
+  query is being typed the browse shelf stays visible (lets the user pre-narrow
+  by facet then search within it) — no behavior change beyond focus-empty. The
+  suggestion-vs-browse mutual exclusion (§3) therefore applies only to the
+  focused-empty state. Revisit in Phase 2, when the shelf itself becomes the
+  live-filter surface. *Implemented: `showShelf = chips.length > 0 &&
+  !showSuggestions`, and `showSuggestions` requires `query.trim() === ''`.*
+- **Q2 — Clearing recents. RESOLVED: INCLUDE long-press-to-remove in Phase 1.**
+  Long-pressing a recent chip removes just that one entry (no destructive
+  confirm — it's a single search string); a bulk "Clear history" in Settings is
+  deferred. The reserved a11y key (`search.clearRecentsA11y`) stays for that
+  later bulk control; the per-chip remove uses `search.removeRecentA11y`.
+  *Implemented via `removeRecent` + the shelf's `onRemoveRecent` long-press.*
+- **Q3 — Privacy of recents. RESOLVED: LOCAL-ONLY, never synced.** Recent
+  searches persist solely in the local meta store (`pref.search.recents`),
+  consistent with `pref.inbox.sort` — never enqueued, uploaded, or sent
+  anywhere. Search strings are user content and stay on-device. *Implemented:
+  load/persist via `getPreference`/`setPreference` only; nothing touches the
+  sync queue.*
 
 ---
 

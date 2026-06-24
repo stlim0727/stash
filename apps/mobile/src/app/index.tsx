@@ -24,6 +24,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
+import { SearchSuggestionShelf } from '@/ui/SearchSuggestionShelf';
+import { useSearchSuggestions } from '@/hooks/useSearchSuggestions';
+import {
+  RECENT_SEARCHES_PREF_KEY,
+  addRecent,
+  parseRecents,
+  removeRecent,
+  serializeRecents,
+} from '@/domain/recent-searches';
+import type { SearchSuggestion } from '@/domain/search-suggestions';
 import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
 import { collectionMatchKey } from '@/domain/collection-match';
 import { filterBookmarks } from '@/domain/search';
@@ -242,6 +252,27 @@ export default function InboxScreen() {
   // debounced copy so an O(C) collection lookup per bookmark doesn't re-run on
   // every keystroke and the match count doesn't flicker mid-type.
   const debouncedQuery = useDebouncedValue(query, 140);
+  // Whether the search field holds focus — drives the suggestion shelf (shown
+  // only while focused with an empty query).
+  const [searchFocused, setSearchFocused] = useState(false);
+  // Tapping a suggestion chip blurs the TextInput FIRST on native (iOS/Android),
+  // which would unmount the shelf mid-gesture and drop the tap into the void. So
+  // we defer the hide one tick: a chip's onPress runs synchronously before the
+  // deferred blur lands, and tag/folder taps (which intentionally blur) cancel
+  // the timer and hide immediately. The ref lets us clear a pending hide on
+  // re-focus and on unmount so we never setState after teardown.
+  const blurHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearBlurHide = useCallback(() => {
+    if (blurHideTimer.current !== null) {
+      clearTimeout(blurHideTimer.current);
+      blurHideTimer.current = null;
+    }
+  }, []);
+  useEffect(() => clearBlurHide, [clearBlurHide]);
+  // The user's own recent searches (most-recent-first). Local-only: persisted in
+  // the meta store as `pref.search.recents`, never enqueued or synced.
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const searchRef = useRef<TextInput>(null);
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -343,8 +374,21 @@ export default function InboxScreen() {
   // have loaded.
   const sortLoaded = useRef(false);
   const viewLoaded = useRef(false);
+  // Mirror the sort-pref guard: don't let the initial empty default clobber the
+  // stored recents before they load.
+  const recentsLoaded = useRef(false);
   useEffect(() => {
     let active = true;
+    getPreference(RECENT_SEARCHES_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setRecentSearches(parseRecents(raw));
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        recentsLoaded.current = true;
+      });
     getPreference(INBOX_SORT_PREF_KEY)
       .then((raw) => {
         if (active) {
@@ -389,6 +433,14 @@ export default function InboxScreen() {
     }
     void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(viewMode)).catch(() => {});
   }, [viewMode]);
+  useEffect(() => {
+    if (!recentsLoaded.current) {
+      return;
+    }
+    // Local-only persistence (meta store, like the sort pref) — never enqueued
+    // or synced. Search strings are user content and stay on-device.
+    void setPreference(RECENT_SEARCHES_PREF_KEY, serializeRecents(recentSearches)).catch(() => {});
+  }, [recentSearches]);
 
   // Browse facet handed in by another screen (e.g. tapping a tag in Bookmark
   // Detail). Applying it on param change lets in-app links jump to a view.
@@ -511,7 +563,65 @@ export default function InboxScreen() {
     () => (searching ? queryTerms(debouncedQuery) : []),
     [searching, debouncedQuery],
   );
-  const showShelf = chips.length > 0;
+  // Suggestion shelf (focused-empty state). A pure projection of already-loaded
+  // state — no fetch/sync fires on focus or keystroke. Phase 1 passes no query
+  // (the shelf only shows on an empty query); the arg is the Phase-2 seam.
+  const suggestions = useSearchSuggestions(recentSearches);
+  // Show the suggestion shelf only while focused with an empty query AND there
+  // is something to suggest; otherwise show the browse shelf as today. The two
+  // are mutually exclusive (never stack two chip rows).
+  const showSuggestions = searchFocused && query.trim() === '' && suggestions.length > 0;
+  // The browse shelf hides when the suggestion shelf takes its slot. Per Q1
+  // (locked), it stays visible while a non-empty query is being typed.
+  const showShelf = chips.length > 0 && !showSuggestions;
+
+  // Record a submitted query into recents (trim + case-insensitive dedupe-to-
+  // front + cap). The ONLY write path for recents — never on every keystroke.
+  const recordRecent = useCallback((raw: string) => {
+    setRecentSearches((current) => addRecent(current, raw));
+  }, []);
+
+  // Apply a tag/folder facet from a suggestion, mirroring the browse-shelf chip
+  // path: reset the cloud-drill context and drop out of the cloud to cards so
+  // the facet-filtered bookmarks are immediately visible.
+  const applySuggestionFacet = useCallback((target: InboxFilter) => {
+    cloudReturnRef.current = null;
+    setFilter(target);
+    setViewMode((mode) => (mode === 'cloud' ? 'card' : mode));
+  }, []);
+
+  // Tap a suggestion chip (§5): a recent FILLS the query and keeps the keyboard
+  // up to edit; a tag/folder APPLIES the facet, clears the query, and blurs so
+  // the shelf closes onto the filtered list.
+  const onPickSuggestion = useCallback(
+    (suggestion: SearchSuggestion) => {
+      if (suggestion.kind === 'recent') {
+        setQuery(suggestion.query ?? suggestion.label);
+        return;
+      }
+      if (suggestion.filter) {
+        applySuggestionFacet(
+          suggestion.filter.kind === 'tag'
+            ? { kind: 'tag', id: suggestion.filter.id }
+            : { kind: 'collection', id: suggestion.filter.id },
+        );
+      }
+      setQuery('');
+      // A tag/folder is a destination: dismiss the shelf now. Hide synchronously
+      // (don't wait for the deferred blur) and cancel any pending blur timer so
+      // there's no second, late setState.
+      clearBlurHide();
+      setSearchFocused(false);
+      searchRef.current?.blur();
+    },
+    [applySuggestionFacet, clearBlurHide],
+  );
+
+  // Long-press a recent chip to remove just that entry (Q2, locked).
+  const onRemoveRecentSuggestion = useCallback((suggestion: SearchSuggestion) => {
+    const target = suggestion.query ?? suggestion.label;
+    setRecentSearches((current) => removeRecent(current, target));
+  }, []);
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
   const sectionLabel = searching
@@ -673,6 +783,10 @@ export default function InboxScreen() {
         // The cluster is absolutely positioned so it floats over the list and
         // can translate out of view. It needs an opaque background so list rows
         // sliding underneath stay hidden while it is partly collapsed.
+        // onLayout re-fires whenever the cluster's height changes, including the
+        // suggestion-shelf↔browse-shelf swap on focus/blur (both shelves mount
+        // inside this measured view), so headerHeight — and the list's keyed-off
+        // paddingTop — re-flow to the new height and don't go stale.
         onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
         style={[
           styles.header,
@@ -762,6 +876,7 @@ export default function InboxScreen() {
         ) : null}
         <View style={styles.searchWrap}>
           <TextInput
+            ref={searchRef}
             style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
             placeholder={t('inbox.searchPlaceholder')}
             placeholderTextColor={palette.textSecondary}
@@ -769,9 +884,36 @@ export default function InboxScreen() {
             autoCorrect={false}
             value={query}
             onChangeText={setQuery}
+            onFocus={() => {
+              // A re-focus cancels any pending deferred hide from a prior blur.
+              clearBlurHide();
+              setSearchFocused(true);
+            }}
+            onBlur={() => {
+              // Defer the hide so a suggestion chip's onPress (which fires after
+              // the native blur) resolves against a still-mounted shelf. A real
+              // dismissal still settles on the next tick.
+              clearBlurHide();
+              blurHideTimer.current = setTimeout(() => {
+                blurHideTimer.current = null;
+                setSearchFocused(false);
+              }, 0);
+            }}
+            // Submit (keyboard "search"/return) is the only recents write path:
+            // the debounced search already reflects the text, so we just record.
+            returnKeyType="search"
+            onSubmitEditing={(event) => recordRecent(event.nativeEvent.text)}
             clearButtonMode="while-editing"
           />
         </View>
+        {showSuggestions ? (
+          <SearchSuggestionShelf
+            suggestions={suggestions}
+            onPick={onPickSuggestion}
+            onRemoveRecent={onRemoveRecentSuggestion}
+          />
+        ) : null}
+        {showSuggestions ? null : (
         <View style={styles.sortRow}>
           <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>{t('inbox.browse')}</Text>
           <Pressable
@@ -814,6 +956,7 @@ export default function InboxScreen() {
             })}
           </View>
         </View>
+        )}
         {showShelf ? (
           <ScrollView
             horizontal

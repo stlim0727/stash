@@ -87,6 +87,16 @@ export const ko: Catalog = {
   'inbox.tagCloudTagA11y': { other: '#{name}, 북마크 {count}개' },
   'inbox.tagCloudEmpty': '아직 태그가 없습니다. 북마크에 태그를 달면 여기에 표시됩니다.',
 
+  'search.shelfAffordance': '바로가기',
+  'search.shelfA11y': '검색 추천',
+  'search.recentChipA11y': '“{query}” 다시 검색',
+  'search.tagChipA11y': '태그 {name}(으)로 거르기',
+  'search.folderChipA11y': '{name} 폴더 보기',
+  // 최근 검색 칩의 개별 삭제(접근성 액션) 라벨.
+  'search.removeRecentA11y': '최근 검색 “{query}” 삭제',
+  // Phase-2 설정의 "기록 지우기" 일괄 삭제용으로 예약 — Phase 1 미사용.
+  'search.clearRecentsA11y': '최근 검색 지우기',
+
   'viewMode.card': '카드',
   'viewMode.list': '목록',
   'viewMode.cloud': '태그 클라우드',

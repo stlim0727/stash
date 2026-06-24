@@ -120,6 +120,18 @@ export const en = {
   },
   'inbox.tagCloudEmpty': 'No tags yet. Tag a bookmark to see it here.',
 
+  // Search suggestion shelf (focused-empty state).
+  'search.shelfAffordance': 'Jump to',
+  'search.shelfA11y': 'Search suggestions',
+  'search.recentChipA11y': 'Search again for “{query}”',
+  'search.tagChipA11y': 'Filter by tag {name}',
+  'search.folderChipA11y': 'Filter by folder {name}',
+  // Per-entry delete, exposed as an accessibility action on a recent chip.
+  'search.removeRecentA11y': 'Remove recent search “{query}”',
+  // Reserved for the Phase-2 Settings "Clear history" bulk-clear control; not
+  // wired in Phase 1 (per-chip removal uses removeRecentA11y above).
+  'search.clearRecentsA11y': 'Clear recent searches',
+
   // View-mode labels (Inbox layout density).
   'viewMode.card': 'Cards',
   'viewMode.list': 'List',
