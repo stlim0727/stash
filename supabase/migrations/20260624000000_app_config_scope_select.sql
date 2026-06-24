@@ -11,11 +11,17 @@
 --
 -- Reads stay anonymous: the policy uses the anon/authenticated roles (the
 -- client sends the anon key) and the startup gate filters with
--- `?key=eq.min_app_version`, which still matches `using (key = 'min_app_version')`.
+-- `?key=eq.min_app_version`, which still matches the allowlist below.
 -- Writes remain service-role only (no insert/update/delete policy exists).
 
 drop policy if exists "anyone can read app_config" on public.app_config;
+-- Idempotent: also drop the new policy so re-applying this migration does not
+-- fail with "policy ... already exists".
+drop policy if exists "read public app_config keys" on public.app_config;
 
+-- Public-key allowlist. Add a key here (and only here) to make it readable by
+-- anon — currently the single startup gate key:
+--   - min_app_version
 create policy "read public app_config keys"
   on public.app_config for select
-  using (key = 'min_app_version');
+  using (key in ('min_app_version'));
