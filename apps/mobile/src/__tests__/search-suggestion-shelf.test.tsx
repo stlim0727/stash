@@ -33,6 +33,7 @@ jest.mock('expo-router', () => {
 
 import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
+import { CaptureToastProvider } from '@/ui/capture-toast';
 import { RECENT_SEARCHES_PREF_KEY } from '@/domain/recent-searches';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -55,7 +56,9 @@ const SEARCH_PLACEHOLDER = 'Search titles, tags, folders';
 function renderInbox() {
   return render(
     <BookmarksProvider>
-      <InboxScreen />
+      <CaptureToastProvider>
+        <InboxScreen />
+      </CaptureToastProvider>
     </BookmarksProvider>,
   );
 }
