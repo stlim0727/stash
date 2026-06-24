@@ -406,6 +406,10 @@ export default function InboxScreen() {
   // Mirror the sort-pref guard: don't let the initial empty default clobber the
   // stored recents before they load.
   const recentsLoaded = useRef(false);
+  // True while a recents persist write is in flight. The focus re-read (below)
+  // must NOT clobber a just-submitted recent with a stale store read before its
+  // async write commits — so it skips while this is set.
+  const recentsDirty = useRef(false);
   useEffect(() => {
     let active = true;
     getPreference(RECENT_SEARCHES_PREF_KEY)
@@ -467,8 +471,15 @@ export default function InboxScreen() {
       return;
     }
     // Local-only persistence (meta store, like the sort pref) — never enqueued
-    // or synced. Search strings are user content and stay on-device.
-    void setPreference(RECENT_SEARCHES_PREF_KEY, serializeRecents(recentSearches)).catch(() => {});
+    // or synced. Search strings are user content and stay on-device. Mark the
+    // write in-flight so a focus re-read can't race ahead of it and drop a
+    // just-submitted recent.
+    recentsDirty.current = true;
+    void setPreference(RECENT_SEARCHES_PREF_KEY, serializeRecents(recentSearches))
+      .catch(() => {})
+      .finally(() => {
+        recentsDirty.current = false;
+      });
   }, [recentSearches]);
   // Re-read recents whenever the Inbox regains focus. The list is loaded once on
   // mount (above), but "Clear search history" in Settings writes the empty list
@@ -482,6 +493,12 @@ export default function InboxScreen() {
     useCallback(() => {
       if (!recentsLoaded.current || !recentsFocusReady.current) {
         recentsFocusReady.current = true;
+        return;
+      }
+      // A recents write from THIS screen is in flight — the in-memory list is
+      // newer than the store, so re-reading now would drop the pending entry.
+      // Skip; the persisted value already matches what we'd reload.
+      if (recentsDirty.current) {
         return;
       }
       let active = true;

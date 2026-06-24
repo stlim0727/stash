@@ -103,9 +103,10 @@ test('the clear-search-history row is disabled and reads empty when there is no 
   await waitFor(() => expect(screen.getByText('Clear search history')).toBeTruthy());
   // Reads the empty state …
   expect(screen.getByText('No recent searches')).toBeTruthy();
-  // … and is non-pressable: the reserved a11y label resolves to a plain View, so
-  // there is no button to query by that label.
-  expect(screen.queryByLabelText('Clear recent searches')).toBeNull();
+  // … and is announced to assistive tech as a DISABLED button (not silent text):
+  // the reserved a11y label resolves, and the disabled state is conveyed.
+  const disabledRow = screen.getByLabelText('Clear recent searches');
+  expect(disabledRow.props.accessibilityState).toEqual({ disabled: true });
 });
 
 test('confirming the clear wipes the persisted recents and flips the row to empty', async () => {
@@ -141,7 +142,10 @@ test('confirming the clear wipes the persisted recents and flips the row to empt
 
   // Row flips to the disabled empty state optimistically …
   await waitFor(() => expect(screen.getByText('No recent searches')).toBeTruthy());
-  expect(screen.queryByLabelText('Clear recent searches')).toBeNull();
+  // … now announced as a disabled button rather than a live one.
+  expect(
+    screen.getByLabelText('Clear recent searches').props.accessibilityState,
+  ).toEqual({ disabled: true });
   // … and the persisted recents are now empty (local-only write).
   await waitFor(() =>
     expect(parseRecents(fakeRepo.__meta(RECENT_SEARCHES_PREF_KEY))).toEqual([]),
@@ -192,4 +196,71 @@ test('the Inbox reflects the cleared recents on its next focus', async () => {
     expect(screen.queryByLabelText('Search again for “local-first”')).toBeNull(),
   );
   expect(screen.queryByTestId('search-suggestion-shelf')).toBeNull();
+});
+
+test('a focus re-read does not drop a just-submitted recent (in-flight write race)', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e2';
+  fakeRepo.__reset([makeStoredBookmark({ id, title: 'Design system' })]);
+  fakeRepo.__setMeta(RECENT_SEARCHES_PREF_KEY, JSON.stringify(['local-first']));
+
+  // Hang the recents persist write so it's still IN FLIGHT (uncommitted, the
+  // store still holds only the old list) when the Inbox regains focus — the
+  // exact window where a focus re-read could clobber the new in-memory recent.
+  let releaseWrite: (() => void) | undefined;
+  const realSetMeta = fakeRepo.repository.setMeta.bind(fakeRepo.repository);
+  const setMetaSpy = jest
+    .spyOn(fakeRepo.repository, 'setMeta')
+    .mockImplementation((key: string, value: string) => {
+      if (key === RECENT_SEARCHES_PREF_KEY) {
+        return new Promise<void>((resolve) => {
+          releaseWrite = () => realSetMeta(key, value).then(resolve);
+        });
+      }
+      return realSetMeta(key, value);
+    });
+
+  try {
+    const screen = await render(
+      <BookmarksProvider>
+        <CaptureToastProvider>
+          <InboxScreen />
+        </CaptureToastProvider>
+      </BookmarksProvider>,
+    );
+    await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
+
+    const input = screen.getByPlaceholderText('Search titles, tags, folders');
+    await act(async () => {
+      fireEvent(input, 'focus');
+    });
+    // Type + submit a new query: records 'design system' into recents (in memory),
+    // and its persist write hangs — the store is now stale relative to state.
+    await act(async () => {
+      fireEvent.changeText(input, 'design system');
+    });
+    await act(async () => {
+      fireEvent(input, 'submitEditing', { nativeEvent: { text: 'design system' } });
+    });
+
+    // Inbox regains focus while the write is still hanging. The dirty-guard must
+    // skip the re-read, so the just-submitted recent is NOT clobbered.
+    await act(async () => {
+      refireFocus();
+    });
+
+    // Clear the query so the focus-empty shelf lists all recents, and assert the
+    // just-submitted one survived (it would be gone if the re-read had won).
+    await act(async () => {
+      fireEvent.changeText(input, '');
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText('Search again for “design system”')).toBeTruthy(),
+    );
+    expect(screen.getByLabelText('Search again for “local-first”')).toBeTruthy();
+  } finally {
+    await act(async () => {
+      releaseWrite?.();
+    });
+    setMetaSpy.mockRestore();
+  }
 });

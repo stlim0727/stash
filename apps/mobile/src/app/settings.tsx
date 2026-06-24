@@ -560,6 +560,7 @@ export default function SettingsScreen() {
           }
           accessibilityLabel={t('search.clearRecentsA11y')}
           last
+          disabled={recentCount === 0}
           onPress={recentCount > 0 ? confirmClearRecents : undefined}
         />
       </Group>
@@ -756,6 +757,7 @@ function Row({
   badge,
   accent,
   last,
+  disabled,
   accessibilityLabel,
 }: {
   styles: ReturnType<typeof makeStyles>;
@@ -768,6 +770,9 @@ function Row({
   badge?: number;
   accent?: boolean;
   last?: boolean;
+  /** A non-pressable row that represents a DISABLED control (vs static info):
+   *  dims the row and announces a disabled button to assistive tech. */
+  disabled?: boolean;
   accessibilityLabel?: string;
 }) {
   const rowStyle: StyleProp<ViewStyle> = [styles.row, !last && styles.divider];
@@ -800,6 +805,21 @@ function Row({
   );
 
   if (!onPress) {
+    // A disabled control (e.g. "Clear search history" with no history): dim it so
+    // it reads as inert rather than tappable, and announce the disabled state to
+    // screen readers (a plain info row stays role-less and full-strength).
+    if (disabled) {
+      return (
+        <View
+          accessibilityRole="button"
+          accessibilityLabel={accessibilityLabel ?? label}
+          accessibilityState={{ disabled: true }}
+          style={[rowStyle, { opacity: 0.4 }]}
+        >
+          {content}
+        </View>
+      );
+    }
     return <View style={rowStyle}>{content}</View>;
   }
 
