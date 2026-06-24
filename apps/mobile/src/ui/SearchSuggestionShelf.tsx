@@ -90,6 +90,12 @@ export function SearchSuggestionShelf({
         accessibilityLabel={
           query.trim() ? t('search.shelfFilteredA11y', { query: query.trim() }) : t('search.shelfA11y')
         }
+        // A chip tap must NOT dismiss the keyboard / blur the search field: a
+        // recent chip FILLS the query and keeps the field focused for editing,
+        // and this also keeps the keyboard up so `keyboardDidHide` never fires
+        // mid-tap (which would otherwise unmount the shelf out from under the
+        // press). `handled` lets the chip's onPress fire while persisting focus.
+        keyboardShouldPersistTaps="handled"
         style={styles.shelf}
         contentContainerStyle={styles.shelfContent}
       >

@@ -7,6 +7,7 @@ import {
   BackHandler,
   FlatList,
   Image,
+  Keyboard,
   Linking,
   Platform,
   Pressable,
@@ -272,10 +273,35 @@ export default function InboxScreen() {
     }
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
+  const searchRef = useRef<TextInput>(null);
+  // On native, dismissing the keyboard with the Back button / interactive swipe
+  // (or an on-drag list scroll) does NOT fire the TextInput's onBlur — so without
+  // this the focused-only suggestion shelf would stay stranded on screen with no
+  // keyboard, and the Browse row (gated on !searchFocused) would never return.
+  // When the keyboard hides, drop the focused state and blur the field (Android
+  // keeps native focus after a Back-button dismiss, so blur() is needed for the
+  // next tap to re-fire onFocus). Route the hide through the SAME deferred timer
+  // the onBlur path uses, so a same-gesture chip onPress still resolves against a
+  // mounted shelf — native hide ordering isn't guaranteed. The shelf's own
+  // ScrollView sets keyboardShouldPersistTaps="handled", so a chip tap never
+  // dismisses the keyboard and this can't fire mid-tap. Web has no soft keyboard.
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      return;
+    }
+    const sub = Keyboard.addListener('keyboardDidHide', () => {
+      clearBlurHide();
+      blurHideTimer.current = setTimeout(() => {
+        blurHideTimer.current = null;
+        setSearchFocused(false);
+        searchRef.current?.blur();
+      }, 0);
+    });
+    return () => sub.remove();
+  }, [clearBlurHide]);
   // The user's own recent searches (most-recent-first). Local-only: persisted in
   // the meta store as `pref.search.recents`, never enqueued or synced.
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
-  const searchRef = useRef<TextInput>(null);
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -1103,6 +1129,10 @@ export default function InboxScreen() {
           useNativeDriver: true,
         })}
         scrollEventThrottle={16}
+        // Dragging the results dismisses the keyboard (→ keyboardDidHide drops the
+        // focused state and the suggestion shelf). The shelf's own ScrollView owns
+        // keyboardShouldPersistTaps for its chips; this list doesn't need it.
+        keyboardDismissMode="on-drag"
         // Keep the scrollbar clear of the floating header.
         scrollIndicatorInsets={{ top: headerHeight }}
         contentContainerStyle={[
