@@ -470,6 +470,33 @@ export default function InboxScreen() {
     // or synced. Search strings are user content and stay on-device.
     void setPreference(RECENT_SEARCHES_PREF_KEY, serializeRecents(recentSearches)).catch(() => {});
   }, [recentSearches]);
+  // Re-read recents whenever the Inbox regains focus. The list is loaded once on
+  // mount (above), but "Clear search history" in Settings writes the empty list
+  // straight to the meta store without touching this screen's state — so on the
+  // way back we re-read storage to reflect the clear (and any other cross-screen
+  // change). Guarded by `recentsLoaded` so it never runs before the initial load
+  // settled, and skipped on the very first focus (the mount load already ran).
+  // Local-only read; nothing is fetched or synced.
+  const recentsFocusReady = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      if (!recentsLoaded.current || !recentsFocusReady.current) {
+        recentsFocusReady.current = true;
+        return;
+      }
+      let active = true;
+      getPreference(RECENT_SEARCHES_PREF_KEY)
+        .then((raw) => {
+          if (active) {
+            setRecentSearches(parseRecents(raw));
+          }
+        })
+        .catch(() => {});
+      return () => {
+        active = false;
+      };
+    }, []),
+  );
 
   // The cloud and the card/list layouts use different scroll containers — an
   // Animated.ScrollView vs the AnimatedFlatList — so crossing between them
@@ -695,6 +722,23 @@ export default function InboxScreen() {
   }, []);
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
+  // Facet-scoped search placeholder (B4): a pure projection of the active facet,
+  // not stored — so it reverts for free when the facet clears. `All` keeps the
+  // generic placeholder; a folder/tag/uncollected facet labels the field with
+  // the scope it's searching within. `activeChip.label` is already the
+  // caller-decorated name (bare collection name, or `#tag`), so it feeds the
+  // `{name}` template directly; uncollected has no chip, so use its own label.
+  const searchPlaceholder = useMemo(() => {
+    if (filter.kind === 'uncollected') {
+      return t('inbox.searchPlaceholderScoped', {
+        name: t('inbox.searchPlaceholderUncollected'),
+      });
+    }
+    if (filter.kind !== 'all' && activeChip) {
+      return t('inbox.searchPlaceholderScoped', { name: activeChip.label });
+    }
+    return t('inbox.searchPlaceholder');
+  }, [filter.kind, activeChip, t]);
   const sectionLabel = searching
     ? t('inbox.sectionMatches', { count: visible.length })
     : filter.kind === 'uncollected'
@@ -956,7 +1000,7 @@ export default function InboxScreen() {
             <TextInput
               ref={searchRef}
               style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
-              placeholder={t('inbox.searchPlaceholder')}
+              placeholder={searchPlaceholder}
               placeholderTextColor={palette.textSecondary}
               autoCapitalize="none"
               autoCorrect={false}
