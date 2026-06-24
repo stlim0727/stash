@@ -128,6 +128,7 @@ export const en = {
 
   // Capture toasts (also used by the share flow).
   'toast.saved': 'Saved to Stash',
+  'toast.savedCount': { one: 'Saved to Stash', other: '{count} saved to Stash' },
   'toast.duplicate': 'Already in Stash',
   'toast.noLink': 'No link found to stash',
 

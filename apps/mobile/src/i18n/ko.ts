@@ -96,6 +96,7 @@ export const ko: Catalog = {
     '기기에 즉시 저장되고 백그라운드에서 클라우드로 동기화됩니다 — 저장은 네트워크를 기다리지 않습니다.',
 
   'toast.saved': 'Stash에 저장됨',
+  'toast.savedCount': { one: 'Stash에 저장됨', other: '{count}개 Stash에 저장됨' },
   'toast.duplicate': '이미 Stash에 있음',
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
 
