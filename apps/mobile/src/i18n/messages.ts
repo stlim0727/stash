@@ -34,6 +34,7 @@ export const en = {
   'common.open': 'Open',
   'common.openLink': 'Open link',
   'common.view': 'View',
+  'common.undo': 'Undo',
   'common.trash': 'Move to Trash',
   'common.restore': 'Restore',
   'common.back': '‹ Back',
@@ -130,6 +131,7 @@ export const en = {
   'toast.saved': 'Saved to Stash',
   'toast.savedCount': { one: 'Saved to Stash', other: '{count} saved to Stash' },
   'toast.duplicate': 'Already in Stash',
+  'toast.trashed': 'Moved to Trash',
   'toast.noLink': 'No link found to stash',
 
   // Settings.

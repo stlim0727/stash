@@ -37,6 +37,7 @@ jest.mock('expo-router', () => {
 
 import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
+import { CaptureToastProvider } from '@/ui/capture-toast';
 import { INBOX_VIEW_PREF_KEY } from '@/domain/view-mode';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -57,7 +58,9 @@ const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModul
 function renderInbox() {
   return render(
     <BookmarksProvider>
-      <InboxScreen />
+      <CaptureToastProvider>
+        <InboxScreen />
+      </CaptureToastProvider>
     </BookmarksProvider>,
   );
 }
@@ -651,6 +654,14 @@ test('long-pressing an inbox card opens the action menu and Move to Trash remove
   // Moving to trash files it away, so it drops out of the (non-archived) Inbox.
   await fireEvent.press(screen.getByText('Move to Trash'));
   await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
+
+  // ...but a confirmation toast offers an immediate Undo, which restores it
+  // (the recovery path is otherwise buried in Settings → Trash).
+  const undo = await screen.findByText('Undo');
+  await act(async () => {
+    fireEvent.press(undo);
+  });
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 });
 
 test('long-pressing the preview image (not just the title) opens the action menu', async () => {

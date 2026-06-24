@@ -56,6 +56,7 @@ import type { TFunction } from '@/i18n/translate';
 import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
+import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
@@ -204,10 +205,12 @@ export default function InboxScreen() {
     clearUnseenSuggestions,
     collections,
     trashBookmark,
+    restoreBookmark,
     deleteBookmark,
     assignCollection,
     markBookmarkAccessed,
   } = useBookmarks();
+  const { show: showToast } = useCaptureToast();
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
@@ -574,10 +577,16 @@ export default function InboxScreen() {
       onPress: () => {
         closeMenu();
         trashBookmark(item.id);
+        // A trash is recoverable, but the recovery path (Settings → Trash) is
+        // not obvious — so offer an immediate one-tap Undo right where it happened.
+        showToast(t('toast.trashed'), {
+          label: t('common.undo'),
+          onPress: () => restoreBookmark(item.id),
+        });
       },
     });
     return actions;
-  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, markBookmarkAccessed, closeMenu, t]);
+  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, restoreBookmark, showToast, markBookmarkAccessed, closeMenu, t]);
 
   const menuTitle =
     menuMode === 'move'

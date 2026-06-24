@@ -18,6 +18,7 @@ export const ko: Catalog = {
   'common.open': '열기',
   'common.openLink': '링크 열기',
   'common.view': '보기',
+  'common.undo': '실행취소',
   'common.trash': '휴지통으로 이동',
   'common.restore': '복원',
   'common.back': '‹ 뒤로',
@@ -98,6 +99,7 @@ export const ko: Catalog = {
   'toast.saved': 'Stash에 저장됨',
   'toast.savedCount': { one: 'Stash에 저장됨', other: '{count}개 Stash에 저장됨' },
   'toast.duplicate': '이미 Stash에 있음',
+  'toast.trashed': '휴지통으로 이동됨',
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
 
   'settings.account.signedIn': '로그인됨',
