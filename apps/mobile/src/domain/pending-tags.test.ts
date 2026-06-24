@@ -7,6 +7,7 @@ import {
   dequeueTagOp,
   enqueueTagOp,
   reconcileSyncedAdd,
+  rekeyPendingTagOps,
   type PendingTagOp,
 } from './pending-tags.ts';
 import type { Tag } from '@/domain/types';
@@ -26,6 +27,23 @@ function op(overrides: Partial<PendingTagOp>): PendingTagOp {
     ...overrides,
   };
 }
+
+test('rekeyPendingTagOps re-targets ops whose bookmark id was re-homed', () => {
+  const ops = [
+    op({ id: 'a', bookmark_id: 'old-1', tag_name: 'design' }),
+    op({ id: 'b', bookmark_id: 'untouched', tag_name: 'food' }),
+  ];
+  const next = rekeyPendingTagOps(ops, new Map([['old-1', 'local-new-1']]));
+  assert.equal(next[0]?.bookmark_id, 'local-new-1');
+  // Other fields are preserved, and unmapped ops pass through unchanged.
+  assert.equal(next[0]?.tag_name, 'design');
+  assert.equal(next[1]?.bookmark_id, 'untouched');
+});
+
+test('rekeyPendingTagOps returns the same list when the id map is empty', () => {
+  const ops = [op({ bookmark_id: 'old-1' })];
+  assert.equal(rekeyPendingTagOps(ops, new Map()), ops);
+});
 
 test('add creates an optimistic local tag and link', () => {
   const next = applyTagOp(EMPTY, op({ tag_name: 'Korean Food' }), 'u1');

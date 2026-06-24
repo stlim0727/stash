@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  createNeedsReconcileUpdate,
   hasRemoteIdentity,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
@@ -290,6 +291,68 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.removeEntry, undefined);
   assert.equal(result.entry.sync_status, 'failed');
   assert.equal(result.entry.last_error, 'timeout');
+});
+
+test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up', () => {
+  // The remote row mirrors exactly what the create payload sent: same title/notes,
+  // active, no metadata, no collection. Nothing diverged, so no follow-up update.
+  const persisted = makeBookmark({
+    id: 'remote-1',
+    title: 'Title',
+    notes: 'note',
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, {
+    url: 'https://example.com/a',
+    title: 'Title',
+    notes: 'note',
+  });
+  assert.equal(needs, false);
+});
+
+test('createNeedsReconcileUpdate: a row trashed before it had a remote id needs a follow-up', () => {
+  // The genuine bug: trashBookmark on a local-only row sets deleted_at but
+  // enqueues no update (no remote identity yet); the create uploads ACTIVE.
+  // Without deleted_at in the reconcile condition the cloud row stays live and
+  // resurrects on other devices. This asserts the follow-up update fires.
+  const persisted = makeBookmark({
+    id: 'remote-1',
+    deleted_at: '2026-06-24T00:00:00.000Z',
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, { url: 'https://example.com/a' });
+  assert.equal(needs, true);
+});
+
+test('create→sync round-trip: a trashed-before-remote-id create reconciles its trash to the cloud', async () => {
+  // Drive the real upload path with the sync fakes: the local row is already
+  // trashed when its create uploads, so the create payload omits deleted_at and
+  // the remote row is active. The reconcile decision (the same predicate the
+  // store uses) must then demand a follow-up update carrying the trash state.
+  const { repository } = fakeRepository();
+  const trashedLocal = makeBookmark({
+    id: 'local-abc',
+    deleted_at: '2026-06-24T00:00:00.000Z',
+    sync_status: 'pending',
+  });
+
+  const result = await syncQueueEntry(
+    fakeApi(),
+    repository,
+    makeCreateEntry(),
+    () => trashedLocal,
+  );
+
+  // The row adopted its remote id and the create payload carried no deleted_at.
+  const persisted = result.bookmarkReplacement?.bookmark;
+  assert.ok(persisted);
+  assert.equal(persisted.id, 'remote-1');
+  assert.equal(persisted.deleted_at, '2026-06-24T00:00:00.000Z');
+  assert.equal(result.uploadedPayload?.url, 'https://example.com/a');
+  assert.equal('deleted_at' in (result.uploadedPayload ?? {}), false);
+
+  // So a follow-up update MUST be enqueued to propagate the trash to the cloud.
+  assert.equal(createNeedsReconcileUpdate(persisted, result.uploadedPayload), true);
 });
 
 test('hasRemoteIdentity accepts only Supabase UUIDs', () => {

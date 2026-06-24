@@ -172,6 +172,31 @@ test('a winning remote upsert preserves device-only fields from the local row', 
   assert.equal(result.upserts[0]?.local_image_uri, 'file:///stash-images/x.jpg');
 });
 
+test('pull propagates a remote trash (deleted_at) onto the local row', async () => {
+  // Another device trashed an already-synced bookmark: its update pushed
+  // deleted_at to the cloud, the row's updated_at advanced, so this device must
+  // pull the trash down and upsert it (deleted_at carries through the mapper).
+  const { calls, repository } = fakeRepository();
+  const local = makeBookmark({ updated_at: '2026-06-12T00:00:00.000Z', deleted_at: null });
+  const remoteTrashed = makeBookmark({
+    updated_at: '2026-06-12T05:00:00.000Z',
+    deleted_at: '2026-06-12T05:00:00.000Z',
+  });
+  const api = fakeApi({
+    listBookmarksUpdatedSince: async () => [remoteTrashed],
+    // The trashed row is a soft delete — it still exists server-side, so it is
+    // still in the id list and must NOT be treated as a hard remote deletion.
+    listBookmarkIds: async () => [remoteTrashed.id],
+  });
+
+  const result = await pullRemoteChanges(api, repository, () => [local], () => false);
+
+  assert.equal(result.upserts.length, 1);
+  assert.equal(result.upserts[0]?.deleted_at, '2026-06-12T05:00:00.000Z');
+  assert.deepEqual(result.deletions, []);
+  assert.ok(calls.includes(`insertBookmark:${remoteTrashed.id}`));
+});
+
 test('pull never overwrites or deletes rows with queued local work', async () => {
   const { calls, repository } = fakeRepository();
   const local = makeBookmark({ updated_at: '2026-06-12T00:00:00.000Z' });

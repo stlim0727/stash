@@ -88,13 +88,24 @@ export async function applyAccountTransition(
   setQueue: (updater: (prev: LocalPendingBookmark[]) => LocalPendingBookmark[]) => void,
   makeLocalId: () => string,
   ensureRepositoryReady: () => Promise<void>,
+  /**
+   * Re-home tag state keyed by bookmark id (pending tag ops + tag links) from
+   * the old re-homed ids to their new local ids. Without this, a re-homed
+   * bookmark's queued tag ops still target its OLD id — absent in the new
+   * account — and `syncTagOps` fires `addTags` against a non-existent bookmark,
+   * silently dropping the carried-over tags.
+   */
+  rehomeTagState: (idMap: Map<string, string>) => void = () => {},
 ): Promise<void> {
   if (plan.rehome.length > 0) {
     const now = new Date().toISOString();
     const rehomedById = new Map<string, Bookmark>();
+    /** old bookmark id -> new local id, for re-keying tag state below. */
+    const idMap = new Map<string, string>();
     const newEntries: LocalPendingBookmark[] = [];
     for (const old of plan.rehome) {
       const newId = makeLocalId();
+      idMap.set(old.id, newId);
       rehomedById.set(old.id, { ...old, id: newId, sync_status: 'pending', updated_at: now });
       newEntries.push({
         local_id: newId,
@@ -115,6 +126,10 @@ export async function applyAccountTransition(
       (current ?? []).map((bookmark) => rehomedById.get(bookmark.id) ?? bookmark),
     );
     setQueue((current) => [...current, ...newEntries]);
+    // Re-key tag ops/links onto the new local ids so the carried-over tags
+    // upload against the re-homed bookmark instead of an id the new account
+    // never had.
+    rehomeTagState(idMap);
     await ensureRepositoryReady();
     for (const [oldId, rehomed] of rehomedById) {
       await repository.replaceBookmark(oldId, rehomed);

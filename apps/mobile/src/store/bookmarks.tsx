@@ -50,6 +50,7 @@ import {
   dequeueTagOp,
   enqueueTagOp,
   reconcileSyncedAdd,
+  rekeyPendingTagOps,
   type PendingTagOp,
 } from '@/domain/pending-tags';
 import { useI18n } from '@/i18n';
@@ -68,6 +69,7 @@ import {
   pullRemoteChanges,
 } from '@/sync/pull-bookmarks';
 import {
+  createNeedsReconcileUpdate,
   createSyncApi,
   hasRemoteIdentity,
   isSyncable,
@@ -1748,20 +1750,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 .then(() => repository.replaceBookmark(previousId, persisted))
                 .catch((error) => logStorageError('post-sync merge', error));
               // The create payload only carries url/title/notes, and the remote
-              // row defaults to no generated metadata + pending status. If the
-              // local row has since diverged — archived, filed into a collection,
-              // edited, or enriched while the create was uploading — reconcile
-              // with a follow-up update so those changes reach the cloud.
+              // row defaults to no generated metadata + pending status + active.
+              // If the local row has since diverged — archived, filed into a
+              // collection, edited, enriched, or TRASHED while the create was
+              // uploading — reconcile with a follow-up update so those changes
+              // reach the cloud. Without the `deleted_at` arm, a bookmark trashed
+              // before it had a remote id would stay live in the cloud and
+              // resurrect on other devices.
               if (
                 entry.operation === 'create' &&
-                (persisted.is_archived ||
-                  persisted.collection_id !== null ||
-                  persisted.title !== (result.uploadedPayload?.title ?? null) ||
-                  persisted.notes !== (result.uploadedPayload?.notes ?? null) ||
-                  persisted.metadata_status !== 'pending' ||
-                  persisted.site_name !== null ||
-                  persisted.favicon_url !== null ||
-                  persisted.preview_image_url !== null)
+                createNeedsReconcileUpdate(persisted, result.uploadedPayload)
               ) {
                 enqueueMutation(persisted.id, 'update');
               }
@@ -1817,6 +1815,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           setQueue,
           makeLocalId,
           ensureRepositoryReady,
+          (idMap) => {
+            // Re-key tag state from the re-homed bookmarks' old ids onto their
+            // new local ids so the carried-over tags upload (via the syncTagOps
+            // call below) against the row that now exists in the new account.
+            applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
+            const links = tagDataRef.current.bookmarkTags.map((link) => {
+              const newId = idMap.get(link.bookmark_id);
+              return newId ? { ...link, bookmark_id: newId } : link;
+            });
+            applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+          },
         );
       } catch (error) {
         logStorageError('account transition', error);

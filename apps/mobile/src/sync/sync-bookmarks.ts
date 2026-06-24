@@ -175,6 +175,36 @@ export async function syncQueueEntry(
   }
 }
 
+/**
+ * After a `create` uploads and the local row adopts its remote id, decide
+ * whether a follow-up `update` is needed. The create payload only carries
+ * url/title/notes, and the freshly-created remote row defaults to no generated
+ * metadata, no collection, active (not archived, not trashed), pending status.
+ * If the local row diverged while the create was in flight — archived, filed,
+ * edited, enriched, or TRASHED — those changes haven't reached the cloud yet,
+ * so reconcile them with one follow-up update.
+ *
+ * Critically includes `deleted_at`: a bookmark trashed before it gained a
+ * remote id uploads as an active create, so without this the cloud row stays
+ * live and resurrects on other devices on the next pull.
+ */
+export function createNeedsReconcileUpdate(
+  persisted: Bookmark,
+  uploadedPayload: CreateBookmarkInput | undefined,
+): boolean {
+  return (
+    persisted.deleted_at !== null ||
+    persisted.is_archived ||
+    persisted.collection_id !== null ||
+    persisted.title !== (uploadedPayload?.title ?? null) ||
+    persisted.notes !== (uploadedPayload?.notes ?? null) ||
+    persisted.metadata_status !== 'pending' ||
+    persisted.site_name !== null ||
+    persisted.favicon_url !== null ||
+    persisted.preview_image_url !== null
+  );
+}
+
 /** Builds a pending mutation entry targeting a bookmark that exists remotely. */
 export function makeMutationEntry(
   bookmarkId: string,

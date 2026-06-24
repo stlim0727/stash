@@ -69,6 +69,10 @@ re-home path is the fallback for when linking can't happen.
 
 - Re-home carries the **bookmarks**; tag/collection/enrichment links that pointed
   at the old account's remote IDs are not re-homed (they refresh from the new
-  account on pull). Full tag/collection carry-over is a follow-up.
+  account on pull). Full tag/collection carry-over is a follow-up. Note: re-home
+  **does** re-key any *pending* tag ops (and optimistic tag links) keyed by the
+  old bookmark id onto the new local id (`applyAccountTransition`'s
+  `rehomeTagState` callback), so user-authored tags queued before sign-in still
+  upload against the re-homed row instead of an id the new account never had.
 - The lossless, no-data-movement path is identity linking; prefer enabling manual
   linking over relying on re-homing.

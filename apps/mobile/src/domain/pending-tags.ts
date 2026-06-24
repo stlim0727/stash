@@ -123,6 +123,26 @@ export function dequeueTagOp(
 }
 
 /**
+ * Re-key pending tag ops from old bookmark ids to new ones. Used on account
+ * carry-over (anonymous → real): re-homing a bookmark swaps it to a fresh
+ * `local-*` id, so any tag ops still keyed by the OLD id would fire `addTags`
+ * against an id that no longer exists in the new account and be orphaned.
+ * Ops whose `bookmark_id` isn't in `idMap` pass through unchanged.
+ */
+export function rekeyPendingTagOps(
+  ops: PendingTagOp[],
+  idMap: Map<string, string>,
+): PendingTagOp[] {
+  if (idMap.size === 0) {
+    return ops;
+  }
+  return ops.map((op) => {
+    const newId = idMap.get(op.bookmark_id);
+    return newId ? { ...op, bookmark_id: newId } : op;
+  });
+}
+
+/**
  * After the server confirms an added tag, swap the optimistic local tag id for
  * the server tag (and its id on every link), and ensure the server tag is
  * present. Idempotent.

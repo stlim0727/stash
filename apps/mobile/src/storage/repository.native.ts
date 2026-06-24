@@ -179,8 +179,14 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     await db.withTransactionAsync(async () => {
       await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
       await db.runAsync(
-        'INSERT OR REPLACE INTO bookmarks (id, data, created_at, is_archived) VALUES (?, ?, ?, ?)',
-        [bookmark.id, JSON.stringify(bookmark), bookmark.created_at, bookmark.is_archived ? 1 : 0],
+        'INSERT OR REPLACE INTO bookmarks (id, data, created_at, is_archived, deleted_at) VALUES (?, ?, ?, ?, ?)',
+        [
+          bookmark.id,
+          JSON.stringify(bookmark),
+          bookmark.created_at,
+          bookmark.is_archived ? 1 : 0,
+          bookmark.deleted_at ?? null,
+        ],
       );
     });
   }
