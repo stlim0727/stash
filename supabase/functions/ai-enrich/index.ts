@@ -27,6 +27,7 @@ import { GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
 import { matchSuggestedCollection } from './collection-match.ts';
 import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
+import { isUuid } from './validation.ts';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
 // Use the Gemini-backed provider when an API key is configured; otherwise fall
@@ -190,6 +191,14 @@ Deno.serve(async (req) => {
   const bookmarkId = body.bookmark_id;
   if (typeof bookmarkId !== 'string' || !bookmarkId) {
     return json({ error: 'bookmark_id is required' }, 400);
+  }
+  // Reject a non-UUID bookmark_id BEFORE it is interpolated into any
+  // id=eq.${bookmarkId} / bookmark_id=eq.${bookmarkId} PostgREST filter below.
+  // On the server path the service-role key bypasses RLS, so a forged id like
+  // `x&select=*&or=(...)` could otherwise smuggle arbitrary PostgREST params.
+  // Guarded here, before any DB call, so the function fails fast.
+  if (!isUuid(bookmarkId)) {
+    return json({ error: 'bookmark_id must be a UUID' }, 400);
   }
 
   // The user's locale, so a model-backed provider writes the summary/tags in

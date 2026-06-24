@@ -15,7 +15,13 @@ test('sanitizeQuery: strips PostgREST structural characters', () => {
 });
 
 test('sanitizeQuery: matches the mobile client regex /[%*,()]/g', () => {
-  // Mirror apps/mobile/src/api/bookmarks.ts:719 so the two surfaces agree.
+  // PARITY PIN (best-effort): this reconstructs the mobile regex inline rather
+  // than importing it — the mobile helper is a module-private function in the
+  // mobile workspace (different test lane + `@/` alias), so a direct import
+  // across the function/mobile boundary is impractical. The canonical source is
+  // apps/mobile/src/api/bookmarks.ts:719; if that regex changes, update this
+  // mirror too. (This catches our own drift from the intended shape, not drift
+  // in the mobile file itself.)
   const mobile = (q: string) => q.replace(/[%*,()]/g, '');
   for (const sample of ['a,b', 'x*y', '(z)', '50%', 'foo),bar', 'safe-slug_99']) {
     assert.equal(sanitizeQuery(sample), mobile(sample));
@@ -61,7 +67,10 @@ test('inFilter: escapes backslashes first so a trailing \\ cannot break out of t
 });
 
 test('inFilter: matches the hardened mobile copy (backslash-then-quote escaping)', () => {
-  // Mirror apps/mobile/src/api/bookmarks.ts:180-182 (post-#3: escape \\ first).
+  // PARITY PIN (best-effort): mirrors apps/mobile/src/api/bookmarks.ts:180-182
+  // (post-#3: escape `\` first, then `"`). The mobile inFilter is module-private
+  // and lives in the mobile lane, so it can't be imported here directly — the
+  // canonical source is bookmarks.ts; keep both in lockstep if either changes.
   const mobile = (values: string[]) =>
     `(${values
       .map((value) => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`)
