@@ -23,6 +23,7 @@ import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
 import { SuggestionSkeleton } from '@/ui/SuggestionSkeleton';
 import { TagField } from '@/ui/TagField';
+import { useCaptureToast } from '@/ui/capture-toast';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
@@ -38,6 +39,7 @@ export default function BookmarkDetailScreen() {
   const palette = usePalette();
   const { t, formatDate } = useI18n();
   const router = useRouter();
+  const { show: showToast } = useCaptureToast();
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
     getBookmark,
@@ -541,7 +543,17 @@ export default function BookmarkDetailScreen() {
             icon="trash"
             label={t('common.trash')}
             tint={palette.danger}
-            onPress={() => { trashBookmark(bookmark.id); router.back(); }}
+            onPress={() => {
+              const trashedId = bookmark.id;
+              trashBookmark(trashedId);
+              // The toast lives above the navigator, so it survives the back nav;
+              // its Undo is the immediate recovery path (vs. Settings → Trash).
+              showToast(t('toast.trashed'), {
+                label: t('common.undo'),
+                onPress: () => restoreBookmark(trashedId),
+              });
+              router.back();
+            }}
           />
         )}
       </View>

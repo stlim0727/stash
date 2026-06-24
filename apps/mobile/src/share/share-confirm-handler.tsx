@@ -43,7 +43,7 @@ export function ShareConfirmHandler() {
     if (!pending) {
       return;
     }
-    show(t('inbox.savedCount', { count: pending.savedCount }), {
+    show(t('toast.savedCount', { count: pending.savedCount }), {
       label: t('common.view'),
       onPress: () => router.replace('/'),
     });

@@ -37,6 +37,7 @@ jest.mock('expo-router', () => {
 
 import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
+import { CaptureToastProvider } from '@/ui/capture-toast';
 import { INBOX_VIEW_PREF_KEY } from '@/domain/view-mode';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -57,7 +58,9 @@ const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModul
 function renderInbox() {
   return render(
     <BookmarksProvider>
-      <InboxScreen />
+      <CaptureToastProvider>
+        <InboxScreen />
+      </CaptureToastProvider>
     </BookmarksProvider>,
   );
 }
@@ -86,6 +89,22 @@ test('renders stored bookmarks with their titles', async () => {
 
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
   expect(screen.getByText('Raindrop review')).toBeTruthy();
+});
+
+test('folds the search/sort/view controls away on an empty library', async () => {
+  fakeRepo.__reset([]);
+
+  const screen = await renderInbox();
+
+  // Empty first run: the controls are cold chrome over "nothing here yet", so
+  // the first screen is all about the first save — an onboarding card that
+  // teaches the share-sheet capture, with the chrome folded away.
+  await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
+  expect(
+    screen.getByText('Share a link from any app and pick Stash to save it in a tap.'),
+  ).toBeTruthy();
+  expect(screen.queryByPlaceholderText('Search your stash')).toBeNull();
+  expect(screen.queryByTestId('inbox-view-card')).toBeNull();
 });
 
 test('shows an AI suggestion badge for pending (un-applied) suggested tags', async () => {
@@ -125,11 +144,16 @@ test('announces suggestions that arrived unseen with a banner, dismissable via �
 
   const banner = await waitFor(() => screen.getByTestId('new-suggestions-banner'));
   expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
+  // While the banner announces, the per-card ✨ badge is suppressed so the same
+  // item isn't shouted twice on one screen.
+  expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
 
   // The ✕ clears the markers, so the banner goes away.
   fireEvent.press(screen.getByLabelText('Dismiss new AI suggestions'));
   await waitFor(() => expect(screen.queryByTestId('new-suggestions-banner')).toBeNull());
   expect(banner).toBeTruthy();
+  // ...and with the banner gone, the per-card badge returns as the surviving cue.
+  await waitFor(() => expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy());
 });
 
 test('the unseen banner counts a folder-only recommendation (no tags)', async () => {
@@ -323,6 +347,20 @@ test('a tag route param filters the Inbox to that tag on load', async () => {
 
   expect(screen.queryByText('Unrelated note')).toBeNull();
   expect(screen.getByText('#design · 1')).toBeTruthy();
+});
+
+test('an empty library shows the onboarding card even with a saved Tag-cloud preference', async () => {
+  // The user last left the Inbox in Tag-cloud view, then trashed their last
+  // item. The view segment is folded away on an empty library, so if the cloud
+  // (with its own "no tags" empty message) kept rendering, there'd be no way
+  // back to Cards. The empty library must fall through to the onboarding card.
+  fakeRepo.__reset([]);
+  await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'cloud');
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
+  expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
 });
 
 test('a routed tag facet overrides a saved Tag-cloud preference and shows the bookmarks', async () => {
@@ -651,6 +689,34 @@ test('long-pressing an inbox card opens the action menu and Move to Trash remove
   // Moving to trash files it away, so it drops out of the (non-archived) Inbox.
   await fireEvent.press(screen.getByText('Move to Trash'));
   await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
+
+  // ...but a confirmation toast offers an immediate Undo, which restores it
+  // (the recovery path is otherwise buried in Settings → Trash).
+  const undo = await screen.findByText('Undo');
+  await act(async () => {
+    fireEvent.press(undo);
+  });
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+});
+
+test('the visible ⋯ overflow button opens the action menu (no long-press needed)', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000062',
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  // Tapping the always-visible ⋯ surfaces the same actions as a long-press,
+  // so the move/share/trash menu is discoverable without a hidden gesture.
+  await fireEvent.press(screen.getByLabelText('More actions'));
+  expect(screen.getByText('Move to collection…')).toBeTruthy();
+  expect(screen.getByText('Move to Trash')).toBeTruthy();
 });
 
 test('long-pressing the preview image (not just the title) opens the action menu', async () => {

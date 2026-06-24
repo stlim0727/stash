@@ -34,6 +34,7 @@ export const en = {
   'common.open': 'Open',
   'common.openLink': 'Open link',
   'common.view': 'View',
+  'common.undo': 'Undo',
   'common.trash': 'Move to Trash',
   'common.restore': 'Restore',
   'common.back': '‹ Back',
@@ -86,7 +87,10 @@ export const en = {
   'inbox.loading': 'Loading your bookmarks…',
   'inbox.emptySearch': 'No bookmarks match your search.',
   'inbox.emptyView': 'Nothing in this view yet.',
-  'inbox.emptyAll': 'Nothing saved yet. Add your first bookmark below.',
+  'inbox.emptyTitle': 'Your stash is empty',
+  'inbox.emptyHintShare': 'Share a link from any app and pick Stash to save it in a tap.',
+  'inbox.emptyHintAdd': 'Or tap ＋ below to add one by hand.',
+  'inbox.moreActions': 'More actions',
   'inbox.moveToCollectionAction': 'Move to collection…',
   'inbox.moveToCollectionTitle': 'Move to collection',
   'inbox.inboxNoCollection': 'Inbox (no collection)',
@@ -128,7 +132,9 @@ export const en = {
 
   // Capture toasts (also used by the share flow).
   'toast.saved': 'Saved to Stash',
+  'toast.savedCount': { one: 'Saved to Stash', other: '{count} saved to Stash' },
   'toast.duplicate': 'Already in Stash',
+  'toast.trashed': 'Moved to Trash',
   'toast.noLink': 'No link found to stash',
 
   // Settings.
@@ -205,7 +211,7 @@ export const en = {
   'settings.import.failedTitle': 'Import failed',
   'settings.import.failedBody': 'Could not import that file. Please try again.',
 
-  // Archived.
+  // Trash.
   'trash.empty': 'Trash is empty.',
   'trash.emptyButton': 'Empty Trash',
   'trash.emptyTitle': 'Empty Trash?',
@@ -283,11 +289,12 @@ export const en = {
   'review.dismissAllA11y': 'Dismiss all suggested tags for {title}',
   'review.goToA11y': 'Go to {title}',
   'review.confidence': '{percent}%',
-  // Chip prefixes that distinguish the two kinds of suggestion at a glance:
-  // 📂 for a folder (collection), # for a tag.
+  // Chip prefixes that distinguish the two kinds of suggestion at a glance and
+  // match the Detail screen's folder chips: 📁 ＋ for a folder (collection,
+  // tap = file in), # for a tag.
   'review.tagChip': '#{name}',
-  'review.folderChip': '📂 {name}',
-  'review.createFolderChip': '📂 Create “{name}”',
+  'review.folderChip': '📁 ＋ {name}',
+  'review.createFolderChip': '📁 ＋ Create “{name}”',
   'review.acceptFolderA11y': 'File {title} into {name}',
   'review.createFolderA11y': 'Create collection {name} and file {title} into it',
   'review.dismissFolderA11y': 'Dismiss suggested collection {name} for {title}',

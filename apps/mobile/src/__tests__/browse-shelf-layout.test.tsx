@@ -48,6 +48,7 @@ jest.mock('expo-router', () => {
 
 import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
+import { CaptureToastProvider } from '@/ui/capture-toast';
 import type { Collection } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeStoredBookmark } from './helpers/fake-repository';
@@ -67,7 +68,9 @@ async function renderShelf() {
   );
   const screen = await render(
     <BookmarksProvider>
-      <InboxScreen />
+      <CaptureToastProvider>
+        <InboxScreen />
+      </CaptureToastProvider>
     </BookmarksProvider>,
   );
   await waitFor(() => expect(screen.getByTestId('browse-shelf')).toBeTruthy());

@@ -115,7 +115,7 @@ export const mockBookmarks: Bookmark[] = [
     favicon_url: 'https://docs.expo.dev/favicon.ico',
     site_name: 'Expo Documentation',
     collection_id: null,
-    is_archived: true,
+    is_archived: false,
     deleted_at: null,
     created_at: '2026-05-28T08:45:00.000Z',
     updated_at: '2026-06-03T10:00:00.000Z',
