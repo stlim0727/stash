@@ -14,6 +14,8 @@
 //   POST   /functions/v1/public-api/collections            create
 //   GET    /functions/v1/public-api/tags                   list
 
+import { inFilter, isUuid, isValidCollectionId, sanitizeQuery } from './filters.ts';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
@@ -76,6 +78,10 @@ function nowIso(): string {
 }
 
 async function validateCollectionOwnership(userId: string, collectionId: string): Promise<boolean> {
+  // Reject anything that isn't a UUID before it reaches eq.${collectionId} — a
+  // forged id like `x&or=(...)` would otherwise inject PostgREST params here.
+  // (A non-owned UUID still correctly returns false below.)
+  if (!isUuid(collectionId)) return false;
   const res = await db('GET', `collections?id=eq.${collectionId}&user_id=eq.${userId}&select=id&limit=1`);
   if (!res.ok) return false;
   const rows: unknown[] = await res.json();
@@ -149,10 +155,6 @@ function uniqueNormalizedTags(tags: string[]): Array<{ name: string; slug: strin
   return result;
 }
 
-function inFilter(values: string[]): string {
-  return `(${values.join(',')})`;
-}
-
 // ---------------------------------------------------------------------------
 // Route handlers
 // ---------------------------------------------------------------------------
@@ -180,8 +182,20 @@ async function listBookmarks(userId: string, url: URL): Promise<Response> {
     offset: String(offset),
   });
 
-  if (query) qs.set('or', `(title.ilike.*${query}*,url.ilike.*${query}*,notes.ilike.*${query}*,description.ilike.*${query}*)`);
-  if (collectionId) qs.set('collection_id', collectionId === 'null' ? 'is.null' : `eq.${collectionId}`);
+  // Strip characters with meaning inside a PostgREST or=() expression so user
+  // input cannot break out of the search group (matches the mobile client,
+  // apps/mobile/src/api/bookmarks.ts:719).
+  const term = sanitizeQuery(query);
+  if (term) qs.set('or', `(title.ilike.*${term}*,url.ilike.*${term}*,notes.ilike.*${term}*,description.ilike.*${term}*)`);
+  // Only the literal "null" or a UUID is a valid collection filter — reject
+  // anything else rather than interpolate it into eq.${collectionId}, which
+  // would let a caller inject extra filter conditions.
+  if (collectionId) {
+    if (!isValidCollectionId(collectionId)) {
+      return json({ error: 'collection_id must be a UUID or "null"' }, 400);
+    }
+    qs.set('collection_id', collectionId === 'null' ? 'is.null' : `eq.${collectionId}`);
+  }
   if (isArchived !== null && isArchived !== undefined) qs.set('is_archived', `eq.${isArchived === 'true'}`);
   else qs.set('is_archived', 'eq.false');
 
@@ -746,6 +760,13 @@ Deno.serve(async (req: Request) => {
 
   // Bookmarks
   if (resource === 'bookmarks') {
+    // The bookmark :id path param is interpolated into eq.${bookmarkId} in every
+    // detail/PATCH/DELETE/tags route. It comes raw from url.pathname, so `&`/`=`
+    // survive — reject anything that isn't a UUID here, before it can inject
+    // arbitrary PostgREST params (or/select/order/limit).
+    if (resourceId && !isUuid(resourceId)) {
+      return json({ error: 'bookmark id must be a UUID' }, 400);
+    }
     if (!resourceId) {
       if (method === 'GET') return listBookmarks(userId, url);
       if (method === 'POST') return createBookmark(userId, body);
