@@ -138,16 +138,6 @@ test('shouldFailClosedOnRateLimit: signed-in user → fail OPEN', () => {
   assert.equal(shouldFailClosedOnRateLimit(caller), false);
 });
 
-test('shouldFailClosedOnRateLimit: server/trigger path → fail OPEN', () => {
-  const caller = resolveCallerAuth({
-    authorization: null,
-    secretHeader: 'the-secret',
-    triggerSecret: 'the-secret',
-  });
-  assert.equal(caller.kind, 'server');
-  assert.equal(shouldFailClosedOnRateLimit(caller), false);
-});
-
 test('shouldFailClosedOnRateLimit: user with garbled token → fail CLOSED (treated as anonymous)', () => {
   const caller = resolveCallerAuth({
     authorization: 'Bearer garbage',
@@ -156,4 +146,63 @@ test('shouldFailClosedOnRateLimit: user with garbled token → fail CLOSED (trea
   });
   assert.equal(caller.kind, 'user');
   assert.equal(shouldFailClosedOnRateLimit(caller), true);
+});
+
+// ── server-path: follow the TARGET BOOKMARK'S OWNER (Codex P1) ────────────────
+// The server-trigger path fires for user-created rows, so an anonymous user can
+// still drive server-path enrichment. During a limiter outage the decision must
+// track the *owner*, not just "trusted server".
+
+function serverCaller() {
+  const caller = resolveCallerAuth({
+    authorization: null,
+    secretHeader: 'the-secret',
+    triggerSecret: 'the-secret',
+  });
+  assert.equal(caller.kind, 'server');
+  return caller;
+}
+
+test('shouldFailClosedOnRateLimit: server path, real owner → fail OPEN', () => {
+  // Don't break a real user's background enrichment on a DB hiccup.
+  assert.equal(shouldFailClosedOnRateLimit(serverCaller(), false), false);
+});
+
+test('shouldFailClosedOnRateLimit: server path, anonymous owner → fail CLOSED', () => {
+  // An anonymous user must not get unthrottled server-path enrichment.
+  assert.equal(shouldFailClosedOnRateLimit(serverCaller(), true), true);
+});
+
+test('shouldFailClosedOnRateLimit: server path, owner anonymity unknown → fail CLOSED (safe default)', () => {
+  // undefined ⇒ the owner lookup failed; default to the strict side.
+  assert.equal(shouldFailClosedOnRateLimit(serverCaller(), undefined), true);
+  assert.equal(shouldFailClosedOnRateLimit(serverCaller()), true);
+});
+
+// ── verify_jwt assumption pin (issue #4) ──────────────────────────────────────
+// The fail-OPEN-for-signed-in branch is only SAFE because the gateway forwards
+// the user's token to PostgREST, which re-verifies its signature (the function
+// itself does NOT verify it — isAnonymousAuthorization just *reads* the claim).
+// A caller who forges `is_anonymous: false` to dodge the fail-closed path is
+// caught downstream: PostgREST rejects the bad signature, so the request can't
+// reach the billable model anyway.
+//
+// IF supabase/config.toml ever flips ai-enrich back to verify_jwt = true at the
+// gateway, that's fine (the gateway pre-verifies). But if the token ever stops
+// being signature-checked on the data path, this control silently evaporates —
+// this test documents that load-bearing assumption so a future posture change
+// trips a visible, named test rather than a quiet regression.
+test('shouldFailClosedOnRateLimit: a forged is_anonymous:false reads as signed-in here — SAFE ONLY because PostgREST re-verifies the forwarded token (verify_jwt)', () => {
+  const forged = makeJwt({ sub: 'attacker', is_anonymous: false });
+  const caller = resolveCallerAuth({
+    authorization: `Bearer ${forged}`,
+    secretHeader: null,
+    triggerSecret: 'the-secret',
+  });
+  // This function trusts the claim (no signature check) → reads as "fail open".
+  assert.equal(shouldFailClosedOnRateLimit(caller), false);
+  // The compensating control lives outside this module: the forwarded token's
+  // signature is re-verified by PostgREST on every read/write. If that ever
+  // changes, revisit the fail-open branch — do not weaken this assertion to
+  // "paper over" a posture change.
 });

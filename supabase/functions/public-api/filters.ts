@@ -24,21 +24,37 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Whether a value is a well-formed UUID. Used to gate any identifier (path
+ * params, query params) before it is interpolated into an `eq.${id}` filter, so
+ * stray PostgREST operators (`&`, `=`, `,`, `)`) in a forged id can never inject
+ * extra params/conditions.
+ */
+export function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
+/**
  * A `collection_id` query param is only ever the literal string `'null'`
  * (meaning "uncollected") or a UUID. Anything else is rejected so it can never
  * be interpolated into `eq.${collectionId}` and inject extra filter conditions.
  */
 export function isValidCollectionId(value: string): boolean {
-  return value === 'null' || UUID_RE.test(value);
+  return value === 'null' || isUuid(value);
 }
 
 /**
  * Build the value list for a PostgREST `in.(...)` filter with each value
- * double-quoted and embedded quotes escaped — the same shape as the hardened
- * mobile copy (apps/mobile/src/api/bookmarks.ts:180-182). Quoting keeps a value
- * containing `,` or `)` from being parsed as extra list members / closing the
- * group early.
+ * double-quoted and embedded quotes/backslashes escaped — the same shape as the
+ * hardened mobile copy (apps/mobile/src/api/bookmarks.ts:180-182). Quoting keeps
+ * a value containing `,` or `)` from being parsed as extra list members /
+ * closing the group early.
+ *
+ * Backslashes are escaped FIRST, then quotes — otherwise a trailing `\` would
+ * combine with our injected `\"` and let the value escape its own quote
+ * (`a\"` → `"a\\""` not `"a\""`).
  */
 export function inFilter(values: string[]): string {
-  return `(${values.map((value) => `"${value.replaceAll('"', '\\"')}"`).join(',')})`;
+  return `(${values
+    .map((value) => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`)
+    .join(',')})`;
 }

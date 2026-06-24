@@ -116,6 +116,48 @@ interface BookmarkRow {
   content_type: string;
 }
 
+/**
+ * Look up whether a user is an anonymous Supabase account, via the GoTrue admin
+ * API (service-role). Used ONLY on the server-trigger path when the rate-limit
+ * verdict is unavailable, to decide fail-closed (anonymous owner) vs fail-open
+ * (real owner) — see shouldFailClosedOnRateLimit.
+ *
+ * No migration / schema change: GET /auth/v1/admin/users/{id} is a stable
+ * service-role endpoint that returns the user record incl. `is_anonymous`.
+ *
+ * Returns:
+ *   - true  → the owner is anonymous (or the record is missing → strict default)
+ *   - false → the owner is a confirmed real (non-anonymous) user
+ *   - undefined → the lookup failed/threw and anonymity is unknown; the caller
+ *     treats undefined as "fail closed" (the safe default).
+ */
+async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefined> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      headers: {
+        apikey: SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      },
+    });
+    if (res.status === 404) {
+      // No such user → treat as anonymous (strict), matching the DB default
+      // in request_ai_enrichment_slot_for (coalesce(is_anonymous, true)).
+      return true;
+    }
+    if (!res.ok) {
+      console.error('Owner anonymity lookup failed:', res.status);
+      return undefined;
+    }
+    const user = (await res.json()) as { is_anonymous?: unknown };
+    // Only an explicit `is_anonymous: false` counts as a real user; missing or
+    // non-boolean defaults to anonymous (strict).
+    return user.is_anonymous !== false;
+  } catch (err) {
+    console.error('Owner anonymity lookup threw:', err);
+    return undefined;
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
@@ -264,21 +306,31 @@ Deno.serve(async (req) => {
 
       if (!verdictObtained) {
         // The verdict couldn't be obtained (missing function, transient error).
-        // Fail CLOSED only on the anonymous caller path: anonymous-first
-        // sign-ups make the limiter the sole cost control there, so a DB hiccup
-        // must not become an open faucet to the billable model. Signed-in users
-        // and the trusted server/trigger path stay fail-OPEN — a real account is
-        // a cost anchor, and breaking the server pipeline on a hiccup would
-        // silently halt background enrichment (see shouldFailClosedOnRateLimit).
-        if (shouldFailClosedOnRateLimit(caller)) {
-          console.error('Rate-limit verdict unavailable; failing closed for anonymous caller');
+        // Decide fail-closed vs fail-open by who owns the cost:
+        //  - anonymous caller         → CLOSED (limiter is the sole cost control)
+        //  - signed-in caller         → OPEN  (real account is a cost anchor)
+        //  - server/trigger path      → follows the TARGET BOOKMARK'S OWNER, since
+        //    the trigger fires for user rows: anonymous owner → CLOSED (an anon
+        //    user must not drive unthrottled server enrichment during an outage),
+        //    real owner → OPEN (don't break a real user's background enrichment).
+        // On the server path we resolve the owner's anonymity via the GoTrue
+        // admin API (service-role, no migration); undetermined ⇒ closed (safe).
+        let ownerIsAnonymous: boolean | undefined;
+        if (serverPath) {
+          ownerIsAnonymous = await fetchOwnerIsAnonymous(bookmark.user_id);
+        }
+        if (shouldFailClosedOnRateLimit(caller, ownerIsAnonymous)) {
+          console.error(
+            'Rate-limit verdict unavailable; failing closed',
+            serverPath ? `(server path, ownerIsAnonymous=${ownerIsAnonymous})` : '(anonymous caller)',
+          );
           return json(
             { error: 'rate_limit_unavailable', reason: 'rate_limit_unavailable', retry_after: 60 },
             503,
             { 'Retry-After': '60' },
           );
         }
-        console.error('Rate-limit verdict unavailable; allowing request (signed-in or server path)');
+        console.error('Rate-limit verdict unavailable; allowing request (real-owner/signed-in path)');
       } else if (verdict && !verdict.allowed) {
         const retryAfter = Math.max(1, Math.floor(verdict.retry_after ?? 60));
         return json(

@@ -126,16 +126,36 @@ export function isAnonymousAuthorization(authorization: string | null): boolean 
  * When the rate-limit verdict cannot be obtained (RPC non-OK or threw), decide
  * whether to fail CLOSED (reject the request) or OPEN (allow it).
  *
- * - server-trigger path  → OPEN: trusted, no user can drive it, and breaking the
- *   server pipeline on a DB hiccup would silently stop background enrichment.
+ * The control follows the *cost anchor*, i.e. who ultimately owns the work:
+ *
  * - signed-in user path  → OPEN: a real account is a weak-but-real cost anchor;
  *   a transient limiter outage shouldn't break AI suggestions for them.
- * - anonymous user path  → CLOSED: anonymous-first sign-ups mean the limiter is
- *   the only cost control, so a DB hiccup must not become an open faucet to the
- *   billable model.
+ * - anonymous user path   → CLOSED: anonymous-first sign-ups mean the limiter is
+ *   the only cost control, so a DB hiccup must not become an open faucet.
+ * - server-trigger path   → depends on the TARGET BOOKMARK'S OWNER. The trigger
+ *   fires for user-created rows carrying `bookmark.user_id`, so an anonymous
+ *   user can still drive unthrottled server-path enrichment during an outage.
+ *   Fail OPEN only when the owner is a real (non-anonymous) user; fail CLOSED
+ *   when the owner is anonymous OR their status couldn't be determined (the
+ *   safe default — `ownerIsAnonymous` undefined ⇒ closed).
  *
  * Pure decision so it can be unit-tested without booting the handler.
+ *
+ * @param ownerIsAnonymous Only consulted on the server path: whether the target
+ *   bookmark's owner is an anonymous user. `undefined` means "couldn't be
+ *   determined" and is treated as anonymous (fail closed).
  */
-export function shouldFailClosedOnRateLimit(caller: CallerAuth): boolean {
-  return caller.kind === 'user' && isAnonymousAuthorization(caller.authorization);
+export function shouldFailClosedOnRateLimit(
+  caller: CallerAuth,
+  ownerIsAnonymous?: boolean,
+): boolean {
+  if (caller.kind === 'user') {
+    return isAnonymousAuthorization(caller.authorization);
+  }
+  if (caller.kind === 'server') {
+    // Fail open only for a confirmed real owner; anonymous or unknown → closed.
+    return ownerIsAnonymous !== false;
+  }
+  // 'unauthorized' never reaches here (rejected earlier), but be safe: closed.
+  return true;
 }

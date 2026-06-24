@@ -14,7 +14,7 @@
 //   POST   /functions/v1/public-api/collections            create
 //   GET    /functions/v1/public-api/tags                   list
 
-import { inFilter, isValidCollectionId, sanitizeQuery } from './filters.ts';
+import { inFilter, isUuid, isValidCollectionId, sanitizeQuery } from './filters.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -78,6 +78,10 @@ function nowIso(): string {
 }
 
 async function validateCollectionOwnership(userId: string, collectionId: string): Promise<boolean> {
+  // Reject anything that isn't a UUID before it reaches eq.${collectionId} — a
+  // forged id like `x&or=(...)` would otherwise inject PostgREST params here.
+  // (A non-owned UUID still correctly returns false below.)
+  if (!isUuid(collectionId)) return false;
   const res = await db('GET', `collections?id=eq.${collectionId}&user_id=eq.${userId}&select=id&limit=1`);
   if (!res.ok) return false;
   const rows: unknown[] = await res.json();
@@ -756,6 +760,13 @@ Deno.serve(async (req: Request) => {
 
   // Bookmarks
   if (resource === 'bookmarks') {
+    // The bookmark :id path param is interpolated into eq.${bookmarkId} in every
+    // detail/PATCH/DELETE/tags route. It comes raw from url.pathname, so `&`/`=`
+    // survive — reject anything that isn't a UUID here, before it can inject
+    // arbitrary PostgREST params (or/select/order/limit).
+    if (resourceId && !isUuid(resourceId)) {
+      return json({ error: 'bookmark id must be a UUID' }, 400);
+    }
     if (!resourceId) {
       if (method === 'GET') return listBookmarks(userId, url);
       if (method === 'POST') return createBookmark(userId, body);
