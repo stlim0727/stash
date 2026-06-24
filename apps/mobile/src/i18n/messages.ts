@@ -67,7 +67,7 @@ export const en = {
   'inbox.storageError':
     'Couldn’t open local storage — showing sample data. Your saves this session may not persist. Tap to report ›',
   'inbox.reportStorageProblem': 'Report storage problem',
-  'inbox.searchPlaceholder': 'Search your stash',
+  'inbox.searchPlaceholder': 'Search titles, tags, folders',
   'inbox.browse': 'Browse',
   'inbox.sortA11y': 'Sort: {label}. Tap to change.',
   'inbox.sortMenuTitle': 'Sort by',
@@ -86,6 +86,14 @@ export const en = {
   'inbox.sectionRecent': 'Recently saved',
   'inbox.loading': 'Loading your bookmarks…',
   'inbox.emptySearch': 'No bookmarks match your search.',
+  // Recovery affordances shown beneath the empty-search message: a hint that the
+  // search reaches beyond titles, and a button to drop the query.
+  'inbox.emptySearchHint': 'Search also looks in tags, folders, and site names.',
+  'inbox.clearSearch': 'Clear search',
+  'inbox.clearSearchA11y': 'Clear search',
+  // Site-name chip on a search result (generated site metadata, not a user
+  // field). Marks WHY a result matched when nothing else on the card shows it.
+  'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': 'Nothing in this view yet.',
   'inbox.emptyTitle': 'Your stash is empty',
   'inbox.emptyHintShare': 'Share a link from any app and pick Stash to save it in a tap.',
@@ -115,6 +123,24 @@ export const en = {
     other: '#{name}, {count} bookmarks',
   },
   'inbox.tagCloudEmpty': 'No tags yet. Tag a bookmark to see it here.',
+
+  // Search suggestion shelf (focused-empty state).
+  'search.shelfAffordance': 'Jump to',
+  'search.shelfA11y': 'Search suggestions',
+  'search.recentChipA11y': 'Search again for “{query}”',
+  // Phase 2 (§13.7): a11y region label for the shelf while a query is active, so
+  // a screen-reader user knows the rail narrowed to their query. Optional polish;
+  // the key is reserved for parity.
+  'search.shelfFilteredA11y': 'Suggestions matching “{query}”',
+  'search.tagChipA11y': 'Filter by tag {name}',
+  'search.folderChipA11y': 'Filter by folder {name}',
+  // Per-entry delete, exposed as an accessibility action on a recent chip.
+  'search.removeRecentA11y': 'Remove recent search “{query}”',
+  // Reserved for the Phase-2 Settings "Clear history" bulk-clear control; not
+  // wired in Phase 1 (per-chip removal uses removeRecentA11y above).
+  'search.clearRecentsA11y': 'Clear recent searches',
+  // Reserved for a future recents sub-grouping label (pre-declared for parity).
+  'search.recentGroupA11y': 'Recent searches',
 
   // View-mode labels (Inbox layout density).
   'viewMode.card': 'Cards',

@@ -47,7 +47,7 @@ export const ko: Catalog = {
   'inbox.storageError':
     '로컬 저장소를 열 수 없어 샘플 데이터를 표시합니다. 이번 세션의 저장 내용은 유지되지 않을 수 있습니다. 신고하려면 탭하세요 ›',
   'inbox.reportStorageProblem': '저장소 문제 신고',
-  'inbox.searchPlaceholder': '내 스태시 검색',
+  'inbox.searchPlaceholder': '제목·태그·폴더 검색',
   'inbox.browse': '둘러보기',
   'inbox.sortA11y': '정렬: {label}. 눌러서 변경하세요.',
   'inbox.sortMenuTitle': '정렬 기준',
@@ -66,6 +66,10 @@ export const ko: Catalog = {
   'inbox.sectionRecent': '최근 저장됨',
   'inbox.loading': '북마크를 불러오는 중…',
   'inbox.emptySearch': '검색과 일치하는 북마크가 없습니다.',
+  'inbox.emptySearchHint': '태그, 폴더, 사이트 이름에서도 검색해요.',
+  'inbox.clearSearch': '검색 지우기',
+  'inbox.clearSearchA11y': '검색 지우기',
+  'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': '이 보기에는 아직 아무것도 없습니다.',
   'inbox.emptyTitle': '아직 비어 있습니다',
   'inbox.emptyHintShare': '어떤 앱에서든 링크를 공유할 때 Stash를 선택하면 한 번에 저장됩니다.',
@@ -86,6 +90,20 @@ export const ko: Catalog = {
   'inbox.tagCloudHeader': '태그 · {count}',
   'inbox.tagCloudTagA11y': { other: '#{name}, 북마크 {count}개' },
   'inbox.tagCloudEmpty': '아직 태그가 없습니다. 북마크에 태그를 달면 여기에 표시됩니다.',
+
+  'search.shelfAffordance': '바로가기',
+  'search.shelfA11y': '검색 추천',
+  'search.recentChipA11y': '“{query}” 다시 검색',
+  // Phase 2: 검색어가 입력된 동안 추천 칩 영역의 접근성 라벨 (검색어로 좁혀졌음을 알림).
+  'search.shelfFilteredA11y': '“{query}” 검색 추천',
+  'search.tagChipA11y': '태그 {name}(으)로 거르기',
+  'search.folderChipA11y': '{name} 폴더 보기',
+  // 최근 검색 칩의 개별 삭제(접근성 액션) 라벨.
+  'search.removeRecentA11y': '최근 검색 “{query}” 삭제',
+  // Phase-2 설정의 "기록 지우기" 일괄 삭제용으로 예약 — Phase 1 미사용.
+  'search.clearRecentsA11y': '최근 검색 지우기',
+  // 최근 검색 서브그룹 라벨용으로 예약 (EN 파리티 선언).
+  'search.recentGroupA11y': '최근 검색',
 
   'viewMode.card': '카드',
   'viewMode.list': '목록',

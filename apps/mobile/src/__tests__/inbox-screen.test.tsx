@@ -220,9 +220,10 @@ test('search filters the list and shows the match count', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search your stash'), 'local-first');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'local-first');
 
-  expect(screen.getByText('Matches (1)')).toBeTruthy();
+  // The derived query is debounced, so the count/filter settle a beat later.
+  await waitFor(() => expect(screen.getByText('Matches (1)')).toBeTruthy());
   expect(screen.getByText('Local-first software')).toBeTruthy();
   expect(screen.queryByText('Raindrop review')).toBeNull();
 });
@@ -765,7 +766,144 @@ test('shows the no-matches empty state for an unmatched search', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search your stash'), 'zzz');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'zzz');
 
-  expect(screen.getByText('No bookmarks match your search.')).toBeTruthy();
+  await waitFor(() => expect(screen.getByText('No bookmarks match your search.')).toBeTruthy());
+});
+
+test('a search result that matched on its site name shows a distinct site chip', async () => {
+  // The bookmark's title/url don't contain "wired" — only its generated
+  // site_name does. Before B1 the card never rendered site_name, so this
+  // matched result looked like a buggy/random hit. In search mode it now shows
+  // a site chip explaining the match.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a1',
+      title: 'The future of work',
+      url: 'https://example.com/article/12345',
+      url_hash: 'https://example.com/article/12345',
+      site_name: 'WIRED',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a2',
+      title: 'Unrelated note',
+      url: 'https://other.example/post',
+      url_hash: 'https://other.example/post',
+      site_name: 'Other Blog',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('The future of work')).toBeTruthy());
+
+  // No site chip outside search mode (it would clutter the normal Inbox).
+  expect(screen.queryByTestId('inbox-card-site')).toBeNull();
+
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'wired');
+
+  await waitFor(() => expect(screen.getByText('Matches (1)')).toBeTruthy());
+  // The matched result surfaces its site name; the chip carries the generated
+  // site value, kept visually distinct from user-authored chips.
+  expect(screen.getByTestId('inbox-card-site')).toBeTruthy();
+  expect(screen.getByText('🌐 WIRED')).toBeTruthy();
+});
+
+test('a 4th+ tag that matched the query is promoted into the shown tag chips', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000a3';
+  // The matching tag ("kubernetes") sorts last alphabetically and is the 4th
+  // tag, so without promotion the card's first-3 slice would hide it and the
+  // result would look unexplained.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Ops runbook' })],
+    {
+      tags: [
+        makeTag('t-alpha', 'alpha'),
+        makeTag('t-beta', 'beta'),
+        makeTag('t-gamma', 'gamma'),
+        makeTag('t-k8s', 'kubernetes'),
+      ],
+      bookmarkTags: ['t-alpha', 't-beta', 't-gamma', 't-k8s'].map((tagId) => ({
+        bookmark_id: id,
+        tag_id: tagId,
+        source: 'user' as const,
+        confidence: null,
+        created_at: '2026-06-12T00:00:00.000Z',
+      })),
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Ops runbook')).toBeTruthy());
+
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'kubernetes');
+
+  await waitFor(() => expect(screen.getByText('Matches (1)')).toBeTruthy());
+  // The matched tag is promoted into the card's (max 3) shown meta chips — the
+  // card meta chip uses accentText, distinguishing it from the browse-shelf
+  // facet chip that also carries "#kubernetes". Without promotion the
+  // alphabetical first-3 (alpha/beta/gamma) would hide it.
+  const k8sChips = screen.getAllByText('#kubernetes');
+  expect(k8sChips.length).toBeGreaterThanOrEqual(2);
+});
+
+test('the debounced query does not filter until typing settles', async () => {
+  jest.useFakeTimers();
+  try {
+    fakeRepo.__reset([
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000b1',
+        title: 'Local-first software',
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000b2',
+        title: 'Raindrop review',
+      }),
+    ]);
+
+    const screen = await renderInbox();
+    // Drain the store's async load under fake timers.
+    await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+    await act(async () => {
+      fireEvent.changeText(
+        screen.getByPlaceholderText('Search titles, tags, folders'),
+        'local-first',
+      );
+    });
+
+    // Immediately after typing (before the debounce elapses) the list is still
+    // unfiltered — both bookmarks remain and there's no "Matches" label yet.
+    expect(screen.getByText('Raindrop review')).toBeTruthy();
+    expect(screen.queryByText(/^Matches/)).toBeNull();
+
+    // Advance past the debounce window → the derived query settles and filters.
+    await act(async () => {
+      jest.advanceTimersByTime(200);
+    });
+    expect(screen.getByText('Matches (1)')).toBeTruthy();
+    expect(screen.queryByText('Raindrop review')).toBeNull();
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
+test('the empty-search state offers a clear control and a searchable-fields hint', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Only one' })]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
+
+  const input = screen.getByPlaceholderText('Search titles, tags, folders');
+  await fireEvent.changeText(input, 'zzz');
+
+  await waitFor(() => expect(screen.getByTestId('inbox-empty-search')).toBeTruthy());
+  // The hint tells the user the search reaches beyond titles …
+  expect(screen.getByText('Search also looks in tags, folders, and site names.')).toBeTruthy();
+
+  // … and the visible Clear control resets the query, returning to the full list.
+  await fireEvent.press(screen.getByLabelText('Clear search'));
+  await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
+  expect(screen.queryByTestId('inbox-empty-search')).toBeNull();
+  expect(input.props.value).toBe('');
 });

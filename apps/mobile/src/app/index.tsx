@@ -24,8 +24,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
+import { SearchSuggestionShelf } from '@/ui/SearchSuggestionShelf';
+import { useSearchSuggestions } from '@/hooks/useSearchSuggestions';
+import {
+  RECENT_SEARCHES_PREF_KEY,
+  addRecent,
+  parseRecents,
+  removeRecent,
+  serializeRecents,
+} from '@/domain/recent-searches';
+import type { SearchSuggestion } from '@/domain/search-suggestions';
 import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
+import { collectionMatchKey } from '@/domain/collection-match';
 import { filterBookmarks } from '@/domain/search';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramColorIndex, monogramIcon } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
 import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
@@ -68,6 +80,32 @@ function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
     parts.push(metadataStatusLabel(t, 'pending'));
   }
   return parts.length > 0 ? parts.join(' · ') : null;
+}
+
+/**
+ * Normalize a query into the same per-token keys the search engine uses
+ * (`collectionMatchKey`: NFKC + lowercase + strip non-alphanumerics), so the
+ * card can tell WHICH of its values a result matched on. Mirrors the tokenizing
+ * in `@/domain/search` — kept in lockstep so "what we show as the reason" agrees
+ * with "what actually matched".
+ */
+function queryTerms(query: string): string[] {
+  return query
+    .split(/\s+/)
+    .map(collectionMatchKey)
+    .filter(Boolean);
+}
+
+/** Whether a single label value (tag, site name) is hit by any query term. */
+function valueMatchesTerms(value: string | null | undefined, terms: string[]): boolean {
+  if (!value || terms.length === 0) {
+    return false;
+  }
+  const key = collectionMatchKey(value);
+  if (!key) {
+    return false;
+  }
+  return terms.some((term) => key.includes(term));
 }
 
 interface FacetChip {
@@ -212,6 +250,32 @@ export default function InboxScreen() {
   } = useBookmarks();
   const { show: showToast } = useCaptureToast();
   const [query, setQuery] = useState('');
+  // The TextInput stays bound to `query` (instant echo), but the derived work —
+  // filtering, sorting, the searching flag, the section label — keys off this
+  // debounced copy so an O(C) collection lookup per bookmark doesn't re-run on
+  // every keystroke and the match count doesn't flicker mid-type.
+  const debouncedQuery = useDebouncedValue(query, 140);
+  // Whether the search field holds focus — drives the suggestion shelf (shown
+  // only while focused with an empty query).
+  const [searchFocused, setSearchFocused] = useState(false);
+  // Tapping a suggestion chip blurs the TextInput FIRST on native (iOS/Android),
+  // which would unmount the shelf mid-gesture and drop the tap into the void. So
+  // we defer the hide one tick: a chip's onPress runs synchronously before the
+  // deferred blur lands, and tag/folder taps (which intentionally blur) cancel
+  // the timer and hide immediately. The ref lets us clear a pending hide on
+  // re-focus and on unmount so we never setState after teardown.
+  const blurHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearBlurHide = useCallback(() => {
+    if (blurHideTimer.current !== null) {
+      clearTimeout(blurHideTimer.current);
+      blurHideTimer.current = null;
+    }
+  }, []);
+  useEffect(() => clearBlurHide, [clearBlurHide]);
+  // The user's own recent searches (most-recent-first). Local-only: persisted in
+  // the meta store as `pref.search.recents`, never enqueued or synced.
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const searchRef = useRef<TextInput>(null);
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -313,8 +377,21 @@ export default function InboxScreen() {
   // have loaded.
   const sortLoaded = useRef(false);
   const viewLoaded = useRef(false);
+  // Mirror the sort-pref guard: don't let the initial empty default clobber the
+  // stored recents before they load.
+  const recentsLoaded = useRef(false);
   useEffect(() => {
     let active = true;
+    getPreference(RECENT_SEARCHES_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setRecentSearches(parseRecents(raw));
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        recentsLoaded.current = true;
+      });
     getPreference(INBOX_SORT_PREF_KEY)
       .then((raw) => {
         if (active) {
@@ -359,6 +436,14 @@ export default function InboxScreen() {
     }
     void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(viewMode)).catch(() => {});
   }, [viewMode]);
+  useEffect(() => {
+    if (!recentsLoaded.current) {
+      return;
+    }
+    // Local-only persistence (meta store, like the sort pref) — never enqueued
+    // or synced. Search strings are user content and stay on-device.
+    void setPreference(RECENT_SEARCHES_PREF_KEY, serializeRecents(recentSearches)).catch(() => {});
+  }, [recentSearches]);
 
   // The cloud and the card/list layouts use different scroll containers — an
   // Animated.ScrollView vs the AnimatedFlatList — so crossing between them
@@ -482,10 +567,39 @@ export default function InboxScreen() {
     }
   }, [filter, chips, hasUncollected, isLoading]);
 
-  const filtered = useMemo(() => filterBookmarks(facetFiltered, query), [facetFiltered, query]);
+  const filtered = useMemo(
+    () =>
+      filterBookmarks(facetFiltered, debouncedQuery, {
+        tagNames: (b) => getTagsForBookmark(b.id).map((tag) => tag.name),
+        collectionName: (b) => getCollection(b.collection_id)?.name,
+      }),
+    [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
+  );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
-  const searching = query.trim().length > 0;
-  const showShelf = chips.length > 0;
+  const searching = debouncedQuery.trim().length > 0;
+  // Normalized terms of the settled query, used to surface WHY each result
+  // matched (site-name chip, promoting a matched tag) when searching.
+  const searchTerms = useMemo(
+    () => (searching ? queryTerms(debouncedQuery) : []),
+    [searching, debouncedQuery],
+  );
+  // Suggestion shelf. A pure projection of already-loaded state — no fetch/sync
+  // fires on focus or keystroke. Phase 2: thread the DEBOUNCED query so the shelf
+  // re-filters on the same ~140ms cadence as the results list and the two update
+  // in the same frame (never momentarily disagree). On an empty query the builder
+  // yields the Phase-1 focus-empty shelf; on a non-empty query it yields the
+  // query-filtered, best-match-first chips (or none when nothing matches).
+  const suggestions = useSearchSuggestions(recentSearches, debouncedQuery);
+  // Show the suggestion shelf whenever the field is focused and there is
+  // something to suggest. Phase 2 (§13.2) drops the empty-query requirement: a
+  // non-empty query that matches nothing yields zero suggestions, so this same
+  // condition cleanly produces the typing-no-match "hide the shelf" state.
+  const showSuggestions = searchFocused && suggestions.length > 0;
+  // The browse shelf is suppressed for the WHOLE focused state (§13.2, widening
+  // Phase-1 Q1): while focused at most one chip row may show — the suggestion
+  // shelf — never the browse shelf. The browse shelf returns only on blur. This
+  // also keeps it hidden in the typing-no-match case, where neither row shows.
+  const showShelf = chips.length > 0 && !searchFocused;
   // On a brand-new (empty) library the search/sort/view controls are just cold
   // chrome over a "nothing here yet" screen — fold them away so the first run
   // is all about the first save. Keyed on the unfiltered library, not the
@@ -497,6 +611,54 @@ export default function InboxScreen() {
   // back to Cards), so an empty library always falls through to the onboarding
   // card regardless of the saved view mode.
   const showCloud = viewMode === 'cloud' && inbox.length > 0;
+
+  // Record a submitted query into recents (trim + case-insensitive dedupe-to-
+  // front + cap). The ONLY write path for recents — never on every keystroke.
+  const recordRecent = useCallback((raw: string) => {
+    setRecentSearches((current) => addRecent(current, raw));
+  }, []);
+
+  // Apply a tag/folder facet from a suggestion, mirroring the browse-shelf chip
+  // path: reset the cloud-drill context and drop out of the cloud to cards so
+  // the facet-filtered bookmarks are immediately visible.
+  const applySuggestionFacet = useCallback((target: InboxFilter) => {
+    cloudReturnRef.current = null;
+    setFilter(target);
+    setViewMode((mode) => (mode === 'cloud' ? 'card' : mode));
+  }, []);
+
+  // Tap a suggestion chip (§5): a recent FILLS the query and keeps the keyboard
+  // up to edit; a tag/folder APPLIES the facet, clears the query, and blurs so
+  // the shelf closes onto the filtered list.
+  const onPickSuggestion = useCallback(
+    (suggestion: SearchSuggestion) => {
+      if (suggestion.kind === 'recent') {
+        setQuery(suggestion.query ?? suggestion.label);
+        return;
+      }
+      if (suggestion.filter) {
+        applySuggestionFacet(
+          suggestion.filter.kind === 'tag'
+            ? { kind: 'tag', id: suggestion.filter.id }
+            : { kind: 'collection', id: suggestion.filter.id },
+        );
+      }
+      setQuery('');
+      // A tag/folder is a destination: dismiss the shelf now. Hide synchronously
+      // (don't wait for the deferred blur) and cancel any pending blur timer so
+      // there's no second, late setState.
+      clearBlurHide();
+      setSearchFocused(false);
+      searchRef.current?.blur();
+    },
+    [applySuggestionFacet, clearBlurHide],
+  );
+
+  // Long-press a recent chip to remove just that entry (Q2, locked).
+  const onRemoveRecentSuggestion = useCallback((suggestion: SearchSuggestion) => {
+    const target = suggestion.query ?? suggestion.label;
+    setRecentSearches((current) => removeRecent(current, target));
+  }, []);
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
   const sectionLabel = searching
@@ -664,6 +826,10 @@ export default function InboxScreen() {
         // The cluster is absolutely positioned so it floats over the list and
         // can translate out of view. It needs an opaque background so list rows
         // sliding underneath stay hidden while it is partly collapsed.
+        // onLayout re-fires whenever the cluster's height changes, including the
+        // suggestion-shelf↔browse-shelf swap on focus/blur (both shelves mount
+        // inside this measured view), so headerHeight — and the list's keyed-off
+        // paddingTop — re-flow to the new height and don't go stale.
         onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
         style={[
           styles.header,
@@ -754,6 +920,7 @@ export default function InboxScreen() {
         {showControls ? (
           <View style={styles.searchWrap}>
             <TextInput
+              ref={searchRef}
               style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
               placeholder={t('inbox.searchPlaceholder')}
               placeholderTextColor={palette.textSecondary}
@@ -761,11 +928,38 @@ export default function InboxScreen() {
               autoCorrect={false}
               value={query}
               onChangeText={setQuery}
+              onFocus={() => {
+                // A re-focus cancels any pending deferred hide from a prior blur.
+                clearBlurHide();
+                setSearchFocused(true);
+              }}
+              onBlur={() => {
+                // Defer the hide so a suggestion chip's onPress (which fires after
+                // the native blur) resolves against a still-mounted shelf. A real
+                // dismissal still settles on the next tick.
+                clearBlurHide();
+                blurHideTimer.current = setTimeout(() => {
+                  blurHideTimer.current = null;
+                  setSearchFocused(false);
+                }, 0);
+              }}
+              // Submit (keyboard "search"/return) is the only recents write path:
+              // the debounced search already reflects the text, so we just record.
+              returnKeyType="search"
+              onSubmitEditing={(event) => recordRecent(event.nativeEvent.text)}
               clearButtonMode="while-editing"
             />
           </View>
         ) : null}
-        {showControls ? (
+        {showSuggestions ? (
+          <SearchSuggestionShelf
+            suggestions={suggestions}
+            onPick={onPickSuggestion}
+            onRemoveRecent={onRemoveRecentSuggestion}
+            query={debouncedQuery}
+          />
+        ) : null}
+        {showControls && !showSuggestions ? (
         <View style={styles.sortRow}>
           <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>{t('inbox.browse')}</Text>
           <Pressable
@@ -924,14 +1118,38 @@ export default function InboxScreen() {
           </Text>
         }
         ListEmptyComponent={
-          isLoading || searching || filter.kind !== 'all' ? (
-            <Text style={[styles.empty, { color: palette.textSecondary }]}>
-              {isLoading
-                ? t('inbox.loading')
-                : searching
-                  ? t('inbox.emptySearch')
-                  : t('inbox.emptyView')}
-            </Text>
+          isLoading ? (
+            <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('inbox.loading')}</Text>
+          ) : searching ? (
+            // A zero-result search is a recovery point, not a dead end: explain
+            // the broadened scope (tags/folders/sites are searchable) and offer
+            // a visible Clear control (Android's keyboard has no native one).
+            <View testID="inbox-empty-search" style={styles.emptySearch}>
+              <Text style={[styles.empty, styles.emptySearchTitle, { color: palette.textSecondary }]}>
+                {t('inbox.emptySearch')}
+              </Text>
+              <Text style={[styles.emptySearchHint, { color: palette.textSecondary }]}>
+                {t('inbox.emptySearchHint')}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('inbox.clearSearchA11y')}
+                onPress={() => setQuery('')}
+                style={({ pressed }) => [
+                  styles.clearSearchButton,
+                  { backgroundColor: palette.accentSoft, opacity: pressed ? 0.7 : 1 },
+                ]}
+              >
+                <Ionicons name="close-circle-outline" size={16} color={palette.accent} />
+                <Text style={[styles.clearSearchLabel, { color: palette.accent }]}>
+                  {t('inbox.clearSearch')}
+                </Text>
+              </Pressable>
+            </View>
+          ) : filter.kind !== 'all' ? (
+            // A facet/filter with zero rows: not the first-run case, so keep the
+            // terse "nothing in this view" line rather than the onboarding card.
+            <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('inbox.emptyView')}</Text>
           ) : (
             // First run: teach the share-sheet capture (the app's whole point),
             // not just "add below" — otherwise Stash reads as a manual URL box.
@@ -970,7 +1188,7 @@ export default function InboxScreen() {
             </View>
           )
         }
-        extraData={viewMode}
+        extraData={`${viewMode}|${searching}|${debouncedQuery}`}
         renderItem={({ item }) => {
           const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
@@ -1064,10 +1282,26 @@ export default function InboxScreen() {
             );
           }
 
+          // In search mode, make sure a tag that the query matched is among the
+          // shown tags — otherwise a result matched via a 4th+ tag looks random.
+          // Promote matching tags to the front, then take the first three.
+          const orderedTags = searching
+            ? [...cardTags].sort((a, b) => {
+                const am = valueMatchesTerms(a.name, searchTerms) ? 0 : 1;
+                const bm = valueMatchesTerms(b.name, searchTerms) ? 0 : 1;
+                return am - bm;
+              })
+            : cardTags;
           const metaParts = [
             ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
-            ...cardTags.slice(0, 3).map((tag) => `#${tag.name}`),
+            ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
+          // Surface the site name only when it's the reason this result matched
+          // (generated site metadata, kept visually distinct from the user-
+          // authored chips above so we never blur the two). When the match came
+          // from the title or a tag, that's already explained — an unexplained
+          // site chip would just be noise competing with the user's own fields.
+          const showSiteChip = searching && valueMatchesTerms(item.site_name, searchTerms);
           return (
             <Card style={styles.card}>
               <Pressable onPress={openDetail} onLongPress={() => setMenuItem(item)}>
@@ -1124,6 +1358,24 @@ export default function InboxScreen() {
                         </Text>
                       </View>
                     ))}
+                  </View>
+                ) : null}
+                {showSiteChip ? (
+                  // Generated site metadata — styled as a neutral, outlined site
+                  // chip (not the filled accent meta chips) so it never reads as
+                  // a user-typed value.
+                  <View style={styles.siteChipRow}>
+                    <View
+                      testID="inbox-card-site"
+                      style={[styles.siteChip, { borderColor: palette.border, backgroundColor: palette.surface }]}
+                    >
+                      <Text
+                        style={[styles.siteChipLabel, { color: palette.textSecondary }]}
+                        numberOfLines={1}
+                      >
+                        {t('inbox.siteChip', { name: item.site_name! })}
+                      </Text>
+                    </View>
                   </View>
                 ) : null}
                   {status ? (
@@ -1261,6 +1513,32 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: 'center',
     paddingVertical: 32,
+  },
+  emptySearch: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    gap: 12,
+  },
+  emptySearchTitle: {
+    paddingVertical: 0,
+  },
+  emptySearchHint: {
+    fontSize: 13,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  clearSearchButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    marginTop: 4,
+  },
+  clearSearchLabel: {
+    fontSize: 14,
+    fontWeight: '700',
   },
   emptyState: {
     alignItems: 'center',
@@ -1538,6 +1816,21 @@ const styles = StyleSheet.create({
   metaChipLabel: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  siteChipRow: {
+    flexDirection: 'row',
+    paddingRight: 72,
+  },
+  siteChip: {
+    flexShrink: 1,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 3,
+    paddingHorizontal: 9,
+  },
+  siteChipLabel: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   cardStatus: {
     fontSize: 12,
