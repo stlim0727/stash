@@ -721,3 +721,52 @@ test('keyboard-hide without a blur drops the stranded shelf (Android Back button
     addSpy.mockRestore();
   }
 });
+
+// The keyboard-hide handler routes its hide through the SAME deferred timer the
+// onBlur path uses, so a chip onPress racing a keyboard dismissal (e.g. a fling
+// that dismisses the keyboard and lands a chip tap) still resolves against a
+// mounted shelf. Fire the handler, then press a chip BEFORE flushing the timer.
+test('keyboard-hide defers its hide so a chip tap mid-dismiss still lands', async () => {
+  jest.useFakeTimers();
+  const handlers: Array<() => void> = [];
+  const addSpy = jest
+    .spyOn(Keyboard, 'addListener')
+    .mockImplementation(((event: string, cb: () => void) => {
+      if (event === 'keyboardDidHide') {
+        handlers.push(cb);
+      }
+      return { remove: jest.fn() };
+    }) as unknown as typeof Keyboard.addListener);
+  try {
+    seedTaggedLibrary();
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
+
+    const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+    await act(async () => {
+      fireEvent(input, 'focus');
+    });
+    await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
+
+    // Keyboard dismisses — the hide is SCHEDULED, not synchronous, so the shelf is
+    // still mounted on this tick …
+    await act(async () => {
+      handlers.forEach((cb) => cb());
+    });
+    expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy();
+
+    // … so a tag chip's press still reaches its handler and applies the facet.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Filter by tag design'));
+    });
+    expect(input.props.value).toBe('');
+
+    // Flushing the deferred hide leaves no stray timer / setState-after-unmount.
+    await act(async () => {
+      jest.runOnlyPendingTimers();
+    });
+  } finally {
+    addSpy.mockRestore();
+    jest.useRealTimers();
+  }
+});

@@ -274,17 +274,28 @@ export default function InboxScreen() {
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
   const searchRef = useRef<TextInput>(null);
-  // On Android, dismissing the keyboard with the hardware/gesture Back button (or
-  // an on-drag list scroll) does NOT fire the TextInput's onBlur — so without
+  // On native, dismissing the keyboard with the Back button / interactive swipe
+  // (or an on-drag list scroll) does NOT fire the TextInput's onBlur — so without
   // this the focused-only suggestion shelf would stay stranded on screen with no
-  // keyboard. When the keyboard hides, drop the focused state (and blur the field
-  // so its next focus re-fires onFocus cleanly). keyboardDidHide lands well after
-  // a chip's synchronous onPress, so it can't reintroduce the tap-into-void race.
+  // keyboard, and the Browse row (gated on !searchFocused) would never return.
+  // When the keyboard hides, drop the focused state and blur the field (Android
+  // keeps native focus after a Back-button dismiss, so blur() is needed for the
+  // next tap to re-fire onFocus). Route the hide through the SAME deferred timer
+  // the onBlur path uses, so a same-gesture chip onPress still resolves against a
+  // mounted shelf — native hide ordering isn't guaranteed. The shelf's own
+  // ScrollView sets keyboardShouldPersistTaps="handled", so a chip tap never
+  // dismisses the keyboard and this can't fire mid-tap. Web has no soft keyboard.
   useEffect(() => {
+    if (Platform.OS === 'web') {
+      return;
+    }
     const sub = Keyboard.addListener('keyboardDidHide', () => {
       clearBlurHide();
-      setSearchFocused(false);
-      searchRef.current?.blur();
+      blurHideTimer.current = setTimeout(() => {
+        blurHideTimer.current = null;
+        setSearchFocused(false);
+        searchRef.current?.blur();
+      }, 0);
     });
     return () => sub.remove();
   }, [clearBlurHide]);
@@ -1118,12 +1129,10 @@ export default function InboxScreen() {
           useNativeDriver: true,
         })}
         scrollEventThrottle={16}
-        // Dragging the list dismisses the keyboard (→ keyboardDidHide drops the
-        // focused state and the suggestion shelf). `handled` keeps suggestion
-        // chips tappable while the field is still focused (their onPress fires
-        // before the tap would otherwise blur the field).
+        // Dragging the results dismisses the keyboard (→ keyboardDidHide drops the
+        // focused state and the suggestion shelf). The shelf's own ScrollView owns
+        // keyboardShouldPersistTaps for its chips; this list doesn't need it.
         keyboardDismissMode="on-drag"
-        keyboardShouldPersistTaps="handled"
         // Keep the scrollbar clear of the floating header.
         scrollIndicatorInsets={{ top: headerHeight }}
         contentContainerStyle={[
