@@ -21,7 +21,6 @@
 const { useState, useEffect, useRef } = React;
 
 const BASE_URL = "https://stzutoejnhzxzhjsjtsi.supabase.co/functions/v1/public-api";
-const CLAUDE_PROXY = "https://stzutoejnhzxzhjsjtsi.supabase.co/functions/v1/claude-proxy";
 const API_KEY = "YOUR_STASH_API_KEY"; // paste your stash_ key here
 const HEADERS = {
   "Authorization": `Bearer ${API_KEY}`,
@@ -34,14 +33,17 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-async function callClaude(system, messages) {
-  const res = await fetch(CLAUDE_PROXY, {
-    method: "POST",
-    headers: { ...HEADERS },
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, system, messages }),
-  });
-  const data = await res.json();
-  return data.content?.[0]?.text || "응답 없음";
+// The `claude-proxy` edge function was an unmetered, unvalidated passthrough to a
+// billable Anthropic key and has been removed (see docs/reviews/project-wide-grumpy-review.md, #1).
+// The AI 분석 / AI 대화 tabs depended on it, so they now surface a clear "removed"
+// notice instead of calling a dead endpoint. The bookmark/tag/collection
+// management tabs are unaffected and continue to use the public-api.
+const AI_DISABLED_MESSAGE =
+  "AI 기능은 비활성화되었습니다. claude-proxy 엔드포인트가 보안상의 이유로 제거되었습니다. " +
+  "(The claude-proxy endpoint was removed for security reasons; the AI analysis and chat features are no longer available.)";
+
+async function callClaude(_system, _messages) {
+  throw new Error(AI_DISABLED_MESSAGE);
 }
 
 function StashManager() {
