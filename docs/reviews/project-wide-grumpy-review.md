@@ -27,8 +27,8 @@ surface is a blind spot** across security, ownership, and verification.
 | 🔴 1 | `claude-proxy` is an unmetered, unvalidated proxy to a billable Anthropic key | Backend/Security | backend-security |
 | 🔴 2 | `public-api` PostgREST filter injection via `q` / `collection_id` (+ unescaped `inFilter`) | Backend/Security | backend-security |
 | 🟠 3 | `ai-enrich` rate limiter fails **open** | Backend/Security | backend-security |
-| 🟠 4 | `replaceBookmark` drops `deleted_at` → trashed bookmarks resurrect on sync | Architecture | domain-sync |
-| 🟠 5 | anon→real carry-over loses `collection_id` / `is_archived` / tags | Architecture | domain-sync |
+| 🟠 4 | Trashed-before-sync create uploads as active; reconcile omits `deleted_at` → row resurrects in cloud / on other devices ([corrected](#correction-log)) | Architecture | domain-sync |
+| 🟠 5 | anon→real carry-over loses **tags** (`collection_id`/`is_archived` self-heal via reconcile — [corrected](#correction-log)) | Architecture | domain-sync |
 | 🟡 6 | `verify-supabase.mjs` still asserts archive-as-delete (contradicts move-to-trash) | Tests/Docs | backend-security |
 | 🟡 7 | `api/bookmarks.ts` (876 LOC) + repository queue engine have zero unit tests | Tests | domain-sync |
 
@@ -36,23 +36,36 @@ surface is a blind spot** across security, ownership, and verification.
 
 ## Level 1 — Architecture & data integrity
 
-**[HIGH] `apps/mobile/src/storage/repository.native.ts:177-185` — `replaceBookmark` silently drops `deleted_at`, resurrecting trashed bookmarks.**
-The INSERT writes only `(id, data, created_at, is_archived)`. When a create syncs
-or an account re-home runs `replaceBookmark` on a trashed row, the indexed
-`deleted_at` column resets to NULL while the JSON `data` still carries it — any
-column-based trash filter now treats the row as live. `insertBookmark:168` writes
-the column; `replaceBookmark` forgot it.
-*Fix:* add `deleted_at` to the `replaceBookmark` INSERT and bind `bookmark.deleted_at ?? null`.
+**[HIGH] Trash state is lost on sync — a bookmark trashed before it syncs stays active in the cloud and resurrects on other devices.** `apps/mobile/src/store/bookmarks.tsx:1756-1765` + `apps/mobile/src/sync/create-payload.ts:18-31`.
+> **Correction (post-Codex + code verification):** the original diagnosis blamed
+> `repository.native.ts:182` (`replaceBookmark` dropping the `deleted_at` column).
+> That is a real omission, but it does **not** resurrect anything locally:
+> `getBookmarks` reads via `JSON.parse(row.data)` (`repository.native.ts:159-162`)
+> and the store's active/trash filters key off `bookmark.deleted_at` from that JSON,
+> so the indexed column being NULL is inert on device. The real bug is on the **sync
+> path**: a local `create` trashed before it gains a remote id uploads as an *active*
+> create (`createPayloadFromBookmark` omits `deleted_at`), and the post-create
+> reconcile condition (`bookmarks.tsx:1756-1765`) checks `is_archived`/`collection_id`/
+> edits/metadata but **not** `deleted_at` — so the cloud row stays active and the next
+> pull on another device sees it live.
+*Fix:* add `deleted_at` to the reconcile condition (enqueue a follow-up `update`/`delete`
+when the persisted row is trashed) and carry trash state through the create path.
+Adding the column to `replaceBookmark` is harmless tidy-up, not the fix.
 
-**[HIGH] `apps/mobile/src/sync/account-transition.ts:96-111` + `create-payload.ts:18-31` — anon→real carry-over drops `collection_id`, `is_archived`, and tags.**
-Re-home rebuilds the upload via `createPayloadFromBookmark`, which emits only
-`url/title/notes/shared_text/client_id`. An anonymous user who filed bookmarks
-into collections and archived some lands them in the cloud as bare inbox items;
-tags live in `pendingTagOps`/`tagData` keyed by the *old* remote id and are
-orphaned when re-home swaps to a new `local-*` id. The post-create reconcile in
-`bookmarks.tsx:1755` is bypassed by the re-home path.
-*Fix:* after re-home, enqueue an `update` per re-homed row once it has a remote id
-(and re-key pending tag ops old→new), or carry the fields in a richer payload.
+**[MEDIUM] anon→real carry-over loses **tags** (not collection/archive).** `apps/mobile/src/sync/account-transition.ts:96-124`.
+> **Correction (post-Codex + code verification):** the original finding claimed
+> `collection_id`/`is_archived`/tags were all dropped and the reconcile was
+> "bypassed". Wrong on two counts: re-homed rows keep `collection_id`/`is_archived`
+> in their local record (`...old` spread, `:98`) and their fresh `create` flows
+> through the **same** post-create reconcile (`bookmarks.tsx:1756`), which fires a
+> follow-up `update` when those fields diverge — so they reach the cloud one sync
+> round later (eventually-consistent, not lost).
+The genuinely-lost state is **tags**: `pendingTagOps` are keyed by `bookmark_id`,
+re-home swaps the row to a new `local-*` id without re-keying the ops, so they fire
+`addTags` against an id that no longer exists in the new account → orphaned.
+*Fix:* re-key `pendingTagOps` old→new id in `applyAccountTransition` (the re-home
+loop already has both ids). Touches account-transition semantics → add a test +
+a note in `docs/architecture/sync-account-switching.md`.
 
 **[MEDIUM] `apps/mobile/src/sync/pull-bookmarks.ts:155-157` vs `bookmarks.tsx:1806` — the deletion guard depends on read-before-write ordering nobody enforces.**
 The "is this an account switch?" decision is computed twice and independently
@@ -256,3 +269,20 @@ whitespace, while the docs describe a codebase that no longer exists.
 
 **Fix the facts (docs/persona/verify script), lock the faucet (`claude-proxy`),
 then bury the zombie bookmarks — before this goes near production.**
+
+---
+
+## Correction log
+
+Findings revised after specialist domain review + an independent Codex pass, both
+verified against the code. Kept transparent rather than silently edited — an
+adversarial report that misdiagnoses is exactly what the team should catch.
+
+- **#4 (trash resurrection)** — root cause corrected. Local reads are JSON-based
+  (`repository.native.ts:159-162`), so the dropped `deleted_at` column does not
+  resurrect rows on device. The real bug is the sync path: a trashed-before-remote-id
+  `create` uploads active and the post-create reconcile (`bookmarks.tsx:1756-1765`)
+  omits `deleted_at`. Fix moved from `replaceBookmark` to the reconcile/create path.
+- **#5 (anon→real carry-over)** — narrowed. `collection_id`/`is_archived` self-heal
+  via the same reconcile; only **tags** are genuinely lost (pending tag ops not
+  re-keyed on id swap). Severity HIGH→MEDIUM, fix scoped to tag re-keying.
