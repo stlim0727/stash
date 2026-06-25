@@ -49,10 +49,17 @@ export function pendingSuggestions(
  * the user's live collection list. Either an existing collection to *file into*
  * or a proposed name to *create*. `null` when there's nothing to suggest (no
  * hint, or the bookmark already lives in the suggested folder).
+ *
+ * `from` carries the collection the bookmark *currently* lives in, when it has
+ * one — so the UI can tell an **add** (no `from`: file an un-filed bookmark in)
+ * apart from a **change/move** (`from` set: relocate it out of `from` into the
+ * suggestion), and render the move as `from → name`. `from` never participates
+ * in the dismissal token ({@link suggestedFolderToken}) — a suggestion is the
+ * same recommendation regardless of where the bookmark sits now.
  */
 export type SuggestedFolder =
-  | { kind: 'existing'; id: string; name: string }
-  | { kind: 'create'; name: string };
+  | { kind: 'existing'; id: string; name: string; from?: { id: string; name: string } | null }
+  | { kind: 'create'; name: string; from?: { id: string; name: string } | null };
 
 /**
  * Resolve the AI folder suggestion the same way the Detail screen does: prefer
@@ -61,6 +68,11 @@ export type SuggestedFolder =
  * enrichment ran still counts as "file into" rather than a duplicate "create"),
  * and otherwise offer to create the proposed name. Returns `null` when the
  * bookmark already sits in the suggested collection or there's no hint at all.
+ *
+ * When the bookmark currently lives in a *different* collection, the result
+ * carries `from` (that collection's id+name) so the caller can render a move;
+ * an unknown `currentCollectionId` (not in `collections`) yields `from: null`
+ * (render as a plain add, never invent a name).
  *
  * Pure so both the Review screen and tests can share one rule.
  */
@@ -72,6 +84,12 @@ export function resolveSuggestedFolder(
   if (!enrichment) {
     return null;
   }
+  // The collection the bookmark sits in now (if any, and if known) — attached as
+  // `from` so an existing/create suggestion reads as a move rather than an add.
+  const fromCollection = currentCollectionId
+    ? (collections.find((collection) => collection.id === currentCollectionId) ?? null)
+    : null;
+  const from = fromCollection ? { id: fromCollection.id, name: fromCollection.name } : null;
   const suggestedByName = enrichment.suggested_collection_name?.trim() || null;
   const suggestedNameKey = suggestedByName ? collectionMatchKey(suggestedByName) : '';
   const byId = enrichment.suggested_collection_id
@@ -84,9 +102,9 @@ export function resolveSuggestedFolder(
   if (existing) {
     return existing.id === currentCollectionId
       ? null
-      : { kind: 'existing', id: existing.id, name: existing.name };
+      : { kind: 'existing', id: existing.id, name: existing.name, from };
   }
-  return suggestedByName ? { kind: 'create', name: suggestedByName } : null;
+  return suggestedByName ? { kind: 'create', name: suggestedByName, from } : null;
 }
 
 /**

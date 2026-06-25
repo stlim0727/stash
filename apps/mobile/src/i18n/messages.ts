@@ -316,11 +316,18 @@ export const en = {
     one: 'Pending suggestions · {count} bookmark',
     other: 'Pending suggestions · {count} bookmarks',
   },
+  // Bulk row, by card content. "Accept all"/"Dismiss all" act on tags AND the
+  // folder (both folder kinds: file into an existing one, or create+file);
+  // "Accept" / "Dismiss" are the folder-only (no tags) singulars.
   'review.acceptAll': 'Accept all',
+  'review.acceptOne': 'Accept',
   'review.dismissAll': 'Dismiss all',
+  'review.dismissOne': 'Dismiss',
   'review.acceptTagA11y': 'Accept suggested tag {name} for {title}',
-  'review.acceptAllA11y': 'Accept all suggested tags for {title}',
-  'review.dismissAllA11y': 'Dismiss all suggested tags for {title}',
+  'review.acceptAllA11y': 'Accept all suggestions for {title}',
+  'review.acceptOneA11y': 'File {title} into the suggested collection',
+  'review.dismissAllA11y': 'Dismiss all suggestions for {title}',
+  'review.dismissOneA11y': 'Dismiss the suggestion for {title}',
   'review.goToA11y': 'Go to {title}',
   'review.confidence': '{percent}%',
   // Chip prefixes that distinguish the two kinds of suggestion at a glance and
@@ -329,9 +336,25 @@ export const en = {
   'review.tagChip': '#{name}',
   'review.folderChip': '📁 ＋ {name}',
   'review.createFolderChip': '📁 ＋ Create “{name}”',
+  // ADD vs CHANGE (move) folder forms. The "→" run targets are rendered as
+  // separate <Text> children so the `from` name can be struck through and only
+  // the arrow + target tinted; these strings are the non-strikethrough fallback
+  // pieces / a11y labels. `addArrow` is "→ {name}" (file into an existing one);
+  // `addCreateArrow` is "→ ＋ "{name}"" (create then file). For a move the chip
+  // composes the struck `from` name with one of these arrows.
+  'review.folderAddArrow': '📁 → {name}',
+  'review.folderCreateArrow': '📁 ＋ Create “{name}”',
+  'review.moveArrowTarget': '→ {name}',
+  'review.moveCreateTarget': '→ ＋ “{name}”',
+  // Chip a11y, per case (screen readers can't see the strikethrough).
   'review.acceptFolderA11y': 'File {title} into {name}',
   'review.createFolderA11y': 'Create collection {name} and file {title} into it',
+  'review.moveFolderA11y': 'Move {title} from {from} to {name}',
+  'review.moveCreateFolderA11y': 'Move {title} from {from} into a new collection {name}',
   'review.dismissFolderA11y': 'Dismiss suggested collection {name} for {title}',
+  // A move overwrites a user-chosen collection_id; the chip already shows the
+  // ~~from~~ → to, so instead of confirming we file it and offer an Undo toast.
+  'review.movedToast': 'Moved to “{name}”',
 
   // Report a problem.
   'report.categoryBug': 'Bug',

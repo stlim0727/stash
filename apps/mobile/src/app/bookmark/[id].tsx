@@ -28,6 +28,7 @@ import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
 import { pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
+import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
 import { collectionMatchKey } from '@/domain/collection-match';
 import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
@@ -223,10 +224,23 @@ export default function BookmarkDetailScreen() {
   // proposed-name key; a dismissal recorded under either token suppresses both
   // forms, and dismissing records every applicable token.
   const dismissedFolderTokens = getDismissedFolderSuggestions(bookmark.id);
+  // The collection the bookmark sits in now (when known) — attached as `from` so
+  // the chip reads as a *move* (📁 ~~from~~ → target) rather than a plain add
+  // when the bookmark already lives somewhere else. Unknown current collection →
+  // no `from` (render as an add), matching resolveSuggestedFolder's rule.
+  const currentFrom =
+    collection && bookmark.collection_id
+      ? { id: bookmark.collection_id, name: collection.name }
+      : null;
   const suggestedFolder: SuggestedFolder | null = suggestedCollection
-    ? { kind: 'existing', id: suggestedCollection.id, name: suggestedCollection.name }
+    ? {
+        kind: 'existing',
+        id: suggestedCollection.id,
+        name: suggestedCollection.name,
+        from: currentFrom,
+      }
     : suggestedByName
-      ? { kind: 'create', name: suggestedByName }
+      ? { kind: 'create', name: suggestedByName, from: currentFrom }
       : null;
   const folderTokens = suggestedFolderTokens(suggestedFolder, suggestedByName);
   const folderSuggestionDismissed = folderTokens.some((token) => dismissedFolderTokens.has(token));
@@ -399,10 +413,27 @@ export default function BookmarkDetailScreen() {
     });
   };
 
-  const handleAcceptCollection = () => {
-    if (suggestedCollection) {
-      assignCollection(bookmark.id, suggestedCollection.id);
+  // A move (the bookmark already lives in a different collection, so `currentFrom`
+  // is set) overwrites a user-chosen collection_id. The chip already shows
+  // ~~from~~ → to, so instead of confirming we file it and offer a "Moved to {to}"
+  // toast whose Undo restores the prior collection. An add overwrites nothing.
+  const offerMoveUndo = (to: string) => {
+    if (!currentFrom) {
+      return;
     }
+    const fromId = currentFrom.id;
+    showToast(t('review.movedToast', { name: to }), {
+      label: t('common.undo'),
+      onPress: () => assignCollection(bookmark.id, fromId),
+    });
+  };
+
+  const handleAcceptCollection = () => {
+    if (!suggestedCollection) {
+      return;
+    }
+    assignCollection(bookmark.id, suggestedCollection.id);
+    offerMoveUndo(suggestedCollection.name);
   };
 
   // Dismiss the folder suggestion under every token that identifies it (resolved
@@ -424,6 +455,21 @@ export default function BookmarkDetailScreen() {
       }
       return result.error ?? t('detail.errorCreateCollection');
     });
+
+  // Accept the "create" folder suggestion: create the proposed name and file in.
+  // When the bookmark already lives elsewhere this is a move, so offer the Undo
+  // toast once the create+assign lands (an add overwrites nothing).
+  const handleAcceptCreateCollection = () => {
+    if (!suggestedByName) {
+      return;
+    }
+    const name = suggestedByName;
+    void handleCreateCollection(name).then((ok) => {
+      if (ok) {
+        offerMoveUndo(name);
+      }
+    });
+  };
 
   const handleOpenLink = () => {
     if (bookmark.url) {
@@ -639,12 +685,17 @@ export default function BookmarkDetailScreen() {
             <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={t('detail.aiFileIntoA11y', { name: suggestedCollection!.name })}
+                accessibilityLabel={folderChipA11yLabel(t, suggestedFolder!, displayedTitle)}
                 disabled={busy}
                 onPress={handleAcceptCollection}
               >
-                <Text style={[styles.ghostLabel, { color: palette.accent }]}>
-                  {t('detail.aiSuggestCollectionChip', { name: suggestedCollection!.name })}
+                <Text style={styles.ghostLabel}>
+                  <FolderSuggestionLabel
+                    t={t}
+                    folder={suggestedFolder!}
+                    accentColor={palette.accent}
+                    secondaryColor={palette.textSecondary}
+                  />
                 </Text>
               </Pressable>
               <Pressable
@@ -666,12 +717,17 @@ export default function BookmarkDetailScreen() {
             <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={t('detail.aiCreateCollectionA11y', { name: suggestedByName! })}
+                accessibilityLabel={folderChipA11yLabel(t, suggestedFolder!, displayedTitle)}
                 disabled={busy}
-                onPress={() => void handleCreateCollection(suggestedByName!)}
+                onPress={handleAcceptCreateCollection}
               >
-                <Text style={[styles.ghostLabel, { color: palette.accent }]}>
-                  {t('detail.aiCreateCollectionChip', { name: suggestedByName! })}
+                <Text style={styles.ghostLabel}>
+                  <FolderSuggestionLabel
+                    t={t}
+                    folder={suggestedFolder!}
+                    accentColor={palette.accent}
+                    secondaryColor={palette.textSecondary}
+                  />
                 </Text>
               </Pressable>
               <Pressable
