@@ -595,18 +595,6 @@ export default function SettingsScreen() {
 
       {developerMode ? (
         <>
-          <Group styles={styles}>
-            <Row
-              styles={styles}
-              palette={palette}
-              icon="key-outline"
-              label={t('settings.apiKeys.label')}
-              value={t('settings.apiKeys.value')}
-              last
-              onPress={() => router.push('/api-keys')}
-            />
-          </Group>
-
           <Text style={styles.sectionLabel}>{t('settings.diagnostics.title')}</Text>
           <Group styles={styles}>
             <InfoRow styles={styles} label={t('settings.diagnostics.supabaseAuth')} value={auth.status} />
