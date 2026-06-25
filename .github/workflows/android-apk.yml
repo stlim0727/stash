@@ -365,6 +365,41 @@ jobs:
             exit 1
           fi
           export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+          # --- one-off auth diagnostic: mint a token straight from the SA key so
+          # we can tell a key-format problem from an SA permission/state problem,
+          # without firebase-tools in the way. Prints only Google's error code /
+          # description (never key material); informational, never fails the job.
+          node --input-type=module -e '
+            import https from "node:https";
+            import crypto from "node:crypto";
+            import { readFileSync } from "node:fs";
+            const sa = JSON.parse(readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, "utf8"));
+            const now = Math.floor(Date.now() / 1000);
+            const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+            const head = b64({ alg: "RS256", typ: "JWT" }) + "." + b64({
+              iss: sa.client_email, scope: "https://www.googleapis.com/auth/cloud-platform",
+              aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600,
+            });
+            let signed;
+            try {
+              const s = crypto.createSign("RSA-SHA256"); s.update(head); s.end();
+              signed = head + "." + s.sign(sa.private_key, "base64url");
+            } catch (e) {
+              console.log("AUTH-DIAGNOSIS: private_key is NOT a usable PEM (" + (e.code || e.message) + ") => the secret is corrupted (likely \\n newlines). Re-store the raw SA JSON.");
+              process.exit(0);
+            }
+            const body = "grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=" + signed;
+            const req = https.request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": Buffer.byteLength(body) } }, (res) => {
+              let d = ""; res.on("data", (c) => (d += c)); res.on("end", () => {
+                let j = {}; try { j = JSON.parse(d); } catch {}
+                if (res.statusCode === 200) console.log("AUTH-DIAGNOSIS: token mint OK => the SA key is VALID and can authenticate. The failure is in firebase-tools/ADC handling, not the key.");
+                else console.log("AUTH-DIAGNOSIS: token endpoint rejected the SA - status " + res.statusCode + ", error=" + (j.error || "?") + ": " + (j.error_description || "") + ". (invalid_grant/Invalid JWT Signature => key format; unauthorized_client/access_denied => SA disabled or missing role)");
+              });
+            });
+            req.on("error", (e) => console.log("AUTH-DIAGNOSIS: network error reaching token endpoint: " + e.message));
+            req.write(body); req.end();
+          ' || true
+          # --- end diagnostic ---
           # firebase-tools authenticates only via GOOGLE_APPLICATION_CREDENTIALS
           # (appdistribution:distribute has no service-account-file flag), and
           # that token exchange intermittently fails with a misleading
