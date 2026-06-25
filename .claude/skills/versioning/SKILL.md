@@ -104,6 +104,14 @@ RC builds stamp from the tag, so `app.json` need not carry the `-rcN`.
 
 ## Step 5 — Cut it (only when asked to build/release, not just "what's next")
 
+**Before tagging or building, check for open PRs.** List open PRs against the
+target branch (`mcp__github__list_pull_requests` with `state="open"`, base =
+`main` or the relevant `release/X.Y.x`). If any are open, **ask the user whether
+to wait for them to merge and publish afterward**, instead of cutting from the
+current commit — the open work may belong in this release. List the open PRs in
+the question so they can decide, and only proceed once they have. (If there are
+no open PRs against the target, skip the question and continue.)
+
 Releases are tag-driven; pushing a `v*` tag (or dispatching the workflow)
 triggers `android-apk.yml`.
 
