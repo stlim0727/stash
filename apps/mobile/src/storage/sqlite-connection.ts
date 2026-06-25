@@ -1,5 +1,15 @@
 import { recordLog } from '@/observability/log-buffer';
 
+export interface SqliteConnectionOptions {
+  /** Max time a liveness probe may run before the handle is treated as dead. */
+  probeTimeoutMs?: number;
+  /** Max time to wait for a stale handle to close before reopening anyway. */
+  closeTimeoutMs?: number;
+}
+
+const DEFAULT_PROBE_TIMEOUT_MS = 2000;
+const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
+
 /**
  * Coalesced, self-healing SQLite connection manager.
  *
@@ -18,15 +28,27 @@ import { recordLog } from '@/observability/log-buffer';
  * `NativeDatabase.prepareAsync ... NullPointerException`, and because every
  * reopen repeats the clobber it never recovers.
  *
- * The fix: funnel the whole decision (liveness probe + reopen) through one
- * in-flight `opening` promise. Concurrent callers await the same resolution, so
- * there is exactly one probe and at most one reopen per generation, and the
- * stale handle is closed rather than leaked. The auth store
- * (`session-storage.native.ts`) coalesces its single connection the same way.
+ * The fix has three parts:
+ *   1. Funnel the whole decision (liveness probe + reopen) through one in-flight
+ *      `opening` promise, so concurrent callers share one probe and at most one
+ *      reopen per generation, and the stale handle is closed (not leaked).
+ *   2. {@link run} retries the *operation*, not just the open: the probe can pass
+ *      microseconds before the OS invalidates the handle, so the real statement
+ *      still throws — `run` detects the now-dead handle and replays the work once
+ *      on a fresh connection. A genuine SQL error (handle still alive) is never
+ *      retried.
+ *   3. The probe and close are time-bounded, so a wedged handle (the very case
+ *      this targets) can't hang the probe or close forever and deadlock every
+ *      caller awaiting `opening`.
+ *
+ * The auth store (`session-storage.native.ts`) drives its single connection the
+ * same way.
  */
 export class SqliteConnection<DB> {
   private db: DB | null = null;
   private opening: Promise<DB> | null = null;
+  private readonly probeTimeoutMs: number;
+  private readonly closeTimeoutMs: number;
 
   constructor(
     private readonly opener: () => Promise<DB>,
@@ -34,7 +56,11 @@ export class SqliteConnection<DB> {
     private readonly probe: (db: DB) => Promise<unknown>,
     /** Best-effort close of a handle being discarded. */
     private readonly close: (db: DB) => Promise<unknown>,
-  ) {}
+    options: SqliteConnectionOptions = {},
+  ) {
+    this.probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+    this.closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
+  }
 
   /** Resolve to a live handle, reopening transparently if the current one died. */
   get(): Promise<DB> {
@@ -46,33 +72,59 @@ export class SqliteConnection<DB> {
     return this.opening;
   }
 
+  /**
+   * Run a unit of DB work with automatic recovery. If the handle dies *during*
+   * the work — the probe in {@link get} can pass just before the OS invalidates
+   * the handle, so the real statement still throws the `prepareAsync`
+   * NullPointerException — the dead handle is dropped and the work is retried
+   * exactly once on a fresh connection. A genuine failure (constraint, bad SQL),
+   * where the handle is still alive, is surfaced immediately and never retried.
+   *
+   * The work callback must be idempotent, since a retry replays it whole. Every
+   * statement in the repository qualifies: single `INSERT OR REPLACE` / `DELETE`
+   * / reads, or transactions built from them.
+   */
+  async run<T>(work: (db: DB) => Promise<T>): Promise<T> {
+    const first = await this.get();
+    try {
+      return await work(first);
+    } catch (error) {
+      // Retry only when the handle itself died; a still-live handle means the
+      // error is real (constraint, bad SQL) and must not be replayed.
+      if (await this.isAlive(first)) {
+        throw error;
+      }
+      if (this.db === first) {
+        this.db = null;
+      }
+      // Evict the dead handle before reopening (see closeQuietly / resolve).
+      await this.closeQuietly(first);
+    }
+    const fresh = await this.get();
+    return work(fresh);
+  }
+
   private async resolve(): Promise<DB> {
     const existing = this.db;
     if (existing) {
-      try {
-        await this.probe(existing);
+      const { alive, error } = await this.probeAlive(existing);
+      if (alive) {
         return existing;
-      } catch (error) {
-        // Stale handle (app was backgrounded). Record it — repeated reopens are
-        // a useful signal — then drop and close it before opening a fresh one.
-        // Coalescing through `opening` means only one caller ever reaches here
-        // per generation, so this never clobbers a replacement handle.
-        recordLog('warn', `sqlite handle stale, reopening: ${String(error)}`);
-        this.db = null;
-        // Close and *await* before reopening. expo-sqlite opens with
-        // useNewConnection=false, so the native layer caches one connection per
-        // database path; closeAsync is what evicts the stale entry. A
-        // fire-and-forget close lets the reopen race ahead and reuse the
-        // still-cached invalid handle (keeping the prepareAsync NullPointer
-        // exceptions coming) — and once the reopen re-references that binding,
-        // the trailing close only drops a refcount instead of freeing it, so it
-        // never recovers. Errors are ignored: the handle may already be wedged.
-        try {
-          await this.close(existing);
-        } catch {
-          // Best-effort — a wedged handle that won't close still gets replaced.
-        }
       }
+      // Stale handle (app was backgrounded). Record it — repeated reopens are a
+      // useful signal — then drop and close it before opening a fresh one.
+      // Coalescing through `opening` means only one caller reaches here per
+      // generation, so this never clobbers a replacement handle.
+      recordLog('warn', `sqlite handle stale, reopening: ${String(error)}`);
+      this.db = null;
+      // Close and *await* before reopening. expo-sqlite opens with
+      // useNewConnection=false, so the native layer caches one connection per
+      // database path; closeAsync is what evicts the stale entry. A
+      // fire-and-forget close lets the reopen reuse the still-cached invalid
+      // handle — and once reopened against that binding, the trailing close only
+      // drops a refcount instead of freeing it, so it never recovers. The wait
+      // is time-bounded so a wedged close can't deadlock the reopen.
+      await this.closeQuietly(existing);
     }
     try {
       const db = await this.opener();
@@ -84,5 +136,45 @@ export class SqliteConnection<DB> {
       recordLog('error', `sqlite open failed: ${String(error)}`);
       throw error;
     }
+  }
+
+  private async isAlive(db: DB): Promise<boolean> {
+    return (await this.probeAlive(db)).alive;
+  }
+
+  private async probeAlive(db: DB): Promise<{ alive: boolean; error?: unknown }> {
+    try {
+      await this.withTimeout(this.probe(db), this.probeTimeoutMs, 'probe');
+      return { alive: true };
+    } catch (error) {
+      return { alive: false, error };
+    }
+  }
+
+  private async closeQuietly(db: DB): Promise<void> {
+    try {
+      await this.withTimeout(this.close(db), this.closeTimeoutMs, 'close');
+    } catch {
+      // The handle may already be wedged or slow to close; a bounded wait keeps
+      // that from hanging the connection. We reopen regardless.
+    }
+  }
+
+  private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`sqlite ${label} timed out after ${ms}ms`));
+      }, ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
   }
 }

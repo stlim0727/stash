@@ -16,6 +16,10 @@ class FakeDb {
     this.alive = false;
   }
 
+  isAlive(): boolean {
+    return this.alive;
+  }
+
   async probe(): Promise<void> {
     if (!this.alive) {
       throw new Error('NativeDatabase.prepareAsync ... NullPointerException');
@@ -27,7 +31,7 @@ class FakeDb {
   }
 }
 
-function makeConnection() {
+function makeConnection(opts?: { probeTimeoutMs?: number; closeTimeoutMs?: number }) {
   let opens = 0;
   const opened: FakeDb[] = [];
   const events: string[] = [];
@@ -44,6 +48,7 @@ function makeConnection() {
       events.push(`close:${db.id}`);
       await db.close();
     },
+    opts,
   );
   return { connection, opened, events, opensCount: () => opens };
 }
@@ -100,6 +105,19 @@ test('a stale handle is reopened once and closed, never double-opened', async ()
   assert.equal(staleLogs.length, 1);
 });
 
+test('reopens exactly once when the handle dies between calls', async () => {
+  const { connection, opensCount } = makeConnection();
+  const a = await connection.get();
+  a.kill();
+  const b = await connection.get();
+  assert.notEqual(b.id, a.id);
+  assert.equal(opensCount(), 2);
+  // b is still live — a later call must not open yet another connection.
+  const c = await connection.get();
+  assert.equal(c.id, b.id);
+  assert.equal(opensCount(), 2);
+});
+
 test('surfaces and retries a failed open', async () => {
   clearLogEntries();
   let attempts = 0;
@@ -145,4 +163,91 @@ test('a reopen failure does not poison later retries', async () => {
   // A subsequent call starts a fresh attempt and recovers.
   const recovered = await connection.get();
   assert.equal(recovered.id, 3);
+});
+
+test('run returns the work result on a live handle', async () => {
+  const { connection, opensCount } = makeConnection();
+  const result = await connection.run(async (db) => `value:${db.id}`);
+  assert.equal(result, 'value:1');
+  assert.equal(opensCount(), 1);
+});
+
+test('run reopens and retries once when the handle dies mid-operation', async () => {
+  // The probe in get() passes, then the handle is invalidated in the window
+  // before the real statement — exactly the field NPE. run must recover.
+  const { connection, opened, opensCount } = makeConnection();
+  await connection.get(); // establish handle 1
+
+  let attempts = 0;
+  const result = await connection.run(async (db) => {
+    attempts += 1;
+    if (attempts === 1) {
+      // Handle dies just as the statement begins.
+      db.kill();
+      throw new Error('NativeDatabase.prepareAsync ... NullPointerException');
+    }
+    return `ok:${db.id}`;
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(result, 'ok:2'); // replayed on the fresh handle
+  assert.equal(opensCount(), 2);
+  assert.equal(opened[0].closed, true); // dead handle evicted
+});
+
+test('run does not retry a genuine error on a live handle', async () => {
+  const { connection, opensCount } = makeConnection();
+  let attempts = 0;
+  await assert.rejects(
+    () =>
+      connection.run(async () => {
+        attempts += 1;
+        throw new Error('UNIQUE constraint failed: bookmarks.id');
+      }),
+    /UNIQUE constraint/,
+  );
+  // The handle is alive, so the error is real — work ran exactly once.
+  assert.equal(attempts, 1);
+  assert.equal(opensCount(), 1);
+});
+
+test('a close that never resolves does not deadlock the reopen', async () => {
+  let opens = 0;
+  const connection = new SqliteConnection<FakeDb>(
+    async () => {
+      opens += 1;
+      return new FakeDb(opens);
+    },
+    (db) => db.probe(),
+    () => new Promise<void>(() => {}), // never resolves — wedged close
+    { closeTimeoutMs: 10, probeTimeoutMs: 50 },
+  );
+
+  const first = await connection.get();
+  first.kill();
+  // Must fall through the bounded close and reopen rather than hang forever.
+  const second = await connection.get();
+  assert.equal(second.id, 2);
+  assert.equal(opens, 2);
+});
+
+test('a probe that hangs is treated as stale and reopened', async () => {
+  let opens = 0;
+  let hang = false;
+  const connection = new SqliteConnection<FakeDb>(
+    async () => {
+      opens += 1;
+      return new FakeDb(opens);
+    },
+    (db) =>
+      hang ? new Promise(() => {}) : db.probe(), // first reuse probe hangs
+    (db) => db.close(),
+    { probeTimeoutMs: 10, closeTimeoutMs: 10 },
+  );
+
+  await connection.get(); // handle 1
+  hang = true; // the next liveness probe will hang
+  const second = await connection.get();
+  assert.equal(second.id, 2); // timed-out probe → treated as dead → reopened
+  assert.equal(opens, 2);
 });

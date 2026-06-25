@@ -27,20 +27,19 @@ const connection = new SqliteConnection<SQLite.SQLiteDatabase>(
   (db) => db.closeAsync(),
 );
 
-function open(): Promise<SQLite.SQLiteDatabase> {
-  return connection.get();
-}
-
 // All operations are best-effort: a storage failure must never block auth.
 // Worst case the session isn't persisted and a fresh anonymous one is created.
+// `connection.run` reopens and retries once if the handle died under us.
 
 export async function readSupabaseSession(): Promise<SupabaseAuthSession | null> {
   try {
-    const db = await open();
-    const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM meta WHERE key = ?', [
-      SESSION_KEY,
-    ]);
-    return row ? (JSON.parse(row.value) as SupabaseAuthSession) : null;
+    return await connection.run(async (db) => {
+      const row = await db.getFirstAsync<{ value: string }>(
+        'SELECT value FROM meta WHERE key = ?',
+        [SESSION_KEY],
+      );
+      return row ? (JSON.parse(row.value) as SupabaseAuthSession) : null;
+    });
   } catch {
     return null;
   }
@@ -48,11 +47,12 @@ export async function readSupabaseSession(): Promise<SupabaseAuthSession | null>
 
 export async function writeSupabaseSession(session: SupabaseAuthSession): Promise<void> {
   try {
-    const db = await open();
-    await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
-      SESSION_KEY,
-      JSON.stringify(session),
-    ]);
+    await connection.run((db) =>
+      db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
+        SESSION_KEY,
+        JSON.stringify(session),
+      ]),
+    );
   } catch {
     // Persistence is best-effort; the session is still usable this run.
   }
@@ -60,8 +60,7 @@ export async function writeSupabaseSession(session: SupabaseAuthSession): Promis
 
 export async function clearSupabaseSession(): Promise<void> {
   try {
-    const db = await open();
-    await db.runAsync('DELETE FROM meta WHERE key = ?', [SESSION_KEY]);
+    await connection.run((db) => db.runAsync('DELETE FROM meta WHERE key = ?', [SESSION_KEY]));
   } catch {
     // Ignore — nothing to clear if storage is unavailable.
   }
