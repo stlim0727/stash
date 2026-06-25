@@ -251,6 +251,9 @@ export default function BookmarkDetailScreen() {
   // Offer to create a brand-new collection only when nothing existing matched.
   const showCreateCollectionSuggestion =
     !suggestedCollection && !!suggestedByName && !folderSuggestionDismissed;
+  // A folder chip (file-into or create) is currently on screen — so the tag
+  // field's "Add all"/"Dismiss all" should sweep it too, like the Review screen.
+  const folderSuggestionVisible = showCollectionSuggestion || showCreateCollectionSuggestion;
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
@@ -359,9 +362,11 @@ export default function BookmarkDetailScreen() {
       markSuggestionsReviewed(bookmark.id, [name]);
     }
   };
-  // One-tap "yes to all" mirror of dismiss-all: apply every chip at once. AI
-  // suggestions go through acceptSuggestedTags (records the accept review);
-  // hashtag chips become plain user tags.
+  // One-tap "yes to all" mirror of dismiss-all: apply every chip at once, AND
+  // file into the suggested folder when one is showing — so "Add all" reflects
+  // the folder + tags together, like the Review screen's "Accept all". AI tags
+  // go through acceptSuggestedTags (records the accept review); hashtag chips
+  // become plain user tags; the folder is filed (existing) or created+filed.
   const handleAcceptAll = () => {
     const hashtagNames = tagSuggestions
       .filter((suggestion) => !aiSuggestionNames.has(suggestion.name.toLowerCase()))
@@ -374,13 +379,31 @@ export default function BookmarkDetailScreen() {
         }
       }
       if (hashtagNames.length > 0) {
-        return addTagsToBookmark(bookmark.id, hashtagNames);
+        const error = await addTagsToBookmark(bookmark.id, hashtagNames);
+        if (error) {
+          return error;
+        }
+      }
+      // File into the suggested folder last so a failed tag add doesn't also
+      // move the bookmark. Existing folder → assign; "create" → make it first.
+      if (showCollectionSuggestion && suggestedCollection) {
+        assignCollection(bookmark.id, suggestedCollection.id);
+        offerMoveUndo(suggestedCollection.name);
+      } else if (showCreateCollectionSuggestion && suggestedByName) {
+        const result = await createCollection(suggestedByName);
+        if (result.collection) {
+          assignCollection(bookmark.id, result.collection.id);
+          offerMoveUndo(suggestedByName);
+        } else {
+          return result.error ?? t('detail.errorCreateCollection');
+        }
       }
       return null;
     });
   };
-  // One-tap "no thanks" for the whole row: session-dismiss every chip, and
-  // persist the AI ones as reviewed (same rule as a single dismiss).
+  // One-tap "no thanks" for the whole row: session-dismiss every chip, persist
+  // the AI ones as reviewed (same rule as a single dismiss), and durably dismiss
+  // the folder suggestion too — mirroring Review's "Dismiss all".
   const handleDismissAll = () => {
     const names = tagSuggestions.map((suggestion) => suggestion.name);
     setDismissed((prev) => {
@@ -393,6 +416,9 @@ export default function BookmarkDetailScreen() {
     const aiNames = names.filter((name) => aiSuggestionNames.has(name.toLowerCase()));
     if (aiNames.length > 0) {
       markSuggestionsReviewed(bookmark.id, aiNames);
+    }
+    if (folderSuggestionVisible) {
+      handleDismissFolder();
     }
   };
 
@@ -497,6 +523,29 @@ export default function BookmarkDetailScreen() {
       { text: t('common.delete'), style: 'destructive', onPress: remove },
     ]);
   };
+
+  // The folder recommendation, packaged for the TagField suggestion row: it
+  // renders as the leading chip beside the tag suggestions. Accept files into
+  // an existing match or creates the proposed name; dismiss is durable. null
+  // when there's no folder hint (or it was dismissed / already filed there).
+  const folderSuggestionChip = folderSuggestionVisible
+    ? {
+        label: (
+          <FolderSuggestionLabel
+            t={t}
+            folder={suggestedFolder!}
+            accentColor={palette.accent}
+            secondaryColor={palette.textSecondary}
+          />
+        ),
+        acceptA11y: folderChipA11yLabel(t, suggestedFolder!, displayedTitle),
+        dismissA11y: showCollectionSuggestion
+          ? t('detail.aiDismissCollectionA11y', { name: suggestedCollection!.name })
+          : t('detail.aiDismissCollectionA11y', { name: suggestedByName! }),
+        onAccept: showCollectionSuggestion ? handleAcceptCollection : handleAcceptCreateCollection,
+        onDismiss: handleDismissFolder,
+      }
+    : null;
 
   return (
     <ScrollView
@@ -678,73 +727,12 @@ export default function BookmarkDetailScreen() {
             {t('detail.currentlyIn', { name: collection.name })}
           </Text>
         ) : null}
-        {/* Suggested folder lives next to the picker as a one-tap chip, the same
-            shape as a suggested tag: tap to file in, ✕ to dismiss. */}
-        {showCollectionSuggestion ? (
-          <View style={styles.suggestionRow}>
-            <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={folderChipA11yLabel(t, suggestedFolder!, displayedTitle)}
-                disabled={busy}
-                onPress={handleAcceptCollection}
-              >
-                <Text style={styles.ghostLabel}>
-                  <FolderSuggestionLabel
-                    t={t}
-                    folder={suggestedFolder!}
-                    accentColor={palette.accent}
-                    secondaryColor={palette.textSecondary}
-                  />
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t('detail.aiDismissCollectionA11y', {
-                  name: suggestedCollection!.name,
-                })}
-                disabled={busy}
-                hitSlop={6}
-                onPress={handleDismissFolder}
-              >
-                <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : null}
-        {/* No existing folder fits the AI's hint — offer to create it and file in. */}
-        {showCreateCollectionSuggestion ? (
-          <View style={styles.suggestionRow}>
-            <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={folderChipA11yLabel(t, suggestedFolder!, displayedTitle)}
-                disabled={busy}
-                onPress={handleAcceptCreateCollection}
-              >
-                <Text style={styles.ghostLabel}>
-                  <FolderSuggestionLabel
-                    t={t}
-                    folder={suggestedFolder!}
-                    accentColor={palette.accent}
-                    secondaryColor={palette.textSecondary}
-                  />
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityLabel={t('detail.aiDismissCollectionA11y', { name: suggestedByName! })}
-                disabled={busy}
-                hitSlop={6}
-                onPress={handleDismissFolder}
-              >
-                <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : null}
       </View>
 
-      {/* Tags sit under the folder as a compact token field (its own
-          "Add tags…" placeholder labels it), not a separate titled panel. */}
+      {/* Tags sit under the folder picker as a compact token field. The folder
+          recommendation rides in the field's suggestion row as the leading chip
+          (a folder is just a tag you can hold one of), so "Add all"/"Dismiss
+          all" sweep folder + tags together — the same grouping as Review. */}
       <TagField
         tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
         suggestions={tagSuggestions}
@@ -757,6 +745,7 @@ export default function BookmarkDetailScreen() {
         onDismissSuggestion={handleDismissTag}
         onAcceptAllSuggestions={handleAcceptAll}
         onDismissAllSuggestions={handleDismissAll}
+        folderSuggestion={folderSuggestionChip}
         disabledHint={
           canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
         }
@@ -1068,31 +1057,6 @@ const styles = StyleSheet.create({
   aiBadgeLabel: {
     fontSize: 11,
     fontWeight: '600',
-  },
-  suggestionRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  ghostChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 999,
-    paddingVertical: 5,
-    paddingHorizontal: 11,
-    borderStyle: 'dashed',
-  },
-  ghostLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 18,
-    includeFontPadding: false,
-  },
-  ghostRemove: {
-    fontSize: 12,
-    fontWeight: '700',
   },
   suggestButton: {
     borderWidth: StyleSheet.hairlineWidth,

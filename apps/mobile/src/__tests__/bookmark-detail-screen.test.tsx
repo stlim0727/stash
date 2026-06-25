@@ -311,6 +311,86 @@ function collectionTagData() {
   };
 }
 
+test('add all also files into the suggested folder, not just the tags', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        suggested_collection_id: 'col-recipes',
+        suggested_tags: [
+          { name: 'design', confidence: 0.8 },
+          { name: 'video', confidence: 0.6 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Add all suggestions')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Add all suggestions'));
+
+  // Tags become real, and the folder is filed in — its chip disappears.
+  await waitFor(() => expect(screen.getByLabelText('Browse #design')).toBeTruthy());
+  expect(screen.getByLabelText('Browse #video')).toBeTruthy();
+  await waitFor(() =>
+    expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull(),
+  );
+});
+
+test('dismiss all also dismisses the suggested folder, not just the tags', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        suggested_collection_id: 'col-recipes',
+        suggested_tags: [
+          { name: 'design', confidence: 0.8 },
+          { name: 'video', confidence: 0.6 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Dismiss all suggestions')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Dismiss all suggestions'));
+
+  // Both the tag suggestions and the folder chip are gone.
+  expect(screen.queryByLabelText('Accept suggested tag design')).toBeNull();
+  await waitFor(() =>
+    expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull(),
+  );
+});
+
+test('the bulk row shows for a folder plus a single tag suggestion', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        suggested_collection_id: 'col-recipes',
+        suggested_tags: [{ name: 'design', confidence: 0.8 }],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  // One tag alone wouldn't reach the >1 threshold; the folder makes it two
+  // actionable suggestions, so "Add all"/"Dismiss all" appear.
+  await waitFor(() => expect(screen.getByLabelText('Add all suggestions')).toBeTruthy());
+  expect(screen.getByLabelText('Dismiss all suggestions')).toBeTruthy();
+});
+
 test('shows the suggested folder as a chip beside the picker and files into it', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
