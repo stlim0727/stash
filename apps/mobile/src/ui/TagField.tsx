@@ -31,6 +31,14 @@ interface TagFieldProps {
   onAcceptAllSuggestions?: () => void;
   /** Dismiss every current suggestion at once (the low-effort escape hatch). */
   onDismissAllSuggestions?: () => void;
+  /**
+   * Count of extra, non-tag suggestions the bulk actions also act on (e.g. a
+   * folder recommendation shown elsewhere on the screen). Folded into the
+   * threshold that shows "Add all"/"Dismiss all", so a single tag suggestion
+   * plus a folder still offers a one-tap "act on everything" — matching the
+   * Review screen, where Accept/Dismiss all covers tags AND the folder.
+   */
+  extraBulkCount?: number;
   /** Shown in place of the input when not editable. */
   disabledHint?: string;
 }
@@ -53,11 +61,16 @@ export function TagField({
   onDismissSuggestion,
   onAcceptAllSuggestions,
   onDismissAllSuggestions,
+  extraBulkCount = 0,
   disabledHint,
 }: TagFieldProps) {
   const palette = usePalette();
   const t = useT();
   const [value, setValue] = useState('');
+
+  // The bulk row is worth showing once "act on everything" covers more than one
+  // thing — tag suggestions here plus any extra (a folder) the caller sweeps too.
+  const bulkCount = suggestions.length + extraBulkCount;
 
   const commit = async (raw: string) => {
     const name = raw.trim();
@@ -170,7 +183,7 @@ export function TagField({
               </Pressable>
             </View>
           ))}
-          {onAcceptAllSuggestions && suggestions.length > 1 ? (
+          {onAcceptAllSuggestions && bulkCount > 1 ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={t('tagField.addAllA11y')}
@@ -184,7 +197,7 @@ export function TagField({
               </Text>
             </Pressable>
           ) : null}
-          {onDismissAllSuggestions && suggestions.length > 1 ? (
+          {onDismissAllSuggestions && bulkCount > 1 ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={t('tagField.dismissAllA11y')}
