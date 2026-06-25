@@ -1,44 +1,51 @@
 import * as SQLite from 'expo-sqlite';
 
+import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
+import { SqliteConnection } from '@/storage/sqlite-connection';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
 const SESSION_KEY = 'supabase.auth.session';
 
-let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+// Use a SEPARATE database file from the bookmarks store (stash.db). Two open
+// connections to the same file race and the native layer rejects statements
+// ("NativeDatabase.prepareAsync ... NullPointerException"). SqliteConnection
+// coalesces opens, retries a failed open, and reopens a handle the OS
+// invalidated while the app was backgrounded (CREATE TABLE IF NOT EXISTS makes
+// reopening idempotent) so a stale auth handle self-heals instead of silently
+// dropping every session write for the rest of the run.
+const connection = new SqliteConnection<SQLite.SQLiteDatabase>(
+  async () => {
+    const db = await SQLite.openDatabaseAsync('stash-auth.db');
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    return db;
+  },
+  (db) => db.getFirstAsync('SELECT 1'),
+  (db) => db.closeAsync(),
+);
 
-async function open(): Promise<SQLite.SQLiteDatabase> {
-  if (!dbPromise) {
-    // Use a SEPARATE database file from the bookmarks store (stash.db). Two
-    // open connections to the same file race and the native layer rejects
-    // statements ("NativeDatabase.prepareAsync ... NullPointerException").
-    dbPromise = SQLite.openDatabaseAsync('stash-auth.db').then(async (db) => {
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS meta (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-      `);
-      return db;
-    });
-    // Let a failed open be retried rather than caching a rejected promise.
-    dbPromise.catch(() => {
-      dbPromise = null;
-    });
-  }
-
-  return dbPromise;
-}
+// Release the handle when the app backgrounds; the next read/write reopens.
+registerForBackgroundClose(() => {
+  void connection.closeCurrent();
+});
 
 // All operations are best-effort: a storage failure must never block auth.
 // Worst case the session isn't persisted and a fresh anonymous one is created.
+// `connection.run` reopens and retries once if the handle died under us.
 
 export async function readSupabaseSession(): Promise<SupabaseAuthSession | null> {
   try {
-    const db = await open();
-    const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM meta WHERE key = ?', [
-      SESSION_KEY,
-    ]);
-    return row ? (JSON.parse(row.value) as SupabaseAuthSession) : null;
+    return await connection.run(async (db) => {
+      const row = await db.getFirstAsync<{ value: string }>(
+        'SELECT value FROM meta WHERE key = ?',
+        [SESSION_KEY],
+      );
+      return row ? (JSON.parse(row.value) as SupabaseAuthSession) : null;
+    });
   } catch {
     return null;
   }
@@ -46,11 +53,12 @@ export async function readSupabaseSession(): Promise<SupabaseAuthSession | null>
 
 export async function writeSupabaseSession(session: SupabaseAuthSession): Promise<void> {
   try {
-    const db = await open();
-    await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
-      SESSION_KEY,
-      JSON.stringify(session),
-    ]);
+    await connection.run((db) =>
+      db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
+        SESSION_KEY,
+        JSON.stringify(session),
+      ]),
+    );
   } catch {
     // Persistence is best-effort; the session is still usable this run.
   }
@@ -58,8 +66,7 @@ export async function writeSupabaseSession(session: SupabaseAuthSession): Promis
 
 export async function clearSupabaseSession(): Promise<void> {
   try {
-    const db = await open();
-    await db.runAsync('DELETE FROM meta WHERE key = ?', [SESSION_KEY]);
+    await connection.run((db) => db.runAsync('DELETE FROM meta WHERE key = ?', [SESSION_KEY]));
   } catch {
     // Ignore — nothing to clear if storage is unavailable.
   }

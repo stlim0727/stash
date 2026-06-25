@@ -1,7 +1,8 @@
 import * as SQLite from 'expo-sqlite';
 
-import { recordLog } from '@/observability/log-buffer';
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
+import { SqliteConnection } from '@/storage/sqlite-connection';
 import type { BookmarkRepository, TagData } from '@/storage/types';
 
 interface BookmarkRow {
@@ -25,56 +26,111 @@ interface QueueRow {
 }
 
 /**
+ * Idempotent schema applied on *every* open. Keeping it in the opener (rather
+ * than only in `init`) means a transparently reopened — or freshly created —
+ * connection is always self-sufficient and never depends on `init` having run
+ * against this particular native handle. Matches the auth store's opener.
+ */
+const SCHEMA_SQL = `
+  PRAGMA journal_mode = WAL;
+  CREATE TABLE IF NOT EXISTS meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS bookmarks (
+    id TEXT PRIMARY KEY,
+    data TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    is_archived INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT DEFAULT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_bookmarks_created_at ON bookmarks (created_at);
+  CREATE TABLE IF NOT EXISTS tag_data (
+    kind TEXT PRIMARY KEY,
+    data TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS enrichments (
+    id TEXT PRIMARY KEY,
+    bookmark_id TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_enrichments_bookmark_id ON enrichments (bookmark_id);
+  CREATE TABLE IF NOT EXISTS local_pending_bookmarks (
+    local_id TEXT PRIMARY KEY,
+    remote_id TEXT,
+    operation TEXT NOT NULL DEFAULT 'create',
+    payload TEXT NOT NULL,
+    sync_status TEXT NOT NULL DEFAULT 'pending',
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`;
+
+// Row writers shared by `init`'s seed path and the public methods, so neither
+// nests a second `connection.run` (which would double-wrap the retry).
+function writeBookmark(db: SQLite.SQLiteDatabase, bookmark: Bookmark): Promise<unknown> {
+  return db.runAsync(
+    'INSERT OR REPLACE INTO bookmarks (id, data, created_at, is_archived, deleted_at) VALUES (?, ?, ?, ?, ?)',
+    [
+      bookmark.id,
+      JSON.stringify(bookmark),
+      bookmark.created_at,
+      bookmark.is_archived ? 1 : 0,
+      bookmark.deleted_at ?? null,
+    ],
+  );
+}
+
+async function writeTagData(db: SQLite.SQLiteDatabase, data: TagData): Promise<void> {
+  for (const kind of ['tags', 'bookmarkTags', 'collections'] as const) {
+    await db.runAsync('INSERT OR REPLACE INTO tag_data (kind, data) VALUES (?, ?)', [
+      kind,
+      JSON.stringify(data[kind]),
+    ]);
+  }
+}
+
+async function writeEnrichments(
+  db: SQLite.SQLiteDatabase,
+  enrichments: AIEnrichment[],
+): Promise<void> {
+  for (const enrichment of enrichments) {
+    await db.runAsync(
+      'INSERT OR REPLACE INTO enrichments (id, bookmark_id, data, updated_at) VALUES (?, ?, ?, ?)',
+      [enrichment.id, enrichment.bookmark_id, JSON.stringify(enrichment), enrichment.updated_at],
+    );
+  }
+}
+
+/**
  * SQLite-backed store. Bookmarks keep their full record as JSON alongside
  * the columns needed for ordering and filtering; dedicated columns can be
  * promoted when the query surface grows in Milestone 6.
  */
 class SqliteBookmarkRepository implements BookmarkRepository {
-  private db: SQLite.SQLiteDatabase | null = null;
-  // In-flight open shared by every concurrent caller. A cold start fires
-  // several DB operations at once (the startup load's Promise.all, background
-  // saves, the sync queue drain). Without this guard each one finds `db` null
-  // and calls openDatabaseAsync in parallel, opening competing native handles
-  // to stash.db; the native layer then rejects statements on the losing
-  // handle ("NativeDatabase.prepareAsync ... NullPointerException"). The auth
-  // store (session-storage.native.ts) coalesces opens the same way.
-  private opening: Promise<SQLite.SQLiteDatabase> | null = null;
+  // A single coalesced, self-healing connection to stash.db. Every operation
+  // runs through `connection.run`, which reopens and retries once if the OS
+  // invalidated the handle (a backgrounded app), so a stale handle no longer
+  // wedges persistence with "NativeDatabase.prepareAsync ... NullPointerException".
+  private readonly connection = new SqliteConnection<SQLite.SQLiteDatabase>(
+    async () => {
+      const db = await SQLite.openDatabaseAsync('stash.db');
+      await db.execAsync(SCHEMA_SQL);
+      return db;
+    },
+    (db) => db.getFirstAsync('SELECT 1'),
+    (db) => db.closeAsync(),
+  );
 
-  private async open(): Promise<SQLite.SQLiteDatabase> {
-    if (this.db) {
-      try {
-        // Liveness probe: a handle invalidated while the app was backgrounded
-        // (common on a warm relaunch from recents/home) throws here. Reopen
-        // instead of failing every read on a stale handle.
-        await this.db.getFirstAsync('SELECT 1');
-        return this.db;
-      } catch (error) {
-        // Stale handle (app was backgrounded). Record it — repeated reopens are
-        // a useful signal — then drop it so we reopen below.
-        recordLog('warn', `sqlite handle stale, reopening: ${String(error)}`);
-        this.db = null;
-      }
-    }
-    // Coalesce concurrent opens onto a single openDatabaseAsync call.
-    if (!this.opening) {
-      this.opening = SQLite.openDatabaseAsync('stash.db')
-        .then((db) => {
-          this.db = db;
-          return db;
-        })
-        .catch((error) => {
-          // The precise native open error is otherwise swallowed by callers and
-          // only surfaces as the generic "Couldn't open local storage" banner.
-          recordLog('error', `sqlite open failed: ${String(error)}`);
-          throw error;
-        })
-        .finally(() => {
-          // Clear the in-flight marker so a later stale-handle reopen (or a
-          // retry after a failed open) starts a fresh attempt.
-          this.opening = null;
-        });
-    }
-    return this.opening;
+  constructor() {
+    // Release the handle when the app backgrounds (Android invalidates it then);
+    // the next operation reopens lazily.
+    registerForBackgroundClose(() => {
+      void this.connection.closeCurrent();
+    });
   }
 
   async init(
@@ -82,92 +138,52 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     seedTagData?: TagData,
     seedEnrichments?: AIEnrichment[],
   ): Promise<void> {
-    const db = await this.open();
-    await db.execAsync(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS bookmarks (
-        id TEXT PRIMARY KEY,
-        data TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        is_archived INTEGER NOT NULL DEFAULT 0,
-        deleted_at TEXT DEFAULT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_bookmarks_created_at ON bookmarks (created_at);
-      CREATE TABLE IF NOT EXISTS tag_data (
-        kind TEXT PRIMARY KEY,
-        data TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS enrichments (
-        id TEXT PRIMARY KEY,
-        bookmark_id TEXT NOT NULL,
-        data TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_enrichments_bookmark_id ON enrichments (bookmark_id);
-      CREATE TABLE IF NOT EXISTS local_pending_bookmarks (
-        local_id TEXT PRIMARY KEY,
-        remote_id TEXT,
-        operation TEXT NOT NULL DEFAULT 'create',
-        payload TEXT NOT NULL,
-        sync_status TEXT NOT NULL DEFAULT 'pending',
-        retry_count INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-    `);
-
-    // Databases created before mutation sync lack the operation column.
-    try {
-      await db.execAsync(
-        "ALTER TABLE local_pending_bookmarks ADD COLUMN operation TEXT NOT NULL DEFAULT 'create'",
-      );
-    } catch {
-      // Column already exists.
-    }
-
-    // Databases created before the trash feature lack the deleted_at column.
-    try {
-      await db.execAsync('ALTER TABLE bookmarks ADD COLUMN deleted_at TEXT DEFAULT NULL');
-    } catch {
-      // Column already exists.
-    }
-
-    const seeded = await db.getFirstAsync<{ value: string }>(
-      "SELECT value FROM meta WHERE key = 'seeded'",
-    );
-    if (!seeded) {
-      for (const bookmark of seed) {
-        await this.insertBookmark(bookmark);
+    await this.connection.run(async (db) => {
+      // Schema (tables/indexes/WAL) is created in the opener. These migrations
+      // backfill columns on databases created before later features and are the
+      // only non-CREATE-IF-NOT-EXISTS steps.
+      try {
+        await db.execAsync(
+          "ALTER TABLE local_pending_bookmarks ADD COLUMN operation TEXT NOT NULL DEFAULT 'create'",
+        );
+      } catch {
+        // Column already exists.
       }
-      if (seedTagData) {
-        await this.replaceTagData(seedTagData);
+      try {
+        await db.execAsync('ALTER TABLE bookmarks ADD COLUMN deleted_at TEXT DEFAULT NULL');
+      } catch {
+        // Column already exists.
       }
-      if (seedEnrichments && seedEnrichments.length > 0) {
-        await this.upsertEnrichments(seedEnrichments);
+
+      const seeded = await db.getFirstAsync<{ value: string }>(
+        "SELECT value FROM meta WHERE key = 'seeded'",
+      );
+      if (!seeded) {
+        for (const bookmark of seed) {
+          await writeBookmark(db, bookmark);
+        }
+        if (seedTagData) {
+          await writeTagData(db, seedTagData);
+        }
+        if (seedEnrichments && seedEnrichments.length > 0) {
+          await writeEnrichments(db, seedEnrichments);
+        }
+        await db.runAsync("INSERT INTO meta (key, value) VALUES ('seeded', '1')");
       }
-      await db.runAsync("INSERT INTO meta (key, value) VALUES ('seeded', '1')");
-    }
+    });
   }
 
   async listBookmarks(): Promise<Bookmark[]> {
-    const db = await this.open();
-    const rows = await db.getAllAsync<BookmarkRow>(
-      'SELECT * FROM bookmarks ORDER BY created_at DESC',
-    );
-    return rows.map((row) => JSON.parse(row.data) as Bookmark);
+    return this.connection.run(async (db) => {
+      const rows = await db.getAllAsync<BookmarkRow>(
+        'SELECT * FROM bookmarks ORDER BY created_at DESC',
+      );
+      return rows.map((row) => JSON.parse(row.data) as Bookmark);
+    });
   }
 
   async insertBookmark(bookmark: Bookmark): Promise<void> {
-    const db = await this.open();
-    await db.runAsync(
-      'INSERT OR REPLACE INTO bookmarks (id, data, created_at, is_archived, deleted_at) VALUES (?, ?, ?, ?, ?)',
-      [bookmark.id, JSON.stringify(bookmark), bookmark.created_at, bookmark.is_archived ? 1 : 0, bookmark.deleted_at ?? null],
-    );
+    await this.connection.run((db) => writeBookmark(db, bookmark));
   }
 
   async updateBookmark(bookmark: Bookmark): Promise<void> {
@@ -175,62 +191,55 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   }
 
   async replaceBookmark(previousId: string, bookmark: Bookmark): Promise<void> {
-    const db = await this.open();
-    await db.withTransactionAsync(async () => {
-      await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
-      await db.runAsync(
-        'INSERT OR REPLACE INTO bookmarks (id, data, created_at, is_archived, deleted_at) VALUES (?, ?, ?, ?, ?)',
-        [
-          bookmark.id,
-          JSON.stringify(bookmark),
-          bookmark.created_at,
-          bookmark.is_archived ? 1 : 0,
-          bookmark.deleted_at ?? null,
-        ],
-      );
-    });
+    await this.connection.run((db) =>
+      db.withTransactionAsync(async () => {
+        await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
+        await writeBookmark(db, bookmark);
+      }),
+    );
   }
 
   async deleteBookmark(id: string): Promise<void> {
-    const db = await this.open();
-    await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]);
+    await this.connection.run((db) => db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]));
   }
 
   async listQueue(): Promise<LocalPendingBookmark[]> {
-    const db = await this.open();
-    const rows = await db.getAllAsync<QueueRow>(
-      'SELECT * FROM local_pending_bookmarks ORDER BY created_at ASC',
-    );
-    return rows.map((row) => ({
-      local_id: row.local_id,
-      remote_id: row.remote_id,
-      operation: (row.operation ?? 'create') as LocalPendingBookmark['operation'],
-      payload: JSON.parse(row.payload),
-      sync_status: row.sync_status as LocalPendingBookmark['sync_status'],
-      retry_count: row.retry_count,
-      last_error: row.last_error,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    }));
+    return this.connection.run(async (db) => {
+      const rows = await db.getAllAsync<QueueRow>(
+        'SELECT * FROM local_pending_bookmarks ORDER BY created_at ASC',
+      );
+      return rows.map((row) => ({
+        local_id: row.local_id,
+        remote_id: row.remote_id,
+        operation: (row.operation ?? 'create') as LocalPendingBookmark['operation'],
+        payload: JSON.parse(row.payload),
+        sync_status: row.sync_status as LocalPendingBookmark['sync_status'],
+        retry_count: row.retry_count,
+        last_error: row.last_error,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      }));
+    });
   }
 
   async enqueue(entry: LocalPendingBookmark): Promise<void> {
-    const db = await this.open();
-    await db.runAsync(
-      `INSERT OR REPLACE INTO local_pending_bookmarks
+    await this.connection.run((db) =>
+      db.runAsync(
+        `INSERT OR REPLACE INTO local_pending_bookmarks
         (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        entry.local_id,
-        entry.remote_id,
-        entry.operation,
-        JSON.stringify(entry.payload),
-        entry.sync_status,
-        entry.retry_count,
-        entry.last_error,
-        entry.created_at,
-        entry.updated_at,
-      ],
+        [
+          entry.local_id,
+          entry.remote_id,
+          entry.operation,
+          JSON.stringify(entry.payload),
+          entry.sync_status,
+          entry.retry_count,
+          entry.last_error,
+          entry.created_at,
+          entry.updated_at,
+        ],
+      ),
     );
   }
 
@@ -239,60 +248,52 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   }
 
   async removeQueueEntry(localId: string): Promise<void> {
-    const db = await this.open();
-    await db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [localId]);
+    await this.connection.run((db) =>
+      db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [localId]),
+    );
   }
 
   async getMeta(key: string): Promise<string | null> {
-    const db = await this.open();
-    const row = await db.getFirstAsync<{ value: string }>('SELECT value FROM meta WHERE key = ?', [
-      key,
-    ]);
-    return row?.value ?? null;
+    return this.connection.run(async (db) => {
+      const row = await db.getFirstAsync<{ value: string }>(
+        'SELECT value FROM meta WHERE key = ?',
+        [key],
+      );
+      return row?.value ?? null;
+    });
   }
 
   async setMeta(key: string, value: string): Promise<void> {
-    const db = await this.open();
-    await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [key, value]);
+    await this.connection.run((db) =>
+      db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [key, value]),
+    );
   }
 
   async listEnrichments(): Promise<AIEnrichment[]> {
-    const db = await this.open();
-    const rows = await db.getAllAsync<{ data: string }>('SELECT data FROM enrichments');
-    return rows.map((row) => JSON.parse(row.data) as AIEnrichment);
+    return this.connection.run(async (db) => {
+      const rows = await db.getAllAsync<{ data: string }>('SELECT data FROM enrichments');
+      return rows.map((row) => JSON.parse(row.data) as AIEnrichment);
+    });
   }
 
   async upsertEnrichments(enrichments: AIEnrichment[]): Promise<void> {
-    const db = await this.open();
-    for (const enrichment of enrichments) {
-      await db.runAsync(
-        'INSERT OR REPLACE INTO enrichments (id, bookmark_id, data, updated_at) VALUES (?, ?, ?, ?)',
-        [enrichment.id, enrichment.bookmark_id, JSON.stringify(enrichment), enrichment.updated_at],
-      );
-    }
+    await this.connection.run((db) => writeEnrichments(db, enrichments));
   }
 
   async listTagData(): Promise<TagData> {
-    const db = await this.open();
-    const rows = await db.getAllAsync<{ kind: string; data: string }>('SELECT * FROM tag_data');
-    const byKind = new Map(rows.map((row) => [row.kind, row.data]));
-    return {
-      tags: JSON.parse(byKind.get('tags') ?? '[]'),
-      bookmarkTags: JSON.parse(byKind.get('bookmarkTags') ?? '[]'),
-      collections: JSON.parse(byKind.get('collections') ?? '[]'),
-    };
+    return this.connection.run(async (db) => {
+      const rows = await db.getAllAsync<{ kind: string; data: string }>('SELECT * FROM tag_data');
+      const byKind = new Map(rows.map((row) => [row.kind, row.data]));
+      return {
+        tags: JSON.parse(byKind.get('tags') ?? '[]'),
+        bookmarkTags: JSON.parse(byKind.get('bookmarkTags') ?? '[]'),
+        collections: JSON.parse(byKind.get('collections') ?? '[]'),
+      };
+    });
   }
 
   async replaceTagData(data: TagData): Promise<void> {
-    const db = await this.open();
-    await db.withTransactionAsync(async () => {
-      for (const kind of ['tags', 'bookmarkTags', 'collections'] as const) {
-        await db.runAsync('INSERT OR REPLACE INTO tag_data (kind, data) VALUES (?, ?)', [
-          kind,
-          JSON.stringify(data[kind]),
-        ]);
-      }
-    });
+    await this.connection.run((db) => db.withTransactionAsync(() => writeTagData(db, data)));
   }
 }
 
