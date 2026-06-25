@@ -56,9 +56,14 @@ jobs:
           echo "node-linker=hoisted" >> .npmrc
           pnpm install --no-frozen-lockfile
 
-      # Cache Gradle deps/transforms + the local build cache across runs.
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      # Restore Gradle deps/transforms + local build cache. Split into restore +
+      # save so the cache is always updated after each build — actions/cache@v4
+      # skips saving on a cache hit, which means the Gradle build cache (task
+      # output hashes) never grows beyond the first cold build for a given
+      # dependency set. Saving unconditionally lets native task outputs accumulate
+      # run-over-run so each build only recompiles what actually changed.
+      - name: Restore Gradle cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.gradle/caches
@@ -78,6 +83,19 @@ jobs:
           key: ccache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             ccache-${{ runner.os }}-
+
+      # Metro transform cache: Metro (the JS bundler) caches per-file transform
+      # results in /tmp/metro-*. Without this, every run re-transforms all
+      # source files even though most haven't changed. Restoring it lets Metro
+      # skip unchanged files and only re-transform what's new, cutting the
+      # bundleReleaseJsAndAssets Gradle task from ~9 min back toward ~5 min.
+      - name: Restore Metro cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/metro-*
+          key: metro-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            metro-${{ runner.os }}-
 
       - name: Prebuild Android project
         working-directory: apps/mobile
@@ -125,6 +143,29 @@ jobs:
         # Build only the arm64-v8a ABI — every modern Android phone — to keep
         # the cold-cache native (NDK) compile fast and the APK small.
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=arm64-v8a
+
+      # Always save the Gradle cache after each build so the Gradle build cache
+      # (task output hashes stored in ~/.gradle/caches/build-cache-*) accumulates
+      # run-over-run. Key by sha so every run creates a fresh entry; the restore
+      # step above falls back via prefix match to pick up the most recent one.
+      - name: Save Gradle cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.sha }}
+
+      # Always save Metro's transform cache after the build so the next run can
+      # skip re-transforming files that haven't changed. Key by sha (unique per
+      # commit); restore above uses prefix fallback to the most recent entry.
+      - name: Save Metro cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/metro-*
+          key: metro-${{ runner.os }}-${{ github.sha }}
 
       # Decide where this build is published. A clean vX.Y.Z (pushed tag or
       # dispatch input) is a real, versioned prerelease kept forever. Anything
