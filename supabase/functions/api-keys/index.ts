@@ -9,8 +9,21 @@
 //   POST   /functions/v1/api-keys         — create a new key; returns plaintext once
 //   DELETE /functions/v1/api-keys/:id     — revoke (soft-delete) a key
 
+import { isIssuanceEnabled } from './issuance.ts';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+// Minting new keys is OFF by default. The public-API surface is "built but not
+// exposed" for the stable cut (docs/api/public-api.md): a one-time revocation
+// cannot hold the posture on its own because this issuer would otherwise let any
+// signed-in user mint a fresh key immediately. Issuance stays denied server-side
+// until the hardening track lands (ownership guard, per-key rate limit, CORS),
+// at which point set ENABLE_API_KEY_ISSUANCE=true on the function. List and
+// revoke remain available so existing key holders can still manage/revoke.
+const API_KEY_ISSUANCE_ENABLED = isIssuanceEnabled(
+  Deno.env.get('ENABLE_API_KEY_ISSUANCE'),
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -89,6 +102,9 @@ async function listKeys(userId: string): Promise<Response> {
 }
 
 async function createKey(userId: string, name: string): Promise<Response> {
+  if (!API_KEY_ISSUANCE_ENABLED) {
+    return json({ error: 'API key issuance is disabled' }, 403);
+  }
   if (!name?.trim()) return json({ error: 'name is required' }, 400);
 
   const plaintext = generateKey();

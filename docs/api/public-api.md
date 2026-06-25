@@ -25,6 +25,12 @@ Both functions run with `verify_jwt: false` and handle their own auth.
 
 - **Keys revoked.** `supabase/migrations/20260625003436_revoke_all_api_keys.sql`
   revokes every outstanding key. Live state: 0 active keys.
+- **Issuance denied server-side.** The `api-keys` issuer refuses to mint new
+  keys unless `ENABLE_API_KEY_ISSUANCE=true` is set on the function (default:
+  off, fail-closed — see `supabase/functions/api-keys/issuance.ts`). This is the
+  real gate: a one-time revocation alone would not hold, since any signed-in
+  user could otherwise mint a fresh key immediately. List and revoke stay
+  available so existing key holders can still manage/revoke.
 - **Discovery gated.** The Settings entry to mint keys is behind a client-side
   Developer Mode toggle (`apps/mobile/src/app/settings.tsx`). This gates
   discoverability, not the endpoint itself.
@@ -52,4 +58,7 @@ externally, close all of:
 3. **Tighten CORS** — currently `Access-Control-Allow-Origin: *`.
 4. **Document the surface** (routes, auth, error model) once the above land.
 
-Until then, keys stay revoked and the feature stays behind Developer Mode.
+Until then, keys stay revoked, issuance stays denied server-side
+(`ENABLE_API_KEY_ISSUANCE` unset), and the feature stays behind Developer Mode.
+Re-enabling is a deliberate one-line flip (`ENABLE_API_KEY_ISSUANCE=true`) once
+the above land.
