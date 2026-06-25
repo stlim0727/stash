@@ -40,14 +40,12 @@ import {
   addDismissedFolderToken,
   addReviewedNames,
   dismissedFolderTokensFor,
-  parseDismissedFolderMap,
-  parseReviewedMap,
   pendingSuggestedFolder,
   pendingSuggestions,
   reviewedNamesFor,
-  type DismissedFolderMap,
-  type ReviewedSuggestionMap,
 } from '@/domain/ai-suggestions';
+import { parseStringSetMap } from '@/domain/string-set-map';
+import type { StringSetMap } from '@/domain/string-set-map';
 import {
   applyPendingTagOps,
   applyTagOp,
@@ -376,6 +374,50 @@ function ensureRepositoryReady(): Promise<void> {
   return repositoryReady;
 }
 
+/**
+ * A per-bookmark `StringSetMap` mirrored into React state *and* a ref, persisted
+ * to `metaKey`. The ref is updated synchronously by `apply` so the optimistic /
+ * background-arrival paths can read-modify-write within a single tick (state
+ * alone would lag a render); `apply` is the one persist seam. Both the
+ * reviewed-suggestions and dismissed-folder stores are instances of this — it
+ * collapses what were two parallel state+ref+apply+clear stacks into one.
+ */
+function usePersistedStringSetMap(metaKey: string) {
+  const [map, setMap] = useState<StringSetMap>({});
+  const ref = useRef<StringSetMap>({});
+  const apply = useCallback(
+    (next: StringSetMap) => {
+      ref.current = next;
+      setMap(next);
+      ensureRepositoryReady()
+        .then(() => repository.setMeta(metaKey, JSON.stringify(next)))
+        .catch((error) => logStorageError(metaKey, error));
+    },
+    [metaKey],
+  );
+  // Replace the whole map from a freshly-parsed meta blob (startup hydration) —
+  // no persist, since it came straight from the store.
+  const hydrate = useCallback((raw: string | null) => {
+    const next = parseStringSetMap(raw);
+    ref.current = next;
+    setMap(next);
+  }, []);
+  // Forget one key's entry entirely (a deliberate "reconsider" — e.g. a manual
+  // "Suggest with AI" re-run). Background sync never calls this.
+  const removeKey = useCallback(
+    (key: string) => {
+      if (!(key in ref.current)) {
+        return;
+      }
+      const next = { ...ref.current };
+      delete next[key];
+      apply(next);
+    },
+    [apply],
+  );
+  return { map, ref, apply, hydrate, removeKey };
+}
+
 /** Append items from `loaded` that aren't already present (by key). */
 function mergeById<T>(current: T[], loaded: T[], key: (item: T) => string): T[] {
   const seen = new Set(current.map(key));
@@ -396,14 +438,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // tagData is the server snapshot with these layered on top.
   const [pendingTagOps, setPendingTagOps] = useState<PendingTagOp[]>([]);
   const pendingTagOpsRef = useRef<PendingTagOp[]>([]);
-  // Suggestion names the user has reviewed (accepted or dismissed) per bookmark.
-  // The ref mirrors state so the accept path can merge synchronously.
-  const [reviewedSuggestions, setReviewedSuggestions] = useState<ReviewedSuggestionMap>({});
-  const reviewedSuggestionsRef = useRef<ReviewedSuggestionMap>({});
-  // Folder (collection) suggestions the user has dismissed per bookmark, keyed by
-  // a stable token. The ref mirrors state so a dismiss + re-render stays in sync.
-  const [dismissedFolders, setDismissedFolders] = useState<DismissedFolderMap>({});
-  const dismissedFoldersRef = useRef<DismissedFolderMap>({});
+  // Suggestion names the user has reviewed (accepted or dismissed) per bookmark,
+  // and the folder suggestions they've dismissed (by stable token) — two
+  // instances of the same persisted-per-bookmark-string-set store. Each mirrors
+  // state into a ref so the optimistic/arrival paths can merge synchronously.
+  const {
+    map: reviewedSuggestions,
+    ref: reviewedSuggestionsRef,
+    apply: applyReviewedSuggestions,
+    hydrate: hydrateReviewedSuggestions,
+    removeKey: clearReviewedSuggestions,
+  } = usePersistedStringSetMap(REVIEWED_SUGGESTIONS_KEY);
+  const {
+    map: dismissedFolders,
+    ref: dismissedFoldersRef,
+    apply: applyDismissedFolders,
+    hydrate: hydrateDismissedFolders,
+    removeKey: clearDismissedFolderSuggestions,
+  } = usePersistedStringSetMap(DISMISSED_FOLDERS_KEY);
   // Bookmark ids whose AI suggestions arrived unwitnessed (drives the Inbox
   // banner). The ref mirrors state so the arrival paths (auto enrichment, pull)
   // can read-modify-write synchronously across back-to-back updates.
@@ -488,16 +540,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .catch((error) => logStorageError('tag ops', error));
   }, []);
 
-  // Apply + persist the reviewed-suggestions map (ref updated synchronously so
-  // a follow-up read in the same tick sees the latest).
-  const applyReviewedSuggestions = useCallback((next: ReviewedSuggestionMap) => {
-    reviewedSuggestionsRef.current = next;
-    setReviewedSuggestions(next);
-    ensureRepositoryReady()
-      .then(() => repository.setMeta(REVIEWED_SUGGESTIONS_KEY, JSON.stringify(next)))
-      .catch((error) => logStorageError('reviewed suggestions', error));
-  }, []);
-
+  // The reviewed-suggestions and dismissed-folder stores share the
+  // persist/hydrate/clear machinery (usePersistedStringSetMap, above); only the
+  // merge rule differs, which lives in these thin wrappers.
   const markSuggestionsReviewed = useCallback(
     (bookmarkId: string, names: string[]) => {
       const next = addReviewedNames(reviewedSuggestionsRef.current, bookmarkId, names);
@@ -506,40 +551,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         applyReviewedSuggestions(next);
       }
     },
-    [applyReviewedSuggestions],
+    [applyReviewedSuggestions, reviewedSuggestionsRef],
   );
 
   const getReviewedSuggestions = useCallback(
     (bookmarkId: string) => reviewedNamesFor(reviewedSuggestions, bookmarkId),
     [reviewedSuggestions],
   );
-
-  // Forget a bookmark's reviewed names so a *manual* AI re-run can re-surface
-  // suggestions the user previously dismissed (accepted ones stay applied, so
-  // they're filtered by appliedTagNames regardless). Background sync never
-  // calls this — only an explicit "Suggest with AI" tap.
-  const clearReviewedSuggestions = useCallback(
-    (bookmarkId: string) => {
-      const current = reviewedSuggestionsRef.current;
-      if (!(bookmarkId in current)) {
-        return;
-      }
-      const next = { ...current };
-      delete next[bookmarkId];
-      applyReviewedSuggestions(next);
-    },
-    [applyReviewedSuggestions],
-  );
-
-  // Apply + persist the dismissed-folder map (ref updated synchronously so a
-  // follow-up read in the same tick sees the latest).
-  const applyDismissedFolders = useCallback((next: DismissedFolderMap) => {
-    dismissedFoldersRef.current = next;
-    setDismissedFolders(next);
-    ensureRepositoryReady()
-      .then(() => repository.setMeta(DISMISSED_FOLDERS_KEY, JSON.stringify(next)))
-      .catch((error) => logStorageError('dismissed folders', error));
-  }, []);
 
   const dismissFolderSuggestion = useCallback(
     (bookmarkId: string, token: string) => {
@@ -549,28 +567,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         applyDismissedFolders(next);
       }
     },
-    [applyDismissedFolders],
+    [applyDismissedFolders, dismissedFoldersRef],
   );
 
   const getDismissedFolderSuggestions = useCallback(
     (bookmarkId: string) => dismissedFolderTokensFor(dismissedFolders, bookmarkId),
     [dismissedFolders],
-  );
-
-  // Forget a bookmark's dismissed folder suggestions so a *manual* AI re-run can
-  // re-surface a folder the user previously waved off (mirrors
-  // clearReviewedSuggestions; background sync never calls this).
-  const clearDismissedFolderSuggestions = useCallback(
-    (bookmarkId: string) => {
-      const current = dismissedFoldersRef.current;
-      if (!(bookmarkId in current)) {
-        return;
-      }
-      const next = { ...current };
-      delete next[bookmarkId];
-      applyDismissedFolders(next);
-    },
-    [applyDismissedFolders],
   );
 
   // Apply + persist the "unseen AI suggestions" id set (ref updated
@@ -789,9 +791,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             }
             // Re-hydrate the per-bookmark reviewed-suggestions map so the "✨"
             // badge stays hidden for suggestions the user already acted on.
-            const storedReviewed = parseReviewedMap(storedReviewedRaw);
-            reviewedSuggestionsRef.current = storedReviewed;
-            setReviewedSuggestions(storedReviewed);
+            hydrateReviewedSuggestions(storedReviewedRaw);
             // Re-hydrate the "unseen AI suggestions" set so a suggestion that
             // landed in a session the user never returned to still drives the
             // Inbox banner on this launch.
@@ -800,9 +800,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             setUnseenSuggestionIds(storedUnseen);
             // Re-hydrate the per-bookmark dismissed-folder map so a folder chip
             // the user waved off stays gone across remounts and relaunches.
-            const storedDismissedFolders = parseDismissedFolderMap(storedDismissedFoldersRaw);
-            dismissedFoldersRef.current = storedDismissedFolders;
-            setDismissedFolders(storedDismissedFolders);
+            hydrateDismissedFolders(storedDismissedFoldersRaw);
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null

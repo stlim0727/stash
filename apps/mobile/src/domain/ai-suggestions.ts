@@ -7,6 +7,8 @@
  */
 
 import { collectionMatchKey } from './collection-match.ts';
+import { addToStringSet, parseStringSetMap, stringSetFor } from './string-set-map.ts';
+import type { StringSetMap } from './string-set-map.ts';
 import type { AIEnrichment, SuggestedTag } from './types';
 
 /**
@@ -90,31 +92,15 @@ export function resolveSuggestedFolder(
 /**
  * A per-bookmark record of suggestion names the user has already reviewed
  * (accepted or dismissed), keyed by bookmark id. Names are stored lowercased
- * and deduped. Persisted as JSON in the repository meta store.
+ * and deduped. Persisted as JSON in the repository meta store. A
+ * {@link StringSetMap} — see that module for the shared parse/merge machinery.
  */
-export type ReviewedSuggestionMap = Record<string, string[]>;
+export type ReviewedSuggestionMap = StringSetMap;
 
 /** Parse the JSON meta blob into a {@link ReviewedSuggestionMap}, tolerating
  *  malformed/legacy values by returning an empty map. */
 export function parseReviewedMap(raw: string | null): ReviewedSuggestionMap {
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
-    }
-    const result: ReviewedSuggestionMap = {};
-    for (const [bookmarkId, names] of Object.entries(parsed)) {
-      if (Array.isArray(names)) {
-        result[bookmarkId] = names.filter((name): name is string => typeof name === 'string');
-      }
-    }
-    return result;
-  } catch {
-    return {};
-  }
+  return parseStringSetMap(raw);
 }
 
 /** The reviewed suggestion names for one bookmark, lowercased, as a Set. */
@@ -132,18 +118,7 @@ export function addReviewedNames(
   bookmarkId: string,
   names: string[],
 ): ReviewedSuggestionMap {
-  const existing = map[bookmarkId] ?? [];
-  const merged = new Set(existing);
-  for (const name of names) {
-    const normalized = name.trim().toLowerCase();
-    if (normalized) {
-      merged.add(normalized);
-    }
-  }
-  if (merged.size === existing.length) {
-    return map;
-  }
-  return { ...map, [bookmarkId]: [...merged] };
+  return addToStringSet(map, bookmarkId, names, (name) => name.trim().toLowerCase());
 }
 
 /**
@@ -217,21 +192,23 @@ export function pendingSuggestedFolder(
 /**
  * A per-bookmark record of folder-suggestion tokens (see
  * {@link suggestedFolderToken}) the user has dismissed, keyed by bookmark id.
- * Same JSON shape as {@link ReviewedSuggestionMap}, persisted under its own meta
- * key so a dismissed folder chip stays gone across remounts and relaunches —
- * unlike the prior session-only state, which re-surfaced on re-entering Detail.
+ * Same shape and machinery as {@link ReviewedSuggestionMap} (both are
+ * {@link StringSetMap}s), persisted under its own meta key so a dismissed folder
+ * chip stays gone across remounts and relaunches — unlike the prior session-only
+ * state, which re-surfaced on re-entering Detail. Tokens arrive pre-folded, so
+ * unlike reviewed names they are stored verbatim (no extra normalization).
  */
-export type DismissedFolderMap = Record<string, string[]>;
+export type DismissedFolderMap = StringSetMap;
 
 /** Parse the JSON meta blob into a {@link DismissedFolderMap}, tolerating
  *  malformed/legacy values by returning an empty map. */
 export function parseDismissedFolderMap(raw: string | null): DismissedFolderMap {
-  return parseReviewedMap(raw);
+  return parseStringSetMap(raw);
 }
 
 /** The dismissed folder-suggestion tokens for one bookmark, as a Set. */
 export function dismissedFolderTokensFor(map: DismissedFolderMap, bookmarkId: string): Set<string> {
-  return new Set(map[bookmarkId] ?? []);
+  return stringSetFor(map, bookmarkId);
 }
 
 /**
@@ -244,9 +221,5 @@ export function addDismissedFolderToken(
   bookmarkId: string,
   token: string,
 ): DismissedFolderMap {
-  const existing = map[bookmarkId] ?? [];
-  if (existing.includes(token)) {
-    return map;
-  }
-  return { ...map, [bookmarkId]: [...existing, token] };
+  return addToStringSet(map, bookmarkId, [token]);
 }
