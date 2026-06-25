@@ -1,5 +1,11 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { StyleSheet } from 'react-native';
 import type { ReactNode } from 'react';
+
+jest.mock('react-native-safe-area-context', () => ({
+  SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
+  useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
+}));
 
 // `mock`-prefixed so jest's hoisted factory may close over it.
 const mockRouterPush = jest.fn();
@@ -28,6 +34,7 @@ jest.mock('expo-router', () => ({
 
 import ReviewScreen from '@/app/review';
 import { BookmarksProvider } from '@/store/bookmarks';
+import { CaptureToastProvider } from '@/ui/capture-toast';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
@@ -36,7 +43,9 @@ const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModul
 function renderReview() {
   return render(
     <BookmarksProvider>
-      <ReviewScreen />
+      <CaptureToastProvider>
+        <ReviewScreen />
+      </CaptureToastProvider>
     </BookmarksProvider>,
   );
 }
@@ -116,7 +125,7 @@ test('"Dismiss all" clears the card without applying any tags', async () => {
   const screen = await renderReview();
 
   await waitFor(() => expect(screen.getByText('Dismiss me')).toBeTruthy());
-  await fireEvent.press(screen.getByLabelText('Dismiss all suggested tags for Dismiss me'));
+  await fireEvent.press(screen.getByLabelText('Dismiss all suggestions for Dismiss me'));
 
   // The card drops out, and dismissing applies no tags (the chips just vanish).
   await waitFor(() => expect(screen.queryByText('Dismiss me')).toBeNull());
@@ -147,14 +156,14 @@ test('surfaces a folder recommendation (📁 ＋) alongside tags (#) and files i
   const screen = await renderReview();
 
   await waitFor(() => expect(screen.getByText('Recipe page')).toBeTruthy());
-  // Folder gets the 📁 ＋ prefix (matching Detail), the tag gets #.
-  expect(screen.getByText('📁 ＋ Recipes')).toBeTruthy();
+  // An ADD (the bookmark has no collection) reads "📁 → {name}"; the tag gets #.
+  expect(screen.getByText('📁 → Recipes')).toBeTruthy();
   expect(screen.getByText('#cooking')).toBeTruthy();
 
   // Filing into the folder makes the recommendation stop surfacing; with no
   // other pending folder suggestion the chip drops out (the tag remains).
   await fireEvent.press(screen.getByLabelText('File Recipe page into Recipes'));
-  await waitFor(() => expect(screen.queryByText('📁 ＋ Recipes')).toBeNull());
+  await waitFor(() => expect(screen.queryByText('📁 → Recipes')).toBeNull());
   expect(screen.getByText('#cooking')).toBeTruthy();
 });
 
@@ -171,10 +180,13 @@ test('lists a folder-only recommendation when no existing folder matches (create
 
   await waitFor(() => expect(screen.getByText('Lone link')).toBeTruthy());
   expect(screen.getByText('📁 ＋ Create “Travel”')).toBeTruthy();
-  // No tag suggestions -> no tag action row.
+  // Folder-only card -> singular "Accept"/"Dismiss" bulk labels (not the plural
+  // "all" forms, which only show when tags are present).
   expect(screen.queryByText('Accept all')).toBeNull();
+  expect(screen.getByText('Accept')).toBeTruthy();
+  expect(screen.getByText('Dismiss')).toBeTruthy();
 
-  // Dismissing the folder clears the (folder-only) card.
+  // Dismissing the folder via its ✕ clears the (folder-only) card.
   await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Travel for Lone link'));
   await waitFor(() => expect(screen.queryByText('Lone link')).toBeNull());
 });
@@ -234,7 +246,137 @@ test('"Accept all" clears the card', async () => {
   const screen = await renderReview();
 
   await waitFor(() => expect(screen.getByText('Accept me')).toBeTruthy());
-  await fireEvent.press(screen.getByLabelText('Accept all suggested tags for Accept me'));
+  await fireEvent.press(screen.getByLabelText('Accept all suggestions for Accept me'));
 
   await waitFor(() => expect(screen.queryByText('Accept me')).toBeNull());
+});
+
+const TWO_COLLECTIONS = (now = '2026-06-12T00:00:00.000Z') => ({
+  tags: [],
+  bookmarkTags: [],
+  collections: [
+    { id: 'col-recipes', user_id: 'user-test', name: 'Recipes', description: null, created_at: now, updated_at: now },
+    { id: 'col-watch', user_id: 'user-test', name: 'Watch Later', description: null, created_at: now, updated_at: now },
+  ],
+});
+
+test('bulk "Accept all" on tags + existing-folder files into the folder', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000d1';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Tags and folder', collection_id: null })],
+    TWO_COLLECTIONS(),
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        suggested_collection_id: 'col-recipes',
+        suggested_tags: [{ name: 'cooking', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('Tags and folder')).toBeTruthy());
+  expect(screen.getByText('📁 → Recipes')).toBeTruthy();
+
+  // One press applies the tag AND files into the existing folder; with nothing
+  // left pending (tag accepted, bookmark now IN the suggested folder so it stops
+  // surfacing) the whole card drops out.
+  await fireEvent.press(screen.getByLabelText('Accept all suggestions for Tags and folder'));
+  await waitFor(() => expect(screen.queryByText('Tags and folder')).toBeNull());
+  expect(screen.queryByText('📁 → Recipes')).toBeNull();
+  expect(screen.queryByText('#cooking')).toBeNull();
+});
+
+test('bulk "Accept all" on tags + create-folder accepts the tags and runs the create path', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000d2';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Tags and create', collection_id: null })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        suggested_collection_name: 'Travel',
+        suggested_tags: [{ name: 'cooking', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('Tags and create')).toBeTruthy());
+  expect(screen.getByText('📁 ＋ Create “Travel”')).toBeTruthy();
+
+  // "Accept all" now covers a create folder too (no "Accept tags" degradation):
+  // it accepts the tag AND runs createCollection→assign. The tag is accepted
+  // immediately (its chip vanishes). createCollection needs the cloud, which the
+  // not_configured test auth can't reach, so the folder chip remains rather than
+  // silently succeeding — proving the create was attempted, not skipped.
+  await fireEvent.press(screen.getByLabelText('Accept all suggestions for Tags and create'));
+  await waitFor(() => expect(screen.queryByText('#cooking')).toBeNull());
+  expect(screen.getByText('📁 ＋ Create “Travel”')).toBeTruthy();
+});
+
+test('a CHANGE chip strikes the current folder and shows the move target; tapping files in with an Undo toast', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000d3';
+  // The bookmark already lives in "Watch Later"; the AI suggests "Recipes" — a
+  // move, so the chip reads ~~Watch Later~~ → Recipes.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Move me', collection_id: 'col-watch' })],
+    TWO_COLLECTIONS(),
+    [makeEnrichment({ bookmark_id: id, suggested_collection_id: 'col-recipes' })],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('Move me')).toBeTruthy());
+
+  // Both names render (the from name struck, the target tinted) as separate runs.
+  const fromRun = screen.getByText('Watch Later');
+  expect(fromRun).toBeTruthy();
+  expect(screen.getByText('→ Recipes')).toBeTruthy();
+  // The "from" name is a REAL strikethrough run (the user's explicit ask), not
+  // literal ~~ characters — assert the line-through style is applied.
+  expect(StyleSheet.flatten(fromRun.props.style)).toMatchObject({
+    textDecorationLine: 'line-through',
+  });
+  // The chip a11y spells out the move for screen readers (no visible strikethrough).
+  const chip = screen.getByLabelText('Move Move me from Watch Later to Recipes');
+  expect(chip).toBeTruthy();
+
+  // Tapping files into Recipes — no confirm — and surfaces a "Moved" toast.
+  // Once filed into the suggested folder the move suggestion stops surfacing.
+  await fireEvent.press(chip);
+  await waitFor(() => expect(screen.getByText('Moved to “Recipes”')).toBeTruthy());
+  await waitFor(() => expect(screen.queryByText('→ Recipes')).toBeNull());
+
+  // Undo restores the prior collection (back in Watch Later) — the move
+  // suggestion re-surfaces, proving the bookmark was moved back, not nowhere.
+  await fireEvent.press(screen.getByLabelText('Undo'));
+  await waitFor(() => expect(screen.getByText('→ Recipes')).toBeTruthy());
+  expect(screen.getByText('Watch Later')).toBeTruthy();
+});
+
+test('bulk "Dismiss all" dismisses the folder durably alongside the tags', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000d4';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Dismiss everything', collection_id: null })],
+    TWO_COLLECTIONS(),
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        suggested_collection_id: 'col-recipes',
+        suggested_tags: [{ name: 'cooking', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('Dismiss everything')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Dismiss all suggestions for Dismiss everything'));
+
+  // Tags reviewed + folder durably dismissed -> the card drops out and the
+  // folder dismissal is written to the cross-screen durable store.
+  await waitFor(() => expect(screen.queryByText('Dismiss everything')).toBeNull());
+  await waitFor(() =>
+    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('id:col-recipes'),
+  );
 });

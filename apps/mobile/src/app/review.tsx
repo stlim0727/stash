@@ -9,6 +9,8 @@ import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { displayTitle } from '@/domain/item-display';
 import { useBookmarks } from '@/store/bookmarks';
 import type { SuggestedTag } from '@/domain/types';
+import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
+import { useCaptureToast } from '@/ui/capture-toast';
 
 interface ReviewItem {
   id: string;
@@ -23,6 +25,7 @@ export default function ReviewScreen() {
   const palette = usePalette();
   const t = useT();
   const router = useRouter();
+  const { show: showToast } = useCaptureToast();
   const {
     inbox,
     collections,
@@ -109,12 +112,30 @@ export default function ReviewScreen() {
     );
   };
 
+  // A move (the folder carries `from`, so filing in overwrites a user-chosen
+  // collection_id) is reversible: show a "Moved to {to}" toast whose Undo files
+  // the bookmark back into `from`. The chip already shows ~~from~~ → to, so the
+  // user sees the move; the toast is the recovery path rather than a blocking
+  // confirm. An add (no `from`) overwrites nothing, so no toast.
+  const offerMoveUndo = (id: string, folder: SuggestedFolder) => {
+    if (!folder.from) {
+      return;
+    }
+    const fromId = folder.from.id;
+    showToast(t('review.movedToast', { name: folder.name }), {
+      label: t('common.undo'),
+      onPress: () => assignCollection(id, fromId),
+    });
+  };
+
   // File the bookmark into the suggested folder — assigning an existing one, or
   // creating the proposed name first. Both paths are optimistic; once the
-  // bookmark lives in the folder the suggestion stops surfacing on its own.
+  // bookmark lives in the folder the suggestion stops surfacing on its own. A
+  // create runs under `busy` so a second tap can't mint a duplicate collection.
   const acceptFolder = (id: string, folder: SuggestedFolder) => {
     if (folder.kind === 'existing') {
       assignCollection(id, folder.id);
+      offerMoveUndo(id, folder);
       return;
     }
     setBusy(true);
@@ -122,6 +143,7 @@ export default function ReviewScreen() {
       .then((result) => {
         if (result.collection) {
           assignCollection(id, result.collection.id);
+          offerMoveUndo(id, folder);
         }
       })
       .finally(() => setBusy(false));
@@ -134,6 +156,31 @@ export default function ReviewScreen() {
   const dismissFolder = (item: ReviewItem) => {
     for (const token of item.folderTokens) {
       dismissFolderSuggestion(item.id, token);
+    }
+  };
+
+  // Bulk "Accept" for a card: apply pending tags AND act on the folder for BOTH
+  // kinds — file into an existing one, or create the proposed name then file in.
+  // A move (folder carries `from`) offers an Undo toast rather than confirming.
+  // The create path runs under `busy` (acceptFolder sets it) so a double-tap
+  // can't mint a duplicate collection.
+  const acceptAll = (item: ReviewItem) => {
+    if (item.suggestions.length > 0) {
+      accept(item.id, item.suggestions);
+    }
+    if (item.folder) {
+      acceptFolder(item.id, item.folder);
+    }
+  };
+
+  // Bulk "Dismiss" for a card: mark pending tags reviewed AND durably dismiss the
+  // folder suggestion (both kinds, never confirms).
+  const dismissAll = (item: ReviewItem) => {
+    if (item.suggestions.length > 0) {
+      dismiss(item.id, item.suggestions);
+    }
+    if (item.folder) {
+      dismissFolder(item);
     }
   };
 
@@ -164,30 +211,23 @@ export default function ReviewScreen() {
             <Text style={[styles.titleChevron, { color: palette.textSecondary }]}>›</Text>
           </Pressable>
           <View style={styles.chipRow}>
-            {/* Folder recommendation leads the row, set apart by the 📂 prefix
-                and a ✕ dismiss; tag suggestions follow, prefixed with #. */}
+            {/* Folder recommendation leads the row, rendered as an add (📁 → X)
+                or a move (📁 ~~from~~ → X) with a ✕ dismiss; tags follow. */}
             {item.folder ? (
               <View style={[styles.folderChip, { borderColor: palette.accent }]}>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={
-                    item.folder.kind === 'existing'
-                      ? t('review.acceptFolderA11y', {
-                          name: item.folder.name,
-                          title: item.title,
-                        })
-                      : t('review.createFolderA11y', {
-                          name: item.folder.name,
-                          title: item.title,
-                        })
-                  }
+                  accessibilityLabel={folderChipA11yLabel(t, item.folder, item.title)}
                   disabled={busy}
                   onPress={() => acceptFolder(item.id, item.folder!)}
                 >
-                  <Text style={[styles.chipLabel, { color: palette.accent }]}>
-                    {item.folder.kind === 'existing'
-                      ? t('review.folderChip', { name: item.folder.name })
-                      : t('review.createFolderChip', { name: item.folder.name })}
+                  <Text style={styles.chipLabel}>
+                    <FolderSuggestionLabel
+                      t={t}
+                      folder={item.folder}
+                      accentColor={palette.accent}
+                      secondaryColor={palette.textSecondary}
+                    />
                   </Text>
                 </Pressable>
                 <Pressable
@@ -225,32 +265,44 @@ export default function ReviewScreen() {
               </Pressable>
             ))}
           </View>
-          {item.suggestions.length > 0 ? (
-            <View style={styles.actionRow}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t('review.acceptAllA11y', { title: item.title })}
-                disabled={busy}
-                hitSlop={6}
-                onPress={() => accept(item.id, item.suggestions)}
-              >
-                <Text style={[styles.link, { color: palette.accent }]}>
-                  {t('review.acceptAll')}
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t('review.dismissAllA11y', { title: item.title })}
-                disabled={busy}
-                hitSlop={6}
-                onPress={() => dismiss(item.id, item.suggestions)}
-              >
-                <Text style={[styles.link, { color: palette.textSecondary }]}>
-                  {t('review.dismissAll')}
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
+          {(() => {
+            // The bulk row acts on tags + folder and is shown whenever a card has
+            // either. "Accept all"/"Dismiss all" when there are tags (those act on
+            // tags AND the folder, both kinds); a folder-only card collapses to
+            // the singular "Accept"/"Dismiss". Every item in the list qualifies,
+            // so this row effectively always renders.
+            const hasTags = item.suggestions.length > 0;
+            const acceptLabel = hasTags ? t('review.acceptAll') : t('review.acceptOne');
+            const acceptA11y = hasTags
+              ? t('review.acceptAllA11y', { title: item.title })
+              : t('review.acceptOneA11y', { title: item.title });
+            const dismissLabel = hasTags ? t('review.dismissAll') : t('review.dismissOne');
+            const dismissA11y = hasTags
+              ? t('review.dismissAllA11y', { title: item.title })
+              : t('review.dismissOneA11y', { title: item.title });
+            return (
+              <View style={styles.actionRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={acceptA11y}
+                  disabled={busy}
+                  hitSlop={6}
+                  onPress={() => acceptAll(item)}
+                >
+                  <Text style={[styles.link, { color: palette.accent }]}>{acceptLabel}</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={dismissA11y}
+                  disabled={busy}
+                  hitSlop={6}
+                  onPress={() => dismissAll(item)}
+                >
+                  <Text style={[styles.link, { color: palette.textSecondary }]}>{dismissLabel}</Text>
+                </Pressable>
+              </View>
+            );
+          })()}
         </View>
       ))}
     </ScrollView>
