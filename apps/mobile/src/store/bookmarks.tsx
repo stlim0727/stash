@@ -42,8 +42,8 @@ import {
   dismissedFolderTokensFor,
   parseDismissedFolderMap,
   parseReviewedMap,
+  pendingSuggestedFolder,
   pendingSuggestions,
-  resolveSuggestedFolder,
   reviewedNamesFor,
   type DismissedFolderMap,
   type ReviewedSuggestionMap,
@@ -610,11 +610,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const applied = appliedTagNamesRef(id);
       const reviewed = reviewedNamesFor(reviewedSuggestionsRef.current, id);
       const bookmark = bookmarksRef.current?.find((item) => item.id === id);
+      // Honor durable folder dismissals so a folder the user already waved off
+      // (on any screen) doesn't re-raise the "new AI suggestions" banner when its
+      // enrichment is re-pulled or re-run.
       const hasFolder =
-        resolveSuggestedFolder(
+        pendingSuggestedFolder(
           enrichment,
           tagDataRef.current.collections,
           bookmark?.collection_id ?? null,
+          dismissedFolderTokensFor(dismissedFoldersRef.current, id),
         ) !== null;
       if (pendingSuggestions(enrichment, applied, reviewed).length === 0 && !hasFolder) {
         return;

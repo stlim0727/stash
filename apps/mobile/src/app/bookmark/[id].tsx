@@ -26,7 +26,8 @@ import { TagField } from '@/ui/TagField';
 import { useCaptureToast } from '@/ui/capture-toast';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
-import { pendingSuggestions, suggestedFolderToken } from '@/domain/ai-suggestions';
+import { pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
+import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { collectionMatchKey } from '@/domain/collection-match';
 import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
@@ -222,16 +223,12 @@ export default function BookmarkDetailScreen() {
   // proposed-name key; a dismissal recorded under either token suppresses both
   // forms, and dismissing records every applicable token.
   const dismissedFolderTokens = getDismissedFolderSuggestions(bookmark.id);
-  const folderTokens = [
-    suggestedCollection
-      ? suggestedFolderToken({
-          kind: 'existing',
-          id: suggestedCollection.id,
-          name: suggestedCollection.name,
-        })
-      : null,
-    suggestedByName ? suggestedFolderToken({ kind: 'create', name: suggestedByName }) : null,
-  ].filter((token): token is string => token !== null);
+  const suggestedFolder: SuggestedFolder | null = suggestedCollection
+    ? { kind: 'existing', id: suggestedCollection.id, name: suggestedCollection.name }
+    : suggestedByName
+      ? { kind: 'create', name: suggestedByName }
+      : null;
+  const folderTokens = suggestedFolderTokens(suggestedFolder, suggestedByName);
   const folderSuggestionDismissed = folderTokens.some((token) => dismissedFolderTokens.has(token));
   const showCollectionSuggestion =
     !!suggestedCollection &&
@@ -390,6 +387,10 @@ export default function BookmarkDetailScreen() {
   const handleSuggestAi = () => {
     clearReviewedSuggestions(bookmark.id);
     clearDismissedFolderSuggestions(bookmark.id);
+    // Also forget this session's not-yet-persisted tag dismissals, so a tag the
+    // user waved off earlier this session can re-surface if the model still
+    // recommends it (matches the durable "reconsider" above).
+    setDismissed(new Set());
     void runOrganizeAction(async () => {
       const error = await requestAiEnrichment(bookmark.id);
       // The store is i18n-free and signals rate-limiting with a sentinel; localize

@@ -159,6 +159,62 @@ export function suggestedFolderToken(folder: SuggestedFolder): string {
 }
 
 /**
+ * Every token that identifies one folder suggestion: the resolved form's token
+ * plus the AI's proposed-name key. The *same* recommendation can render as a
+ * "create {name}" chip or a "file into {existing}" chip depending on whether a
+ * matching collection exists yet — and can flip between them after the user
+ * dismisses it (a like-named folder is created/pulled later, or a matched one is
+ * deleted). Recording every applicable token on dismiss, and treating the
+ * suggestion as dismissed if *any* of them was recorded, keeps the dismissal
+ * stable across that flip. `suggestedName` is the enrichment's raw
+ * `suggested_collection_name`.
+ */
+export function suggestedFolderTokens(
+  folder: SuggestedFolder | null,
+  suggestedName: string | null | undefined,
+): string[] {
+  const tokens: string[] = [];
+  if (folder) {
+    tokens.push(suggestedFolderToken(folder));
+  }
+  const name = suggestedName?.trim();
+  if (name) {
+    const nameToken = suggestedFolderToken({ kind: 'create', name });
+    if (!tokens.includes(nameToken)) {
+      tokens.push(nameToken);
+    }
+  }
+  return tokens;
+}
+
+/**
+ * The folder suggestion to surface for a bookmark *after* honoring the user's
+ * durable dismissals — {@link resolveSuggestedFolder} minus anything dismissed
+ * (by any of its {@link suggestedFolderTokens}). This is the single predicate
+ * every surface should use (Detail, Review, the Inbox badge/banner, Settings,
+ * and the store's unseen-marker logic) so a folder dismissed on one screen stops
+ * counting everywhere. Returns `null` when there's nothing to surface.
+ */
+export function pendingSuggestedFolder(
+  enrichment: AIEnrichment | undefined | null,
+  collections: ReadonlyArray<{ id: string; name: string }>,
+  currentCollectionId: string | null,
+  dismissedTokens?: ReadonlySet<string>,
+): SuggestedFolder | null {
+  const folder = resolveSuggestedFolder(enrichment, collections, currentCollectionId);
+  if (!folder) {
+    return null;
+  }
+  if (dismissedTokens && dismissedTokens.size > 0) {
+    const tokens = suggestedFolderTokens(folder, enrichment?.suggested_collection_name);
+    if (tokens.some((token) => dismissedTokens.has(token))) {
+      return null;
+    }
+  }
+  return folder;
+}
+
+/**
  * A per-bookmark record of folder-suggestion tokens (see
  * {@link suggestedFolderToken}) the user has dismissed, keyed by bookmark id.
  * Same JSON shape as {@link ReviewedSuggestionMap}, persisted under its own meta

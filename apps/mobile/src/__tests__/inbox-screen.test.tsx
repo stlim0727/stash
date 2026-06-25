@@ -172,6 +172,58 @@ test('the unseen banner counts a folder-only recommendation (no tags)', async ()
   expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
 });
 
+test('the per-card ✨ badge counts a folder-only recommendation (no tags)', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000f1';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Folder only', collection_id: null })],
+    undefined,
+    [makeEnrichment({ bookmark_id: id, suggested_tags: [], suggested_collection_name: 'Travel' })],
+  );
+  // No unseen marker, so the banner is absent and the per-card badge is the cue.
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Folder only')).toBeTruthy());
+  // The folder counts toward the badge even with zero pending tags — matching the
+  // banner/Settings/Review inclusion rule (regression: the badge ignored folders).
+  expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
+});
+
+test('a durably-dismissed folder drops the per-card ✨ badge', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000f2';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Folder only', collection_id: null })],
+    undefined,
+    [makeEnrichment({ bookmark_id: id, suggested_tags: [], suggested_collection_name: 'Travel' })],
+  );
+  // The folder was dismissed earlier (on any screen) — durable, cross-screen.
+  fakeRepo.__setMeta('dismissed_folder_suggestions', JSON.stringify({ [id]: ['name:travel'] }));
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Folder only')).toBeTruthy());
+  // No pending tag and the folder is dismissed → nothing to badge.
+  expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
+});
+
+test('the unseen banner ignores a folder-only item whose folder was dismissed', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000f3';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Folder only', collection_id: null })],
+    undefined,
+    [makeEnrichment({ bookmark_id: id, suggested_tags: [], suggested_collection_name: 'Travel' })],
+  );
+  fakeRepo.__setMeta('unseen_ai_suggestions', JSON.stringify([id]));
+  // The only recommendation (the folder) was already dismissed durably.
+  fakeRepo.__setMeta('dismissed_folder_suggestions', JSON.stringify({ [id]: ['name:travel'] }));
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Folder only')).toBeTruthy());
+  // Nothing live remains to review, so the banner stays down despite the marker.
+  expect(screen.queryByTestId('new-suggestions-banner')).toBeNull();
+});
+
 test('the unseen banner ignores items whose suggestions were already applied', async () => {
   const id = '7e64cf1e-0000-4000-8000-00000000000e';
   fakeRepo.__reset(

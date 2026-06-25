@@ -23,7 +23,7 @@ import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { ActionSheet } from '@/ui/ActionSheet';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
-import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
+import { pendingSuggestedFolder, pendingSuggestions } from '@/domain/ai-suggestions';
 import {
   DEFAULT_SHARE_BEHAVIOR,
   parseShareBehavior,
@@ -93,6 +93,7 @@ export default function SettingsScreen() {
     getTagsForBookmark,
     getEnrichment,
     getReviewedSuggestions,
+    getDismissedFolderSuggestions,
     importBookmarks,
   } = useBookmarks();
   const auth = useSupabaseAuth();
@@ -339,7 +340,12 @@ export default function SettingsScreen() {
     const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
     const enrichment = getEnrichment(bookmark.id);
     const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
-    const folder = resolveSuggestedFolder(enrichment, collections, bookmark.collection_id);
+    const folder = pendingSuggestedFolder(
+      enrichment,
+      collections,
+      bookmark.collection_id,
+      getDismissedFolderSuggestions(bookmark.id),
+    );
     return total + (pending.length > 0 || folder ? 1 : 0);
   }, 0);
 

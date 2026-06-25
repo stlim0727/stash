@@ -70,6 +70,21 @@ test('the review row counts a folder-only suggestion instead of "Nothing to revi
   expect(screen.queryByText('Nothing to review')).toBeNull();
 });
 
+test('the review row drops a folder the user dismissed elsewhere (durable, cross-screen)', async () => {
+  // A folder-only suggestion that was already dismissed (on Detail or Review).
+  // Settings must honor that durable dismissal, not re-count it.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: ID, title: 'A bookmark', collection_id: null })],
+    undefined,
+    [makeEnrichment({ bookmark_id: ID, suggested_collection_name: 'Travel' })],
+  );
+  fakeRepo.__setMeta('dismissed_folder_suggestions', JSON.stringify({ [ID]: ['name:travel'] }));
+
+  const screen = await renderSettings();
+
+  await waitFor(() => expect(screen.getByText('Nothing to review')).toBeTruthy());
+});
+
 test('the review row reads "Nothing to review" when no tag or folder suggestion remains', async () => {
   // An enrichment with neither pending tags nor a folder hint — nothing to do.
   fakeRepo.__reset(
