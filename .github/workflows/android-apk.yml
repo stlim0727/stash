@@ -313,8 +313,12 @@ jobs:
           # Validate it really is a service-account key BEFORE calling firebase,
           # so a bad/empty/expired secret fails with a clear, non-sensitive
           # message instead of the opaque "have you run firebase login?" error.
-          # Only the (non-secret) client_email is echoed; the key never is.
-          if ! node -e 'const j=require(process.argv[1]); if(j.type!=="service_account"||!j.client_email||!j.private_key){process.exit(1)} console.log("Firebase service account: "+j.client_email)' "$SA"; then
+          # Parse inside try/catch and NEVER print the parser error: on malformed
+          # (e.g. truncated base64) JSON, Node would otherwise echo the offending
+          # decoded source line — which can contain private-key material that
+          # Actions masking (keyed on the base64 secret) won't redact. Only the
+          # non-secret client_email is ever echoed.
+          if ! node -e 'let j;try{j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))}catch{process.exit(1)}if(j.type!=="service_account"||!j.client_email||!j.private_key){process.exit(1)}console.log("Firebase service account: "+j.client_email)' "$SA"; then
             echo "::error::FIREBASE_SERVICE_ACCOUNT is not a valid service-account JSON (tried raw and base64). Re-create the key in Google Cloud → IAM → Service Accounts, grant it the 'Firebase App Distribution Admin' role, and store the downloaded JSON (raw, or base64 of it) in the secret."
             rm -f "$SA"
             exit 1
