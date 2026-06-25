@@ -1,7 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
-import { recordLog } from '@/observability/log-buffer';
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { SqliteConnection } from '@/storage/sqlite-connection';
 import type { BookmarkRepository, TagData } from '@/storage/types';
 
 interface BookmarkRow {
@@ -30,51 +30,20 @@ interface QueueRow {
  * promoted when the query surface grows in Milestone 6.
  */
 class SqliteBookmarkRepository implements BookmarkRepository {
-  private db: SQLite.SQLiteDatabase | null = null;
-  // In-flight open shared by every concurrent caller. A cold start fires
-  // several DB operations at once (the startup load's Promise.all, background
-  // saves, the sync queue drain). Without this guard each one finds `db` null
-  // and calls openDatabaseAsync in parallel, opening competing native handles
-  // to stash.db; the native layer then rejects statements on the losing
-  // handle ("NativeDatabase.prepareAsync ... NullPointerException"). The auth
-  // store (session-storage.native.ts) coalesces opens the same way.
-  private opening: Promise<SQLite.SQLiteDatabase> | null = null;
+  // A single coalesced connection to stash.db. Concurrent callers (the startup
+  // load's Promise.all, background saves, the sync queue drain) share one open
+  // and one liveness-probe/reopen decision, so a handle invalidated while the
+  // app was backgrounded is replaced exactly once instead of spawning competing
+  // native handles that reject statements with
+  // "NativeDatabase.prepareAsync ... NullPointerException".
+  private readonly connection = new SqliteConnection<SQLite.SQLiteDatabase>(
+    () => SQLite.openDatabaseAsync('stash.db'),
+    (db) => db.getFirstAsync('SELECT 1'),
+    (db) => db.closeAsync(),
+  );
 
-  private async open(): Promise<SQLite.SQLiteDatabase> {
-    if (this.db) {
-      try {
-        // Liveness probe: a handle invalidated while the app was backgrounded
-        // (common on a warm relaunch from recents/home) throws here. Reopen
-        // instead of failing every read on a stale handle.
-        await this.db.getFirstAsync('SELECT 1');
-        return this.db;
-      } catch (error) {
-        // Stale handle (app was backgrounded). Record it — repeated reopens are
-        // a useful signal — then drop it so we reopen below.
-        recordLog('warn', `sqlite handle stale, reopening: ${String(error)}`);
-        this.db = null;
-      }
-    }
-    // Coalesce concurrent opens onto a single openDatabaseAsync call.
-    if (!this.opening) {
-      this.opening = SQLite.openDatabaseAsync('stash.db')
-        .then((db) => {
-          this.db = db;
-          return db;
-        })
-        .catch((error) => {
-          // The precise native open error is otherwise swallowed by callers and
-          // only surfaces as the generic "Couldn't open local storage" banner.
-          recordLog('error', `sqlite open failed: ${String(error)}`);
-          throw error;
-        })
-        .finally(() => {
-          // Clear the in-flight marker so a later stale-handle reopen (or a
-          // retry after a failed open) starts a fresh attempt.
-          this.opening = null;
-        });
-    }
-    return this.opening;
+  private open(): Promise<SQLite.SQLiteDatabase> {
+    return this.connection.get();
   }
 
   async init(

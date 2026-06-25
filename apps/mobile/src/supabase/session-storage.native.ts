@@ -1,32 +1,34 @@
 import * as SQLite from 'expo-sqlite';
 
+import { SqliteConnection } from '@/storage/sqlite-connection';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
 const SESSION_KEY = 'supabase.auth.session';
 
-let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+// Use a SEPARATE database file from the bookmarks store (stash.db). Two open
+// connections to the same file race and the native layer rejects statements
+// ("NativeDatabase.prepareAsync ... NullPointerException"). SqliteConnection
+// coalesces opens, retries a failed open, and reopens a handle the OS
+// invalidated while the app was backgrounded (CREATE TABLE IF NOT EXISTS makes
+// reopening idempotent) so a stale auth handle self-heals instead of silently
+// dropping every session write for the rest of the run.
+const connection = new SqliteConnection<SQLite.SQLiteDatabase>(
+  async () => {
+    const db = await SQLite.openDatabaseAsync('stash-auth.db');
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    return db;
+  },
+  (db) => db.getFirstAsync('SELECT 1'),
+  (db) => db.closeAsync(),
+);
 
-async function open(): Promise<SQLite.SQLiteDatabase> {
-  if (!dbPromise) {
-    // Use a SEPARATE database file from the bookmarks store (stash.db). Two
-    // open connections to the same file race and the native layer rejects
-    // statements ("NativeDatabase.prepareAsync ... NullPointerException").
-    dbPromise = SQLite.openDatabaseAsync('stash-auth.db').then(async (db) => {
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS meta (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-      `);
-      return db;
-    });
-    // Let a failed open be retried rather than caching a rejected promise.
-    dbPromise.catch(() => {
-      dbPromise = null;
-    });
-  }
-
-  return dbPromise;
+function open(): Promise<SQLite.SQLiteDatabase> {
+  return connection.get();
 }
 
 // All operations are best-effort: a storage failure must never block auth.
