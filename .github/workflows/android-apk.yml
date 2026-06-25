@@ -68,7 +68,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json') }}
+          key: gradle-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             gradle-${{ runner.os }}-
 
