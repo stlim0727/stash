@@ -210,27 +210,36 @@ export default function BookmarkDetailScreen() {
     : undefined;
   const suggestedCollection =
     getCollection(enrichment?.suggested_collection_id ?? null) ?? localNameMatch ?? null;
-  // Folder dismissals are durable (per bookmark, keyed by a stable token) so a
+  // Folder dismissals are durable (per bookmark, keyed by stable tokens) so a
   // dismissed chip stays gone when the user re-enters Detail — a later enrichment
   // proposing a *different* folder yields a different token and re-surfaces.
+  //
+  // The SAME recommendation can render as either a "create {name}" chip or a
+  // "file into {existing}" chip depending on whether a matching collection exists
+  // yet — and that can flip after the user dismisses it (a folder named like the
+  // suggestion gets created or pulled later, or an existing one is deleted). So a
+  // suggestion is identified by BOTH its resolved-collection id and the AI's
+  // proposed-name key; a dismissal recorded under either token suppresses both
+  // forms, and dismissing records every applicable token.
   const dismissedFolderTokens = getDismissedFolderSuggestions(bookmark.id);
-  const fileIntoToken = suggestedCollection
-    ? suggestedFolderToken({
-        kind: 'existing',
-        id: suggestedCollection.id,
-        name: suggestedCollection.name,
-      })
-    : null;
-  const createToken = suggestedByName
-    ? suggestedFolderToken({ kind: 'create', name: suggestedByName })
-    : null;
+  const folderTokens = [
+    suggestedCollection
+      ? suggestedFolderToken({
+          kind: 'existing',
+          id: suggestedCollection.id,
+          name: suggestedCollection.name,
+        })
+      : null,
+    suggestedByName ? suggestedFolderToken({ kind: 'create', name: suggestedByName }) : null,
+  ].filter((token): token is string => token !== null);
+  const folderSuggestionDismissed = folderTokens.some((token) => dismissedFolderTokens.has(token));
   const showCollectionSuggestion =
     !!suggestedCollection &&
     bookmark.collection_id !== suggestedCollection.id &&
-    !dismissedFolderTokens.has(fileIntoToken!);
+    !folderSuggestionDismissed;
   // Offer to create a brand-new collection only when nothing existing matched.
   const showCreateCollectionSuggestion =
-    !suggestedCollection && !!suggestedByName && !dismissedFolderTokens.has(createToken!);
+    !suggestedCollection && !!suggestedByName && !folderSuggestionDismissed;
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
@@ -392,6 +401,16 @@ export default function BookmarkDetailScreen() {
   const handleAcceptCollection = () => {
     if (suggestedCollection) {
       assignCollection(bookmark.id, suggestedCollection.id);
+    }
+  };
+
+  // Dismiss the folder suggestion under every token that identifies it (resolved
+  // id and/or the AI's proposed name), so it stays gone even if it later flips
+  // between the "create" and "file into" forms. At most one chip shows at a time,
+  // so `folderTokens` already reflects the visible suggestion.
+  const handleDismissFolder = () => {
+    for (const token of folderTokens) {
+      dismissFolderSuggestion(bookmark.id, token);
     }
   };
 
@@ -633,7 +652,7 @@ export default function BookmarkDetailScreen() {
                 })}
                 disabled={busy}
                 hitSlop={6}
-                onPress={() => dismissFolderSuggestion(bookmark.id, fileIntoToken!)}
+                onPress={handleDismissFolder}
               >
                 <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
               </Pressable>
@@ -658,7 +677,7 @@ export default function BookmarkDetailScreen() {
                 accessibilityLabel={t('detail.aiDismissCollectionA11y', { name: suggestedByName! })}
                 disabled={busy}
                 hitSlop={6}
-                onPress={() => dismissFolderSuggestion(bookmark.id, createToken!)}
+                onPress={handleDismissFolder}
               >
                 <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
               </Pressable>
