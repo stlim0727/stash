@@ -673,7 +673,7 @@ export default function InboxScreen() {
   // Highlight the matched spans in result titles/URLs while searching. Empty
   // string when not searching, so `HighlightedText` renders a plain label.
   const highlightQuery = searching ? debouncedQuery : '';
-  const highlightStyle = { backgroundColor: palette.accentSoft, color: palette.accentText };
+  const highlightStyle = { backgroundColor: palette.highlight, color: palette.highlightText };
   // Suggestion shelf. A pure projection of already-loaded state — no fetch/sync
   // fires on focus or keystroke. Phase 2: thread the DEBOUNCED query so the shelf
   // re-filters on the same ~140ms cadence as the results list and the two update
