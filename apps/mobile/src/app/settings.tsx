@@ -23,7 +23,7 @@ import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { ActionSheet } from '@/ui/ActionSheet';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
-import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
 import {
   DEFAULT_SHARE_BEHAVIOR,
   parseShareBehavior,
@@ -330,15 +330,17 @@ export default function SettingsScreen() {
     );
   }, [shareBehavior]);
 
-  // Total high-confidence suggestions still waiting to be reviewed (un-applied
-  // and not yet accepted/dismissed) — matches the Inbox/Review counts.
+  // Inbox bookmarks still worth reviewing — those with an un-applied,
+  // un-reviewed tag suggestion OR a pending folder recommendation. Counts
+  // bookmarks (not individual tags) so the badge matches the Review list and
+  // the Inbox banner; in particular a folder-only item still counts, instead of
+  // the row claiming "nothing to review" while Review shows folder chips.
   const pendingSuggestionCount = inbox.reduce((total, bookmark) => {
     const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
-    return (
-      total +
-      pendingSuggestions(getEnrichment(bookmark.id), applied, getReviewedSuggestions(bookmark.id))
-        .length
-    );
+    const enrichment = getEnrichment(bookmark.id);
+    const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
+    const folder = resolveSuggestedFolder(enrichment, collections, bookmark.collection_id);
+    return total + (pending.length > 0 || folder ? 1 : 0);
   }, 0);
 
   const insets = useSafeAreaInsets();
