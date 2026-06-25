@@ -344,6 +344,41 @@ test('the suggested folder chip can be dismissed', async () => {
   expect(screen.queryByLabelText('File into Recipes')).toBeNull();
 });
 
+test('dismissing a folder suggestion persists it durably (gone on re-entry)', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes' })],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
+  await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Recipes'));
+
+  // The dismissal is written to durable meta (keyed by a stable token), so a
+  // later re-entry re-hydrates it and the chip stays gone — the regression was
+  // that it lived only in session state and re-appeared on re-open.
+  await waitFor(() =>
+    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('id:col-recipes'),
+  );
+});
+
+test('a durably-dismissed folder suggestion is hidden on first render', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes' })],
+  );
+  // Simulate a prior session's dismissal already in the durable store.
+  fakeRepo.__setMeta('dismissed_folder_suggestions', JSON.stringify({ [SYNCED_ID]: ['id:col-recipes'] }));
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+  expect(screen.queryByLabelText('File into Recipes')).toBeNull();
+});
+
 test('offers to create a brand-new collection when the AI suggests one that does not exist', async () => {
   mockRouteId = SYNCED_ID;
   // No seeded collections: the enrichment carries only a proposed NAME, so the

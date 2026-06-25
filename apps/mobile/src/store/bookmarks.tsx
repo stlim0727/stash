@@ -37,11 +37,15 @@ import type {
 import { sanitizeTagData } from '@/domain/tag-data';
 import { normalizeTag } from '@/domain/tag-input';
 import {
+  addDismissedFolderToken,
   addReviewedNames,
+  dismissedFolderTokensFor,
+  parseDismissedFolderMap,
   parseReviewedMap,
   pendingSuggestions,
   resolveSuggestedFolder,
   reviewedNamesFor,
+  type DismissedFolderMap,
   type ReviewedSuggestionMap,
 } from '@/domain/ai-suggestions';
 import {
@@ -198,6 +202,16 @@ interface BookmarksContextValue {
   /** Forget a bookmark's reviewed names so a manual AI re-run can re-surface
    *  previously-dismissed suggestions. Background sync never clears them. */
   clearReviewedSuggestions: (bookmarkId: string) => void;
+  /** The folder (collection) suggestion tokens the user has dismissed for a
+   *  bookmark (durable). The Detail screen filters its folder chip against this
+   *  so a dismissal survives re-entering the screen. */
+  getDismissedFolderSuggestions: (bookmarkId: string) => Set<string>;
+  /** Record a folder suggestion (by `suggestedFolderToken`) as dismissed for a
+   *  bookmark (durable). */
+  dismissFolderSuggestion: (bookmarkId: string, token: string) => void;
+  /** Forget a bookmark's dismissed folder suggestions so a manual AI re-run can
+   *  re-surface one. Background sync never clears them. */
+  clearDismissedFolderSuggestions: (bookmarkId: string) => void;
   /**
    * Bookmark ids whose AI suggestions arrived while the user wasn't looking
    * (background auto-enrichment, a server-side trigger, or another device's
@@ -236,6 +250,14 @@ const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
  *  names the user has reviewed (accepted or dismissed). Drives the "✨" badge so
  *  it reflects *unreviewed* suggestions rather than merely *un-applied* ones. */
 const REVIEWED_SUGGESTIONS_KEY = 'reviewed_ai_suggestions';
+
+/** Durable key (JSON `{ [bookmarkId]: string[] }` in meta) for the folder
+ *  (collection) suggestions the user has dismissed on a bookmark's Detail, keyed
+ *  by a stable token (see `suggestedFolderToken`). Persisted so a dismissed
+ *  folder chip stays gone when the user re-enters Detail or relaunches — a later
+ *  enrichment proposing a *different* folder yields a different token and still
+ *  re-surfaces. */
+const DISMISSED_FOLDERS_KEY = 'dismissed_folder_suggestions';
 
 /** Durable key (JSON id array in meta) for bookmarks whose AI suggestions
  *  arrived while the user wasn't looking — a background auto-enrichment, a
@@ -378,6 +400,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // The ref mirrors state so the accept path can merge synchronously.
   const [reviewedSuggestions, setReviewedSuggestions] = useState<ReviewedSuggestionMap>({});
   const reviewedSuggestionsRef = useRef<ReviewedSuggestionMap>({});
+  // Folder (collection) suggestions the user has dismissed per bookmark, keyed by
+  // a stable token. The ref mirrors state so a dismiss + re-render stays in sync.
+  const [dismissedFolders, setDismissedFolders] = useState<DismissedFolderMap>({});
+  const dismissedFoldersRef = useRef<DismissedFolderMap>({});
   // Bookmark ids whose AI suggestions arrived unwitnessed (drives the Inbox
   // banner). The ref mirrors state so the arrival paths (auto enrichment, pull)
   // can read-modify-write synchronously across back-to-back updates.
@@ -503,6 +529,48 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       applyReviewedSuggestions(next);
     },
     [applyReviewedSuggestions],
+  );
+
+  // Apply + persist the dismissed-folder map (ref updated synchronously so a
+  // follow-up read in the same tick sees the latest).
+  const applyDismissedFolders = useCallback((next: DismissedFolderMap) => {
+    dismissedFoldersRef.current = next;
+    setDismissedFolders(next);
+    ensureRepositoryReady()
+      .then(() => repository.setMeta(DISMISSED_FOLDERS_KEY, JSON.stringify(next)))
+      .catch((error) => logStorageError('dismissed folders', error));
+  }, []);
+
+  const dismissFolderSuggestion = useCallback(
+    (bookmarkId: string, token: string) => {
+      const next = addDismissedFolderToken(dismissedFoldersRef.current, bookmarkId, token);
+      // addDismissedFolderToken returns the same reference when already dismissed.
+      if (next !== dismissedFoldersRef.current) {
+        applyDismissedFolders(next);
+      }
+    },
+    [applyDismissedFolders],
+  );
+
+  const getDismissedFolderSuggestions = useCallback(
+    (bookmarkId: string) => dismissedFolderTokensFor(dismissedFolders, bookmarkId),
+    [dismissedFolders],
+  );
+
+  // Forget a bookmark's dismissed folder suggestions so a *manual* AI re-run can
+  // re-surface a folder the user previously waved off (mirrors
+  // clearReviewedSuggestions; background sync never calls this).
+  const clearDismissedFolderSuggestions = useCallback(
+    (bookmarkId: string) => {
+      const current = dismissedFoldersRef.current;
+      if (!(bookmarkId in current)) {
+        return;
+      }
+      const next = { ...current };
+      delete next[bookmarkId];
+      applyDismissedFolders(next);
+    },
+    [applyDismissedFolders],
   );
 
   // Apply + persist the "unseen AI suggestions" id set (ref updated
@@ -695,6 +763,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedAiTriggerRaw,
             storedReviewedRaw,
             storedUnseenRaw,
+            storedDismissedFoldersRaw,
           ] = await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
@@ -705,6 +774,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.getMeta(PENDING_AI_TRIGGER_KEY),
             repository.getMeta(REVIEWED_SUGGESTIONS_KEY),
             repository.getMeta(UNSEEN_SUGGESTIONS_KEY),
+            repository.getMeta(DISMISSED_FOLDERS_KEY),
           ]);
           if (!cancelled) {
             // Re-hydrate deferred AI triggers so a bookmark whose create synced
@@ -724,6 +794,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             const storedUnseen = parseIdSet(storedUnseenRaw);
             unseenSuggestionIdsRef.current = storedUnseen;
             setUnseenSuggestionIds(storedUnseen);
+            // Re-hydrate the per-bookmark dismissed-folder map so a folder chip
+            // the user waved off stays gone across remounts and relaunches.
+            const storedDismissedFolders = parseDismissedFolderMap(storedDismissedFoldersRaw);
+            dismissedFoldersRef.current = storedDismissedFolders;
+            setDismissedFolders(storedDismissedFolders);
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
@@ -2118,6 +2193,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getReviewedSuggestions,
       markSuggestionsReviewed,
       clearReviewedSuggestions,
+      getDismissedFolderSuggestions,
+      dismissFolderSuggestion,
+      clearDismissedFolderSuggestions,
       unseenSuggestionIds,
       markSuggestionsSeen,
       clearUnseenSuggestions,
@@ -2154,6 +2232,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       getReviewedSuggestions,
       markSuggestionsReviewed,
       clearReviewedSuggestions,
+      getDismissedFolderSuggestions,
+      dismissFolderSuggestion,
+      clearDismissedFolderSuggestions,
       unseenSuggestionIds,
       markSuggestionsSeen,
       clearUnseenSuggestions,

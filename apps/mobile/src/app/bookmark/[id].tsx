@@ -26,7 +26,7 @@ import { TagField } from '@/ui/TagField';
 import { useCaptureToast } from '@/ui/capture-toast';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
-import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { pendingSuggestions, suggestedFolderToken } from '@/domain/ai-suggestions';
 import { collectionMatchKey } from '@/domain/collection-match';
 import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
@@ -61,6 +61,9 @@ export default function BookmarkDetailScreen() {
     getReviewedSuggestions,
     markSuggestionsReviewed,
     clearReviewedSuggestions,
+    getDismissedFolderSuggestions,
+    dismissFolderSuggestion,
+    clearDismissedFolderSuggestions,
     markSuggestionsSeen,
     assignCollection,
     createCollection,
@@ -70,12 +73,6 @@ export default function BookmarkDetailScreen() {
   const [busy, setBusy] = useState(false);
   // Suggested tag names the user dismissed this session (local-only).
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  // Suggested collection id the user dismissed this session (local-only). A new
-  // enrichment proposing a different collection re-surfaces the chip.
-  const [dismissedCollectionId, setDismissedCollectionId] = useState<string | null>(null);
-  // Match-key of a "create this collection" suggestion dismissed this session
-  // (local-only); a later enrichment proposing a different name shows again.
-  const [dismissedCollectionKey, setDismissedCollectionKey] = useState<string | null>(null);
   // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
@@ -213,13 +210,27 @@ export default function BookmarkDetailScreen() {
     : undefined;
   const suggestedCollection =
     getCollection(enrichment?.suggested_collection_id ?? null) ?? localNameMatch ?? null;
+  // Folder dismissals are durable (per bookmark, keyed by a stable token) so a
+  // dismissed chip stays gone when the user re-enters Detail — a later enrichment
+  // proposing a *different* folder yields a different token and re-surfaces.
+  const dismissedFolderTokens = getDismissedFolderSuggestions(bookmark.id);
+  const fileIntoToken = suggestedCollection
+    ? suggestedFolderToken({
+        kind: 'existing',
+        id: suggestedCollection.id,
+        name: suggestedCollection.name,
+      })
+    : null;
+  const createToken = suggestedByName
+    ? suggestedFolderToken({ kind: 'create', name: suggestedByName })
+    : null;
   const showCollectionSuggestion =
     !!suggestedCollection &&
     bookmark.collection_id !== suggestedCollection.id &&
-    suggestedCollection.id !== dismissedCollectionId;
+    !dismissedFolderTokens.has(fileIntoToken!);
   // Offer to create a brand-new collection only when nothing existing matched.
   const showCreateCollectionSuggestion =
-    !suggestedCollection && !!suggestedByName && suggestedNameKey !== dismissedCollectionKey;
+    !suggestedCollection && !!suggestedByName && !dismissedFolderTokens.has(createToken!);
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
@@ -369,6 +380,7 @@ export default function BookmarkDetailScreen() {
   // model can surface tags it still recommends (accepted tags stay applied).
   const handleSuggestAi = () => {
     clearReviewedSuggestions(bookmark.id);
+    clearDismissedFolderSuggestions(bookmark.id);
     void runOrganizeAction(async () => {
       const error = await requestAiEnrichment(bookmark.id);
       // The store is i18n-free and signals rate-limiting with a sentinel; localize
@@ -621,7 +633,7 @@ export default function BookmarkDetailScreen() {
                 })}
                 disabled={busy}
                 hitSlop={6}
-                onPress={() => setDismissedCollectionId(suggestedCollection!.id)}
+                onPress={() => dismissFolderSuggestion(bookmark.id, fileIntoToken!)}
               >
                 <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
               </Pressable>
@@ -646,7 +658,7 @@ export default function BookmarkDetailScreen() {
                 accessibilityLabel={t('detail.aiDismissCollectionA11y', { name: suggestedByName! })}
                 disabled={busy}
                 hitSlop={6}
-                onPress={() => setDismissedCollectionKey(suggestedNameKey)}
+                onPress={() => dismissFolderSuggestion(bookmark.id, createToken!)}
               >
                 <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
               </Pressable>

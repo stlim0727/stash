@@ -145,3 +145,52 @@ export function addReviewedNames(
   }
   return { ...map, [bookmarkId]: [...merged] };
 }
+
+/**
+ * A stable token identifying the specific folder suggestion the user dismissed,
+ * so the dismissal can be remembered durably (per bookmark) and *only that*
+ * suggestion stays hidden. Filing into an existing collection is keyed by its id;
+ * an offer to create a new folder by its tolerant match-key. A later enrichment
+ * proposing a *different* collection or name yields a different token, so the
+ * chip re-surfaces rather than staying suppressed forever.
+ */
+export function suggestedFolderToken(folder: SuggestedFolder): string {
+  return folder.kind === 'existing' ? `id:${folder.id}` : `name:${collectionMatchKey(folder.name)}`;
+}
+
+/**
+ * A per-bookmark record of folder-suggestion tokens (see
+ * {@link suggestedFolderToken}) the user has dismissed, keyed by bookmark id.
+ * Same JSON shape as {@link ReviewedSuggestionMap}, persisted under its own meta
+ * key so a dismissed folder chip stays gone across remounts and relaunches —
+ * unlike the prior session-only state, which re-surfaced on re-entering Detail.
+ */
+export type DismissedFolderMap = Record<string, string[]>;
+
+/** Parse the JSON meta blob into a {@link DismissedFolderMap}, tolerating
+ *  malformed/legacy values by returning an empty map. */
+export function parseDismissedFolderMap(raw: string | null): DismissedFolderMap {
+  return parseReviewedMap(raw);
+}
+
+/** The dismissed folder-suggestion tokens for one bookmark, as a Set. */
+export function dismissedFolderTokensFor(map: DismissedFolderMap, bookmarkId: string): Set<string> {
+  return new Set(map[bookmarkId] ?? []);
+}
+
+/**
+ * Record `token` as a dismissed folder suggestion for `bookmarkId`. Returns the
+ * SAME map reference when the token was already present (so callers can skip a
+ * re-persist), otherwise a new map with the token merged in.
+ */
+export function addDismissedFolderToken(
+  map: DismissedFolderMap,
+  bookmarkId: string,
+  token: string,
+): DismissedFolderMap {
+  const existing = map[bookmarkId] ?? [];
+  if (existing.includes(token)) {
+    return map;
+  }
+  return { ...map, [bookmarkId]: [...existing, token] };
+}
