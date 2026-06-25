@@ -12,6 +12,7 @@ export type InboxFilter =
   | { kind: 'tag'; id: string };
 
 export const ALL_FILTER: InboxFilter = { kind: 'all' };
+export const UNCOLLECTED_FILTER: InboxFilter = { kind: 'uncollected' };
 
 /** Whether two filters select the same facet (used for chip highlighting). */
 export function sameFilter(a: InboxFilter, b: InboxFilter): boolean {

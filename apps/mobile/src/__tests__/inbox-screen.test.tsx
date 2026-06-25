@@ -684,6 +684,44 @@ test('the tag cloud scopes to the active folder facet', async () => {
   expect(screen.queryByLabelText('#cooking, 1 bookmark')).toBeNull();
 });
 
+test('a browse-shelf chip still filters after drilling in from the tag cloud', async () => {
+  // Regression for "after selecting a tag from the cloud, the browse chips went
+  // dead for several seconds": the shelf chips are now memoized and driven by a
+  // stable handler, so this guards that the wiring still responds to a tap right
+  // after the cloud→cards drill-in.
+  const cooked = '7e64cf1e-0000-4000-8000-000000000091';
+  const reading = '7e64cf1e-0000-4000-8000-000000000092';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
+      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+      bookmarkTags: [
+        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+
+  // Open the cloud and drill into the cooking tag → only that bookmark shows.
+  await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+  await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
+  await waitFor(() => expect(screen.getByText('#cooking · 1')).toBeTruthy());
+  expect(screen.queryByText('Local-first software')).toBeNull();
+
+  // Tapping the "All" browse chip immediately responds and clears the facet.
+  await fireEvent.press(screen.getByText('All'));
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+  expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
+});
+
 test('the hardware back key returns from a drilled-in tag to the tag cloud', async () => {
   // The handler only registers on Android (where hardware Back exists).
   const originalOS = Platform.OS;
