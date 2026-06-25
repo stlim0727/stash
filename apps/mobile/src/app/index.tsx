@@ -69,6 +69,7 @@ import type { TFunction } from '@/i18n/translate';
 import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
+import { HighlightedText } from '@/ui/HighlightedText';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
 
@@ -669,6 +670,10 @@ export default function InboxScreen() {
     () => (searching ? queryTerms(debouncedQuery) : []),
     [searching, debouncedQuery],
   );
+  // Highlight the matched spans in result titles/URLs while searching. Empty
+  // string when not searching, so `HighlightedText` renders a plain label.
+  const highlightQuery = searching ? debouncedQuery : '';
+  const highlightStyle = { backgroundColor: palette.accentSoft, color: palette.accentText };
   // Suggestion shelf. A pure projection of already-loaded state — no fetch/sync
   // fires on focus or keystroke. Phase 2: thread the DEBOUNCED query so the shelf
   // re-filters on the same ~140ms cadence as the results list and the two update
@@ -1351,17 +1356,22 @@ export default function InboxScreen() {
               >
                 <ItemIcon item={item} compact testID="inbox-list-monogram" />
                 <View style={styles.listText}>
-                  <Text
+                  <HighlightedText
                     testID="inbox-list-title"
                     style={[styles.listTitle, { color: palette.text }]}
                     numberOfLines={1}
-                  >
-                    {displayTitle(item) ?? t('common.untitled')}
-                  </Text>
+                    text={displayTitle(item) ?? t('common.untitled')}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
                   {item.url ? (
-                    <Text style={[styles.listUrl, { color: palette.textSecondary }]} numberOfLines={1}>
-                      {item.url}
-                    </Text>
+                    <HighlightedText
+                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
                   ) : null}
                 </View>
                 {/* While the "new AI suggestions" banner is announcing, suppress
@@ -1437,13 +1447,14 @@ export default function InboxScreen() {
                 <View style={styles.cardBody}>
                   <View style={styles.cardTitleRow}>
                   <ItemIcon item={item} testID="inbox-card-monogram" />
-                  <Text
+                  <HighlightedText
                     testID="inbox-card-title"
                     style={[styles.cardTitle, { color: palette.text }]}
                     numberOfLines={1}
-                  >
-                    {displayTitle(item) ?? t('common.untitled')}
-                  </Text>
+                    text={displayTitle(item) ?? t('common.untitled')}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
                   {suggestionCount > 0 && newSuggestionsCount === 0 ? (
                     <View
                       accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
@@ -1467,9 +1478,13 @@ export default function InboxScreen() {
                   </Pressable>
                 </View>
                 {item.url ? (
-                  <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
-                    {item.url}
-                  </Text>
+                  <HighlightedText
+                    style={[styles.cardUrl, { color: palette.textSecondary }]}
+                    numberOfLines={1}
+                    text={item.url}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
                 ) : null}
                 {metaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
