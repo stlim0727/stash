@@ -179,6 +179,42 @@ test('lists a folder-only recommendation when no existing folder matches (create
   await waitFor(() => expect(screen.queryByText('Lone link')).toBeNull());
 });
 
+test('dismissing a folder in Review persists durably (shared with Detail)', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000c3';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Lone link', collection_id: null })],
+    undefined,
+    [makeEnrichment({ bookmark_id: id, suggested_collection_name: 'Travel' })],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('📁 ＋ Create “Travel”')).toBeTruthy());
+  await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Travel for Lone link'));
+
+  // Written to the durable, cross-screen store — not a session-only Set — so the
+  // dismissal sticks on re-entry and is honored by Detail/Inbox/Settings too.
+  await waitFor(() =>
+    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('name:travel'),
+  );
+});
+
+test('a durably-dismissed folder is hidden on Review entry', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000c4';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Lone link', collection_id: null })],
+    undefined,
+    [makeEnrichment({ bookmark_id: id, suggested_collection_name: 'Travel' })],
+  );
+  // A prior dismissal (from any screen) already in the durable store.
+  fakeRepo.__setMeta('dismissed_folder_suggestions', JSON.stringify({ [id]: ['name:travel'] }));
+
+  const screen = await renderReview();
+
+  // The folder-only card never appears — the queue is empty.
+  await waitFor(() => expect(screen.getByText('No suggestions to review.')).toBeTruthy());
+  expect(screen.queryByText('Lone link')).toBeNull();
+});
+
 test('"Accept all" clears the card', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000b3';
   fakeRepo.__reset(

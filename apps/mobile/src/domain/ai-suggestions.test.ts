@@ -2,11 +2,17 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  addDismissedFolderToken,
   addReviewedNames,
+  dismissedFolderTokensFor,
+  parseDismissedFolderMap,
   parseReviewedMap,
+  pendingSuggestedFolder,
   pendingSuggestions,
   resolveSuggestedFolder,
   reviewedNamesFor,
+  suggestedFolderToken,
+  suggestedFolderTokens,
   SUGGESTION_MIN_CONFIDENCE,
 } from './ai-suggestions.ts';
 import type { AIEnrichment, SuggestedTag } from './types.ts';
@@ -177,4 +183,84 @@ test('resolveSuggestedFolder returns null when already in the suggested folder',
 test('resolveSuggestedFolder returns null with no hint or no enrichment', () => {
   assert.equal(resolveSuggestedFolder(null, COLLECTIONS, null), null);
   assert.equal(resolveSuggestedFolder(makeFolderEnrichment({}), COLLECTIONS, null), null);
+});
+
+test('suggestedFolderToken keys "file into" by id and "create" by tolerant name', () => {
+  assert.equal(suggestedFolderToken({ kind: 'existing', id: 'col-recipes', name: 'Recipes' }), 'id:col-recipes');
+  // The create token folds case/spacing/punctuation, so "Watch Later" and
+  // "watch-later" map to the same dismissal — re-proposing it stays hidden.
+  assert.equal(suggestedFolderToken({ kind: 'create', name: 'Watch Later' }), 'name:watchlater');
+  assert.equal(suggestedFolderToken({ kind: 'create', name: 'watch-later' }), 'name:watchlater');
+});
+
+test('addDismissedFolderToken merges per bookmark and is idempotent by reference', () => {
+  const empty: ReturnType<typeof parseDismissedFolderMap> = {};
+  const once = addDismissedFolderToken(empty, 'b1', 'id:col-recipes');
+  assert.deepEqual([...dismissedFolderTokensFor(once, 'b1')], ['id:col-recipes']);
+  // Re-dismissing the same token returns the SAME reference (no re-persist).
+  assert.equal(addDismissedFolderToken(once, 'b1', 'id:col-recipes'), once);
+  // A different token for the same bookmark accumulates.
+  const twice = addDismissedFolderToken(once, 'b1', 'name:travel');
+  assert.deepEqual([...dismissedFolderTokensFor(twice, 'b1')], ['id:col-recipes', 'name:travel']);
+  // Other bookmarks are untouched.
+  assert.deepEqual([...dismissedFolderTokensFor(twice, 'b2')], []);
+});
+
+test('parseDismissedFolderMap tolerates malformed JSON', () => {
+  assert.deepEqual(parseDismissedFolderMap(null), {});
+  assert.deepEqual(parseDismissedFolderMap('not json'), {});
+  assert.deepEqual(parseDismissedFolderMap('{"b1":["id:col-x"]}'), { b1: ['id:col-x'] });
+});
+
+test('suggestedFolderTokens lists the resolved-form token plus the proposed-name key', () => {
+  // A file-into suggestion: both the id token and the AI's name key identify it.
+  assert.deepEqual(
+    suggestedFolderTokens({ kind: 'existing', id: 'col-recipes', name: 'Recipes' }, 'Recipes'),
+    ['id:col-recipes', 'name:recipes'],
+  );
+  // A create suggestion: the resolved token already IS the name key — deduped.
+  assert.deepEqual(suggestedFolderTokens({ kind: 'create', name: 'Travel' }, 'Travel'), [
+    'name:travel',
+  ]);
+  // No resolved folder but a proposed name (e.g. computing tokens to dismiss a
+  // create chip) still yields the name key.
+  assert.deepEqual(suggestedFolderTokens(null, 'Travel'), ['name:travel']);
+  // Nothing to key on.
+  assert.deepEqual(suggestedFolderTokens(null, null), []);
+});
+
+test('pendingSuggestedFolder returns the folder when nothing is dismissed', () => {
+  const enrichment = makeFolderEnrichment({ suggested_collection_id: 'col-recipes' });
+  assert.deepEqual(pendingSuggestedFolder(enrichment, COLLECTIONS, null, new Set()), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+  });
+});
+
+test('pendingSuggestedFolder suppresses a folder dismissed by its id token', () => {
+  const enrichment = makeFolderEnrichment({ suggested_collection_id: 'col-recipes' });
+  assert.equal(
+    pendingSuggestedFolder(enrichment, COLLECTIONS, null, new Set(['id:col-recipes'])),
+    null,
+  );
+});
+
+test('pendingSuggestedFolder suppresses a name-matched folder dismissed earlier as "create"', () => {
+  // Dismissed when it was a "create Recipes" chip (name token); a matching folder
+  // now exists so it resolves to "file into" — the name-keyed dismissal still wins.
+  const enrichment = makeFolderEnrichment({ suggested_collection_name: 'recipes' });
+  assert.equal(
+    pendingSuggestedFolder(enrichment, COLLECTIONS, null, new Set(['name:recipes'])),
+    null,
+  );
+});
+
+test('pendingSuggestedFolder ignores an unrelated dismissal', () => {
+  const enrichment = makeFolderEnrichment({ suggested_collection_id: 'col-recipes' });
+  assert.deepEqual(pendingSuggestedFolder(enrichment, COLLECTIONS, null, new Set(['name:travel'])), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+  });
 });

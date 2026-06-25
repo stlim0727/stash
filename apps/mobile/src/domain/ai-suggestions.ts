@@ -7,6 +7,8 @@
  */
 
 import { collectionMatchKey } from './collection-match.ts';
+import { addToStringSet, parseStringSetMap, stringSetFor } from './string-set-map.ts';
+import type { StringSetMap } from './string-set-map.ts';
 import type { AIEnrichment, SuggestedTag } from './types';
 
 /**
@@ -90,31 +92,15 @@ export function resolveSuggestedFolder(
 /**
  * A per-bookmark record of suggestion names the user has already reviewed
  * (accepted or dismissed), keyed by bookmark id. Names are stored lowercased
- * and deduped. Persisted as JSON in the repository meta store.
+ * and deduped. Persisted as JSON in the repository meta store. A
+ * {@link StringSetMap} — see that module for the shared parse/merge machinery.
  */
-export type ReviewedSuggestionMap = Record<string, string[]>;
+export type ReviewedSuggestionMap = StringSetMap;
 
 /** Parse the JSON meta blob into a {@link ReviewedSuggestionMap}, tolerating
  *  malformed/legacy values by returning an empty map. */
 export function parseReviewedMap(raw: string | null): ReviewedSuggestionMap {
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
-    }
-    const result: ReviewedSuggestionMap = {};
-    for (const [bookmarkId, names] of Object.entries(parsed)) {
-      if (Array.isArray(names)) {
-        result[bookmarkId] = names.filter((name): name is string => typeof name === 'string');
-      }
-    }
-    return result;
-  } catch {
-    return {};
-  }
+  return parseStringSetMap(raw);
 }
 
 /** The reviewed suggestion names for one bookmark, lowercased, as a Set. */
@@ -132,16 +118,108 @@ export function addReviewedNames(
   bookmarkId: string,
   names: string[],
 ): ReviewedSuggestionMap {
-  const existing = map[bookmarkId] ?? [];
-  const merged = new Set(existing);
-  for (const name of names) {
-    const normalized = name.trim().toLowerCase();
-    if (normalized) {
-      merged.add(normalized);
+  return addToStringSet(map, bookmarkId, names, (name) => name.trim().toLowerCase());
+}
+
+/**
+ * A stable token identifying the specific folder suggestion the user dismissed,
+ * so the dismissal can be remembered durably (per bookmark) and *only that*
+ * suggestion stays hidden. Filing into an existing collection is keyed by its id;
+ * an offer to create a new folder by its tolerant match-key. A later enrichment
+ * proposing a *different* collection or name yields a different token, so the
+ * chip re-surfaces rather than staying suppressed forever.
+ */
+export function suggestedFolderToken(folder: SuggestedFolder): string {
+  return folder.kind === 'existing' ? `id:${folder.id}` : `name:${collectionMatchKey(folder.name)}`;
+}
+
+/**
+ * Every token that identifies one folder suggestion: the resolved form's token
+ * plus the AI's proposed-name key. The *same* recommendation can render as a
+ * "create {name}" chip or a "file into {existing}" chip depending on whether a
+ * matching collection exists yet — and can flip between them after the user
+ * dismisses it (a like-named folder is created/pulled later, or a matched one is
+ * deleted). Recording every applicable token on dismiss, and treating the
+ * suggestion as dismissed if *any* of them was recorded, keeps the dismissal
+ * stable across that flip. `suggestedName` is the enrichment's raw
+ * `suggested_collection_name`.
+ */
+export function suggestedFolderTokens(
+  folder: SuggestedFolder | null,
+  suggestedName: string | null | undefined,
+): string[] {
+  const tokens: string[] = [];
+  if (folder) {
+    tokens.push(suggestedFolderToken(folder));
+  }
+  const name = suggestedName?.trim();
+  if (name) {
+    const nameToken = suggestedFolderToken({ kind: 'create', name });
+    if (!tokens.includes(nameToken)) {
+      tokens.push(nameToken);
     }
   }
-  if (merged.size === existing.length) {
-    return map;
+  return tokens;
+}
+
+/**
+ * The folder suggestion to surface for a bookmark *after* honoring the user's
+ * durable dismissals — {@link resolveSuggestedFolder} minus anything dismissed
+ * (by any of its {@link suggestedFolderTokens}). This is the single predicate
+ * every surface should use (Detail, Review, the Inbox badge/banner, Settings,
+ * and the store's unseen-marker logic) so a folder dismissed on one screen stops
+ * counting everywhere. Returns `null` when there's nothing to surface.
+ */
+export function pendingSuggestedFolder(
+  enrichment: AIEnrichment | undefined | null,
+  collections: ReadonlyArray<{ id: string; name: string }>,
+  currentCollectionId: string | null,
+  dismissedTokens?: ReadonlySet<string>,
+): SuggestedFolder | null {
+  const folder = resolveSuggestedFolder(enrichment, collections, currentCollectionId);
+  if (!folder) {
+    return null;
   }
-  return { ...map, [bookmarkId]: [...merged] };
+  if (dismissedTokens && dismissedTokens.size > 0) {
+    const tokens = suggestedFolderTokens(folder, enrichment?.suggested_collection_name);
+    if (tokens.some((token) => dismissedTokens.has(token))) {
+      return null;
+    }
+  }
+  return folder;
+}
+
+/**
+ * A per-bookmark record of folder-suggestion tokens (see
+ * {@link suggestedFolderToken}) the user has dismissed, keyed by bookmark id.
+ * Same shape and machinery as {@link ReviewedSuggestionMap} (both are
+ * {@link StringSetMap}s), persisted under its own meta key so a dismissed folder
+ * chip stays gone across remounts and relaunches — unlike the prior session-only
+ * state, which re-surfaced on re-entering Detail. Tokens arrive pre-folded, so
+ * unlike reviewed names they are stored verbatim (no extra normalization).
+ */
+export type DismissedFolderMap = StringSetMap;
+
+/** Parse the JSON meta blob into a {@link DismissedFolderMap}, tolerating
+ *  malformed/legacy values by returning an empty map. */
+export function parseDismissedFolderMap(raw: string | null): DismissedFolderMap {
+  return parseStringSetMap(raw);
+}
+
+/** The dismissed folder-suggestion tokens for one bookmark, as a Set. */
+export function dismissedFolderTokensFor(map: DismissedFolderMap, bookmarkId: string): Set<string> {
+  return stringSetFor(map, bookmarkId);
+}
+
+/**
+ * Record `token` as a dismissed folder suggestion for `bookmarkId`. Returns the
+ * SAME map reference when the token was already present (so callers can skip a
+ * re-persist), otherwise a new map with the token merged in.
+ */
+export function addDismissedFolderToken(
+  map: DismissedFolderMap,
+  bookmarkId: string,
+  token: string,
+): DismissedFolderMap {
+  return addToStringSet(map, bookmarkId, [token]);
 }

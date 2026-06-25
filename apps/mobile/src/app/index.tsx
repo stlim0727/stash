@@ -35,7 +35,7 @@ import {
   serializeRecents,
 } from '@/domain/recent-searches';
 import type { SearchSuggestion } from '@/domain/search-suggestions';
-import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
+import { pendingSuggestedFolder, pendingSuggestions } from '@/domain/ai-suggestions';
 import { collectionMatchKey } from '@/domain/collection-match';
 import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
@@ -240,6 +240,7 @@ export default function InboxScreen() {
     getCollection,
     getEnrichment,
     getReviewedSuggestions,
+    getDismissedFolderSuggestions,
     unseenSuggestionIds,
     clearUnseenSuggestions,
     collections,
@@ -357,8 +358,14 @@ export default function InboxScreen() {
       const enrichment = getEnrichment(bookmark.id);
       const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
       // A folder-only recommendation (no pending tags) is reviewable too, so it
-      // must keep the banner up — mirror the Review screen's inclusion rule.
-      const folder = resolveSuggestedFolder(enrichment, collections, bookmark.collection_id);
+      // must keep the banner up — mirror the Review screen's inclusion rule, and
+      // honor durable folder dismissals so a waved-off folder stops counting.
+      const folder = pendingSuggestedFolder(
+        enrichment,
+        collections,
+        bookmark.collection_id,
+        getDismissedFolderSuggestions(bookmark.id),
+      );
       if (pending.length > 0 || folder) {
         count += 1;
       }
@@ -371,6 +378,7 @@ export default function InboxScreen() {
     getTagsForBookmark,
     getEnrichment,
     getReviewedSuggestions,
+    getDismissedFolderSuggestions,
   ]);
 
   // Long-press action menu: which bookmark it targets, and whether it's showing
@@ -1298,14 +1306,24 @@ export default function InboxScreen() {
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
           // Pending AI suggestions = high-confidence suggested tags not yet
-          // applied (see @/domain/ai-suggestions), surfaced so they're
-          // reviewable from the list rather than buried in Detail.
+          // applied PLUS a pending folder recommendation (see
+          // @/domain/ai-suggestions), surfaced so they're reviewable from the
+          // list rather than buried in Detail. Counts the folder too so a
+          // folder-only bookmark still shows the "✨" badge, matching the
+          // banner/Settings/Review inclusion rule.
           const appliedNames = new Set(cardTags.map((tag) => tag.name.toLowerCase()));
-          const suggestionCount = pendingSuggestions(
-            getEnrichment(item.id),
-            appliedNames,
-            getReviewedSuggestions(item.id),
-          ).length;
+          const cardEnrichment = getEnrichment(item.id);
+          const suggestionCount =
+            pendingSuggestions(cardEnrichment, appliedNames, getReviewedSuggestions(item.id))
+              .length +
+            (pendingSuggestedFolder(
+              cardEnrichment,
+              collections,
+              item.collection_id,
+              getDismissedFolderSuggestions(item.id),
+            )
+              ? 1
+              : 0);
           const openDetail = () =>
             router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
           const openLink = () => {

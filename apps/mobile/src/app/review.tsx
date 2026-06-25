@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
-import { pendingSuggestions, resolveSuggestedFolder } from '@/domain/ai-suggestions';
+import { pendingSuggestedFolder, pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { displayTitle } from '@/domain/item-display';
 import { useBookmarks } from '@/store/bookmarks';
@@ -15,6 +15,8 @@ interface ReviewItem {
   title: string;
   suggestions: SuggestedTag[];
   folder: SuggestedFolder | null;
+  // Every token identifying `folder`, so dismissing records them all (durable).
+  folderTokens: string[];
 }
 
 export default function ReviewScreen() {
@@ -31,14 +33,12 @@ export default function ReviewScreen() {
     markSuggestionsReviewed,
     assignCollection,
     createCollection,
+    getDismissedFolderSuggestions,
+    dismissFolderSuggestion,
     unseenSuggestionIds,
     clearUnseenSuggestions,
   } = useBookmarks();
   const [busy, setBusy] = useState(false);
-  // Folder suggestions have no durable "reviewed" record (accepting one files
-  // the bookmark in, which makes it stop suggesting on its own); a dismissal is
-  // session-only, mirroring the Detail screen. Keyed by bookmark id.
-  const [dismissedFolders, setDismissedFolders] = useState<ReadonlySet<string>>(new Set());
 
   // Entering Review means the user is witnessing every pending suggestion, so
   // clear the "new AI suggestions" markers that drive the Inbox banner. Keyed on
@@ -64,15 +64,21 @@ export default function ReviewScreen() {
         applied,
         getReviewedSuggestions(bookmark.id),
       );
-      const folder = dismissedFolders.has(bookmark.id)
-        ? null
-        : resolveSuggestedFolder(enrichment, collections, bookmark.collection_id);
+      // Durable folder dismissals (shared with Detail) — a folder waved off on
+      // any screen stays gone here too, instead of the old session-only state.
+      const folder = pendingSuggestedFolder(
+        enrichment,
+        collections,
+        bookmark.collection_id,
+        getDismissedFolderSuggestions(bookmark.id),
+      );
       if (suggestions.length > 0 || folder) {
         result.push({
           id: bookmark.id,
           title: displayTitle(bookmark) ?? t('common.untitled'),
           suggestions,
           folder,
+          folderTokens: suggestedFolderTokens(folder, enrichment?.suggested_collection_name),
         });
       }
     }
@@ -80,7 +86,7 @@ export default function ReviewScreen() {
   }, [
     inbox,
     collections,
-    dismissedFolders,
+    getDismissedFolderSuggestions,
     getTagsForBookmark,
     getEnrichment,
     getReviewedSuggestions,
@@ -121,14 +127,14 @@ export default function ReviewScreen() {
       .finally(() => setBusy(false));
   };
 
-  // Session-dismiss the folder recommendation (re-surfaces on a later enrichment
-  // proposing a different folder).
-  const dismissFolder = (id: string) => {
-    setDismissedFolders((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
+  // Durably dismiss the folder recommendation under every token that identifies
+  // it, mirroring the Detail screen — so it stays gone here, on Detail, and in
+  // the Inbox/Settings counts (re-surfaces only if a later enrichment proposes a
+  // genuinely different folder).
+  const dismissFolder = (item: ReviewItem) => {
+    for (const token of item.folderTokens) {
+      dismissFolderSuggestion(item.id, token);
+    }
   };
 
   if (items.length === 0) {
@@ -192,7 +198,7 @@ export default function ReviewScreen() {
                   })}
                   disabled={busy}
                   hitSlop={6}
-                  onPress={() => dismissFolder(item.id)}
+                  onPress={() => dismissFolder(item)}
                 >
                   <Text style={[styles.folderDismiss, { color: palette.textSecondary }]}>✕</Text>
                 </Pressable>
