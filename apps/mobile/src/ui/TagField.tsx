@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useT } from '@/i18n';
@@ -13,6 +13,21 @@ export interface AppliedTag {
 export interface TagSuggestion {
   name: string;
   confidence: number;
+}
+
+/**
+ * A folder (collection) recommendation rendered as the leading chip of the
+ * suggestion row, alongside the tag suggestions — a folder is conceptually just
+ * a tag you can only hold one of, so it lives in the same group and is swept by
+ * the same "Add all"/"Dismiss all". The caller supplies the rendered label
+ * (e.g. a FolderSuggestionLabel) and the accept/dismiss handlers.
+ */
+export interface FolderSuggestionChip {
+  label: ReactNode;
+  acceptA11y: string;
+  dismissA11y: string;
+  onAccept: () => void;
+  onDismiss: () => void;
 }
 
 interface TagFieldProps {
@@ -32,13 +47,11 @@ interface TagFieldProps {
   /** Dismiss every current suggestion at once (the low-effort escape hatch). */
   onDismissAllSuggestions?: () => void;
   /**
-   * Count of extra, non-tag suggestions the bulk actions also act on (e.g. a
-   * folder recommendation shown elsewhere on the screen). Folded into the
-   * threshold that shows "Add all"/"Dismiss all", so a single tag suggestion
-   * plus a folder still offers a one-tap "act on everything" — matching the
-   * Review screen, where Accept/Dismiss all covers tags AND the folder.
+   * A folder recommendation shown as the leading chip of the suggestion row.
+   * It's counted toward the "Add all"/"Dismiss all" threshold and swept by them,
+   * so folder + tags read as one group — matching the Review screen.
    */
-  extraBulkCount?: number;
+  folderSuggestion?: FolderSuggestionChip | null;
   /** Shown in place of the input when not editable. */
   disabledHint?: string;
 }
@@ -61,16 +74,19 @@ export function TagField({
   onDismissSuggestion,
   onAcceptAllSuggestions,
   onDismissAllSuggestions,
-  extraBulkCount = 0,
+  folderSuggestion,
   disabledHint,
 }: TagFieldProps) {
   const palette = usePalette();
   const t = useT();
   const [value, setValue] = useState('');
 
-  // The bulk row is worth showing once "act on everything" covers more than one
-  // thing — tag suggestions here plus any extra (a folder) the caller sweeps too.
-  const bulkCount = suggestions.length + extraBulkCount;
+  // The folder chip leads the suggestion row; tags follow. The row shows when
+  // there's anything to suggest, and the bulk "Add all"/"Dismiss all" appears
+  // once that's more than one thing (folder + tags), since they sweep both.
+  const hasFolderSuggestion = !!folderSuggestion;
+  const bulkCount = suggestions.length + (hasFolderSuggestion ? 1 : 0);
+  const showSuggestionRow = suggestions.length > 0 || hasFolderSuggestion;
 
   const commit = async (raw: string) => {
     const name = raw.trim();
@@ -159,8 +175,30 @@ export function TagField({
         <Text style={[styles.hint, { color: palette.textSecondary }]}>{disabledHint}</Text>
       ) : null}
 
-      {suggestions.length > 0 ? (
+      {showSuggestionRow ? (
         <View style={styles.suggestionRow}>
+          {folderSuggestion ? (
+            <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={folderSuggestion.acceptA11y}
+                disabled={busy}
+                onPress={folderSuggestion.onAccept}
+              >
+                {/* The label brings its own colors (file-in vs. move), so the
+                    wrapper Text sets none — unlike the accent tag chips below. */}
+                <Text style={styles.ghostLabel}>{folderSuggestion.label}</Text>
+              </Pressable>
+              <Pressable
+                accessibilityLabel={folderSuggestion.dismissA11y}
+                disabled={busy}
+                hitSlop={6}
+                onPress={folderSuggestion.onDismiss}
+              >
+                <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
+              </Pressable>
+            </View>
+          ) : null}
           {suggestions.map((suggestion) => (
             <View key={suggestion.name} style={[styles.ghostChip, { borderColor: palette.accent }]}>
               <Pressable
