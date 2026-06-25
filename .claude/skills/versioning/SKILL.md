@@ -120,8 +120,7 @@ git push origin vX.Y.Z[-rcN]
 **Remote-environment caveat (important):** Claude Code web/remote sessions push
 through a git relay that only permits the session's designated dev branch — **tag
 pushes are blocked (HTTP 403)** and no GitHub MCP tool creates a tag/release. In
-that case cut the build via workflow dispatch instead, which produces an
-**identical APK** (only the durable git tag is missing):
+that case cut the build via workflow dispatch instead:
 
 ```
 mcp__github__actions_run_trigger(
@@ -129,9 +128,17 @@ mcp__github__actions_run_trigger(
   ref="<branch>", inputs={ "version": "vX.Y.Z[-rcN]" })
 ```
 
-Then hand the user the exact `git tag … && git push …` one-liner so they can
-create the durable tag from an unconstrained machine. Always tell them which
-path you used and what (if anything) is missing.
+It builds from the **same commit**, so the shipped app code / JS bundle is the
+same — but do **not** call it identical to a later tag-triggered build. The two
+differ in build metadata: `ANDROID_VERSION_CODE` is `github.run_number` (changes
+every run) and `EXPO_PUBLIC_GIT_REF` is `github.ref_name` (a dispatch on `main`
+records `main`; a tag build records `vX.Y.Z-rcN`), both baked into the APK and
+shown in Settings. And for an RC, pushing the tag later just refreshes the same
+rolling `dev` release again — it is not a new, distinct release. So describe the
+dispatch build as "same code, different build number/provenance," and hand the
+user the exact `git tag … && git push …` one-liner to create the durable tag
+from an unconstrained machine. Always tell them which path you used and what is
+missing or will differ.
 
 If the target depends on an unmerged PR (e.g. "include fix #N in the RC"),
 **merge that PR first** so the tag/commit you build actually contains it.
