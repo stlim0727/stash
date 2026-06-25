@@ -300,12 +300,29 @@ jobs:
             exit 0
           fi
           # The service-account JSON is passed via a file, not an inline flag,
-          # so it never lands in the process list or logs.
-          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
-          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
+          # so it never lands in the process list or logs. The secret may be
+          # stored as raw JSON or base64-encoded JSON (a common way to dodge
+          # newline mangling) — accept either: raw JSON contains a '{', base64
+          # never does, so that tells them apart.
+          SA="$RUNNER_TEMP/firebase-sa.json"
+          if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
+          else
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
+          fi
+          # Validate it really is a service-account key BEFORE calling firebase,
+          # so a bad/empty/expired secret fails with a clear, non-sensitive
+          # message instead of the opaque "have you run firebase login?" error.
+          # Only the (non-secret) client_email is echoed; the key never is.
+          if ! node -e 'const j=require(process.argv[1]); if(j.type!=="service_account"||!j.client_email||!j.private_key){process.exit(1)} console.log("Firebase service account: "+j.client_email)' "$SA"; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT is not a valid service-account JSON (tried raw and base64). Re-create the key in Google Cloud → IAM → Service Accounts, grant it the 'Firebase App Distribution Admin' role, and store the downloaded JSON (raw, or base64 of it) in the secret."
+            rm -f "$SA"
+            exit 1
+          fi
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA"
           npx --yes firebase-tools appdistribution:distribute \
             "dist/${{ steps.meta.outputs.apk }}" \
             --app "$FIREBASE_APP_ID" \
             --groups "$FIREBASE_TESTER_GROUPS" \
             --release-notes "${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})"
-          rm -f "$RUNNER_TEMP/firebase-sa.json"
+          rm -f "$SA"
