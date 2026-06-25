@@ -59,9 +59,19 @@ export class SqliteConnection<DB> {
         // per generation, so this never clobbers a replacement handle.
         recordLog('warn', `sqlite handle stale, reopening: ${String(error)}`);
         this.db = null;
-        void Promise.resolve(this.close(existing)).catch(() => {
-          // The stale handle may already be wedged; failing to close it is fine.
-        });
+        // Close and *await* before reopening. expo-sqlite opens with
+        // useNewConnection=false, so the native layer caches one connection per
+        // database path; closeAsync is what evicts the stale entry. A
+        // fire-and-forget close lets the reopen race ahead and reuse the
+        // still-cached invalid handle (keeping the prepareAsync NullPointer
+        // exceptions coming) — and once the reopen re-references that binding,
+        // the trailing close only drops a refcount instead of freeing it, so it
+        // never recovers. Errors are ignored: the handle may already be wedged.
+        try {
+          await this.close(existing);
+        } catch {
+          // Best-effort — a wedged handle that won't close still gets replaced.
+        }
       }
     }
     try {

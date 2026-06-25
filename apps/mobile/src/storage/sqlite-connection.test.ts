@@ -30,17 +30,22 @@ class FakeDb {
 function makeConnection() {
   let opens = 0;
   const opened: FakeDb[] = [];
+  const events: string[] = [];
   const connection = new SqliteConnection<FakeDb>(
     async () => {
       opens += 1;
+      events.push(`open:${opens}`);
       const db = new FakeDb(opens);
       opened.push(db);
       return db;
     },
     (db) => db.probe(),
-    (db) => db.close(),
+    async (db) => {
+      events.push(`close:${db.id}`);
+      await db.close();
+    },
   );
-  return { connection, opened, opensCount: () => opens };
+  return { connection, opened, events, opensCount: () => opens };
 }
 
 test('opens lazily and reuses a live handle', async () => {
@@ -63,7 +68,7 @@ test('coalesces a cold-start burst onto a single open', async () => {
 
 test('a stale handle is reopened once and closed, never double-opened', async () => {
   clearLogEntries();
-  const { connection, opened, opensCount } = makeConnection();
+  const { connection, opened, events, opensCount } = makeConnection();
 
   const first = await connection.get();
   assert.equal(opensCount(), 1);
@@ -83,6 +88,10 @@ test('a stale handle is reopened once and closed, never double-opened', async ()
   }
   // The dead handle was closed, not leaked.
   assert.equal(first.closed, true);
+  // The stale handle is closed (evicting it from expo-sqlite's per-path native
+  // cache) *before* the replacement is opened — otherwise the reopen could
+  // reuse the still-cached invalid handle. Order must be close:1 then open:2.
+  assert.deepEqual(events, ['open:1', 'close:1', 'open:2']);
   // The fresh handle is live and not clobbered by a late probe rejection.
   assert.equal((await connection.get()).id, fresh.id);
 
