@@ -365,9 +365,28 @@ jobs:
             exit 1
           fi
           export GOOGLE_APPLICATION_CREDENTIALS="$SA"
-          npx --yes firebase-tools appdistribution:distribute \
-            "dist/${{ steps.meta.outputs.apk }}" \
-            --app "$FIREBASE_APP_ID" \
-            --groups "$FIREBASE_TESTER_GROUPS" \
-            --release-notes "${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})"
+          # firebase-tools authenticates only via GOOGLE_APPLICATION_CREDENTIALS
+          # (appdistribution:distribute has no service-account-file flag), and
+          # that token exchange intermittently fails with a misleading
+          # "Failed to authenticate, have you run firebase login?" even with a
+          # valid key (proven: the validation above printed the client_email).
+          # Retry a few times before failing. Pin the version so CI behaviour is
+          # reproducible run-over-run instead of tracking firebase-tools @latest.
+          ok=""
+          for attempt in 1 2 3; do
+            if npx --yes firebase-tools@15.22.2 appdistribution:distribute \
+              "dist/${{ steps.meta.outputs.apk }}" \
+              --app "$FIREBASE_APP_ID" \
+              --groups "$FIREBASE_TESTER_GROUPS" \
+              --release-notes "${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})"; then
+              ok=1
+              break
+            fi
+            echo "App Distribution upload attempt $attempt failed; retrying in $((attempt * 15))s…"
+            sleep $((attempt * 15))
+          done
           rm -f "$SA"
+          if [ -z "$ok" ]; then
+            echo "::error::Firebase App Distribution failed after 3 attempts (the APK + GitHub Release still published)."
+            exit 1
+          fi
