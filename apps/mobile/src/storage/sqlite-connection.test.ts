@@ -328,6 +328,67 @@ test('a second consecutive death surfaces and is recorded, not retried again', a
   assert.ok(getLogEntries().some((e) => e.message.includes('after reopen retry')));
 });
 
+test('run serializes operations — they never overlap', async () => {
+  const { connection } = makeConnection();
+  let active = 0;
+  let maxActive = 0;
+  const order: number[] = [];
+
+  const op = (n: number) =>
+    connection.run(async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      // Yield a few times so overlap would be observable if it existed.
+      await Promise.resolve();
+      await Promise.resolve();
+      order.push(n);
+      active -= 1;
+    });
+
+  await Promise.all([op(1), op(2), op(3), op(4)]);
+  assert.equal(maxActive, 1); // never more than one in flight
+  assert.deepEqual(order, [1, 2, 3, 4]); // FIFO, matching submission order
+});
+
+test('closeCurrent releases the handle and the next op reopens', async () => {
+  const { connection, opened, opensCount } = makeConnection();
+  const first = await connection.run(async (db) => db.id);
+  assert.equal(first, 1);
+  assert.equal(opensCount(), 1);
+
+  // Simulate AppState backgrounding: proactively close the live handle.
+  await connection.closeCurrent();
+  assert.equal(opened[0].closed, true);
+
+  // Next operation reopens lazily on a fresh handle.
+  const second = await connection.run(async (db) => db.id);
+  assert.equal(second, 2);
+  assert.equal(opensCount(), 2);
+});
+
+test('closeCurrent is a no-op when there is no open handle', async () => {
+  const { connection, opensCount } = makeConnection();
+  await connection.closeCurrent(); // nothing open yet
+  assert.equal(opensCount(), 0);
+});
+
+test('closeCurrent does not close the handle out from under an in-flight op', async () => {
+  const { connection, opened } = makeConnection();
+  await connection.get(); // open handle 1
+
+  let opSawClosed = false;
+  const op = connection.run(async (db) => {
+    // closeCurrent is queued while this op runs; it must wait, not close db now.
+    await Promise.resolve();
+    opSawClosed = (db as { closed: boolean }).closed;
+  });
+  const closing = connection.closeCurrent();
+  await Promise.all([op, closing]);
+
+  assert.equal(opSawClosed, false); // the op completed on a live handle
+  assert.equal(opened[0].closed, true); // then it was closed
+});
+
 test('a close that never resolves does not deadlock the reopen', async () => {
   let opens = 0;
   const connection = new SqliteConnection<FakeDb>(

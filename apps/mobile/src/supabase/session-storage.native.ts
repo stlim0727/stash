@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 
+import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
@@ -26,6 +27,11 @@ const connection = new SqliteConnection<SQLite.SQLiteDatabase>(
   (db) => db.getFirstAsync('SELECT 1'),
   (db) => db.closeAsync(),
 );
+
+// Release the handle when the app backgrounds; the next read/write reopens.
+registerForBackgroundClose(() => {
+  void connection.closeCurrent();
+});
 
 // All operations are best-effort: a storage failure must never block auth.
 // Worst case the session isn't persisted and a fresh anonymous one is created.

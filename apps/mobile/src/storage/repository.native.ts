@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
 import type { BookmarkRepository, TagData } from '@/storage/types';
 
@@ -123,6 +124,14 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     (db) => db.getFirstAsync('SELECT 1'),
     (db) => db.closeAsync(),
   );
+
+  constructor() {
+    // Release the handle when the app backgrounds (Android invalidates it then);
+    // the next operation reopens lazily.
+    registerForBackgroundClose(() => {
+      void this.connection.closeCurrent();
+    });
+  }
 
   async init(
     seed: Bookmark[],

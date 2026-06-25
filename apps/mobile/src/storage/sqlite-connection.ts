@@ -28,18 +28,25 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
  * `NativeDatabase.prepareAsync ... NullPointerException`, and because every
  * reopen repeats the clobber it never recovers.
  *
- * The fix has three parts:
- *   1. Funnel the whole decision (liveness probe + reopen) through one in-flight
- *      `opening` promise, so concurrent callers share one probe and at most one
- *      reopen per generation, and the stale handle is closed (not leaked).
- *   2. {@link run} retries the *operation*, not just the open: the probe can pass
+ * The fix has several parts:
+ *   1. All work runs through {@link run}, which serializes units onto a single
+ *      tail (the "connection actor") so DB operations never overlap — the
+ *      concurrent probe/reopen race becomes structurally impossible, not just
+ *      coalesced.
+ *   2. The liveness probe + reopen decision also funnels through one in-flight
+ *      `opening` promise, so even direct {@link get} callers share one probe and
+ *      at most one reopen per generation, and the stale handle is closed (not
+ *      leaked).
+ *   3. {@link run} retries the *operation*, not just the open: the probe can pass
  *      microseconds before the OS invalidates the handle, so the real statement
  *      still throws — `run` detects the now-dead handle and replays the work once
  *      on a fresh connection. A genuine SQL error (handle still alive) is never
  *      retried.
- *   3. The probe and close are time-bounded, so a wedged handle (the very case
- *      this targets) can't hang the probe or close forever and deadlock every
- *      caller awaiting `opening`.
+ *   4. The probe and close are time-bounded, so a wedged handle (the very case
+ *      this targets) can't hang the probe or close forever and deadlock the tail.
+ *   5. {@link closeCurrent} lets the app proactively release the handle when it
+ *      backgrounds (the moment Android invalidates it), so the next operation
+ *      reopens cleanly instead of first failing on a dead handle.
  *
  * The auth store (`session-storage.native.ts`) drives its single connection the
  * same way.
@@ -47,6 +54,13 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
 export class SqliteConnection<DB> {
   private db: DB | null = null;
   private opening: Promise<DB> | null = null;
+  // Serialization tail (the "connection actor"). Every `run` and `closeCurrent`
+  // chains onto this, so DB work executes strictly one unit at a time. The
+  // concurrent probe/reopen race this class originally guarded against then
+  // becomes structurally impossible rather than merely coalesced. The trade-off
+  // is head-of-line blocking — acceptable here because each operation is a small,
+  // fast statement on a tiny local DB (and SQLite serializes writes regardless).
+  private tail: Promise<unknown> = Promise.resolve();
   private readonly probeTimeoutMs: number;
   private readonly closeTimeoutMs: number;
 
@@ -93,7 +107,42 @@ export class SqliteConnection<DB> {
    * failure mode this targets, and a loop could spin. A second consecutive death
    * is surfaced (and recorded) rather than retried again.
    */
-  async run<T>(work: (db: DB) => Promise<T>): Promise<T> {
+  run<T>(work: (db: DB) => Promise<T>): Promise<T> {
+    return this.serialize(() => this.runOnce(work));
+  }
+
+  /**
+   * Close and drop the active handle, then let the next {@link run} reopen
+   * lazily. Wired to AppState so the app proactively releases the connection
+   * when it backgrounds — Android invalidates native handles in the background,
+   * and closing ahead of time means we rarely operate on an already-dead handle
+   * instead of only recovering after the prepareAsync NPE. Serialized like every
+   * other unit of work, so it never closes the handle out from under an
+   * in-flight operation.
+   */
+  closeCurrent(): Promise<void> {
+    return this.serialize(async () => {
+      const db = this.db;
+      if (db) {
+        this.db = null;
+        await this.closeQuietly(db);
+      }
+    });
+  }
+
+  /** Chain a task onto the serialization tail so units of work never overlap. */
+  private serialize<T>(task: () => Promise<T>): Promise<T> {
+    // Run after the current tail settles, regardless of its outcome; a prior
+    // rejection must not break the chain for the next caller.
+    const result = this.tail.then(task, task);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async runOnce<T>(work: (db: DB) => Promise<T>): Promise<T> {
     const first = await this.get();
     try {
       return await work(first);
