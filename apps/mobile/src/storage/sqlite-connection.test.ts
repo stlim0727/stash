@@ -31,6 +31,56 @@ class FakeDb {
   }
 }
 
+/**
+ * A fake handle backed by a shared key-value `store` (modelling one DB file
+ * across reopens), with transaction semantics and a controllable COMMIT-point
+ * death: the first COMMIT durably applies its writes, then invalidates the
+ * handle and throws — the exact "commit landed but the promise rejected" case.
+ */
+class FakeKvDb {
+  closed = false;
+  private alive = true;
+  private failCommitOnce: boolean;
+
+  constructor(
+    readonly id: number,
+    private readonly store: Map<string, string>,
+    opts: { failCommitOnce?: boolean } = {},
+  ) {
+    this.failCommitOnce = opts.failCommitOnce ?? false;
+  }
+
+  async probe(): Promise<void> {
+    if (!this.alive) {
+      throw new Error('NativeDatabase.prepareAsync ... NullPointerException');
+    }
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+  }
+
+  async del(key: string): Promise<void> {
+    this.store.delete(key);
+  }
+
+  async put(key: string, value: string): Promise<void> {
+    this.store.set(key, value);
+  }
+
+  async withTransactionAsync(task: () => Promise<void>): Promise<void> {
+    await task();
+    // COMMIT point.
+    if (this.failCommitOnce) {
+      this.failCommitOnce = false;
+      // Writes above have durably landed in `store`, but the handle dies and the
+      // COMMIT promise rejects — replay must still converge.
+      this.alive = false;
+      throw new Error('NativeDatabase.prepareAsync ... NullPointerException');
+    }
+  }
+}
+
 function makeConnection(opts?: { probeTimeoutMs?: number; closeTimeoutMs?: number }) {
   let opens = 0;
   const opened: FakeDb[] = [];
@@ -209,6 +259,73 @@ test('run does not retry a genuine error on a live handle', async () => {
   // The handle is alive, so the error is real — work ran exactly once.
   assert.equal(attempts, 1);
   assert.equal(opensCount(), 1);
+});
+
+test('run keys off liveness, not the error message: an NPE-shaped error on a live handle is not retried', async () => {
+  // Proves the retry decision is `isAlive`, not string-matching the message —
+  // a prepareAsync-NPE-looking error from a *live* handle is a real error.
+  const { connection, opensCount } = makeConnection();
+  let attempts = 0;
+  await assert.rejects(
+    () =>
+      connection.run(async () => {
+        attempts += 1;
+        throw new Error('NativeDatabase.prepareAsync ... NullPointerException');
+      }),
+    /NullPointerException/,
+  );
+  assert.equal(attempts, 1);
+  assert.equal(opensCount(), 1);
+});
+
+test('run replays a transaction idempotently after a COMMIT-point death', async () => {
+  // The worst case for replay: the first attempt's writes durably land, then the
+  // handle dies and the COMMIT promise rejects with the NPE. The replay must
+  // converge to the same state (this models replaceBookmark: DELETE old id +
+  // INSERT OR REPLACE new id inside a transaction).
+  const store = new Map<string, string>();
+  store.set('local-1', 'payload');
+  let opens = 0;
+  const connection = new SqliteConnection<FakeKvDb>(
+    async () => {
+      opens += 1;
+      return new FakeKvDb(opens, store, { failCommitOnce: opens === 1 });
+    },
+    (db) => db.probe(),
+    (db) => db.close(),
+  );
+
+  await connection.run((db) =>
+    db.withTransactionAsync(async () => {
+      await db.del('local-1');
+      await db.put('remote-1', 'payload');
+    }),
+  );
+
+  assert.equal(opens, 2); // first handle died at COMMIT, replayed on a fresh one
+  assert.equal(store.has('local-1'), false); // old id removed exactly once
+  assert.equal(store.get('remote-1'), 'payload'); // new id present exactly once
+  assert.equal(store.size, 1); // no duplication despite the durable first commit
+});
+
+test('a second consecutive death surfaces and is recorded, not retried again', async () => {
+  clearLogEntries();
+  const { connection } = makeConnection();
+  const first = await connection.get();
+  first.kill();
+
+  // Work kills whatever handle it runs on, so the reopen's replacement dies too.
+  await assert.rejects(
+    () =>
+      connection.run(async (db) => {
+        db.kill();
+        throw new Error('NativeDatabase.prepareAsync ... NullPointerException');
+      }),
+    /NullPointerException/,
+  );
+
+  // Single retry only — the second death is logged rather than retried forever.
+  assert.ok(getLogEntries().some((e) => e.message.includes('after reopen retry')));
 });
 
 test('a close that never resolves does not deadlock the reopen', async () => {

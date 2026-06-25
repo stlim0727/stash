@@ -80,9 +80,18 @@ export class SqliteConnection<DB> {
    * exactly once on a fresh connection. A genuine failure (constraint, bad SQL),
    * where the handle is still alive, is surfaced immediately and never retried.
    *
-   * The work callback must be idempotent, since a retry replays it whole. Every
-   * statement in the repository qualifies: single `INSERT OR REPLACE` / `DELETE`
-   * / reads, or transactions built from them.
+   * The work callback MUST be idempotent under a full replay. Note the replay
+   * can happen even when the first attempt's writes *did* land: the NPE is a
+   * JS/native-binding failure, not proof the underlying COMMIT was rolled back,
+   * so a transaction whose COMMIT durably succeeded but whose promise rejected
+   * will be replayed. Every statement in the repository converges correctly
+   * regardless: single `INSERT OR REPLACE` / `DELETE` / reads, and the two
+   * transactions (`replaceBookmark` = DELETE + INSERT OR REPLACE, `replaceTagData`
+   * = full overwrite) all reach the same state when re-run.
+   *
+   * The retry is deliberately single-shot: a back-to-back invalidation is not the
+   * failure mode this targets, and a loop could spin. A second consecutive death
+   * is surfaced (and recorded) rather than retried again.
    */
   async run<T>(work: (db: DB) => Promise<T>): Promise<T> {
     const first = await this.get();
@@ -101,7 +110,15 @@ export class SqliteConnection<DB> {
       await this.closeQuietly(first);
     }
     const fresh = await this.get();
-    return work(fresh);
+    try {
+      return await work(fresh);
+    } catch (error) {
+      // The replacement handle also died (rapid background/foreground thrash).
+      // Surface it — the first reopen is logged in resolve(), so without this
+      // the second death would be silent behind the generic storage banner.
+      recordLog('warn', `sqlite operation failed after reopen retry: ${String(error)}`);
+      throw error;
+    }
   }
 
   private async resolve(): Promise<DB> {
