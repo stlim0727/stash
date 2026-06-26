@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import {
   Alert,
   Animated,
@@ -41,7 +41,13 @@ import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramColorIndex, monogramIcon } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
-import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
+import {
+  ALL_FILTER,
+  UNCOLLECTED_FILTER,
+  filterByFacet,
+  sameFilter,
+  type InboxFilter,
+} from '@/domain/filter';
 import {
   DEFAULT_SORT,
   INBOX_SORT_PREF_KEY,
@@ -60,7 +66,7 @@ import {
   serializeViewMode,
   type ViewMode,
 } from '@/domain/view-mode';
-import { buildTagCloud, tagCloudFontSize } from '@/domain/tag-cloud';
+import { buildTagCloud, tagCloudFontSize, type TagCloudEntry } from '@/domain/tag-cloud';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { trackBreadcrumb } from '@/observability/sentry';
 import { useT } from '@/i18n';
@@ -216,6 +222,46 @@ const WORDMARK = {
     dark: require('../../assets/images/wordmark-ko-dark.png'),
   },
 };
+
+/**
+ * One pill in the Inbox browse shelf. Memoized so a filter change (which
+ * re-renders the whole screen) only re-renders the chips whose `active` flag
+ * actually flips — not all of them. With a large library the shelf can hold
+ * well over a hundred tag chips, and re-rendering every one on each tap was
+ * what made a chip tap feel dead for seconds after drilling in from the tag
+ * cloud. `target` comes straight from the (memoized) chip list / module-level
+ * filter constants and `onSelect` is referentially stable, so memo's prop
+ * compare holds across taps.
+ */
+// Stable empty cloud returned when the tag-cloud layout isn't active, so an
+// off-cloud facet change doesn't allocate (or scan) a fresh one.
+const EMPTY_TAG_CLOUD: TagCloudEntry[] = [];
+
+const BrowseChip = memo(function BrowseChip({
+  target,
+  label,
+  icon,
+  active,
+  onSelect,
+}: {
+  target: InboxFilter;
+  label: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  active: boolean;
+  onSelect: (target: InboxFilter) => void;
+}) {
+  return (
+    <Chip
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={() => onSelect(target)}
+      variant={active ? 'selected' : 'default'}
+      icon={icon}
+    >
+      {label}
+    </Chip>
+  );
+});
 
 export default function InboxScreen() {
   const palette = usePalette();
@@ -632,7 +678,16 @@ export default function InboxScreen() {
   // tags): a frequency-ranked overview sized by how many of those bookmarks
   // carry each tag. Search is left out on purpose — the cloud is the navigation
   // surface, not a result of it. Tapping a tag drills in by applying its filter.
+  // Only built while the cloud is the active layout. The cloud isn't rendered in
+  // card/list view, but this memo keys off `facetFiltered`, so without the guard
+  // every browse-chip tap (which changes the facet) re-scanned every filtered
+  // bookmark and its tags and re-sorted — wasted work that, on a large library,
+  // was a big slice of the "chips go dead for seconds after picking a tag from
+  // the cloud" stall. Skipping it off-cloud makes a facet change in cards cheap.
   const tagCloud = useMemo(() => {
+    if (!isCloud) {
+      return EMPTY_TAG_CLOUD;
+    }
     const counts = new Map<string, { name: string; count: number }>();
     for (const bookmark of facetFiltered) {
       for (const tag of getTagsForBookmark(bookmark.id)) {
@@ -647,7 +702,7 @@ export default function InboxScreen() {
     return buildTagCloud(
       [...counts.entries()].map(([id, { name, count }]) => ({ id, name, count })),
     );
-  }, [facetFiltered, getTagsForBookmark]);
+  }, [isCloud, facetFiltered, getTagsForBookmark]);
 
   // If the active facet disappears (last member removed/unfiled), fall back to
   // All rather than stranding the user on an empty filtered view.
@@ -993,42 +1048,35 @@ export default function InboxScreen() {
       ? t('inbox.moveToCollectionTitle')
       : ((menuItem ? displayTitle(menuItem) : null) ?? t('common.untitled'));
 
-  const renderChip = (
-    key: string,
-    label: string,
-    target: InboxFilter,
-    icon?: keyof typeof Ionicons.glyphMap,
-  ) => {
-    const active = sameFilter(target, filter);
-    return (
-      <Chip
-        key={key}
-        accessibilityRole="button"
-        accessibilityState={{ selected: active }}
-        // Diagnostic trail for the "tag-cloud chips go dead after narrowing to a
-        // folder on Android" report: if this breadcrumb is ABSENT when the user
-        // says a chip tap did nothing, the touch never reached JS (a native
-        // hit-test issue with the floating header), not our filter logic. Ids
-        // are opaque UUIDs — no user content. See the cloud-tag tap for a
-        // positive control proving touches still reach the screen.
-        onPress={() => {
-          trackBreadcrumb('browse', 'chip tap', {
-            target: 'id' in target ? `${target.kind}:${target.id}` : target.kind,
-            view: viewMode,
-            cloud: tagCloud.length,
-            header: Math.round(headerHeight),
-          });
-          // Picking a facet directly ends the cloud-drill context.
-          cloudReturnRef.current = null;
-          setFilter(target);
-        }}
-        variant={active ? 'selected' : 'default'}
-        icon={icon}
-      >
-        {label}
-      </Chip>
-    );
+  // Latest view/cloud/header context for the chip-tap diagnostic breadcrumb,
+  // held in a ref so the tap handler can stay referentially stable. That
+  // stability is what lets the memoized BrowseChips skip re-rendering on every
+  // facet change — the whole point of the perf fix — while the breadcrumb still
+  // reports live context. A plain render-time snapshot; it never re-renders.
+  const chipTapCtx = useRef({ view: viewMode, cloud: 0, header: 0 });
+  chipTapCtx.current = {
+    view: viewMode,
+    cloud: tagCloud.length,
+    header: Math.round(headerHeight),
   };
+  const onSelectFilter = useCallback((target: InboxFilter) => {
+    // Diagnostic trail for the "tag-cloud chips go dead after narrowing to a
+    // folder on Android" report: if this breadcrumb is ABSENT when the user
+    // says a chip tap did nothing, the touch never reached JS (a native
+    // hit-test issue with the floating header), not our filter logic. Ids are
+    // opaque UUIDs — no user content. See the cloud-tag tap for a positive
+    // control proving touches still reach the screen.
+    const ctx = chipTapCtx.current;
+    trackBreadcrumb('browse', 'chip tap', {
+      target: 'id' in target ? `${target.kind}:${target.id}` : target.kind,
+      view: ctx.view,
+      cloud: ctx.cloud,
+      header: ctx.header,
+    });
+    // Picking a facet directly ends the cloud-drill context.
+    cloudReturnRef.current = null;
+    setFilter(target);
+  }, []);
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
@@ -1251,11 +1299,31 @@ export default function InboxScreen() {
             style={styles.shelf}
             contentContainerStyle={styles.shelfContent}
           >
-            {renderChip('all', t('inbox.filterAll'), ALL_FILTER)}
-            {hasUncollected
-              ? renderChip('uncollected', t('inbox.filterNoCollection'), { kind: 'uncollected' }, 'file-tray-outline')
-              : null}
-            {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter, chip.icon))}
+            <BrowseChip
+              target={ALL_FILTER}
+              label={t('inbox.filterAll')}
+              active={sameFilter(ALL_FILTER, filter)}
+              onSelect={onSelectFilter}
+            />
+            {hasUncollected ? (
+              <BrowseChip
+                target={UNCOLLECTED_FILTER}
+                label={t('inbox.filterNoCollection')}
+                icon="file-tray-outline"
+                active={sameFilter(UNCOLLECTED_FILTER, filter)}
+                onSelect={onSelectFilter}
+              />
+            ) : null}
+            {chips.map((chip) => (
+              <BrowseChip
+                key={chip.key}
+                target={chip.filter}
+                label={chip.label}
+                icon={chip.icon}
+                active={sameFilter(chip.filter, filter)}
+                onSelect={onSelectFilter}
+              />
+            ))}
           </ScrollView>
         ) : null}
       </Animated.View>
