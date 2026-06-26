@@ -92,6 +92,16 @@ export const en = {
   'inbox.emptySearchHint': 'Search also looks in tags, folders, and site names.',
   'inbox.clearSearch': 'Clear search',
   'inbox.clearSearchA11y': 'Clear search',
+  // Sticky active-filter bar: tells the user the list is narrowed and offers a
+  // one-tap way back. `scopeFiltered`/`scopeSearch` label what's active;
+  // `scopeBackToTags` is the trailing pill when a cloud drill can return to the
+  // tag cloud, otherwise a clear/✕ action is shown.
+  'inbox.scopeFiltered': 'Filtered: {label}',
+  'inbox.scopeSearch': 'Results for “{query}”',
+  'inbox.scopeBackToTags': 'Tag cloud',
+  'inbox.scopeBackToTagsA11y': 'Back to the tag cloud',
+  'inbox.scopeClearA11y': 'Clear filter and show all bookmarks',
+  'inbox.scopeClearSearchA11y': 'Clear the search',
   // Site-name chip on a search result (generated site metadata, not a user
   // field). Marks WHY a result matched when nothing else on the card shows it.
   'inbox.siteChip': '🌐 {name}',

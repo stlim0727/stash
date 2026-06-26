@@ -751,6 +751,139 @@ test('the hardware back key returns from a drilled-in tag to the tag cloud', asy
   }
 });
 
+test('drilling into a cloud tag does not persist a Cards/List view preference', async () => {
+  const cooked = '7e64cf1e-0000-4000-8000-0000000000c1';
+  const reading = '7e64cf1e-0000-4000-8000-0000000000c2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
+      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+      bookmarkTags: [
+        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+  // The user's saved view is the tag cloud.
+  await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'cloud');
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+
+  // Drill into a tag: this is a transient layout flip to show the bookmarks…
+  await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
+  await waitFor(() => expect(screen.getByText('#cooking · 1')).toBeTruthy());
+
+  // …it must NOT overwrite the stored 'cloud' preference, so the next launch
+  // still returns to the cloud.
+  await waitFor(async () =>
+    expect(await fakeRepo.repository.getMeta(INBOX_VIEW_PREF_KEY)).toBe('cloud'),
+  );
+});
+
+test('the active-filter bar clears the facet back to all bookmarks', async () => {
+  const cooked = '7e64cf1e-0000-4000-8000-0000000000d1';
+  const reading = '7e64cf1e-0000-4000-8000-0000000000d2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
+      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+      bookmarkTags: [
+        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+
+  // Pick the #cooking facet chip: the list narrows and the cooking-less
+  // bookmark drops out.
+  await fireEvent.press(screen.getByRole('button', { name: '#cooking' }));
+  await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
+
+  // The sticky filter bar appears; pressing its clear action restores All.
+  expect(screen.getByTestId('inbox-filter-bar')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('inbox-filter-clear'));
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+});
+
+test('the filter bar returns to the tag cloud on any platform', async () => {
+  const cooked = '7e64cf1e-0000-4000-8000-0000000000e1';
+  const reading = '7e64cf1e-0000-4000-8000-0000000000e2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
+      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+      bookmarkTags: [
+        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+
+  // Open the cloud and drill into a tag (Platform default — no android override,
+  // so this exercises the cross-platform filter bar, not hardware Back).
+  await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+  await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
+  await waitFor(() => expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull());
+
+  // The bar's back-to-cloud action returns to the cloud overview.
+  await fireEvent.press(screen.getByTestId('inbox-filter-back-to-cloud'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+});
+
+test('drilling into a cloud tag lands in the List layout when List is preferred', async () => {
+  const cooked = '7e64cf1e-0000-4000-8000-0000000000f1';
+  const reading = '7e64cf1e-0000-4000-8000-0000000000f2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
+      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+      bookmarkTags: [
+        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+
+  // The user deliberately chooses List, then opens the cloud.
+  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await waitFor(() => expect(screen.getAllByTestId('inbox-list-title').length).toBeGreaterThan(0));
+  await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+
+  // Drilling in lands in their preferred List layout, not hard-coded Cards.
+  // Only the #cooking bookmark survives the filter, so a single list row shows.
+  await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
+  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
+  expect(screen.queryByTestId('inbox-card-title')).toBeNull();
+});
+
 test('blank-named tags and collections do not produce empty filter chips', async () => {
   const id = '7e64cf1e-0000-4000-8000-000000000050';
   fakeRepo.__reset(
