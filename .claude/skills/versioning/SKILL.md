@@ -36,12 +36,22 @@ disagree with this file, the docs win; fix this file.
   - *Build number* (`versionCode`) is `github.run_number`, a monotonic integer.
     Use a build-number-only bump **only for genuinely identical code** (CI
     re-run, re-sign, refreshed QR). Never use it to paper over a code change.
-- **Release candidates** are hyphenated tags: `vX.Y.Z-rcN` — **no dot** before
-  the number (`v0.1.7-rc8`, `v1.0.0-rc2`), N increments from 1 per target
-  version. Under the current `android-apk.yml`, any hyphenated tag/version
-  routes to the rolling **`dev`** prerelease (the APK is still stamped with the
-  full `1.0.0-rc2` version name); only a clean `vX.Y.Z` gets its own versioned,
+- **Release candidates** are hyphenated: `vX.Y.Z-rcN` — **no dot** before the
+  number (`v0.1.7-rc8`, `v1.0.0-rc2`), N increments from 1 per target version.
+  Under the current `android-apk.yml`, any hyphenated version routes to the
+  rolling **`dev`** prerelease (the APK is still stamped with the full
+  `1.0.0-rc2` version name); only a clean `vX.Y.Z` gets its own versioned,
   marked-"latest" release.
+- **RCs leave NO git tag or Release — `docs/development/build-history.md` is the
+  source of truth for RC numbers, NOT `list_tags`.** RC builds are almost always
+  `workflow_dispatch` runs (tag pushes are blocked in remote sessions), which
+  only refresh the `dev` prerelease in place; they create no tag, and the `dev`
+  release body shows only the built commit, never the `-rcN` label. So a tag/
+  release query is blind to RC history. The next rc number = (highest `-rcN` in
+  the current cycle's table in `build-history.md`) **+ 1**. Whoever dispatches a
+  build **must add a row to that file** in the same change — when that lapses,
+  the next person reading tags skips real builds (this is exactly how
+  `v1.0.0-rc4` went unlogged and `rc5` had to be confirmed with the user).
 - **Golden rule:** any code users receive that changed → bump the version. Same
   code rebuilt → keep the version, let the build number distinguish it. Never
   ship different code under the same version name.
@@ -50,18 +60,30 @@ disagree with this file, the docs win; fix this file.
 
 Gather, in this order:
 
-1. **Latest tags** (source of truth for what's shipped). Local clone is often
-   shallow with no tags, so prefer the GitHub MCP:
-   `mcp__github__list_tags(owner, repo)` → take the highest `vX.Y.Z` and the
-   highest `vX.Y.Z-rcN` per version. Fall back to `git tag --sort=-v:refname`.
-2. **Marketing version**: `apps/mobile/app.json` → `expo.version`.
-3. **Branches that exist**: is there a `release/X.Y.x` for the line in question?
+1. **Stable releases — latest tags.** Local clone is often shallow with no tags,
+   so prefer the GitHub MCP: `mcp__github__list_tags(owner, repo)` → take the
+   highest clean `vX.Y.Z` per line. Fall back to `git tag --sort=-v:refname`.
+   **Tags are authoritative for STABLE cuts only — do NOT trust them for RC
+   numbers** (RCs leave no tag; see the RC bullet in the model above).
+2. **RC history — `docs/development/build-history.md`.** This file, not tags, is
+   the source of truth for "what's the next `-rcN`." Read the **current cycle's**
+   table (the one matching `app.json` `version`); the next rc = its highest
+   `-rcN` **+ 1**. If `app.json`'s version has no section yet (a fresh bump),
+   the cycle is new → next is `rc1` and you create the section. Cross-check
+   against the `dev` prerelease's target commit (it holds the latest RC's code)
+   and, when still unsure, the Play internal-test track — but the file is the
+   ledger you extend.
+3. **Marketing version**: `apps/mobile/app.json` → `expo.version` (it can sit
+   *ahead* of the stable tags — e.g. `1.0.0` while the last stable tag is
+   `v0.2.2` — because the RC cycle bumps it before the stable cut; this is
+   normal, the build-history cycle heading disambiguates).
+4. **Branches that exist**: is there a `release/X.Y.x` for the line in question?
    `mcp__github__list_branches` or `git branch -r`.
-4. **What the change is** (feature vs bug fix) and **which shipped line it
+5. **What the change is** (feature vs bug fix) and **which shipped line it
    affects** — from the user and the diff/PRs since the last tag.
 
-Report what you found before proposing a version, e.g. "latest stable
-`v0.1.10`, app.json `1.0.0`, `release/0.1.x` exists, change is a feature."
+Report what you found before proposing a version, e.g. "app.json `1.0.0`, latest
+stable tag `v0.2.2`, build-history 1.0.0 cycle highest is `rc4` → next `rc5`."
 
 ## Step 2 — Classify the change
 
@@ -81,9 +103,14 @@ target version you computed above.
    app.json can be ahead of or behind the tags; tags are what shipped).
 2. Apply the bump from Step 2.
 3. If cutting a release candidate for that target:
-   - Find the highest existing `vTARGET-rcN`. Next is `rc(N+1)`.
-   - If none exists, start at `rc1`. (Flag to the user when there's a gap, e.g.
-     they ask for `rc2` but no `rc1` exists — name it as requested but say so.)
+   - Find the highest `vTARGET-rcN` **in the current cycle's table in
+     `docs/development/build-history.md`** (NOT from `list_tags` — RCs leave no
+     tag). Next is `rc(N+1)`.
+   - If that cycle has no table yet, start at `rc1` and create the section.
+   - The RC count can be **non-monotonic / hand-typed** historically; when the
+     ledger looks incomplete (a bumped `app.json` with no matching cycle table,
+     or a gap a user points out), say so and **confirm the number with the
+     user** rather than guessing — then backfill the missing rows.
 4. **The one question worth asking** (only if genuinely ambiguous from the
    request + diff): is this a feature (MINOR) or a fix (PATCH)? Everything else
    is determined. Don't ask about anything the rules already decide.
@@ -151,12 +178,21 @@ missing or will differ.
 If the target depends on an unmerged PR (e.g. "include fix #N in the RC"),
 **merge that PR first** so the tag/commit you build actually contains it.
 
+**Always log the build in `docs/development/build-history.md` (non-optional).**
+The moment you dispatch/tag an RC, add a row to the current cycle's table —
+date (UTC), the `main` SHA it built from (the run's `head_sha`), the run number,
+and a one-line "what's new since the last RC." This file is the *only* durable
+record of RC numbers (tags/releases don't capture them), so skipping it breaks
+the next person's Step 1. Commit it on a normal branch + PR (it's a docs change
+to the trunk).
+
 ## Step 6 — Report
 
 Always end with a compact, copy-pasteable summary:
 
 - **Next version:** `vX.Y.Z[-rcN]`
-- **Why:** <feature→MINOR / fix→PATCH / RC of …>, from latest tag `<…>`
+- **Why:** <feature→MINOR / fix→PATCH / RC of …>, from latest stable tag `<…>`
+  / build-history cycle `<…>`
 - **Branch / tag at:** `<branch>` @ `<commit>`
 - **Build:** clean release ⇒ versioned/latest; rc ⇒ rolling `dev` (stamped
   `X.Y.Z-rcN`)
@@ -169,7 +205,9 @@ Always end with a compact, copy-pasteable summary:
   (MINOR, tag on `main`).
 - "hotfix the 0.1 line", latest `v0.1.10` → **`v0.1.11`** (PATCH on
   `release/0.1.x`, cherry-pick into `main`).
-- "cut 1.0 rc2", latest stable `v0.1.10`, app.json `1.0.0`, no `v1.0.0-rc1` →
-  **`v1.0.0-rc2`** (MAJOR RC on `main`; note the missing rc1; hyphenated ⇒ `dev`
-  build).
+- "build new rc", app.json `1.0.0`, latest stable tag `v0.2.2`, build-history
+  1.0.0 cycle highest row `v1.0.0-rc4` → **`v1.0.0-rc5`** (dispatch on `main`,
+  hyphenated ⇒ `dev` build; then add the rc5 row to build-history). Note: do NOT
+  derive this from `list_tags` — no `v1.0.0-rc*` tag exists; the table is the
+  source.
 - "rebuild v0.1.10, nothing changed" → **keep `0.1.10`**, new build number only.
