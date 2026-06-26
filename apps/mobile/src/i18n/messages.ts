@@ -144,6 +144,7 @@ export const en = {
     other: '#{name}, {count} bookmarks',
   },
   'inbox.tagCloudEmpty': 'No tags yet. Tag a bookmark to see it here.',
+  'inbox.tagCloudEmptySearch': 'No tags on results for “{query}”.',
 
   // Search suggestion shelf (focused-empty state).
   'search.shelfAffordance': 'Jump to',
