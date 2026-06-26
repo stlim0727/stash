@@ -1861,8 +1861,16 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    // Above the list so it floats over the scrolling rows.
+    // Above the list so it floats over the scrolling rows. On iOS `zIndex`
+    // governs both paint and touch order, but on Android `zIndex` is paint-only
+    // — touch dispatch follows native draw order (elevation, then sibling
+    // order). Without a matching `elevation`, a later-mounted full-screen scroll
+    // sibling (the tag cloud) renders *under* the header yet steals touches over
+    // it, leaving the header's controls visible but dead (STASH-7: "not
+    // responding except back key"). Keep elevation == zIndex so the header wins
+    // touches too. The FAB (elevation 6) already relies on this.
     zIndex: 10,
+    elevation: 10,
   },
   list: {
     padding: 16,
@@ -2030,7 +2038,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
+    // elevation mirrors zIndex so the bar wins Android touch dispatch over the
+    // list the same way the header does (see the `header` style note). Its
+    // clear / back-to-cloud action must stay tappable while the list scrolls
+    // underneath.
     zIndex: 5,
+    elevation: 5,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   filterBarInner: {
