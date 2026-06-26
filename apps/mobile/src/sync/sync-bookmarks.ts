@@ -71,6 +71,24 @@ export async function syncQueueEntry(
 ): Promise<EntrySyncResult> {
   const now = new Date().toISOString();
 
+  // Final guard before anything leaves the device: an `update`/`delete` must
+  // target a row that exists remotely. If its id is still a device-local
+  // (`local-…`) or seeded (`bookmark-…`) id, the row's `create` hasn't finished
+  // its local→remote id swap yet — sending this op would push a non-UUID into a
+  // Postgres `uuid` column and the server 400s ("invalid input syntax for type
+  // uuid"), wedging the entry in a retry loop (issue #237). DEFER instead: leave
+  // the entry pending and untouched so it rides behind the create's
+  // reconciliation, which re-keys it onto the remote id on a later pass. Not a
+  // failure (don't bump retry_count or record an error), just "not yet".
+  if (entry.operation !== 'create') {
+    // Mirror exactly what each branch sends to the server: `update` targets
+    // `local_id`, `delete` targets `remote_id ?? local_id`.
+    const targetId = entry.operation === 'delete' ? entry.remote_id ?? entry.local_id : entry.local_id;
+    if (!hasRemoteIdentity(targetId)) {
+      return { entry: { ...entry, sync_status: 'pending' } };
+    }
+  }
+
   if (entry.operation === 'update') {
     const bookmark = getBookmark(entry.local_id);
     if (!bookmark) {

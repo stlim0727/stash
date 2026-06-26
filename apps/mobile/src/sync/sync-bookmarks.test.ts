@@ -95,11 +95,11 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
 function fakeApi(overrides: Partial<Record<keyof BookmarkApi, unknown>> = {}): BookmarkApi {
   return {
     createBookmark: async () => ({
-      bookmark_id: 'remote-1',
+      bookmark_id: '00000000-0000-4000-8000-000000000001',
       status: 'created',
       metadata_status: 'pending',
     }),
-    updateBookmark: async () => makeBookmark({ id: 'remote-1', sync_status: 'synced' }),
+    updateBookmark: async () => makeBookmark({ id: '00000000-0000-4000-8000-000000000001', sync_status: 'synced' }),
     deleteBookmark: async () => undefined,
     ...overrides,
   } as unknown as BookmarkApi;
@@ -112,10 +112,10 @@ test('create: bookmark adopts the remote ID and synced status', async () => {
   const result = await syncQueueEntry(fakeApi(), repository, makeCreateEntry(), () => bookmark);
 
   assert.equal(result.entry.sync_status, 'synced');
-  assert.equal(result.entry.remote_id, 'remote-1');
+  assert.equal(result.entry.remote_id, '00000000-0000-4000-8000-000000000001');
   assert.equal(result.bookmarkReplacement?.previousId, 'local-abc');
-  assert.equal(result.bookmarkReplacement?.bookmark.id, 'remote-1');
-  assert.ok(calls.includes('replaceBookmark:local-abc->remote-1'));
+  assert.equal(result.bookmarkReplacement?.bookmark.id, '00000000-0000-4000-8000-000000000001');
+  assert.ok(calls.includes('replaceBookmark:local-abc->00000000-0000-4000-8000-000000000001'));
 });
 
 test('create: uploads the LATEST title/notes, not the payload captured at save', async () => {
@@ -124,7 +124,7 @@ test('create: uploads the LATEST title/notes, not the payload captured at save',
   const api = fakeApi({
     createBookmark: async (input: unknown) => {
       sent.push(input);
-      return { bookmark_id: 'remote-1', status: 'created', metadata_status: 'pending' };
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'pending' };
     },
   });
   const editedSinceSave = makeBookmark({ title: 'Edited title', notes: 'edited notes' });
@@ -150,7 +150,7 @@ test('create: forwards the payload client_id so a retried text note stays idempo
   const api = fakeApi({
     createBookmark: async (input: { client_id?: string }) => {
       sent.push(input);
-      return { bookmark_id: 'remote-1', status: 'created', metadata_status: 'skipped' };
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'skipped' };
     },
   });
   // A text note: no URL, body in description, idempotency rests on client_id.
@@ -192,7 +192,7 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
     },
   });
   const latest = makeBookmark({
-    id: 'remote-1',
+    id: '00000000-0000-4000-8000-000000000001',
     sync_status: 'pending',
     is_archived: true,
     notes: 'edited after enqueue',
@@ -201,12 +201,12 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
     metadata_status: 'complete',
   });
 
-  const entry = makeMutationEntry('remote-1', 'update');
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
   const result = await syncQueueEntry(api, repository, entry, () => latest);
 
   assert.equal(result.removeEntry, true);
   assert.deepEqual(sent[0], [
-    'remote-1',
+    '00000000-0000-4000-8000-000000000001',
     {
       title: null,
       description: null,
@@ -222,7 +222,7 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
     },
   ]);
   assert.equal(result.bookmarkReplacement?.bookmark.sync_status, 'synced');
-  assert.ok(calls.includes('removeQueueEntry:remote-1'));
+  assert.ok(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
 });
 
 test('update: a locally deleted bookmark just clears the entry', async () => {
@@ -235,12 +235,12 @@ test('update: a locally deleted bookmark just clears the entry', async () => {
     },
   });
 
-  const entry = makeMutationEntry('remote-1', 'update');
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
   const result = await syncQueueEntry(api, repository, entry, () => undefined);
 
   assert.equal(result.removeEntry, true);
   assert.equal(apiCalled, false);
-  assert.ok(calls.includes('removeQueueEntry:remote-1'));
+  assert.ok(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
 });
 
 test('update: failure stays retryable', async () => {
@@ -251,9 +251,9 @@ test('update: failure stays retryable', async () => {
     },
   });
 
-  const entry = makeMutationEntry('remote-1', 'update');
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
   const result = await syncQueueEntry(api, repository, entry, () =>
-    makeBookmark({ id: 'remote-1' }),
+    makeBookmark({ id: '00000000-0000-4000-8000-000000000001' }),
   );
 
   assert.equal(result.removeEntry, undefined);
@@ -270,12 +270,12 @@ test('delete: permanently removes the remote row and leaves the queue', async ()
     },
   });
 
-  const entry = makeMutationEntry('remote-1', 'delete');
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'delete');
   const result = await syncQueueEntry(api, repository, entry, () => undefined);
 
   assert.equal(result.removeEntry, true);
-  assert.deepEqual(sent[0], ['remote-1', true]);
-  assert.ok(calls.includes('removeQueueEntry:remote-1'));
+  assert.deepEqual(sent[0], ['00000000-0000-4000-8000-000000000001', true]);
+  assert.ok(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
 });
 
 test('delete: failure stays retryable', async () => {
@@ -286,7 +286,7 @@ test('delete: failure stays retryable', async () => {
     },
   });
 
-  const entry = makeMutationEntry('remote-1', 'delete');
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'delete');
   const result = await syncQueueEntry(api, repository, entry, () => undefined);
 
   assert.equal(result.removeEntry, undefined);
@@ -294,11 +294,79 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.entry.last_error, 'timeout');
 });
 
+test('update: a local-id target is DEFERRED, never sent to the server (issue #237)', async () => {
+  // Regression: a follow-up update enqueued for a bookmark whose `create` had
+  // not yet completed its local→remote id swap. Sending `local-…` to the
+  // Postgres `uuid` column 400s ("invalid input syntax for type uuid") and the
+  // entry wedges in a retry loop. It must be deferred (left pending, untouched)
+  // so it rides behind the create's reconciliation instead.
+  const { calls, repository } = fakeRepository();
+  let apiCalled = false;
+  const api = fakeApi({
+    updateBookmark: async () => {
+      apiCalled = true;
+      return makeBookmark();
+    },
+  });
+  const localId = 'local-mquc351g-wzpsqbby';
+  const entry = makeMutationEntry(localId, 'update');
+
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: localId }),
+  );
+
+  assert.equal(apiCalled, false, 'the local id must never reach the server');
+  assert.equal(result.removeEntry, undefined, 'entry stays queued to retry later');
+  assert.equal(result.entry.sync_status, 'pending', 'deferred, not failed');
+  assert.equal(result.entry.retry_count, 0, 'a deferral is not a failure');
+  assert.equal(result.entry.last_error, null);
+  assert.deepEqual(calls, [], 'no queue/bookmark writes on a deferral');
+});
+
+test('delete: a local-id target is DEFERRED, never sent to the server (issue #237)', async () => {
+  const { calls, repository } = fakeRepository();
+  let apiCalled = false;
+  const api = fakeApi({
+    deleteBookmark: async () => {
+      apiCalled = true;
+    },
+  });
+  const localId = 'local-mquc351g-wzpsqbby';
+  // remote_id falls back to local_id when the create never swapped it.
+  const entry: LocalPendingBookmark = { ...makeMutationEntry(localId, 'delete'), remote_id: localId };
+
+  const result = await syncQueueEntry(api, repository, entry, () => undefined);
+
+  assert.equal(apiCalled, false, 'the local id must never reach the server');
+  assert.equal(result.removeEntry, undefined, 'entry stays queued to retry later');
+  assert.equal(result.entry.sync_status, 'pending', 'deferred, not failed');
+  assert.deepEqual(calls, []);
+});
+
+test('update: a seeded (bookmark-…) target is DEFERRED too', async () => {
+  const { repository } = fakeRepository();
+  let apiCalled = false;
+  const api = fakeApi({
+    updateBookmark: async () => {
+      apiCalled = true;
+      return makeBookmark();
+    },
+  });
+  const entry = makeMutationEntry('bookmark-seed-1', 'update');
+
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: 'bookmark-seed-1' }),
+  );
+
+  assert.equal(apiCalled, false);
+  assert.equal(result.entry.sync_status, 'pending');
+});
+
 test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up', () => {
   // The remote row mirrors exactly what the create payload sent: same title/notes,
   // active, no metadata, no collection. Nothing diverged, so no follow-up update.
   const persisted = makeBookmark({
-    id: 'remote-1',
+    id: '00000000-0000-4000-8000-000000000001',
     title: 'Title',
     notes: 'note',
     sync_status: 'synced',
@@ -316,7 +384,7 @@ test('createNeedsReconcileUpdate: a text note whose body was edited before uploa
   // description. If the user edited the body before the create ran, the uploaded
   // shared_text is stale, so the divergence must trigger a follow-up update.
   const persisted = makeBookmark({
-    id: 'remote-1',
+    id: '00000000-0000-4000-8000-000000000001',
     url: null,
     content_type: 'text',
     description: 'edited body',
@@ -328,7 +396,7 @@ test('createNeedsReconcileUpdate: a text note whose body was edited before uploa
 
 test('createNeedsReconcileUpdate: a pristine text note (body unchanged) needs no follow-up', () => {
   const persisted = makeBookmark({
-    id: 'remote-1',
+    id: '00000000-0000-4000-8000-000000000001',
     url: null,
     content_type: 'text',
     description: 'a thought',
@@ -344,7 +412,7 @@ test('createNeedsReconcileUpdate: a row trashed before it had a remote id needs 
   // Without deleted_at in the reconcile condition the cloud row stays live and
   // resurrects on other devices. This asserts the follow-up update fires.
   const persisted = makeBookmark({
-    id: 'remote-1',
+    id: '00000000-0000-4000-8000-000000000001',
     deleted_at: '2026-06-24T00:00:00.000Z',
     sync_status: 'synced',
   });
@@ -361,7 +429,7 @@ test('create→sync round-trip: a trashed-before-remote-id create lands deleted_
   const api = fakeApi({
     createBookmark: async (input: unknown) => {
       createReceived.push(input);
-      return { bookmark_id: 'remote-1', status: 'created', metadata_status: 'pending' };
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'pending' };
     },
     updateBookmark: async (id: string, input: Record<string, unknown>) => {
       updateReceived.push([id, input]);
@@ -390,12 +458,12 @@ test('create→sync round-trip: a trashed-before-remote-id create lands deleted_
   const followUp = makeMutationEntry(persisted.id, 'update');
 
   // Pass 2: process that update against the (still trashed) remote-id row.
-  const remoteRow = makeBookmark({ id: 'remote-1', deleted_at: '2026-06-24T00:00:00.000Z' });
+  const remoteRow = makeBookmark({ id: '00000000-0000-4000-8000-000000000001', deleted_at: '2026-06-24T00:00:00.000Z' });
   await syncQueueEntry(api, repository, followUp, () => remoteRow);
 
   // The cloud row is now trashed: api.updateBookmark received deleted_at for it.
   assert.equal(updateReceived.length, 1);
-  assert.equal(updateReceived[0]?.[0], 'remote-1');
+  assert.equal(updateReceived[0]?.[0], '00000000-0000-4000-8000-000000000001');
   assert.equal(updateReceived[0]?.[1]?.deleted_at, '2026-06-24T00:00:00.000Z');
 });
 
@@ -454,29 +522,29 @@ test('hasRemoteIdentity accepts only Supabase UUIDs', () => {
 });
 
 test('update success does not remove a delete entry that superseded it', async () => {
-  const supersedingDelete = makeMutationEntry('remote-1', 'delete');
+  const supersedingDelete = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'delete');
   const { calls, repository } = fakeRepository([supersedingDelete]);
 
-  const entry = makeMutationEntry('remote-1', 'update');
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
   const result = await syncQueueEntry(fakeApi(), repository, entry, () =>
-    makeBookmark({ id: 'remote-1', sync_status: 'synced' }),
+    makeBookmark({ id: '00000000-0000-4000-8000-000000000001', sync_status: 'synced' }),
   );
 
   assert.equal(result.removeEntry, true);
   // The durable delete row must survive so the deletion still happens
   // after a restart.
-  assert.equal(calls.includes('removeQueueEntry:remote-1'), false);
+  assert.equal(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'), false);
 });
 
 test('update of a missing bookmark preserves a superseding delete entry', async () => {
-  const supersedingDelete = makeMutationEntry('remote-1', 'delete');
+  const supersedingDelete = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'delete');
   const { calls, repository } = fakeRepository([supersedingDelete]);
 
-  const entry = makeMutationEntry('remote-1', 'update');
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
   const result = await syncQueueEntry(fakeApi(), repository, entry, () => undefined);
 
   assert.equal(result.removeEntry, true);
-  assert.equal(calls.includes('removeQueueEntry:remote-1'), false);
+  assert.equal(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'), false);
 });
 
 const REMOTE_ID = '7e64cf1e-0000-4000-8000-000000000001';
@@ -570,9 +638,9 @@ test('reconcileOrphanedQueueEntries leaves synced and already-queued bookmarks a
 });
 
 test('makeMutationEntry targets the bookmark with a pending status', () => {
-  const entry = makeMutationEntry('remote-1', 'delete');
-  assert.equal(entry.local_id, 'remote-1');
-  assert.equal(entry.remote_id, 'remote-1');
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'delete');
+  assert.equal(entry.local_id, '00000000-0000-4000-8000-000000000001');
+  assert.equal(entry.remote_id, '00000000-0000-4000-8000-000000000001');
   assert.equal(entry.operation, 'delete');
   assert.equal(entry.sync_status, 'pending');
 });
