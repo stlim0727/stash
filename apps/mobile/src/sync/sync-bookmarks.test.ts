@@ -294,12 +294,15 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.entry.last_error, 'timeout');
 });
 
-test('update: a local-id target is DEFERRED, never sent to the server (issue #237)', async () => {
-  // Regression: a follow-up update enqueued for a bookmark whose `create` had
-  // not yet completed its local→remote id swap. Sending `local-…` to the
-  // Postgres `uuid` column 400s ("invalid input syntax for type uuid") and the
-  // entry wedges in a retry loop. It must be deferred (left pending, untouched)
-  // so it rides behind the create's reconciliation instead.
+// A `hasPendingCreate` predicate that says "yes, a create for this id is still
+// queued" — the reconcilable case. The default (omitted) predicate is "no".
+const createPending = () => true;
+
+test('update: a local-id target with a pending create is DEFERRED, never sent (issue #237)', async () => {
+  // A follow-up update enqueued for a bookmark whose `create` has NOT yet
+  // completed its local→remote id swap. Sending `local-…` to the Postgres `uuid`
+  // column 400s ("invalid input syntax for type uuid") and wedges the entry. With
+  // a create still queued to re-key it, defer (left pending, untouched).
   const { calls, repository } = fakeRepository();
   let apiCalled = false;
   const api = fakeApi({
@@ -311,8 +314,12 @@ test('update: a local-id target is DEFERRED, never sent to the server (issue #23
   const localId = 'local-mquc351g-wzpsqbby';
   const entry = makeMutationEntry(localId, 'update');
 
-  const result = await syncQueueEntry(api, repository, entry, () =>
-    makeBookmark({ id: localId }),
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    entry,
+    () => makeBookmark({ id: localId }),
+    createPending,
   );
 
   assert.equal(apiCalled, false, 'the local id must never reach the server');
@@ -323,7 +330,7 @@ test('update: a local-id target is DEFERRED, never sent to the server (issue #23
   assert.deepEqual(calls, [], 'no queue/bookmark writes on a deferral');
 });
 
-test('delete: a local-id target is DEFERRED, never sent to the server (issue #237)', async () => {
+test('delete: a local-id target with a pending create is DEFERRED, never sent (issue #237)', async () => {
   const { calls, repository } = fakeRepository();
   let apiCalled = false;
   const api = fakeApi({
@@ -335,7 +342,7 @@ test('delete: a local-id target is DEFERRED, never sent to the server (issue #23
   // remote_id falls back to local_id when the create never swapped it.
   const entry: LocalPendingBookmark = { ...makeMutationEntry(localId, 'delete'), remote_id: localId };
 
-  const result = await syncQueueEntry(api, repository, entry, () => undefined);
+  const result = await syncQueueEntry(api, repository, entry, () => undefined, createPending);
 
   assert.equal(apiCalled, false, 'the local id must never reach the server');
   assert.equal(result.removeEntry, undefined, 'entry stays queued to retry later');
@@ -343,7 +350,7 @@ test('delete: a local-id target is DEFERRED, never sent to the server (issue #23
   assert.deepEqual(calls, []);
 });
 
-test('update: a seeded (bookmark-…) target is DEFERRED too', async () => {
+test('update: a seeded (bookmark-…) target with a pending create is DEFERRED too', async () => {
   const { repository } = fakeRepository();
   let apiCalled = false;
   const api = fakeApi({
@@ -354,12 +361,64 @@ test('update: a seeded (bookmark-…) target is DEFERRED too', async () => {
   });
   const entry = makeMutationEntry('bookmark-seed-1', 'update');
 
-  const result = await syncQueueEntry(api, repository, entry, () =>
-    makeBookmark({ id: 'bookmark-seed-1' }),
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    entry,
+    () => makeBookmark({ id: 'bookmark-seed-1' }),
+    createPending,
   );
 
   assert.equal(apiCalled, false);
   assert.equal(result.entry.sync_status, 'pending');
+});
+
+test('update: an ORPHANED local-id target (no pending create) SETTLES failed, not pending (issue #237)', async () => {
+  // No create will ever re-key this entry, so deferring as `pending` would
+  // hot-loop the auto-sync effect (which re-fires on every pending entry).
+  // Settle it `failed` instead — that stops the loop while still retrying on a
+  // later save / manual Sync. The local id must never reach the server.
+  const { repository } = fakeRepository();
+  let apiCalled = false;
+  const api = fakeApi({
+    updateBookmark: async () => {
+      apiCalled = true;
+      return makeBookmark();
+    },
+  });
+  const localId = 'local-mquc351g-wzpsqbby';
+  const entry = makeMutationEntry(localId, 'update');
+
+  // Default predicate => no pending create => orphaned.
+  const result = await syncQueueEntry(api, repository, entry, () => makeBookmark({ id: localId }));
+
+  assert.equal(apiCalled, false, 'the local id must never reach the server');
+  assert.equal(result.entry.sync_status, 'failed', 'settled failed, NOT pending');
+  assert.equal(result.entry.retry_count, 1);
+  assert.match(result.entry.last_error ?? '', /no remote identity/i);
+});
+
+test('delete: an ORPHANED local-id target (no pending create) is REMOVED, no remote delete (issue #237)', async () => {
+  // The row never reached the server (its id is still local) and the local
+  // delete already happened — there is nothing to delete remotely, so the entry
+  // settles cleanly by leaving the queue.
+  const { calls, repository } = fakeRepository();
+  let apiCalled = false;
+  const api = fakeApi({
+    deleteBookmark: async () => {
+      apiCalled = true;
+    },
+  });
+  const localId = 'local-mquc351g-wzpsqbby';
+  const entry: LocalPendingBookmark = { ...makeMutationEntry(localId, 'delete'), remote_id: localId };
+
+  // Default predicate => no pending create => orphaned.
+  const result = await syncQueueEntry(api, repository, entry, () => undefined);
+
+  assert.equal(apiCalled, false, 'no remote delete must be attempted');
+  assert.equal(result.removeEntry, true, 'entry settles by leaving the queue');
+  assert.equal(result.entry.sync_status, 'synced');
+  assert.ok(calls.includes(`removeQueueEntry:${localId}`));
 });
 
 test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up', () => {

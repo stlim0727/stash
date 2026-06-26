@@ -62,30 +62,62 @@ async function failEntry(
  *
  * `getBookmark` must return the LATEST local row — not a snapshot — so
  * concurrent enrichment or edits are never overwritten by stale data.
+ *
+ * `hasPendingCreate(localId)` reports whether a not-yet-synced `create` entry
+ * for the same local id is still in the queue. It decides what to do with an
+ * `update`/`delete` that still targets a device-local id (see the guard below).
  */
 export async function syncQueueEntry(
   api: BookmarkApi,
   repository: BookmarkRepository,
   entry: LocalPendingBookmark,
   getBookmark: (id: string) => Bookmark | undefined,
+  hasPendingCreate: (localId: string) => boolean = () => false,
 ): Promise<EntrySyncResult> {
   const now = new Date().toISOString();
 
   // Final guard before anything leaves the device: an `update`/`delete` must
   // target a row that exists remotely. If its id is still a device-local
-  // (`local-…`) or seeded (`bookmark-…`) id, the row's `create` hasn't finished
-  // its local→remote id swap yet — sending this op would push a non-UUID into a
-  // Postgres `uuid` column and the server 400s ("invalid input syntax for type
-  // uuid"), wedging the entry in a retry loop (issue #237). DEFER instead: leave
-  // the entry pending and untouched so it rides behind the create's
-  // reconciliation, which re-keys it onto the remote id on a later pass. Not a
-  // failure (don't bump retry_count or record an error), just "not yet".
+  // (`local-…`) or seeded (`bookmark-…`) id, sending the op would push a
+  // non-UUID into a Postgres `uuid` column and the server 400s ("invalid input
+  // syntax for type uuid"), wedging the entry in a retry loop (issue #237).
+  //
+  // What to do depends on whether reconciliation is genuinely coming. A pending
+  // `create` for the same local id WILL re-key this entry onto the remote id
+  // once it lands, so DEFER (leave it pending, untouched) and let it ride behind
+  // that create. But if there is no such create — an orphaned mutation whose
+  // create already settled, can never succeed, or was never enqueued — nothing
+  // will ever re-key it. Returning it `pending` then hot-loops the auto-sync
+  // effect (which re-fires on any `pending` entry), so SETTLE it instead:
+  //   - delete: the row never reached the server (its id is still local) and the
+  //     local delete already happened, so there is nothing to delete remotely —
+  //     remove the queue entry so it leaves cleanly.
+  //   - update: settle as `failed` with a clear reason. `failed` does NOT re-fire
+  //     the auto-sync loop; it still retries on the next save or a manual Sync.
   if (entry.operation !== 'create') {
     // Mirror exactly what each branch sends to the server: `update` targets
     // `local_id`, `delete` targets `remote_id ?? local_id`.
-    const targetId = entry.operation === 'delete' ? entry.remote_id ?? entry.local_id : entry.local_id;
+    const targetId =
+      entry.operation === 'delete' ? entry.remote_id ?? entry.local_id : entry.local_id;
     if (!hasRemoteIdentity(targetId)) {
-      return { entry: { ...entry, sync_status: 'pending' } };
+      if (hasPendingCreate(entry.local_id)) {
+        // Reconcilable: a create is coming to swap this onto its remote id.
+        return { entry: { ...entry, sync_status: 'pending' } };
+      }
+      if (entry.operation === 'delete') {
+        // Nothing exists remotely; the local delete already ran. Settle.
+        await removeQueueEntryIfNotSuperseded(repository, entry);
+        return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
+      }
+      // Orphaned update: stop the hot loop by settling as failed.
+      return {
+        entry: await failEntry(
+          repository,
+          entry,
+          new Error('Cannot sync: bookmark has no remote identity yet.'),
+          now,
+        ),
+      };
     }
   }
 
