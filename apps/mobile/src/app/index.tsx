@@ -316,6 +316,12 @@ export default function InboxScreen() {
   // whenever we're not in a cloud-drilled state (the user moved on via a chip or
   // the view-mode control, both of which clear it).
   const cloudReturnRef = useRef<InboxFilter | null>(null);
+  // The user's preferred ITEM layout (Cards or List) — the one a deliberate view
+  // segment tap last selected, restored from the saved pref on launch. Drilling
+  // into a tag (cloud / routed facet / suggestion) lands in THIS layout rather
+  // than a hard-coded Cards, so a List user keeps List when they drill in. Never
+  // 'cloud': the cloud is a navigation surface, not an item layout.
+  const preferredItemView = useRef<ViewMode>('card');
   useFocusEffect(
     useCallback(() => {
       // Hardware Back only exists on Android. Guard the registration there:
@@ -447,6 +453,12 @@ export default function InboxScreen() {
           return;
         }
         const stored = parseViewMode(raw);
+        // Remember the user's preferred item layout so a later drill-in lands
+        // there instead of hard-coded Cards. The cloud isn't an item layout, so
+        // only 'card'/'list' update the ref.
+        if (stored === 'card' || stored === 'list') {
+          preferredItemView.current = stored;
+        }
         // Cold-starting via a tag/collection deep link forces a bookmark layout
         // (see the routed-facet effect); don't let a restored Tag-cloud
         // preference land afterwards and hide the linked-to bookmarks.
@@ -469,12 +481,6 @@ export default function InboxScreen() {
     }
     void setPreference(INBOX_SORT_PREF_KEY, serializeSort(sort)).catch(() => {});
   }, [sort]);
-  useEffect(() => {
-    if (!viewLoaded.current) {
-      return;
-    }
-    void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(viewMode)).catch(() => {});
-  }, [viewMode]);
   useEffect(() => {
     if (!recentsLoaded.current) {
       return;
@@ -552,11 +558,17 @@ export default function InboxScreen() {
     if (!paramTag && !paramCollection) {
       return;
     }
+    // A routed facet is a fresh destination chosen elsewhere (e.g. a tag tapped
+    // in Detail), NOT a continuation of a cloud drill — so end any cloud-return
+    // context, matching the cloud-tag/chip/suggestion paths. Without this, a
+    // deep-link landing while a stale ref lingers would mislabel the filter bar
+    // with a back-to-cloud action that jumps to a facet the user never chose.
+    cloudReturnRef.current = null;
     setFilter(paramTag ? { kind: 'tag', id: paramTag } : { kind: 'collection', id: paramCollection! });
     // A routed facet wants the matching bookmarks in view; the tag cloud is a
-    // global overview that ignores the facet, so drop back to a bookmark layout
-    // (same drill-in as tapping a tag inside the cloud).
-    setViewMode((mode) => (mode === 'cloud' ? 'card' : mode));
+    // global overview that ignores the facet, so drop back to the user's
+    // preferred item layout (same drill-in as tapping a tag inside the cloud).
+    setViewMode((mode) => (mode === 'cloud' ? preferredItemView.current : mode));
   }, [paramTag, paramCollection]);
 
   const tagIdsFor = useCallback(
@@ -715,7 +727,7 @@ export default function InboxScreen() {
   const applySuggestionFacet = useCallback((target: InboxFilter) => {
     cloudReturnRef.current = null;
     setFilter(target);
-    setViewMode((mode) => (mode === 'cloud' ? 'card' : mode));
+    setViewMode((mode) => (mode === 'cloud' ? preferredItemView.current : mode));
   }, []);
 
   // Tap a suggestion chip (§5): a recent FILLS the query and keeps the keyboard
@@ -776,6 +788,71 @@ export default function InboxScreen() {
       : activeChip
         ? t('inbox.sectionFacet', { label: activeChip.label, count: visible.length })
         : t('inbox.sectionRecent');
+
+  // Sticky active-filter bar (rendered inside the floating header). The list is
+  // "narrowed" whenever a facet is applied or a real search is running; the bar
+  // tells the user that and offers a one-tap way back out. Precedence peels the
+  // most-recently-added layer first: a live search clears before the underlying
+  // facet, and a cloud-drilled facet returns to the cloud before clearing.
+  //
+  // cloudReturnRef is read directly here (not via state): every ref write in
+  // this file is paired with a setState, so a render always reflects its current
+  // value. The action handler re-reads it at call time for the same reason.
+  const narrowed = filter.kind !== 'all' || searching;
+  const scope = useMemo((): {
+    text: string;
+    icon: ComponentProps<typeof Ionicons>['name'];
+    action: 'clear-search' | 'clear-facet' | 'back-to-cloud';
+    a11y: string;
+  } | null => {
+    if (searching) {
+      return {
+        text: t('inbox.scopeSearch', { query: debouncedQuery.trim() }),
+        icon: 'search-outline',
+        action: 'clear-search',
+        a11y: t('inbox.scopeClearSearchA11y'),
+      };
+    }
+    if (filter.kind === 'all') {
+      return null;
+    }
+    const label =
+      filter.kind === 'uncollected' ? t('inbox.filterNoCollection') : (activeChip?.label ?? '');
+    if (cloudReturnRef.current !== null) {
+      return {
+        text: t('inbox.scopeFiltered', { label }),
+        icon: 'funnel-outline',
+        action: 'back-to-cloud',
+        a11y: t('inbox.scopeBackToTagsA11y'),
+      };
+    }
+    return {
+      text: t('inbox.scopeFiltered', { label }),
+      icon: 'funnel-outline',
+      action: 'clear-facet',
+      a11y: t('inbox.scopeClearA11y'),
+    };
+  }, [searching, debouncedQuery, filter.kind, activeChip, t]);
+
+  // Run the scope bar's trailing action. Re-reads cloudReturnRef at call time so
+  // it mirrors the live drill context, not whatever it was when scope memoized.
+  const onScopeAction = useCallback(() => {
+    if (searching) {
+      setQuery('');
+      return;
+    }
+    if (cloudReturnRef.current !== null) {
+      // Navigation back to the cloud — mirror the Android Back handler. Do NOT
+      // persist a view pref: returning to the cloud isn't a layout preference.
+      const r = cloudReturnRef.current;
+      cloudReturnRef.current = null;
+      setFilter(r ?? ALL_FILTER);
+      setViewMode('cloud');
+      return;
+    }
+    cloudReturnRef.current = null;
+    setFilter(ALL_FILTER);
+  }, [searching]);
 
   const closeMenu = useCallback(() => {
     setMenuItem(null);
@@ -1096,7 +1173,14 @@ export default function InboxScreen() {
                     // A deliberate layout change ends the cloud-drill context,
                     // so Back should no longer jump back to the cloud.
                     cloudReturnRef.current = null;
+                    // Only a deliberate segment tap persists the view pref (a
+                    // transient drill-in must NOT), and remembers the preferred
+                    // ITEM layout so the next drill lands in Cards/List to match.
+                    if (mode !== 'cloud') {
+                      preferredItemView.current = mode;
+                    }
                     setViewMode(mode);
+                    void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(mode)).catch(() => {});
                   }}
                   style={[styles.viewSegmentButton, active ? { backgroundColor: palette.accentSoft } : null]}
                 >
@@ -1110,6 +1194,41 @@ export default function InboxScreen() {
             })}
           </View>
         </View>
+        ) : null}
+        {showControls && narrowed && !searchFocused && scope ? (
+          <View
+            testID="inbox-filter-bar"
+            style={[styles.suggestBanner, styles.filterBar, { backgroundColor: palette.accentSoft }]}
+          >
+            <Ionicons name={scope.icon} size={16} color={palette.accentText} style={styles.filterBarIcon} />
+            <Text style={[styles.filterBarText, { color: palette.accentText }]} numberOfLines={1}>
+              {scope.text}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={scope.a11y}
+              testID={
+                scope.action === 'back-to-cloud' ? 'inbox-filter-back-to-cloud' : 'inbox-filter-clear'
+              }
+              hitSlop={8}
+              onPress={onScopeAction}
+              style={({ pressed }) => [
+                styles.filterBarAction,
+                { borderColor: palette.accent, opacity: pressed ? 0.6 : 1 },
+              ]}
+            >
+              {scope.action === 'back-to-cloud' ? (
+                <>
+                  <Ionicons name="arrow-back" size={14} color={palette.accentText} />
+                  <Text style={[styles.filterBarActionLabel, { color: palette.accentText }]}>
+                    {t('inbox.scopeBackToTags')}
+                  </Text>
+                </>
+              ) : (
+                <Ionicons name="close" size={16} color={palette.accentText} />
+              )}
+            </Pressable>
+          </View>
         ) : null}
         {showShelf ? (
           <ScrollView
@@ -1177,7 +1296,9 @@ export default function InboxScreen() {
                         // scoped it) rather than exiting the app.
                         cloudReturnRef.current = filter;
                         setFilter({ kind: 'tag', id: entry.id });
-                        setViewMode('card');
+                        // Land in the user's preferred item layout (Cards or
+                        // List), not a hard-coded Cards.
+                        setViewMode(preferredItemView.current);
                       }}
                     >
                       <Text
@@ -1741,6 +1862,31 @@ const styles = StyleSheet.create({
   },
   suggestBannerClose: {
     padding: 8,
+  },
+  filterBar: {
+    paddingRight: 8,
+    paddingVertical: 8,
+  },
+  filterBarIcon: {
+    marginRight: 8,
+  },
+  filterBarText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  filterBarAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+  },
+  filterBarActionLabel: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   searchWrap: {
     paddingHorizontal: 16,
