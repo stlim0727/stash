@@ -76,6 +76,7 @@ import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import { HighlightedText } from '@/ui/HighlightedText';
+import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
 
@@ -1861,8 +1862,8 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    // Above the list so it floats over the scrolling rows.
-    zIndex: 10,
+    // Float above the list for paint AND touch — see overlayLayer (STASH-7).
+    ...overlayLayer(10),
   },
   list: {
     padding: 16,
@@ -2030,7 +2031,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    zIndex: 5,
+    // Between the header (10) and the list (0), winning touches over the list so
+    // its clear / back-to-cloud action stays tappable while scrolling — see
+    // overlayLayer (STASH-7).
+    ...overlayLayer(5),
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   filterBarInner: {

@@ -44,7 +44,6 @@ function RootStack() {
       <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
       <Stack.Screen name="add" options={{ title: t('nav.addBookmark'), presentation: 'modal' }} />
       <Stack.Screen name="settings" options={{ title: t('nav.settings') }} />
-      <Stack.Screen name="account" options={{ title: t('nav.account'), presentation: 'modal' }} />
       <Stack.Screen name="review" options={{ title: t('nav.review') }} />
       <Stack.Screen name="report" options={{ title: t('nav.report') }} />
       <Stack.Screen name="trash" options={{ title: t('nav.trash') }} />
