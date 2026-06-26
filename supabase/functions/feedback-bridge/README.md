@@ -72,23 +72,35 @@ supabase secrets set FEEDBACK_BRIDGE_SECRET="<random-string>"
 
 ## Wiring the database webhook
 
-Either configure a **Database Webhook** in the Supabase dashboard
-(Database → Webhooks) on `public.feedback_reports`, event `INSERT`, pointing at
-`https://<project-ref>.supabase.co/functions/v1/feedback-bridge`, adding the
-`x-feedback-bridge-secret` header if you set `FEEDBACK_BRIDGE_SECRET` — or
-create the trigger in SQL:
+The INSERT → function trigger ships as a migration
+(`supabase/migrations/20260626000000_feedback_bridge_webhook.sql`). It uses
+`pg_net` and reads its URL + shared secret from **Vault**, mirroring the
+`dispatch_ai_enrichment` trigger — so no secret is baked into the repo and the
+trigger never holds the writer's transaction open on the network.
+
+The migration creates everything except the secrets, which the operator sets
+out-of-band (so they stay off-repo). Set **both** the Vault secrets the trigger
+reads and the matching edge-function env vars:
 
 ```sql
-create trigger on_feedback_report_created
-  after insert on public.feedback_reports
-  for each row execute function supabase_functions.http_request(
-    'https://<project-ref>.supabase.co/functions/v1/feedback-bridge',
-    'POST',
-    '{"Content-Type":"application/json","x-feedback-bridge-secret":"<secret>"}',
-    '{}',
-    '5000'
-  );
+select vault.create_secret(
+  'https://<project-ref>.supabase.co/functions/v1/feedback-bridge', 'feedback_bridge_url');
+select vault.create_secret('<random-shared-secret>', 'feedback_bridge_secret');
 ```
+
+```bash
+supabase secrets set SENTRY_DSN="https://<key>@<host>/<project>"
+supabase secrets set FEEDBACK_BRIDGE_SECRET="<same-random-shared-secret>"
+```
+
+The `feedback_bridge_secret` Vault value (sent as the `x-feedback-bridge-secret`
+header) must equal the function's `FEEDBACK_BRIDGE_SECRET` env, or the function
+rejects the webhook (401). Until `feedback_bridge_url` is set the trigger is a
+no-op; reports are always persisted regardless — forwarding is best-effort.
+
+> Note: this project never had the dashboard-managed Database Webhooks feature
+> (`supabase_functions` schema) enabled, so the trigger calls `net.http_post`
+> directly rather than `supabase_functions.http_request`.
 
 ## Local development
 

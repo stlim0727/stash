@@ -31,3 +31,11 @@ verify_jwt = true
 # API key authentication is handled in the handler — JWT pre-verification is
 # disabled because callers use stash_ API keys, not Supabase JWTs.
 verify_jwt = false
+
+[functions.feedback-bridge]
+# Invoked by the feedback_reports INSERT trigger via pg_net (no user session), so
+# it authorizes via the x-feedback-bridge-secret shared-secret header validated in
+# index.ts. The gateway must NOT pre-verify a JWT, or it rejects the database-
+# triggered request before the handler can check the secret — every report would
+# persist but never forward. Mirrors ai-enrich's server-trigger path.
+verify_jwt = false
