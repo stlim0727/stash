@@ -54,14 +54,23 @@ Gather, in this order:
    shallow with no tags, so prefer the GitHub MCP:
    `mcp__github__list_tags(owner, repo)` → take the highest `vX.Y.Z` and the
    highest `vX.Y.Z-rcN` per version. Fall back to `git tag --sort=-v:refname`.
-2. **Marketing version**: `apps/mobile/app.json` → `expo.version`.
-3. **Branches that exist**: is there a `release/X.Y.x` for the line in question?
+2. **Latest releases** — **CRITICAL for RC numbering.** Tags are only created
+   when pushed manually; RC builds cut via `workflow_dispatch` (the normal path
+   in a remote session) produce APKs stamped with the version string but **no
+   git tag**. Always also call `mcp__github__list_releases(owner, repo)` and
+   scan the release names/titles for the highest `vX.Y.Z-rcN` that matches the
+   target version. The highest RC number found across **both tags and releases**
+   is the floor — next RC is `max(tags_rc, releases_rc) + 1`. If tags and
+   releases disagree, trust the higher number and note the discrepancy.
+3. **Marketing version**: `apps/mobile/app.json` → `expo.version`.
+4. **Branches that exist**: is there a `release/X.Y.x` for the line in question?
    `mcp__github__list_branches` or `git branch -r`.
-4. **What the change is** (feature vs bug fix) and **which shipped line it
+5. **What the change is** (feature vs bug fix) and **which shipped line it
    affects** — from the user and the diff/PRs since the last tag.
 
 Report what you found before proposing a version, e.g. "latest stable
-`v0.1.10`, app.json `1.0.0`, `release/0.1.x` exists, change is a feature."
+`v0.1.10`, app.json `1.0.0`, latest release `v1.0.0-rc3` (no matching tag),
+`release/0.1.x` exists, change is a feature."
 
 ## Step 2 — Classify the change
 
@@ -173,3 +182,6 @@ Always end with a compact, copy-pasteable summary:
   **`v1.0.0-rc2`** (MAJOR RC on `main`; note the missing rc1; hyphenated ⇒ `dev`
   build).
 - "rebuild v0.1.10, nothing changed" → **keep `0.1.10`**, new build number only.
+- "next rc", no `v1.0.0-rcN` git tags but GitHub Releases shows `v1.0.0-rc3`
+  (dispatch builds without tags) → **`v1.0.0-rc4`** (releases beat tags as the
+  floor; always check both).
