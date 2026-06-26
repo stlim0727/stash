@@ -146,16 +146,26 @@ mcp__github__actions_run_trigger(
 ```
 
 It builds from the **same commit**, so the shipped app code / JS bundle is the
-same — but do **not** call it identical to a later tag-triggered build. The two
-differ in build metadata: `ANDROID_VERSION_CODE` is `github.run_number` (changes
-every run) and `EXPO_PUBLIC_GIT_REF` is `github.ref_name` (a dispatch on `main`
-records `main`; a tag build records `vX.Y.Z-rcN`), both baked into the APK and
-shown in Settings. And for an RC, pushing the tag later just refreshes the same
-rolling `dev` release again — it is not a new, distinct release. So describe the
-dispatch build as "same code, different build number/provenance," and hand the
-user the exact `git tag … && git push …` one-liner to create the durable tag
-from an unconstrained machine. Always tell them which path you used and what is
-missing or will differ.
+same — but the two differ in build metadata: `ANDROID_VERSION_CODE` is
+`github.run_number` (changes every run) and `EXPO_PUBLIC_GIT_REF` is
+`github.ref_name` (dispatch records the branch name; a tag build records the
+tag), both baked into the APK and shown in Settings.
+
+**After every dispatch build, always provide the tag command.** Look up the
+exact HEAD commit of the target branch (`git rev-parse origin/<branch>` or from
+the workflow run's triggered-on sha) and give the user this block verbatim in
+the Step 6 report — not optional, not buried:
+
+```bash
+# Run from your local machine after the build completes:
+git fetch origin <branch>
+git tag vX.Y.Z[-rcN] <exact-sha>
+git push origin vX.Y.Z[-rcN]
+```
+
+For an RC the tag pushes refresh the same rolling `dev` release (no new entry);
+for a clean `vX.Y.Z` the tag triggers a separate versioned release build. Either
+way the tag is the durable record of what was shipped — always create it.
 
 If the target depends on an unmerged PR (e.g. "include fix #N in the RC"),
 **merge that PR first** so the tag/commit you build actually contains it.
@@ -166,11 +176,17 @@ Always end with a compact, copy-pasteable summary:
 
 - **Next version:** `vX.Y.Z[-rcN]`
 - **Why:** <feature→MINOR / fix→PATCH / RC of …>, from latest tag `<…>`
-- **Branch / tag at:** `<branch>` @ `<commit>`
+- **Branch / tag at:** `<branch>` @ `<exact-sha>`
 - **Build:** clean release ⇒ versioned/latest; rc ⇒ rolling `dev` (stamped
   `X.Y.Z-rcN`)
-- **Command run / for you to run:** the tag push or dispatch
-- **Follow-ups:** app.json bump? cherry-pick to `main`? release notes file?
+- **Command run:** the dispatch or tag push actually executed
+- **REQUIRED — tag it locally** (always include this block, every time):
+  ```bash
+  git fetch origin <branch>
+  git tag vX.Y.Z[-rcN] <exact-sha>
+  git push origin vX.Y.Z[-rcN]
+  ```
+- **Other follow-ups:** app.json bump? cherry-pick to `main`? release notes file?
 
 ## Quick examples
 
