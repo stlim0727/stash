@@ -381,13 +381,13 @@ test('the collection chip filters the Inbox to that collection', async () => {
   expect(screen.getByText('Work doc')).toBeTruthy();
   expect(screen.queryByText('Loose link')).toBeNull();
 
-  await fireEvent.press(screen.getByText('No collection'));
+  await fireEvent.press(screen.getByText('Inbox'));
   expect(screen.getByText('Loose link')).toBeTruthy();
   expect(screen.queryByText('Work doc')).toBeNull();
 });
 
 test('facet chips carry icons that distinguish collections from tags (#142)', async () => {
-  // The "No collection" chip used to sit unmarked among bare collection-name
+  // The "Inbox" (no-collection) chip used to sit unmarked among bare collection-name
   // chips and "#tag" chips, so its meaning read as ambiguous (issue #142).
   // Collections now carry a folder icon and the no-collection set a tray icon,
   // so the shelf groups collection filters apart from the "#tag" chips.

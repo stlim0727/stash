@@ -1,6 +1,6 @@
 /**
  * Layout regression guards for the Browse facet shelf (the horizontal chip row
- * under "BROWSE": All / No collection / collections / #tags).
+ * under "BROWSE": All / Inbox / collections / #tags).
  *
  * On Android a horizontal ScrollView can collapse its viewport onto its content
  * and clip the chips' bottom edge, and vertical padding on the content

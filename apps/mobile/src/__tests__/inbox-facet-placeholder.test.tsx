@@ -64,8 +64,8 @@ function renderInbox() {
 
 /**
  * One foldered+tagged bookmark plus one uncollected bookmark, so the browse
- * shelf surfaces a folder chip (Work), a #tag chip (#design), an Uncollected
- * chip, and the All chip — every facet the placeholder can scope to.
+ * shelf surfaces a folder chip (Work), a #tag chip (#design), an Inbox
+ * (no-collection) chip, and the All chip — every facet the placeholder can scope to.
  */
 function seedFacetedLibrary() {
   const foldered = '7e64cf1e-0000-4000-8000-0000000000d1';
@@ -117,9 +117,9 @@ test('the placeholder scopes to the active facet and reverts to the default on A
   await tapBrowseChip('#design');
   await waitFor(() => expect(screen.getByPlaceholderText('Search in #design')).toBeTruthy());
 
-  // Uncollected facet → the fixed "Search in Uncollected" label.
-  await tapBrowseChip('No collection');
-  await waitFor(() => expect(screen.getByPlaceholderText('Search in Uncollected')).toBeTruthy());
+  // Uncollected facet → the fixed "Search in Inbox" label.
+  await tapBrowseChip('Inbox');
+  await waitFor(() => expect(screen.getByPlaceholderText('Search in Inbox')).toBeTruthy());
 
   // Clearing the facet (All chip) reverts to the default with no stale scope.
   await tapBrowseChip('All');
