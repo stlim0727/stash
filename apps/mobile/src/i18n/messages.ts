@@ -119,6 +119,10 @@ export const en = {
   'inbox.moveToCollectionAction': 'Move to collection…',
   'inbox.moveToCollectionTitle': 'Move to collection',
   'inbox.inboxNoCollection': 'Inbox',
+  // Distinct screen-reader label so the unfiled option never sounds identical to
+  // a user collection that happens to be named "Inbox" (the visible row stays
+  // the clean "Inbox", the tray icon disambiguates it visually).
+  'inbox.inboxNoCollectionA11y': 'Inbox (no collection)',
   'inbox.aiSuggestionsA11y': { one: '{count} AI suggestion', other: '{count} AI suggestions' },
   'inbox.newSuggestions': {
     one: '✨ {count} new AI suggestion',
@@ -409,6 +413,9 @@ export const en = {
   'collectionPicker.changeA11y': 'Change collection',
   'collectionPicker.current': '📁  {name}',
   'collectionPicker.inbox': 'Inbox',
+  // Distinct a11y label for the unfiled (no-collection) row — see the matching
+  // note on inbox.inboxNoCollectionA11y.
+  'collectionPicker.inboxA11y': 'Inbox (no collection)',
   'collectionPicker.findOrCreateA11y': 'Find or create a collection',
   'collectionPicker.findOrCreatePlaceholder': 'Find or create…',
   'collectionPicker.inboxNone': 'Inbox',

@@ -970,6 +970,7 @@ export default function InboxScreen() {
         {
           key: 'none',
           label: t('inbox.inboxNoCollection'),
+          accessibilityLabel: t('inbox.inboxNoCollectionA11y'),
           icon: 'file-tray-outline',
           selected: item.collection_id === null,
           onPress: () => {
