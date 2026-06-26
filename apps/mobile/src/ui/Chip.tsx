@@ -14,6 +14,10 @@ interface ChipProps extends Omit<PressableProps, 'style'> {
   // collection" set) — so they read as collection filters rather than being
   // confused with the bare "#tag" chips beside them.
   icon?: keyof typeof Ionicons.glyphMap;
+  // Optional trailing count (e.g. how many bookmarks a folder chip holds). Kept
+  // as a separate muted token rather than baked into `children`, so the label
+  // stays clean for the search placeholder and screen readers.
+  count?: number;
   style?: StyleProp<ViewStyle>;
 }
 
@@ -25,7 +29,7 @@ const LABEL_FONT_SIZE = 14;
 // font/display size.
 const LABEL_LINE_RATIO = 1.57;
 
-export function Chip({ children, variant = 'default', icon, disabled, style, ...props }: ChipProps) {
+export function Chip({ children, variant = 'default', icon, count, disabled, style, ...props }: ChipProps) {
   const palette = usePalette();
   const colors = {
     default: { backgroundColor: palette.surface, borderColor: palette.border, color: palette.text },
@@ -55,6 +59,9 @@ export function Chip({ children, variant = 'default', icon, disabled, style, ...
         <Ionicons name={icon} size={13} color={colors.color} style={styles.icon} testID={`chip-icon-${icon}`} />
       ) : null}
       <Text style={[styles.label, { color: colors.color, lineHeight }]}>{children}</Text>
+      {typeof count === 'number' ? (
+        <Text style={[styles.count, { color: colors.color, lineHeight }]}>{`· ${count}`}</Text>
+      ) : null}
     </Pressable>
   );
 }
@@ -85,5 +92,13 @@ const styles = StyleSheet.create({
     // Keep Android's default font padding (do NOT set includeFontPadding:false,
     // which tightened the box and made it clip).
     fontWeight: '700',
+  },
+  // Trailing count: same color as the label but dimmed and lighter, so it reads
+  // as secondary metadata (the folder's weight) without competing with the name.
+  count: {
+    fontSize: LABEL_FONT_SIZE,
+    fontWeight: '600',
+    opacity: 0.55,
+    marginLeft: 5,
   },
 });

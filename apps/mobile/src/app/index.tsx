@@ -121,6 +121,10 @@ interface FacetChip {
   label: string;
   filter: InboxFilter;
   icon?: keyof typeof Ionicons.glyphMap;
+  // How many bookmarks the facet holds. Set for the "container" chips (folders
+  // and the Inbox/no-collection set) so their weight is visible at a glance;
+  // left undefined for #tag chips (the tag cloud is their frequency view).
+  count?: number;
 }
 
 // Glyph for each layout in the view-mode segmented control.
@@ -241,12 +245,14 @@ const BrowseChip = memo(function BrowseChip({
   target,
   label,
   icon,
+  count,
   active,
   onSelect,
 }: {
   target: InboxFilter;
   label: string;
   icon?: keyof typeof Ionicons.glyphMap;
+  count?: number;
   active: boolean;
   onSelect: (target: InboxFilter) => void;
 }) {
@@ -257,6 +263,7 @@ const BrowseChip = memo(function BrowseChip({
       onPress={() => onSelect(target)}
       variant={active ? 'selected' : 'default'}
       icon={icon}
+      count={count}
     >
       {label}
     </Chip>
@@ -634,29 +641,33 @@ export default function InboxScreen() {
 
   // Browse facets derived from what is actually in the Inbox, so every chip
   // leads to at least one bookmark and the bar stays empty for fresh installs.
-  const { chips, hasUncollected } = useMemo(() => {
-    const collectionIds = new Set<string>();
+  const { chips, hasUncollected, uncollectedCount } = useMemo(() => {
+    const collectionCounts = new Map<string, number>();
     const tagsById = new Map<string, string>();
-    let uncollected = false;
+    let uncollected = 0;
     for (const bookmark of inbox) {
       if (bookmark.collection_id === null) {
-        uncollected = true;
+        uncollected += 1;
       } else {
-        collectionIds.add(bookmark.collection_id);
+        collectionCounts.set(
+          bookmark.collection_id,
+          (collectionCounts.get(bookmark.collection_id) ?? 0) + 1,
+        );
       }
       for (const tag of getTagsForBookmark(bookmark.id)) {
         tagsById.set(tag.id, tag.name);
       }
     }
-    const collectionChips: FacetChip[] = [...collectionIds]
-      .map((id) => ({ id, name: getCollection(id)?.name?.trim() }))
-      .filter((entry): entry is { id: string; name: string } => Boolean(entry.name))
+    const collectionChips: FacetChip[] = [...collectionCounts.keys()]
+      .map((id) => ({ id, name: getCollection(id)?.name?.trim(), count: collectionCounts.get(id) ?? 0 }))
+      .filter((entry): entry is { id: string; name: string; count: number } => Boolean(entry.name))
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map(({ id, name }) => ({
+      .map(({ id, name, count }) => ({
         key: `c:${id}`,
         label: name,
         filter: { kind: 'collection', id },
         icon: 'folder-outline' as const,
+        count,
       }));
     const tagChips: FacetChip[] = [...tagsById.entries()]
       // Drop tags whose name is empty/whitespace so they don't render as blank
@@ -665,7 +676,11 @@ export default function InboxScreen() {
       .filter((entry) => entry.name.length > 0)
       .sort((a, b) => a.name.localeCompare(b.name))
       .map(({ id, name }) => ({ key: `t:${id}`, label: `#${name}`, filter: { kind: 'tag', id } }));
-    return { chips: [...collectionChips, ...tagChips], hasUncollected: uncollected };
+    return {
+      chips: [...collectionChips, ...tagChips],
+      hasUncollected: uncollected > 0,
+      uncollectedCount: uncollected,
+    };
   }, [inbox, getTagsForBookmark, getCollection]);
 
   const facetFiltered = useMemo(
@@ -970,6 +985,7 @@ export default function InboxScreen() {
         {
           key: 'none',
           label: t('inbox.inboxNoCollection'),
+          accessibilityLabel: t('inbox.inboxNoCollectionA11y'),
           icon: 'file-tray-outline',
           selected: item.collection_id === null,
           onPress: () => {
@@ -1310,6 +1326,7 @@ export default function InboxScreen() {
                 target={UNCOLLECTED_FILTER}
                 label={t('inbox.filterNoCollection')}
                 icon="file-tray-outline"
+                count={uncollectedCount}
                 active={sameFilter(UNCOLLECTED_FILTER, filter)}
                 onSelect={onSelectFilter}
               />
@@ -1320,6 +1337,7 @@ export default function InboxScreen() {
                 target={chip.filter}
                 label={chip.label}
                 icon={chip.icon}
+                count={chip.count}
                 active={sameFilter(chip.filter, filter)}
                 onSelect={onSelectFilter}
               />

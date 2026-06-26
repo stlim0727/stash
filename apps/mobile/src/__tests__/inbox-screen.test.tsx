@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 import { BackHandler, Linking, Platform } from 'react-native';
 
@@ -381,13 +381,13 @@ test('the collection chip filters the Inbox to that collection', async () => {
   expect(screen.getByText('Work doc')).toBeTruthy();
   expect(screen.queryByText('Loose link')).toBeNull();
 
-  await fireEvent.press(screen.getByText('No collection'));
+  await fireEvent.press(screen.getByText('Inbox'));
   expect(screen.getByText('Loose link')).toBeTruthy();
   expect(screen.queryByText('Work doc')).toBeNull();
 });
 
 test('facet chips carry icons that distinguish collections from tags (#142)', async () => {
-  // The "No collection" chip used to sit unmarked among bare collection-name
+  // The "Inbox" (no-collection) chip used to sit unmarked among bare collection-name
   // chips and "#tag" chips, so its meaning read as ambiguous (issue #142).
   // Collections now carry a folder icon and the no-collection set a tray icon,
   // so the shelf groups collection filters apart from the "#tag" chips.
@@ -404,6 +404,40 @@ test('facet chips carry icons that distinguish collections from tags (#142)', as
 
   expect(screen.getByTestId('chip-icon-file-tray-outline')).toBeTruthy();
   expect(screen.getByTestId('chip-icon-folder-outline')).toBeTruthy();
+});
+
+test('container chips show a bookmark count (folders + Inbox), tags do not', async () => {
+  // The "container" facets — folders and the Inbox (no-collection) set — carry a
+  // count so their weight is visible at a glance; #tag chips stay countless (the
+  // tag cloud is their frequency view). Two bookmarks in Work, one uncollected.
+  const a = '7e64cf1e-0000-4000-8000-0000000000c1';
+  const b = '7e64cf1e-0000-4000-8000-0000000000c2';
+  const loose = '7e64cf1e-0000-4000-8000-0000000000c3';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: a, title: 'Work A', collection_id: 'col-work' }),
+      makeStoredBookmark({ id: b, title: 'Work B', collection_id: 'col-work' }),
+      makeStoredBookmark({ id: loose, title: 'Loose note', collection_id: null }),
+    ],
+    {
+      tags: [makeTag('t-design', 'design')],
+      bookmarkTags: [
+        { bookmark_id: a, tag_id: 't-design', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [makeCollection('col-work', 'Work')],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Work A')).toBeTruthy());
+
+  const shelf = screen.getByTestId('browse-shelf');
+  // Work folder holds 2, the Inbox set holds 1 — exactly two count tokens.
+  expect(within(shelf).getByText('· 2')).toBeTruthy();
+  expect(within(shelf).getByText('· 1')).toBeTruthy();
+  expect(within(shelf).queryAllByText(/^· /)).toHaveLength(2);
+  // The tag chip is present but carries no count.
+  expect(within(shelf).getByText('#design')).toBeTruthy();
 });
 
 test('the tag chip filters the Inbox to bookmarks with that tag', async () => {

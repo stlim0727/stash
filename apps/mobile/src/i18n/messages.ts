@@ -68,7 +68,7 @@ export const en = {
   'inbox.reportStorageProblem': 'Report storage problem',
   'inbox.searchPlaceholder': 'Search titles, tags, folders',
   'inbox.searchPlaceholderScoped': 'Search in {name}',
-  'inbox.searchPlaceholderUncollected': 'Uncollected',
+  'inbox.searchPlaceholderUncollected': 'Inbox',
   'inbox.browse': 'Browse',
   'inbox.sortA11y': 'Sort: {label}. Tap to change.',
   'inbox.sortMenuTitle': 'Sort by',
@@ -86,9 +86,9 @@ export const en = {
   'inbox.browseTagsA11y': 'Browse by tag',
   'inbox.browseTagsCloseA11y': 'Close tag browser',
   'inbox.filterAll': 'All',
-  'inbox.filterNoCollection': 'No collection',
+  'inbox.filterNoCollection': 'Inbox',
   'inbox.sectionMatches': { one: '{count} result', other: '{count} results' },
-  'inbox.sectionNoCollection': 'No collection · {count}',
+  'inbox.sectionNoCollection': 'Inbox · {count}',
   'inbox.sectionFacet': '{label} · {count}',
   'inbox.sectionRecent': 'Recently saved',
   'inbox.loading': 'Loading your bookmarks…',
@@ -118,7 +118,11 @@ export const en = {
   'inbox.moreActions': 'More actions',
   'inbox.moveToCollectionAction': 'Move to collection…',
   'inbox.moveToCollectionTitle': 'Move to collection',
-  'inbox.inboxNoCollection': 'Inbox (no collection)',
+  'inbox.inboxNoCollection': 'Inbox',
+  // Distinct screen-reader label so the unfiled option never sounds identical to
+  // a user collection that happens to be named "Inbox" (the visible row stays
+  // the clean "Inbox", the tray icon disambiguates it visually).
+  'inbox.inboxNoCollectionA11y': 'Inbox (no collection)',
   'inbox.aiSuggestionsA11y': { one: '{count} AI suggestion', other: '{count} AI suggestions' },
   'inbox.newSuggestions': {
     one: '✨ {count} new AI suggestion',
@@ -409,9 +413,12 @@ export const en = {
   'collectionPicker.changeA11y': 'Change collection',
   'collectionPicker.current': '📁  {name}',
   'collectionPicker.inbox': 'Inbox',
+  // Distinct a11y label for the unfiled (no-collection) row — see the matching
+  // note on inbox.inboxNoCollectionA11y.
+  'collectionPicker.inboxA11y': 'Inbox (no collection)',
   'collectionPicker.findOrCreateA11y': 'Find or create a collection',
   'collectionPicker.findOrCreatePlaceholder': 'Find or create…',
-  'collectionPicker.inboxNone': 'Inbox (none)',
+  'collectionPicker.inboxNone': 'Inbox',
   'collectionPicker.createA11y': 'Create collection {name}',
   'collectionPicker.create': '＋ Create “{name}”',
 

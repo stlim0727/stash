@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -87,6 +88,7 @@ export function CollectionPicker({
 
           <Pressable
             accessibilityRole="button"
+            accessibilityLabel={t('collectionPicker.inboxA11y')}
             disabled={busy}
             onPress={() => {
               onSelect(null);
@@ -94,6 +96,12 @@ export function CollectionPicker({
             }}
             style={styles.option}
           >
+            <Ionicons
+              name="file-tray-outline"
+              size={18}
+              color={palette.textSecondary}
+              style={styles.optionIcon}
+            />
             <Text style={[styles.optionLabel, { color: palette.text }]}>{t('collectionPicker.inboxNone')}</Text>
             {currentId === null ? <Text style={{ color: palette.accent }}>✓</Text> : null}
           </Pressable>
@@ -109,6 +117,12 @@ export function CollectionPicker({
               }}
               style={styles.option}
             >
+              <Ionicons
+                name="folder-outline"
+                size={18}
+                color={palette.textSecondary}
+                style={styles.optionIcon}
+              />
               <Text style={[styles.optionLabel, { color: palette.text }]} numberOfLines={1}>
                 {collection.name}
               </Text>
@@ -186,6 +200,9 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     paddingHorizontal: 10,
     borderRadius: 10,
+  },
+  optionIcon: {
+    marginRight: 10,
   },
   optionLabel: {
     flex: 1,

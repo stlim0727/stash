@@ -16,6 +16,8 @@ import { usePalette } from '@/theme';
 export interface SheetAction {
   key: string;
   label: string;
+  /** Overrides the spoken label when the visible text alone would be ambiguous. */
+  accessibilityLabel?: string;
   icon?: keyof typeof Ionicons.glyphMap;
   /** Renders the row in the danger tint (for destructive actions like Delete). */
   destructive?: boolean;
@@ -81,7 +83,7 @@ export function ActionSheet({
               <Pressable
                 key={action.key}
                 accessibilityRole="button"
-                accessibilityLabel={action.label}
+                accessibilityLabel={action.accessibilityLabel ?? action.label}
                 onPress={action.onPress}
                 style={({ pressed }) => [
                   styles.action,
