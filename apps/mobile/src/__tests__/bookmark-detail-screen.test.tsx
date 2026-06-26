@@ -311,6 +311,86 @@ function collectionTagData() {
   };
 }
 
+test('add all also files into the suggested folder, not just the tags', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        suggested_collection_id: 'col-recipes',
+        suggested_tags: [
+          { name: 'design', confidence: 0.8 },
+          { name: 'video', confidence: 0.6 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Add all suggestions')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Add all suggestions'));
+
+  // Tags become real, and the folder is filed in — its chip disappears.
+  await waitFor(() => expect(screen.getByLabelText('Browse #design')).toBeTruthy());
+  expect(screen.getByLabelText('Browse #video')).toBeTruthy();
+  await waitFor(() =>
+    expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull(),
+  );
+});
+
+test('dismiss all also dismisses the suggested folder, not just the tags', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        suggested_collection_id: 'col-recipes',
+        suggested_tags: [
+          { name: 'design', confidence: 0.8 },
+          { name: 'video', confidence: 0.6 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Dismiss all suggestions')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Dismiss all suggestions'));
+
+  // Both the tag suggestions and the folder chip are gone.
+  expect(screen.queryByLabelText('Accept suggested tag design')).toBeNull();
+  await waitFor(() =>
+    expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull(),
+  );
+});
+
+test('the bulk row shows for a folder plus a single tag suggestion', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    collectionTagData(),
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        suggested_collection_id: 'col-recipes',
+        suggested_tags: [{ name: 'design', confidence: 0.8 }],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  // One tag alone wouldn't reach the >1 threshold; the folder makes it two
+  // actionable suggestions, so "Add all"/"Dismiss all" appear.
+  await waitFor(() => expect(screen.getByLabelText('Add all suggestions')).toBeTruthy());
+  expect(screen.getByLabelText('Dismiss all suggestions')).toBeTruthy();
+});
+
 test('shows the suggested folder as a chip beside the picker and files into it', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
@@ -320,12 +400,12 @@ test('shows the suggested folder as a chip beside the picker and files into it',
   );
 
   const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
+  await waitFor(() => expect(screen.getByLabelText('File A synced bookmark into Recipes')).toBeTruthy());
 
-  await fireEvent.press(screen.getByLabelText('File into Recipes'));
+  await fireEvent.press(screen.getByLabelText('File A synced bookmark into Recipes'));
 
   // Once filed in, the suggestion (a different folder than current) is gone.
-  await waitFor(() => expect(screen.queryByLabelText('File into Recipes')).toBeNull());
+  await waitFor(() => expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull());
 });
 
 test('the suggested folder chip can be dismissed', async () => {
@@ -337,11 +417,11 @@ test('the suggested folder chip can be dismissed', async () => {
   );
 
   const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
+  await waitFor(() => expect(screen.getByLabelText('File A synced bookmark into Recipes')).toBeTruthy());
 
   await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Recipes'));
 
-  expect(screen.queryByLabelText('File into Recipes')).toBeNull();
+  expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull();
 });
 
 test('dismissing a folder suggestion persists it durably (gone on re-entry)', async () => {
@@ -353,7 +433,7 @@ test('dismissing a folder suggestion persists it durably (gone on re-entry)', as
   );
 
   const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
+  await waitFor(() => expect(screen.getByLabelText('File A synced bookmark into Recipes')).toBeTruthy());
   await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Recipes'));
 
   // The dismissal is written to durable meta (keyed by a stable token), so a
@@ -376,7 +456,7 @@ test('a durably-dismissed folder suggestion is hidden on first render', async ()
 
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
-  expect(screen.queryByLabelText('File into Recipes')).toBeNull();
+  expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull();
 });
 
 test('a dismissed "create" suggestion stays gone once a matching folder appears', async () => {
@@ -395,8 +475,8 @@ test('a dismissed "create" suggestion stays gone once a matching folder appears'
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
   // Resolves to "file into Recipes" by name match, but stays hidden by the
   // earlier name-keyed dismissal rather than reappearing.
-  expect(screen.queryByLabelText('File into Recipes')).toBeNull();
-  expect(screen.queryByLabelText('Create collection Recipes and file into it')).toBeNull();
+  expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull();
+  expect(screen.queryByLabelText('Create collection Recipes and file A synced bookmark into it')).toBeNull();
 });
 
 test('dismissing a name-matched folder chip records both id and name tokens', async () => {
@@ -411,7 +491,7 @@ test('dismissing a name-matched folder chip records both id and name tokens', as
   );
 
   const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
+  await waitFor(() => expect(screen.getByLabelText('File A synced bookmark into Recipes')).toBeTruthy());
   await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Recipes'));
 
   await waitFor(() => {
@@ -434,10 +514,10 @@ test('offers to create a brand-new collection when the AI suggests one that does
   const screen = await renderDetail();
 
   expect(
-    await waitFor(() => screen.getByLabelText('Create collection Recipes and file into it')),
+    await waitFor(() => screen.getByLabelText('Create collection Recipes and file A synced bookmark into it')),
   ).toBeTruthy();
   // It's a create suggestion, not a "file into existing" one.
-  expect(screen.queryByLabelText('File into Recipes')).toBeNull();
+  expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull();
 });
 
 test('files into an existing collection when the proposed name matches one (id unresolved)', async () => {
@@ -451,11 +531,11 @@ test('files into an existing collection when the proposed name matches one (id u
   );
 
   const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByLabelText('File into Recipes')).toBeTruthy());
-  expect(screen.queryByLabelText('Create collection recipes and file into it')).toBeNull();
+  await waitFor(() => expect(screen.getByLabelText('File A synced bookmark into Recipes')).toBeTruthy());
+  expect(screen.queryByLabelText('Create collection recipes and file A synced bookmark into it')).toBeNull();
 
-  await fireEvent.press(screen.getByLabelText('File into Recipes'));
-  await waitFor(() => expect(screen.queryByLabelText('File into Recipes')).toBeNull());
+  await fireEvent.press(screen.getByLabelText('File A synced bookmark into Recipes'));
+  await waitFor(() => expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull());
 });
 
 test('matches a live collection that differs only in spacing/punctuation (no duplicate create)', async () => {
@@ -483,8 +563,8 @@ test('matches a live collection that differs only in spacing/punctuation (no dup
   const screen = await renderDetail();
 
   // Resolves to the existing folder — file in, never offer to create a duplicate.
-  await waitFor(() => expect(screen.getByLabelText('File into Watch Later')).toBeTruthy());
-  expect(screen.queryByLabelText('Create collection watch-later and file into it')).toBeNull();
+  await waitFor(() => expect(screen.getByLabelText('File A synced bookmark into Watch Later')).toBeTruthy());
+  expect(screen.queryByLabelText('Create collection watch-later and file A synced bookmark into it')).toBeNull();
 });
 
 test('the create-collection suggestion can be dismissed', async () => {
@@ -497,12 +577,43 @@ test('the create-collection suggestion can be dismissed', async () => {
 
   const screen = await renderDetail();
   await waitFor(() =>
-    expect(screen.getByLabelText('Create collection Recipes and file into it')).toBeTruthy(),
+    expect(screen.getByLabelText('Create collection Recipes and file A synced bookmark into it')).toBeTruthy(),
   );
 
   await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Recipes'));
 
-  expect(screen.queryByLabelText('Create collection Recipes and file into it')).toBeNull();
+  expect(screen.queryByLabelText('Create collection Recipes and file A synced bookmark into it')).toBeNull();
+});
+
+test('a CHANGE (move) suggestion strikes the current folder and shows the move target', async () => {
+  mockRouteId = SYNCED_ID;
+  const now = '2026-06-12T00:00:00.000Z';
+  // The bookmark already lives in "Watch Later"; the AI suggests "Recipes" — a
+  // move, so the chip reads ~~Watch Later~~ → Recipes (current struck, target tinted).
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: 'col-watch' })],
+    {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        { id: 'col-recipes', user_id: 'user-test', name: 'Recipes', description: null, created_at: now, updated_at: now },
+        { id: 'col-watch', user_id: 'user-test', name: 'Watch Later', description: null, created_at: now, updated_at: now },
+      ],
+    },
+    [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes' })],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  // The from name and the move target render as separate runs (the strikethrough
+  // is a real style on the struck run, never literal "~~").
+  expect(screen.getByText('Watch Later')).toBeTruthy();
+  expect(screen.getByText('→ Recipes')).toBeTruthy();
+  // The chip a11y spells the move out for screen readers (can't see the strike).
+  expect(
+    screen.getByLabelText('Move A synced bookmark from Watch Later to Recipes'),
+  ).toBeTruthy();
 });
 
 test('offers hashtags from the title as one-tap tag suggestions', async () => {

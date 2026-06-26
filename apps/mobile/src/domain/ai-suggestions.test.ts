@@ -149,10 +149,12 @@ const COLLECTIONS = [
 
 test('resolveSuggestedFolder files into the collection resolved by id', () => {
   const enrichment = makeFolderEnrichment({ suggested_collection_id: 'col-recipes' });
+  // No current collection → an ADD (from is null).
   assert.deepEqual(resolveSuggestedFolder(enrichment, COLLECTIONS, null), {
     kind: 'existing',
     id: 'col-recipes',
     name: 'Recipes',
+    from: null,
   });
 });
 
@@ -164,6 +166,7 @@ test('resolveSuggestedFolder re-matches a name tolerantly when no id resolved', 
     kind: 'existing',
     id: 'col-watch',
     name: 'Watch Later',
+    from: null,
   });
 });
 
@@ -172,6 +175,30 @@ test('resolveSuggestedFolder offers to create when nothing matches', () => {
   assert.deepEqual(resolveSuggestedFolder(enrichment, COLLECTIONS, null), {
     kind: 'create',
     name: 'Travel',
+    from: null,
+  });
+});
+
+test('resolveSuggestedFolder carries `from` when the bookmark is in a different collection (a move)', () => {
+  // Bookmark currently in Watch Later; AI suggests Recipes → a CHANGE/move that
+  // surfaces both ends so the chip can render "Watch Later → Recipes".
+  const enrichment = makeFolderEnrichment({ suggested_collection_id: 'col-recipes' });
+  assert.deepEqual(resolveSuggestedFolder(enrichment, COLLECTIONS, 'col-watch'), {
+    kind: 'existing',
+    id: 'col-recipes',
+    name: 'Recipes',
+    from: { id: 'col-watch', name: 'Watch Later' },
+  });
+});
+
+test('resolveSuggestedFolder gives `from: null` when the current collection id is unknown', () => {
+  // An id not in the live list (orphaned / not-yet-synced) → render as a plain
+  // add, never invent a name.
+  const enrichment = makeFolderEnrichment({ suggested_collection_name: 'Travel' });
+  assert.deepEqual(resolveSuggestedFolder(enrichment, COLLECTIONS, 'col-missing'), {
+    kind: 'create',
+    name: 'Travel',
+    from: null,
   });
 });
 
@@ -235,6 +262,7 @@ test('pendingSuggestedFolder returns the folder when nothing is dismissed', () =
     kind: 'existing',
     id: 'col-recipes',
     name: 'Recipes',
+    from: null,
   });
 });
 
@@ -262,5 +290,6 @@ test('pendingSuggestedFolder ignores an unrelated dismissal', () => {
     kind: 'existing',
     id: 'col-recipes',
     name: 'Recipes',
+    from: null,
   });
 });

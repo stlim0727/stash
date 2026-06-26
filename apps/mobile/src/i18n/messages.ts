@@ -79,6 +79,12 @@ export const en = {
   'inbox.sortNameAsc': 'Name A–Z',
   'inbox.sortNameDesc': 'Name Z–A',
   'inbox.viewAsA11y': 'View as {mode}',
+  // "Browse by tag" toggle: opens the transient tag cloud (a navigation surface,
+  // never a persisted layout). Its a11y label flips to a close phrasing when the
+  // cloud is already open.
+  'inbox.browseTags': 'Tags',
+  'inbox.browseTagsA11y': 'Browse by tag',
+  'inbox.browseTagsCloseA11y': 'Close tag browser',
   'inbox.filterAll': 'All',
   'inbox.filterNoCollection': 'No collection',
   'inbox.sectionMatches': { one: '{count} result', other: '{count} results' },
@@ -92,6 +98,16 @@ export const en = {
   'inbox.emptySearchHint': 'Search also looks in tags, folders, and site names.',
   'inbox.clearSearch': 'Clear search',
   'inbox.clearSearchA11y': 'Clear search',
+  // Sticky active-filter bar: tells the user the list is narrowed and offers a
+  // one-tap way back. `scopeFiltered`/`scopeSearch` label what's active;
+  // `scopeBackToTags` is the trailing pill when a cloud drill can return to the
+  // tag cloud, otherwise a clear/✕ action is shown.
+  'inbox.scopeFiltered': 'Filtered: {label}',
+  'inbox.scopeSearch': 'Results for “{query}”',
+  'inbox.scopeBackToTags': 'Tag cloud',
+  'inbox.scopeBackToTagsA11y': 'Back to the tag cloud',
+  'inbox.scopeClearA11y': 'Clear filter and show all bookmarks',
+  'inbox.scopeClearSearchA11y': 'Clear the search',
   // Site-name chip on a search result (generated site metadata, not a user
   // field). Marks WHY a result matched when nothing else on the card shows it.
   'inbox.siteChip': '🌐 {name}',
@@ -146,7 +162,6 @@ export const en = {
   // View-mode labels (Inbox layout density).
   'viewMode.card': 'Cards',
   'viewMode.list': 'List',
-  'viewMode.cloud': 'Tag cloud',
 
   // Add bookmark.
   'add.urlLabel': 'URL',
@@ -316,11 +331,18 @@ export const en = {
     one: 'Pending suggestions · {count} bookmark',
     other: 'Pending suggestions · {count} bookmarks',
   },
+  // Bulk row, by card content. "Accept all"/"Dismiss all" act on tags AND the
+  // folder (both folder kinds: file into an existing one, or create+file);
+  // "Accept" / "Dismiss" are the folder-only (no tags) singulars.
   'review.acceptAll': 'Accept all',
+  'review.acceptOne': 'Accept',
   'review.dismissAll': 'Dismiss all',
+  'review.dismissOne': 'Dismiss',
   'review.acceptTagA11y': 'Accept suggested tag {name} for {title}',
-  'review.acceptAllA11y': 'Accept all suggested tags for {title}',
-  'review.dismissAllA11y': 'Dismiss all suggested tags for {title}',
+  'review.acceptAllA11y': 'Accept all suggestions for {title}',
+  'review.acceptOneA11y': 'File {title} into the suggested collection',
+  'review.dismissAllA11y': 'Dismiss all suggestions for {title}',
+  'review.dismissOneA11y': 'Dismiss the suggestion for {title}',
   'review.goToA11y': 'Go to {title}',
   'review.confidence': '{percent}%',
   // Chip prefixes that distinguish the two kinds of suggestion at a glance and
@@ -329,9 +351,25 @@ export const en = {
   'review.tagChip': '#{name}',
   'review.folderChip': '📁 ＋ {name}',
   'review.createFolderChip': '📁 ＋ Create “{name}”',
+  // ADD vs CHANGE (move) folder forms. The "→" run targets are rendered as
+  // separate <Text> children so the `from` name can be struck through and only
+  // the arrow + target tinted; these strings are the non-strikethrough fallback
+  // pieces / a11y labels. `addArrow` is "→ {name}" (file into an existing one);
+  // `addCreateArrow` is "→ ＋ "{name}"" (create then file). For a move the chip
+  // composes the struck `from` name with one of these arrows.
+  'review.folderAddArrow': '📁 → {name}',
+  'review.folderCreateArrow': '📁 ＋ Create “{name}”',
+  'review.moveArrowTarget': '→ {name}',
+  'review.moveCreateTarget': '→ ＋ “{name}”',
+  // Chip a11y, per case (screen readers can't see the strikethrough).
   'review.acceptFolderA11y': 'File {title} into {name}',
   'review.createFolderA11y': 'Create collection {name} and file {title} into it',
+  'review.moveFolderA11y': 'Move {title} from {from} to {name}',
+  'review.moveCreateFolderA11y': 'Move {title} from {from} into a new collection {name}',
   'review.dismissFolderA11y': 'Dismiss suggested collection {name} for {title}',
+  // A move overwrites a user-chosen collection_id; the chip already shows the
+  // ~~from~~ → to, so instead of confirming we file it and offer an Undo toast.
+  'review.movedToast': 'Moved to “{name}”',
 
   // Report a problem.
   'report.categoryBug': 'Bug',

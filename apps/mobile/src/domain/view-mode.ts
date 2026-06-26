@@ -1,10 +1,11 @@
 /**
  * Inbox layout density. The same bookmarks render either as rich cards (preview
- * image, inline meta), a compact single-line list, or a tag cloud (tags sized
- * by how many bookmarks carry them) — purely a presentation choice, so it
- * composes with search, facet filtering, and sort.
+ * image, inline meta) or a compact single-line list — purely a presentation
+ * choice, so it composes with search, facet filtering, and sort. The tag cloud
+ * is no longer a layout: it's a separate, transient "Browse by tag" toggle that
+ * is never persisted, so it isn't part of this union.
  */
-export type ViewMode = 'card' | 'list' | 'cloud';
+export type ViewMode = 'card' | 'list';
 
 /** Cards are the historical default — richer, more visual. */
 export const DEFAULT_VIEW_MODE: ViewMode = 'card';
@@ -13,7 +14,7 @@ export const DEFAULT_VIEW_MODE: ViewMode = 'card';
  * The layouts in the order the segmented control presents them. Also the order
  * `nextViewMode` cycles through.
  */
-export const VIEW_MODES: ViewMode[] = ['card', 'list', 'cloud'];
+export const VIEW_MODES: ViewMode[] = ['card', 'list'];
 
 /** Persistence key for the user's chosen layout (repository meta store). */
 export const INBOX_VIEW_PREF_KEY = 'pref.inbox.view';
@@ -31,8 +32,6 @@ export function describeViewMode(mode: ViewMode): string {
       return 'Cards';
     case 'list':
       return 'List';
-    case 'cloud':
-      return 'Tag cloud';
   }
 }
 
@@ -41,5 +40,8 @@ export function serializeViewMode(mode: ViewMode): string {
 }
 
 export function parseViewMode(raw: string | null | undefined): ViewMode {
-  return raw === 'card' || raw === 'list' || raw === 'cloud' ? raw : DEFAULT_VIEW_MODE;
+  // A stored 'cloud' from before the cloud became a transient toggle degrades to
+  // Cards: the cloud is no longer a persisted layout, so any leftover value
+  // lands on the default rather than the (now removed) cloud view.
+  return raw === 'card' || raw === 'list' ? raw : DEFAULT_VIEW_MODE;
 }

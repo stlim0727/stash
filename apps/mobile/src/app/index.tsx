@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import {
   Alert,
   Animated,
@@ -41,7 +41,13 @@ import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramColorIndex, monogramIcon } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
-import { ALL_FILTER, filterByFacet, sameFilter, type InboxFilter } from '@/domain/filter';
+import {
+  ALL_FILTER,
+  UNCOLLECTED_FILTER,
+  filterByFacet,
+  sameFilter,
+  type InboxFilter,
+} from '@/domain/filter';
 import {
   DEFAULT_SORT,
   INBOX_SORT_PREF_KEY,
@@ -60,7 +66,7 @@ import {
   serializeViewMode,
   type ViewMode,
 } from '@/domain/view-mode';
-import { buildTagCloud, tagCloudFontSize } from '@/domain/tag-cloud';
+import { buildTagCloud, tagCloudFontSize, type TagCloudEntry } from '@/domain/tag-cloud';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { trackBreadcrumb } from '@/observability/sentry';
 import { useT } from '@/i18n';
@@ -69,6 +75,7 @@ import type { TFunction } from '@/i18n/translate';
 import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
+import { HighlightedText } from '@/ui/HighlightedText';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
 
@@ -120,14 +127,12 @@ interface FacetChip {
 const VIEW_MODE_ICON: Record<ViewMode, ComponentProps<typeof Ionicons>['name']> = {
   card: 'albums-outline',
   list: 'list-outline',
-  cloud: 'pricetags-outline',
 };
 
 // Translation key for each layout's human label (segmented-control a11y).
 const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   card: 'viewMode.card',
   list: 'viewMode.list',
-  cloud: 'viewMode.cloud',
 };
 
 // Friendly label + icon for each sort preset, keyed by its serialized form.
@@ -218,6 +223,46 @@ const WORDMARK = {
   },
 };
 
+/**
+ * One pill in the Inbox browse shelf. Memoized so a filter change (which
+ * re-renders the whole screen) only re-renders the chips whose `active` flag
+ * actually flips — not all of them. With a large library the shelf can hold
+ * well over a hundred tag chips, and re-rendering every one on each tap was
+ * what made a chip tap feel dead for seconds after drilling in from the tag
+ * cloud. `target` comes straight from the (memoized) chip list / module-level
+ * filter constants and `onSelect` is referentially stable, so memo's prop
+ * compare holds across taps.
+ */
+// Stable empty cloud returned when the tag-cloud layout isn't active, so an
+// off-cloud facet change doesn't allocate (or scan) a fresh one.
+const EMPTY_TAG_CLOUD: TagCloudEntry[] = [];
+
+const BrowseChip = memo(function BrowseChip({
+  target,
+  label,
+  icon,
+  active,
+  onSelect,
+}: {
+  target: InboxFilter;
+  label: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  active: boolean;
+  onSelect: (target: InboxFilter) => void;
+}) {
+  return (
+    <Chip
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      onPress={() => onSelect(target)}
+      variant={active ? 'selected' : 'default'}
+      icon={icon}
+    >
+      {label}
+    </Chip>
+  );
+});
+
 export default function InboxScreen() {
   const palette = usePalette();
   const t = useT();
@@ -307,6 +352,10 @@ export default function InboxScreen() {
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+  // Whether the transient "Browse by tag" cloud is open. NEVER persisted and
+  // never the cold-start view: it's a navigation surface over the current
+  // layout, toggled on demand. `viewMode` remains the item layout underneath.
+  const [cloudOpen, setCloudOpen] = useState(false);
 
   // Drilling into a tag from the cloud is a same-screen state change (filter +
   // card layout), not a navigation push, so the Android hardware Back key would
@@ -331,7 +380,7 @@ export default function InboxScreen() {
         }
         cloudReturnRef.current = null;
         setFilter(returnTo);
-        setViewMode('cloud');
+        setCloudOpen(true);
         return true;
       };
       const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
@@ -395,16 +444,41 @@ export default function InboxScreen() {
   // the header immediately wherever you are in the list, not only at the top.
   const scrollY = useRef(new Animated.Value(0)).current;
   const [headerHeight, setHeaderHeight] = useState(0);
+  // The pinned active-filter bar is measured separately (it lives in its own
+  // non-translating layer below the header). When it's showing, both scroll
+  // containers reserve extra top padding for it so the first rows aren't hidden.
+  const [filterBarHeight, setFilterBarHeight] = useState(0);
+  // Both the header and the pinned filter bar ride the SAME diffClamp source, so
+  // they collapse in lockstep off one scroll listener. The header slides fully
+  // out of view; the bar only rides up until it meets the safe-area top line,
+  // then stops — so its clear/back action stays reachable while scrolled.
+  const headerClamp = useMemo(
+    () => (headerHeight ? Animated.diffClamp(scrollY, 0, headerHeight) : null),
+    [scrollY, headerHeight],
+  );
   const headerTranslate = useMemo(() => {
-    if (!headerHeight) {
+    if (!headerClamp || !headerHeight) {
       return 0;
     }
-    return Animated.diffClamp(scrollY, 0, headerHeight).interpolate({
+    return headerClamp.interpolate({
       inputRange: [0, headerHeight],
       outputRange: [0, -headerHeight],
       extrapolate: 'clamp',
     });
-  }, [scrollY, headerHeight]);
+  }, [headerClamp, headerHeight]);
+  // The bar rests at `headerHeight` (just under the revealed header) and rides up
+  // by `headerHeight - insets.top` as the header collapses, stopping at the
+  // status-bar line so it never tucks under the notch.
+  const filterBarTranslate = useMemo(() => {
+    if (!headerClamp || !headerHeight) {
+      return 0;
+    }
+    return headerClamp.interpolate({
+      inputRange: [0, headerHeight],
+      outputRange: [0, -(headerHeight - insets.top)],
+      extrapolate: 'clamp',
+    });
+  }, [headerClamp, headerHeight, insets.top]);
 
   // Load the saved sort + view mode once, then persist any change. The guards
   // stop the initial defaults from clobbering the stored values before they
@@ -445,14 +519,10 @@ export default function InboxScreen() {
         if (!active) {
           return;
         }
-        const stored = parseViewMode(raw);
-        // Cold-starting via a tag/collection deep link forces a bookmark layout
-        // (see the routed-facet effect); don't let a restored Tag-cloud
-        // preference land afterwards and hide the linked-to bookmarks.
-        if (stored === 'cloud' && (paramTag || paramCollection)) {
-          return;
-        }
-        setViewMode(stored);
+        // parseViewMode degrades any legacy stored 'cloud' to Cards — the cloud
+        // is a transient toggle now, never a persisted/cold-start layout, so the
+        // stored pref is always a real item layout (card/list).
+        setViewMode(parseViewMode(raw));
       })
       .catch(() => {})
       .finally(() => {
@@ -468,12 +538,6 @@ export default function InboxScreen() {
     }
     void setPreference(INBOX_SORT_PREF_KEY, serializeSort(sort)).catch(() => {});
   }, [sort]);
-  useEffect(() => {
-    if (!viewLoaded.current) {
-      return;
-    }
-    void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(viewMode)).catch(() => {});
-  }, [viewMode]);
   useEffect(() => {
     if (!recentsLoaded.current) {
       return;
@@ -535,7 +599,7 @@ export default function InboxScreen() {
   // newly mounted list agree on offset 0. Keyed on the cloud boolean (not
   // viewMode) so a card⇄list switch — which keeps the same FlatList and its
   // scroll position — is left untouched.
-  const isCloud = viewMode === 'cloud';
+  const isCloud = cloudOpen;
   useEffect(() => {
     scrollY.setValue(0);
   }, [isCloud, scrollY]);
@@ -551,11 +615,16 @@ export default function InboxScreen() {
     if (!paramTag && !paramCollection) {
       return;
     }
+    // A routed facet is a fresh destination chosen elsewhere (e.g. a tag tapped
+    // in Detail), NOT a continuation of a cloud drill — so end any cloud-return
+    // context, matching the cloud-tag/chip/suggestion paths. Without this, a
+    // deep-link landing while a stale ref lingers would mislabel the filter bar
+    // with a back-to-cloud action that jumps to a facet the user never chose.
+    cloudReturnRef.current = null;
     setFilter(paramTag ? { kind: 'tag', id: paramTag } : { kind: 'collection', id: paramCollection! });
-    // A routed facet wants the matching bookmarks in view; the tag cloud is a
-    // global overview that ignores the facet, so drop back to a bookmark layout
-    // (same drill-in as tapping a tag inside the cloud).
-    setViewMode((mode) => (mode === 'cloud' ? 'card' : mode));
+    // A routed facet wants the matching bookmarks in view, not the global tag
+    // cloud overview — so close the cloud and leave the item layout untouched.
+    setCloudOpen(false);
   }, [paramTag, paramCollection]);
 
   const tagIdsFor = useCallback(
@@ -609,7 +678,16 @@ export default function InboxScreen() {
   // tags): a frequency-ranked overview sized by how many of those bookmarks
   // carry each tag. Search is left out on purpose — the cloud is the navigation
   // surface, not a result of it. Tapping a tag drills in by applying its filter.
+  // Only built while the cloud is the active layout. The cloud isn't rendered in
+  // card/list view, but this memo keys off `facetFiltered`, so without the guard
+  // every browse-chip tap (which changes the facet) re-scanned every filtered
+  // bookmark and its tags and re-sorted — wasted work that, on a large library,
+  // was a big slice of the "chips go dead for seconds after picking a tag from
+  // the cloud" stall. Skipping it off-cloud makes a facet change in cards cheap.
   const tagCloud = useMemo(() => {
+    if (!isCloud) {
+      return EMPTY_TAG_CLOUD;
+    }
     const counts = new Map<string, { name: string; count: number }>();
     for (const bookmark of facetFiltered) {
       for (const tag of getTagsForBookmark(bookmark.id)) {
@@ -624,7 +702,7 @@ export default function InboxScreen() {
     return buildTagCloud(
       [...counts.entries()].map(([id, { name, count }]) => ({ id, name, count })),
     );
-  }, [facetFiltered, getTagsForBookmark]);
+  }, [isCloud, facetFiltered, getTagsForBookmark]);
 
   // If the active facet disappears (last member removed/unfiled), fall back to
   // All rather than stranding the user on an empty filtered view.
@@ -669,6 +747,10 @@ export default function InboxScreen() {
     () => (searching ? queryTerms(debouncedQuery) : []),
     [searching, debouncedQuery],
   );
+  // Highlight the matched spans in result titles/URLs while searching. Empty
+  // string when not searching, so `HighlightedText` renders a plain label.
+  const highlightQuery = searching ? debouncedQuery : '';
+  const highlightStyle = { backgroundColor: palette.highlight, color: palette.highlightText };
   // Suggestion shelf. A pure projection of already-loaded state — no fetch/sync
   // fires on focus or keystroke. Phase 2: thread the DEBOUNCED query so the shelf
   // re-filters on the same ~140ms cadence as the results list and the two update
@@ -692,11 +774,17 @@ export default function InboxScreen() {
   // current view, so a search/filter that yields zero rows still keeps the
   // controls (the user needs them to clear the query or facet).
   const showControls = inbox.length > 0 || searching;
-  // The tag cloud is a navigation surface over existing items; on an empty
-  // library it has nothing to show AND its view segment is folded away (no way
-  // back to Cards), so an empty library always falls through to the onboarding
-  // card regardless of the saved view mode.
-  const showCloud = viewMode === 'cloud' && inbox.length > 0;
+  // The tag cloud is a transient navigation surface over existing items; on an
+  // empty library it has nothing to show (and its toggle is hidden), so an empty
+  // library always falls through to the onboarding card.
+  const showCloud = cloudOpen && inbox.length > 0;
+  // If the library empties while the cloud is open (e.g. the last item trashed),
+  // close it so nothing is stranded on a blank cloud with no toggle to escape.
+  useEffect(() => {
+    if (inbox.length === 0 && cloudOpen) {
+      setCloudOpen(false);
+    }
+  }, [inbox.length, cloudOpen]);
 
   // Record a submitted query into recents (trim + case-insensitive dedupe-to-
   // front + cap). The ONLY write path for recents — never on every keystroke.
@@ -710,7 +798,7 @@ export default function InboxScreen() {
   const applySuggestionFacet = useCallback((target: InboxFilter) => {
     cloudReturnRef.current = null;
     setFilter(target);
-    setViewMode((mode) => (mode === 'cloud' ? 'card' : mode));
+    setCloudOpen(false);
   }, []);
 
   // Tap a suggestion chip (§5): a recent FILLS the query and keeps the keyboard
@@ -771,6 +859,80 @@ export default function InboxScreen() {
       : activeChip
         ? t('inbox.sectionFacet', { label: activeChip.label, count: visible.length })
         : t('inbox.sectionRecent');
+
+  // Sticky active-filter bar (rendered inside the floating header). The list is
+  // "narrowed" whenever a facet is applied or a real search is running; the bar
+  // tells the user that and offers a one-tap way back out. Precedence peels the
+  // most-recently-added layer first: a live search clears before the underlying
+  // facet, and a cloud-drilled facet returns to the cloud before clearing.
+  //
+  // cloudReturnRef is read directly here (not via state): every ref write in
+  // this file is paired with a setState, so a render always reflects its current
+  // value. The action handler re-reads it at call time for the same reason.
+  const narrowed = filter.kind !== 'all' || searching;
+  // The pinned active-filter bar shows under the same gates as before — only its
+  // position changed (its own layer, no longer inside the collapsing header).
+  const showFilterBar = showControls && narrowed && !searchFocused;
+  // Both scroll containers reserve room for the floating header, plus the pinned
+  // filter bar's measured height when it's showing. When the bar is absent this
+  // collapses back to the header-only inset (no leftover gap).
+  const filterBarReserve = showFilterBar ? filterBarHeight : 0;
+  const listPaddingTop = headerHeight + filterBarReserve + 8;
+  const scrollInsetTop = headerHeight + filterBarReserve;
+  const scope = useMemo((): {
+    text: string;
+    icon: ComponentProps<typeof Ionicons>['name'];
+    action: 'clear-search' | 'clear-facet' | 'back-to-cloud';
+    a11y: string;
+  } | null => {
+    if (searching) {
+      return {
+        text: t('inbox.scopeSearch', { query: debouncedQuery.trim() }),
+        icon: 'search-outline',
+        action: 'clear-search',
+        a11y: t('inbox.scopeClearSearchA11y'),
+      };
+    }
+    if (filter.kind === 'all') {
+      return null;
+    }
+    const label =
+      filter.kind === 'uncollected' ? t('inbox.filterNoCollection') : (activeChip?.label ?? '');
+    if (cloudReturnRef.current !== null) {
+      return {
+        text: t('inbox.scopeFiltered', { label }),
+        icon: 'funnel-outline',
+        action: 'back-to-cloud',
+        a11y: t('inbox.scopeBackToTagsA11y'),
+      };
+    }
+    return {
+      text: t('inbox.scopeFiltered', { label }),
+      icon: 'funnel-outline',
+      action: 'clear-facet',
+      a11y: t('inbox.scopeClearA11y'),
+    };
+  }, [searching, debouncedQuery, filter.kind, activeChip, t]);
+
+  // Run the scope bar's trailing action. Re-reads cloudReturnRef at call time so
+  // it mirrors the live drill context, not whatever it was when scope memoized.
+  const onScopeAction = useCallback(() => {
+    if (searching) {
+      setQuery('');
+      return;
+    }
+    if (cloudReturnRef.current !== null) {
+      // Navigation back to the cloud — mirror the Android Back handler. Do NOT
+      // persist a view pref: returning to the cloud isn't a layout preference.
+      const r = cloudReturnRef.current;
+      cloudReturnRef.current = null;
+      setFilter(r ?? ALL_FILTER);
+      setCloudOpen(true);
+      return;
+    }
+    cloudReturnRef.current = null;
+    setFilter(ALL_FILTER);
+  }, [searching]);
 
   const closeMenu = useCallback(() => {
     setMenuItem(null);
@@ -886,42 +1048,35 @@ export default function InboxScreen() {
       ? t('inbox.moveToCollectionTitle')
       : ((menuItem ? displayTitle(menuItem) : null) ?? t('common.untitled'));
 
-  const renderChip = (
-    key: string,
-    label: string,
-    target: InboxFilter,
-    icon?: keyof typeof Ionicons.glyphMap,
-  ) => {
-    const active = sameFilter(target, filter);
-    return (
-      <Chip
-        key={key}
-        accessibilityRole="button"
-        accessibilityState={{ selected: active }}
-        // Diagnostic trail for the "tag-cloud chips go dead after narrowing to a
-        // folder on Android" report: if this breadcrumb is ABSENT when the user
-        // says a chip tap did nothing, the touch never reached JS (a native
-        // hit-test issue with the floating header), not our filter logic. Ids
-        // are opaque UUIDs — no user content. See the cloud-tag tap for a
-        // positive control proving touches still reach the screen.
-        onPress={() => {
-          trackBreadcrumb('browse', 'chip tap', {
-            target: 'id' in target ? `${target.kind}:${target.id}` : target.kind,
-            view: viewMode,
-            cloud: tagCloud.length,
-            header: Math.round(headerHeight),
-          });
-          // Picking a facet directly ends the cloud-drill context.
-          cloudReturnRef.current = null;
-          setFilter(target);
-        }}
-        variant={active ? 'selected' : 'default'}
-        icon={icon}
-      >
-        {label}
-      </Chip>
-    );
+  // Latest view/cloud/header context for the chip-tap diagnostic breadcrumb,
+  // held in a ref so the tap handler can stay referentially stable. That
+  // stability is what lets the memoized BrowseChips skip re-rendering on every
+  // facet change — the whole point of the perf fix — while the breadcrumb still
+  // reports live context. A plain render-time snapshot; it never re-renders.
+  const chipTapCtx = useRef({ view: viewMode, cloud: 0, header: 0 });
+  chipTapCtx.current = {
+    view: viewMode,
+    cloud: tagCloud.length,
+    header: Math.round(headerHeight),
   };
+  const onSelectFilter = useCallback((target: InboxFilter) => {
+    // Diagnostic trail for the "tag-cloud chips go dead after narrowing to a
+    // folder on Android" report: if this breadcrumb is ABSENT when the user
+    // says a chip tap did nothing, the touch never reached JS (a native
+    // hit-test issue with the floating header), not our filter logic. Ids are
+    // opaque UUIDs — no user content. See the cloud-tag tap for a positive
+    // control proving touches still reach the screen.
+    const ctx = chipTapCtx.current;
+    trackBreadcrumb('browse', 'chip tap', {
+      target: 'id' in target ? `${target.kind}:${target.id}` : target.kind,
+      view: ctx.view,
+      cloud: ctx.cloud,
+      header: ctx.header,
+    });
+    // Picking a facet directly ends the cloud-drill context.
+    cloudReturnRef.current = null;
+    setFilter(target);
+  }, []);
 
   return (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
@@ -1069,14 +1224,40 @@ export default function InboxScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('inbox.sortA11y', { label: t(SORT_LABEL_KEY[serializeSort(sort)]) })}
             onPress={() => setSortMenuOpen(true)}
-            style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
+            style={[styles.sortPill, styles.sortPillFlexible, { backgroundColor: palette.surface, borderColor: palette.border }]}
           >
             <Ionicons name={SORT_ICON[sort.field]} size={15} color={palette.textSecondary} />
-            <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+            <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
               {t(SORT_LABEL_KEY[serializeSort(sort)])}
             </Text>
             <Ionicons name="chevron-down" size={14} color={palette.textSecondary} />
           </Pressable>
+          {inbox.length > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={cloudOpen ? t('inbox.browseTagsCloseA11y') : t('inbox.browseTagsA11y')}
+              accessibilityState={{ selected: cloudOpen }}
+              testID="inbox-browse-tags-toggle"
+              onPress={() => setCloudOpen((open) => !open)}
+              style={[
+                styles.sortPill,
+                cloudOpen
+                  ? { backgroundColor: palette.accentSoft, borderColor: palette.accent }
+                  : { backgroundColor: palette.surface, borderColor: palette.border },
+              ]}
+            >
+              <Ionicons
+                name={cloudOpen ? 'pricetags' : 'pricetags-outline'}
+                size={15}
+                color={cloudOpen ? palette.accent : palette.textSecondary}
+              />
+              <Text
+                style={[styles.sortPillLabel, { color: cloudOpen ? palette.accent : palette.text }]}
+              >
+                {t('inbox.browseTags')}
+              </Text>
+            </Pressable>
+          ) : null}
           <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
             {VIEW_MODES.map((mode) => {
               const active = viewMode === mode;
@@ -1091,7 +1272,11 @@ export default function InboxScreen() {
                     // A deliberate layout change ends the cloud-drill context,
                     // so Back should no longer jump back to the cloud.
                     cloudReturnRef.current = null;
+                    // Picking a layout while the cloud is open closes it and
+                    // applies that layout (the cloud is transient, not a layout).
+                    setCloudOpen(false);
                     setViewMode(mode);
+                    void setPreference(INBOX_VIEW_PREF_KEY, serializeViewMode(mode)).catch(() => {});
                   }}
                   style={[styles.viewSegmentButton, active ? { backgroundColor: palette.accentSoft } : null]}
                 >
@@ -1114,14 +1299,86 @@ export default function InboxScreen() {
             style={styles.shelf}
             contentContainerStyle={styles.shelfContent}
           >
-            {renderChip('all', t('inbox.filterAll'), ALL_FILTER)}
-            {hasUncollected
-              ? renderChip('uncollected', t('inbox.filterNoCollection'), { kind: 'uncollected' }, 'file-tray-outline')
-              : null}
-            {chips.map((chip) => renderChip(chip.key, chip.label, chip.filter, chip.icon))}
+            <BrowseChip
+              target={ALL_FILTER}
+              label={t('inbox.filterAll')}
+              active={sameFilter(ALL_FILTER, filter)}
+              onSelect={onSelectFilter}
+            />
+            {hasUncollected ? (
+              <BrowseChip
+                target={UNCOLLECTED_FILTER}
+                label={t('inbox.filterNoCollection')}
+                icon="file-tray-outline"
+                active={sameFilter(UNCOLLECTED_FILTER, filter)}
+                onSelect={onSelectFilter}
+              />
+            ) : null}
+            {chips.map((chip) => (
+              <BrowseChip
+                key={chip.key}
+                target={chip.filter}
+                label={chip.label}
+                icon={chip.icon}
+                active={sameFilter(chip.filter, filter)}
+                onSelect={onSelectFilter}
+              />
+            ))}
           </ScrollView>
         ) : null}
       </Animated.View>
+      {showFilterBar && scope ? (
+        // Pinned active-filter bar: its OWN non-translating layer between the
+        // header (zIndex 10, which must stay above so it covers the bar when
+        // revealed) and the list. It rides the header's diffClamp but clamps at
+        // the safe-area top, so its clear/back action stays tappable while
+        // scrolled to the bottom. Resting top = headerHeight; it slides up from
+        // there. Opaque base so list rows can't bleed through the tint.
+        <Animated.View
+          testID="inbox-filter-bar"
+          onLayout={(event) => setFilterBarHeight(event.nativeEvent.layout.height)}
+          style={[
+            styles.filterBar,
+            {
+              top: headerHeight,
+              backgroundColor: palette.background,
+              borderBottomColor: palette.border,
+              transform: [{ translateY: filterBarTranslate }],
+            },
+          ]}
+        >
+          <View style={[styles.filterBarInner, { backgroundColor: palette.accentSoft }]}>
+            <Ionicons name={scope.icon} size={16} color={palette.accentText} style={styles.filterBarIcon} />
+            <Text style={[styles.filterBarText, { color: palette.accentText }]} numberOfLines={1}>
+              {scope.text}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={scope.a11y}
+              testID={
+                scope.action === 'back-to-cloud' ? 'inbox-filter-back-to-cloud' : 'inbox-filter-clear'
+              }
+              hitSlop={8}
+              onPress={onScopeAction}
+              style={({ pressed }) => [
+                styles.filterBarAction,
+                { borderColor: palette.accent, opacity: pressed ? 0.6 : 1 },
+              ]}
+            >
+              {scope.action === 'back-to-cloud' ? (
+                <>
+                  <Ionicons name="arrow-back" size={14} color={palette.accentText} />
+                  <Text style={[styles.filterBarActionLabel, { color: palette.accentText }]}>
+                    {t('inbox.scopeBackToTags')}
+                  </Text>
+                </>
+              ) : (
+                <Ionicons name="close" size={16} color={palette.accentText} />
+              )}
+            </Pressable>
+          </View>
+        </Animated.View>
+      ) : null}
       {showCloud ? (
         <Animated.ScrollView
           testID="inbox-tag-cloud"
@@ -1129,10 +1386,10 @@ export default function InboxScreen() {
             useNativeDriver: true,
           })}
           scrollEventThrottle={16}
-          scrollIndicatorInsets={{ top: headerHeight }}
+          scrollIndicatorInsets={{ top: scrollInsetTop }}
           contentContainerStyle={[
             styles.list,
-            { paddingTop: headerHeight + 8, paddingBottom: insets.bottom + 96 },
+            { paddingTop: listPaddingTop, paddingBottom: insets.bottom + 96 },
           ]}
         >
           <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
@@ -1172,7 +1429,10 @@ export default function InboxScreen() {
                         // scoped it) rather than exiting the app.
                         cloudReturnRef.current = filter;
                         setFilter({ kind: 'tag', id: entry.id });
-                        setViewMode('card');
+                        // Close the cloud back to the CURRENT item layout (Cards
+                        // or List) — the layout is already correct, so don't
+                        // touch viewMode; a List user lands back in List.
+                        setCloudOpen(false);
                       }}
                     >
                       <Text
@@ -1210,14 +1470,15 @@ export default function InboxScreen() {
         // focused state and the suggestion shelf). The shelf's own ScrollView owns
         // keyboardShouldPersistTaps for its chips; this list doesn't need it.
         keyboardDismissMode="on-drag"
-        // Keep the scrollbar clear of the floating header.
-        scrollIndicatorInsets={{ top: headerHeight }}
+        // Keep the scrollbar clear of the floating header (and the pinned filter
+        // bar when it's showing).
+        scrollIndicatorInsets={{ top: scrollInsetTop }}
         contentContainerStyle={[
           styles.list,
           viewMode === 'list' ? styles.listModeList : null,
-          // Start the list below the floating header, and clear the Add button
-          // so it never covers the last row.
-          { paddingTop: headerHeight + 8, paddingBottom: insets.bottom + 96 },
+          // Start the list below the floating header (and the pinned filter bar
+          // when active), and clear the Add button so it never covers the last row.
+          { paddingTop: listPaddingTop, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
           // On a zero-result search the empty-search recovery card already
@@ -1351,17 +1612,22 @@ export default function InboxScreen() {
               >
                 <ItemIcon item={item} compact testID="inbox-list-monogram" />
                 <View style={styles.listText}>
-                  <Text
+                  <HighlightedText
                     testID="inbox-list-title"
                     style={[styles.listTitle, { color: palette.text }]}
                     numberOfLines={1}
-                  >
-                    {displayTitle(item) ?? t('common.untitled')}
-                  </Text>
+                    text={displayTitle(item) ?? t('common.untitled')}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
                   {item.url ? (
-                    <Text style={[styles.listUrl, { color: palette.textSecondary }]} numberOfLines={1}>
-                      {item.url}
-                    </Text>
+                    <HighlightedText
+                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
                   ) : null}
                 </View>
                 {/* While the "new AI suggestions" banner is announcing, suppress
@@ -1437,13 +1703,14 @@ export default function InboxScreen() {
                 <View style={styles.cardBody}>
                   <View style={styles.cardTitleRow}>
                   <ItemIcon item={item} testID="inbox-card-monogram" />
-                  <Text
+                  <HighlightedText
                     testID="inbox-card-title"
                     style={[styles.cardTitle, { color: palette.text }]}
                     numberOfLines={1}
-                  >
-                    {displayTitle(item) ?? t('common.untitled')}
-                  </Text>
+                    text={displayTitle(item) ?? t('common.untitled')}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
                   {suggestionCount > 0 && newSuggestionsCount === 0 ? (
                     <View
                       accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
@@ -1467,9 +1734,13 @@ export default function InboxScreen() {
                   </Pressable>
                 </View>
                 {item.url ? (
-                  <Text style={[styles.cardUrl, { color: palette.textSecondary }]} numberOfLines={1}>
-                    {item.url}
-                  </Text>
+                  <HighlightedText
+                    style={[styles.cardUrl, { color: palette.textSecondary }]}
+                    numberOfLines={1}
+                    text={item.url}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
                 ) : null}
                 {metaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
@@ -1727,6 +1998,45 @@ const styles = StyleSheet.create({
   suggestBannerClose: {
     padding: 8,
   },
+  filterBar: {
+    // Pinned, edge-to-edge toolbar strip in its own layer. Between the header
+    // (zIndex 10) and the list (default 0) so the header covers it when revealed
+    // and it covers the rows. An opaque background plus a hairline bottom border
+    // make it read as an intentional toolbar, not a floating pill.
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 5,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  filterBarInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 16,
+    paddingRight: 8,
+    paddingVertical: 8,
+  },
+  filterBarIcon: {
+    marginRight: 8,
+  },
+  filterBarText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  filterBarAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+  },
+  filterBarActionLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
   searchWrap: {
     paddingHorizontal: 16,
     paddingTop: 12,
@@ -1759,9 +2069,17 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     paddingHorizontal: 13,
   },
+  sortPillFlexible: {
+    // The Sort pill carries the only long label in the controls row; let it
+    // shrink and truncate (numberOfLines={1}) so adding the Tags toggle can't
+    // shove the view segment off the right edge on a narrow device.
+    flexShrink: 1,
+    minWidth: 0,
+  },
   sortPillLabel: {
     fontSize: 14,
     fontWeight: '600',
+    flexShrink: 1,
   },
   viewSegment: {
     marginLeft: 'auto',

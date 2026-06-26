@@ -56,14 +56,19 @@ jobs:
           echo "node-linker=hoisted" >> .npmrc
           pnpm install --no-frozen-lockfile
 
-      # Cache Gradle deps/transforms + the local build cache across runs.
-      - name: Cache Gradle
-        uses: actions/cache@v4
+      # Restore Gradle deps/transforms + local build cache. Split into restore +
+      # save so the cache is always updated after each build — actions/cache@v4
+      # skips saving on a cache hit, which means the Gradle build cache (task
+      # output hashes) never grows beyond the first cold build for a given
+      # dependency set. Saving unconditionally lets native task outputs accumulate
+      # run-over-run so each build only recompiles what actually changed.
+      - name: Restore Gradle cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/mobile/package.json') }}
+          key: gradle-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             gradle-${{ runner.os }}-
 
@@ -78,6 +83,19 @@ jobs:
           key: ccache-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             ccache-${{ runner.os }}-
+
+      # Metro transform cache: Metro (the JS bundler) caches per-file transform
+      # results in /tmp/metro-*. Without this, every run re-transforms all
+      # source files even though most haven't changed. Restoring it lets Metro
+      # skip unchanged files and only re-transform what's new, cutting the
+      # bundleReleaseJsAndAssets Gradle task from ~9 min back toward ~5 min.
+      - name: Restore Metro cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/metro-*
+          key: metro-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            metro-${{ runner.os }}-
 
       - name: Prebuild Android project
         working-directory: apps/mobile
@@ -125,6 +143,29 @@ jobs:
         # Build only the arm64-v8a ABI — every modern Android phone — to keep
         # the cold-cache native (NDK) compile fast and the APK small.
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=arm64-v8a
+
+      # Always save the Gradle cache after each build so the Gradle build cache
+      # (task output hashes stored in ~/.gradle/caches/build-cache-*) accumulates
+      # run-over-run. Key by sha so every run creates a fresh entry; the restore
+      # step above falls back via prefix match to pick up the most recent one.
+      - name: Save Gradle cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.sha }}
+
+      # Always save Metro's transform cache after the build so the next run can
+      # skip re-transforming files that haven't changed. Key by sha (unique per
+      # commit); restore above uses prefix fallback to the most recent entry.
+      - name: Save Metro cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/metro-*
+          key: metro-${{ runner.os }}-${{ github.sha }}
 
       # Decide where this build is published. A clean vX.Y.Z (pushed tag or
       # dispatch input) is a real, versioned prerelease kept forever. Anything
@@ -300,12 +341,41 @@ jobs:
             exit 0
           fi
           # The service-account JSON is passed via a file, not an inline flag,
-          # so it never lands in the process list or logs.
-          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-sa.json"
-          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-sa.json"
-          npx --yes firebase-tools appdistribution:distribute \
-            "dist/${{ steps.meta.outputs.apk }}" \
-            --app "$FIREBASE_APP_ID" \
-            --groups "$FIREBASE_TESTER_GROUPS" \
-            --release-notes "${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})"
-          rm -f "$RUNNER_TEMP/firebase-sa.json"
+          # so it never lands in the process list or logs. The secret may be
+          # stored as raw JSON or base64-encoded JSON (a common way to dodge
+          # newline mangling) — accept either: raw JSON contains a '{', base64
+          # never does, so that tells them apart.
+          SA="$RUNNER_TEMP/firebase-sa.json"
+          if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
+          else
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
+          fi
+          # Remove the key file on step exit — success, failure, or an early
+          # validation bail-out — so it never lingers in $RUNNER_TEMP. (Steps run
+          # under `bash -e`, so a non-zero command exits before any trailing
+          # cleanup line would run; a trap is the only thing that always fires.)
+          trap 'rm -f "$SA"' EXIT
+          # Validate it really is a service-account key BEFORE calling firebase,
+          # so a bad/empty/expired secret fails with a clear, non-sensitive
+          # message instead of the opaque "have you run firebase login?" error.
+          # Parse inside try/catch and NEVER print the parser error: on malformed
+          # (e.g. truncated base64) JSON, Node would otherwise echo the offending
+          # decoded source line — which can contain private-key material that
+          # Actions masking (keyed on the base64 secret) won't redact. Only the
+          # non-secret client_email is ever echoed.
+          if ! node -e 'let j;try{j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))}catch{process.exit(1)}if(j.type!=="service_account"||!j.client_email||!j.private_key){process.exit(1)}console.log("Firebase service account: "+j.client_email)' "$SA"; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT is not a valid service-account JSON (tried raw and base64). Re-create the key in Google Cloud → IAM → Service Accounts, grant it the 'Firebase App Distribution Admin' role, and store the downloaded JSON (raw, or base64 of it) in the secret."
+            exit 1
+          fi
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+          # Upload + distribute via the App Distribution REST API directly. We
+          # avoid `firebase-tools`, whose CLI service-account auth is broken in
+          # CI — it ignores a valid GOOGLE_APPLICATION_CREDENTIALS and dies with
+          # "Failed to authenticate, have you run firebase login?"
+          # (firebase/firebase-tools#10041). A token minted straight from the SA
+          # key works (verified in CI), so the script does exactly that.
+          APK_PATH="dist/${{ steps.meta.outputs.apk }}" \
+          RELEASE_NOTES="${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})" \
+            node scripts/firebase-app-distribution.mjs
+          # The EXIT trap above removes the key; bash -e propagates any failure.
