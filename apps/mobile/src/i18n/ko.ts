@@ -59,6 +59,9 @@ export const ko: Catalog = {
   'inbox.sortNameAsc': '이름 ㄱ–ㅎ',
   'inbox.sortNameDesc': '이름 ㅎ–ㄱ',
   'inbox.viewAsA11y': '{mode}로 보기',
+  'inbox.browseTags': '태그',
+  'inbox.browseTagsA11y': '태그로 둘러보기',
+  'inbox.browseTagsCloseA11y': '태그 둘러보기 닫기',
   'inbox.filterAll': '전체',
   'inbox.filterNoCollection': '컬렉션 없음',
   'inbox.sectionMatches': { other: '검색 결과 {count}개' },
@@ -114,7 +117,6 @@ export const ko: Catalog = {
 
   'viewMode.card': '카드',
   'viewMode.list': '목록',
-  'viewMode.cloud': '태그 클라우드',
 
   'add.urlLabel': 'URL',
   'add.urlPlaceholder': 'https://',

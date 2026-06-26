@@ -79,6 +79,12 @@ export const en = {
   'inbox.sortNameAsc': 'Name A–Z',
   'inbox.sortNameDesc': 'Name Z–A',
   'inbox.viewAsA11y': 'View as {mode}',
+  // "Browse by tag" toggle: opens the transient tag cloud (a navigation surface,
+  // never a persisted layout). Its a11y label flips to a close phrasing when the
+  // cloud is already open.
+  'inbox.browseTags': 'Tags',
+  'inbox.browseTagsA11y': 'Browse by tag',
+  'inbox.browseTagsCloseA11y': 'Close tag browser',
   'inbox.filterAll': 'All',
   'inbox.filterNoCollection': 'No collection',
   'inbox.sectionMatches': { one: '{count} result', other: '{count} results' },
@@ -156,7 +162,6 @@ export const en = {
   // View-mode labels (Inbox layout density).
   'viewMode.card': 'Cards',
   'viewMode.list': 'List',
-  'viewMode.cloud': 'Tag cloud',
 
   // Add bookmark.
   'add.urlLabel': 'URL',

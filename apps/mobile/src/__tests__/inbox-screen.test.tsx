@@ -458,11 +458,11 @@ test('a tag route param filters the Inbox to that tag on load', async () => {
   expect(screen.getByText('#design · 1')).toBeTruthy();
 });
 
-test('an empty library shows the onboarding card even with a saved Tag-cloud preference', async () => {
-  // The user last left the Inbox in Tag-cloud view, then trashed their last
-  // item. The view segment is folded away on an empty library, so if the cloud
-  // (with its own "no tags" empty message) kept rendering, there'd be no way
-  // back to Cards. The empty library must fall through to the onboarding card.
+test('an empty library shows the onboarding card even with a legacy Tag-cloud preference', async () => {
+  // The tag cloud is no longer a persisted layout: a legacy stored 'cloud'
+  // degrades to Cards (parseViewMode), and the cloud is a transient toggle that
+  // never cold-starts. On an empty library the Browse-by-tag toggle is hidden
+  // and the cloud can't open, so the screen must show the onboarding card.
   fakeRepo.__reset([]);
   await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'cloud');
 
@@ -470,9 +470,11 @@ test('an empty library shows the onboarding card even with a saved Tag-cloud pre
 
   await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
   expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
+  // The toggle is hidden when the library is empty.
+  expect(screen.queryByTestId('inbox-browse-tags-toggle')).toBeNull();
 });
 
-test('a routed tag facet overrides a saved Tag-cloud preference and shows the bookmarks', async () => {
+test('a routed tag facet shows the bookmarks, not the tag cloud', async () => {
   const tagged = '7e64cf1e-0000-4000-8000-000000000071';
   const untagged = '7e64cf1e-0000-4000-8000-000000000072';
   mockParams = { tag: 't-design' };
@@ -489,13 +491,14 @@ test('a routed tag facet overrides a saved Tag-cloud preference and shows the bo
       collections: [],
     },
   );
-  // The user's saved layout is the tag cloud …
+  // A legacy stored 'cloud' degrades to Cards; the routed facet keeps the cloud
+  // closed regardless.
   await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'cloud');
 
   const screen = await renderInbox();
 
-  // … but a routed tag facet drills into a bookmark layout so the linked-to
-  // bookmark is visible, rather than leaving the global cloud on screen.
+  // A routed tag facet shows the linked-to bookmark in the item layout, never
+  // the global cloud overview.
   await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
   expect(screen.getByText('Design system')).toBeTruthy();
   expect(screen.queryByText('Unrelated note')).toBeNull();
@@ -636,8 +639,8 @@ test('the tag cloud view lists tags and tapping one filters to that tag', async 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
 
-  // Switch to the tag cloud: both tags appear, cards are gone.
-  await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+  // Open the Browse-by-tag cloud: both tags appear, cards are gone.
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
   await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
   expect(screen.queryByTestId('inbox-card-title')).toBeNull();
   const cookingTag = await screen.findByLabelText('#cooking, 2 bookmarks');
@@ -673,7 +676,7 @@ test('the tag cloud scopes to the active folder facet', async () => {
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
   // Whole-Inbox cloud shows both folders' tags …
-  await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
   await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
   expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy();
   expect(screen.getByLabelText('#cooking, 1 bookmark')).toBeTruthy();
@@ -722,7 +725,7 @@ test('the hardware back key returns from a drilled-in tag to the tag cloud', asy
     await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
 
     // Open the cloud and drill into a tag → filtered cards, cloud gone.
-    await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+    await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
     await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
     await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
     await waitFor(() => expect(screen.getByText('#cooking · 1')).toBeTruthy());
@@ -768,20 +771,23 @@ test('drilling into a cloud tag does not persist a Cards/List view preference', 
       collections: [],
     },
   );
-  // The user's saved view is the tag cloud.
-  await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'cloud');
+  // The user's saved item layout is List.
+  await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'list');
 
   const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+  await waitFor(() => expect(screen.getAllByTestId('inbox-list-title').length).toBeGreaterThan(0));
 
-  // Drill into a tag: this is a transient layout flip to show the bookmarks…
+  // Open the transient cloud, then drill into a tag — the cloud is a navigation
+  // surface, not a layout, so neither opening it nor drilling in writes a pref.
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
   await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
   await waitFor(() => expect(screen.getByText('#cooking · 1')).toBeTruthy());
 
-  // …it must NOT overwrite the stored 'cloud' preference, so the next launch
-  // still returns to the cloud.
+  // The stored layout preference is untouched (still List), so the next launch
+  // returns to List — the cloud never persists.
   await waitFor(async () =>
-    expect(await fakeRepo.repository.getMeta(INBOX_VIEW_PREF_KEY)).toBe('cloud'),
+    expect(await fakeRepo.repository.getMeta(INBOX_VIEW_PREF_KEY)).toBe('list'),
   );
 });
 
@@ -840,7 +846,7 @@ test('the filter bar returns to the tag cloud on any platform', async () => {
 
   // Open the cloud and drill into a tag (Platform default — no android override,
   // so this exercises the cross-platform filter bar, not hardware Back).
-  await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
   await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
   await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
   await waitFor(() => expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull());
@@ -874,14 +880,93 @@ test('drilling into a cloud tag lands in the List layout when List is preferred'
   // The user deliberately chooses List, then opens the cloud.
   await fireEvent.press(screen.getByTestId('inbox-view-list'));
   await waitFor(() => expect(screen.getAllByTestId('inbox-list-title').length).toBeGreaterThan(0));
-  await fireEvent.press(screen.getByTestId('inbox-view-cloud'));
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
   await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
 
-  // Drilling in lands in their preferred List layout, not hard-coded Cards.
+  // Drilling in lands back in the current List layout, not hard-coded Cards.
   // Only the #cooking bookmark survives the filter, so a single list row shows.
   await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
   await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
   expect(screen.queryByTestId('inbox-card-title')).toBeNull();
+});
+
+test('the layout segment offers only Cards and List (no Tag-cloud option)', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a1', title: 'Kimchi jjigae' }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+
+  // The segment renders exactly the two item layouts; the cloud moved to its
+  // own Browse-by-tag toggle.
+  expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
+  expect(screen.getByTestId('inbox-view-list')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-view-cloud')).toBeNull();
+  expect(screen.getByTestId('inbox-browse-tags-toggle')).toBeTruthy();
+});
+
+test('the Browse-by-tag toggle opens and closes the transient cloud', async () => {
+  const cooked = '7e64cf1e-0000-4000-8000-0000000000b1';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' })],
+    {
+      tags: [makeTag('t-cooking', 'cooking')],
+      bookmarkTags: [
+        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+
+  // Tap once → cloud opens, item layout hidden.
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+  expect(screen.queryByTestId('inbox-card-title')).toBeNull();
+
+  // Tap again → cloud closes, items return. No filter was applied.
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await waitFor(() => expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull());
+  expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
+});
+
+test('closing the Browse-by-tag toggle leaves the active filter unchanged', async () => {
+  const cooked = '7e64cf1e-0000-4000-8000-0000000000b2';
+  const reading = '7e64cf1e-0000-4000-8000-0000000000b3';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
+      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+      bookmarkTags: [
+        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+
+  // Narrow to the #cooking facet first.
+  await fireEvent.press(screen.getByRole('button', { name: '#cooking' }));
+  await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
+
+  // Open the cloud, then close it again via the toggle.
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await waitFor(() => expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull());
+
+  // The facet is still applied — toggling the cloud never touches the filter.
+  expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
+  expect(screen.queryByText('Local-first software')).toBeNull();
 });
 
 test('blank-named tags and collections do not produce empty filter chips', async () => {
