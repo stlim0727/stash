@@ -95,7 +95,12 @@ states. Each screen links to the section that specifies its behavior; see
   vocabulary so each one's *kind* is unambiguous: collection chips show a
   folder icon and the `Inbox` chip a tray icon (so it reads as "items not
   filed into any collection", not "items with no tag"); tag chips keep their
-  `#` prefix. Chips are derived
+  `#` prefix. The *container* chips — folders and the `Inbox` set — also show a
+  trailing bookmark count (`Work · 12`), so their weight is visible at a glance
+  without a separate cloud; `#tag` chips and `All` stay countless (tags get
+  their frequency view from the tag cloud, and `All` is the reset, not a
+  bucket). The count is a muted secondary token and never part of the chip's
+  label, so the facet-scoped search placeholder still reads "Search in Work". Chips are derived
   from current Inbox content, so each leads to at least one bookmark; the
   section header reflects the active facet and count, and selecting a facet
   composes with search. If the active facet's last member leaves the Inbox,
