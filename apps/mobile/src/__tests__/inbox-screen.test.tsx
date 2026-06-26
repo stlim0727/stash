@@ -721,6 +721,43 @@ test('the tag cloud scopes to the active folder facet', async () => {
   expect(screen.queryByLabelText('#cooking, 1 bookmark')).toBeNull();
 });
 
+test('a search narrows the tag cloud to the tags on matching results', async () => {
+  const work = '7e64cf1e-0000-4000-8000-000000000081';
+  const home = '7e64cf1e-0000-4000-8000-000000000082';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: work, title: 'Local-first software' }),
+      makeStoredBookmark({ id: home, title: 'Kimchi jjigae' }),
+    ],
+    {
+      tags: [makeTag('t-reading', 'reading'), makeTag('t-cooking', 'cooking')],
+      bookmarkTags: [
+        { bookmark_id: work, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: home, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  // The whole-Inbox cloud shows both bookmarks' tags …
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+  expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy();
+  expect(screen.getByLabelText('#cooking, 1 bookmark')).toBeTruthy();
+
+  // … searching narrows it to only the tags carried by the matching result
+  // (debounced, so the cloud settles a beat later).
+  await fireEvent.changeText(
+    screen.getByPlaceholderText('Search titles, tags, folders'),
+    'kimchi',
+  );
+  await waitFor(() => expect(screen.queryByLabelText('#reading, 1 bookmark')).toBeNull());
+  expect(screen.getByLabelText('#cooking, 1 bookmark')).toBeTruthy();
+});
+
 test('a browse-shelf chip still filters after drilling in from the tag cloud', async () => {
   // Regression for "after selecting a tag from the cloud, the browse chips went
   // dead for several seconds": the shelf chips are now memoized and driven by a

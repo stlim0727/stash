@@ -688,37 +688,6 @@ export default function InboxScreen() {
     [inbox, filter, tagIdsFor],
   );
 
-  // Tag cloud derived from the facet-filtered Inbox (so the browse-shelf chips
-  // scope it — e.g. picking a folder chip narrows the cloud to that folder's
-  // tags): a frequency-ranked overview sized by how many of those bookmarks
-  // carry each tag. Search is left out on purpose — the cloud is the navigation
-  // surface, not a result of it. Tapping a tag drills in by applying its filter.
-  // Only built while the cloud is the active layout. The cloud isn't rendered in
-  // card/list view, but this memo keys off `facetFiltered`, so without the guard
-  // every browse-chip tap (which changes the facet) re-scanned every filtered
-  // bookmark and its tags and re-sorted — wasted work that, on a large library,
-  // was a big slice of the "chips go dead for seconds after picking a tag from
-  // the cloud" stall. Skipping it off-cloud makes a facet change in cards cheap.
-  const tagCloud = useMemo(() => {
-    if (!isCloud) {
-      return EMPTY_TAG_CLOUD;
-    }
-    const counts = new Map<string, { name: string; count: number }>();
-    for (const bookmark of facetFiltered) {
-      for (const tag of getTagsForBookmark(bookmark.id)) {
-        const existing = counts.get(tag.id);
-        if (existing) {
-          existing.count += 1;
-        } else {
-          counts.set(tag.id, { name: tag.name, count: 1 });
-        }
-      }
-    }
-    return buildTagCloud(
-      [...counts.entries()].map(([id, { name, count }]) => ({ id, name, count })),
-    );
-  }, [isCloud, facetFiltered, getTagsForBookmark]);
-
   // If the active facet disappears (last member removed/unfiled), fall back to
   // All rather than stranding the user on an empty filtered view.
   useEffect(() => {
@@ -747,6 +716,39 @@ export default function InboxScreen() {
     [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
+
+  // Tag cloud derived from the SEARCH-filtered Inbox (`filtered` = facet + the
+  // current query), so the cloud agrees with the result list: the browse-shelf
+  // chips scope it (picking a folder narrows to that folder's tags), and a live
+  // search narrows it further to the tags carried by the matching bookmarks —
+  // a co-occurrence/"related tags" view of the results, not the whole library.
+  // With no query, `filtered` is the full facet set, so this is identical to the
+  // facet-only cloud. Frequency-ranked and sized by how many of those bookmarks
+  // carry each tag; tapping a tag drills in by applying its filter. Only built
+  // while the cloud is the active layout — the cloud isn't rendered in card/list
+  // view, and this memo keys off `filtered`, so without the guard every
+  // browse-chip/keystroke change would re-scan every filtered bookmark and its
+  // tags and re-sort (wasted work that fed the "chips go dead after picking a
+  // tag from the cloud" stall). Skipping it off-cloud keeps those changes cheap.
+  const tagCloud = useMemo(() => {
+    if (!isCloud) {
+      return EMPTY_TAG_CLOUD;
+    }
+    const counts = new Map<string, { name: string; count: number }>();
+    for (const bookmark of filtered) {
+      for (const tag of getTagsForBookmark(bookmark.id)) {
+        const existing = counts.get(tag.id);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          counts.set(tag.id, { name: tag.name, count: 1 });
+        }
+      }
+    }
+    return buildTagCloud(
+      [...counts.entries()].map(([id, { name, count }]) => ({ id, name, count })),
+    );
+  }, [isCloud, filtered, getTagsForBookmark]);
   // A query is only a search when it produces at least one real search token. A
   // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
   // zero tokens, so `filterBookmarks` returns everything — treating that as a
@@ -1472,7 +1474,11 @@ export default function InboxScreen() {
             </View>
           ) : (
             <Text style={[styles.empty, { color: palette.textSecondary }]}>
-              {isLoading ? t('inbox.loading') : t('inbox.tagCloudEmpty')}
+              {isLoading
+                ? t('inbox.loading')
+                : searching
+                  ? t('inbox.tagCloudEmptySearch', { query: debouncedQuery.trim() })
+                  : t('inbox.tagCloudEmpty')}
             </Text>
           )}
         </Animated.ScrollView>
