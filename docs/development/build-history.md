@@ -7,16 +7,47 @@ candidates** (`vX.Y.Z-rcN`) that lead up to each stable cut.
 
 ## How to read / extend this
 
-- Each RC is built from `main` (the 0.2.x trunk) via the **Android APK** workflow.
-- **Always pass the `version` input** (e.g. `v0.2.1-rc4`) so the build carries a
-  real label in the Release/run instead of being an anonymous blank dispatch —
-  that label is what makes this history trustworthy. A hyphenated `-rcN` tag
-  refreshes the single rolling **`dev`** prerelease in place (it never clutters
-  Releases); only a clean `vX.Y.Z` cuts a kept, versioned Release.
-- After triggering, add a row below with the date, the `main` SHA it built from,
-  and a one-line "what's new since the last RC."
+- Each RC is built from `main` (the trunk) via the **Android APK** workflow.
+- **The next RC number comes from THIS FILE, not from git tags.** An RC build is
+  a `workflow_dispatch` run that only refreshes the rolling **`dev`** prerelease
+  — it creates **no git tag and no versioned Release**, and the `dev` release
+  body shows only the built commit, never the `-rcN` label. So `list_tags` /
+  releases are blind to RC history; the **current cycle's table below is the
+  single source of truth**. Next rc = (highest `-rcN` in the current cycle's
+  table) **+ 1**. If the cycle has no table yet (a fresh `app.json` version
+  bump), start at `rc1` and create the section.
+- **Always pass the `version` input** (e.g. `v1.0.0-rc5`) so the build carries a
+  real label in the run instead of being an anonymous blank dispatch — that
+  label plus the row you add here is what makes this history trustworthy. A
+  hyphenated `-rcN` tag refreshes the single rolling **`dev`** prerelease in
+  place (it never clutters Releases); only a clean `vX.Y.Z` cuts a kept,
+  versioned Release.
+- **After triggering, immediately add a row** to the current cycle's table with
+  the date, the `main` SHA it built from (the run's `head_sha`), and a one-line
+  "what's new since the last RC." Skipping this is exactly how `v1.0.0-rc4` went
+  unlogged and the next build's number became a guess.
 
-## 0.2.2 cycle (current — unreleased trunk)
+## 1.0.0 cycle (current trunk)
+
+`apps/mobile/app.json` `version` = `1.0.0` (bumped `0.2.2 → 1.0.0` in #223,
+commit `d48c01f`, ahead of the first 1.0 release candidate). Stash is
+feature-complete for 1.0; these are the release candidates leading to the first
+`v1.0.0` stable cut. The stable target is **`v1.0.0`**.
+
+| Build | Date (UTC) | `main` SHA | What's new since last RC |
+| ----- | ---------- | ---------- | ------------------------ |
+| `v1.0.0-rc5` | 2026-06-26 | `8e68980` | Search now narrows the Browse-by-tag cloud to the tags on matching results (was showing the whole library under a "Results for …" banner) (#234). Build = `android-apk.yml` run #109. |
+| `v1.0.0-rc4` | 2026-06-26 | `45b13b6` | *(not logged at build time — reconstructed: this was the `dev` prerelease's target commit immediately before rc5, and `dev` always holds the latest RC. Code: unify the no-collection label as "Inbox" + folder/Inbox chip counts (#232).)* |
+| `v1.0.0-rc1`–`rc3` | 2026-06 | *(not recorded)* | *(1.0.0 dispatches built before this cycle's table existed; their `-rcN` numbers were tracked only on the Play internal-test track. SHAs were not captured at the time — this is the tracking gap that adding the rows above closes. rc1 was the first build after the `1.0.0` bump #223.)* |
+
+> **Why `rc4` was missed.** RC builds leave no git tag and the `dev` release body
+> omits the `-rcN` label, so the only durable ledger is this file — and it was
+> never extended past the 0.2.2 cycle when `app.json` jumped to `1.0.0`. Anyone
+> deriving "the next RC" from `list_tags` (or from the partial Play-Console
+> notes in #233, which only saw rc1/rc3) would skip straight past rc4. The fix
+> is procedural: maintain this 1.0.0 table on every dispatch (see "How to read").
+
+## 0.2.2 cycle (released — `v0.2.2`)
 
 `apps/mobile/app.json` `version` = `0.2.2`; `min_app_version` soft gate stays at
 `0.2.1` (a `0.2.2` client passes it; raising the gate would force `0.2.1` users
