@@ -558,6 +558,12 @@ export default function InboxScreen() {
     if (!paramTag && !paramCollection) {
       return;
     }
+    // A routed facet is a fresh destination chosen elsewhere (e.g. a tag tapped
+    // in Detail), NOT a continuation of a cloud drill — so end any cloud-return
+    // context, matching the cloud-tag/chip/suggestion paths. Without this, a
+    // deep-link landing while a stale ref lingers would mislabel the filter bar
+    // with a back-to-cloud action that jumps to a facet the user never chose.
+    cloudReturnRef.current = null;
     setFilter(paramTag ? { kind: 'tag', id: paramTag } : { kind: 'collection', id: paramCollection! });
     // A routed facet wants the matching bookmarks in view; the tag cloud is a
     // global overview that ignores the facet, so drop back to the user's
@@ -1194,8 +1200,8 @@ export default function InboxScreen() {
             testID="inbox-filter-bar"
             style={[styles.suggestBanner, styles.filterBar, { backgroundColor: palette.accentSoft }]}
           >
-            <Ionicons name={scope.icon} size={16} color={palette.accent} style={styles.filterBarIcon} />
-            <Text style={[styles.filterBarText, { color: palette.accent }]} numberOfLines={1}>
+            <Ionicons name={scope.icon} size={16} color={palette.accentText} style={styles.filterBarIcon} />
+            <Text style={[styles.filterBarText, { color: palette.accentText }]} numberOfLines={1}>
               {scope.text}
             </Text>
             <Pressable
@@ -1213,13 +1219,13 @@ export default function InboxScreen() {
             >
               {scope.action === 'back-to-cloud' ? (
                 <>
-                  <Ionicons name="arrow-back" size={14} color={palette.accent} />
-                  <Text style={[styles.filterBarActionLabel, { color: palette.accent }]}>
+                  <Ionicons name="arrow-back" size={14} color={palette.accentText} />
+                  <Text style={[styles.filterBarActionLabel, { color: palette.accentText }]}>
                     {t('inbox.scopeBackToTags')}
                   </Text>
                 </>
               ) : (
-                <Ionicons name="close" size={16} color={palette.accent} />
+                <Ionicons name="close" size={16} color={palette.accentText} />
               )}
             </Pressable>
           </View>
