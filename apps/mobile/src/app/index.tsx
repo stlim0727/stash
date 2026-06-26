@@ -1176,10 +1176,10 @@ export default function InboxScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('inbox.sortA11y', { label: t(SORT_LABEL_KEY[serializeSort(sort)]) })}
             onPress={() => setSortMenuOpen(true)}
-            style={[styles.sortPill, { backgroundColor: palette.surface, borderColor: palette.border }]}
+            style={[styles.sortPill, styles.sortPillFlexible, { backgroundColor: palette.surface, borderColor: palette.border }]}
           >
             <Ionicons name={SORT_ICON[sort.field]} size={15} color={palette.textSecondary} />
-            <Text style={[styles.sortPillLabel, { color: palette.text }]}>
+            <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
               {t(SORT_LABEL_KEY[serializeSort(sort)])}
             </Text>
             <Ionicons name="chevron-down" size={14} color={palette.textSecondary} />
@@ -2001,9 +2001,17 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     paddingHorizontal: 13,
   },
+  sortPillFlexible: {
+    // The Sort pill carries the only long label in the controls row; let it
+    // shrink and truncate (numberOfLines={1}) so adding the Tags toggle can't
+    // shove the view segment off the right edge on a narrow device.
+    flexShrink: 1,
+    minWidth: 0,
+  },
   sortPillLabel: {
     fontSize: 14,
     fontWeight: '600',
+    flexShrink: 1,
   },
   viewSegment: {
     marginLeft: 'auto',
