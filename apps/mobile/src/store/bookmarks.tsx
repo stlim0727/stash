@@ -1800,7 +1800,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ),
           );
 
-          const result = await syncQueueEntry(api, repository, entry, getLatestBookmark);
+          const result = await syncQueueEntry(
+            api,
+            repository,
+            entry,
+            getLatestBookmark,
+            // A still-local update/delete is only safe to DEFER (vs. settle) when
+            // a not-yet-synced create for the same local id is still queued to
+            // re-key it. Reading the live ref (not the `syncable` snapshot) so a
+            // create enqueued mid-run still counts.
+            (localId) =>
+              queueRef.current.some(
+                (queued) =>
+                  queued.local_id === localId &&
+                  queued.operation === 'create' &&
+                  queued.sync_status !== 'synced',
+              ),
+          );
 
           // Deleted while a create/update was in flight: don't resurrect it.
           // Undo the rows syncQueueEntry just persisted and best-effort delete
