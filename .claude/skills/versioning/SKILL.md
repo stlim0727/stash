@@ -42,6 +42,20 @@ disagree with this file, the docs win; fix this file.
   routes to the rolling **`dev`** prerelease (the APK is still stamped with the
   full `1.0.0-rc2` version name); only a clean `vX.Y.Z` gets its own versioned,
   marked-"latest" release.
+  - **⚠️ RCs usually leave NO git tag.** When the RC was built by **dispatching
+    the workflow** (the remote-session path — `version=v1.0.0-rc1`) rather than
+    by pushing a tag, GitHub creates no `v1.0.0-rc1` tag *or* release — it only
+    overwrites the single rolling `dev` release in place. So `list_tags` /
+    `list_releases` are **blind to the real RC history**: you'll see the `dev`
+    release and the clean `vX.Y.Z` releases, but not the `-rcN` builds that ran
+    through `dev`. Never tell the user "no RC was published" from tags alone —
+    it's almost always wrong. See Step 1 for where to actually look.
+  - **rc numbers can be non-monotonic** because the `version` input is typed by
+    hand each dispatch (observed: `1.0.0-rc3` at build 105, then `1.0.0-rc1` at
+    build 107 — a *lower* rc name on a *newer* build). The `versionCode`
+    (`run_number`) is the only monotonic identifier. So compute the next rc as
+    **(highest rc number ever stamped for the target) + 1**, by rc *name*, not
+    by recency — and flag the mess + any gaps to the user.
 - **Golden rule:** any code users receive that changed → bump the version. Same
   code rebuilt → keep the version, let the build number distinguish it. Never
   ship different code under the same version name.
@@ -50,18 +64,39 @@ disagree with this file, the docs win; fix this file.
 
 Gather, in this order:
 
-1. **Latest tags** (source of truth for what's shipped). Local clone is often
-   shallow with no tags, so prefer the GitHub MCP:
-   `mcp__github__list_tags(owner, repo)` → take the highest `vX.Y.Z` and the
-   highest `vX.Y.Z-rcN` per version. Fall back to `git tag --sort=-v:refname`.
-2. **Marketing version**: `apps/mobile/app.json` → `expo.version`.
-3. **Branches that exist**: is there a `release/X.Y.x` for the line in question?
+1. **Latest tags** (source of truth for *clean stable* `vX.Y.Z` releases). Local
+   clone is often shallow with no tags, so prefer the GitHub MCP:
+   `mcp__github__list_tags(owner, repo)` → take the highest `vX.Y.Z`. Fall back
+   to `git tag --sort=-v:refname`. **Tags do NOT reliably capture RCs** — see #2.
+2. **The real RC history** (tags miss it — see the RC bullet above). To find the
+   highest `vX.Y.Z-rcN` actually built, check, in order:
+   - **The rolling `dev` release**: `get_release_by_tag(owner, repo, "dev")` —
+     its body names the commit, but the *stamped version name* lives in the APK,
+     not the release metadata. The most reliable read of the latest RC's version
+     **name** is the install screen / Play Console internal-test track (the user
+     can screenshot it: e.g. "버전 1.0.0-rc1 (107)").
+   - **Recent `workflow_dispatch` runs** of `android-apk.yml`:
+     `actions_list(method="list_workflow_runs", resource_id="android-apk.yml",
+     workflow_runs_filter={event:"workflow_dispatch"})`. The `run_number` is the
+     `versionCode` (monotonic); cross-reference it with the install-screen build
+     number to map each build → its rc name + commit. (The `version` *input*
+     isn't in the run summary, so the install screen / Play track is the
+     authority for the rc name.)
+   - **The Play Console internal-testing list** if the user has it open — it
+     shows every uploaded `versionName (versionCode)` in one place and is the
+     single best source. Ask for a screenshot when the RC history is unclear.
+3. **Marketing version**: `apps/mobile/app.json` → `expo.version`. ⚠️ This can be
+   **stale/ahead of reality** (observed at `1.0.0` for the whole 0.1.x/0.2.x run
+   because the workflow `version` input overrides `APP_VERSION` at build time).
+   Treat it as a *hint of intent*, never as proof of what shipped.
+4. **Branches that exist**: is there a `release/X.Y.x` for the line in question?
    `mcp__github__list_branches` or `git branch -r`.
-4. **What the change is** (feature vs bug fix) and **which shipped line it
+5. **What the change is** (feature vs bug fix) and **which shipped line it
    affects** — from the user and the diff/PRs since the last tag.
 
 Report what you found before proposing a version, e.g. "latest stable
-`v0.1.10`, app.json `1.0.0`, `release/0.1.x` exists, change is a feature."
+`v0.2.2`; latest RC `v1.0.0-rc3` (build 105, from the Play track — no git tag);
+app.json `1.0.0` (stale); `release/0.1.x` exists; change is polish."
 
 ## Step 2 — Classify the change
 
