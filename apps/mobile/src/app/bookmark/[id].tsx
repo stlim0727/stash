@@ -33,6 +33,7 @@ import { collectionMatchKey } from '@/domain/collection-match';
 import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
+import { trackBreadcrumb } from '@/observability/sentry';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
@@ -109,11 +110,14 @@ export default function BookmarkDetailScreen() {
     setTitleExpanded(false);
   }, [displayedTitle]);
 
-  // Forward genuine AI outages (provider error / timeout) to monitoring once per
-  // enrichment, so the section can stay quiet in the common case and we still
-  // see when the model actually fails. Rate-limits and missing-config are
-  // expected fallbacks, not incidents, so they're left out. console.error is the
-  // Sentry bridge (observability/sentry.ts); the message carries no content.
+  // Leave a monitoring trail for genuine AI outages (provider error / timeout)
+  // once per enrichment, so we can still see when the model actually fails.
+  // Rate-limits and missing-config are expected fallbacks, not incidents, so
+  // they're left out. This is a low-severity *breadcrumb*, not console.error:
+  // a degraded fallback is a handled, in-app-surfaced condition (the "basic
+  // suggestions" note below), so it must not raise a standalone Sentry error
+  // issue — it just attaches to any real event from this session. The message
+  // carries no content.
   // Opening a bookmark's Detail means the user is now witnessing its AI
   // suggestions, so clear the Inbox "new suggestions" flag for it. Keyed on the
   // enrichment too, so a suggestion that lands *while* this screen is open
@@ -145,7 +149,7 @@ export default function BookmarkDetailScreen() {
       return;
     }
     reportedDegradedRef.current.add(reportEnrichment.id);
-    console.error(`[stash] AI enrichment degraded (${reason})`);
+    trackBreadcrumb('enrichment', 'degraded', { reason });
   }, [reportEnrichment?.id, reportEnrichment?.degraded, reportEnrichment?.degraded_reason]);
 
   if (!bookmark) {
