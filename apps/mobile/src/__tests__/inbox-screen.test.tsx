@@ -39,6 +39,7 @@ import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { INBOX_VIEW_PREF_KEY } from '@/domain/view-mode';
+import { TAG_CLOUD_MAX_ENTRIES } from '@/domain/tag-cloud';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
@@ -718,6 +719,45 @@ test('the tag cloud view lists tags and tapping one filters to that tag', async 
   await waitFor(() => expect(screen.getByText('#cooking · 2')).toBeTruthy());
   expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
   expect(screen.getByText('Local-first software')).toBeTruthy();
+});
+
+test('the tag cloud caps how many tags it renders but still counts them all', async () => {
+  // A large library would otherwise mount hundreds of pressables in one
+  // synchronous commit and freeze the UI thread (the in-app "tag cloud frozen /
+  // not responding" reports). The cloud renders only the busiest
+  // TAG_CLOUD_MAX_ENTRIES tags; the header still reports the true total.
+  const bookmarkId = '7e64cf1e-0000-4000-8000-0000000000c0';
+  const overflow = 10;
+  const tagCount = TAG_CLOUD_MAX_ENTRIES + overflow;
+  const tags: Tag[] = [];
+  const bookmarkTags = [];
+  for (let i = 0; i < tagCount; i += 1) {
+    const suffix = String(i).padStart(3, '0');
+    const tagId = `t-${suffix}`;
+    tags.push(makeTag(tagId, `tag-${suffix}`));
+    bookmarkTags.push({
+      bookmark_id: bookmarkId,
+      tag_id: tagId,
+      source: 'user' as const,
+      confidence: null,
+      created_at: '2026-06-12T00:00:00.000Z',
+    });
+  }
+  fakeRepo.__reset([makeStoredBookmark({ id: bookmarkId, title: 'Heavily tagged' })], {
+    tags,
+    bookmarkTags,
+    collections: [],
+  });
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Heavily tagged')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
+  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
+
+  // Only the cap renders, even though the header advertises every tag.
+  expect(screen.getAllByTestId('inbox-cloud-tag')).toHaveLength(TAG_CLOUD_MAX_ENTRIES);
+  expect(screen.getByText(`Tags · ${tagCount}`)).toBeTruthy();
 });
 
 test('the tag cloud scopes to the active folder facet', async () => {
