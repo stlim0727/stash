@@ -111,10 +111,15 @@ jobs:
         # app.config.js stamps these onto the native project: APP_VERSION (from
         # the release tag, leading `v` stripped in the config; empty on a blank
         # dispatch ⇒ falls back to app.json's version) and a per-run versionCode
-        # so every App Distribution upload is unique and increasing.
+        # so every App Distribution upload is unique and increasing. The GIT_*
+        # provenance is stamped into the config's `extra` here too so the embedded
+        # Constants.expoConfig.extra carries the right commit (see app.config.js).
         env:
           APP_VERSION: ${{ inputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
+          EXPO_PUBLIC_GIT_SHA: ${{ github.sha }}
+          EXPO_PUBLIC_GIT_REF: ${{ github.ref_name }}
+          EXPO_PUBLIC_COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
         run: npx expo prebuild --platform android --no-install
 
       - name: Give Gradle more heap
@@ -135,8 +140,11 @@ jobs:
           # Release APKs report under the "production" Sentry environment (the
           # SDK otherwise defaults to "development").
           EXPO_PUBLIC_SENTRY_ENVIRONMENT: production
-          # Build provenance — inlined into the bundle and shown in Settings so
-          # any installed APK self-identifies which commit it was built from.
+          # Build provenance — stamped into the config's `extra` (read at runtime
+          # via Constants.expoConfig.extra) and shown in Settings so any installed
+          # APK self-identifies which commit it was built from. NOT inlined into
+          # the JS bundle: that path freezes in Metro's transform cache and
+          # reports a stale commit (see app.config.js / domain/build-info.ts).
           EXPO_PUBLIC_GIT_SHA: ${{ github.sha }}
           EXPO_PUBLIC_GIT_REF: ${{ github.ref_name }}
           EXPO_PUBLIC_COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}

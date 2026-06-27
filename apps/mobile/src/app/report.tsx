@@ -73,7 +73,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const lastError =
     queue.find((entry) => entry.last_error)?.last_error ?? undefined;
 
-  const buildLabel = describeBuild(getBuildInfo());
+  const buildLabel = describeBuild(getBuildInfo(Constants.expoConfig?.extra));
 
   // Build the diagnostics fresh on demand so submit/share capture the latest
   // logs (the storage error is recorded at startup, before this screen mounts).

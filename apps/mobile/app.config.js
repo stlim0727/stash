@@ -12,6 +12,15 @@
 //   ANDROID_VERSION_CODE integer versionCode + iOS buildNumber. CI sets it to
 //                        the workflow run number so every build is unique and
 //                        monotonically increasing; defaults to 1 locally.
+//   EXPO_PUBLIC_GIT_SHA   build provenance — full commit SHA, git ref, and the
+//   EXPO_PUBLIC_GIT_REF   canonical commit URL. Exposed via `extra` (read at
+//   EXPO_PUBLIC_COMMIT_URL runtime through Constants.expoConfig.extra), NOT via
+//                        Babel's EXPO_PUBLIC_* bundle inlining: an inlined value
+//                        gets frozen in Metro's content-keyed transform cache and
+//                        then reports a stale commit on every cached CI build.
+//                        Routing it through `extra` shares `version`'s
+//                        cache-immune path, so the provenance updates each build.
+//                        Empty locally ⇒ the app shows a "local build" label.
 module.exports = ({ config }) => {
   const version = (process.env.APP_VERSION || config.version || '0.0.0').replace(/^v/, '');
   const versionCode = Number.parseInt(process.env.ANDROID_VERSION_CODE || '', 10) || 1;
@@ -21,5 +30,11 @@ module.exports = ({ config }) => {
     version,
     android: { ...config.android, versionCode },
     ios: { ...config.ios, buildNumber: String(versionCode) },
+    extra: {
+      ...config.extra,
+      gitSha: process.env.EXPO_PUBLIC_GIT_SHA || null,
+      gitRef: process.env.EXPO_PUBLIC_GIT_REF || null,
+      commitUrl: process.env.EXPO_PUBLIC_COMMIT_URL || null,
+    },
   };
 };
