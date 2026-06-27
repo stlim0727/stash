@@ -84,6 +84,15 @@ jobs:
           restore-keys: |
             ccache-${{ runner.os }}-
 
+      # Make sure the ccache binary is present (the runner image usually ships
+      # it, but don't depend on that) and zero its run stats so the post-build
+      # `ccache -s` reflects only this build's hit/miss rate.
+      - name: Install ccache
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ccache
+          ccache --version | head -1
+          ccache -z
+
       # Metro transform cache: Metro (the JS bundler) caches per-file transform
       # results in /tmp/metro-*. Without this, every run re-transforms all
       # source files even though most haven't changed. Restoring it lets Metro
@@ -136,13 +145,38 @@ jobs:
           # versionName/versionCode baked into the APK.
           APP_VERSION: ${{ inputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
-          # Route NDK C++ compiles through ccache (cached across runs above).
-          USE_CCACHE: '1'
+          # Route every CMake/NDK C++ compile through ccache. React Native only
+          # wires ccache when building RN *itself* from source; for a prebuilt-RN
+          # app build — and for third-party native modules (reanimated, worklets,
+          # expo-modules-core, folly/fabric) — USE_CCACHE was a no-op, so those
+          # compiles (the single biggest chunk of the build, ~4-5 min) ran cold
+          # every run and the ccache dir stayed empty. CMake initializes the
+          # CMAKE_<LANG>_COMPILER_LAUNCHER cache variable from the env var of the
+          # same name, so exporting these makes every module use ccache as its
+          # compiler launcher — independent of RN/Expo internals.
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_DIR: /home/runner/.ccache
           CCACHE_MAXSIZE: 3G
+          # expo prebuild regenerates android/ each run, so the absolute paths in
+          # the compile commands shift run-over-run; CCACHE_BASEDIR rewrites them
+          # to relative paths so cached objects still hit. The sloppiness flags
+          # stop __DATE__/__TIME__ and include mtimes from busting the cache.
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_COMPILERCHECK: content
+          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines
         # Build only the arm64-v8a ABI — every modern Android phone — to keep
         # the cold-cache native (NDK) compile fast and the APK small.
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=arm64-v8a
+        # `-x lintVitalRelease` skips AGP's release-lint chain (lintVitalAnalyze/
+        # generateReleaseLintVital*), which assembleRelease runs by default and
+        # which cost ~2 min — pure overhead for an internal, debug-signed APK.
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=arm64-v8a -x lintVitalRelease
+
+      # Surface ccache's hit/miss for this build so a regression (back to 0%
+      # hits) is visible in the log instead of silently costing 5 cold minutes.
+      - name: ccache stats
+        if: always()
+        run: ccache -s
 
       # Always save the Gradle cache after each build so the Gradle build cache
       # (task output hashes stored in ~/.gradle/caches/build-cache-*) accumulates
