@@ -216,8 +216,9 @@ export default function BrowseTagsScreen() {
     }
   }, [isLoading, isTyping, facetScoped.length, navigation, router]);
 
-  // Header title reflects the scope: "Tags" / "Tags in {name}" / "Tags · No
-  // collection". Set imperatively so the static native header tracks the facet.
+  // Header title reflects the scope: "Tags" / "Tags in {name}" / "Tags · Inbox"
+  // (the no-collection bucket is labelled "Inbox" everywhere, #232). Set
+  // imperatively so the static native header tracks the facet.
   const scopeName =
     scope.kind === 'collection' ? (getCollection(scope.id)?.name?.trim() ?? '') : '';
   const headerTitle = useMemo(() => {

@@ -109,10 +109,10 @@ export const ko: Catalog = {
   'inbox.tagViewAllA11y': '모든 태그를 목록으로 보기',
   'inbox.tagsTitle': '태그',
   'inbox.tagsTitleScoped': '{name}의 태그',
-  'inbox.tagsTitleUncollected': '태그 · 컬렉션 없음',
+  'inbox.tagsTitleUncollected': '태그 · 받은함',
   'inbox.tagListCount': '· {count}',
   'inbox.tagsScopedEmpty': '{name}에는 아직 태그가 없습니다.',
-  'inbox.tagsUncollectedEmpty': '컬렉션 없는 항목에는 아직 태그가 없습니다.',
+  'inbox.tagsUncollectedEmpty': '받은함에 아직 태그가 없습니다.',
   'inbox.tagsBrowseAll': '전체 태그 보기',
   'inbox.tagsSearchZero': '“{query}”에 해당하는 태그가 없습니다.',
 
