@@ -134,6 +134,17 @@ export const en = {
     other: 'Review {count} new AI suggestions',
   },
   'inbox.newSuggestionsDismiss': 'Dismiss new AI suggestions',
+  // Calm, persistent form of the review banner: shown whenever anything is left
+  // to review (even after the "new" arrivals are acknowledged), as the standing
+  // entry point into the Review screen.
+  'inbox.reviewPending': {
+    one: '✨ {count} suggestion to review',
+    other: '✨ {count} suggestions to review',
+  },
+  'inbox.reviewPendingA11y': {
+    one: 'Review {count} AI suggestion',
+    other: 'Review {count} AI suggestions',
+  },
   'inbox.inCollection': 'in {name}',
   'inbox.addBookmark': 'Add bookmark',
   'inbox.openExternal': 'Open ↗',
@@ -185,6 +196,11 @@ export const en = {
   'toast.noLink': 'No link found to stash',
 
   // Settings.
+  'settings.section.account': 'Account',
+  'settings.section.library': 'Library',
+  'settings.section.preferences': 'Preferences',
+  'settings.section.data': 'Your data',
+  'settings.section.advanced': 'Advanced',
   'settings.account.signedIn': 'Signed in',
   'settings.account.signIn': 'Sign In',
   'settings.account.signOut': 'Sign out',
@@ -201,9 +217,6 @@ export const en = {
     one: '{count} item waiting to upload',
     other: '{count} items waiting to upload',
   },
-  'settings.review.label': 'Review AI suggestions',
-  'settings.review.toReview': '{count} to review',
-  'settings.review.nothing': 'Nothing to review',
   'settings.trash.label': 'Trash',
   'settings.trash.value': '{count} items',
   'settings.report.label': 'Report a problem',

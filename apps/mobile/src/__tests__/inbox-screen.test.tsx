@@ -129,7 +129,7 @@ test('shows an AI suggestion badge for pending (un-applied) suggested tags', asy
   expect(screen.getByLabelText('2 AI suggestions')).toBeTruthy();
 });
 
-test('announces suggestions that arrived unseen with a banner, dismissable via ✕', async () => {
+test('announces unseen arrivals as a "new" alert, then settles into the standing review entry on ✕', async () => {
   const id = '7e64cf1e-0000-4000-8000-00000000000d';
   fakeRepo.__reset(
     [makeStoredBookmark({ id, title: 'Arrived while away' })],
@@ -142,18 +142,44 @@ test('announces suggestions that arrived unseen with a banner, dismissable via �
 
   const screen = await renderInbox();
 
-  const banner = await waitFor(() => screen.getByTestId('new-suggestions-banner'));
+  await waitFor(() => screen.getByTestId('review-banner'));
   expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
-  // While the banner announces, the per-card ✨ badge is suppressed so the same
+  // While the alert announces, the per-card ✨ badge is suppressed so the same
   // item isn't shouted twice on one screen.
   expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
 
-  // The ✕ clears the markers, so the banner goes away.
+  // The ✕ acknowledges the fresh arrivals: the alert downgrades to the calm,
+  // persistent "to review" entry — the banner itself STAYS (it's now the way
+  // back into Review from the Inbox), it just sheds the "new" wording and the ✕.
   fireEvent.press(screen.getByLabelText('Dismiss new AI suggestions'));
-  await waitFor(() => expect(screen.queryByTestId('new-suggestions-banner')).toBeNull());
-  expect(banner).toBeTruthy();
-  // ...and with the banner gone, the per-card badge returns as the surviving cue.
+  await waitFor(() => expect(screen.queryByText('✨ 1 new AI suggestion')).toBeNull());
+  expect(screen.getByTestId('review-banner')).toBeTruthy();
+  expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
+  expect(screen.queryByLabelText('Dismiss new AI suggestions')).toBeNull();
+  // ...and with the alert gone, the per-card badge returns as the per-item cue.
   await waitFor(() => expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy());
+});
+
+test('shows a persistent review banner for pending suggestions even with nothing unseen', async () => {
+  const id = '7e64cf1e-0000-4000-8000-00000000001d';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Foreground save' })],
+    undefined,
+    [makeEnrichment({ bookmark_id: id, suggested_tags: [{ name: 'design', confidence: 0.8 }] })],
+  );
+  // No unseen marker — the suggestion was seen as it was saved. The banner is
+  // the standing entry point into Review, so it still shows (calm form), and the
+  // per-card ✨ badge shows alongside it as the per-item cue.
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Foreground save')).toBeTruthy());
+  expect(screen.getByTestId('review-banner')).toBeTruthy();
+  expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
+  // Not the "new" alert, and no acknowledge ✕ in the calm state.
+  expect(screen.queryByText('✨ 1 new AI suggestion')).toBeNull();
+  expect(screen.queryByLabelText('Dismiss new AI suggestions')).toBeNull();
+  expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
 });
 
 test('the unseen banner counts a folder-only recommendation (no tags)', async () => {
@@ -168,7 +194,7 @@ test('the unseen banner counts a folder-only recommendation (no tags)', async ()
 
   const screen = await renderInbox();
 
-  await waitFor(() => expect(screen.getByTestId('new-suggestions-banner')).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId('review-banner')).toBeTruthy());
   expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
 });
 
@@ -179,14 +205,18 @@ test('the per-card ✨ badge counts a folder-only recommendation (no tags)', asy
     undefined,
     [makeEnrichment({ bookmark_id: id, suggested_tags: [], suggested_collection_name: 'Travel' })],
   );
-  // No unseen marker, so the banner is absent and the per-card badge is the cue.
+  // No unseen marker, so the banner is in its calm standing form and the
+  // per-card badge shows alongside it as the per-item cue.
 
   const screen = await renderInbox();
 
   await waitFor(() => expect(screen.getByText('Folder only')).toBeTruthy());
   // The folder counts toward the badge even with zero pending tags — matching the
-  // banner/Settings/Review inclusion rule (regression: the badge ignored folders).
+  // banner/Review inclusion rule (regression: the badge ignored folders).
   expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
+  // ...and the same folder-only item counts toward the persistent review banner.
+  expect(screen.getByTestId('review-banner')).toBeTruthy();
+  expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
 });
 
 test('a durably-dismissed folder drops the per-card ✨ badge', async () => {
@@ -202,8 +232,10 @@ test('a durably-dismissed folder drops the per-card ✨ badge', async () => {
   const screen = await renderInbox();
 
   await waitFor(() => expect(screen.getByText('Folder only')).toBeTruthy());
-  // No pending tag and the folder is dismissed → nothing to badge.
+  // No pending tag and the folder is dismissed → nothing to badge, and the
+  // persistent review banner honors that durable dismissal (stays down).
   expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
+  expect(screen.queryByTestId('review-banner')).toBeNull();
 });
 
 test('the unseen banner ignores a folder-only item whose folder was dismissed', async () => {
@@ -221,7 +253,7 @@ test('the unseen banner ignores a folder-only item whose folder was dismissed', 
 
   await waitFor(() => expect(screen.getByText('Folder only')).toBeTruthy());
   // Nothing live remains to review, so the banner stays down despite the marker.
-  expect(screen.queryByTestId('new-suggestions-banner')).toBeNull();
+  expect(screen.queryByTestId('review-banner')).toBeNull();
 });
 
 test('the unseen banner ignores items whose suggestions were already applied', async () => {
@@ -250,7 +282,7 @@ test('the unseen banner ignores items whose suggestions were already applied', a
 
   await waitFor(() => expect(screen.getByText('Already handled')).toBeTruthy());
   // No live pending suggestion remains, so the banner never shows.
-  expect(screen.queryByTestId('new-suggestions-banner')).toBeNull();
+  expect(screen.queryByTestId('review-banner')).toBeNull();
 });
 
 test('search filters the list and shows the match count', async () => {
