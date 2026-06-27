@@ -5,10 +5,31 @@ export interface SqliteConnectionOptions {
   probeTimeoutMs?: number;
   /** Max time to wait for a stale handle to close before reopening anyway. */
   closeTimeoutMs?: number;
+  /**
+   * Max time a single unit of DB work may run before the stall is *reported*.
+   * Unlike the probe/close bounds this does **not** abort or replay the op
+   * (JS can't cancel an in-flight promise, and replaying a merely-slow write on
+   * a reopened connection would corrupt the actor's ordering) — it only records
+   * an `error` so a wedged handle, which otherwise stalls the whole
+   * serialization tail silently, becomes visible in monitoring.
+   */
+  workTimeoutMs?: number;
+  /**
+   * How many reopens in a single session before the churn is escalated from a
+   * local-buffer breadcrumb to a tracked error (one per session). Frequent
+   * reopens are the leading indicator of the Android background-handle thrash
+   * that wedges the DB, so we want it visible in monitoring before it bites.
+   */
+  reopenAlertThreshold?: number;
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 2000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
+// Generous on purpose: a single statement on this tiny local DB is sub-millisecond,
+// so a multi-second stall is unambiguously a wedged handle, not a slow query —
+// the bound exists to catch a hang, not to police latency.
+const DEFAULT_WORK_TIMEOUT_MS = 5000;
+const DEFAULT_REOPEN_ALERT_THRESHOLD = 5;
 
 /**
  * Coalesced, self-healing SQLite connection manager.
@@ -43,10 +64,16 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
  *      on a fresh connection. A genuine SQL error (handle still alive) is never
  *      retried.
  *   4. The probe and close are time-bounded, so a wedged handle (the very case
- *      this targets) can't hang the probe or close forever and deadlock the tail.
+ *      this targets) can't hang the probe or close forever and deadlock the
+ *      tail. A long-running work unit is additionally *watched* and reported at
+ *      `error` level — but never aborted or replayed, since that would break the
+ *      actor ordering (see {@link runWork}); it only makes the stall observable.
  *   5. {@link closeCurrent} lets the app proactively release the handle when it
  *      backgrounds (the moment Android invalidates it), so the next operation
  *      reopens cleanly instead of first failing on a dead handle.
+ *   6. Reopens are counted and, past a per-session threshold, escalated to a
+ *      tracked error — frequent reopens are the leading indicator of the
+ *      background-handle thrash that wedges the DB (see {@link noteReopen}).
  *
  * The auth store (`session-storage.native.ts`) drives its single connection the
  * same way.
@@ -61,8 +88,14 @@ export class SqliteConnection<DB> {
   // is head-of-line blocking — acceptable here because each operation is a small,
   // fast statement on a tiny local DB (and SQLite serializes writes regardless).
   private tail: Promise<unknown> = Promise.resolve();
+  // Count of successful opens this session. The first is the initial open; every
+  // one after it is a reopen (a handle died or was proactively closed), which we
+  // track as a freeze-risk signal (see noteReopen).
+  private opens = 0;
   private readonly probeTimeoutMs: number;
   private readonly closeTimeoutMs: number;
+  private readonly workTimeoutMs: number;
+  private readonly reopenAlertThreshold: number;
 
   constructor(
     private readonly opener: () => Promise<DB>,
@@ -74,6 +107,8 @@ export class SqliteConnection<DB> {
   ) {
     this.probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
     this.closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
+    this.workTimeoutMs = options.workTimeoutMs ?? DEFAULT_WORK_TIMEOUT_MS;
+    this.reopenAlertThreshold = options.reopenAlertThreshold ?? DEFAULT_REOPEN_ALERT_THRESHOLD;
   }
 
   /** Resolve to a live handle, reopening transparently if the current one died. */
@@ -145,7 +180,7 @@ export class SqliteConnection<DB> {
   private async runOnce<T>(work: (db: DB) => Promise<T>): Promise<T> {
     const first = await this.get();
     try {
-      return await work(first);
+      return await this.runWork(first, work);
     } catch (error) {
       // Retry only when the handle itself died; a still-live handle means the
       // error is real (constraint, bad SQL) and must not be replayed.
@@ -160,13 +195,58 @@ export class SqliteConnection<DB> {
     }
     const fresh = await this.get();
     try {
-      return await work(fresh);
+      return await this.runWork(fresh, work);
     } catch (error) {
       // The replacement handle also died (rapid background/foreground thrash).
       // Surface it — the first reopen is logged in resolve(), so without this
       // the second death would be silent behind the generic storage banner.
       recordLog('warn', `sqlite operation failed after reopen retry: ${String(error)}`);
       throw error;
+    }
+  }
+
+  /**
+   * Run one unit of work under a **reporting-only** watchdog. A native op that
+   * stalls past the bound is recorded at `error` level (so the wedge reaches
+   * crash monitoring via the console bridge) but the operation is deliberately
+   * **left to complete** — it is never aborted or replayed.
+   *
+   * This is load-bearing for the actor guarantee: JavaScript can't cancel an
+   * in-flight promise, so reopening + replaying a merely-slow op (a large
+   * import/pull write, or a call paused by app suspension) would let the
+   * original `work(db)` finish *later* against a since-closed connection and
+   * land a stale write after a newer edit. So the watchdog only observes; the
+   * unit keeps owning the tail until it actually settles, and a genuinely dead
+   * handle is still recovered by {@link runOnce}'s post-throw `isAlive` retry.
+   * The report fires at most once per op (the tail is blocked meanwhile, so
+   * there is nothing else to drown out).
+   */
+  private async runWork<T>(db: DB, work: (db: DB) => Promise<T>): Promise<T> {
+    const timer = setTimeout(() => {
+      recordLog(
+        'error',
+        `sqlite operation still running after ${this.workTimeoutMs}ms — possible wedged handle (the connection actor is blocked until it settles; the op is left to finish, never aborted)`,
+      );
+    }, this.workTimeoutMs);
+    try {
+      return await work(db);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Record a reopen as a freeze-risk signal. Each reopen is a low-severity
+   *  breadcrumb in the local diagnostics buffer; once they cross the alert
+   *  threshold in a session the churn is escalated to a single tracked `error`
+   *  (the leading indicator of the Android background-handle wedge). */
+  private noteReopen(): void {
+    const reopens = this.opens - 1;
+    recordLog('info', `sqlite connection reopened (reopen #${reopens} this session)`);
+    if (reopens === this.reopenAlertThreshold) {
+      recordLog(
+        'error',
+        `sqlite connection reopened ${reopens} times this session — excessive handle churn (likely background/foreground thrash or a wedging handle)`,
+      );
     }
   }
 
@@ -195,6 +275,10 @@ export class SqliteConnection<DB> {
     try {
       const db = await this.opener();
       this.db = db;
+      this.opens += 1;
+      if (this.opens > 1) {
+        this.noteReopen();
+      }
       return db;
     } catch (error) {
       // The precise native open error is otherwise swallowed by callers and

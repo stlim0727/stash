@@ -81,7 +81,12 @@ class FakeKvDb {
   }
 }
 
-function makeConnection(opts?: { probeTimeoutMs?: number; closeTimeoutMs?: number }) {
+function makeConnection(opts?: {
+  probeTimeoutMs?: number;
+  closeTimeoutMs?: number;
+  workTimeoutMs?: number;
+  reopenAlertThreshold?: number;
+}) {
   let opens = 0;
   const opened: FakeDb[] = [];
   const events: string[] = [];
@@ -407,6 +412,60 @@ test('a close that never resolves does not deadlock the reopen', async () => {
   const second = await connection.get();
   assert.equal(second.id, 2);
   assert.equal(opens, 2);
+});
+
+test('a stalled operation is reported but left to finish on the same handle (never aborted/replayed)', async () => {
+  clearLogEntries();
+  const { connection, opened, opensCount } = makeConnection({ workTimeoutMs: 10 });
+  await connection.get(); // handle 1
+
+  // A slow op that has not settled by the watchdog deadline. The watchdog must
+  // report it but must NOT close/reopen/replay — replaying a still-running write
+  // on a fresh connection would let the original land later and corrupt order.
+  let resolveWork: () => void = () => {};
+  let ran = 0;
+  const runPromise = connection.run((db) => {
+    ran += 1;
+    return new Promise<string>((res) => {
+      resolveWork = () => res(`done:${db.id}`);
+    });
+  });
+
+  // Wait past the watchdog so its report fires while the op is still in flight.
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(
+    getLogEntries().some((e) => e.level === 'error' && e.message.includes('still running after')),
+    'the stall is reported at error level',
+  );
+  assert.equal(opensCount(), 1); // no reopen while the op is merely slow
+  assert.equal(opened[0].closed, false); // the live handle was not closed out from under it
+
+  // The op finally completes — on the original handle, run exactly once, no replay.
+  resolveWork();
+  assert.equal(await runPromise, 'done:1');
+  assert.equal(ran, 1);
+  assert.equal(opensCount(), 1);
+});
+
+test('frequent reopens escalate to a tracked error past the threshold', async () => {
+  clearLogEntries();
+  const { connection, opensCount } = makeConnection({ reopenAlertThreshold: 3 });
+
+  // Kill the handle before each call so every get() reopens.
+  for (let i = 0; i < 4; i += 1) {
+    const db = await connection.get();
+    db.kill();
+  }
+  // 4 opens total = the initial open + 3 reopens, hitting the threshold.
+  assert.equal(opensCount(), 4);
+
+  const reopenBreadcrumbs = getLogEntries().filter((e) => e.message.includes('connection reopened (reopen #'));
+  assert.equal(reopenBreadcrumbs.length, 3); // one info breadcrumb per reopen
+
+  const escalations = getLogEntries().filter(
+    (e) => e.level === 'error' && e.message.includes('excessive handle churn'),
+  );
+  assert.equal(escalations.length, 1); // fires exactly once, when it crosses
 });
 
 test('a probe that hangs is treated as stale and reopened', async () => {
