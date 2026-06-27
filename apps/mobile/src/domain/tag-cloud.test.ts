@@ -58,6 +58,22 @@ test('buildTagCloud returns an empty cloud when there are no usable tags', () =>
   assert.deepEqual(buildTagCloud([{ id: 'a', name: ' ', count: 3 }]), []);
 });
 
+test('buildTagCloud handles a very large tag set without a stack overflow', () => {
+  // Regression: Math.min(...counts)/Math.max(...counts) used to spread every
+  // count as call args, throwing RangeError past the arg-count limit. A library
+  // big enough to trigger the cloud-perf reports must still rank cleanly.
+  const tags = Array.from({ length: 200_000 }, (_, i) => ({
+    id: `t${i}`,
+    name: `tag-${i}`,
+    count: (i % 7) + 1,
+  }));
+  const cloud = buildTagCloud(tags);
+  assert.equal(cloud.length, 200_000);
+  // Busiest count is 7 → weight 1; least is 1 → weight 0.
+  assert.equal(cloud[0].weight, 1);
+  assert.equal(cloud[cloud.length - 1].weight, 0);
+});
+
 test('tagCloudFontSize maps weight into the font bounds and clamps', () => {
   assert.equal(tagCloudFontSize(0), TAG_CLOUD_MIN_FONT);
   assert.equal(tagCloudFontSize(1), TAG_CLOUD_MAX_FONT);
