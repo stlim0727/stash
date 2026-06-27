@@ -2040,6 +2040,13 @@ const styles = StyleSheet.create({
   sortRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    // Wrap on overflow so the rightmost control (the view segment) is never
+    // clipped off-screen: with three view modes the caption + Sort pill + Tags
+    // pill + segment can exceed a narrow 320–360dp width (worse with Korean
+    // labels / large text), more than the Sort label's truncation can absorb.
+    // `gap` doubles as the row gap when a control wraps to a second line; wide
+    // phones still render everything on one line.
+    flexWrap: 'wrap',
     gap: 8,
     paddingHorizontal: 16,
     paddingTop: 10,
