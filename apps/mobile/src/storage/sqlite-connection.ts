@@ -6,11 +6,12 @@ export interface SqliteConnectionOptions {
   /** Max time to wait for a stale handle to close before reopening anyway. */
   closeTimeoutMs?: number;
   /**
-   * Max time a single unit of DB work may run before the handle is treated as
-   * wedged. Unlike the probe/close bounds, this guards the real statement: a
-   * native op that never settles would otherwise stall the whole serialization
-   * tail (every later `run` queues behind it) with no signal. On timeout the
-   * stall is reported and the handle dropped so the next op reopens.
+   * Max time a single unit of DB work may run before the stall is *reported*.
+   * Unlike the probe/close bounds this does **not** abort or replay the op
+   * (JS can't cancel an in-flight promise, and replaying a merely-slow write on
+   * a reopened connection would corrupt the actor's ordering) — it only records
+   * an `error` so a wedged handle, which otherwise stalls the whole
+   * serialization tail silently, becomes visible in monitoring.
    */
   workTimeoutMs?: number;
   /**
@@ -29,18 +30,6 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
 // the bound exists to catch a hang, not to police latency.
 const DEFAULT_WORK_TIMEOUT_MS = 5000;
 const DEFAULT_REOPEN_ALERT_THRESHOLD = 5;
-
-/**
- * Marker for a timeout produced by {@link SqliteConnection.withTimeout}. Lets a
- * caller distinguish "the handle wedged" (retry on a fresh connection) from a
- * genuine rejection thrown by the work itself (a real SQL error — surface it).
- */
-export class SqliteTimeoutError extends Error {
-  constructor(public readonly label: string, public readonly timeoutMs: number) {
-    super(`sqlite ${label} timed out after ${timeoutMs}ms`);
-    this.name = 'SqliteTimeoutError';
-  }
-}
 
 /**
  * Coalesced, self-healing SQLite connection manager.
@@ -74,10 +63,11 @@ export class SqliteTimeoutError extends Error {
  *      still throws — `run` detects the now-dead handle and replays the work once
  *      on a fresh connection. A genuine SQL error (handle still alive) is never
  *      retried.
- *   4. The probe, close, *and the work itself* are time-bounded, so a wedged
- *      handle (the very case this targets) can't hang forever and deadlock the
- *      tail. A work stall is reported at `error` level and recovered by dropping
- *      the handle and reopening (see {@link runWork}).
+ *   4. The probe and close are time-bounded, so a wedged handle (the very case
+ *      this targets) can't hang the probe or close forever and deadlock the
+ *      tail. A long-running work unit is additionally *watched* and reported at
+ *      `error` level — but never aborted or replayed, since that would break the
+ *      actor ordering (see {@link runWork}); it only makes the stall observable.
  *   5. {@link closeCurrent} lets the app proactively release the handle when it
  *      backgrounds (the moment Android invalidates it), so the next operation
  *      reopens cleanly instead of first failing on a dead handle.
@@ -192,12 +182,9 @@ export class SqliteConnection<DB> {
     try {
       return await this.runWork(first, work);
     } catch (error) {
-      // A watchdog stall means the handle is wedged: don't probe it (the probe
-      // would likely hang too, and we've already waited the full bound) — treat
-      // it as dead and retry on a fresh connection.
-      if (!(error instanceof SqliteTimeoutError) && (await this.isAlive(first))) {
-        // Retry only when the handle itself died; a still-live handle means the
-        // error is real (constraint, bad SQL) and must not be replayed.
+      // Retry only when the handle itself died; a still-live handle means the
+      // error is real (constraint, bad SQL) and must not be replayed.
+      if (await this.isAlive(first)) {
         throw error;
       }
       if (this.db === first) {
@@ -219,24 +206,32 @@ export class SqliteConnection<DB> {
   }
 
   /**
-   * Run one unit of work under the watchdog. A wedged native op that never
-   * settles would silently stall the serialization tail forever; the bound
-   * turns that into a reported, recoverable failure. The stall is recorded at
-   * `error` level (so it reaches crash monitoring via the console bridge) and
-   * re-thrown as a {@link SqliteTimeoutError} so {@link runOnce} drops the
-   * handle and reopens instead of probing a handle that is likely hung too.
+   * Run one unit of work under a **reporting-only** watchdog. A native op that
+   * stalls past the bound is recorded at `error` level (so the wedge reaches
+   * crash monitoring via the console bridge) but the operation is deliberately
+   * **left to complete** — it is never aborted or replayed.
+   *
+   * This is load-bearing for the actor guarantee: JavaScript can't cancel an
+   * in-flight promise, so reopening + replaying a merely-slow op (a large
+   * import/pull write, or a call paused by app suspension) would let the
+   * original `work(db)` finish *later* against a since-closed connection and
+   * land a stale write after a newer edit. So the watchdog only observes; the
+   * unit keeps owning the tail until it actually settles, and a genuinely dead
+   * handle is still recovered by {@link runOnce}'s post-throw `isAlive` retry.
+   * The report fires at most once per op (the tail is blocked meanwhile, so
+   * there is nothing else to drown out).
    */
   private async runWork<T>(db: DB, work: (db: DB) => Promise<T>): Promise<T> {
+    const timer = setTimeout(() => {
+      recordLog(
+        'error',
+        `sqlite operation still running after ${this.workTimeoutMs}ms — possible wedged handle (the connection actor is blocked until it settles; the op is left to finish, never aborted)`,
+      );
+    }, this.workTimeoutMs);
     try {
-      return await this.withTimeout(work(db), this.workTimeoutMs, 'operation');
-    } catch (error) {
-      if (error instanceof SqliteTimeoutError) {
-        recordLog(
-          'error',
-          `sqlite operation stalled after ${this.workTimeoutMs}ms — treating the handle as wedged and reopening`,
-        );
-      }
-      throw error;
+      return await work(db);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -318,7 +313,7 @@ export class SqliteConnection<DB> {
   private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new SqliteTimeoutError(label, ms));
+        reject(new Error(`sqlite ${label} timed out after ${ms}ms`));
       }, ms);
       promise.then(
         (value) => {

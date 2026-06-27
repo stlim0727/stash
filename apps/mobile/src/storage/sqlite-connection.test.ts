@@ -414,83 +414,37 @@ test('a close that never resolves does not deadlock the reopen', async () => {
   assert.equal(opens, 2);
 });
 
-test('a wedged operation is bounded, reported, and recovered on a fresh handle', async () => {
+test('a stalled operation is reported but left to finish on the same handle (never aborted/replayed)', async () => {
   clearLogEntries();
-  const { connection, opened, opensCount } = makeConnection({
-    workTimeoutMs: 20,
-    probeTimeoutMs: 50,
-    closeTimeoutMs: 50,
-  });
+  const { connection, opened, opensCount } = makeConnection({ workTimeoutMs: 10 });
   await connection.get(); // handle 1
 
-  let attempts = 0;
-  const result = await connection.run(async (db) => {
-    attempts += 1;
-    if (attempts === 1) {
-      // The native op wedges — never settles. The watchdog must not let it
-      // stall the tail forever.
-      return new Promise<string>(() => {});
-    }
-    return `ok:${db.id}`;
+  // A slow op that has not settled by the watchdog deadline. The watchdog must
+  // report it but must NOT close/reopen/replay — replaying a still-running write
+  // on a fresh connection would let the original land later and corrupt order.
+  let resolveWork: () => void = () => {};
+  let ran = 0;
+  const runPromise = connection.run((db) => {
+    ran += 1;
+    return new Promise<string>((res) => {
+      resolveWork = () => res(`done:${db.id}`);
+    });
   });
 
-  assert.equal(attempts, 2);
-  assert.equal(result, 'ok:2'); // recovered on a reopened handle
-  assert.equal(opensCount(), 2);
-  assert.equal(opened[0].closed, true); // the wedged handle was dropped
-  // The stall is reported at error level so it reaches crash monitoring.
-  assert.ok(getLogEntries().some((e) => e.level === 'error' && e.message.includes('stalled after')));
-});
-
-test('a wedged operation does not probe the hung handle before reopening', async () => {
-  // The recovery must treat a stall as dead without probing — a probe on a
-  // wedged handle would itself hang (only to be bounded), doubling the wait.
-  let probes = 0;
-  let opens = 0;
-  const connection = new SqliteConnection<FakeDb>(
-    async () => {
-      opens += 1;
-      return new FakeDb(opens);
-    },
-    (db) => {
-      probes += 1;
-      return db.probe();
-    },
-    (db) => db.close(),
-    { workTimeoutMs: 20, probeTimeoutMs: 50, closeTimeoutMs: 50 },
+  // Wait past the watchdog so its report fires while the op is still in flight.
+  await new Promise((r) => setTimeout(r, 30));
+  assert.ok(
+    getLogEntries().some((e) => e.level === 'error' && e.message.includes('still running after')),
+    'the stall is reported at error level',
   );
+  assert.equal(opensCount(), 1); // no reopen while the op is merely slow
+  assert.equal(opened[0].closed, false); // the live handle was not closed out from under it
 
-  let attempts = 0;
-  await connection.run(async (db) => {
-    attempts += 1;
-    if (attempts === 1) {
-      return new Promise<void>(() => {}); // wedge
-    }
-    return undefined;
-  });
-
-  assert.equal(attempts, 2);
-  assert.equal(opens, 2);
-  // No liveness probe was run to decide the stall was fatal — the timeout is
-  // proof enough. (Probes here come only from get()'s reuse path, which doesn't
-  // run on a first open or a freshly reopened handle.)
-  assert.equal(probes, 0);
-});
-
-test('a back-to-back wedge surfaces after a single retry, not forever', async () => {
-  clearLogEntries();
-  const { connection } = makeConnection({
-    workTimeoutMs: 20,
-    probeTimeoutMs: 50,
-    closeTimeoutMs: 50,
-  });
-
-  await assert.rejects(
-    () => connection.run(() => new Promise<void>(() => {})), // wedges on every handle
-    (error: Error) => error.name === 'SqliteTimeoutError',
-  );
-  // Reported on each stall, and the second-failure path is recorded too.
-  assert.ok(getLogEntries().some((e) => e.message.includes('after reopen retry')));
+  // The op finally completes — on the original handle, run exactly once, no replay.
+  resolveWork();
+  assert.equal(await runPromise, 'done:1');
+  assert.equal(ran, 1);
+  assert.equal(opensCount(), 1);
 });
 
 test('frequent reopens escalate to a tracked error past the threshold', async () => {
