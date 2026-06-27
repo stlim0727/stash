@@ -1,42 +1,39 @@
-# Smoke + screenshot + regression flow for the Inbox "Browse by tag" cloud.
+# Smoke + screenshot flow for the dedicated "Browse by tag" route (/browse/tags).
 # Runs on a CI Android emulator (see .github/workflows/android-screenshots.yml).
 #
 # Renders the deterministic first-run seed (mock tags / read-later / local-
-# first), opens the transient tag cloud, and captures it — the one surface unit
-# tests and the web export can't show on a real Android touch surface.
+# first), opens the tag-browse route from the Inbox toggle, and captures the
+# word cloud — the one surface unit tests and the web export can't show on a real
+# Android touch surface.
 #
-# It also guards STASH-7: the floating header sits above the cloud's full-screen
-# ScrollView by zIndex, but on Android zIndex is paint-only, so without a
-# matching `elevation` the cloud steals touches over the header and its controls
-# go dead ("not responding except back key"). The "Browse by tag" toggle lives
-# IN that floating header, so tapping it again WHILE the cloud is open — and
-# asserting the cloud actually closes — proves the header still receives touches
-# through the overlay. On the un-fixed build the tap is swallowed and the cloud
-# stays open, so this flow's assertion goes red in the Maestro run output.
+# The in-Inbox transient cloud (and its STASH-7 same-screen overlay assertion)
+# was retired: the cloud now lives on its own pushed route with a static native
+# header, so the header no longer floats over a full-screen cloud ScrollView. The
+# hard CI gate for the overlay-elevation bug class remains `pnpm lint:overlay`
+# (scripts/check-overlay-elevation.mjs) in ci.yml.
 #
-# NOTE: the screenshots runner invokes `maestro test ... || true` (a selector
-# hiccup on a secondary screen must not fail the job), so a failure here is
-# VISIBLE in the logs but does not by itself gate the build. The hard CI gate
-# for this bug class is `pnpm lint:overlay` (scripts/check-overlay-elevation.mjs)
-# in ci.yml; this flow is the on-device reproduction that jsdom can't model.
+# NOTE: the screenshots runner invokes `maestro test ... || true`, so a selector
+# hiccup is VISIBLE in the logs but does not by itself gate the build.
 appId: com.stash.app
 ---
 - launchApp:
     clearState: true
 - assertVisible: 'Stash'
-# Open the transient cloud from the header toggle (the cloud is no longer a view
-# mode — the layout segment is only Cards/List). The cloud renders each seed tag
-# as "#name".
+# Open the dedicated tag-browse route from the header toggle. The route lands on
+# the word cloud, which renders each seed tag as "#name".
 - tapOn:
     id: 'inbox-browse-tags-toggle'
 - assertVisible:
-    id: 'inbox-tag-cloud'
+    id: 'browse-tags-cloud'
 - assertVisible: '#design'
 - takeScreenshot: tag-cloud
-# STASH-7 regression: tap the header toggle again while the cloud overlay is up.
-# If the header is hittable through the overlay the cloud closes and its
-# container unmounts; if the overlay steals the touch (the bug) it stays open.
+# Toggle to the full virtualized list, then back to the cloud — both surfaces
+# render on the route's own screen.
 - tapOn:
-    id: 'inbox-browse-tags-toggle'
-- assertNotVisible:
-    id: 'inbox-tag-cloud'
+    id: 'browse-tags-view-all'
+- assertVisible:
+    id: 'browse-tags-list'
+- tapOn:
+    id: 'browse-tags-view-cloud'
+- assertVisible:
+    id: 'browse-tags-cloud'

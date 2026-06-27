@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { BackHandler, Linking, Platform } from 'react-native';
+import { Linking } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -23,11 +23,12 @@ jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
 let mockParams: Record<string, string> = {};
+const mockPush = jest.fn();
 jest.mock('expo-router', () => {
   const { useEffect } = require('react');
   return {
     Link: ({ children }: { children: ReactNode }) => children,
-    useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+    useRouter: () => ({ push: mockPush, navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
     useLocalSearchParams: () => mockParams,
     // Run the focus callback as a mount effect (the screen is always focused in
     // these tests); honours the returned cleanup like the real hook.
@@ -39,7 +40,6 @@ import InboxScreen from '@/app/index';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { INBOX_VIEW_PREF_KEY } from '@/domain/view-mode';
-import { TAG_CLOUD_MAX_ENTRIES } from '@/domain/tag-cloud';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
@@ -68,6 +68,7 @@ function renderInbox() {
 
 beforeEach(() => {
   mockParams = {};
+  mockPush.mockClear();
 });
 
 test('renders stored bookmarks with their titles', async () => {
@@ -684,20 +685,16 @@ test('the view segmented control switches between card and list layouts', async 
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
 });
 
-test('the tag cloud view lists tags and tapping one filters to that tag', async () => {
+test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', async () => {
+  // The transient in-Inbox cloud was replaced by a dedicated /browse/tags route;
+  // the toggle now navigates there instead of flipping an in-screen surface.
   const cooked = '7e64cf1e-0000-4000-8000-000000000061';
-  const reading = '7e64cf1e-0000-4000-8000-000000000062';
   fakeRepo.__reset(
-    [
-      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
-      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
-    ],
+    [makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' })],
     {
-      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+      tags: [makeTag('t-cooking', 'cooking')],
       bookmarkTags: [
         { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        { bookmark_id: reading, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
       ],
       collections: [],
     },
@@ -706,270 +703,36 @@ test('the tag cloud view lists tags and tapping one filters to that tag', async 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
 
-  // Open the Browse-by-tag cloud: both tags appear, cards are gone.
   await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-  expect(screen.queryByTestId('inbox-card-title')).toBeNull();
-  const cookingTag = await screen.findByLabelText('#cooking, 2 bookmarks');
-  expect(cookingTag).toBeTruthy();
-  expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy();
 
-  // Tapping a tag drills in: it filters to that tag and drops back to cards.
-  await fireEvent.press(cookingTag);
-  await waitFor(() => expect(screen.getByText('#cooking · 2')).toBeTruthy());
-  expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
-  expect(screen.getByText('Local-first software')).toBeTruthy();
+  // It pushes the route (no in-screen cloud surface exists anymore).
+  expect(mockPush).toHaveBeenCalledWith('/browse/tags');
+  expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
+  expect(screen.queryByTestId('inbox-cloud-tag')).toBeNull();
 });
 
-test('the tag cloud caps how many tags it renders but still counts them all', async () => {
-  // A large library would otherwise mount hundreds of pressables in one
-  // synchronous commit and freeze the UI thread (the in-app "tag cloud frozen /
-  // not responding" reports). The cloud renders only the busiest
-  // TAG_CLOUD_MAX_ENTRIES tags; the header still reports the true total.
-  const bookmarkId = '7e64cf1e-0000-4000-8000-0000000000c0';
-  const overflow = 10;
-  const tagCount = TAG_CLOUD_MAX_ENTRIES + overflow;
-  const tags: Tag[] = [];
-  const bookmarkTags = [];
-  for (let i = 0; i < tagCount; i += 1) {
-    const suffix = String(i).padStart(3, '0');
-    const tagId = `t-${suffix}`;
-    tags.push(makeTag(tagId, `tag-${suffix}`));
-    bookmarkTags.push({
-      bookmark_id: bookmarkId,
-      tag_id: tagId,
-      source: 'user' as const,
-      confidence: null,
-      created_at: '2026-06-12T00:00:00.000Z',
-    });
-  }
-  fakeRepo.__reset([makeStoredBookmark({ id: bookmarkId, title: 'Heavily tagged' })], {
-    tags,
-    bookmarkTags,
-    collections: [],
-  });
-
-  const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByText('Heavily tagged')).toBeTruthy());
-
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-
-  // Only the cap renders, even though the header advertises every tag.
-  expect(screen.getAllByTestId('inbox-cloud-tag')).toHaveLength(TAG_CLOUD_MAX_ENTRIES);
-  expect(screen.getByText(`Tags · ${tagCount}`)).toBeTruthy();
-});
-
-test('the tag cloud scopes to the active folder facet', async () => {
+test('the Browse-by-tag toggle carries the active folder facet as the route scope', async () => {
   const work = '7e64cf1e-0000-4000-8000-000000000071';
-  const home = '7e64cf1e-0000-4000-8000-000000000072';
   fakeRepo.__reset(
-    [
-      makeStoredBookmark({ id: work, title: 'Local-first software', collection_id: 'col-work' }),
-      makeStoredBookmark({ id: home, title: 'Kimchi jjigae', collection_id: 'col-home' }),
-    ],
+    [makeStoredBookmark({ id: work, title: 'Local-first software', collection_id: 'col-work' })],
     {
-      tags: [makeTag('t-reading', 'reading'), makeTag('t-cooking', 'cooking')],
+      tags: [makeTag('t-reading', 'reading')],
       bookmarkTags: [
         { bookmark_id: work, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        { bookmark_id: home, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
       ],
-      collections: [makeCollection('col-work', 'Work'), makeCollection('col-home', 'Home')],
+      collections: [makeCollection('col-work', 'Work')],
     },
   );
 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
-  // Whole-Inbox cloud shows both folders' tags …
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-  expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy();
-  expect(screen.getByLabelText('#cooking, 1 bookmark')).toBeTruthy();
-
-  // … picking the Work folder chip narrows the cloud to that folder's tags.
+  // Narrow to the Work folder first, then open the tag-browse route: the active
+  // facet rides along as the scope param.
   await fireEvent.press(screen.getByText('Work'));
-  await waitFor(() => expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy());
-  expect(screen.queryByLabelText('#cooking, 1 bookmark')).toBeNull();
-});
-
-test('a search narrows the tag cloud to the tags on matching results', async () => {
-  const work = '7e64cf1e-0000-4000-8000-000000000081';
-  const home = '7e64cf1e-0000-4000-8000-000000000082';
-  fakeRepo.__reset(
-    [
-      makeStoredBookmark({ id: work, title: 'Local-first software' }),
-      makeStoredBookmark({ id: home, title: 'Kimchi jjigae' }),
-    ],
-    {
-      tags: [makeTag('t-reading', 'reading'), makeTag('t-cooking', 'cooking')],
-      bookmarkTags: [
-        { bookmark_id: work, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        { bookmark_id: home, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-      ],
-      collections: [],
-    },
-  );
-
-  const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
-
-  // The whole-Inbox cloud shows both bookmarks' tags …
   await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-  expect(screen.getByLabelText('#reading, 1 bookmark')).toBeTruthy();
-  expect(screen.getByLabelText('#cooking, 1 bookmark')).toBeTruthy();
 
-  // … searching narrows it to only the tags carried by the matching result
-  // (debounced, so the cloud settles a beat later).
-  await fireEvent.changeText(
-    screen.getByPlaceholderText('Search titles, tags, folders'),
-    'kimchi',
-  );
-  await waitFor(() => expect(screen.queryByLabelText('#reading, 1 bookmark')).toBeNull());
-  expect(screen.getByLabelText('#cooking, 1 bookmark')).toBeTruthy();
-});
-
-test('a browse-shelf chip still filters after drilling in from the tag cloud', async () => {
-  // Regression for "after selecting a tag from the cloud, the browse chips went
-  // dead for several seconds": the shelf chips are now memoized and driven by a
-  // stable handler, so this guards that the wiring still responds to a tap right
-  // after the cloud→cards drill-in.
-  const cooked = '7e64cf1e-0000-4000-8000-000000000091';
-  const reading = '7e64cf1e-0000-4000-8000-000000000092';
-  fakeRepo.__reset(
-    [
-      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
-      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
-    ],
-    {
-      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
-      bookmarkTags: [
-        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-      ],
-      collections: [],
-    },
-  );
-
-  const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
-
-  // Open the cloud and drill into the cooking tag → only that bookmark shows.
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-  await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
-  await waitFor(() => expect(screen.getByText('#cooking · 1')).toBeTruthy());
-  expect(screen.queryByText('Local-first software')).toBeNull();
-
-  // Tapping the "All" browse chip immediately responds and clears the facet.
-  await fireEvent.press(screen.getByText('All'));
-  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
-  expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
-});
-
-test('the hardware back key returns from a drilled-in tag to the tag cloud', async () => {
-  // The handler only registers on Android (where hardware Back exists).
-  const originalOS = Platform.OS;
-  Platform.OS = 'android';
-  // Capture the screen's hardwareBackPress handler so we can fire it directly
-  // (there is no real device back button in the test environment).
-  const handlers: Array<() => boolean> = [];
-  const addSpy = jest
-    .spyOn(BackHandler, 'addEventListener')
-    .mockImplementation((event, cb) => {
-      if (event === 'hardwareBackPress') {
-        handlers.push(cb as () => boolean);
-      }
-      return { remove: () => {} } as ReturnType<typeof BackHandler.addEventListener>;
-    });
-
-  try {
-    const cooked = '7e64cf1e-0000-4000-8000-000000000081';
-    const reading = '7e64cf1e-0000-4000-8000-000000000082';
-    fakeRepo.__reset(
-      [
-        makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
-        makeStoredBookmark({ id: reading, title: 'Local-first software' }),
-      ],
-      {
-        tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
-        bookmarkTags: [
-          { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-          { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        ],
-        collections: [],
-      },
-    );
-
-    const screen = await renderInbox();
-    await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
-
-    // Open the cloud and drill into a tag → filtered cards, cloud gone.
-    await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-    await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-    await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
-    await waitFor(() => expect(screen.getByText('#cooking · 1')).toBeTruthy());
-    expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
-
-    const onBack = handlers[handlers.length - 1];
-    expect(onBack).toBeDefined();
-
-    // Back consumes the press and restores the tag cloud instead of exiting.
-    let handled: boolean | undefined;
-    await act(async () => {
-      handled = onBack();
-    });
-    expect(handled).toBe(true);
-    await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-
-    // A second press is no longer consumed — there is nothing left to undo, so
-    // the OS gets the press (app may background/exit) as usual.
-    await act(async () => {
-      handled = onBack();
-    });
-    expect(handled).toBe(false);
-  } finally {
-    addSpy.mockRestore();
-    Platform.OS = originalOS;
-  }
-});
-
-test('drilling into a cloud tag does not persist a Cards/List view preference', async () => {
-  const cooked = '7e64cf1e-0000-4000-8000-0000000000c1';
-  const reading = '7e64cf1e-0000-4000-8000-0000000000c2';
-  fakeRepo.__reset(
-    [
-      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
-      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
-    ],
-    {
-      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
-      bookmarkTags: [
-        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-      ],
-      collections: [],
-    },
-  );
-  // The user's saved item layout is List.
-  await fakeRepo.repository.setMeta(INBOX_VIEW_PREF_KEY, 'list');
-
-  const screen = await renderInbox();
-  await waitFor(() => expect(screen.getAllByTestId('inbox-list-title').length).toBeGreaterThan(0));
-
-  // Open the transient cloud, then drill into a tag — the cloud is a navigation
-  // surface, not a layout, so neither opening it nor drilling in writes a pref.
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-  await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
-  await waitFor(() => expect(screen.getByText('#cooking · 1')).toBeTruthy());
-
-  // The stored layout preference is untouched (still List), so the next launch
-  // returns to List — the cloud never persists.
-  await waitFor(async () =>
-    expect(await fakeRepo.repository.getMeta(INBOX_VIEW_PREF_KEY)).toBe('list'),
-  );
+  expect(mockPush).toHaveBeenCalledWith('/browse/tags?scope=collection:col-work');
 });
 
 test('the active-filter bar clears the facet back to all bookmarks', async () => {
@@ -1004,73 +767,6 @@ test('the active-filter bar clears the facet back to all bookmarks', async () =>
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 });
 
-test('the filter bar returns to the tag cloud on any platform', async () => {
-  const cooked = '7e64cf1e-0000-4000-8000-0000000000e1';
-  const reading = '7e64cf1e-0000-4000-8000-0000000000e2';
-  fakeRepo.__reset(
-    [
-      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
-      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
-    ],
-    {
-      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
-      bookmarkTags: [
-        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-      ],
-      collections: [],
-    },
-  );
-
-  const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
-
-  // Open the cloud and drill into a tag (Platform default — no android override,
-  // so this exercises the cross-platform filter bar, not hardware Back).
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-  await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
-  await waitFor(() => expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull());
-
-  // The bar's back-to-cloud action returns to the cloud overview.
-  await fireEvent.press(screen.getByTestId('inbox-filter-back-to-cloud'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-});
-
-test('drilling into a cloud tag lands in the List layout when List is preferred', async () => {
-  const cooked = '7e64cf1e-0000-4000-8000-0000000000f1';
-  const reading = '7e64cf1e-0000-4000-8000-0000000000f2';
-  fakeRepo.__reset(
-    [
-      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
-      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
-    ],
-    {
-      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
-      bookmarkTags: [
-        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-      ],
-      collections: [],
-    },
-  );
-
-  const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
-
-  // The user deliberately chooses List, then opens the cloud.
-  await fireEvent.press(screen.getByTestId('inbox-view-list'));
-  await waitFor(() => expect(screen.getAllByTestId('inbox-list-title').length).toBeGreaterThan(0));
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-
-  // Drilling in lands back in the current List layout, not hard-coded Cards.
-  // Only the #cooking bookmark survives the filter, so a single list row shows.
-  await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
-  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
-  expect(screen.queryByTestId('inbox-card-title')).toBeNull();
-});
-
 test('the layout segment offers only Cards and List (no Tag-cloud option)', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a1', title: 'Kimchi jjigae' }),
@@ -1087,34 +783,9 @@ test('the layout segment offers only Cards and List (no Tag-cloud option)', asyn
   expect(screen.getByTestId('inbox-browse-tags-toggle')).toBeTruthy();
 });
 
-test('the Browse-by-tag toggle opens and closes the transient cloud', async () => {
-  const cooked = '7e64cf1e-0000-4000-8000-0000000000b1';
-  fakeRepo.__reset(
-    [makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' })],
-    {
-      tags: [makeTag('t-cooking', 'cooking')],
-      bookmarkTags: [
-        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
-      ],
-      collections: [],
-    },
-  );
-
-  const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
-
-  // Tap once → cloud opens, item layout hidden.
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-  expect(screen.queryByTestId('inbox-card-title')).toBeNull();
-
-  // Tap again → cloud closes, items return. No filter was applied.
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull());
-  expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
-});
-
-test('closing the Browse-by-tag toggle leaves the active filter unchanged', async () => {
+test('opening the Browse-by-tag route does not change the Inbox filter', async () => {
+  // The toggle now navigates instead of flipping an in-screen surface, so it
+  // must not touch the active facet (no in-Inbox cloud machinery remains).
   const cooked = '7e64cf1e-0000-4000-8000-0000000000b2';
   const reading = '7e64cf1e-0000-4000-8000-0000000000b3';
   fakeRepo.__reset(
@@ -1139,13 +810,13 @@ test('closing the Browse-by-tag toggle leaves the active filter unchanged', asyn
   await fireEvent.press(screen.getByRole('button', { name: '#cooking' }));
   await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
 
-  // Open the cloud, then close it again via the toggle.
+  // Pressing the toggle navigates and leaves the Inbox's own filter exactly as
+  // it was — there's no in-screen cloud to open/close. A tag facet has no
+  // browse-tags scope (the route scopes by collection/uncollected only), so the
+  // route opens unscoped while the Inbox keeps its #cooking facet underneath.
   await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.getByTestId('inbox-tag-cloud')).toBeTruthy());
-  await fireEvent.press(screen.getByTestId('inbox-browse-tags-toggle'));
-  await waitFor(() => expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull());
-
-  // The facet is still applied — toggling the cloud never touches the filter.
+  expect(mockPush).toHaveBeenCalledWith('/browse/tags');
+  expect(screen.queryByTestId('inbox-tag-cloud')).toBeNull();
   expect(screen.getByText('Kimchi jjigae')).toBeTruthy();
   expect(screen.queryByText('Local-first software')).toBeNull();
 });

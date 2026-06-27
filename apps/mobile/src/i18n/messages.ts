@@ -60,6 +60,7 @@ export const en = {
   'nav.report': 'Report a problem',
   'nav.trash': 'Trash',
   'nav.bookmark': 'Bookmark',
+  'nav.browseTags': 'Tags',
 
   // Inbox (home).
   'inbox.savedCount': '{count} saved',
@@ -79,12 +80,10 @@ export const en = {
   'inbox.sortNameAsc': 'Name A–Z',
   'inbox.sortNameDesc': 'Name Z–A',
   'inbox.viewAsA11y': 'View as {mode}',
-  // "Browse by tag" toggle: opens the transient tag cloud (a navigation surface,
-  // never a persisted layout). Its a11y label flips to a close phrasing when the
-  // cloud is already open.
+  // "Browse by tag" toggle: navigates to the dedicated tag-browse route
+  // (/browse/tags), carrying the current facet as its scope.
   'inbox.browseTags': 'Tags',
   'inbox.browseTagsA11y': 'Browse by tag',
-  'inbox.browseTagsCloseA11y': 'Close tag browser',
   'inbox.filterAll': 'All',
   'inbox.filterNoCollection': 'Inbox',
   'inbox.sectionMatches': { one: '{count} result', other: '{count} results' },
@@ -99,13 +98,10 @@ export const en = {
   'inbox.clearSearch': 'Clear search',
   'inbox.clearSearchA11y': 'Clear search',
   // Sticky active-filter bar: tells the user the list is narrowed and offers a
-  // one-tap way back. `scopeFiltered`/`scopeSearch` label what's active;
-  // `scopeBackToTags` is the trailing pill when a cloud drill can return to the
-  // tag cloud, otherwise a clear/✕ action is shown.
+  // one-tap way back. `scopeFiltered`/`scopeSearch` label what's active; a
+  // clear/✕ action is shown.
   'inbox.scopeFiltered': 'Filtered: {label}',
   'inbox.scopeSearch': 'Results for “{query}”',
-  'inbox.scopeBackToTags': 'Tag cloud',
-  'inbox.scopeBackToTagsA11y': 'Back to the tag cloud',
   'inbox.scopeClearA11y': 'Clear filter and show all bookmarks',
   'inbox.scopeClearSearchA11y': 'Clear the search',
   // Site-name chip on a search result (generated site metadata, not a user
@@ -149,13 +145,31 @@ export const en = {
   'inbox.addBookmark': 'Add bookmark',
   'inbox.openExternal': 'Open ↗',
   'inbox.settingsA11y': 'Settings',
-  'inbox.tagCloudHeader': 'Tags · {count}',
   'inbox.tagCloudTagA11y': {
     one: '#{name}, {count} bookmark',
     other: '#{name}, {count} bookmarks',
   },
   'inbox.tagCloudEmpty': 'No tags yet. Tag a bookmark to see it here.',
-  'inbox.tagCloudEmptySearch': 'No tags on results for “{query}”.',
+
+  // Browse-by-tag route (/browse/tags). One debounced co-occurrence search field
+  // at top, then a segmented control between the (adaptive-capped) word cloud and
+  // the full virtualized list. Header title names the active facet scope.
+  'inbox.tagSearchPlaceholder': 'Search tags',
+  'inbox.tagViewCloud': 'Cloud',
+  'inbox.tagViewAll': 'All',
+  'inbox.tagViewCloudA11y': 'Show the tag cloud',
+  'inbox.tagViewAllA11y': 'Show all tags as a list',
+  // Header titles, by scope: whole library / a folder / the uncollected set.
+  'inbox.tagsTitle': 'Tags',
+  'inbox.tagsTitleScoped': 'Tags in {name}',
+  'inbox.tagsTitleUncollected': 'Tags · No collection',
+  // The list row's muted count badge (how many bookmarks carry the tag).
+  'inbox.tagListCount': '· {count}',
+  // Empty/zero states on the route.
+  'inbox.tagsScopedEmpty': 'No tags in {name} yet.',
+  'inbox.tagsUncollectedEmpty': 'No tags in the uncollected set yet.',
+  'inbox.tagsBrowseAll': 'Browse all tags',
+  'inbox.tagsSearchZero': 'No tags match “{query}”.',
 
   // Search suggestion shelf (focused-empty state).
   'search.shelfAffordance': 'Jump to',

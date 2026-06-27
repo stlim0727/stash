@@ -50,9 +50,20 @@ export function buildTagCloud(tags: TagCount[]): TagCloudEntry[] {
   if (named.length === 0) {
     return [];
   }
-  const counts = named.map((tag) => tag.count);
-  const min = Math.min(...counts);
-  const max = Math.max(...counts);
+  // Reduce instead of Math.min(...counts)/Math.max(...counts): the spread form
+  // pushes every count onto the call stack and throws RangeError on a large
+  // enough tag set. A library big enough to surface the cloud-perf reports is
+  // exactly where that would bite, so fold the extent in a single pass.
+  let min = named[0].count;
+  let max = named[0].count;
+  for (const tag of named) {
+    if (tag.count < min) {
+      min = tag.count;
+    }
+    if (tag.count > max) {
+      max = tag.count;
+    }
+  }
   const span = max - min;
   return named
     .map((tag) => ({
