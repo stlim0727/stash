@@ -26,6 +26,7 @@ jest.mock('@/domain/enrichment', () => ({
 // inspectable. `mockParams` is the route's scope param.
 let mockParams: Record<string, string> = {};
 const mockNavigate = jest.fn();
+const mockDismissTo = jest.fn();
 const mockPush = jest.fn();
 const mockBack = jest.fn();
 let mockCanGoBack = true;
@@ -34,6 +35,7 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({
     push: mockPush,
     navigate: mockNavigate,
+    dismissTo: mockDismissTo,
     replace: jest.fn(),
     back: mockBack,
   }),
@@ -73,6 +75,7 @@ function renderScreen() {
 beforeEach(() => {
   mockParams = {};
   mockNavigate.mockClear();
+  mockDismissTo.mockClear();
   mockPush.mockClear();
   mockBack.mockClear();
   mockSetOptions.mockClear();
@@ -227,8 +230,9 @@ test('tapping a cloud tag navigates to the root Inbox with that tag facet', asyn
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
 
   await fireEvent.press(await screen.findByLabelText('#cooking, 2 bookmarks'));
-  expect(mockNavigate).toHaveBeenCalledTimes(1);
-  const [arg] = mockNavigate.mock.calls[0];
+  // dismissTo (not navigate) so the browse route is popped, not stacked.
+  expect(mockDismissTo).toHaveBeenCalledTimes(1);
+  const [arg] = mockDismissTo.mock.calls[0];
   expect(arg.pathname).toBe('/');
   expect(arg.params.tag).toBe('t-cooking');
   // A monotonic nonce rides along so a same-tag re-tap on return re-applies.
@@ -245,12 +249,12 @@ test('re-tapping the SAME tag fires a fresh navigate (with a new nonce) each tim
   await fireEvent.press(tag);
   await fireEvent.press(tag);
 
-  expect(mockNavigate).toHaveBeenCalledTimes(2);
-  const firstNonce = mockNavigate.mock.calls[0][0].params.t;
-  const secondNonce = mockNavigate.mock.calls[1][0].params.t;
+  expect(mockDismissTo).toHaveBeenCalledTimes(2);
+  const firstNonce = mockDismissTo.mock.calls[0][0].params.t;
+  const secondNonce = mockDismissTo.mock.calls[1][0].params.t;
   // Same tag both times …
-  expect(mockNavigate.mock.calls[0][0].params.tag).toBe('t-cooking');
-  expect(mockNavigate.mock.calls[1][0].params.tag).toBe('t-cooking');
+  expect(mockDismissTo.mock.calls[0][0].params.tag).toBe('t-cooking');
+  expect(mockDismissTo.mock.calls[1][0].params.tag).toBe('t-cooking');
   // … but a fresh nonce, so the root Inbox re-applies on the second return.
   expect(secondNonce).not.toBe(firstNonce);
 });
@@ -275,7 +279,7 @@ test('drilling in from a folder-scoped route still applies the all-library tag f
   await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
 
   await fireEvent.press(await screen.findByLabelText('#cooking, 1 bookmark'));
-  const [arg] = mockNavigate.mock.calls[0];
+  const [arg] = mockDismissTo.mock.calls[0];
   // Just the tag facet — no scope/collection carried into the drill-in.
   expect(arg.params.tag).toBe('t-cooking');
   expect(arg.params.collection).toBeUndefined();

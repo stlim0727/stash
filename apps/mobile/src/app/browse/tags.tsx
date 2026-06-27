@@ -179,7 +179,13 @@ export default function BrowseTagsScreen() {
       // COUNTS + opaque id only — never the tag name (hard rule).
       trackBreadcrumb('browse', 'cloud tag tap', { view, cloud: ranked.length });
       navNonce.current += 1;
-      router.navigate({ pathname: '/', params: { tag: entry.id, t: String(navNonce.current) } });
+      // dismissTo, NOT navigate: this removes /browse/tags from the stack while
+      // handing the tag facet to the root Inbox beneath it, so repeated
+      // Browse→tag cycles can't grow the stack and native Back can't land on a
+      // stale tag browser. Reached cold (no Inbox beneath — e.g. a deep link)?
+      // dismissTo falls back to a replace, so there's still no dangling browse
+      // screen left behind.
+      router.dismissTo({ pathname: '/', params: { tag: entry.id, t: String(navNonce.current) } });
     },
     [router, view, ranked.length],
   );
