@@ -406,6 +406,13 @@ test('shows the suggested folder as a chip beside the picker and files into it',
 
   // Once filed in, the suggestion (a different folder than current) is gone.
   await waitFor(() => expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull());
+
+  // Accepting also records the decision durably (mirrors an accepted tag), so the
+  // recommendation can't re-surface if the bookmark later moves out of the folder
+  // — the regression was that accept relied solely on "already lives there".
+  await waitFor(() =>
+    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('id:col-recipes'),
+  );
 });
 
 test('the suggested folder chip can be dismissed', async () => {

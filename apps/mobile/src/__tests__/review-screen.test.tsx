@@ -167,6 +167,37 @@ test('surfaces a folder recommendation (📁 ＋) alongside tags (#) and files i
   expect(screen.getByText('#cooking')).toBeTruthy();
 });
 
+test('accepting a folder recommendation records it so undoing the move does not re-surface it', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000c9';
+  const now = '2026-06-12T00:00:00.000Z';
+  // The bookmark already lives in "Watch Later"; the AI suggests "Recipes" — a
+  // move, so accepting offers an Undo toast.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Move me', collection_id: 'col-watch' })],
+    TWO_COLLECTIONS(now),
+    [makeEnrichment({ bookmark_id: id, suggested_collection_id: 'col-recipes' })],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('Move me')).toBeTruthy());
+
+  // Accepting the move records the decision durably (mirrors an accepted tag),
+  // not just "the bookmark now lives there".
+  await fireEvent.press(screen.getByLabelText('Move Move me from Watch Later to Recipes'));
+  await waitFor(() =>
+    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('id:col-recipes'),
+  );
+
+  // Undo moves the bookmark back to Watch Later, but the recommendation stays
+  // gone — the user already decided on it.
+  await fireEvent.press(screen.getByLabelText('Undo'));
+  await waitFor(() =>
+    expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.collection_id).toBe('col-watch'),
+  );
+  expect(screen.queryByText('→ Recipes')).toBeNull();
+  await waitFor(() => expect(screen.getByText('No suggestions to review.')).toBeTruthy());
+});
+
 test('lists a folder-only recommendation when no existing folder matches (create chip)', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000c2';
   fakeRepo.__reset(
@@ -347,11 +378,15 @@ test('a CHANGE chip strikes the current folder and shows the move target; tappin
   await waitFor(() => expect(screen.getByText('Moved to “Recipes”')).toBeTruthy());
   await waitFor(() => expect(screen.queryByText('→ Recipes')).toBeNull());
 
-  // Undo restores the prior collection (back in Watch Later) — the move
-  // suggestion re-surfaces, proving the bookmark was moved back, not nowhere.
+  // Undo restores the prior collection (back in Watch Later) — verified by the
+  // stored row, not by the suggestion re-appearing. Accepting the recommendation
+  // is a decision the user made, so undoing the *move* must NOT bring the
+  // recommendation back (the prior bug); it stays gone like an accepted tag does.
   await fireEvent.press(screen.getByLabelText('Undo'));
-  await waitFor(() => expect(screen.getByText('→ Recipes')).toBeTruthy());
-  expect(screen.getByText('Watch Later')).toBeTruthy();
+  await waitFor(() =>
+    expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.collection_id).toBe('col-watch'),
+  );
+  expect(screen.queryByText('→ Recipes')).toBeNull();
 });
 
 test('bulk "Dismiss all" dismisses the folder durably alongside the tags', async () => {

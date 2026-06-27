@@ -388,11 +388,13 @@ export default function BookmarkDetailScreen() {
       // move the bookmark. Existing folder → assign; "create" → make it first.
       if (showCollectionSuggestion && suggestedCollection) {
         assignCollection(bookmark.id, suggestedCollection.id);
+        recordFolderActedOn();
         offerMoveUndo(suggestedCollection.name);
       } else if (showCreateCollectionSuggestion && suggestedByName) {
         const result = await createCollection(suggestedByName);
         if (result.collection) {
           assignCollection(bookmark.id, result.collection.id);
+          recordFolderActedOn();
           offerMoveUndo(suggestedByName);
         } else {
           return result.error ?? t('detail.errorCreateCollection');
@@ -454,22 +456,28 @@ export default function BookmarkDetailScreen() {
     });
   };
 
+  // Record the folder suggestion as acted-on under every token that identifies it
+  // (resolved id and/or the AI's proposed name), so it stays gone even if it
+  // later flips between the "create" and "file into" forms. Both dismiss AND
+  // accept route through here: accepting only files the bookmark in, which hides
+  // the chip *while it stays there* — so without recording the decision, undoing
+  // the move (or refiling elsewhere) would re-surface a recommendation the user
+  // already acted on. Mirrors how accepting a tag records it as reviewed. At most
+  // one chip shows at a time, so `folderTokens` already reflects it.
+  const recordFolderActedOn = () => {
+    for (const token of folderTokens) {
+      dismissFolderSuggestion(bookmark.id, token);
+    }
+  };
+  const handleDismissFolder = recordFolderActedOn;
+
   const handleAcceptCollection = () => {
     if (!suggestedCollection) {
       return;
     }
     assignCollection(bookmark.id, suggestedCollection.id);
+    recordFolderActedOn();
     offerMoveUndo(suggestedCollection.name);
-  };
-
-  // Dismiss the folder suggestion under every token that identifies it (resolved
-  // id and/or the AI's proposed name), so it stays gone even if it later flips
-  // between the "create" and "file into" forms. At most one chip shows at a time,
-  // so `folderTokens` already reflects the visible suggestion.
-  const handleDismissFolder = () => {
-    for (const token of folderTokens) {
-      dismissFolderSuggestion(bookmark.id, token);
-    }
   };
 
   const handleCreateCollection = (name: string) =>
@@ -492,6 +500,7 @@ export default function BookmarkDetailScreen() {
     const name = suggestedByName;
     void handleCreateCollection(name).then((ok) => {
       if (ok) {
+        recordFolderActedOn();
         offerMoveUndo(name);
       }
     });
