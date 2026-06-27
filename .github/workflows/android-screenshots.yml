@@ -94,6 +94,14 @@ jobs:
           restore-keys: |
             ccache-screens-${{ runner.os }}-
 
+      # Ensure the ccache binary is present and zero its run stats so the
+      # post-build `ccache -s` reflects only this build.
+      - name: Install ccache
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ccache
+          ccache --version | head -1
+          ccache -z
+
       - name: Install Maestro
         run: |
           curl -Ls "https://get.maestro.mobile.dev" | bash
@@ -114,10 +122,28 @@ jobs:
       - name: Build APK (x86_64)
         working-directory: apps/mobile/android
         env:
-          USE_CCACHE: '1'
+          # Route every CMake/NDK C++ compile through ccache. RN only wires ccache
+          # when building RN itself from source, so for a prebuilt-RN app build (and
+          # third-party native modules) USE_CCACHE was a no-op and the compiles ran
+          # cold every run. CMake reads CMAKE_<LANG>_COMPILER_LAUNCHER from the env,
+          # so these make every module use ccache regardless of RN/Expo internals.
+          CMAKE_C_COMPILER_LAUNCHER: ccache
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
           CCACHE_DIR: /home/runner/.ccache
           CCACHE_MAXSIZE: 3G
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=x86_64
+          # expo prebuild regenerates android/ each run, shifting absolute paths;
+          # CCACHE_BASEDIR rewrites them to relative so cached objects still hit.
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_COMPILERCHECK: content
+          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines
+        # `-x lintVitalRelease` skips AGP's release-lint chain (~2 min) — pointless
+        # for a throwaway screenshot APK.
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=x86_64 -x lintVitalRelease
+
+      # Surface ccache's hit/miss so a regression back to 0% hits is visible.
+      - name: ccache stats
+        if: always()
+        run: ccache -s
 
       # Attempt 1. ~1 in 3 CI emulators boot with a broken UiAutomator layer
       # (every element reads as "not found" for the whole session), and retrying
