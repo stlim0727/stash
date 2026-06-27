@@ -36,6 +36,7 @@ feature-complete for 1.0; these are the release candidates leading to the first
 
 | Build | Date (UTC) | `main` SHA | What's new since last RC |
 | ----- | ---------- | ---------- | ------------------------ |
+| `v1.0.0-rc6` | 2026-06-27 | `0a3dd63` | Settings reorganized into labelled sections (Account / Library / Preferences / Your data / Advanced); AI-suggestion review moved out of Settings onto a persistent Inbox banner that stands while anything is left to review and escalates to a "new" alert for unseen arrivals (#239). Build = `android-apk.yml` run #110. |
 | `v1.0.0-rc5` | 2026-06-26 | `8e68980` | Search now narrows the Browse-by-tag cloud to the tags on matching results (was showing the whole library under a "Results for …" banner) (#234). Build = `android-apk.yml` run #109. |
 | `v1.0.0-rc4` | 2026-06-26 | `45b13b6` | *(not logged at build time — reconstructed: this was the `dev` prerelease's target commit immediately before rc5, and `dev` always holds the latest RC. Code: unify the no-collection label as "Inbox" + folder/Inbox chip counts (#232).)* |
 | `v1.0.0-rc1`–`rc3` | 2026-06 | *(not recorded)* | *(1.0.0 dispatches built before this cycle's table existed; their `-rcN` numbers were tracked only on the Play internal-test track. SHAs were not captured at the time — this is the tracking gap that adding the rows above closes. rc1 was the first build after the `1.0.0` bump #223.)* |
