@@ -88,12 +88,20 @@ export async function syncQueueEntry(
   // that create. But if there is no such create — an orphaned mutation whose
   // create already settled, can never succeed, or was never enqueued — nothing
   // will ever re-key it. Returning it `pending` then hot-loops the auto-sync
-  // effect (which re-fires on any `pending` entry), so SETTLE it instead:
+  // effect (which re-fires on any `pending` entry), so resolve it instead:
   //   - delete: the row never reached the server (its id is still local) and the
   //     local delete already happened, so there is nothing to delete remotely —
   //     remove the queue entry so it leaves cleanly.
-  //   - update: settle as `failed` with a clear reason. `failed` does NOT re-fire
-  //     the auto-sync loop; it still retries on the next save or a manual Sync.
+  //   - update: the bookmark's `create` never reached the server, yet an `update`
+  //     needs a remote row to target — so it can NEVER succeed and just re-fails
+  //     every pass, stranding the bookmark as "sync failed" forever (visible in
+  //     the queue with a climbing retry count). The local row still exists, so
+  //     RECOVER by promoting this entry to a `create`: rebuild the create payload
+  //     from the row and fall through to the create path below, which uploads it
+  //     (idempotent on URL — a duplicate reuses the existing row), re-keys the
+  //     bookmark onto its new remote id, and lets the caller reconcile any
+  //     diverged fields. Only when the row is gone, or can't be expressed as a
+  //     create (no URL and no text), is there nothing to upload — settle then.
   if (entry.operation !== 'create') {
     // Mirror exactly what each branch sends to the server: `update` targets
     // `local_id`, `delete` targets `remote_id ?? local_id`.
@@ -109,14 +117,36 @@ export async function syncQueueEntry(
         await removeQueueEntryIfNotSuperseded(repository, entry);
         return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
       }
-      // Orphaned update: stop the hot loop by settling as failed.
-      return {
-        entry: await failEntry(
-          repository,
-          entry,
-          new Error('Cannot sync: bookmark has no remote identity yet.'),
-          now,
-        ),
+      // Orphaned update — promote to a create so the bookmark can finally reach
+      // the server (see the comment above for why a bare update can't).
+      const localRow = getBookmark(entry.local_id);
+      if (!localRow) {
+        // The row is gone locally; there is nothing left to update or create.
+        await removeQueueEntryIfNotSuperseded(repository, entry);
+        return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
+      }
+      const rebuiltPayload = createPayloadFromBookmark(localRow);
+      if (!isUploadableCreate(rebuiltPayload)) {
+        // No URL and no text body: a create can't carry it. Settle as `failed`
+        // (does NOT re-fire the auto-sync loop) so it stops hot-looping while
+        // still retrying on the next save or a manual Sync.
+        return {
+          entry: await failEntry(
+            repository,
+            entry,
+            new Error('Cannot sync: bookmark has no remote identity yet.'),
+            now,
+          ),
+        };
+      }
+      // Rewrite this entry into a `create` and let the create path below run it.
+      // Keeps the same local_id key so the queue row is replaced, not duplicated.
+      entry = {
+        ...entry,
+        operation: 'create',
+        payload: rebuiltPayload,
+        sync_status: 'pending',
+        last_error: null,
       };
     }
   }

@@ -1902,6 +1902,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 // The re-keyed op now targets a remote id; kick the uploader.
                 void syncTagOps();
               }
+              // `uploadedPayload` is set IFF a create just uploaded — whether
+              // the entry began as a `create` or was promoted from an orphaned
+              // `update` (a bookmark whose create never reached the server). Use
+              // it, not `entry.operation`, so a promoted create reconciles and
+              // AI-triggers too: the loop's `entry.operation` is still 'update'.
+              const createUploaded = result.uploadedPayload !== undefined;
               // The create payload only carries url/title/notes, and the remote
               // row defaults to no generated metadata + pending status + active.
               // If the local row has since diverged — archived, filed into a
@@ -1910,10 +1916,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // reach the cloud. Without the `deleted_at` arm, a bookmark trashed
               // before it had a remote id would stay live in the cloud and
               // resurrect on other devices.
-              if (
-                entry.operation === 'create' &&
-                createNeedsReconcileUpdate(persisted, result.uploadedPayload)
-              ) {
+              if (createUploaded && createNeedsReconcileUpdate(persisted, result.uploadedPayload)) {
                 enqueueMutation(persisted.id, 'update');
               }
               // A brand-new bookmark just gained a remote identity: queue AI
@@ -1921,7 +1924,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // OpenGraph fetch may still be in flight, and enriching against a
               // bare URL yields nothing. The effect below fires once this
               // bookmark's metadata enrichment has settled.
-              if (entry.operation === 'create') {
+              if (createUploaded) {
                 markPendingAiTrigger(persisted.id);
               }
             }
