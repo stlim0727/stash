@@ -373,29 +373,89 @@ test('update: a seeded (bookmark-…) target with a pending create is DEFERRED t
   assert.equal(result.entry.sync_status, 'pending');
 });
 
-test('update: an ORPHANED local-id target (no pending create) SETTLES failed, not pending (issue #237)', async () => {
-  // No create will ever re-key this entry, so deferring as `pending` would
-  // hot-loop the auto-sync effect (which re-fires on every pending entry).
-  // Settle it `failed` instead — that stops the loop while still retrying on a
-  // later save / manual Sync. The local id must never reach the server.
-  const { repository } = fakeRepository();
-  let apiCalled = false;
+test('update: an ORPHANED local-id target (no pending create) is PROMOTED to a create and uploaded', async () => {
+  // No create will ever re-key this entry, so a bare `update` can never target a
+  // remote row — it would just re-fail every pass, stranding the bookmark as
+  // "sync failed" forever. The row still exists locally, so promote to a create:
+  // upload it (idempotent on URL), adopt the remote id, and leave the queue.
+  const { calls, repository } = fakeRepository();
+  let updateCalled = false;
+  let createdPayload: unknown = null;
   const api = fakeApi({
     updateBookmark: async () => {
-      apiCalled = true;
+      updateCalled = true;
       return makeBookmark();
+    },
+    createBookmark: async (payload: unknown) => {
+      createdPayload = payload;
+      return {
+        bookmark_id: '00000000-0000-4000-8000-000000000099',
+        status: 'created',
+        metadata_status: 'pending',
+      };
     },
   });
   const localId = 'local-mquc351g-wzpsqbby';
   const entry = makeMutationEntry(localId, 'update');
 
   // Default predicate => no pending create => orphaned.
-  const result = await syncQueueEntry(api, repository, entry, () => makeBookmark({ id: localId }));
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: localId, url: 'https://example.com/a' }),
+  );
 
-  assert.equal(apiCalled, false, 'the local id must never reach the server');
+  assert.equal(updateCalled, false, 'a local id must never be sent as an update');
+  assert.equal(result.entry.sync_status, 'synced', 'promoted create settled the entry');
+  assert.equal(result.entry.operation, 'create', 'the entry was promoted to a create');
+  assert.equal(result.entry.remote_id, '00000000-0000-4000-8000-000000000099');
+  assert.equal(
+    result.bookmarkReplacement?.bookmark.id,
+    '00000000-0000-4000-8000-000000000099',
+    'the local row is re-keyed onto the remote id',
+  );
+  assert.ok(result.uploadedPayload, 'uploadedPayload signals a create ran, so the caller reconciles');
+  assert.equal((createdPayload as { url?: string })?.url, 'https://example.com/a');
+  assert.ok(
+    calls.includes('replaceBookmark:local-mquc351g-wzpsqbby->00000000-0000-4000-8000-000000000099'),
+  );
+});
+
+test('update: an ORPHANED local-id target with no URL or text SETTLES failed (cannot become a create)', async () => {
+  // A row a create can't carry (no URL, no body) can never reach the server, so
+  // promotion is impossible. Settle `failed` (does NOT re-fire the auto-sync
+  // loop) so it stops hot-looping while still retrying on a later save / Sync.
+  const { repository } = fakeRepository();
+  let apiCalled = false;
+  const api = fakeApi({
+    createBookmark: async () => {
+      apiCalled = true;
+      throw new Error('should not be called');
+    },
+  });
+  const localId = 'local-mquc351g-wzpsqbby';
+  const entry = makeMutationEntry(localId, 'update');
+
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: localId, url: null, description: null, content_type: 'text' }),
+  );
+
+  assert.equal(apiCalled, false, 'nothing uploadable, so no create is attempted');
   assert.equal(result.entry.sync_status, 'failed', 'settled failed, NOT pending');
   assert.equal(result.entry.retry_count, 1);
   assert.match(result.entry.last_error ?? '', /no remote identity/i);
+});
+
+test('update: an ORPHANED local-id target whose row is gone leaves the queue cleanly', async () => {
+  // The local row was deleted, so there is nothing to update or create. Settle
+  // by removing the queue entry rather than failing it forever.
+  const { calls, repository } = fakeRepository();
+  const localId = 'local-mquc351g-wzpsqbby';
+  const entry = makeMutationEntry(localId, 'update');
+
+  const result = await syncQueueEntry(fakeApi(), repository, entry, () => undefined);
+
+  assert.equal(result.removeEntry, true);
+  assert.equal(result.entry.sync_status, 'synced');
+  assert.ok(calls.includes('removeQueueEntry:local-mquc351g-wzpsqbby'));
 });
 
 test('delete: an ORPHANED local-id target (no pending create) is REMOVED, no remote delete (issue #237)', async () => {
