@@ -1144,6 +1144,16 @@ export default function InboxScreen() {
         // suggestion-shelf↔browse-shelf swap on focus/blur (both shelves mount
         // inside this measured view), so headerHeight — and the list's keyed-off
         // paddingTop — re-flow to the new height and don't go stale.
+        //
+        // box-none: the elevation that keeps this overlay winning touches over
+        // the cloud's full-screen ScrollView (overlayLayer, STASH-7) otherwise
+        // captures EVERY touch inside the laid-out rect on Android — including
+        // transparent regions and the dead zone left behind when the collapse
+        // translateY moves the view but not its elevation hit-rect. box-none
+        // makes the container itself transparent to touches while its real
+        // children (chips, sort pill, cloud toggle, banner) stay tappable, so
+        // taps in empty space fall through to the cloud/list (STASH-7/STASH-8).
+        pointerEvents="box-none"
         onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
         style={[
           styles.header,
@@ -1425,6 +1435,13 @@ export default function InboxScreen() {
         // there. Opaque base so list rows can't bleed through the tint.
         <Animated.View
           testID="inbox-filter-bar"
+          // box-none for the same reason as the header: its elevation
+          // (overlayLayer, STASH-7) would otherwise capture touches across the
+          // whole rect — and across the dead zone the collapse translateY
+          // leaves behind on Android — eating taps meant for the cloud/list.
+          // The opaque filterBarInner child still fills and owns the visible
+          // strip, so the clear / back-to-cloud action stays tappable.
+          pointerEvents="box-none"
           onLayout={(event) => setFilterBarHeight(event.nativeEvent.layout.height)}
           style={[
             styles.filterBar,
