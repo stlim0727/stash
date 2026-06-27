@@ -129,12 +129,14 @@ interface FacetChip {
 // Glyph for each layout in the view-mode segmented control.
 const VIEW_MODE_ICON: Record<ViewMode, ComponentProps<typeof Ionicons>['name']> = {
   card: 'albums-outline',
+  compact: 'reorder-four-outline',
   list: 'list-outline',
 };
 
 // Translation key for each layout's human label (segmented-control a11y).
 const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   card: 'viewMode.card',
+  compact: 'viewMode.compact',
   list: 'viewMode.list',
 };
 
@@ -1374,7 +1376,7 @@ export default function InboxScreen() {
         scrollIndicatorInsets={{ top: scrollInsetTop }}
         contentContainerStyle={[
           styles.list,
-          viewMode === 'list' ? styles.listModeList : null,
+          viewMode !== 'card' ? styles.listModeList : null,
           // Start the list below the floating header (and the pinned filter bar
           // when active), and clear the Add button so it never covers the last row.
           { paddingTop: listPaddingTop, paddingBottom: insets.bottom + 96 },
@@ -1589,6 +1591,97 @@ export default function InboxScreen() {
           // from the title or a tag, that's already explained — an unexplained
           // site chip would just be noise competing with the user's own fields.
           const showSiteChip = searching && valueMatchesTerms(item.site_name, searchTerms);
+
+          // Compact sits between cards and the dense list: it keeps the card's
+          // thumbnail (a real visual cue) but at list density — a small leading
+          // image plus one collapsed meta line, so more bookmarks fit per screen
+          // without losing "which one was this?" recognition. The preview image
+          // is generated metadata, so it's purely a thumbnail; the title/URL/meta
+          // beside it stay the user-vs-generated split the cards already draw.
+          if (viewMode === 'compact') {
+            const thumbUri = item.local_image_uri ?? item.preview_image_url ?? null;
+            const compactMeta = metaParts.join('  ·  ');
+            return (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.listRow,
+                  styles.compactRow,
+                  {
+                    backgroundColor: palette.surfaceElevated,
+                    borderColor: palette.border,
+                    opacity: pressed ? 0.78 : 1,
+                  },
+                ]}
+                onPress={openDetail}
+                onLongPress={() => setMenuItem(item)}
+              >
+                {thumbUri ? (
+                  <Image
+                    testID="inbox-compact-thumb"
+                    source={{ uri: thumbUri }}
+                    style={[styles.compactThumb, { backgroundColor: palette.mutedSurface }]}
+                  />
+                ) : (
+                  <ItemIcon item={item} testID="inbox-compact-monogram" />
+                )}
+                <View style={styles.listText}>
+                  <HighlightedText
+                    testID="inbox-compact-title"
+                    style={[styles.listTitle, { color: palette.text }]}
+                    numberOfLines={1}
+                    text={displayTitle(item) ?? t('common.untitled')}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
+                  {item.url ? (
+                    <HighlightedText
+                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                  ) : null}
+                  {compactMeta ? (
+                    <Text style={[styles.compactMeta, { color: palette.accentText }]} numberOfLines={1}>
+                      {compactMeta}
+                    </Text>
+                  ) : null}
+                </View>
+                {suggestionCount > 0 && newSuggestionsCount === 0 ? (
+                  <View
+                    accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
+                    style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                  >
+                    <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
+                      ✨ {suggestionCount}
+                    </Text>
+                  </View>
+                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t('inbox.moreActions')}
+                  hitSlop={8}
+                  style={styles.moreButton}
+                  onPress={() => setMenuItem(item)}
+                >
+                  <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                </Pressable>
+                {item.url ? (
+                  <Pressable
+                    accessibilityRole="link"
+                    accessibilityLabel={t('common.openLink')}
+                    hitSlop={8}
+                    style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
+                    onPress={openLink}
+                  >
+                    <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                  </Pressable>
+                ) : null}
+              </Pressable>
+            );
+          }
+
           return (
             <Card style={styles.card}>
               <Pressable onPress={openDetail} onLongPress={() => setMenuItem(item)}>
@@ -2034,6 +2127,22 @@ const styles = StyleSheet.create({
   listText: {
     flex: 1,
     gap: 2,
+  },
+  // Compact rows are a touch taller than list rows to give the thumbnail and the
+  // extra meta line room without crowding — still roughly half a card's height.
+  compactRow: {
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  compactThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: 12,
+  },
+  compactMeta: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 1,
   },
   listTitle: {
     fontSize: 15,
