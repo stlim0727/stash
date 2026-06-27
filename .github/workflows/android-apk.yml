@@ -164,7 +164,13 @@ jobs:
           # stop __DATE__/__TIME__ and include mtimes from busting the cache.
           CCACHE_BASEDIR: ${{ github.workspace }}
           CCACHE_COMPILERCHECK: content
-          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines
+          # NOHASHDIR drops the build dir (cwd) from the hash — Gradle/NDK compile
+          # each module from a per-run .cxx/<hash> dir, so without it the same
+          # source missed run-over-run (first warm build hit only ~29%). It only
+          # affects debug-symbol paths, irrelevant for an internal APK. `locale`
+          # ignores LC_* so a runner locale change can't bust the cache.
+          CCACHE_NOHASHDIR: 'true'
+          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,locale
         # Build only the arm64-v8a ABI — every modern Android phone — to keep
         # the cold-cache native (NDK) compile fast and the APK small.
         # `-x lintVitalRelease` skips AGP's release-lint chain (lintVitalAnalyze/

@@ -135,7 +135,11 @@ jobs:
           # CCACHE_BASEDIR rewrites them to relative so cached objects still hit.
           CCACHE_BASEDIR: ${{ github.workspace }}
           CCACHE_COMPILERCHECK: content
-          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines
+          # NOHASHDIR drops the per-run .cxx/<hash> build dir from the hash so the
+          # same source hits run-over-run (only affects debug-symbol paths);
+          # `locale` ignores LC_* so a runner locale change can't bust the cache.
+          CCACHE_NOHASHDIR: 'true'
+          CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,locale
         # `-x lintVitalRelease` skips AGP's release-lint chain (~2 min) — pointless
         # for a throwaway screenshot APK.
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=x86_64 -x lintVitalRelease
