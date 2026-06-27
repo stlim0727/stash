@@ -753,7 +753,14 @@ export default function BookmarkDetailScreen() {
         busy={busy}
         onAdd={handleAddTag}
         onRemove={handleRemoveTag}
-        onBrowse={(tagId) => router.navigate({ pathname: '/', params: { tag: tagId } })}
+        onBrowse={(tagId) =>
+          // dismissTo (not navigate): browsing a tag means "go to the Inbox
+          // filtered by it", so dismiss back to the root Inbox and apply the
+          // facet — never leave this detail (or an intermediate Review/Trash)
+          // stacked beneath. Falls back to a replace if Detail was reached cold
+          // (deep link, no Inbox beneath). Mirrors the /browse/tags drill-in.
+          router.dismissTo({ pathname: '/', params: { tag: tagId } })
+        }
         onAcceptSuggestion={handleAcceptSuggestion}
         onDismissSuggestion={handleDismissTag}
         onAcceptAllSuggestions={handleAcceptAll}

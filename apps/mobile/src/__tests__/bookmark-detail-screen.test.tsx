@@ -24,10 +24,17 @@ jest.mock('@/domain/enrichment', () => ({
 }));
 
 const mockNavigate = jest.fn();
+const mockDismissTo = jest.fn();
 // The detail screen reads the bookmark id from the route; tests set it.
 let mockRouteId = 'bookmark-raindrop';
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ navigate: mockNavigate, push: jest.fn(), back: jest.fn(), replace: jest.fn() }),
+  useRouter: () => ({
+    navigate: mockNavigate,
+    dismissTo: mockDismissTo,
+    push: jest.fn(),
+    back: jest.fn(),
+    replace: jest.fn(),
+  }),
   useLocalSearchParams: () => ({ id: mockRouteId }),
 }));
 
@@ -61,7 +68,7 @@ test('tapping a tag chip navigates to the Inbox filtered by that tag', async () 
 
   await fireEvent.press(screen.getByLabelText('Browse #design'));
 
-  expect(mockNavigate).toHaveBeenCalledWith({ pathname: '/', params: { tag: 'tag-design' } });
+  expect(mockDismissTo).toHaveBeenCalledWith({ pathname: '/', params: { tag: 'tag-design' } });
 });
 
 test('tapping the preview image opens the bookmark link', async () => {
