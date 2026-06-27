@@ -47,7 +47,7 @@ Backend: `supabase/migrations` (owner-scoped RLS) and `supabase/functions` edge 
 
 ## Branch / release notes
 
-- **Branch strategy: trunk-based + release branches** (`docs/development/branching.md`). `main` is the trunk (next release, currently `0.2.x`); `release/0.1.x` is the maintenance line for `0.1.*` patches. Base each change on the line it ships in — 0.2.x features → `main`; 0.1.x bug fixes → `release/0.1.x`, then **cherry-pick the fix forward into `main`**. Never merge `main` into a release branch.
+- **Branch strategy: trunk-based + release branches** (`docs/development/branching.md`). `main` is the trunk (next release); each `release/*` branch is the maintenance line for an already-shipped version. Base each change on the line it ships in — features → `main`; bug fixes for a shipped version → its `release/*` branch, then **cherry-pick the fix forward into `main`**. Never merge `main` into a release branch.
 - **Pull requests: open as regular (non-draft) PRs, not drafts.**
 - CI (`.github/workflows/ci.yml`) runs lint, typecheck, and tests on every PR.
 - Installable Android APK without an EAS account: the `android-apk.yml` workflow (`expo prebuild` → Gradle `assembleRelease`, debug-signed standalone, arm64-v8a only). Trigger/output mapping and the MCP/`gh` invocation steps are documented in `AGENTS.md`. EAS profiles for store builds live in `apps/mobile/eas.json`; release flow in `docs/development/releasing.md`.
