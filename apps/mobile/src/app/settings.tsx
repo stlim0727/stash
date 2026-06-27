@@ -351,7 +351,7 @@ export default function SettingsScreen() {
         ? t('settings.sync.waiting', { count: waiting })
         : t('settings.sync.allBackedUp');
 
-  const build = getBuildInfo();
+  const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
     Constants.expoConfig?.sdkVersion ?? '56'
   })`;

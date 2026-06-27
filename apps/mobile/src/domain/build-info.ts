@@ -1,13 +1,32 @@
 /**
- * Build provenance baked into the bundle at build time.
+ * Build provenance surfaced in Settings and in feedback diagnostics.
  *
- * The values come from STATIC `process.env.EXPO_PUBLIC_*` reads so Expo inlines
- * them into the release bundle (a dynamic `process.env[key]` would read empty in
- * production — see `scripts/check-static-env.mjs`). CI sets them per build; a
- * local/dev build leaves them empty and the app shows a "local build" label.
+ * The values are stamped into the app config's `extra` block at build time by
+ * `app.config.js` (which reads the CI-provided env vars) and read back at
+ * runtime from `expo-constants` `Constants.expoConfig.extra`.
+ *
+ * We deliberately do NOT read `process.env.EXPO_PUBLIC_*` here. Those are
+ * inlined into the JS bundle by Babel and then frozen in Metro's content-keyed
+ * transform cache: because this module's source never changes between builds,
+ * a cache hit keeps serving whatever commit first populated the cache, so the
+ * APK reports a stale commit even though it was built from newer source. Routing
+ * the values through `extra` piggybacks on the same runtime-config channel as
+ * `version` — which is regenerated from app.config.js every build and is immune
+ * to the transform cache — so the provenance updates on every build.
+ *
+ * Callers read the raw values from `Constants.expoConfig?.extra` and pass them
+ * in, keeping this module pure and platform-free (Node-testable).
  */
 
-declare const process: { env: Record<string, string | undefined> };
+/** Raw provenance values as read from `Constants.expoConfig.extra`. */
+export interface BuildInfoSource {
+  /** Full commit SHA, or null/absent in local/dev builds. */
+  gitSha?: string | null;
+  /** Git ref (branch or tag) the build came from, if provided. */
+  gitRef?: string | null;
+  /** Canonical URL to the exact commit on GitHub, if provided. */
+  commitUrl?: string | null;
+}
 
 export interface BuildInfo {
   /** Full commit SHA the build came from, or null in local/dev builds. */
@@ -20,10 +39,14 @@ export interface BuildInfo {
   commitUrl: string | null;
 }
 
-export function getBuildInfo(): BuildInfo {
-  const sha = (process.env.EXPO_PUBLIC_GIT_SHA ?? '').trim();
-  const ref = (process.env.EXPO_PUBLIC_GIT_REF ?? '').trim();
-  const commitUrl = (process.env.EXPO_PUBLIC_COMMIT_URL ?? '').trim();
+function clean(value: string | null | undefined): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export function getBuildInfo(source: BuildInfoSource | null | undefined = {}): BuildInfo {
+  const sha = clean(source?.gitSha);
+  const ref = clean(source?.gitRef);
+  const commitUrl = clean(source?.commitUrl);
 
   return {
     sha: sha || null,
