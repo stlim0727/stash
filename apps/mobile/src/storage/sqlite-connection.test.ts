@@ -81,7 +81,12 @@ class FakeKvDb {
   }
 }
 
-function makeConnection(opts?: { probeTimeoutMs?: number; closeTimeoutMs?: number }) {
+function makeConnection(opts?: {
+  probeTimeoutMs?: number;
+  closeTimeoutMs?: number;
+  workTimeoutMs?: number;
+  reopenAlertThreshold?: number;
+}) {
   let opens = 0;
   const opened: FakeDb[] = [];
   const events: string[] = [];
@@ -407,6 +412,106 @@ test('a close that never resolves does not deadlock the reopen', async () => {
   const second = await connection.get();
   assert.equal(second.id, 2);
   assert.equal(opens, 2);
+});
+
+test('a wedged operation is bounded, reported, and recovered on a fresh handle', async () => {
+  clearLogEntries();
+  const { connection, opened, opensCount } = makeConnection({
+    workTimeoutMs: 20,
+    probeTimeoutMs: 50,
+    closeTimeoutMs: 50,
+  });
+  await connection.get(); // handle 1
+
+  let attempts = 0;
+  const result = await connection.run(async (db) => {
+    attempts += 1;
+    if (attempts === 1) {
+      // The native op wedges — never settles. The watchdog must not let it
+      // stall the tail forever.
+      return new Promise<string>(() => {});
+    }
+    return `ok:${db.id}`;
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(result, 'ok:2'); // recovered on a reopened handle
+  assert.equal(opensCount(), 2);
+  assert.equal(opened[0].closed, true); // the wedged handle was dropped
+  // The stall is reported at error level so it reaches crash monitoring.
+  assert.ok(getLogEntries().some((e) => e.level === 'error' && e.message.includes('stalled after')));
+});
+
+test('a wedged operation does not probe the hung handle before reopening', async () => {
+  // The recovery must treat a stall as dead without probing — a probe on a
+  // wedged handle would itself hang (only to be bounded), doubling the wait.
+  let probes = 0;
+  let opens = 0;
+  const connection = new SqliteConnection<FakeDb>(
+    async () => {
+      opens += 1;
+      return new FakeDb(opens);
+    },
+    (db) => {
+      probes += 1;
+      return db.probe();
+    },
+    (db) => db.close(),
+    { workTimeoutMs: 20, probeTimeoutMs: 50, closeTimeoutMs: 50 },
+  );
+
+  let attempts = 0;
+  await connection.run(async (db) => {
+    attempts += 1;
+    if (attempts === 1) {
+      return new Promise<void>(() => {}); // wedge
+    }
+    return undefined;
+  });
+
+  assert.equal(attempts, 2);
+  assert.equal(opens, 2);
+  // No liveness probe was run to decide the stall was fatal — the timeout is
+  // proof enough. (Probes here come only from get()'s reuse path, which doesn't
+  // run on a first open or a freshly reopened handle.)
+  assert.equal(probes, 0);
+});
+
+test('a back-to-back wedge surfaces after a single retry, not forever', async () => {
+  clearLogEntries();
+  const { connection } = makeConnection({
+    workTimeoutMs: 20,
+    probeTimeoutMs: 50,
+    closeTimeoutMs: 50,
+  });
+
+  await assert.rejects(
+    () => connection.run(() => new Promise<void>(() => {})), // wedges on every handle
+    (error: Error) => error.name === 'SqliteTimeoutError',
+  );
+  // Reported on each stall, and the second-failure path is recorded too.
+  assert.ok(getLogEntries().some((e) => e.message.includes('after reopen retry')));
+});
+
+test('frequent reopens escalate to a tracked error past the threshold', async () => {
+  clearLogEntries();
+  const { connection, opensCount } = makeConnection({ reopenAlertThreshold: 3 });
+
+  // Kill the handle before each call so every get() reopens.
+  for (let i = 0; i < 4; i += 1) {
+    const db = await connection.get();
+    db.kill();
+  }
+  // 4 opens total = the initial open + 3 reopens, hitting the threshold.
+  assert.equal(opensCount(), 4);
+
+  const reopenBreadcrumbs = getLogEntries().filter((e) => e.message.includes('connection reopened (reopen #'));
+  assert.equal(reopenBreadcrumbs.length, 3); // one info breadcrumb per reopen
+
+  const escalations = getLogEntries().filter(
+    (e) => e.level === 'error' && e.message.includes('excessive handle churn'),
+  );
+  assert.equal(escalations.length, 1); // fires exactly once, when it crosses
 });
 
 test('a probe that hangs is treated as stale and reopened', async () => {
