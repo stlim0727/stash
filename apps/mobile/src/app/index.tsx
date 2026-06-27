@@ -438,6 +438,43 @@ export default function InboxScreen() {
     getDismissedFolderSuggestions,
   ]);
 
+  // Every inbox bookmark still worth reviewing — a pending (un-applied,
+  // un-reviewed) tag suggestion OR a pending folder recommendation — regardless
+  // of whether it arrived "unseen". This drives the *persistent* review banner:
+  // the Review screen's entry point now lives here on the Inbox (it used to be a
+  // row in Settings), so the banner stands as long as anything is left to
+  // review, escalating to the "new" styling only while `newSuggestionsCount`
+  // marks fresh arrivals. Mirrors the Review list's inclusion rule exactly.
+  const pendingReviewCount = useMemo(() => {
+    let count = 0;
+    for (const bookmark of inbox) {
+      const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
+      const enrichment = getEnrichment(bookmark.id);
+      const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
+      const folder = pendingSuggestedFolder(
+        enrichment,
+        collections,
+        bookmark.collection_id,
+        getDismissedFolderSuggestions(bookmark.id),
+      );
+      if (pending.length > 0 || folder) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [
+    inbox,
+    collections,
+    getTagsForBookmark,
+    getEnrichment,
+    getReviewedSuggestions,
+    getDismissedFolderSuggestions,
+  ]);
+
+  // Whether the review banner is in its escalated "new arrivals" state (accent
+  // alert + acknowledge ✕) vs the calm standing "to review" entry.
+  const hasNewSuggestions = newSuggestionsCount > 0;
+
   // Long-press action menu: which bookmark it targets, and whether it's showing
   // the top-level actions or the "move to collection" picker. Null item = closed.
   const [menuItem, setMenuItem] = useState<Bookmark | null>(null);
@@ -1165,33 +1202,64 @@ export default function InboxScreen() {
             </Text>
           </Pressable>
         ) : null}
-        {newSuggestionsCount > 0 ? (
+        {pendingReviewCount > 0 ? (
+          // The Review screen's standing entry point (it used to be a Settings
+          // row). Persistent while anything is left to review; it escalates to
+          // the accent "new AI suggestions" alert — with a ✕ that acknowledges
+          // the fresh arrivals — only while `newSuggestionsCount` marks unseen
+          // ones, then settles back to the calm "to review" entry. The ✕ never
+          // hides the banner outright; it only downgrades the wording, so the
+          // way back into Review is always one tap from the Inbox.
           <View
-            testID="new-suggestions-banner"
-            style={[styles.suggestBanner, { backgroundColor: palette.accentSoft }]}
+            testID="review-banner"
+            style={[
+              styles.suggestBanner,
+              hasNewSuggestions
+                ? { backgroundColor: palette.accentSoft }
+                : {
+                    backgroundColor: palette.card,
+                    borderWidth: StyleSheet.hairlineWidth,
+                    borderColor: palette.border,
+                    paddingRight: 14,
+                  },
+            ]}
           >
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })}
+              accessibilityLabel={
+                hasNewSuggestions
+                  ? t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })
+                  : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
+              }
               onPress={() => router.push('/review')}
               style={({ pressed }) => [styles.suggestBannerMain, { opacity: pressed ? 0.7 : 1 }]}
             >
-              <Text style={[styles.suggestBannerText, { color: palette.accent }]} numberOfLines={1}>
-                {t('inbox.newSuggestions', { count: newSuggestionsCount })}
+              <Text
+                style={[
+                  styles.suggestBannerText,
+                  { color: hasNewSuggestions ? palette.accent : palette.text },
+                ]}
+                numberOfLines={1}
+              >
+                {hasNewSuggestions
+                  ? t('inbox.newSuggestions', { count: newSuggestionsCount })
+                  : t('inbox.reviewPending', { count: pendingReviewCount })}
               </Text>
               <Text style={[styles.suggestBannerCta, { color: palette.accent }]}>
                 {t('inbox.newSuggestionsReview')}
               </Text>
             </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('inbox.newSuggestionsDismiss')}
-              hitSlop={8}
-              onPress={() => clearUnseenSuggestions()}
-              style={({ pressed }) => [styles.suggestBannerClose, { opacity: pressed ? 0.5 : 1 }]}
-            >
-              <Ionicons name="close" size={18} color={palette.accent} />
-            </Pressable>
+            {hasNewSuggestions ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('inbox.newSuggestionsDismiss')}
+                hitSlop={8}
+                onPress={() => clearUnseenSuggestions()}
+                style={({ pressed }) => [styles.suggestBannerClose, { opacity: pressed ? 0.5 : 1 }]}
+              >
+                <Ionicons name="close" size={18} color={palette.accent} />
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
         {showControls ? (

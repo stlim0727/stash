@@ -23,7 +23,6 @@ import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { ActionSheet } from '@/ui/ActionSheet';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
-import { pendingSuggestedFolder, pendingSuggestions } from '@/domain/ai-suggestions';
 import {
   DEFAULT_SHARE_BEHAVIOR,
   parseShareBehavior,
@@ -92,8 +91,6 @@ export default function SettingsScreen() {
     collections,
     getTagsForBookmark,
     getEnrichment,
-    getReviewedSuggestions,
-    getDismissedFolderSuggestions,
     importBookmarks,
   } = useBookmarks();
   const auth = useSupabaseAuth();
@@ -331,24 +328,6 @@ export default function SettingsScreen() {
     );
   }, [shareBehavior]);
 
-  // Inbox bookmarks still worth reviewing — those with an un-applied,
-  // un-reviewed tag suggestion OR a pending folder recommendation. Counts
-  // bookmarks (not individual tags) so the badge matches the Review list and
-  // the Inbox banner; in particular a folder-only item still counts, instead of
-  // the row claiming "nothing to review" while Review shows folder chips.
-  const pendingSuggestionCount = inbox.reduce((total, bookmark) => {
-    const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
-    const enrichment = getEnrichment(bookmark.id);
-    const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
-    const folder = pendingSuggestedFolder(
-      enrichment,
-      collections,
-      bookmark.collection_id,
-      getDismissedFolderSuggestions(bookmark.id),
-    );
-    return total + (pending.length > 0 || folder ? 1 : 0);
-  }, 0);
-
   const insets = useSafeAreaInsets();
   const isAuthenticated = auth.status === 'authenticated';
 
@@ -465,21 +444,10 @@ export default function SettingsScreen() {
       </Card>
       </View>
 
-      {/* Library — navigation into the user's own content. */}
+      {/* Library — navigation into the user's own content. Reviewing AI
+          suggestions now lives on the Inbox (the persistent review banner), not
+          here — Settings is for configuration, not a recurring workflow. */}
       <Group styles={styles} title={t('settings.section.library')}>
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="sparkles-outline"
-          label={t('settings.review.label')}
-          value={
-            pendingSuggestionCount > 0
-              ? t('settings.review.toReview', { count: pendingSuggestionCount })
-              : t('settings.review.nothing')
-          }
-          badge={pendingSuggestionCount > 0 ? pendingSuggestionCount : undefined}
-          onPress={() => router.push('/review')}
-        />
         <Row
           styles={styles}
           palette={palette}
