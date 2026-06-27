@@ -68,7 +68,13 @@ test('tapping a tag chip navigates to the Inbox filtered by that tag', async () 
 
   await fireEvent.press(screen.getByLabelText('Browse #design'));
 
-  expect(mockDismissTo).toHaveBeenCalledWith({ pathname: '/', params: { tag: 'tag-design' } });
+  expect(mockDismissTo).toHaveBeenCalledTimes(1);
+  const [arg] = mockDismissTo.mock.calls[0];
+  expect(arg.pathname).toBe('/');
+  expect(arg.params.tag).toBe('tag-design');
+  // A nonce rides along so re-browsing the same tag re-applies past the Inbox's
+  // (tag + t) dedupe even after the user cleared the facet.
+  expect(arg.params.t).toBeTruthy();
 });
 
 test('tapping the preview image opens the bookmark link', async () => {
