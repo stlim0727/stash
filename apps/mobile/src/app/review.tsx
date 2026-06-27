@@ -128,22 +128,42 @@ export default function ReviewScreen() {
     });
   };
 
+  // Record every token that identifies this folder recommendation in the durable
+  // dismissed-folder store. Both accepting and dismissing route through here: a
+  // folder accept only files the bookmark in, which hides the chip *while it
+  // stays there* — so without recording the decision, undoing the move (or
+  // refiling elsewhere) would re-surface a recommendation the user already acted
+  // on. Mirrors how accepting a tag records it as reviewed.
+  const recordFolderActedOn = (item: ReviewItem) => {
+    for (const token of item.folderTokens) {
+      dismissFolderSuggestion(item.id, token);
+    }
+  };
+
   // File the bookmark into the suggested folder — assigning an existing one, or
   // creating the proposed name first. Both paths are optimistic; once the
-  // bookmark lives in the folder the suggestion stops surfacing on its own. A
-  // create runs under `busy` so a second tap can't mint a duplicate collection.
-  const acceptFolder = (id: string, folder: SuggestedFolder) => {
+  // bookmark lives in the folder the suggestion stops surfacing on its own. We
+  // also record the decision (recordFolderActedOn) so a later Undo/move doesn't
+  // bring the recommendation back. A create runs under `busy` so a second tap
+  // can't mint a duplicate collection.
+  const acceptFolder = (item: ReviewItem) => {
+    const folder = item.folder;
+    if (!folder) {
+      return;
+    }
     if (folder.kind === 'existing') {
-      assignCollection(id, folder.id);
-      offerMoveUndo(id, folder);
+      assignCollection(item.id, folder.id);
+      recordFolderActedOn(item);
+      offerMoveUndo(item.id, folder);
       return;
     }
     setBusy(true);
     void createCollection(folder.name)
       .then((result) => {
         if (result.collection) {
-          assignCollection(id, result.collection.id);
-          offerMoveUndo(id, folder);
+          assignCollection(item.id, result.collection.id);
+          recordFolderActedOn(item);
+          offerMoveUndo(item.id, folder);
         }
       })
       .finally(() => setBusy(false));
@@ -154,9 +174,7 @@ export default function ReviewScreen() {
   // the Inbox/Settings counts (re-surfaces only if a later enrichment proposes a
   // genuinely different folder).
   const dismissFolder = (item: ReviewItem) => {
-    for (const token of item.folderTokens) {
-      dismissFolderSuggestion(item.id, token);
-    }
+    recordFolderActedOn(item);
   };
 
   // Bulk "Accept" for a card: apply pending tags AND act on the folder for BOTH
@@ -169,7 +187,7 @@ export default function ReviewScreen() {
       accept(item.id, item.suggestions);
     }
     if (item.folder) {
-      acceptFolder(item.id, item.folder);
+      acceptFolder(item);
     }
   };
 
@@ -219,7 +237,7 @@ export default function ReviewScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={folderChipA11yLabel(t, item.folder, item.title)}
                   disabled={busy}
-                  onPress={() => acceptFolder(item.id, item.folder!)}
+                  onPress={() => acceptFolder(item)}
                 >
                   <Text style={styles.chipLabel}>
                     <FolderSuggestionLabel
