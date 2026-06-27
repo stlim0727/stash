@@ -185,6 +185,11 @@ export const en = {
   'toast.noLink': 'No link found to stash',
 
   // Settings.
+  'settings.section.account': 'Account',
+  'settings.section.library': 'Library',
+  'settings.section.preferences': 'Preferences',
+  'settings.section.data': 'Your data',
+  'settings.section.advanced': 'Advanced',
   'settings.account.signedIn': 'Signed in',
   'settings.account.signIn': 'Sign In',
   'settings.account.signOut': 'Sign out',

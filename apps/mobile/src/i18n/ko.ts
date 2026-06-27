@@ -134,6 +134,11 @@ export const ko: Catalog = {
   'toast.trashed': '휴지통으로 이동됨',
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
 
+  'settings.section.account': '계정',
+  'settings.section.library': '라이브러리',
+  'settings.section.preferences': '환경설정',
+  'settings.section.data': '내 데이터',
+  'settings.section.advanced': '고급',
   'settings.account.signedIn': '로그인됨',
   'settings.account.signIn': '로그인',
   'settings.account.signOut': '로그아웃',

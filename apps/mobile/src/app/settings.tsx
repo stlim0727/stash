@@ -386,6 +386,8 @@ export default function SettingsScreen() {
           The auth control sits beside the identity (sign in with a provider, or
           log out); the sync row below shows backup status. All inline — no
           separate screen. */}
+      <View style={styles.section}>
+      <Text style={styles.sectionLabel}>{t('settings.section.account')}</Text>
       <Card style={styles.account} elevated={false}>
         <View style={styles.accountHeader}>
           {isAuthenticated ? (
@@ -461,9 +463,10 @@ export default function SettingsScreen() {
           }
         />
       </Card>
+      </View>
 
-      {/* Library & tools */}
-      <Group styles={styles}>
+      {/* Library — navigation into the user's own content. */}
+      <Group styles={styles} title={t('settings.section.library')}>
         <Row
           styles={styles}
           palette={palette}
@@ -488,8 +491,66 @@ export default function SettingsScreen() {
         />
       </Group>
 
-      {/* Your data — export / portability */}
-      <Group styles={styles}>
+      {/* Preferences — everyday app behaviour: language, share landing, and the
+          search-history privacy control. */}
+      <Group styles={styles} title={t('settings.section.preferences')}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="language-outline"
+          label={t('settings.language.label')}
+          value={t(
+            LANGUAGE_OPTIONS.find((option) => option.value === languagePref)?.labelKey ??
+              'settings.language.system',
+          )}
+          onPress={() => setLanguageSheetOpen(true)}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="share-outline"
+          label={t('settings.share.label')}
+          value={
+            shareBehavior === 'inbox'
+              ? t('settings.share.inbox')
+              : t('settings.share.toast')
+          }
+          right={
+            <Switch
+              value={shareBehavior === 'inbox'}
+              onValueChange={(on) => setShareBehavior(on ? 'inbox' : 'toast')}
+              trackColor={{ true: palette.accent, false: palette.border }}
+              thumbColor="#ffffff"
+            />
+          }
+        />
+        {/* Clear search history (A3): the privacy escape hatch for the recents
+            shelf. Disabled (no onPress) and reading "No recent searches" when
+            there's nothing to clear. The a11y label is the reserved
+            `search.clearRecentsA11y` rather than the visible label. */}
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="time-outline"
+          label={t('settings.search.clearLabel')}
+          value={
+            recentCount > 0
+              ? t('settings.search.clearValue', { count: recentCount })
+              : t('settings.search.clearEmpty')
+          }
+          accessibilityLabel={t('search.clearRecentsA11y')}
+          last
+          disabled={recentCount === 0}
+          onPress={recentCount > 0 ? confirmClearRecents : undefined}
+        />
+      </Group>
+
+      {/* Your data — export / import / portability. */}
+      <Group
+        styles={styles}
+        title={t('settings.section.data')}
+        footnote={t('settings.dataNote')}
+      >
         <Row
           styles={styles}
           palette={palette}
@@ -518,63 +579,9 @@ export default function SettingsScreen() {
           onPress={importing ? undefined : () => setImportSheetOpen(true)}
         />
       </Group>
-      <Text style={styles.exportNote}>{t('settings.dataNote')}</Text>
 
-      {/* Preferences — sharing behavior and language in one group */}
-      <Group styles={styles}>
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="share-outline"
-          label={t('settings.share.label')}
-          value={
-            shareBehavior === 'inbox'
-              ? t('settings.share.inbox')
-              : t('settings.share.toast')
-          }
-          right={
-            <Switch
-              value={shareBehavior === 'inbox'}
-              onValueChange={(on) => setShareBehavior(on ? 'inbox' : 'toast')}
-              trackColor={{ true: palette.accent, false: palette.border }}
-              thumbColor="#ffffff"
-            />
-          }
-        />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="language-outline"
-          label={t('settings.language.label')}
-          value={t(
-            LANGUAGE_OPTIONS.find((option) => option.value === languagePref)?.labelKey ??
-              'settings.language.system',
-          )}
-          onPress={() => setLanguageSheetOpen(true)}
-        />
-        {/* Clear search history (A3): the privacy escape hatch for the recents
-            shelf. Disabled (no onPress) and reading "No recent searches" when
-            there's nothing to clear. The a11y label is the reserved
-            `search.clearRecentsA11y` rather than the visible label. */}
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="time-outline"
-          label={t('settings.search.clearLabel')}
-          value={
-            recentCount > 0
-              ? t('settings.search.clearValue', { count: recentCount })
-              : t('settings.search.clearEmpty')
-          }
-          accessibilityLabel={t('search.clearRecentsA11y')}
-          last
-          disabled={recentCount === 0}
-          onPress={recentCount > 0 ? confirmClearRecents : undefined}
-        />
-      </Group>
-
-      {/* Developer mode toggle */}
-      <Group styles={styles}>
+      {/* Advanced — developer mode toggle, and the diagnostics it reveals. */}
+      <Group styles={styles} title={t('settings.section.advanced')}>
         <Row
           styles={styles}
           palette={palette}
@@ -595,8 +602,7 @@ export default function SettingsScreen() {
 
       {developerMode ? (
         <>
-          <Text style={styles.sectionLabel}>{t('settings.diagnostics.title')}</Text>
-          <Group styles={styles}>
+          <Group styles={styles} title={t('settings.diagnostics.title')}>
             <InfoRow styles={styles} label={t('settings.diagnostics.supabaseAuth')} value={auth.status} />
             <InfoRow
               styles={styles}
@@ -621,11 +627,13 @@ export default function SettingsScreen() {
             />
           </Group>
 
-          <Text style={styles.sectionLabel}>{t('settings.queue.title')}</Text>
           {queue.length === 0 ? (
-            <Text style={styles.emptyQueue}>{t('settings.queue.empty')}</Text>
+            <View style={styles.section}>
+              <Text style={styles.sectionLabel}>{t('settings.queue.title')}</Text>
+              <Text style={styles.emptyQueue}>{t('settings.queue.empty')}</Text>
+            </View>
           ) : (
-            <Group styles={styles}>
+            <Group styles={styles} title={t('settings.queue.title')}>
               {queue.map((entry, index) => (
                 <View
                   key={entry.local_id}
@@ -724,18 +732,29 @@ export default function SettingsScreen() {
   );
 }
 
-/** Rounded card that groups settings rows with hairline dividers. */
+/** Rounded card that groups settings rows with hairline dividers, under an
+ *  optional uppercase section header so the screen reads as labelled sections
+ *  (iOS-Settings style) rather than a stack of anonymous cards. */
 function Group({
   children,
   styles,
+  title,
+  footnote,
 }: {
   children: React.ReactNode;
   styles: ReturnType<typeof makeStyles>;
+  title?: string;
+  /** Caption rendered beneath the card (iOS-style section footer). */
+  footnote?: string;
 }) {
   return (
-    <Card style={styles.group} elevated={false}>
-      {children}
-    </Card>
+    <View style={styles.section}>
+      {title ? <Text style={styles.sectionLabel}>{title}</Text> : null}
+      <Card style={styles.group} elevated={false}>
+        {children}
+      </Card>
+      {footnote ? <Text style={styles.footnote}>{footnote}</Text> : null}
+    </View>
   );
 }
 
@@ -888,6 +907,9 @@ const makeStyles = (palette: AppPalette) =>
       fontSize: 13,
       color: palette.textSecondary,
     },
+    section: {
+      gap: 8,
+    },
     group: {
       paddingHorizontal: 0,
       paddingVertical: 0,
@@ -958,7 +980,6 @@ const makeStyles = (palette: AppPalette) =>
       color: palette.textSecondary,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
-      marginBottom: -8,
       marginLeft: 4,
     },
     queueRow: {
@@ -989,10 +1010,9 @@ const makeStyles = (palette: AppPalette) =>
       color: palette.textSecondary,
       marginLeft: 4,
     },
-    exportNote: {
+    footnote: {
       fontSize: 13,
       color: palette.textSecondary,
-      marginTop: -10,
       marginHorizontal: 4,
       lineHeight: 18,
     },
