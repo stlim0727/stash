@@ -66,7 +66,12 @@ import {
   serializeViewMode,
   type ViewMode,
 } from '@/domain/view-mode';
-import { buildTagCloud, tagCloudFontSize, type TagCloudEntry } from '@/domain/tag-cloud';
+import {
+  buildTagCloud,
+  tagCloudFontSize,
+  TAG_CLOUD_MAX_ENTRIES,
+  type TagCloudEntry,
+} from '@/domain/tag-cloud';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { trackBreadcrumb } from '@/observability/sentry';
 import { useT } from '@/i18n';
@@ -238,9 +243,17 @@ const WORDMARK = {
  * filter constants and `onSelect` is referentially stable, so memo's prop
  * compare holds across taps.
  */
+// A frequency-ranked browse cloud: `entries` are the (capped) tags actually
+// rendered, `total` is how many tags the filtered set carries before the cap —
+// kept separate so the header and the diagnostic breadcrumb still report the
+// true count even when the rendered list is truncated for performance.
+interface TagCloud {
+  entries: TagCloudEntry[];
+  total: number;
+}
 // Stable empty cloud returned when the tag-cloud layout isn't active, so an
 // off-cloud facet change doesn't allocate (or scan) a fresh one.
-const EMPTY_TAG_CLOUD: TagCloudEntry[] = [];
+const EMPTY_TAG_CLOUD: TagCloud = { entries: [], total: 0 };
 
 const BrowseChip = memo(function BrowseChip({
   target,
@@ -783,10 +796,23 @@ export default function InboxScreen() {
         }
       }
     }
-    return buildTagCloud(
+    const ranked = buildTagCloud(
       [...counts.entries()].map(([id, { name, count }]) => ({ id, name, count })),
     );
+    // Render only the busiest tags — a huge cloud is both unreadable and a
+    // synchronous mount/teardown cost that freezes the UI thread (see
+    // TAG_CLOUD_MAX_ENTRIES). Slicing the already-frequency-ranked list leaves
+    // each kept tag's size (its true popularity) untouched; `total` preserves
+    // the real tag count for the header and breadcrumb.
+    return { entries: ranked.slice(0, TAG_CLOUD_MAX_ENTRIES), total: ranked.length };
   }, [isCloud, filtered, getTagsForBookmark]);
+  // The cloud renders alphabetically (so big/small words intersperse), but the
+  // ranked source is frequency-ordered — sort once per cloud change instead of
+  // on every scroll-driven re-render of the surrounding Animated.ScrollView.
+  const cloudWords = useMemo(
+    () => [...tagCloud.entries].sort((a, b) => a.name.localeCompare(b.name)),
+    [tagCloud],
+  );
   // A query is only a search when it produces at least one real search token. A
   // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
   // zero tokens, so `filterBookmarks` returns everything — treating that as a
@@ -1112,7 +1138,7 @@ export default function InboxScreen() {
   const chipTapCtx = useRef({ view: viewMode, cloud: 0, header: 0 });
   chipTapCtx.current = {
     view: viewMode,
-    cloud: tagCloud.length,
+    cloud: tagCloud.total,
     header: Math.round(headerHeight),
   };
   const onSelectFilter = useCallback((target: InboxFilter) => {
@@ -1499,15 +1525,16 @@ export default function InboxScreen() {
           ]}
         >
           <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-            {t('inbox.tagCloudHeader', { count: tagCloud.length })}
+            {t('inbox.tagCloudHeader', { count: tagCloud.total })}
           </Text>
-          {tagCloud.length > 0 ? (
+          {tagCloud.entries.length > 0 ? (
             <View style={styles.cloudWrap}>
-              {/* Render alphabetically so big/small words intersperse into a
-                  cloud rather than a frequency-sorted descending wedge; size +
-                  weight + a stable per-tag color carry the frequency signal. */}
-              {[...tagCloud]
-                .sort((a, b) => a.name.localeCompare(b.name))
+              {/* Rendered alphabetically (memoized as cloudWords) so big/small
+                  words intersperse into a cloud rather than a frequency-sorted
+                  descending wedge; size + weight + a stable per-tag color carry
+                  the frequency signal. Capped to the busiest tags — see
+                  TAG_CLOUD_MAX_ENTRIES. */}
+              {cloudWords
                 .map((entry) => {
                   const size = tagCloudFontSize(entry.weight);
                   const color = MONOGRAM_COLORS[monogramColorIndex(entry.name)];
@@ -1529,7 +1556,7 @@ export default function InboxScreen() {
                         // the screen and only the header's chips are unhittable.
                         trackBreadcrumb('browse', 'cloud tag tap', {
                           view: viewMode,
-                          cloud: tagCloud.length,
+                          cloud: tagCloud.total,
                         });
                         // Let Back return to this cloud (and the facet that
                         // scoped it) rather than exiting the app.

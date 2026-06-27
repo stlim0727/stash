@@ -26,6 +26,18 @@ export const TAG_CLOUD_MIN_FONT = 14;
 export const TAG_CLOUD_MAX_FONT = 34;
 
 /**
+ * Most tags rendered in the browse-by-tag cloud at once. The cloud is a
+ * non-virtualized, flex-wrapped surface, so every entry is a live view: a
+ * library with hundreds of tags would mount (and, on drill-in, tear down)
+ * hundreds of pressables in one synchronous commit and freeze the UI thread
+ * for seconds — the symptom behind the in-app "tag cloud frozen / not
+ * responding" reports. Capping to the busiest N keeps the worst case bounded
+ * as a library grows; rarer tags stay reachable through search. The full tag
+ * count is still surfaced in the header and the diagnostic breadcrumb.
+ */
+export const TAG_CLOUD_MAX_ENTRIES = 80;
+
+/**
  * Build the cloud: drop blank-named tags, sort by frequency (desc) then name
  * (asc) so the heaviest tags lead and ties stay alphabetical, and normalize
  * each count to a 0..1 weight against the busiest tag. When every tag has the
