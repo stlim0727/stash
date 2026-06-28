@@ -288,17 +288,12 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: stash-android-apk
-          path: dist/*.apk
-          if-no-files-found: error
-          # The same APK is attached to the GitHub Release (durable) and pushed
-          # to Firebase App Distribution, so this artifact is just a short-lived
-          # CI copy. Keep it brief — on a private repo artifact storage counts
-          # against the account's 500 MB (Free) quota, and an ~80 MB APK per
-          # build fills that fast at the default 90-day retention.
-          retention-days: 14
+      # No Actions-artifact copy of the APK: the same ~80 MB binary is attached
+      # to the GitHub Release (durable) and pushed to Firebase App Distribution,
+      # so an artifact copy is pure redundancy — and on a private repo each one
+      # counts against the account's 500 MB (Free) artifact quota, which an
+      # ~80 MB APK per build exhausts fast (it started failing CreateArtifact and
+      # sinking unrelated PRs). Download the APK from the Release/Firebase instead.
 
       # Encode the direct Release download URL as a QR code, attached to the
       # Release and embedded in its notes. Scanning it on a phone goes straight
