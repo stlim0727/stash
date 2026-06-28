@@ -11,12 +11,29 @@
 --     * is_anonymous = true                          (never upgraded)
 --     * no auth.identities row                       (no linked OAuth/email)
 --     * email is null or empty                       (belt-and-suspenders w/ above)
---     * zero rows in public.bookmarks/collections/tags for that user  (EMPTY)
+--     * zero rows in EVERY table holding user-authored content for that user:
+--         public.bookmarks, public.collections, public.tags,
+--         public.feedback_reports (support reports the user typed),
+--         public.api_keys        (named credentials the user created)  (EMPTY)
 --     * coalesce(last_sign_in_at, created_at) older than 7 days        (IDLE, weak)
 --     * no auth.sessions row updated within the last 7 days            (IDLE, real)
 --   i.e. anonymous, ownerless, carrying no user data, and untouched for a week.
---   This is deliberately conservative: a single saved bookmark, a recent session,
---   or any linked identity keeps the user.
+--   This is deliberately conservative: a single saved bookmark, a support report,
+--   an API key, a recent session, or any linked identity keeps the user.
+--
+--   "EMPTY" deliberately includes feedback_reports + api_keys, not just
+--   bookmarks/collections/tags. Both CASCADE-delete with auth.users and hold
+--   user-authored/meaningful rows (a typed support message; a named credential),
+--   so reaping a user that owns either would silently destroy that content. They
+--   are eligibility-BLOCKING. (predicate v1 missed these — fixed in v2 below.)
+--
+--   Other CASCADE children are intentionally NOT eligibility-blocking, by design:
+--     * public.ai_enrichments — AI output DERIVED from a bookmark (has bookmark_id).
+--       It cannot exist without a bookmark, and the bookmarks guard already keeps
+--       any user that owns one. An "empty" user (zero bookmarks) therefore owns
+--       zero enrichments; cascading them away loses no independent user content.
+--     * public.ai_enrichment_requests — a per-user rate-limit/throttle LOG
+--       (id/user_id/created_at only, no user content). Safe to cascade.
 --
 -- WHICH IDLE CLAUSE ACTUALLY GUARDS (verified read-only against prod 2026-06-28):
 --   GoTrue stamps auth.users.last_sign_in_at exactly once, at anonymous creation,
@@ -51,7 +68,12 @@
 -- auth.users in this project is ON DELETE CASCADE (verified: bookmarks,
 -- collections, tags, api_keys, ai_enrichments, ai_enrichment_requests,
 -- feedback_reports, and all auth.* children). bookmark_tags cascades transitively
--- via bookmarks/tags. So a plain DELETE FROM auth.users is sufficient and safe.
+-- via bookmarks/tags. So a plain DELETE FROM auth.users is sufficient — but note
+-- that "sufficient" only means referentially safe; whether cascading a given child
+-- is acceptable DATA-wise is a separate question, handled by the EMPTY guards
+-- above. Content-bearing children (bookmarks, collections, tags, feedback_reports,
+-- api_keys) are eligibility-blocking; derived/log children (ai_enrichments,
+-- ai_enrichment_requests) are not. See the EMPTY notes above for the reasoning.
 --
 -- LIVE-JWT WIPE WINDOW (acknowledged, bounded, accepted):
 --   A Supabase access token (JWT) is self-contained and valid until its own `exp`,
@@ -130,7 +152,7 @@ as $$
 declare
   -- Bump this string whenever the eligibility predicate below changes, so the
   -- audit log records which logic produced each deletion batch.
-  v_predicate_version constant text := 'tier-a-v1';
+  v_predicate_version constant text := 'tier-a-v2';
   v_deleted_ids uuid[];
   v_deleted_count int;
 begin
@@ -151,6 +173,14 @@ begin
       )
       and not exists (
         select 1 from public.tags t where t.user_id = u.id
+      )
+      -- feedback_reports + api_keys hold user-authored content and CASCADE on
+      -- delete (predicate v2). A user owning either is NOT "empty" — keep them.
+      and not exists (
+        select 1 from public.feedback_reports f where f.user_id = u.id
+      )
+      and not exists (
+        select 1 from public.api_keys k where k.user_id = u.id
       )
       -- NOTE: for anon users last_sign_in_at == created_at (GoTrue never advances
       -- it post-creation — verified), so this clause is effectively an account-age
