@@ -1218,7 +1218,10 @@ export default function InboxScreen() {
         ) : null}
         {showControls && !showSuggestions ? (
         <View style={styles.sortRow}>
-          <Text style={[styles.sortCaption, { color: palette.textSecondary }]}>{t('inbox.browse')}</Text>
+          {/* No "Browse" caption: the Sort pill, Tags pill, and view segment are
+              self-evident controls, and the caption's width was forcing the
+              view segment to wrap onto its own near-empty second row. Dropping
+              it lets all three sit on one line, reclaiming that row. */}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t('inbox.sortA11y', { label: t(SORT_LABEL_KEY[serializeSort(sort)]) })}
@@ -2039,12 +2042,6 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
     paddingTop: 8,
-  },
-  sortCaption: {
-    fontSize: 13,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
   sortPill: {
     flexDirection: 'row',
