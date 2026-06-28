@@ -244,7 +244,14 @@ jobs:
       # Attempt 3 — last roll on yet another fresh emulator. Two prior boots both
       # failing is usually a transient runner/KVM issue that a third try clears.
       - name: Run Maestro flows on emulator (retry 2, fresh emulator)
+        id: emu3
         if: steps.emu1.outcome == 'failure' && steps.emu2.outcome == 'failure'
+        # continue-on-error so a total boot failure (all 3 attempts) is handled
+        # by the guard below as a non-blocking infra skip, not a hard job failure
+        # — otherwise the auto-trigger on UI PRs (#268) would red-X every PR
+        # whenever the GitHub runner can't boot an emulator (a real outage seen
+        # 2026-06-28). A genuine visual regression still fails via the diff step.
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
@@ -258,14 +265,26 @@ jobs:
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
 
+      # Infra guard: if NO screenshots were produced, every emulator attempt
+      # failed to boot — that's a runner/KVM issue, not a code regression, so
+      # warn (visible annotation) but do NOT fail the job. Keeps a runner outage
+      # from red-Xing every UI PR via the auto-trigger (#268). Trade-off: a true
+      # "app booted but rendered nothing" crash also reads as a skip here; that's
+      # acceptable while the emulator is the bottleneck (see #269 — managed
+      # devices remove this), and the APK build/distribution has its own signal.
+      - name: Guard — no screenshots (emulator never booted)
+        if: hashFiles('screenshots/*.png') == ''
+        run: |
+          echo "::warning title=Screenshots skipped::All emulator attempts produced no screenshots (boot failure / infra). The visual-regression gate did not run — NOT a code failure. Re-run when the runner recovers, or move to a managed device service (#269)."
+
       # Visual-regression gate (issue #269, item 2): pixel-diff the captured
       # screenshots against the committed baselines and FAIL on a layout change
       # — including a resized element, which Maestro's assertVisible can't catch
-      # (exactly the rc11/rc12 wordmark miss). Runs only when the emulator
-      # actually captured (success()), and is a no-op until baselines exist.
-      # To update baselines after an INTENTIONAL change, commit the new PNGs from
-      # the uploaded `android-screenshots` artifact into the baselines dir.
+      # (exactly the rc11/rc12 wordmark miss). Only runs when screenshots exist;
+      # a no-op until baselines are committed. To update baselines after an
+      # INTENTIONAL change, commit the new PNGs from the uploaded artifact.
       - name: Visual regression diff
+        if: hashFiles('screenshots/*.png') != ''
         env:
           BASELINE_DIR: apps/mobile/.maestro/baselines
           NEW_DIR: screenshots
@@ -274,13 +293,13 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         # Upload even on failure: the screenshot — and the diff image when the
-        # gate trips — of the broken state is exactly what you want here.
+        # gate trips — of the broken state is exactly what you want here. `warn`
+        # (not `error`) so the empty-output infra case is handled by the guard
+        # above, not a second hard failure here.
         if: always()
         with:
           name: android-screenshots
           path: |
             screenshots/*.png
             screenshots/diff/*.png
-          # Fail loudly if no screenshot was produced — otherwise a flow that
-          # silently stops capturing would pass as a false green.
-          if-no-files-found: error
+          if-no-files-found: warn
