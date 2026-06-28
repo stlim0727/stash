@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type Component
 import {
   Alert,
   Animated,
+  BackHandler,
   FlatList,
   Image,
   Keyboard,
@@ -885,6 +886,35 @@ export default function InboxScreen() {
     }
     setFilter(ALL_FILTER);
   }, [searching]);
+
+  // Android hardware back peels the active narrowing layer instead of quitting
+  // the app — the same most-recently-added-layer-first model as the scope bar's
+  // X (a live search clears before the underlying facet). Without this, landing
+  // on the root Inbox already narrowed (e.g. after picking a tag in /browse/tags,
+  // which dismisses that route and applies the facet here, or after a search)
+  // made back exit straight to the home screen. Only an un-narrowed Inbox returns
+  // false so the OS handles back normally; the handler is registered via
+  // useFocusEffect, so it's inactive (and can't swallow back) whenever a child
+  // route — settings, the add modal, a bookmark — is on top. Keyed on the raw
+  // `query` (not the debounced `searching`) so text typed within the debounce
+  // window is still clearable. iOS has no hardware back, so this is a no-op there.
+  useFocusEffect(
+    useCallback(() => {
+      const onBack = () => {
+        if (query.length > 0) {
+          setQuery('');
+          return true;
+        }
+        if (filter.kind !== 'all') {
+          setFilter(ALL_FILTER);
+          return true;
+        }
+        return false;
+      };
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBack);
+      return () => subscription.remove();
+    }, [query, filter.kind]),
+  );
 
   const closeMenu = useCallback(() => {
     setMenuItem(null);
