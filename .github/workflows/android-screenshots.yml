@@ -73,9 +73,12 @@ jobs:
       || contains(github.event.pull_request.labels.*.name, 'screenshots')
       || needs.detect.outputs.ui == 'true'
     runs-on: ubuntu-latest
-    # A full run is ~12-15 min; cap well above that so a hung emulator can't
-    # silently burn Actions minutes (the default job timeout is 6 hours).
-    timeout-minutes: 30
+    # A clean run is ~12-15 min, but the x86_64 build is ~11 min on its own and
+    # ~1 in 3 emulators boot broken — so a flake plus the fresh-emulator retry
+    # below can need ~33 min. 30 was guillotining that retry mid-render (run
+    # cancelled, zero screenshots); 45 lets the retry actually finish while still
+    # capping a truly-hung emulator well under the 6h default.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -221,13 +224,29 @@ jobs:
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
 
+      # Visual-regression gate (issue #269, item 2): pixel-diff the captured
+      # screenshots against the committed baselines and FAIL on a layout change
+      # — including a resized element, which Maestro's assertVisible can't catch
+      # (exactly the rc11/rc12 wordmark miss). Runs only when the emulator
+      # actually captured (success()), and is a no-op until baselines exist.
+      # To update baselines after an INTENTIONAL change, commit the new PNGs from
+      # the uploaded `android-screenshots` artifact into the baselines dir.
+      - name: Visual regression diff
+        env:
+          BASELINE_DIR: apps/mobile/.maestro/baselines
+          NEW_DIR: screenshots
+          OUT_DIR: screenshots/diff
+        run: node scripts/screenshot-diff.mjs
+
       - uses: actions/upload-artifact@v4
-        # Upload even on failure: a screenshot of the broken state is exactly
-        # what you want when the flow's assertions fail.
+        # Upload even on failure: the screenshot — and the diff image when the
+        # gate trips — of the broken state is exactly what you want here.
         if: always()
         with:
           name: android-screenshots
-          path: screenshots/*.png
+          path: |
+            screenshots/*.png
+            screenshots/diff/*.png
           # Fail loudly if no screenshot was produced — otherwise a flow that
           # silently stops capturing would pass as a false green.
           if-no-files-found: error
