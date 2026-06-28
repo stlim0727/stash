@@ -64,7 +64,11 @@ import type { EnrichmentMetadataHint } from '@/api/bookmarks';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { SupabaseRequestError } from '@/supabase/client';
-import { applyAccountTransition, planAccountTransition } from '@/sync/account-transition';
+import {
+  applyAccountTransition,
+  planAccountTransition,
+  planLogoutCacheClear,
+} from '@/sync/account-transition';
 import {
   LAST_PULLED_AT_KEY,
   SYNCED_USER_ANON_KEY,
@@ -469,6 +473,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // or account switch changes this, re-triggering a pull; null until the first
   // session is established.
   const lastSyncedUserId = useRef<string | null>(null);
+  // Guards the logout cache-clear effect so it runs exactly once per logout
+  // (the `signed_out` status persists until the next session is established).
+  const loggedOutCleared = useRef(false);
   // Bookmark IDs currently being enriched, so concurrent passes (startup +
   // a fresh save) never double-process the same item.
   const enriching = useRef(new Set<string>());
@@ -2135,6 +2142,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the
   // next save or via the manual Sync now action, not in a hot loop.
+  //
+  // `signed_out` is deliberately EXCLUDED here: with no session, syncNow can't
+  // run, and re-triggering it on every render would hot-loop. The lazy-mint
+  // effect below bridges the gap — once it mints an anonymous session, auth
+  // flips to `anonymous` and this effect takes over with the queued work.
   useEffect(() => {
     if (
       !isSyncing &&
@@ -2149,6 +2161,53 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncNow();
     }
   }, [bookmarks, auth.status, queue, isSyncing, syncNow]);
+
+  // Lazy anonymous creation on the first save after logout. With lazy logout,
+  // signing out leaves `auth.status === 'signed_out'` and NO session — no
+  // anonymous user is minted (that was the orphaned-empty-user leak). A clean
+  // logout has an empty queue, so this effect stays dormant. The first capture
+  // after logout enqueues a pending entry; that's genuine user work to push, so
+  // we mint the anonymous user lazily by calling ensureAnonymousSession (the
+  // same call the sync path uses). It flips auth to `anonymous`, after which the
+  // background-sync effect above uploads the queue normally.
+  //
+  // A ref guards against a hot loop: ensureAnonymousSession can fail (Supabase
+  // down) and leave us in `signed_out` with the entry still pending, which would
+  // otherwise re-fire this effect every render. We reset the guard whenever we
+  // leave `signed_out`, so a later save (or a recovered network) tries again.
+  const lazyMintInFlight = useRef(false);
+  useEffect(() => {
+    if (auth.status !== 'signed_out') {
+      lazyMintInFlight.current = false;
+      return;
+    }
+    if (
+      lazyMintInFlight.current ||
+      bookmarks === null ||
+      !queue.some((entry) => entry.sync_status === 'pending' || entry.sync_status === 'syncing')
+    ) {
+      return;
+    }
+    lazyMintInFlight.current = true;
+    void auth
+      .ensureAnonymousSession()
+      .then((session) => {
+        // Leave the guard SET on success (a real session was minted): auth will
+        // flip out of `signed_out`, and the branch above clears the guard. If the
+        // call resolved to null (no session minted, e.g. not configured), clear
+        // the guard so a later save retries instead of being stuck forever.
+        if (!session) {
+          lazyMintInFlight.current = false;
+        }
+      })
+      .catch((error) => {
+        // Mint failed (network/Supabase down): reset the guard so the next save
+        // can retry. We don't re-fire here — the entry is still pending and a
+        // later save re-triggers this effect (bounded, no hot loop).
+        lazyMintInFlight.current = false;
+        logStorageError('lazy anonymous mint', error);
+      });
+  }, [auth, bookmarks, queue]);
 
   // Pull on first ready, and again whenever the signed-in user changes —
   // including the anonymous → real upgrade at sign-in and an account switch.
@@ -2177,6 +2236,73 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncNow();
     }
   }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
+
+  // Logout cache-clear: with lazy anonymous creation, logout mints no new user
+  // and runs no sync, so the just-logged-out real account's bookmarks would
+  // linger in the local cache — stale, and visible to the next anonymous user
+  // on the device (a privacy leak). On the `signed_out` transition we drop all of
+  // that account's cloud-identity rows (safe: they live in the real account's
+  // cloud) AND their queued update/delete ops, then reset the synced-user meta +
+  // pull watermark so the next session re-syncs cleanly from scratch.
+  //
+  // Capture is sacred: the account-transition "drop" machinery only touches rows
+  // with a remote identity. Never-synced LOCAL captures (local-* ids) are LEFT in
+  // place — they have never reached any cloud account, so dropping them would
+  // destroy not-yet-uploaded user data; they carry no other account's identity
+  // and will upload under whatever account the next save mints. A pending EDIT to
+  // an already-synced cloud bookmark IS dropped along with its queued op: the
+  // bookmark is safe in the departing account's cloud, and keeping the op would
+  // strand it under the next (different) identity — RLS/404 → silent loss.
+  useEffect(() => {
+    if (auth.status !== 'signed_out') {
+      // Left the signed_out state (a new session was minted): re-arm so the
+      // next logout clears again.
+      loggedOutCleared.current = false;
+      return;
+    }
+    if (bookmarks === null || loggedOutCleared.current) {
+      return;
+    }
+    loggedOutCleared.current = true;
+    // Reset the pull effect's guard so the next user (lazily minted) triggers a
+    // fresh pull rather than being treated as "already synced".
+    lastSyncedUserId.current = null;
+    void (async () => {
+      try {
+        await ensureRepositoryReady();
+        const plan = planLogoutCacheClear(bookmarksRef.current ?? []);
+        await applyAccountTransition(
+          plan,
+          repository,
+          setBookmarks,
+          setQueue,
+          makeLocalId,
+          ensureRepositoryReady,
+          {
+            drop: (ids) => {
+              // Purge the logged-out account's pending tag ops + links so they
+              // can't leak into the next session's UI or upload under it.
+              applyTagOps(dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids));
+              const dropped = new Set(ids);
+              const links = tagDataRef.current.bookmarkTags.filter(
+                (link) => !dropped.has(link.bookmark_id),
+              );
+              applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+            },
+          },
+        );
+        // Reset the synced-user meta + watermark so the next session does a full
+        // refresh (planAccountTransition + pullRemoteChanges read these). Empty
+        // strings read back as falsy/null in both call sites.
+        await repository.setMeta(SYNCED_USER_ID_KEY, '');
+        await repository.setMeta(SYNCED_USER_ANON_KEY, '');
+        await repository.setMeta(LAST_PULLED_AT_KEY, '');
+        setLastPulledAt(null);
+      } catch (error) {
+        logStorageError('logout cache clear', error);
+      }
+    })();
+  }, [auth.status, bookmarks, applyTagOps, applyTagData]);
 
   const value = useMemo<BookmarksContextValue>(
     () => ({

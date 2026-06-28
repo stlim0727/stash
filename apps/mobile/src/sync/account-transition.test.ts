@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { applyAccountTransition, planAccountTransition } from './account-transition.ts';
+import {
+  applyAccountTransition,
+  planAccountTransition,
+  planLogoutCacheClear,
+} from './account-transition.ts';
 import {
   dropPendingTagOpsForBookmarks,
   rekeyPendingTagOps,
@@ -83,7 +87,24 @@ test('real account A -> real account B drops A’s local cache (no merge)', () =
   assert.equal(plan.kind, 'switch');
   assert.deepEqual(plan.rehome, []);
   assert.deepEqual(plan.drop, [REMOTE_A]);
+  assert.deepEqual(plan.dropQueue, [REMOTE_A]);
   assert.equal(plan.resetWatermark, true);
+});
+
+test('real A→real B also drops pending-edit cloud rows (and their queued ops)', () => {
+  // A row A synced then edited flips to `pending` with an update op keyed to A's
+  // UUID. The old synced-only filter KEPT it, so it would fire under B and 404.
+  const plan = planAccountTransition(
+    { id: 'A', isAnonymous: false },
+    { id: 'B', isAnonymous: false },
+    [
+      bookmark({ id: REMOTE_A, sync_status: 'synced' }),
+      bookmark({ id: REMOTE_B, sync_status: 'pending' }), // edited-after-sync
+      bookmark({ id: 'local-keep', sync_status: 'pending' }), // never-synced local create
+    ],
+  );
+  assert.deepEqual(plan.drop, [REMOTE_A, REMOTE_B]);
+  assert.deepEqual(plan.dropQueue, [REMOTE_A, REMOTE_B]);
 });
 
 test('only cloud-owned rows are touched — local/seed rows are left alone', () => {
@@ -103,6 +124,141 @@ test('only cloud-owned rows are touched — local/seed rows are left alone', () 
     plan.rehome.map((b) => b.id),
     [REMOTE_A],
   );
+});
+
+test('planLogoutCacheClear drops the logged-out account’s cloud rows', () => {
+  const plan = planLogoutCacheClear([bookmark({ id: REMOTE_A }), bookmark({ id: REMOTE_B })]);
+  assert.equal(plan.kind, 'logout');
+  assert.deepEqual(plan.rehome, []);
+  assert.deepEqual(plan.drop, [REMOTE_A, REMOTE_B]);
+  // Their queued ops (keyed by local_id === remote UUID) drop in lockstep.
+  assert.deepEqual(plan.dropQueue, [REMOTE_A, REMOTE_B]);
+  assert.equal(plan.resetWatermark, true);
+});
+
+test('planLogoutCacheClear leaves never-synced LOCAL captures in place but drops pending EDITS to cloud rows', () => {
+  const plan = planLogoutCacheClear([
+    bookmark({ id: REMOTE_A, sync_status: 'synced' }), // cloud-owned — drop
+    bookmark({ id: 'local-pending-1', sync_status: 'pending' }), // local create — keep
+    // A previously-synced cloud row the account then EDITED: now `pending` with a
+    // remote UUID and an update op keyed to the departing account. Must be dropped
+    // (op would 404 under the next identity), even though it isn't `synced`.
+    bookmark({ id: REMOTE_B, sync_status: 'pending' }),
+    bookmark({ id: 'bookmark-seed-1', sync_status: 'synced' }), // seed (no remote identity) — keep
+  ]);
+  // Both cloud-identity rows drop; the local create and the seed survive.
+  assert.deepEqual(plan.drop, [REMOTE_A, REMOTE_B]);
+  assert.deepEqual(plan.dropQueue, [REMOTE_A, REMOTE_B]);
+});
+
+test('applyAccountTransition (logout drop) removes only the dropped synced rows', async () => {
+  const plan = planLogoutCacheClear([
+    bookmark({ id: REMOTE_A, sync_status: 'synced' }),
+    bookmark({ id: 'local-pending-1', sync_status: 'pending' }),
+  ]);
+
+  let bookmarks: Bookmark[] | null = [
+    bookmark({ id: REMOTE_A, sync_status: 'synced' }),
+    bookmark({ id: 'local-pending-1', sync_status: 'pending' }),
+  ];
+  const deleted: string[] = [];
+  const repo = fakeRepository();
+  repo.deleteBookmark = async (id: string) => {
+    deleted.push(id);
+  };
+
+  await applyAccountTransition(
+    plan,
+    repo,
+    (updater) => {
+      bookmarks = updater(bookmarks);
+    },
+    () => {},
+    () => 'local-x',
+    async () => {},
+    { drop: () => {} },
+  );
+
+  // The synced cloud row is gone from the cache + repository…
+  assert.deepEqual(
+    bookmarks?.map((b) => b.id),
+    ['local-pending-1'],
+  );
+  assert.deepEqual(deleted, [REMOTE_A]);
+});
+
+function queueEntry(overrides: Partial<LocalPendingBookmark> = {}): LocalPendingBookmark {
+  const now = '2026-06-16T00:00:00.000Z';
+  return {
+    local_id: REMOTE_A,
+    remote_id: REMOTE_A,
+    operation: 'update',
+    payload: { url: 'https://example.com/a' } as LocalPendingBookmark['payload'],
+    sync_status: 'pending',
+    retry_count: 0,
+    last_error: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
+test('applyAccountTransition (logout) drops a pending EDIT row AND its update queue entry, preserving a never-synced local create', async () => {
+  // REMOTE_B was synced then edited → now `pending` with an update op keyed to
+  // the departing account's UUID. local-create has never reached any cloud.
+  const rows = [
+    bookmark({ id: REMOTE_A, sync_status: 'synced' }),
+    bookmark({ id: REMOTE_B, sync_status: 'pending' }),
+    bookmark({ id: 'local-create-1', sync_status: 'pending' }),
+  ];
+  const plan = planLogoutCacheClear(rows);
+  assert.deepEqual(plan.drop, [REMOTE_A, REMOTE_B]);
+  assert.deepEqual(plan.dropQueue, [REMOTE_A, REMOTE_B]);
+
+  let bookmarks: Bookmark[] | null = rows;
+  let queue: LocalPendingBookmark[] = [
+    queueEntry({ local_id: REMOTE_A, operation: 'update' }),
+    queueEntry({ local_id: REMOTE_B, operation: 'update' }),
+    // Never-synced local create — must survive (capture is sacred).
+    queueEntry({ local_id: 'local-create-1', remote_id: null, operation: 'create' }),
+  ];
+  const deleted: string[] = [];
+  const queueRemoved: string[] = [];
+  const repo = fakeRepository();
+  repo.deleteBookmark = async (id: string) => {
+    deleted.push(id);
+  };
+  repo.removeQueueEntry = async (localId: string) => {
+    queueRemoved.push(localId);
+  };
+
+  await applyAccountTransition(
+    plan,
+    repo,
+    (updater) => {
+      bookmarks = updater(bookmarks);
+    },
+    (updater) => {
+      queue = updater(queue);
+    },
+    () => 'local-x',
+    async () => {},
+    { drop: () => {} },
+  );
+
+  // Both cloud rows gone; the never-synced local create survives.
+  assert.deepEqual(
+    bookmarks?.map((b) => b.id),
+    ['local-create-1'],
+  );
+  assert.deepEqual(deleted, [REMOTE_A, REMOTE_B]);
+  // The update ops are dropped from the in-memory queue AND the repository;
+  // only the local create's entry remains.
+  assert.deepEqual(
+    queue.map((e) => e.local_id),
+    ['local-create-1'],
+  );
+  assert.deepEqual(queueRemoved.sort(), [REMOTE_A, REMOTE_B].sort());
 });
 
 function fakeRepository(): BookmarkRepository {
