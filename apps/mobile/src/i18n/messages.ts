@@ -162,12 +162,12 @@ export const en = {
   // Header titles, by scope: whole library / a folder / the uncollected set.
   'inbox.tagsTitle': 'Tags',
   'inbox.tagsTitleScoped': 'Tags in {name}',
-  'inbox.tagsTitleUncollected': 'Tags · No collection',
+  'inbox.tagsTitleUncollected': 'Tags · Inbox',
   // The list row's muted count badge (how many bookmarks carry the tag).
   'inbox.tagListCount': '· {count}',
   // Empty/zero states on the route.
   'inbox.tagsScopedEmpty': 'No tags in {name} yet.',
-  'inbox.tagsUncollectedEmpty': 'No tags in the uncollected set yet.',
+  'inbox.tagsUncollectedEmpty': 'No tags in the Inbox yet.',
   'inbox.tagsBrowseAll': 'Browse all tags',
   'inbox.tagsSearchZero': 'No tags match “{query}”.',
 
