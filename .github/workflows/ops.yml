@@ -1,0 +1,106 @@
+# Manual "ops" workflow — a phone-friendly remote shell for `gh`.
+#
+# Why this exists: in some environments (the Claude Code mobile/web session, a
+# phone with no PC) the `gh` CLI isn't usable directly — outbound GitHub API
+# access is gated. GitHub-hosted runners, by contrast, ship `gh` preinstalled
+# and get a scoped `GITHUB_TOKEN` for free. So instead of running `gh` locally,
+# dispatch this workflow (one tap from the GitHub mobile app, or via the
+# Claude session's `actions_run_trigger`) and let the runner execute it for you.
+#
+# Only collaborators with write access can trigger workflow_dispatch, so the
+# free-form `run-command` task is as privileged as a normal push — no more.
+name: Ops (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: What to do
+        type: choice
+        default: list-artifacts
+        options:
+          - list-artifacts
+          - delete-all-artifacts
+          - delete-artifacts-older-than-days
+          - run-command
+      days:
+        description: "Age threshold in days (for delete-artifacts-older-than-days)"
+        type: string
+        required: false
+        default: "7"
+      command:
+        description: "Shell command to run; `gh` is available (for run-command)"
+        type: string
+        required: false
+
+# Deleting artifacts/logs needs actions:write; everything else is read-only.
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: List artifacts
+        if: inputs.task == 'list-artifacts'
+        run: |
+          set -euo pipefail
+          echo "Artifacts in $REPO (id / created_at / size / name):"
+          gh api "repos/$REPO/actions/artifacts" --paginate \
+            --jq '.artifacts[] | "\(.id)\t\(.created_at)\t\(.size_in_bytes)\t\(.name)"' \
+            | sort -k2 || echo "(none)"
+
+      - name: Delete all artifacts
+        if: inputs.task == 'delete-all-artifacts'
+        run: |
+          set -euo pipefail
+          ids=$(gh api "repos/$REPO/actions/artifacts" --paginate --jq '.artifacts[].id')
+          if [ -z "$ids" ]; then echo "No artifacts to delete."; exit 0; fi
+          for id in $ids; do
+            echo "Deleting artifact $id"
+            gh api -X DELETE "repos/$REPO/actions/artifacts/$id"
+          done
+          echo "Done."
+
+      - name: Delete artifacts older than N days
+        if: inputs.task == 'delete-artifacts-older-than-days'
+        env:
+          DAYS: ${{ inputs.days }}
+        run: |
+          set -euo pipefail
+          cutoff=$(date -u -d "${DAYS} days ago" +%s)
+          echo "Deleting artifacts created before $(date -u -d @"$cutoff" +%FT%TZ)"
+          deleted=0
+          gh api "repos/$REPO/actions/artifacts" --paginate \
+            --jq '.artifacts[] | "\(.id) \(.created_at)"' \
+          | while read -r id created; do
+              ts=$(date -u -d "$created" +%s)
+              if [ "$ts" -lt "$cutoff" ]; then
+                echo "Deleting artifact $id ($created)"
+                gh api -X DELETE "repos/$REPO/actions/artifacts/$id"
+                deleted=$((deleted + 1))
+              fi
+            done
+          echo "Done."
+
+      # Free-form escape hatch: run any shell/gh command. The command is passed
+      # via env (not interpolated into the script) so quoting can't break it or
+      # inject extra steps.
+      - name: Run command
+        if: inputs.task == 'run-command'
+        env:
+          CMD: ${{ inputs.command }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CMD:-}" ]; then
+            echo "No command provided." >&2
+            exit 1
+          fi
+          echo "::group::command"
+          printf '%s\n' "$CMD"
+          echo "::endgroup::"
+          bash -c "$CMD"
