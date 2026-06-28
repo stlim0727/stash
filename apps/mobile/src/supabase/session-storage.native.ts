@@ -1,19 +1,57 @@
+import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 
+import {
+  createSecureSessionStore,
+  type LegacySessionSource,
+  type SecureKvBackend,
+} from '@/supabase/secure-session-core';
+import type { SupabaseAuthSession } from '@/supabase/types';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
-import type { SupabaseAuthSession } from '@/supabase/types';
 
-const SESSION_KEY = 'supabase.auth.session';
+const LEGACY_SESSION_KEY = 'supabase.auth.session';
 
-// Use a SEPARATE database file from the bookmarks store (stash.db). Two open
-// connections to the same file race and the native layer rejects statements
-// ("NativeDatabase.prepareAsync ... NullPointerException"). SqliteConnection
-// coalesces opens, retries a failed open, and reopens a handle the OS
-// invalidated while the app was backgrounded (CREATE TABLE IF NOT EXISTS makes
-// reopening idempotent) so a stale auth handle self-heals instead of silently
-// dropping every session write for the rest of the run.
-const connection = new SqliteConnection<SQLite.SQLiteDatabase>(
+// iOS Keychain accessibility: AFTER_FIRST_UNLOCK lets a backgrounded app read
+// the session (e.g. to refresh an expiring token on a background task) once the
+// device has been unlocked at least since boot. The stricter default
+// (WHEN_UNLOCKED) would make those reads fail while the screen is locked. The
+// item is still excluded from iCloud/iTunes backups by SecureStore by default.
+const SECURE_STORE_OPTIONS: SecureStore.SecureStoreOptions = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+};
+
+// Secure (Keychain/Keystore-backed) key/value backend. Every call is
+// best-effort: a hardware/keystore failure must never block auth, so reads fall
+// back to null and writes/deletes swallow. Worst case a session isn't persisted
+// and a fresh anonymous one is created next launch — the same failure mode the
+// old plaintext store had.
+const secureBackend: SecureKvBackend = {
+  async getItem(key) {
+    try {
+      return await SecureStore.getItemAsync(key, SECURE_STORE_OPTIONS);
+    } catch {
+      return null;
+    }
+  },
+  async setItem(key, value) {
+    await SecureStore.setItemAsync(key, value, SECURE_STORE_OPTIONS);
+  },
+  async deleteItem(key) {
+    try {
+      await SecureStore.deleteItemAsync(key, SECURE_STORE_OPTIONS);
+    } catch {
+      // Nothing to delete / keystore unavailable — ignore.
+    }
+  },
+};
+
+// --- Legacy plaintext store (read + delete only) -----------------------------
+// The previous implementation wrote the full session as JSON into this plain
+// (unencrypted) SQLite file. We keep just enough of it to migrate any existing
+// session into secure storage on first launch after upgrade, then wipe it. No
+// new sessions are ever written here.
+const legacyConnection = new SqliteConnection<SQLite.SQLiteDatabase>(
   async () => {
     const db = await SQLite.openDatabaseAsync('stash-auth.db');
     await db.execAsync(`
@@ -28,37 +66,50 @@ const connection = new SqliteConnection<SQLite.SQLiteDatabase>(
   (db) => db.closeAsync(),
 );
 
-// Release the handle when the app backgrounds; the next read/write reopens.
+// Release the legacy handle when the app backgrounds; the next read reopens.
 registerForBackgroundClose(() => {
-  void connection.closeCurrent();
+  void legacyConnection.closeCurrent();
 });
 
-// All operations are best-effort: a storage failure must never block auth.
-// Worst case the session isn't persisted and a fresh anonymous one is created.
-// `connection.run` reopens and retries once if the handle died under us.
+const legacySource: LegacySessionSource = {
+  async read() {
+    try {
+      return await legacyConnection.run(async (db) => {
+        const row = await db.getFirstAsync<{ value: string }>(
+          'SELECT value FROM meta WHERE key = ?',
+          [LEGACY_SESSION_KEY],
+        );
+        if (!row) return null;
+        try {
+          return JSON.parse(row.value) as SupabaseAuthSession;
+        } catch {
+          return null;
+        }
+      });
+    } catch {
+      return null;
+    }
+  },
+  async clear() {
+    try {
+      await legacyConnection.run((db) =>
+        db.runAsync('DELETE FROM meta WHERE key = ?', [LEGACY_SESSION_KEY]),
+      );
+    } catch {
+      // Best-effort: a failed wipe just means migration retries next launch.
+    }
+  },
+};
+
+const store = createSecureSessionStore({ backend: secureBackend, legacy: legacySource });
 
 export async function readSupabaseSession(): Promise<SupabaseAuthSession | null> {
-  try {
-    return await connection.run(async (db) => {
-      const row = await db.getFirstAsync<{ value: string }>(
-        'SELECT value FROM meta WHERE key = ?',
-        [SESSION_KEY],
-      );
-      return row ? (JSON.parse(row.value) as SupabaseAuthSession) : null;
-    });
-  } catch {
-    return null;
-  }
+  return store.read();
 }
 
 export async function writeSupabaseSession(session: SupabaseAuthSession): Promise<void> {
   try {
-    await connection.run((db) =>
-      db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
-        SESSION_KEY,
-        JSON.stringify(session),
-      ]),
-    );
+    await store.write(session);
   } catch {
     // Persistence is best-effort; the session is still usable this run.
   }
@@ -66,8 +117,8 @@ export async function writeSupabaseSession(session: SupabaseAuthSession): Promis
 
 export async function clearSupabaseSession(): Promise<void> {
   try {
-    await connection.run((db) => db.runAsync('DELETE FROM meta WHERE key = ?', [SESSION_KEY]));
+    await store.clear();
   } catch {
-    // Ignore — nothing to clear if storage is unavailable.
+    // Ignore — nothing to clear if secure storage is unavailable.
   }
 }
