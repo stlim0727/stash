@@ -221,13 +221,29 @@ jobs:
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
 
+      # Visual-regression gate (issue #269, item 2): pixel-diff the captured
+      # screenshots against the committed baselines and FAIL on a layout change
+      # — including a resized element, which Maestro's assertVisible can't catch
+      # (exactly the rc11/rc12 wordmark miss). Runs only when the emulator
+      # actually captured (success()), and is a no-op until baselines exist.
+      # To update baselines after an INTENTIONAL change, commit the new PNGs from
+      # the uploaded `android-screenshots` artifact into the baselines dir.
+      - name: Visual regression diff
+        env:
+          BASELINE_DIR: apps/mobile/.maestro/baselines
+          NEW_DIR: screenshots
+          OUT_DIR: screenshots/diff
+        run: node scripts/screenshot-diff.mjs
+
       - uses: actions/upload-artifact@v4
-        # Upload even on failure: a screenshot of the broken state is exactly
-        # what you want when the flow's assertions fail.
+        # Upload even on failure: the screenshot — and the diff image when the
+        # gate trips — of the broken state is exactly what you want here.
         if: always()
         with:
           name: android-screenshots
-          path: screenshots/*.png
+          path: |
+            screenshots/*.png
+            screenshots/diff/*.png
           # Fail loudly if no screenshot was produced — otherwise a flow that
           # silently stops capturing would pass as a false green.
           if-no-files-found: error

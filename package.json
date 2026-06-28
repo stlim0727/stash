@@ -25,5 +25,9 @@
     "verify:sentry": "node --no-warnings --experimental-transform-types scripts/verify-sentry.mjs",
     "dedupe:supabase": "node --no-warnings --experimental-transform-types scripts/dedupe-bookmarks.mjs",
     "test:components": "pnpm --filter mobile test:components"
+  },
+  "devDependencies": {
+    "pixelmatch": "^7.2.0",
+    "pngjs": "^7.0.0"
   }
 }
