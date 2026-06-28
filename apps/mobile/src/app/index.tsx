@@ -897,9 +897,15 @@ export default function InboxScreen() {
   // useFocusEffect, so it's inactive (and can't swallow back) whenever a child
   // route — settings, the add modal, a bookmark — is on top. Keyed on the raw
   // `query` (not the debounced `searching`) so text typed within the debounce
-  // window is still clearable. iOS has no hardware back, so this is a no-op there.
+  // window is still clearable. Android-only: hardware back doesn't exist on iOS,
+  // and react-native-web's BackHandler is an unsupported stub that console.errors
+  // on subscribe — which `installConsoleCapture`/Sentry would log as a false error
+  // on every Inbox focus/keystroke — so we never subscribe off Android.
   useFocusEffect(
     useCallback(() => {
+      if (Platform.OS !== 'android') {
+        return;
+      }
       const onBack = () => {
         if (query.length > 0) {
           setQuery('');

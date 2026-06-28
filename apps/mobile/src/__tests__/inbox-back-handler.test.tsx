@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { BackHandler } from 'react-native';
+import { BackHandler, Platform } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -65,6 +65,13 @@ function renderInbox() {
 // bound to the live state.
 let backHandlers: Array<() => boolean | null | undefined> = [];
 let addSpy: jest.SpyInstance;
+
+// The screen only subscribes to hardware back on Android (it's a no-op elsewhere
+// and react-native-web's BackHandler stub console.errors on subscribe), so pin
+// the platform here. Module registries are per-file, so this can't leak.
+beforeAll(() => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'android' });
+});
 
 beforeEach(() => {
   backHandlers = [];
