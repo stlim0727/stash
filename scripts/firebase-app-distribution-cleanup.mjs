@@ -27,6 +27,18 @@ const fail = (msg) => {
   process.exit(1);
 };
 
+// Parse a non-negative-integer input. Empty/unset falls back to `fallback`;
+// anything else that isn't a non-negative integer fails closed rather than
+// silently coercing to 0 — a typo like "seven" must not disable the age filter
+// (delete everything) or zero out the newest-release safety net.
+function intInput(name, raw, fallback) {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  if (!/^\d+$/.test(raw.trim())) {
+    fail(`${name} must be a non-negative integer (got "${raw}")`);
+  }
+  return parseInt(raw, 10);
+}
+
 function request(method, url, { headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -124,8 +136,8 @@ async function listAllReleases(appName, token) {
 async function main() {
   const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   const appId = process.env.FIREBASE_APP_ID;
-  const keep = Math.max(0, parseInt(process.env.KEEP ?? "20", 10) || 0);
-  const maxAgeDays = Math.max(0, parseInt(process.env.MAX_AGE_DAYS ?? "0", 10) || 0);
+  const keep = intInput("KEEP", process.env.KEEP, 20);
+  const maxAgeDays = intInput("MAX_AGE_DAYS", process.env.MAX_AGE_DAYS, 0);
   const dryRun = process.env.DRY_RUN === "true";
 
   if (!keyPath || !appId) {
