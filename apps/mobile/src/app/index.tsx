@@ -228,6 +228,11 @@ const WORDMARK = {
   },
 };
 
+// Rendered height of the hero wordmark in dp; its width is this × the asset
+// ratio. Kept as a constant so the Image's explicit width and height stay in
+// lockstep (see heroWordmark / the hero Image).
+const WORDMARK_HEIGHT = 30;
+
 /**
  * One pill in the Inbox browse shelf. Memoized so a filter change (which
  * re-renders the whole screen) only re-renders the chips whose `active` flag
@@ -1079,7 +1084,16 @@ export default function InboxScreen() {
               accessibilityLabel={wordmarkLabel}
               source={wordmark.source}
               resizeMode="contain"
-              style={[styles.heroWordmark, { aspectRatio: wordmark.ratio }]}
+              // Size with an EXPLICIT width+height (derived from the asset ratio),
+              // not height+aspectRatio. In this flex row, height+aspectRatio let
+              // Yoga fall back toward the PNG's huge intrinsic size and the
+              // wordmark blew up to fill the screen on native (the column layout
+              // this came from constrained it via alignSelf:'flex-start'). An
+              // explicit box removes that ambiguity.
+              style={[
+                styles.heroWordmark,
+                { width: Math.round(WORDMARK_HEIGHT * wordmark.ratio), height: WORDMARK_HEIGHT },
+              ]}
             />
             <Text
               style={[styles.heroCountText, { color: palette.textSecondary }]}
@@ -1859,8 +1873,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   heroWordmark: {
-    // Height drives the size; width follows from the asset's aspectRatio.
-    height: 30,
+    // Concrete width+height are set inline from WORDMARK_HEIGHT × the asset
+    // ratio (see the Image above). flexShrink:0 so the row never squeezes it.
+    flexShrink: 0,
   },
   heroCountText: {
     fontSize: 13,
