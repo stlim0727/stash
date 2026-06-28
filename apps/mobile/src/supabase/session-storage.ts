@@ -1,31 +1,71 @@
+import {
+  createSecureSessionStore,
+  type LegacySessionSource,
+  type SecureKvBackend,
+} from '@/supabase/secure-session-core';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
-const SESSION_KEY = 'stash.supabase.auth.session';
-let memorySession: SupabaseAuthSession | null = null;
+// Web has no Keychain/Keystore, so "secure" storage is best-effort localStorage
+// with an in-memory fallback during SSR. We still route through the shared core
+// so chunking, validation, and legacy migration behave identically to native —
+// the browser is a dev/SSR target, not the security-sensitive surface.
+const LEGACY_SESSION_KEY = 'stash.supabase.auth.session';
+
+const memory = new Map<string, string>();
 
 function storageAvailable(): boolean {
   return typeof localStorage !== 'undefined';
 }
 
-export async function readSupabaseSession(): Promise<SupabaseAuthSession | null> {
-  if (!storageAvailable()) {
-    return memorySession;
-  }
+const webBackend: SecureKvBackend = {
+  async getItem(key) {
+    if (storageAvailable()) {
+      return localStorage.getItem(key);
+    }
+    return memory.has(key) ? (memory.get(key) as string) : null;
+  },
+  async setItem(key, value) {
+    memory.set(key, value);
+    if (storageAvailable()) {
+      localStorage.setItem(key, value);
+    }
+  },
+  async deleteItem(key) {
+    memory.delete(key);
+    if (storageAvailable()) {
+      localStorage.removeItem(key);
+    }
+  },
+};
 
-  const raw = localStorage.getItem(SESSION_KEY);
-  return raw ? (JSON.parse(raw) as SupabaseAuthSession) : null;
+const legacySource: LegacySessionSource = {
+  async read() {
+    if (!storageAvailable()) return null;
+    const raw = localStorage.getItem(LEGACY_SESSION_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as SupabaseAuthSession;
+    } catch {
+      return null;
+    }
+  },
+  async clear() {
+    if (storageAvailable()) {
+      localStorage.removeItem(LEGACY_SESSION_KEY);
+    }
+  },
+};
+
+const store = createSecureSessionStore({ backend: webBackend, legacy: legacySource });
+
+export async function readSupabaseSession(): Promise<SupabaseAuthSession | null> {
+  return store.read();
 }
 
 export async function writeSupabaseSession(session: SupabaseAuthSession): Promise<void> {
-  memorySession = session;
-  if (storageAvailable()) {
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-  }
+  await store.write(session);
 }
 
 export async function clearSupabaseSession(): Promise<void> {
-  memorySession = null;
-  if (storageAvailable()) {
-    localStorage.removeItem(SESSION_KEY);
-  }
+  await store.clear();
 }
