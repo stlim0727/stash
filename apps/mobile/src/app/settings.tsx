@@ -111,13 +111,30 @@ export default function SettingsScreen() {
       setAuthBusy(null);
     }
   };
-  const handleSignOut = async () => {
+  // Sign-out is confirmed first: logging out hides the whole library from view,
+  // so we reassure that the data is safe in the account before proceeding. Only
+  // the destructive confirm actually calls `auth.signOut()`.
+  const runSignOut = async () => {
     setAuthBusy('signout');
     try {
       await auth.signOut();
     } finally {
       setAuthBusy(null);
     }
+  };
+  const handleSignOut = () => {
+    Alert.alert(
+      t('settings.account.signOutConfirmTitle'),
+      t('settings.account.signOutConfirmBody'),
+      [
+        { text: t('settings.account.signOutCancel'), style: 'cancel' },
+        {
+          text: t('settings.account.signOutConfirm'),
+          style: 'destructive',
+          onPress: () => void runSignOut(),
+        },
+      ],
+    );
   };
 
   // Data export: build a portable file from the on-device library and hand it
@@ -381,7 +398,7 @@ export default function SettingsScreen() {
                 variant="ghost"
                 size="sm"
                 disabled={authBusy !== null}
-                onPress={() => void handleSignOut()}
+                onPress={handleSignOut}
               >
                 {t('settings.account.signOut')}
               </Button>

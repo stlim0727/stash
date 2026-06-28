@@ -45,8 +45,10 @@ jest.mock('@/supabase/run-oauth', () => ({
 import { SupabaseAuthProvider, useSupabaseAuth } from '@/supabase/auth-provider';
 
 const { __client: fakeClient } = jest.requireMock('@/supabase/client') as {
-  __client: { signOut: jest.Mock };
+  __client: { signOut: jest.Mock; signInAnonymously: jest.Mock };
 };
+// Same client instance — aliased for readability where we assert on minting.
+const fakeAnonClient = fakeClient;
 const { runOAuthSignIn } = jest.requireMock('@/supabase/run-oauth') as {
   runOAuthSignIn: jest.Mock;
 };
@@ -84,7 +86,34 @@ test('signIn links the anonymous user and becomes authenticated', async () => {
   expect(result.current.isSignedIn).toBe(true);
 });
 
-test('signOut revokes the session and falls back to anonymous', async () => {
+test('signOut revokes the session and drops to signed_out without minting a new anonymous user', async () => {
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  await act(async () => {
+    await result.current.signIn('apple');
+  });
+  await waitFor(() => expect(result.current.status).toBe('authenticated'));
+
+  // One anonymous mint so far: the mount bootstrap.
+  expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await result.current.signOut();
+  });
+
+  // Best-effort server revoke still happens.
+  expect(fakeClient.signOut).toHaveBeenCalledWith(mockAuthedSession.access_token);
+  // Lazy logout: signed_out, no session, no new anonymous user minted.
+  await waitFor(() => expect(result.current.status).toBe('signed_out'));
+  expect(result.current.session).toBeNull();
+  expect(result.current.isSignedIn).toBe(false);
+  expect(result.current.email).toBeNull();
+  // Crucially, NO additional anonymous user was created on logout.
+  expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(1);
+});
+
+test('a save after logout lazily mints an anonymous session', async () => {
   const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
 
@@ -96,8 +125,17 @@ test('signOut revokes the session and falls back to anonymous', async () => {
   await act(async () => {
     await result.current.signOut();
   });
+  await waitFor(() => expect(result.current.status).toBe('signed_out'));
 
-  expect(fakeClient.signOut).toHaveBeenCalledWith(mockAuthedSession.access_token);
+  // The store/sync path calls ensureAnonymousSession() on the first save — it
+  // must be able to run from the signed_out state and mint a fresh anonymous
+  // user (the inFlight guard was reset on logout).
+  await act(async () => {
+    await result.current.ensureAnonymousSession();
+  });
+
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
-  expect(result.current.email).toBeNull();
+  expect(result.current.isSignedIn).toBe(true);
+  // Mount bootstrap + this lazy mint = two anonymous creations total.
+  expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(2);
 });

@@ -20,6 +20,7 @@ export type SupabaseAuthStatus =
   | 'loading'
   | 'anonymous'
   | 'authenticated'
+  | 'signed_out'
   | 'error';
 
 interface SupabaseAuthContextValue {
@@ -38,7 +39,12 @@ interface SupabaseAuthContextValue {
   ensureAnonymousSession: (forceRefresh?: boolean) => Promise<SupabaseAuthSession | null>;
   /** Start an OAuth sign-in; links the anonymous account in place when possible. */
   signIn: (provider: OAuthProvider) => Promise<SupabaseAuthSession | null>;
-  /** Sign out and fall back to a fresh anonymous session (anonymous-first). */
+  /**
+   * Sign out: revoke + clear the session and drop to the `signed_out` state.
+   * We do NOT mint a fresh anonymous user here — that lazily happens on the next
+   * save via the store's `ensureAnonymousSession` path. Eagerly minting created
+   * an orphaned, empty `auth.users` row on every logout (the leak this fixes).
+   */
   signOut: () => Promise<void>;
 }
 
@@ -154,12 +160,16 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       // Best-effort: drop to a clean local state regardless.
     }
     setSession(null);
-    setStatus(configState.status === 'missing' ? 'not_configured' : 'loading');
+    setStatus(configState.status === 'missing' ? 'not_configured' : 'signed_out');
     setMessage('Signed out.');
-    // Re-establish anonymous-first sync under a fresh local user.
+    // Reset the single-flight guard so the next ensureAnonymousSession() (the
+    // store/sync path fires it on the first save after logout) can run a fresh
+    // restore-then-create. We deliberately do NOT call ensureAnonymousSession
+    // here: minting an anonymous user eagerly on every logout is exactly the
+    // orphaned-empty-user leak this change removes. The anonymous user is
+    // created lazily on the next capture instead.
     inFlight.current = null;
-    await ensureAnonymousSession();
-  }, [session, configState, ensureAnonymousSession]);
+  }, [session, configState]);
 
   useEffect(() => {
     void ensureAnonymousSession();

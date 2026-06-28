@@ -158,6 +158,11 @@ export const ko: Catalog = {
   'settings.account.signOut': '로그아웃',
   'settings.account.cloudUnavailable': '클라우드 동기화 사용 불가',
   'settings.account.worksOffline': 'Stash는 오프라인에서도 완전히 작동합니다',
+  'settings.account.signOutConfirmTitle': 'Stash에서 로그아웃할까요?',
+  'settings.account.signOutConfirmBody':
+    '북마크는 계정에 안전하게 백업돼 있어요. 다시 로그인하면 언제든 볼 수 있어요.',
+  'settings.account.signOutConfirm': '로그아웃',
+  'settings.account.signOutCancel': '취소',
   'settings.sync.label': '동기화',
   'settings.sync.syncing': { other: '{count}개 항목 동기화 중…' },
   'settings.sync.allBackedUp': '모두 백업됨',
