@@ -12,16 +12,20 @@ name: Android Screenshots
 #
 # Cost note: booting an emulator is ~3-5 min and occasionally flaky, and most
 # PRs don't need a native render, so this is OPT-IN rather than automatic. It
-# runs only when explicitly asked for:
-#   - add the `screenshots` label to a PR (re-runs on each push while labelled), or
-#   - trigger it manually from the Actions tab (workflow_dispatch).
-# The `pull_request` trigger fires on every PR event below, but the job's `if`
-# guard skips it unless the label is present — so unlabelled PRs cost nothing.
+# runs:
+#   - AUTOMATICALLY when a PR changes screen code (apps/mobile/src/app/**): the
+#     `detect` job below sets ui=true and the emulator job gates on it, so a
+#     layout regression in the screens (e.g. an oversized wordmark) is caught
+#     without anyone remembering to add a label;
+#   - ON DEMAND for anything else: add the `screenshots` label to a PR (re-runs
+#     on each push while labelled), or trigger it manually (workflow_dispatch).
+# A PR that touches no screen code and carries no label costs nothing — the
+# `detect` job is seconds and the emulator job is skipped.
 
 on:
   workflow_dispatch:
   pull_request:
-    types: [labeled, synchronize, reopened]
+    types: [opened, labeled, synchronize, reopened]
 
 # One emulator run per ref; cancel superseded runs on rapid pushes.
 concurrency:
@@ -29,12 +33,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Seconds-cheap gate: does this PR touch screen code? Its `ui` output drives
+  # the emulator job, so UI changes auto-render without needing a label. Uses
+  # the PR's file list via `gh` (no checkout/clone needed).
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ui: ${{ steps.changes.outputs.ui }}
+    steps:
+      - id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # No PR context (manual dispatch) → ui=false; the screenshots job's own
+          # workflow_dispatch clause still runs it.
+          if [ -z "${PR:-}" ]; then echo "ui=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
+          if printf '%s\n' "$files" | grep -qE '^apps/mobile/src/app/'; then
+            echo "Screen code changed → screenshots will run."
+            echo "ui=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No screen code changed → screenshots skipped (label to force)."
+            echo "ui=false" >> "$GITHUB_OUTPUT"
+          fi
+
   screenshots:
-    # Opt-in: only run when a PR carries the `screenshots` label, or on manual
-    # dispatch. Every other PR event is skipped (no emulator minutes spent).
+    needs: detect
+    # Run on manual dispatch, when the PR carries the `screenshots` label, OR
+    # when the PR changed screen code (apps/mobile/src/app/**). Other PRs skip,
+    # spending no emulator minutes.
     if: >-
       github.event_name == 'workflow_dispatch'
       || contains(github.event.pull_request.labels.*.name, 'screenshots')
+      || needs.detect.outputs.ui == 'true'
     runs-on: ubuntu-latest
     # A full run is ~12-15 min; cap well above that so a hung emulator can't
     # silently burn Actions minutes (the default job timeout is 6 hours).
