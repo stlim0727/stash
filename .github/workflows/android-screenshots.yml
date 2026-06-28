@@ -189,11 +189,18 @@ jobs:
         if: always()
         run: ccache -s
 
-      # Attempt 1. ~1 in 3 CI emulators boot with a broken UiAutomator layer
-      # (every element reads as "not found" for the whole session), and retrying
-      # inside that dead emulator can't recover it — so retry at the JOB level on
-      # a fresh emulator (attempt 2) instead. `default` (AOSP) images avoid the
-      # Google Play Services dialogs that can steal the foreground.
+      # The emulator boot is the flaky part (#269): ~1 in 3 CI emulators boot
+      # with a broken UiAutomator layer (every element reads "not found"), and
+      # some never bring the device up at all ("device 'emulator-5554' not
+      # found" → "Timeout waiting for emulator to boot"). A dead emulator can't
+      # be recovered in place, so we retry at the JOB level on a fresh emulator —
+      # now up to THREE attempts, since two consecutive boot failures have been
+      # seen. Each attempt is hardened: explicit cores/RAM, and a 7-min boot cap
+      # (a healthy emulator boots in ~2-4 min; a dead one is abandoned fast so
+      # all three attempts still fit the 45-min job budget). `default` (AOSP)
+      # images avoid the Google Play Services dialogs that can steal the
+      # foreground. (GitHub Actions doesn't reliably support YAML anchors, so the
+      # three attempts duplicate the same hardened `with:` block.)
       - name: Run Maestro flows on emulator
         id: emu1
         continue-on-error: true
@@ -203,6 +210,10 @@ jobs:
           arch: x86_64
           target: default
           profile: pixel_5
+          cores: 2
+          ram-size: 4096M
+          # Fail a dead boot fast (default is 600s) so retries fit the budget.
+          emulator-boot-timeout: 420
           disable-animations: true
           # Headless, accelerated, no extras that slow boot or destabilise the
           # system server on CI.
@@ -211,15 +222,38 @@ jobs:
           # own `sh -c`), so loops/cd/vars must live in a real script file.
           script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
 
-      # Attempt 2 on a brand-new emulator, only if attempt 1 failed.
+      # Attempt 2 on a brand-new emulator, only if attempt 1 failed. Also
+      # continue-on-error so attempt 3 can still run after it.
       - name: Run Maestro flows on emulator (retry, fresh emulator)
+        id: emu2
         if: steps.emu1.outcome == 'failure'
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           arch: x86_64
           target: default
           profile: pixel_5
+          cores: 2
+          ram-size: 4096M
+          emulator-boot-timeout: 420
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
+
+      # Attempt 3 — last roll on yet another fresh emulator. Two prior boots both
+      # failing is usually a transient runner/KVM issue that a third try clears.
+      - name: Run Maestro flows on emulator (retry 2, fresh emulator)
+        if: steps.emu1.outcome == 'failure' && steps.emu2.outcome == 'failure'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          profile: pixel_5
+          cores: 2
+          ram-size: 4096M
+          emulator-boot-timeout: 420
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
