@@ -45,7 +45,10 @@ Two non-obvious details the core handles:
    Android; a session with both tokens plus OAuth `user_metadata` can exceed
    that, and a silent write failure would mint a fresh anonymous user next launch
    and **orphan the original user's bookmarks**. The core splits the payload into
-   byte-bounded chunks and writes a count marker last as the commit point.
+   byte-bounded chunks and **double-buffers** overwrites — the new session is
+   written under an inactive generation and a single pointer key is flipped to
+   commit, so an interrupted/failed overwrite leaves the previous session fully
+   readable rather than corrupting the live one.
 2. **Migration.** Existing installs already hold a session in the plaintext
    store. First read after upgrade carries it into secure storage and wipes the
    plaintext copy, so nobody is signed out by the switch.

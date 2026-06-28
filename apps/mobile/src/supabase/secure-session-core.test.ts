@@ -129,8 +129,13 @@ test('a large session is split across multiple chunks and reassembled', async ()
 
   await store.write(session);
 
-  const count = Number.parseInt(backend.store.get('supabase.auth.session.v2.count') as string, 10);
+  // First write lands in generation 'a'.
+  const count = Number.parseInt(
+    backend.store.get('supabase.auth.session.v2.a.count') as string,
+    10,
+  );
   assert.ok(count > 1, `expected multiple chunks, got ${count}`);
+  assert.equal(backend.store.get('supabase.auth.session.v2.active'), 'a');
   assert.deepEqual(await store.read(), session);
 });
 
@@ -148,28 +153,39 @@ test('read returns null when a chunk is missing (torn write)', async () => {
   await store.write(makeSession({ access_token: 'A'.repeat(200) }));
 
   // Drop a middle chunk but leave the count marker claiming it exists.
-  backend.store.delete('supabase.auth.session.v2.1');
+  backend.store.delete('supabase.auth.session.v2.a.1');
   assert.equal(await store.read(), null);
 });
 
 test('read returns null on an invalid count marker', async () => {
   const backend = new FakeBackend();
   const store = createSecureSessionStore({ backend });
-  backend.store.set('supabase.auth.session.v2.count', 'not-a-number');
+  backend.store.set('supabase.auth.session.v2.active', 'a');
+
+  backend.store.set('supabase.auth.session.v2.a.count', 'not-a-number');
   assert.equal(await store.read(), null);
 
-  backend.store.set('supabase.auth.session.v2.count', '0');
+  backend.store.set('supabase.auth.session.v2.a.count', '0');
   assert.equal(await store.read(), null);
 
-  backend.store.set('supabase.auth.session.v2.count', '9999');
+  backend.store.set('supabase.auth.session.v2.a.count', '9999');
+  assert.equal(await store.read(), null);
+});
+
+test('read returns null when the pointer names no readable generation', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend });
+  // Pointer set but the generation it names was never written.
+  backend.store.set('supabase.auth.session.v2.active', 'b');
   assert.equal(await store.read(), null);
 });
 
 test('read returns null when the payload is not valid JSON', async () => {
   const backend = new FakeBackend();
   const store = createSecureSessionStore({ backend });
-  backend.store.set('supabase.auth.session.v2.count', '1');
-  backend.store.set('supabase.auth.session.v2.0', '{ not json');
+  backend.store.set('supabase.auth.session.v2.active', 'a');
+  backend.store.set('supabase.auth.session.v2.a.count', '1');
+  backend.store.set('supabase.auth.session.v2.a.0', '{ not json');
   assert.equal(await store.read(), null);
 });
 
@@ -177,8 +193,9 @@ test('read rejects a structurally invalid session (missing refresh_token)', asyn
   const backend = new FakeBackend();
   const store = createSecureSessionStore({ backend });
   const broken = { access_token: 'a', token_type: 'bearer', user: { id: 'u' } };
-  backend.store.set('supabase.auth.session.v2.count', '1');
-  backend.store.set('supabase.auth.session.v2.0', JSON.stringify(broken));
+  backend.store.set('supabase.auth.session.v2.active', 'a');
+  backend.store.set('supabase.auth.session.v2.a.count', '1');
+  backend.store.set('supabase.auth.session.v2.a.0', JSON.stringify(broken));
   assert.equal(await store.read(), null);
 });
 
@@ -186,35 +203,74 @@ test('read rejects a session whose user has no id', async () => {
   const backend = new FakeBackend();
   const store = createSecureSessionStore({ backend });
   const broken = { access_token: 'a', refresh_token: 'r', user: {} };
-  backend.store.set('supabase.auth.session.v2.count', '1');
-  backend.store.set('supabase.auth.session.v2.0', JSON.stringify(broken));
+  backend.store.set('supabase.auth.session.v2.active', 'a');
+  backend.store.set('supabase.auth.session.v2.a.count', '1');
+  backend.store.set('supabase.auth.session.v2.a.0', JSON.stringify(broken));
   assert.equal(await store.read(), null);
 });
 
 // --- overwrite / clear -------------------------------------------------------
 
-test('overwriting with a shorter payload leaves no orphan chunks', async () => {
+test('overwriting flips generations and retires the previous one (no orphans)', async () => {
   const backend = new FakeBackend();
   const store = createSecureSessionStore({ backend, maxChunkBytes: 16 });
 
   await store.write(makeSession({ access_token: 'A'.repeat(400) }));
+  assert.equal(backend.store.get('supabase.auth.session.v2.active'), 'a');
   const longCount = Number.parseInt(
-    backend.store.get('supabase.auth.session.v2.count') as string,
+    backend.store.get('supabase.auth.session.v2.a.count') as string,
     10,
   );
 
   await store.write(makeSession({ access_token: 'B' }));
+  // The overwrite committed to the other generation...
+  assert.equal(backend.store.get('supabase.auth.session.v2.active'), 'b');
   const shortCount = Number.parseInt(
-    backend.store.get('supabase.auth.session.v2.count') as string,
+    backend.store.get('supabase.auth.session.v2.b.count') as string,
     10,
   );
-
   assert.ok(shortCount < longCount);
-  // No chunk index at or beyond the new count should survive.
-  for (let i = shortCount; i < longCount; i += 1) {
-    assert.equal(backend.store.has(`supabase.auth.session.v2.${i}`), false);
+
+  // ...and the previous generation 'a' is fully wiped — no orphan chunks/marker.
+  assert.equal(backend.store.has('supabase.auth.session.v2.a.count'), false);
+  for (let i = 0; i < longCount; i += 1) {
+    assert.equal(backend.store.has(`supabase.auth.session.v2.a.${i}`), false);
   }
   assert.deepEqual(await store.read(), makeSession({ access_token: 'B' }));
+});
+
+test('a failed pointer flip during overwrite keeps the previous session readable', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend, maxChunkBytes: 16 });
+
+  const first = makeSession({ refresh_token: 'first', access_token: 'A'.repeat(120) });
+  await store.write(first);
+
+  // The new session's chunks land in the inactive generation, but the atomic
+  // pointer flip fails (app killed / keystore error at the worst moment).
+  backend.failSetForKey = 'supabase.auth.session.v2.active';
+  await assert.rejects(store.write(makeSession({ refresh_token: 'second' })));
+
+  // The previous session is untouched and still fully readable — no orphaning.
+  backend.failSetForKey = null;
+  assert.deepEqual(await store.read(), first);
+});
+
+test('a failed chunk write during overwrite keeps the previous session readable', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend, maxChunkBytes: 16 });
+
+  const first = makeSession({ refresh_token: 'first', access_token: 'A'.repeat(120) });
+  await store.write(first); // generation 'a'
+
+  // The overwrite targets generation 'b'; fail one of its chunk writes partway.
+  backend.failSetForKey = 'supabase.auth.session.v2.b.2';
+  await assert.rejects(store.write(makeSession({ refresh_token: 'second', access_token: 'B'.repeat(120) })));
+
+  backend.failSetForKey = null;
+  // Pointer never moved off 'a', so the original session is intact.
+  assert.equal(backend.store.get('supabase.auth.session.v2.active'), 'a');
+  assert.deepEqual(await store.read(), first);
 });
 
 test('clear removes the count marker and every chunk', async () => {
@@ -270,8 +326,9 @@ test('a session in secure storage takes precedence over legacy (no migration rea
 
 test('migration still returns the session when persisting it fails', async () => {
   const backend = new FakeBackend();
-  // The first chunk write fails, so the carry-over can't be persisted.
-  backend.failSetForKey = 'supabase.auth.session.v2.0';
+  // The first chunk write fails (migration targets generation 'a'), so the
+  // carry-over can't be persisted.
+  backend.failSetForKey = 'supabase.auth.session.v2.a.0';
   const legacySession = makeSession({ refresh_token: 'legacy-refresh' });
   const legacy = new FakeLegacySource(legacySession);
   const store = createSecureSessionStore({ backend, legacy });

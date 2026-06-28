@@ -22,8 +22,10 @@ import type { SupabaseAuthSession } from '@/supabase/types';
  *      both tokens plus OAuth `user_metadata` (avatar URL, name) can exceed that.
  *      A silent write failure is dangerous: on next launch we'd find no session,
  *      mint a *fresh anonymous user*, and orphan the original user's bookmarks.
- *      So we split the payload into byte-bounded chunks and only treat it as
- *      present once the count marker is written (the commit point).
+ *      So we split the payload into byte-bounded chunks, and to make an overwrite
+ *      crash-safe we double-buffer: the new session is written under an *inactive*
+ *      generation and a single pointer key is flipped to commit, leaving the
+ *      previous session fully readable until — and unless — the flip lands.
  *   2. **Migration.** Existing installs already have a session in the legacy
  *      plaintext SQLite store. On first read after upgrade we transparently
  *      carry it over into secure storage and wipe the plaintext copy, so nobody
@@ -52,11 +54,18 @@ export interface SecureSessionStore {
   clear(): Promise<void>;
 }
 
-// Namespaced + versioned so the chunk keys never collide with the legacy
-// plaintext key and so a future format change can coexist during migration.
+// Namespaced + versioned so the keys never collide with the legacy plaintext
+// key and so a future format change can coexist during migration.
 const KEY_PREFIX = 'supabase.auth.session.v2';
-const COUNT_KEY = `${KEY_PREFIX}.count`;
-const chunkKey = (index: number): string => `${KEY_PREFIX}.${index}`;
+// Double-buffered storage: a session is written under one of two generations
+// ('a' / 'b') and a single pointer key is flipped to commit (see
+// createSecureSessionStore). The previous generation stays intact and readable
+// until the flip, so a torn/failed overwrite never corrupts the live session.
+const ACTIVE_KEY = `${KEY_PREFIX}.active`;
+type Generation = 'a' | 'b';
+const countKey = (gen: Generation): string => `${KEY_PREFIX}.${gen}.count`;
+const chunkKey = (gen: Generation, index: number): string => `${KEY_PREFIX}.${gen}.${index}`;
+const otherGeneration = (gen: Generation): Generation => (gen === 'a' ? 'b' : 'a');
 
 // Conservative cap well under the ~2048-byte Android SecureStore limit, leaving
 // headroom for the per-entry key/overhead the platform adds.
@@ -129,8 +138,13 @@ export interface SecureSessionStoreOptions {
 export function createSecureSessionStore(options: SecureSessionStoreOptions): SecureSessionStore {
   const { backend, legacy, maxChunkBytes = DEFAULT_MAX_CHUNK_BYTES } = options;
 
-  async function readFromSecure(): Promise<SupabaseAuthSession | null> {
-    const countRaw = await backend.getItem(COUNT_KEY);
+  async function activeGeneration(): Promise<Generation | null> {
+    const raw = await backend.getItem(ACTIVE_KEY);
+    return raw === 'a' || raw === 'b' ? raw : null;
+  }
+
+  async function readGeneration(gen: Generation): Promise<SupabaseAuthSession | null> {
+    const countRaw = await backend.getItem(countKey(gen));
     if (countRaw === null) return null;
 
     const count = Number.parseInt(countRaw, 10);
@@ -138,7 +152,7 @@ export function createSecureSessionStore(options: SecureSessionStoreOptions): Se
 
     let serialized = '';
     for (let index = 0; index < count; index += 1) {
-      const part = await backend.getItem(chunkKey(index));
+      const part = await backend.getItem(chunkKey(gen, index));
       // A missing chunk means a torn/partial write — treat the whole thing as
       // absent rather than parsing a truncated payload.
       if (part === null) return null;
@@ -154,6 +168,41 @@ export function createSecureSessionStore(options: SecureSessionStoreOptions): Se
     return isValidSession(parsed) ? parsed : null;
   }
 
+  async function readFromSecure(): Promise<SupabaseAuthSession | null> {
+    const active = await activeGeneration();
+    if (!active) return null;
+    return readGeneration(active);
+  }
+
+  async function clearGeneration(gen: Generation): Promise<void> {
+    const countRaw = await backend.getItem(countKey(gen));
+    const count = countRaw === null ? 0 : Number.parseInt(countRaw, 10);
+    await backend.deleteItem(countKey(gen));
+    const upper = Number.isInteger(count) && count > 0 ? Math.min(count, MAX_CHUNKS) : 0;
+    for (let index = 0; index < upper; index += 1) {
+      await backend.deleteItem(chunkKey(gen, index));
+    }
+  }
+
+  async function writeGeneration(gen: Generation, chunks: string[]): Promise<void> {
+    // How many chunks this generation held before (e.g. from an interrupted
+    // earlier write to it), so we can drop the longer tail and never read a
+    // stale chunk back.
+    const previousRaw = await backend.getItem(countKey(gen));
+    const previousCount = previousRaw === null ? 0 : Number.parseInt(previousRaw, 10);
+
+    for (let index = 0; index < chunks.length; index += 1) {
+      await backend.setItem(chunkKey(gen, index), chunks[index]);
+    }
+    await backend.setItem(countKey(gen), String(chunks.length));
+
+    if (Number.isInteger(previousCount)) {
+      for (let index = chunks.length; index < previousCount && index < MAX_CHUNKS; index += 1) {
+        await backend.deleteItem(chunkKey(gen, index));
+      }
+    }
+  }
+
   async function writeToSecure(session: SupabaseAuthSession): Promise<void> {
     const serialized = JSON.stringify(session);
     const chunks = chunkByBytes(serialized, maxChunkBytes);
@@ -163,34 +212,32 @@ export function createSecureSessionStore(options: SecureSessionStoreOptions): Se
       throw new Error(`session too large to persist (${chunks.length} chunks)`);
     }
 
-    // How many chunks the previous write left, so we can delete the tail and not
-    // leave orphans when the new payload is shorter.
-    const previousCountRaw = await backend.getItem(COUNT_KEY);
-    const previousCount = previousCountRaw === null ? 0 : Number.parseInt(previousCountRaw, 10);
+    const active = await activeGeneration();
+    const target = active ? otherGeneration(active) : 'a';
 
-    // Write data chunks first; the count marker is the commit point, written
-    // last, so a crash mid-write never presents a partial session as complete.
-    for (let index = 0; index < chunks.length; index += 1) {
-      await backend.setItem(chunkKey(index), chunks[index]);
-    }
-    await backend.setItem(COUNT_KEY, String(chunks.length));
+    // Write the whole new session into the INACTIVE generation. The active one is
+    // left untouched, so a failure or app-kill anywhere in here leaves the
+    // previous session fully readable — the pointer still names it.
+    await writeGeneration(target, chunks);
 
-    if (Number.isInteger(previousCount)) {
-      for (let index = chunks.length; index < previousCount && index < MAX_CHUNKS; index += 1) {
-        await backend.deleteItem(chunkKey(index));
-      }
+    // Single-key flip = the atomic commit point. A torn write of one key yields
+    // either the old or the new value, never a mix, so read() always resolves to
+    // one complete generation, never a half-replaced blend of both.
+    await backend.setItem(ACTIVE_KEY, target);
+
+    // Retire the previous generation now that the pointer has moved off it.
+    // Best-effort: if interrupted, the leftovers are simply ignored (the pointer
+    // never names them) and overwritten the next time we target that generation.
+    if (active) {
+      await clearGeneration(active);
     }
   }
 
   async function clearSecure(): Promise<void> {
-    const countRaw = await backend.getItem(COUNT_KEY);
-    const count = countRaw === null ? 0 : Number.parseInt(countRaw, 10);
-    // Drop the marker first so a half-finished clear never re-reads as present.
-    await backend.deleteItem(COUNT_KEY);
-    const upper = Number.isInteger(count) && count > 0 ? Math.min(count, MAX_CHUNKS) : 0;
-    for (let index = 0; index < upper; index += 1) {
-      await backend.deleteItem(chunkKey(index));
-    }
+    // Drop the pointer first so a half-finished clear never re-reads as present.
+    await backend.deleteItem(ACTIVE_KEY);
+    await clearGeneration('a');
+    await clearGeneration('b');
   }
 
   return {
