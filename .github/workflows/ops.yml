@@ -22,12 +22,19 @@ on:
           - list-artifacts
           - delete-all-artifacts
           - delete-artifacts-older-than-days
+          - firebase-list-releases
+          - firebase-delete-old-releases
           - run-command
       days:
-        description: "Age threshold in days (for delete-artifacts-older-than-days)"
+        description: "Age threshold in days (delete-artifacts-older-than-days, firebase-delete-old-releases)"
         type: string
         required: false
         default: "7"
+      keep:
+        description: "Keep the N most recent Firebase releases (firebase-* tasks)"
+        type: string
+        required: false
+        default: "20"
       command:
         description: "Shell command to run; `gh` is available (for run-command)"
         type: string
@@ -86,6 +93,43 @@ jobs:
               fi
             done
           echo "Done."
+
+# --- Firebase App Distribution cleanup ---------------------------------------
+# These tasks need the cleanup script from the repo, so check it out first.
+      - name: Checkout (for Firebase tasks)
+        if: startsWith(inputs.task, 'firebase-')
+        uses: actions/checkout@v4
+
+      # Prune old App Distribution releases via the REST API + service account.
+      # firebase-list-releases is a dry run (reports what would go); the actual
+      # delete only runs for firebase-delete-old-releases. Skips cleanly when the
+      # Firebase secrets aren't configured. SA-key handling mirrors android-apk.yml.
+      - name: Firebase release cleanup
+        if: startsWith(inputs.task, 'firebase-')
+        env:
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          KEEP: ${{ inputs.keep }}
+          MAX_AGE_DAYS: ${{ inputs.days }}
+          DRY_RUN: ${{ inputs.task == 'firebase-list-releases' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FIREBASE_APP_ID" ] || [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "Firebase secrets not set — nothing to clean up."
+            exit 0
+          fi
+          # SA JSON via a file (never inline) so it can't leak into logs/process
+          # list. The secret may be raw JSON or base64-encoded JSON: raw contains
+          # a '{', base64 never does, so that tells them apart.
+          SA="$RUNNER_TEMP/firebase-sa.json"
+          if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
+          else
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
+          fi
+          trap 'rm -f "$SA"' EXIT
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+          node scripts/firebase-app-distribution-cleanup.mjs
 
       # Free-form escape hatch: run any shell/gh command. The command is passed
       # via env (not interpolated into the script) so quoting can't break it or
