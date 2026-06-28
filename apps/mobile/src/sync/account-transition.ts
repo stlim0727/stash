@@ -30,7 +30,7 @@ export interface SyncedUserRef {
   isAnonymous: boolean;
 }
 
-export type AccountTransitionKind = 'first' | 'none' | 'carry-over' | 'switch';
+export type AccountTransitionKind = 'first' | 'none' | 'carry-over' | 'switch' | 'logout';
 
 export interface AccountTransitionPlan {
   kind: AccountTransitionKind;
@@ -38,21 +38,92 @@ export interface AccountTransitionPlan {
   rehome: Bookmark[];
   /** Row ids (owned by a previous REAL account) to drop from the local cache. */
   drop: string[];
+  /**
+   * Queue entry `local_id`s to remove alongside the dropped rows. An already-
+   * synced cloud bookmark that the previous account then edited or deleted flips
+   * to `sync_status: 'pending'` with an `update`/`delete` queue entry keyed to
+   * that account's remote UUID (see sync-bookmarks.ts). If we drop the row but
+   * KEEP the entry, the next minted account's background sync would run that
+   * update/delete under a DIFFERENT JWT against a UUID it doesn't own (RLS/404 →
+   * failEntry → the edit is silently stranded and lost). So the dropped rows'
+   * queue entries must be removed in lockstep. Always a subset of `drop`.
+   */
+  dropQueue: string[];
   /** Whether the pull watermark must be reset for a full refresh of the new user. */
   resetWatermark: boolean;
 }
 
 /**
- * Rows owned by the previously-synced cloud account: a real remote identity
- * (Supabase UUID) and already `synced`. Device-local/seed rows are never
- * touched — they have no remote identity and belong to no account yet. The
- * remote-identity check also makes a transition self-idempotent: once re-homed
- * (now a local id) or dropped (gone), a row no longer matches.
+ * Rows that can be CARRIED OVER (re-homed) from a previous ANONYMOUS account:
+ * a real remote identity (Supabase UUID) and already `synced`. Device-local/seed
+ * rows are never touched — they have no remote identity and belong to no account
+ * yet. The remote-identity check also makes a transition self-idempotent: once
+ * re-homed (now a local id), a row no longer matches.
+ *
+ * Re-home is deliberately `synced`-only: a not-yet-synced row has no confirmed
+ * cloud copy under the anon account, and its create entry is still in the queue,
+ * so leaving it untouched lets it upload under the new account as-is.
  */
 function cloudOwnedRows(localBookmarks: Bookmark[]): Bookmark[] {
   return localBookmarks.filter(
     (bookmark) => hasRemoteIdentity(bookmark.id) && bookmark.sync_status === 'synced',
   );
+}
+
+/**
+ * Rows owned by the previously-signed-in CLOUD account that must be DROPPED on a
+ * real-account departure (logout, or a real A→real B switch): every row with a
+ * remote identity (Supabase UUID), REGARDLESS of sync_status.
+ *
+ * Crucially this includes rows the account edited or deleted after they were
+ * synced — those flip to `sync_status: 'pending'` with an `update`/`delete` queue
+ * entry keyed to the account's remote UUID. The original synced-only filter KEPT
+ * those rows (and their queue entries), so the next minted account's sync would
+ * fire the update/delete under a different identity against a UUID it doesn't
+ * own (RLS/404 → the edit silently stranded). Dropping by remote identity, plus
+ * removing the matching queue entries (`dropQueue`), closes that data-loss hole.
+ *
+ * Capture is sacred: never-synced LOCAL creates have local-* ids (no remote
+ * identity), so they are NOT matched here and survive to upload under the next
+ * account. Discarding an unsynced EDIT to a cloud bookmark is the deliberate
+ * trade-off: the bookmark itself is safe in that account's cloud, and keeping
+ * the queued op would strand it under a different identity, so we drop the op.
+ */
+function cloudRemoteRows(localBookmarks: Bookmark[]): Bookmark[] {
+  return localBookmarks.filter((bookmark) => hasRemoteIdentity(bookmark.id));
+}
+
+/**
+ * Plans the local-cache cleanup that runs on logout (sign-out to the
+ * `signed_out` state) BEFORE any new account exists.
+ *
+ * With lazy anonymous creation, logout no longer mints a new user and no sync
+ * runs, so the just-logged-out real account's bookmarks would otherwise linger
+ * in the local cache — stale, and a privacy leak to the next anonymous user on
+ * the device. So we DROP all of that account's cloud-identity rows (their data is
+ * safe in the real account's cloud) and reset the watermark, like a real A→real
+ * B switch but with no "B" yet.
+ *
+ * Capture is sacred: never-synced LOCAL captures (no remote identity) are
+ * intentionally LEFT in place. They have never reached any cloud account, carry
+ * no other account's identity, and will upload under whatever account the next
+ * save mints. We DO drop rows the account edited/deleted after syncing (now
+ * pending with an update/delete queued to that account's UUID): the bookmark is
+ * safe in the account's cloud, and keeping the queued op would strand it under
+ * a different identity (RLS/404), so the op is dropped with the row (`dropQueue`).
+ */
+export function planLogoutCacheClear(localBookmarks: Bookmark[]): AccountTransitionPlan {
+  const owned = cloudRemoteRows(localBookmarks);
+  const dropIds = owned.map((bookmark) => bookmark.id);
+  return {
+    kind: 'logout',
+    rehome: [],
+    drop: dropIds,
+    // Queue entries are keyed by local_id, which for a synced row equals its
+    // remote UUID — so the dropped ids ARE the keys of their update/delete ops.
+    dropQueue: dropIds,
+    resetWatermark: true,
+  };
 }
 
 export function planAccountTransition(
@@ -61,17 +132,30 @@ export function planAccountTransition(
   localBookmarks: Bookmark[],
 ): AccountTransitionPlan {
   if (previous === null) {
-    return { kind: 'first', rehome: [], drop: [], resetWatermark: false };
+    return { kind: 'first', rehome: [], drop: [], dropQueue: [], resetWatermark: false };
   }
   if (previous.id === current.id) {
-    return { kind: 'none', rehome: [], drop: [], resetWatermark: false };
+    return { kind: 'none', rehome: [], drop: [], dropQueue: [], resetWatermark: false };
   }
 
-  const owned = cloudOwnedRows(localBookmarks);
   if (previous.isAnonymous) {
-    return { kind: 'carry-over', rehome: owned, drop: [], resetWatermark: true };
+    // Carry-over: re-home synced rows only (see cloudOwnedRows). Their create
+    // entries are re-issued under the new account, so nothing is queue-dropped.
+    return {
+      kind: 'carry-over',
+      rehome: cloudOwnedRows(localBookmarks),
+      drop: [],
+      dropQueue: [],
+      resetWatermark: true,
+    };
   }
-  return { kind: 'switch', rehome: [], drop: owned.map((bookmark) => bookmark.id), resetWatermark: true };
+  // Real A → real B: drop ALL of A's cloud-identity rows (synced AND
+  // pending-edit/delete) plus their queued ops, same data-loss reasoning as
+  // logout — keeping a pending update/delete keyed to A's UUID would fire it
+  // under B and 404/RLS-fail, stranding the edit.
+  const owned = cloudRemoteRows(localBookmarks);
+  const dropIds = owned.map((bookmark) => bookmark.id);
+  return { kind: 'switch', rehome: [], drop: dropIds, dropQueue: dropIds, resetWatermark: true };
 }
 
 /**
@@ -150,13 +234,33 @@ export async function applyAccountTransition(
   }
   if (plan.drop.length > 0) {
     const dropped = new Set(plan.drop);
-    recordLog('warn', `account switch: dropping ${plan.drop.length} cached bookmark(s) from the previous account`);
+    // Diagnostics must reflect the actual kind: a logout is not an account
+    // switch, so don't log "account switch: …" on it (NIT #7 — misleading logs).
+    const reason = plan.kind === 'logout' ? 'logout' : 'account switch';
+    recordLog(
+      'warn',
+      `${reason}: dropping ${plan.drop.length} cached bookmark(s) from the previous account`,
+    );
     setBookmarks((current) => (current ?? []).filter((bookmark) => !dropped.has(bookmark.id)));
+    // Drop the dropped rows' queued ops too. An update/delete keyed to the
+    // departing account's remote UUID would otherwise run under the next
+    // identity (logout → next anon mint, or account B) against a row it doesn't
+    // own → RLS/404 → failEntry → the user's edit silently stranded. Discarding
+    // an unsynced edit here is deliberate: the bookmark itself is safe in the
+    // departing account's cloud; keeping the op would lose it under a stranger.
+    const droppedQueue = new Set(plan.dropQueue);
+    if (droppedQueue.size > 0) {
+      setQueue((current) => current.filter((entry) => !droppedQueue.has(entry.local_id)));
+    }
     // Purge the dropped rows' tag state too, symmetric to the re-home re-key:
     // otherwise account A's pending tag ops/links leak into account B's session
     // and syncTagOps uploads them as B.
     tagState.drop?.(plan.drop);
     await ensureRepositoryReady();
     await Promise.all(plan.drop.map((id) => repository.deleteBookmark(id)));
+    // Remove the queue entries durably too, not just in memory — otherwise the
+    // next launch re-loads them from the repository and fires them under the new
+    // identity.
+    await Promise.all([...droppedQueue].map((localId) => repository.removeQueueEntry(localId)));
   }
 }

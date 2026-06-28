@@ -221,6 +221,11 @@ export const en = {
   'settings.account.signOut': 'Sign out',
   'settings.account.cloudUnavailable': 'Cloud sync unavailable',
   'settings.account.worksOffline': 'Stash works fully offline',
+  'settings.account.signOutConfirmTitle': 'Sign out of Stash?',
+  'settings.account.signOutConfirmBody':
+    'Your bookmarks are safely backed up to your account. Sign back in anytime to see them again.',
+  'settings.account.signOutConfirm': 'Sign out',
+  'settings.account.signOutCancel': 'Cancel',
   'settings.sync.label': 'Sync',
   'settings.sync.syncing': {
     one: 'Syncing {count} item…',
