@@ -35,6 +35,11 @@ jobs:
           fi
       - uses: actions/upload-artifact@v4
         if: always()
+        # The preview is decorative (a deterministic tag-cloud render). Never let
+        # its upload fail the gate — e.g. when the account's artifact storage
+        # quota is hit, CreateArtifact errors hard, which would otherwise sink
+        # every PR's checks. Short retention so it can't pile onto that quota.
+        continue-on-error: true
         with:
           name: tag-cloud-preview
           path: |
@@ -43,3 +48,4 @@ jobs:
           # .artifacts is a dotted (hidden) dir; v4 skips hidden files otherwise.
           include-hidden-files: true
           if-no-files-found: warn
+          retention-days: 7
