@@ -131,6 +131,7 @@ export const ko: Catalog = {
   'search.recentGroupA11y': '최근 검색',
 
   'viewMode.card': '카드',
+  'viewMode.compact': '콤팩트',
   'viewMode.list': '목록',
 
   'add.urlLabel': 'URL',

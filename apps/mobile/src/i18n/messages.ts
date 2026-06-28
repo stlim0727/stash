@@ -191,6 +191,7 @@ export const en = {
 
   // View-mode labels (Inbox layout density).
   'viewMode.card': 'Cards',
+  'viewMode.compact': 'Compact',
   'viewMode.list': 'List',
 
   // Add bookmark.
