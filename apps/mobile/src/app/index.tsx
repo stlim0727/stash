@@ -1061,7 +1061,12 @@ export default function InboxScreen() {
           { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
         ]}
       >
-        <View style={[styles.hero, { paddingTop: insets.top + 12 }]}>
+        <View style={[styles.hero, { paddingTop: insets.top + 10 }]}>
+          {/* Compact single-row hero: the brand wordmark with the saved-count
+              sitting inline on its baseline, and a bare settings gear. The old
+              stacked tagline + count lines and the "설정" caption were pure
+              vertical chrome that pushed the first card down ~40% of the
+              screen, so they're folded away here to reclaim that space. */}
           <View style={styles.heroTitleBlock}>
             {/* The brand wordmark is a pre-rendered image (Gothic A1 "Stash" +
                 Gowun Dodum 스태시) rather than bundled fonts — a few KB of PNG
@@ -1076,30 +1081,26 @@ export default function InboxScreen() {
               resizeMode="contain"
               style={[styles.heroWordmark, { aspectRatio: wordmark.ratio }]}
             />
-            <Text style={[styles.heroSubtitle, { color: palette.textSecondary }]}>
-              {t('app.tagline')}
-            </Text>
-            <Text style={[styles.heroCountText, { color: palette.textSecondary }]}>
+            <Text
+              style={[styles.heroCountText, { color: palette.textSecondary }]}
+              numberOfLines={1}
+            >
               {t('inbox.savedCount', { count: inbox.length })}
             </Text>
           </View>
-          <View style={styles.headerActions}>
-            {/* Single settings entry point. Account sign-in/management lives
-                inside Settings (the account card), so the hero stays focused on
-                bookmarks rather than carrying a second, redundant account button. */}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('inbox.settingsA11y')}
-              hitSlop={8}
-              style={styles.accountButton}
-              onPress={() => router.push('/settings')}
-            >
-              <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-                <Ionicons name="settings-sharp" size={20} color={palette.text} />
-              </View>
-              <Text style={[styles.accountCaption, { color: palette.textSecondary }]}>{t('nav.settings')}</Text>
-            </Pressable>
-          </View>
+          {/* Single settings entry point. Account sign-in/management lives
+              inside Settings (the account card), so the hero stays focused on
+              bookmarks rather than carrying a second, redundant account button. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('inbox.settingsA11y')}
+            hitSlop={8}
+            onPress={() => router.push('/settings')}
+          >
+            <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+              <Ionicons name="settings-sharp" size={20} color={palette.text} />
+            </View>
+          </Pressable>
         </View>
         {loadError ? (
           <Pressable
@@ -1841,37 +1842,30 @@ const styles = StyleSheet.create({
   hero: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 8,
   },
   heroTitleBlock: {
     flex: 1,
-  },
-  headerActions: {
+    // Wordmark and saved-count share one row, bottoms aligned so the count
+    // reads as sitting on the wordmark's baseline.
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'flex-end',
     gap: 10,
-    marginLeft: 12,
   },
   heroWordmark: {
     // Height drives the size; width follows from the asset's aspectRatio.
-    height: 32,
-    alignSelf: 'flex-start',
-  },
-  heroSubtitle: {
-    fontSize: 15,
-    marginTop: 2,
+    height: 30,
   },
   heroCountText: {
     fontSize: 13,
     fontWeight: '600',
-    marginTop: 6,
-  },
-  accountButton: {
-    alignItems: 'center',
-    marginLeft: 12,
+    // Nudge off the very bottom so it lines up with the wordmark's baseline
+    // rather than its descender edge.
+    marginBottom: 2,
+    flexShrink: 1,
   },
   avatar: {
     width: 44,
@@ -1880,11 +1874,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  accountCaption: {
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4,
   },
   sectionLabel: {
     fontSize: 13,
@@ -2029,7 +2018,7 @@ const styles = StyleSheet.create({
   },
   searchWrap: {
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 10,
   },
   searchInput: {
     borderRadius: 20,
@@ -2049,7 +2038,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     paddingHorizontal: 16,
-    paddingTop: 10,
+    paddingTop: 8,
   },
   sortCaption: {
     fontSize: 13,
@@ -2101,7 +2090,7 @@ const styles = StyleSheet.create({
     // are vertically centred via shelfContent.alignItems. Spacing is margin
     // (outside the scroll box, so it can't clip).
     minHeight: 42,
-    marginTop: 8,
+    marginTop: 6,
     marginBottom: 0,
   },
   shelfContent: {
