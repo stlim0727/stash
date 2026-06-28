@@ -12,6 +12,12 @@
 name: Ops (manual)
 
 on:
+  # Daily automatic prune: delete artifacts older than 3 days so the account's
+  # Actions artifact storage quota can't refill and start failing CI uploads
+  # again (see android-apk.yml / ci.yml notes). Manual dispatch (below) still
+  # offers the full task menu, including a one-off older-than-N or delete-all.
+  schedule:
+    - cron: '17 4 * * *' # daily 04:17 UTC (off-peak, off the :00/:30 rush)
   workflow_dispatch:
     inputs:
       task:
@@ -74,9 +80,12 @@ jobs:
           echo "Done."
 
       - name: Delete artifacts older than N days
-        if: inputs.task == 'delete-artifacts-older-than-days'
+        # The manual task OR the daily scheduled prune (which carries no inputs).
+        if: inputs.task == 'delete-artifacts-older-than-days' || github.event_name == 'schedule'
         env:
-          DAYS: ${{ inputs.days }}
+          # Scheduled runs have no inputs → default to 3 days; a manual dispatch
+          # uses the chosen value (its own input default is 7).
+          DAYS: ${{ inputs.days || '3' }}
         run: |
           set -euo pipefail
           cutoff=$(date -u -d "${DAYS} days ago" +%s)
