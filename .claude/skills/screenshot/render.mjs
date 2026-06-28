@@ -150,31 +150,8 @@ async function main() {
     .catch(() => {});
   await page.waitForTimeout(600);
 
-  // Fixup 1 — RN-web Image quirk: the brand wordmark <img> ignores its
-  // aspectRatio+height and lays out at full intrinsic width (~1294px), shoving
-  // the inline saved-count off-screen and hiding behind the header layer.
-  // Pin the sizer + wrapper, then overlay the same asset so it actually paints.
-  await page.evaluate(() => {
-    const img = [...document.querySelectorAll('img')].find((i) => /wordmark/.test(i.src));
-    if (!img || !img.naturalWidth) return;
-    const w = 30 * (img.naturalWidth / img.naturalHeight);
-    img.style.setProperty('height', '30px', 'important');
-    img.style.setProperty('width', `${w}px`, 'important');
-    img.style.setProperty('object-fit', 'contain', 'important');
-    if (img.parentElement) {
-      img.parentElement.style.setProperty('width', `${w}px`, 'important');
-      img.parentElement.style.setProperty('flex', '0 0 auto', 'important');
-      img.parentElement.style.setProperty('overflow', 'visible', 'important');
-    }
-    const r = img.getBoundingClientRect();
-    const o = document.createElement('img');
-    o.src = img.src;
-    o.style.cssText = `position:fixed;left:${r.x}px;top:${r.y}px;height:30px;width:auto;z-index:99999;`;
-    document.body.appendChild(o);
-  });
-
-  // Fixup 2 — dark theme: recolor any element still painted with the baked
-  // light container background (static-export hydration leaves it light).
+  // Dark theme: recolor any element still painted with the baked light
+  // container background (static-export hydration leaves it light).
   if (theme === 'dark') {
     await page.evaluate(
       ({ map, darkBg }) => {

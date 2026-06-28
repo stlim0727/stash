@@ -90,19 +90,22 @@ Run everything from the repo root.
 - `--width` / `--height` / `--scale` — viewport + DPR (default `390×844@2`).
 - `--full` — full-page (scrolling) screenshot instead of just the viewport.
 
-## Why two fixups live in the driver (don't "fix" them away)
+## The dark-theme fixup in the driver (don't "fix" it away)
 
-The Expo **web** export has two quirks that are render-only artifacts, not app
-bugs — both are correct on native. The script patches them so the PNG matches
-what a device shows:
+The Expo **web** export prerenders the static HTML in light, and that baked
+container background survives hydration — so dark mode renders a light container
+behind dark cards. The script recolors elements still carrying the light
+background (`apps/mobile/src/theme.ts` → `light.background` #f7f9fc) to the dark
+background (#0b1220). If the palette changes, update those two constants at the
+top of `render.mjs`. This is a render-only web artifact (correct on native).
 
-1. **Wordmark sizing** — RN-web ignores the wordmark `<Image>`'s
-   `aspectRatio`+`height` and lays it out at full intrinsic width, hiding the
-   inline saved-count and the brand. The script pins it and overlays the same
-   asset.
-2. **Dark-theme hydration** — the static HTML is prerendered light, and that
-   baked container background survives hydration, so dark mode renders a light
-   container behind dark cards. The script recolors elements still carrying the
-   light background (`apps/mobile/src/theme.ts` → `light.background` #f7f9fc) to
-   the dark background (#0b1220). If the palette changes, update those two
-   constants at the top of `render.mjs`.
+> ⚠️ **Lesson — verify Image sizing against a device, not this preview.** An
+> earlier version also patched a wordmark `<Image>` that the web export laid out
+> at full intrinsic width, and this doc wrongly called it "correct on native."
+> It was **not**: the same `height`+`aspectRatio`-in-a-flex-row pattern blew the
+> wordmark up to fill the screen on a real Android build (rc11/rc12). The source
+> now sets an explicit `width`+`height` (so both web and native are correct) and
+> the fixup is gone. Treat any "the web preview hides/mangles an element"
+> situation as a possible **real** layout bug until a device or the
+> `android-screenshots` emulator says otherwise — don't assume the browser is
+> the only thing that's wrong.
