@@ -211,8 +211,13 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
         now: new Date().toISOString(),
       });
       // Reflect the write locally so we don't re-stamp within this launch, but
-      // only if the user hasn't changed underneath us in the meantime.
-      if (merged && sessionRef.current?.user.id === merged.user.id) {
+      // only if the session we stamped is still the live one. We compare the
+      // access token, not the user id: OAuth linking keeps the same user id
+      // while swapping the anonymous session for an authenticated one (new
+      // token), so an id-only guard would let a late-resolving PATCH restore the
+      // stale anonymous session/token over the fresh authenticated one. `merged`
+      // carries `active`'s token, so a token match means nothing replaced it.
+      if (merged && sessionRef.current?.access_token === merged.access_token) {
         setSession(merged);
       }
     })();
