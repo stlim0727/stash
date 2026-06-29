@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   Platform,
@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { nextFacetNonce } from '@/domain/facet-nonce';
 import { filterBookmarks } from '@/domain/search';
 import { ALL_FILTER, UNCOLLECTED_FILTER, filterByFacet, type InboxFilter } from '@/domain/filter';
 import { MONOGRAM_COLORS, monogramColorIndex } from '@/domain/item-icon';
@@ -170,22 +171,24 @@ export default function BrowseTagsScreen() {
   // tags). The list surface shows ALL ranked entries.
   const cloudEntries = useMemo(() => ranked.slice(0, adaptiveCap), [ranked, adaptiveCap]);
 
-  // Monotonic nonce so re-selecting the SAME tag still re-applies the facet on
-  // the root Inbox (its handler consumes the nonce — see index.tsx). A ref
-  // counter, not Date.now(), so the value is deterministic.
-  const navNonce = useRef(0);
   const onTagPress = useCallback(
     (entry: TagCloudEntry) => {
       // COUNTS + opaque id only — never the tag name (hard rule).
       trackBreadcrumb('browse', 'cloud tag tap', { view, cloud: ranked.length });
-      navNonce.current += 1;
+      // A monotonic nonce so re-selecting the SAME tag still re-applies the facet
+      // on the root Inbox (its handler dedupes by tag + nonce — see index.tsx).
+      // It MUST come from the shared module counter, not a per-screen ref:
+      // dismissTo tears this screen down, so a ref would reset to 0 and re-emit
+      // the same nonce on every visit, and the Inbox would skip the re-selection
+      // as already-consumed (STASH-D).
+      const nonce = nextFacetNonce();
       // dismissTo, NOT navigate: this removes /browse/tags from the stack while
       // handing the tag facet to the root Inbox beneath it, so repeated
       // Browse→tag cycles can't grow the stack and native Back can't land on a
       // stale tag browser. Reached cold (no Inbox beneath — e.g. a deep link)?
       // dismissTo falls back to a replace, so there's still no dangling browse
       // screen left behind.
-      router.dismissTo({ pathname: '/', params: { tag: entry.id, t: String(navNonce.current) } });
+      router.dismissTo({ pathname: '/', params: { tag: entry.id, t: nonce } });
     },
     [router, view, ranked.length],
   );

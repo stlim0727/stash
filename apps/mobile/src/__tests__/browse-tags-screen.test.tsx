@@ -259,6 +259,38 @@ test('re-tapping the SAME tag fires a fresh navigate (with a new nonce) each tim
   expect(secondNonce).not.toBe(firstNonce);
 });
 
+test('re-tapping the same tag across separate browse visits ships a fresh nonce', async () => {
+  // The real-world flow STASH-D hit: dismissTo tears the browse screen down, so
+  // each visit re-mounts it. A per-screen ref nonce would reset to "1" every
+  // time, colliding with the Inbox's already-consumed (tag + nonce) key and
+  // silently skipping the re-selection — no narrowing, no filter ribbon. The
+  // shared module counter must keep climbing across mounts.
+  seedLibrary();
+
+  const first = await renderScreen();
+  await waitFor(() => expect(first.getByTestId('browse-tags-cloud')).toBeTruthy());
+  await fireEvent.press(await first.findByLabelText('#cooking, 2 bookmarks'));
+  // Tear the screen down, exactly as dismissTo does on the device.
+  await act(async () => {
+    first.unmount();
+  });
+
+  const second = await renderScreen();
+  await waitFor(() => expect(second.getByTestId('browse-tags-cloud')).toBeTruthy());
+  await fireEvent.press(await second.findByLabelText('#cooking, 2 bookmarks'));
+  await act(async () => {
+    second.unmount();
+  });
+
+  expect(mockDismissTo).toHaveBeenCalledTimes(2);
+  expect(mockDismissTo.mock.calls[0][0].params.tag).toBe('t-cooking');
+  expect(mockDismissTo.mock.calls[1][0].params.tag).toBe('t-cooking');
+  const firstNonce = mockDismissTo.mock.calls[0][0].params.t;
+  const secondNonce = mockDismissTo.mock.calls[1][0].params.t;
+  // Distinct nonces despite the remount → the Inbox re-applies the facet.
+  expect(secondNonce).not.toBe(firstNonce);
+});
+
 test('drilling in from a folder-scoped route still applies the all-library tag facet', async () => {
   // InboxFilter has no compound tag+folder, so a tag tapped while folder-scoped
   // widens to the whole-library tag facet (documented behavior).
