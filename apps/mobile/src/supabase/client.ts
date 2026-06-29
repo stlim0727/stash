@@ -14,7 +14,7 @@ import type {
 } from '@/supabase/types';
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   accessToken?: string;
   body?: unknown;
   headers?: Record<string, string>;
@@ -196,19 +196,32 @@ export class StashSupabaseClient {
 
   /**
    * Merge `data` into the authenticated user's GoTrue `user_metadata` and return
-   * the updated user. GoTrue does a shallow top-level merge, so only the keys we
-   * send are touched — unrelated OAuth profile fields (full_name, avatar_url) are
-   * preserved. Works for anonymous users too (they update their own record).
+   * the updated user. GoTrue's user-update route is `PUT /user` (PATCH is only
+   * enabled at the CORS layer, not routed — a PATCH is rejected), so we must use
+   * PUT, the same verb supabase-js's `updateUser` issues. GoTrue does a shallow
+   * top-level merge of `data`, so only the keys we send are touched — unrelated
+   * OAuth profile fields (full_name, avatar_url) are preserved. Works for
+   * anonymous users too (they update their own record).
    */
   async updateUserMetadata(
     accessToken: string,
     data: Record<string, unknown>,
   ): Promise<SupabaseAuthUser> {
     return this.request<SupabaseAuthUser>('/auth/v1/user', {
-      method: 'PATCH',
+      method: 'PUT',
       accessToken,
       body: { data },
     });
+  }
+
+  /**
+   * Persist a session to local secure storage without going through the network.
+   * Used to write back an in-memory mutation (e.g. a freshly stamped
+   * `user_metadata`) so a cold restart restores the updated copy instead of the
+   * stale one — otherwise the change-only guards re-run the same write each launch.
+   */
+  async persistSession(session: SupabaseAuthSession): Promise<void> {
+    await writeSupabaseSession(session);
   }
 
   /** Revoke the current session server-side (best-effort) and clear it locally. */

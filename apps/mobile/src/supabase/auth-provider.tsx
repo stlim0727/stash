@@ -203,9 +203,10 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     if (!active) {
       return;
     }
+    const client = createSupabaseClient();
     void (async () => {
       const merged = await trackAppVersionMetadata({
-        client: createSupabaseClient(),
+        client,
         session: active,
         runtime: { appVersion: Constants.expoConfig?.version, platform: Platform.OS },
         now: new Date().toISOString(),
@@ -214,11 +215,17 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       // only if the session we stamped is still the live one. We compare the
       // access token, not the user id: OAuth linking keeps the same user id
       // while swapping the anonymous session for an authenticated one (new
-      // token), so an id-only guard would let a late-resolving PATCH restore the
+      // token), so an id-only guard would let a late-resolving write restore the
       // stale anonymous session/token over the fresh authenticated one. `merged`
       // carries `active`'s token, so a token match means nothing replaced it.
       if (merged && sessionRef.current?.access_token === merged.access_token) {
         setSession(merged);
+        // Also persist the stamped metadata to secure storage. restoreSession
+        // reads the stored JSON on cold start; without this it still holds the
+        // old user_metadata, so the change-only planner would re-stamp on every
+        // launch until a token refresh happened to rewrite the session.
+        // Best-effort — a failed persist just means the next launch re-stamps.
+        void client.persistSession(merged).catch(() => {});
       }
     })();
   }, [userId, status]);

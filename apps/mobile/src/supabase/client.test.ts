@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { errorMessageFrom } from './client.ts';
+import { errorMessageFrom, StashSupabaseClient } from './client.ts';
 
 test('errorMessageFrom prefers GoTrue/PostgREST human-readable keys', () => {
   assert.equal(errorMessageFrom({ msg: 'bad login' }, 400), 'bad login');
@@ -25,4 +25,36 @@ test('errorMessageFrom falls back to a plain-text body, then the HTTP status', (
   assert.equal(errorMessageFrom({}, 500), 'Supabase request failed with HTTP 500');
   // Non-string keys are ignored, not coerced.
   assert.equal(errorMessageFrom({ error: 42 }, 400), 'Supabase request failed with HTTP 400');
+});
+
+test('updateUserMetadata issues PUT /auth/v1/user with { data } (GoTrue rejects PATCH)', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({ id: 'user-1' }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    await client.updateUserMetadata('access-token', { app_version: '1.0.0-rc15' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://proj.supabase.co/auth/v1/user');
+  // The regression this guards: must be PUT, not PATCH — GoTrue does not route
+  // PATCH /user, so a PATCH silently fails and no app_version is ever written.
+  assert.equal(calls[0].init.method, 'PUT');
+  assert.equal(
+    (calls[0].init.headers as Record<string, string>).Authorization,
+    'Bearer access-token',
+  );
+  assert.deepEqual(JSON.parse(calls[0].init.body as string), {
+    data: { app_version: '1.0.0-rc15' },
+  });
 });
