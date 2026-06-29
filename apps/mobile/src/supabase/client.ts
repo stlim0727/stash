@@ -6,7 +6,12 @@ import {
   writeSupabaseSession,
 } from '@/supabase/session-storage';
 import { buildAuthorizeQuery } from '@/supabase/oauth';
-import type { OAuthProvider, SupabaseAuthResponse, SupabaseAuthSession } from '@/supabase/types';
+import type {
+  OAuthProvider,
+  SupabaseAuthResponse,
+  SupabaseAuthSession,
+  SupabaseAuthUser,
+} from '@/supabase/types';
 
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -187,6 +192,23 @@ export class StashSupabaseClient {
     const session = toSession(payload);
     await writeSupabaseSession(session);
     return session;
+  }
+
+  /**
+   * Merge `data` into the authenticated user's GoTrue `user_metadata` and return
+   * the updated user. GoTrue does a shallow top-level merge, so only the keys we
+   * send are touched — unrelated OAuth profile fields (full_name, avatar_url) are
+   * preserved. Works for anonymous users too (they update their own record).
+   */
+  async updateUserMetadata(
+    accessToken: string,
+    data: Record<string, unknown>,
+  ): Promise<SupabaseAuthUser> {
+    return this.request<SupabaseAuthUser>('/auth/v1/user', {
+      method: 'PATCH',
+      accessToken,
+      body: { data },
+    });
   }
 
   /** Revoke the current session server-side (best-effort) and clear it locally. */

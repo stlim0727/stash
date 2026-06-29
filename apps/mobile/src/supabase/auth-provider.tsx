@@ -9,9 +9,13 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
 import { setSentryUser } from '@/observability/sentry';
 import { describeSupabaseConfig, getSupabaseConfigState } from '@/supabase/config';
 import { createSupabaseClient } from '@/supabase/client';
+import { trackAppVersionMetadata } from '@/supabase/app-version-tracker';
 import { runOAuthSignIn } from '@/supabase/run-oauth';
 import type { OAuthProvider, SupabaseAuthSession } from '@/supabase/types';
 
@@ -181,6 +185,43 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setSentryUser(userId);
   }, [userId]);
+
+  // Keep a ref to the latest session so the version-tracking effect can read it
+  // without re-firing every time the session object identity changes.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
+  // Stamp the current app version / platform onto the user's metadata so we can
+  // report which version each user is on. Fire-and-forget and change-only: it
+  // only writes when the version actually changed, never blocks, and never
+  // throws. Keyed on userId + status so it runs once per established session.
+  useEffect(() => {
+    if (status !== 'anonymous' && status !== 'authenticated') {
+      return;
+    }
+    const active = sessionRef.current;
+    if (!active) {
+      return;
+    }
+    void (async () => {
+      const merged = await trackAppVersionMetadata({
+        client: createSupabaseClient(),
+        session: active,
+        runtime: { appVersion: Constants.expoConfig?.version, platform: Platform.OS },
+        now: new Date().toISOString(),
+      });
+      // Reflect the write locally so we don't re-stamp within this launch, but
+      // only if the session we stamped is still the live one. We compare the
+      // access token, not the user id: OAuth linking keeps the same user id
+      // while swapping the anonymous session for an authenticated one (new
+      // token), so an id-only guard would let a late-resolving PATCH restore the
+      // stale anonymous session/token over the fresh authenticated one. `merged`
+      // carries `active`'s token, so a token match means nothing replaced it.
+      if (merged && sessionRef.current?.access_token === merged.access_token) {
+        setSession(merged);
+      }
+    })();
+  }, [userId, status]);
 
   const email = session?.user.email ?? null;
   const metadata = session?.user.user_metadata;
