@@ -18,6 +18,12 @@ export interface SupabaseAuthUser {
     picture?: string | null;
     full_name?: string | null;
     name?: string | null;
+    /** Current app version this user is on, stamped on launch (see app-version-tracker). */
+    app_version?: string | null;
+    /** Platform the user is on — `ios` | `android` | `web`. */
+    platform?: string | null;
+    /** ISO timestamp of when app_version/platform were last stamped. */
+    app_version_updated_at?: string | null;
   };
   created_at?: string;
 }
