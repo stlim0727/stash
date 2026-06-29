@@ -24,6 +24,7 @@ import { CollectionPicker } from '@/ui/CollectionPicker';
 import { SuggestionSkeleton } from '@/ui/SuggestionSkeleton';
 import { TagField } from '@/ui/TagField';
 import { useCaptureToast } from '@/ui/capture-toast';
+import { nextFacetNonce } from '@/domain/facet-nonce';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
 import { pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
@@ -42,11 +43,6 @@ export default function BookmarkDetailScreen() {
   const palette = usePalette();
   const { t, formatDate } = useI18n();
   const router = useRouter();
-  // Monotonic nonce for the tag-browse drill-in. dismissTo reuses the existing
-  // root Inbox, whose handler dedupes by (tag + t) — so a fresh nonce each tap
-  // makes re-browsing the same tag re-apply even after the user cleared the
-  // facet by hand (mirrors the /browse/tags drill-in).
-  const browseNonce = useRef(0);
   const { show: showToast } = useCaptureToast();
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
@@ -764,11 +760,13 @@ export default function BookmarkDetailScreen() {
           // facet — never leave this detail (or an intermediate Review/Trash)
           // stacked beneath. Falls back to a replace if Detail was reached cold
           // (deep link, no Inbox beneath). The `t` nonce makes a same-tag
-          // re-browse re-apply past the Inbox handler's (tag + t) dedupe.
-          browseNonce.current += 1;
+          // re-browse re-apply past the Inbox handler's (tag + t) dedupe. It
+          // comes from the shared module counter, not a per-screen ref: dismissTo
+          // tears this screen down, so a ref would reset to 0 and re-emit the
+          // same nonce, which the Inbox would skip as already-consumed (STASH-D).
           router.dismissTo({
             pathname: '/',
-            params: { tag: tagId, t: String(browseNonce.current) },
+            params: { tag: tagId, t: nextFacetNonce() },
           });
         }}
         onAcceptSuggestion={handleAcceptSuggestion}
