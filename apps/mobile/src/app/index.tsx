@@ -40,7 +40,7 @@ import { collectionMatchKey } from '@/domain/collection-match';
 import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
-import { displayTitle } from '@/domain/item-display';
+import { accessibilityTitle, displayTitle } from '@/domain/item-display';
 import {
   ALL_FILTER,
   UNCOLLECTED_FILTER,
@@ -1296,9 +1296,6 @@ export default function InboxScreen() {
               ]}
             >
               <Ionicons name="pricetags-outline" size={15} color={palette.textSecondary} />
-              <Text style={[styles.sortPillLabel, { color: palette.text }]}>
-                {t('inbox.browseTags')}
-              </Text>
             </Pressable>
           ) : null}
           <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
@@ -1566,7 +1563,17 @@ export default function InboxScreen() {
                 onLongPress={() => setMenuItem(item)}
               >
                 <ItemIcon item={item} compact testID="inbox-list-monogram" />
-                <View style={styles.listText}>
+                {/* Only the title/body is the accessible "open details" button;
+                    the row container stays a plain (non-accessible) Pressable so
+                    the nested ↗ / … buttons remain independently focusable. */}
+                <Pressable
+                  style={styles.listText}
+                  accessibilityRole="button"
+                  accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
+                  accessibilityHint={t('inbox.openBookmarkHint')}
+                  onPress={openDetail}
+                  onLongPress={() => setMenuItem(item)}
+                >
                   <HighlightedText
                     testID="inbox-list-title"
                     style={[styles.listTitle, { color: palette.text }]}
@@ -1584,7 +1591,7 @@ export default function InboxScreen() {
                       highlightStyle={highlightStyle}
                     />
                   ) : null}
-                </View>
+                </Pressable>
                 {/* While the "new AI suggestions" banner is announcing, suppress
                     the per-card ✨ badge so the same item isn't shouted twice on
                     one screen; dismissing the banner brings the badges back. */}
@@ -1678,7 +1685,14 @@ export default function InboxScreen() {
                 ) : (
                   <ItemIcon item={item} testID="inbox-compact-monogram" />
                 )}
-                <View style={styles.listText}>
+                <Pressable
+                  style={styles.listText}
+                  accessibilityRole="button"
+                  accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
+                  accessibilityHint={t('inbox.openBookmarkHint')}
+                  onPress={openDetail}
+                  onLongPress={() => setMenuItem(item)}
+                >
                   <HighlightedText
                     testID="inbox-compact-title"
                     style={[styles.listTitle, { color: palette.text }]}
@@ -1701,7 +1715,7 @@ export default function InboxScreen() {
                       {compactMeta}
                     </Text>
                   ) : null}
-                </View>
+                </Pressable>
                 {suggestionCount > 0 && newSuggestionsCount === 0 ? (
                   <View
                     accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
@@ -1738,7 +1752,10 @@ export default function InboxScreen() {
 
           return (
             <Card style={styles.card}>
-              <Pressable onPress={openDetail} onLongPress={() => setMenuItem(item)}>
+              <Pressable
+                onPress={openDetail}
+                onLongPress={() => setMenuItem(item)}
+              >
                 {item.local_image_uri ?? item.preview_image_url ? (
                   <Image
                     testID="inbox-card-preview"
@@ -1749,14 +1766,26 @@ export default function InboxScreen() {
                 <View style={styles.cardBody}>
                   <View style={styles.cardTitleRow}>
                   <ItemIcon item={item} testID="inbox-card-monogram" />
-                  <HighlightedText
-                    testID="inbox-card-title"
-                    style={[styles.cardTitle, { color: palette.text }]}
-                    numberOfLines={1}
-                    text={displayTitle(item) ?? t('common.untitled')}
-                    query={highlightQuery}
-                    highlightStyle={highlightStyle}
-                  />
+                  {/* Only the title is the accessible "open details" button so
+                      the sibling … overflow button stays independently
+                      focusable; the whole card remains tappable visually. */}
+                  <Pressable
+                    style={styles.cardTitlePressable}
+                    accessibilityRole="button"
+                    accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
+                    accessibilityHint={t('inbox.openBookmarkHint')}
+                    onPress={openDetail}
+                    onLongPress={() => setMenuItem(item)}
+                  >
+                    <HighlightedText
+                      testID="inbox-card-title"
+                      style={[styles.cardTitle, { color: palette.text }]}
+                      numberOfLines={1}
+                      text={displayTitle(item) ?? t('common.untitled')}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                  </Pressable>
                   {suggestionCount > 0 && newSuggestionsCount === 0 ? (
                     <View
                       accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
@@ -2262,6 +2291,9 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '700',
+  },
+  cardTitlePressable: {
+    flex: 1,
   },
   cardTitle: {
     flex: 1,

@@ -27,6 +27,7 @@ jest.mock('expo-router', () => ({
 }));
 
 import AddBookmarkScreen from '@/app/add';
+import { en } from '@/i18n/messages';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -66,6 +67,13 @@ describe('AddBookmarkScreen duplicate UX', () => {
     expect(mockBack).toHaveBeenCalled();
     // Dedupe held: no new create was enqueued.
     expect(fakeRepo.__queue()).toHaveLength(0);
+    unmount();
+  });
+
+  it('renders the capture hint wired to the add.hint message key', async () => {
+    fakeRepo.__reset([]);
+    const { findByText, unmount } = await renderAddScreen();
+    await findByText(en['add.hint'] as string);
     unmount();
   });
 

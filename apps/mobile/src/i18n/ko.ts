@@ -60,8 +60,8 @@ export const ko: Catalog = {
   'inbox.sortNameAsc': '이름 ㄱ–ㅎ',
   'inbox.sortNameDesc': '이름 ㅎ–ㄱ',
   'inbox.viewAsA11y': '{mode}로 보기',
-  'inbox.browseTags': '태그',
   'inbox.browseTagsA11y': '태그로 둘러보기',
+  'inbox.openBookmarkHint': '북마크 상세 열기',
   'inbox.filterAll': '전체',
   'inbox.filterNoCollection': '받은함',
   'inbox.sectionMatches': { other: '검색 결과 {count}개' },
@@ -139,8 +139,7 @@ export const ko: Catalog = {
   'add.noteLabel': '메모 (선택)',
   'add.notePlaceholder': '왜 저장하나요?',
   'add.save': '북마크 저장',
-  'add.hint':
-    '기기에 즉시 저장되고 백그라운드에서 클라우드로 동기화됩니다 — 저장은 네트워크를 기다리지 않습니다.',
+  'add.hint': '즉시 저장됩니다. 동기화는 백그라운드에서 진행됩니다.',
 
   'toast.saved': 'Stash에 저장됨',
   'toast.savedCount': { one: 'Stash에 저장됨', other: '{count}개 Stash에 저장됨' },

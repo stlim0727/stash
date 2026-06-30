@@ -1,3 +1,4 @@
+import { hostFromUrl } from '@/domain/item-icon';
 import type { Bookmark } from '@/domain/types';
 
 /**
@@ -21,4 +22,39 @@ export function displayTitle(
   }
   const description = bookmark.description?.trim();
   return description || null;
+}
+
+/**
+ * A screen-reader-friendly label for a bookmark. Unlike {@link displayTitle},
+ * which falls back to the raw URL (so VoiceOver spells out the entire link) or
+ * the full note body, this prefers a bare hostname for URL bookmarks and a
+ * sensibly truncated form otherwise. Returns null when there is nothing to
+ * announce so callers can supply a localized "Untitled".
+ *
+ * Pure and dependency-free (aside from the host parser) so it is unit-testable.
+ */
+export function accessibilityTitle(
+  bookmark: Pick<Bookmark, 'title' | 'url' | 'description'>,
+): string | null {
+  const title = bookmark.title?.trim();
+  if (title) {
+    return truncateForSpeech(title);
+  }
+  const host = hostFromUrl(bookmark.url);
+  if (host) {
+    return host;
+  }
+  if (bookmark.url) {
+    return truncateForSpeech(bookmark.url);
+  }
+  const description = bookmark.description?.trim();
+  return description ? truncateForSpeech(description) : null;
+}
+
+function truncateForSpeech(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= 80) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 79).trimEnd()}…`;
 }
