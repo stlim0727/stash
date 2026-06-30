@@ -139,6 +139,102 @@ group aliases if you don't want the `testers` default.
 > inline CLI flag) and deleted after upload. Treat the JSON key like a password;
 > rotate it from the Cloud Console if it leaks.
 
+### App Testing Agent (Gemini-powered AI tests)
+
+The `android-apk.yml` workflow includes an optional step — **Run App Testing Agent** — that runs immediately after distribution. It uses the Gemini-powered [Firebase App Testing Agent](https://firebase.google.com/docs/app-distribution/android/app-testing-agent) to execute test cases you define in natural language in the Firebase console.
+
+The step is skipped when either repo variable is absent, so it is truly additive.
+
+#### One-time setup (Firebase console, ~10 min)
+
+1. In Firebase → App Distribution → **Test Cases**, click **Create test case**.
+2. Give each test case a name (e.g. "Load app") and describe the goal in plain English (e.g. "Open the app and verify the inbox loads without errors"). The console assigns each test case a short ID — copy it from the list.
+3. Back in the GitHub repo → *Settings* → *Secrets and variables* → *Actions* → **Variables**, add:
+
+| Variable | Value |
+| --- | --- |
+| `FIREBASE_TEST_CASES` | comma-separated test case IDs, e.g. `load-app,complete-onboarding` |
+| `FIREBASE_TEST_DEVICES` | semicolon-separated device specs, e.g. `model=shiba,version=34,locale=en,orientation=portrait` |
+
+Device `model` and `version` values come from the Firebase Test Lab device catalog (same catalog as Firebase Test Lab / Robo tests).
+
+#### Optional variables
+
+| Variable / Secret | Default | Purpose |
+| --- | --- | --- |
+| `FIREBASE_TEST_NON_BLOCKING` | `false` | Set `true` to fire tests and exit immediately without waiting for results |
+| `FIREBASE_TEST_USERNAME` *(secret)* | — | Auto-login username for apps behind a sign-in screen |
+| `FIREBASE_TEST_PASSWORD` *(secret)* | — | Auto-login password |
+| `FIREBASE_TEST_USERNAME_RESOURCE` | — | Android resource name of the username field (e.g. `com.stash.app:id/email`) |
+| `FIREBASE_TEST_PASSWORD_RESOURCE` | — | Android resource name of the password field |
+
+#### How it works in CI
+
+After the APK is uploaded and distributed, the workflow:
+1. Passes the release resource name (output by the distribute step) to `scripts/firebase-app-distribution-test.mjs`.
+2. The script calls the App Distribution REST API to create a test run for all specified test cases × devices.
+3. Unless `TEST_NON_BLOCKING=true`, it polls until every device execution reaches a terminal state and prints a per-device, per-test-case summary.
+4. A `PASSED` result exits 0; any other terminal state fails the step (won't block the Release — the release is already published before this step runs).
+
+This path runs **console-defined** test cases by ID. For test cases kept **in the repo as YAML**, see the next section.
+
+### App Testing Agent test cases (YAML, in-repo)
+
+Rather than only authoring test cases in the Firebase console, Stash keeps them
+in the repo as YAML under **`apps/mobile/apptesting/*.yaml`** so they're
+versioned, reviewed in PRs, and runnable from the CLI and CI. The same
+Gemini-powered agent drives a real device in Firebase Test Lab from these
+natural-language journeys.
+
+**The cases** — one file per surface:
+
+| File | Covers |
+| --- | --- |
+| `capture.yaml` | Add modal: save URL + note, invalid-URL error, idempotent duplicate save. |
+| `inbox.yaml` | View-mode switch, sort, search + clear, no-match empty state. |
+| `detail-and-ai.yaml` | Edit title/notes (auto-save), add/remove tags, reassign collection. |
+| `organize.yaml` | Long-press move-to-collection, tag-cloud facet, AI-suggestion review (best-effort). |
+| `trash.yaml` | Trash → view → restore, empty-trash cancel vs. confirm. |
+| `settings.yaml` | Language, export action sheet, sync status, developer mode, report-a-problem. |
+
+See `apps/mobile/apptesting/README.md` for the YAML format and how to add a case.
+
+**How the binary is chosen.** `apptesting:execute` runs against **the last
+release uploaded to Firebase App Distribution** when no APK path is given. Since
+`android-apk.yml` already distributes every build, the agent always tests the
+most recent build — no need to pass or rebuild a binary.
+
+**Run locally** (needs the Firebase CLI and a service-account key with the
+**Firebase Test Admin** + **Firebase App Distribution Admin** roles via ADC):
+
+```bash
+npm install -g firebase-tools
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+export FIREBASE_APP_ID=1:1234567890:android:abcdef
+
+pnpm test:apptesting                               # all cases, default device
+FIREBASE_TEST_DEVICES="model=tokay,version=36,locale=en,orientation=portrait" \
+  pnpm test:apptesting                             # pick a device
+firebase apptesting:execute --app "$FIREBASE_APP_ID" \
+  --test-dir apps/mobile/apptesting \
+  --test-devices "model=shiba,version=34,locale=en,orientation=portrait" \
+  --test-name-pattern "capture|inbox"              # subset by name regex
+```
+
+`GOOGLE_APPLICATION_CREDENTIALS` (ADC) is the supported auth path for the newer
+`apptesting:*` commands; the older `firebase login:ci --token` flow is deprecated
+and unreliable for them.
+
+**Run in CI.** The standalone **`.github/workflows/app-testing.yml`** workflow
+runs the same command — on demand via `workflow_dispatch` (choose `test-devices`
+and an optional `test-name-pattern`), or chained after a build via
+`workflow_call` (invoke it as a follow-on job to `android-apk.yml` to exercise
+the release that was just distributed). It reuses `FIREBASE_APP_ID` /
+`FIREBASE_SERVICE_ACCOUNT` (raw JSON **or** base64, same as the distribute step),
+writes the key to a temp file, validates it, runs against the last App
+Distribution release, and removes the key with a `trap` on exit. When the
+Firebase secrets are absent it **skips cleanly (exit 0)**.
+
 The rest of this doc covers the EAS-based path for store/internal builds.
 
 ## Supabase edge functions & backend deploy

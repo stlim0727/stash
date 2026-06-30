@@ -1,0 +1,131 @@
+name: App Testing Agent
+
+# Runs the Firebase (Gemini-powered) App Testing Agent against the YAML test
+# cases in apps/mobile/apptesting/*.yaml. Each YAML file describes a user
+# journey in natural language; the agent drives a real device in Firebase Test
+# Lab and reports pass/fail.
+#
+# Two entry points:
+#   - workflow_dispatch: run on demand, with overridable test-devices and an
+#     optional test-name-pattern to run a subset of cases.
+#   - workflow_call: invoke from another workflow (e.g. right after the APK is
+#     distributed) so a fresh release is exercised automatically.
+#
+# The binary under test is NOT passed on the command line: omitting it makes the
+# agent pull the *last release uploaded to Firebase App Distribution*. Chain this
+# after android-apk.yml's distribute step and it tests the build that just went
+# out.
+#
+# Auth: firebase-tools' newer commands authenticate via Application Default
+# Credentials. We write the service-account JSON from secrets to a temp file and
+# export GOOGLE_APPLICATION_CREDENTIALS at it. The step SKIPS cleanly — never
+# fails — when FIREBASE_APP_ID or FIREBASE_SERVICE_ACCOUNT are absent, so the
+# workflow is safe to wire up before Firebase is configured.
+#
+# Setup: docs/development/releasing.md → "App Testing Agent test cases".
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-devices:
+        description: 'Test device spec (model=...,version=...,locale=...,orientation=...). Repeat with ; for multiple.'
+        required: false
+        default: 'model=shiba,version=34,locale=en,orientation=portrait'
+      test-name-pattern:
+        description: 'Optional regex to run only matching test cases (by name). Blank = all cases.'
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      test-devices:
+        description: 'Test device spec passed through from the caller.'
+        required: false
+        type: string
+        default: 'model=shiba,version=34,locale=en,orientation=portrait'
+      test-name-pattern:
+        description: 'Optional regex to run only matching test cases.'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      FIREBASE_APP_ID:
+        required: false
+      FIREBASE_SERVICE_ACCOUNT:
+        required: false
+
+jobs:
+  app-testing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      # firebase-tools provides `apptesting:execute`. A global install keeps the
+      # CLI off the project's dependency tree (it's CI-only tooling).
+      - name: Install firebase-tools
+        run: npm install -g firebase-tools
+
+      # The actual run. Skips (exit 0) when Firebase isn't configured, so this
+      # workflow is harmless to enable before secrets exist.
+      - name: Run App Testing Agent (when configured)
+        env:
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # inputs.* is populated for both workflow_dispatch and workflow_call.
+          TEST_DEVICES: ${{ inputs.test-devices }}
+          TEST_NAME_PATTERN: ${{ inputs.test-name-pattern }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${FIREBASE_APP_ID:-}" ] || [ -z "${FIREBASE_SERVICE_ACCOUNT:-}" ]; then
+            echo "Firebase secrets not set (FIREBASE_APP_ID / FIREBASE_SERVICE_ACCOUNT) — skipping App Testing Agent."
+            exit 0
+          fi
+
+          # Write the service-account JSON to a temp file. The secret may be
+          # stored as raw JSON or base64-encoded JSON (a common way to dodge
+          # newline mangling) — accept either: raw JSON contains a '{', base64
+          # never does, so that tells them apart. Mirrors android-apk.yml.
+          SA="$RUNNER_TEMP/firebase-sa.json"
+          if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
+          else
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
+          fi
+
+          # Always remove the key on step exit — success, failure, or an early
+          # bail-out. Under `set -e` a non-zero command exits before any trailing
+          # cleanup line; a trap is the only thing that always fires.
+          trap 'rm -f "$SA"' EXIT
+
+          # Validate it really is a service-account key before invoking firebase,
+          # so a bad/empty/expired secret fails with a clear, non-sensitive
+          # message. Never print the parser error (it can echo private-key
+          # material that Actions masking won't redact); only the non-secret
+          # client_email is echoed.
+          if ! node -e 'let j;try{j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))}catch{process.exit(1)}if(j.type!=="service_account"||!j.client_email||!j.private_key){process.exit(1)}console.log("Firebase service account: "+j.client_email)' "$SA"; then
+            echo "::error::FIREBASE_SERVICE_ACCOUNT is not a valid service-account JSON (tried raw and base64). Re-create the key in Google Cloud → IAM → Service Accounts, grant it the 'Firebase Test Admin' + 'Firebase App Distribution Admin' roles, and store the downloaded JSON (raw, or base64 of it) in the secret."
+            exit 1
+          fi
+
+          # ADC is the supported auth path for newer firebase-tools commands.
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+
+          DEVICES="${TEST_DEVICES:-model=shiba,version=34,locale=en,orientation=portrait}"
+          echo "Running App Testing Agent against the last App Distribution release on devices: $DEVICES"
+
+          # Build args. No binary argument => the agent uses the last release
+          # uploaded to App Distribution. --test-name-pattern is optional.
+          ARGS=(apptesting:execute
+            --app "$FIREBASE_APP_ID"
+            --test-dir apps/mobile/apptesting
+            --test-devices "$DEVICES")
+          if [ -n "${TEST_NAME_PATTERN:-}" ]; then
+            ARGS+=(--test-name-pattern "$TEST_NAME_PATTERN")
+          fi
+
+          firebase "${ARGS[@]}"
+          # The EXIT trap above removes the key; set -e propagates any failure.
