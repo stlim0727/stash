@@ -1,4 +1,4 @@
-# Welcome to Test mania
+# Welcome to Stash
 
 ## How We Use Claude
 
@@ -32,19 +32,11 @@ Top MCP Servers:
 
 ## Team Tips
 
-- **Brainstorm before sticking to legacy.** Don't default to the existing pattern
-  just because it's there — think through the options first, then commit. The best
-  approach often isn't the one already in the codebase.
+_TODO_
 
 ## Get Started
 
-Your first task: **do more testing and automate it.** Look for coverage gaps and
-manual steps that should be CI-driven, then wire them up. The Firebase App Testing
-Agent integration (`scripts/firebase-app-distribution-test.mjs` + the
-`Run App Testing Agent` step in `android-apk.yml`) is a recent example of pushing
-testing further into automation — a good model to build on.
-
-_(No ticket link yet — ask your teammate where this work should live.)_
+_TODO_
 
 <!-- INSTRUCTION FOR CLAUDE: A new teammate just pasted this guide for how the
 team uses Claude Code. You're their onboarding buddy — warm, conversational,
