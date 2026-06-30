@@ -9,14 +9,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 
-import {
-  mockBookmarkTags,
-  mockBookmarks,
-  mockCollections,
-  mockEnrichments,
-  mockTags,
-  mockUserId,
-} from '@/domain/mock-data';
+import { mockUserId } from '@/domain/mock-data';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
 import {
@@ -359,15 +352,10 @@ function logStorageError(operation: string, error: unknown) {
 let repositoryReady: Promise<void> | null = null;
 function ensureRepositoryReady(): Promise<void> {
   if (!repositoryReady) {
-    // Seed the sample tags/links/collections and enrichments alongside the
-    // bookmarks so the synced samples behave like real cloud rows (e.g. their
-    // collection is assignable, not just a label) instead of leaning on the
-    // in-memory fallbacks in getCollection/getTagsForBookmark/getEnrichment.
-    repositoryReady = repository.init(
-      mockBookmarks,
-      { tags: mockTags, bookmarkTags: mockBookmarkTags, collections: mockCollections },
-      mockEnrichments,
-    );
+    // A fresh install starts empty — no sample bookmarks/tags/collections are
+    // seeded. `init` still runs to create the tables and mark the store seeded
+    // (so the empty state is durable), it just inserts nothing.
+    repositoryReady = repository.init([]);
     // A failed init must not poison the whole session — clear the cached
     // rejection so the next call retries (e.g. after a transient warm-start
     // open failure).
@@ -861,11 +849,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           }
           logStorageError('startup load', error);
           setLoadError(true);
-          setBookmarks((current) =>
-            current === null
-              ? mockBookmarks
-              : mergeById(current, mockBookmarks, (bookmark) => bookmark.id),
-          );
+          // Don't conjure sample bookmarks on a load failure — surface the empty
+          // (errored) state instead of fake content the user never saved.
+          setBookmarks((current) => current ?? []);
         }
       }
     })();
@@ -883,9 +869,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   // Precompute bookmarkId -> Tag[] once per tagData change so search (which calls
   // getTagsForBookmark for every bookmark on every keystroke) is an O(1) Map
-  // lookup instead of an O(N·M) scan + Set allocation per call. The per-bookmark
-  // verdict is unchanged: cloud tag links (refreshed by pull sync) win; a
-  // bookmark with no cloud links falls back to the seeded mock links.
+  // lookup instead of an O(N·M) scan + Set allocation per call. Cloud tag links
+  // (refreshed by pull sync) are the only source; a bookmark with no links has
+  // no tags.
   const tagsByBookmark = useMemo(() => {
     const map = new Map<string, Tag[]>();
     const tagsById = new Map(tagData.tags.map((tag) => [tag.id, tag]));
@@ -907,27 +893,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       map.set(bookmarkId, tags);
     }
 
-    // Seeded fallback only for bookmarks with no cloud links.
-    const mockTagsById = new Map(mockTags.map((tag) => [tag.id, tag]));
-    const mockIdsByBookmark = new Map<string, string[]>();
-    for (const link of mockBookmarkTags) {
-      const list = mockIdsByBookmark.get(link.bookmark_id);
-      if (list) {
-        list.push(link.tag_id);
-      } else {
-        mockIdsByBookmark.set(link.bookmark_id, [link.tag_id]);
-      }
-    }
-    for (const [bookmarkId, tagIds] of mockIdsByBookmark) {
-      if (map.has(bookmarkId)) {
-        continue;
-      }
-      const tags = tagIds
-        .map((tagId) => mockTagsById.get(tagId))
-        .filter((tag): tag is Tag => Boolean(tag));
-      map.set(bookmarkId, tags);
-    }
-
     return map;
   }, [tagData]);
 
@@ -940,20 +905,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (id: string | null) =>
       id === null
         ? undefined
-        : (tagData.collections.find((collection) => collection.id === id) ??
-          mockCollections.find((collection) => collection.id === id)),
+        : tagData.collections.find((collection) => collection.id === id),
     [tagData],
   );
 
   const getEnrichment = useCallback(
     (bookmarkId: string) => {
-      // Cloud enrichments (refreshed by pull sync) win over seeded samples.
-      const cached = enrichments
+      return enrichments
         .filter((enrichment) => enrichment.bookmark_id === bookmarkId)
         .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-      return (
-        cached ?? mockEnrichments.find((enrichment) => enrichment.bookmark_id === bookmarkId)
-      );
     },
     [enrichments],
   );

@@ -60,8 +60,32 @@ function renderDetail() {
 
 test('tapping a tag chip navigates to the Inbox filtered by that tag', async () => {
   mockRouteId = 'bookmark-raindrop';
-  // The seeded sample "bookmark-raindrop" carries the mock tag "design".
-  fakeRepo.__reset([makeStoredBookmark({ id: 'bookmark-raindrop', title: 'Raindrop review' })]);
+  // Seed a real tag + link for this bookmark (the app no longer ships sample data).
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: 'bookmark-raindrop', title: 'Raindrop review' })],
+    {
+      tags: [
+        {
+          id: 'tag-design',
+          user_id: 'user-test',
+          name: 'design',
+          slug: 'design',
+          source: 'user',
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      bookmarkTags: [
+        {
+          bookmark_id: 'bookmark-raindrop',
+          tag_id: 'tag-design',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [],
+    },
+  );
 
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
