@@ -6,6 +6,10 @@
 // App Distribution console (natural-language goals). Test case IDs come from the
 // "Test Cases" page in the Firebase console.
 //
+// The App Testing Agent lives on the v1alpha API. Each release test accepts a
+// single testCase resource name, so this script creates one release test per
+// test case ID and polls them all to completion.
+//
 // Inputs (env):
 //   GOOGLE_APPLICATION_CREDENTIALS  path to the service-account JSON key
 //   FIREBASE_APP_ID                 e.g. 1:1234567890:android:abcdef
@@ -25,7 +29,11 @@ import https from "node:https";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 
+// The App Testing Agent is on the v1alpha surface (not v1).
+// Ref: firebase-tools src/appdistribution/client.ts — appDistroV1AlphaClient
 const API = "https://firebaseappdistribution.googleapis.com";
+const API_VERSION = "v1alpha";
+
 const fail = (msg) => {
   console.error(`::error::Firebase App Testing Agent: ${msg}`);
   process.exit(1);
@@ -103,7 +111,8 @@ function parseDeviceSpec(spec) {
   const device = {};
   for (const part of spec.split(",")) {
     const eq = part.indexOf("=");
-    if (eq === -1) fail(`invalid device spec segment "${part}" (expected key=value)`);
+    if (eq === -1)
+      fail(`invalid device spec segment "${part}" (expected key=value)`);
     device[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
   }
   if (!device.model) fail(`device spec missing "model": "${spec}"`);
@@ -111,7 +120,22 @@ function parseDeviceSpec(spec) {
   return device;
 }
 
-const STATE_TERMINAL = new Set(["PASSED", "FAILED", "INCONCLUSIVE", "SKIPPED"]);
+// The v1alpha ReleaseTest has no top-level state field. Completion is determined
+// by inspecting each deviceExecution's state individually.
+// Ref: firebase-tools src/appdistribution/distribution.ts — awaitTestResults
+function allExecutionsTerminal(releaseTest) {
+  const executions = releaseTest.deviceExecutions || [];
+  if (!executions.length) return false;
+  return executions.every(
+    (e) => e.state === "PASSED" || e.state === "FAILED" || e.state === "INCONCLUSIVE",
+  );
+}
+
+function anyExecutionFailed(releaseTest) {
+  return (releaseTest.deviceExecutions || []).some(
+    (e) => e.state === "FAILED" || e.state === "INCONCLUSIVE",
+  );
+}
 
 async function main() {
   const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -130,12 +154,17 @@ async function main() {
       "missing GOOGLE_APPLICATION_CREDENTIALS, FIREBASE_APP_ID, or RELEASE_NAME",
     );
   }
-  if (!testCasesRaw) fail("TEST_CASES is required (comma-separated IDs from the Firebase console)");
-  if (!testDevicesRaw) fail("TEST_DEVICES is required (semicolon-separated device specs)");
+  if (!testCasesRaw)
+    fail(
+      "TEST_CASES is required (comma-separated IDs from the Firebase console)",
+    );
+  if (!testDevicesRaw)
+    fail("TEST_DEVICES is required (semicolon-separated device specs)");
 
   const sa = JSON.parse(readFileSync(keyPath, "utf8"));
   const projectNumber = appId.split(":")[1];
-  if (!projectNumber) fail(`could not parse project number from app id "${appId}"`);
+  if (!projectNumber)
+    fail(`could not parse project number from app id "${appId}"`);
   const appName = `projects/${projectNumber}/apps/${appId}`;
 
   const testCaseIds = testCasesRaw
@@ -147,117 +176,145 @@ async function main() {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  if (!testCaseIds.length) fail("TEST_CASES produced no valid IDs after parsing");
-  if (!deviceSpecs.length) fail("TEST_DEVICES produced no valid specs after parsing");
+  if (!testCaseIds.length)
+    fail("TEST_CASES produced no valid IDs after parsing");
+  if (!deviceSpecs.length)
+    fail("TEST_DEVICES produced no valid specs after parsing");
 
   const token = await getAccessToken(sa);
   console.log(
     `Authenticated as ${sa.client_email}; launching App Testing Agent on ${releaseName}`,
   );
 
-  const body = {
-    testCases: testCaseIds.map((id) => ({
-      testCase: `${appName}/testCases/${id}`,
-    })),
-    deviceExecutions: deviceSpecs.map((spec) => ({
-      device: parseDeviceSpec(spec),
-    })),
-  };
-  if (username && password) {
-    body.loginCredential = { username, password };
-    if (usernameResource || passwordResource) {
-      body.loginCredential.fieldHints = {};
-      if (usernameResource)
-        body.loginCredential.fieldHints.usernameResourceName = usernameResource;
-      if (passwordResource)
-        body.loginCredential.fieldHints.passwordResourceName = passwordResource;
-    }
-  }
+  const deviceExecutions = deviceSpecs.map((spec) => ({
+    device: parseDeviceSpec(spec),
+  }));
 
-  const create = await request(
-    "POST",
-    `${API}/v1/${releaseName}/tests`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
+  const loginCredential =
+    username && password
+      ? {
+          username,
+          password,
+          ...(usernameResource || passwordResource
+            ? {
+                fieldHints: {
+                  ...(usernameResource
+                    ? { usernameResourceName: usernameResource }
+                    : {}),
+                  ...(passwordResource
+                    ? { passwordResourceName: passwordResource }
+                    : {}),
+                },
+              }
+            : {}),
+        }
+      : undefined;
+
+  // v1alpha accepts one testCase per release test — create one per test case ID.
+  const testNames = [];
+  for (const id of testCaseIds) {
+    const testCaseResource = `${appName}/testCases/${id}`;
+    const body = {
+      deviceExecutions,
+      testCase: testCaseResource,
+      ...(loginCredential ? { loginCredential } : {}),
+    };
+    const res = await request(
+      "POST",
+      `${API}/${API_VERSION}/${releaseName}/tests`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-    },
-  );
-  if (create.status !== 200 || !create.json?.name) {
-    fail(
-      `failed to create test run (status ${create.status}): ${create.text?.slice(0, 300)}`,
     );
+    if (res.status !== 200 || !res.json?.name) {
+      fail(
+        `failed to create test run for "${id}" (status ${res.status}): ${res.text?.slice(0, 300)}`,
+      );
+    }
+    testNames.push(res.json.name);
+    console.log(`  Started: ${res.json.name} (testCase: ${id})`);
   }
-  const testName = create.json.name;
-  console.log(`App Testing Agent started: ${testName}`);
-  console.log(`  Test cases : ${testCaseIds.join(", ")}`);
-  console.log(`  Devices    : ${deviceSpecs.join(" | ")}`);
 
-  // Expose the test resource name to downstream steps.
+  console.log(
+    `App Testing Agent: ${testNames.length} test run(s) started on ${deviceSpecs.length} device(s).`,
+  );
+
+  // Expose test names to downstream steps.
   const ghOutput = process.env.GITHUB_OUTPUT;
   if (ghOutput) {
     const { appendFileSync } = await import("node:fs");
-    appendFileSync(ghOutput, `test_name=${testName}\n`);
+    appendFileSync(ghOutput, `test_names=${testNames.join(",")}\n`);
   }
 
   if (nonBlocking) {
     console.log(
       "TEST_NON_BLOCKING=true — not waiting for results. " +
-        "Check the Firebase console (App Distribution → Test Cases) for outcome.",
+        "Check the Firebase console (App Distribution → Test Cases) for outcomes.",
     );
     return;
   }
 
-  // Poll until all executions reach a terminal state (max ~30 min).
-  console.log("Waiting for test results (this may take 10–30 minutes)…");
-  let lastState = "";
-  for (let i = 0; i < 90; i++) {
-    await sleep(i < 3 ? 10_000 : 20_000);
-    const poll = await request("GET", `${API}/v1/${testName}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (poll.status !== 200) {
-      console.log(
-        `Warning: poll failed (status ${poll.status}) — retrying…`,
-      );
-      continue;
-    }
-    const state = poll.json.state || "UNKNOWN";
-    if (state !== lastState) {
-      console.log(`  State: ${state}`);
-      lastState = state;
-    }
-    if (STATE_TERMINAL.has(state)) {
-      printResults(poll.json);
-      if (state !== "PASSED") {
-        fail(`App Testing Agent finished with state: ${state}`);
+  // Poll until every release test reaches a terminal state on all device executions.
+  // Max ~20 min (40 attempts × 30 s). Mirrors firebase-tools awaitTestResults.
+  console.log("Waiting for test results (may take 10–20 minutes)…");
+  const pending = new Map(testNames.map((n) => [n, null]));
+  const failures = [];
+
+  for (let i = 0; i < 40 && pending.size > 0; i++) {
+    await sleep(30_000);
+    for (const name of [...pending.keys()]) {
+      const poll = await request("GET", `${API}/${API_VERSION}/${name}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (poll.status !== 200) {
+        console.log(`  Warning: poll failed for ${name} (status ${poll.status}) — retrying`);
+        continue;
       }
-      console.log("App Testing Agent: all test cases PASSED.");
-      return;
+      if (allExecutionsTerminal(poll.json)) {
+        pending.delete(name);
+        printTestResult(poll.json);
+        if (anyExecutionFailed(poll.json)) {
+          failures.push(name);
+        }
+      }
+    }
+    if (pending.size > 0) {
+      console.log(`  ${pending.size} test run(s) still in progress…`);
     }
   }
-  // Timed out — non-fatal so the build still publishes, but flag it.
-  console.log(
-    "::warning::App Testing Agent did not finish within the polling window. " +
-      "Check the Firebase console for results.",
-  );
+
+  if (pending.size > 0) {
+    console.log(
+      `::warning::App Testing Agent: ${pending.size} test run(s) did not finish within the polling window. ` +
+        "Check the Firebase console for results.",
+    );
+  }
+
+  if (failures.length) {
+    fail(`${failures.length} test run(s) had FAILED or INCONCLUSIVE executions.`);
+  }
+  console.log("App Testing Agent: all executions PASSED.");
 }
 
-function printResults(test) {
-  const executions = test.deviceExecutions || [];
-  for (const exec of executions) {
+function printTestResult(releaseTest) {
+  const caseId = (releaseTest.testCase || releaseTest.name || "?")
+    .split("/")
+    .pop();
+  console.log(`\n[testCase: ${caseId}]`);
+  for (const exec of releaseTest.deviceExecutions || []) {
     const dev = exec.device
       ? `${exec.device.model}@${exec.device.version}`
       : "unknown-device";
-    console.log(`\n[${dev}] ${exec.state || "?"}`);
-    for (const r of exec.testCaseResults || []) {
-      const caseId = (r.testCase || "").split("/").pop();
-      const icon = r.state === "PASSED" ? "✓" : "✗";
-      const reason = r.failedReason ? ` — ${r.failedReason}` : "";
-      console.log(`  ${icon} ${caseId}: ${r.state || "?"}${reason}`);
-    }
+    const icon = exec.state === "PASSED" ? "✓" : "✗";
+    const reason =
+      exec.failedReason || exec.inconclusiveReason
+        ? ` — ${exec.failedReason || exec.inconclusiveReason}`
+        : "";
+    console.log(`  ${icon} ${dev}: ${exec.state || "?"}${reason}`);
   }
 }
 
