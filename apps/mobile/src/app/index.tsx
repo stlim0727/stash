@@ -2127,13 +2127,14 @@ const styles = StyleSheet.create({
   sortRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    // Wrap on overflow so the rightmost control (the view segment) is never
-    // clipped off-screen: with three view modes the caption + Sort pill + Tags
-    // pill + segment can exceed a narrow 320–360dp width (worse with Korean
-    // labels / large text), more than the Sort label's truncation can absorb.
-    // `gap` doubles as the row gap when a control wraps to a second line; wide
-    // phones still render everything on one line.
-    flexWrap: 'wrap',
+    // Single row, never wrapped: the Sort pill, Tags pill, and view segment all
+    // share one line. The Sort pill (sortPillFlexible: flexShrink 1 + minWidth 0,
+    // label numberOfLines={1}) is the only flexible item, so on a narrow width
+    // it truncates its label — "Recently opened" → "Recently op…", its leading
+    // icon still naming the field — instead of shoving the rightmost view
+    // segment onto a wasteful second line. An earlier `flexWrap: 'wrap'` did
+    // exactly that, so we drop it; the view segment (marginLeft: 'auto') stays
+    // pinned right and is never clipped because the Sort pill yields the space.
     gap: 8,
     paddingHorizontal: 16,
     paddingTop: 8,
