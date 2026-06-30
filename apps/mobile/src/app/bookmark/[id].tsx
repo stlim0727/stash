@@ -21,6 +21,7 @@ import { enrichmentDegradedLabel, metadataStatusLabel, syncStatusLabel } from '@
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
+import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
 import { SuggestionSkeleton } from '@/ui/SuggestionSkeleton';
 import { TagField } from '@/ui/TagField';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -562,9 +563,11 @@ export default function BookmarkDetailScreen() {
     : null;
 
   return (
+    <KeyboardAvoidingScreen style={{ backgroundColor: palette.background }}>
     <ScrollView
       style={{ backgroundColor: palette.background }}
       contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 32 }]}
+      keyboardShouldPersistTaps="handled"
     >
       {/* Prefer a captured image's local URI (image bookmarks) over a fetched
           preview; either renders the same hero. */}
@@ -871,6 +874,7 @@ export default function BookmarkDetailScreen() {
 
       {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
     </ScrollView>
+    </KeyboardAvoidingScreen>
   );
 }
 
