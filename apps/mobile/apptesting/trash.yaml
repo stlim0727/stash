@@ -1,0 +1,61 @@
+tests:
+- displayName: App loaded
+  id: trash-app-loaded
+  steps:
+  - goal: Wait for the Stash app to finish loading and show the main bookmark list
+    finalScreenAssertion: The inbox screen with the bookmark list (or an empty state) is visible
+
+- displayName: Save a bookmark to trash later
+  id: trash-save-bookmark
+  prerequisiteTestCaseId: trash-app-loaded
+  steps:
+  - goal: Add a new bookmark for the URL https://example.com/trash-target
+    hint: Use the add or plus button to start saving a bookmark, then submit the URL
+    finalScreenAssertion: A bookmark for example.com appears in the inbox list
+
+- displayName: Trash a bookmark from the inbox
+  id: trash-bookmark-from-inbox
+  prerequisiteTestCaseId: trash-save-bookmark
+  steps:
+  - goal: Open the action menu for the example.com bookmark
+    hint: Long-press the bookmark card to bring up its action sheet
+    finalScreenAssertion: An action sheet with options including a trash or delete action is visible
+  - goal: Move the example.com bookmark to the trash
+    finalScreenAssertion: The example.com bookmark no longer appears in the inbox list
+
+- displayName: Confirm bookmark appears in trash
+  id: trash-view-in-trash
+  prerequisiteTestCaseId: trash-bookmark-from-inbox
+  steps:
+  - goal: Open the Trash screen
+    hint: Trash is reachable from the navigation or Settings menu
+    finalScreenAssertion: The Trash screen is visible and lists the example.com bookmark
+
+- displayName: Restore a bookmark from trash
+  id: trash-restore-bookmark
+  prerequisiteTestCaseId: trash-view-in-trash
+  steps:
+  - goal: Restore the example.com bookmark from the trash
+    hint: Use the bookmark's restore action on the Trash screen
+    finalScreenAssertion: The example.com bookmark is removed from the Trash list
+  - goal: Return to the inbox screen
+    finalScreenAssertion: The restored example.com bookmark appears again in the inbox list
+
+- displayName: Cancelling empty-trash keeps the items
+  id: trash-empty-cancel
+  prerequisiteTestCaseId: trash-app-loaded
+  steps:
+  - goal: Add a new bookmark for the URL https://example.net/keep-me, then long-press it and move it to the trash
+    hint: Save the URL, then long-press the card and choose the trash action
+    finalScreenAssertion: The example.net bookmark no longer appears in the inbox list
+  - goal: Open the Trash screen, start the Empty trash action, then cancel the confirmation dialog
+    hint: Use the empty trash action but dismiss / cancel the confirmation instead of accepting
+    finalScreenAssertion: The Trash screen still lists the example.net bookmark; nothing was permanently deleted
+
+- displayName: Empty the trash permanently
+  id: trash-empty-trash
+  prerequisiteTestCaseId: trash-empty-cancel
+  steps:
+  - goal: On the Trash screen, empty the trash and confirm the permanent deletion when prompted
+    hint: Use the empty trash action and accept the confirmation dialog
+    finalScreenAssertion: The Trash screen shows an empty state indicating there are no trashed bookmarks

@@ -1,0 +1,60 @@
+tests:
+- displayName: App loaded
+  id: settings-app-loaded
+  steps:
+  - goal: Wait for the Stash app to finish loading and show the Inbox
+    finalScreenAssertion: The Inbox screen is visible, showing either a list of bookmark cards or an empty inbox state.
+- displayName: Change app language
+  id: change-app-language
+  prerequisiteTestCaseId: settings-app-loaded
+  steps:
+  - goal: Open the Settings screen
+    finalScreenAssertion: The Settings screen is visible with sections such as Account, Preferences, and Your data.
+  - goal: Open the Language setting, then choose a different language than the one currently selected
+    hint: Tap the Language row to open the language chooser action sheet, then pick a specific language like English or Korean.
+    finalScreenAssertion: The action sheet closes and the Language row now shows the newly selected language, and the surrounding interface labels reflect that language.
+- displayName: Export bookmarks via action sheet
+  id: export-bookmarks
+  prerequisiteTestCaseId: settings-app-loaded
+  steps:
+  - goal: Save a new bookmark for the URL https://example.com so the library is not empty
+    hint: Use the add or capture button on the Inbox, paste the URL, and save it.
+    finalScreenAssertion: A bookmark for example.com appears in the Inbox list.
+  - goal: Open the Settings screen
+    finalScreenAssertion: The Settings screen is visible and the Export row under the Your data section is enabled (not showing a "nothing to export" state).
+  - goal: Open the Export action and choose the JSON format
+    hint: Tap the Export row to open the export format action sheet, then pick JSON.
+    finalScreenAssertion: The export format action sheet appeared offering HTML, CSV, and JSON options, and after picking JSON the app proceeds with the export without showing an error.
+- displayName: View sync status
+  id: view-sync-status
+  prerequisiteTestCaseId: settings-app-loaded
+  steps:
+  - goal: Open the Settings screen and locate the Sync row in the Account section
+    finalScreenAssertion: The Settings screen shows a Sync row with a status summary such as "all backed up", a pending count, or "local only".
+- displayName: Enable Developer Mode to reveal diagnostics
+  id: enable-developer-mode
+  prerequisiteTestCaseId: settings-app-loaded
+  steps:
+  - goal: Open the Settings screen and scroll to the Advanced section
+    finalScreenAssertion: The Advanced section with the Developer mode toggle is visible.
+  - goal: Turn on the Developer mode toggle
+    finalScreenAssertion: The Developer mode toggle is on and a Diagnostics section appears showing rows such as Supabase auth status, last pulled time, and app version.
+- displayName: Submit a problem report
+  id: submit-problem-report
+  prerequisiteTestCaseId: settings-app-loaded
+  steps:
+  - goal: Open the Settings screen and follow the Report a problem link
+    hint: The Report a problem link is near the bottom of Settings.
+    finalScreenAssertion: The Report a problem screen is visible with category chips, a description field, and a submit button.
+  - goal: Choose the "Idea" category, then type "The inbox is great, please add dark mode" into the description field
+    finalScreenAssertion: The Idea category chip is selected and the typed message appears in the description field.
+  - goal: Submit the report
+    finalScreenAssertion: A success confirmation message is shown and the description field is cleared.
+- displayName: Submit report blocked when message empty
+  id: submit-report-empty-message
+  prerequisiteTestCaseId: settings-app-loaded
+  steps:
+  - goal: Open the Settings screen and follow the Report a problem link
+    finalScreenAssertion: The Report a problem screen is visible with an empty description field.
+  - goal: Without typing any message, attempt to submit the report
+    finalScreenAssertion: The report is not submitted; the submit button is disabled or inactive and no success confirmation appears.

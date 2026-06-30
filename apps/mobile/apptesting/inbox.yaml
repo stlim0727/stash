@@ -1,0 +1,44 @@
+tests:
+- displayName: App loaded with a bookmark saved
+  id: inbox-with-bookmark
+  steps:
+  - goal: Wait for the Stash app to finish loading and show the Inbox home screen
+    finalScreenAssertion: The Inbox screen is visible, showing the Stash wordmark and a settings gear.
+  - goal: Save a new bookmark for the URL "https://en.wikipedia.org/wiki/Bob_Dylan"
+    hint: Use the add button (the floating plus / add control) to enter the URL, then confirm the save.
+    finalScreenAssertion: The app returns to the Inbox and a bookmark for the Bob Dylan Wikipedia page appears in the list.
+
+- displayName: Switch view mode to compact
+  id: inbox-switch-view-mode
+  prerequisiteTestCaseId: inbox-with-bookmark
+  steps:
+  - goal: Change the inbox layout to the compact (dense list) view
+    hint: Use the view-mode segmented control near the sort and tags controls; it has card, compact, and list options.
+    finalScreenAssertion: The bookmark list is shown in the compact layout, with the compact view option appearing selected, and the saved bookmark still visible.
+
+- displayName: Change sort order to alphabetical
+  id: inbox-change-sort
+  prerequisiteTestCaseId: inbox-with-bookmark
+  steps:
+  - goal: Open the sort menu and change the sort order to sort by name (alphabetical, A to Z)
+    hint: Tap the sort pill (it shows the current order with a chevron) to open the sort options.
+    finalScreenAssertion: The sort control now shows a by-name / alphabetical ordering and the bookmark list remains visible.
+
+- displayName: Search filters the list
+  id: inbox-search-filter
+  prerequisiteTestCaseId: inbox-with-bookmark
+  steps:
+  - goal: Type "dylan" into the search field to search across the saved bookmarks
+    hint: Tap the search input at the top of the Inbox and enter the text.
+    finalScreenAssertion: The list is filtered to show the Bob Dylan bookmark, and a matches indicator reflects the active search.
+  - goal: Clear the active search so the full inbox is shown again
+    hint: Use the clear control on the search field or the X on the active-filter bar.
+    finalScreenAssertion: The search is cleared and the full bookmark list is visible again with no active search filter.
+
+- displayName: Search with no matches shows empty state
+  id: inbox-search-no-match
+  prerequisiteTestCaseId: inbox-with-bookmark
+  steps:
+  - goal: Search for the text "zzqqxnomatch" which matches none of the saved bookmarks
+    hint: Type the text into the Inbox search field.
+    finalScreenAssertion: An empty-search state is shown indicating no bookmarks match the search, with no bookmark rows listed.

@@ -1,0 +1,50 @@
+tests:
+- displayName: Launch app to inbox
+  id: organize-app-loaded
+  steps:
+  - goal: Open the Stash app and wait for the inbox to finish loading
+    finalScreenAssertion: The inbox (home) screen is visible with the Stash wordmark at the top.
+
+- displayName: Save a bookmark for organizing
+  id: save-bookmark
+  prerequisiteTestCaseId: organize-app-loaded
+  steps:
+  - goal: Start adding a new bookmark, enter the URL "https://reactnative.dev" and save it
+    hint: Use the add/compose button to open the add-bookmark screen, type the URL, then save.
+    finalScreenAssertion: A confirmation toast appears and the bookmark for reactnative.dev is visible in the inbox list.
+
+- displayName: Move a bookmark to a collection from the long-press menu
+  id: inbox-move-to-collection
+  prerequisiteTestCaseId: save-bookmark
+  steps:
+  - goal: Long-press the reactnative.dev bookmark card in the inbox to open its action menu
+    finalScreenAssertion: An action sheet appears with options including "Move to collection" and "Trash".
+  - goal: Choose "Move to collection" and then pick one of the listed collections (or create one called "Dev")
+    hint: Selecting "Move to collection" switches the sheet to a list of collections; tap one of them or create a new one.
+    finalScreenAssertion: The action sheet closes and the bookmark is filed into the chosen collection (no longer in the no-collection set).
+
+- displayName: Browse tag cloud and apply a tag facet
+  id: browse-tags-apply-facet
+  prerequisiteTestCaseId: organize-app-loaded
+  steps:
+  - goal: Open the tag browsing screen
+    hint: Tap the "Tags" pill in the inbox controls row (next to the sort pill).
+    finalScreenAssertion: The browse-by-tags screen is visible with a tag cloud of "#tag" words and a Cloud / All segmented control at the top.
+  - goal: Tap any tag word in the cloud to filter the inbox by that tag
+    finalScreenAssertion: The app returns to the inbox showing an active-filter bar indicating the selected tag, and the list is narrowed to bookmarks carrying that tag.
+
+# The AI-suggestions review flow only surfaces once the ai-enrich edge function
+# has produced high-confidence suggestions over the network. These tests open the
+# review surface when it is available and accept a suggestion; on a device whose
+# inbox carries no pending suggestions the review banner won't appear, so treat
+# these as best-effort coverage of the accept path rather than guaranteed-green.
+- displayName: Accept an AI tag suggestion in review
+  id: review-accept-tag
+  prerequisiteTestCaseId: save-bookmark
+  steps:
+  - goal: Open the AI suggestions review screen if a review banner is present in the inbox
+    hint: Tap the review / "to review" banner near the top of the inbox that mentions pending suggestions. If no banner is present, the inbox has no suggestions to review.
+    finalScreenAssertion: Either the review screen is visible showing a bookmark card with suggested tag chips, or the inbox shows no review banner (nothing pending to review).
+  - goal: If the review screen is open, accept a suggested tag by tapping its tag chip, then open that bookmark's detail to confirm
+    hint: After accepting, navigate into the bookmark to verify the tag is now applied.
+    finalScreenAssertion: The accepted tag appears as an applied tag chip on the bookmark's detail screen (confirming it was applied, not merely dismissed).

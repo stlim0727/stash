@@ -1,0 +1,36 @@
+tests:
+- displayName: App loaded to Inbox
+  id: capture-app-loaded
+  steps:
+  - goal: Wait for the Stash app to finish loading and reach the main Inbox screen
+    finalScreenAssertion: The Inbox screen is visible, showing the list of bookmark cards (or an empty state) and an add/FAB button.
+- displayName: Add a bookmark with a URL and note
+  id: add-bookmark-with-note
+  prerequisiteTestCaseId: capture-app-loaded
+  steps:
+  - goal: Open the Add bookmark screen by tapping the add/FAB button
+    finalScreenAssertion: The Add bookmark screen is visible with a URL input field, a Note input field, and a Save button.
+  - goal: Enter the URL "https://example.com/articles/capture-test" into the URL field and the note "Read this later" into the Note field, then tap Save
+    finalScreenAssertion: The app returns to the Inbox and a confirmation toast appears indicating the bookmark was saved.
+  - goal: Confirm the newly saved bookmark is present in the Inbox
+    hint: Look for a card referencing example.com; you can use the search field if needed
+    finalScreenAssertion: A bookmark card for the example.com URL is visible in the Inbox list.
+- displayName: Invalid URL shows an inline error
+  id: add-invalid-url
+  prerequisiteTestCaseId: capture-app-loaded
+  steps:
+  - goal: Open the Add bookmark screen by tapping the add/FAB button
+    finalScreenAssertion: The Add bookmark screen is visible with a URL input field and a Save button.
+  - goal: Enter the clearly invalid text "not a url" into the URL field and tap Save
+    finalScreenAssertion: The app stays on the Add screen and an inline validation error message is shown near the URL field; no toast confirms a save.
+- displayName: Saving a duplicate URL is idempotent
+  id: add-duplicate-url
+  prerequisiteTestCaseId: add-bookmark-with-note
+  steps:
+  - goal: Open the Add bookmark screen again by tapping the add/FAB button
+    finalScreenAssertion: The Add bookmark screen is visible with an empty URL input field.
+  - goal: Enter the same URL "https://example.com/articles/capture-test" that was already saved earlier and tap Save
+    finalScreenAssertion: The app returns to the Inbox and a toast reading "Already in Stash" appears, indicating the bookmark already existed rather than being newly created.
+  - goal: Verify the Inbox still contains only one card for the example.com URL
+    hint: Search for example.com to count matching cards
+    finalScreenAssertion: Exactly one bookmark card for the example.com URL is present; no duplicate second card was created.

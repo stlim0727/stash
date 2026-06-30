@@ -1,0 +1,51 @@
+tests:
+- displayName: Save a bookmark to edit
+  id: save-bookmark-for-detail
+  steps:
+  - goal: Wait for the Stash app to finish loading and show the Inbox
+    finalScreenAssertion: The Inbox screen with the list of bookmark cards (or an empty state) is visible.
+  - goal: Add a new bookmark by saving the URL "https://www.nytimes.com"
+    hint: Use the add button (the FAB) to paste the URL and save it.
+    finalScreenAssertion: A new bookmark card for nytimes.com appears in the inbox list.
+
+- displayName: Open bookmark detail
+  id: open-bookmark-detail
+  prerequisiteTestCaseId: save-bookmark-for-detail
+  steps:
+  - goal: Open the nytimes.com bookmark to view its detail screen
+    hint: Tap the bookmark card in the inbox.
+    finalScreenAssertion: The bookmark detail screen is open, showing an editable title field, a notes field, and the bookmark's URL.
+
+- displayName: Edit title and notes
+  id: edit-title-and-notes
+  prerequisiteTestCaseId: open-bookmark-detail
+  steps:
+  - goal: Change the bookmark title to "My reading list" and then dismiss the keyboard so it auto-saves
+    hint: Edit the title field at the top, then tap elsewhere to blur it.
+    finalScreenAssertion: The title field shows "My reading list".
+  - goal: Type the note "Read this weekend" into the notes field and blur it to auto-save
+    finalScreenAssertion: The notes field contains the text "Read this weekend".
+  - goal: Go back to the inbox and reopen the same bookmark to confirm the edits persisted
+    finalScreenAssertion: The detail screen shows the title "My reading list" and the note "Read this weekend".
+
+- displayName: Add and remove a tag
+  id: add-and-remove-tag
+  prerequisiteTestCaseId: open-bookmark-detail
+  steps:
+  - goal: Add a tag named "news" to the bookmark
+    hint: Use the tag input on the detail screen and submit the tag.
+    finalScreenAssertion: A tag chip labeled "news" is shown on the detail screen.
+  - goal: Remove the "news" tag from the bookmark
+    hint: Tap the remove control on the "news" tag chip.
+    finalScreenAssertion: No tag chip labeled "news" is shown on the detail screen.
+
+- displayName: Reassign bookmark to a collection
+  id: reassign-collection
+  prerequisiteTestCaseId: open-bookmark-detail
+  steps:
+  - goal: Open the collection picker for this bookmark
+    hint: Tap the collection row or "currently in" area on the detail screen to open the picker.
+    finalScreenAssertion: The collection picker is open, listing available collections.
+  - goal: Create a new collection called "Articles" and assign this bookmark to it
+    hint: Use the create-collection option inside the picker if "Articles" does not exist, then select it.
+    finalScreenAssertion: The detail screen shows the bookmark is now filed in the "Articles" collection.
