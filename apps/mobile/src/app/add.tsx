@@ -6,6 +6,7 @@ import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
+import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
 import { useCaptureToast } from '@/ui/capture-toast';
 import { useBookmarks } from '@/store/bookmarks';
 
@@ -34,6 +35,7 @@ export default function AddBookmarkScreen() {
   }
 
   return (
+    <KeyboardAvoidingScreen style={{ backgroundColor: palette.background }}>
     <View style={[styles.container, { backgroundColor: palette.background }]}>
       <Card elevated={false} style={styles.captureCard}>
         <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
@@ -72,6 +74,7 @@ export default function AddBookmarkScreen() {
       <Button size="lg" onPress={handleSave}>{t('add.save')}</Button>
       <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('add.hint')}</Text>
     </View>
+    </KeyboardAvoidingScreen>
   );
 }
 

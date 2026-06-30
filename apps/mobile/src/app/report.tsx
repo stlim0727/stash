@@ -20,6 +20,7 @@ import type { DiagnosticsContext } from '@/domain/diagnostics';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { getLogEntries } from '@/observability/log-buffer';
 import { useT } from '@/i18n';
+import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
 import type { MessageKey } from '@/i18n/messages';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
@@ -184,6 +185,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   }
 
   return (
+    <KeyboardAvoidingScreen>
     <ScrollView
       contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
       keyboardShouldPersistTaps="handled"
@@ -278,6 +280,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         </Text>
       </Pressable>
     </ScrollView>
+    </KeyboardAvoidingScreen>
   );
 }
 
