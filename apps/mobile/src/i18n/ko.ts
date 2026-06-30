@@ -75,6 +75,7 @@ export const ko: Catalog = {
   'inbox.clearSearchA11y': '검색 지우기',
   'inbox.scopeFiltered': '필터: {label}',
   'inbox.scopeSearch': '“{query}” 검색 결과',
+  'inbox.scopeSearchIn': '{scope}에서 “{query}” 검색 결과',
   'inbox.scopeClearA11y': '필터를 지우고 모든 북마크 보기',
   'inbox.scopeClearSearchA11y': '검색 지우기',
   'inbox.siteChip': '🌐 {name}',

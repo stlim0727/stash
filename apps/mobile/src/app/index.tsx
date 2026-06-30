@@ -857,8 +857,19 @@ export default function InboxScreen() {
     a11y: string;
   } | null => {
     if (searching) {
+      // Search runs inside the active facet, so the banner names the scope it's
+      // searching within (Inbox/no-collection, a folder, or a #tag). `All` has
+      // no scope to name and keeps the bare "Results for …" form.
+      const scopeName =
+        filter.kind === 'all'
+          ? null
+          : filter.kind === 'uncollected'
+            ? t('inbox.filterNoCollection')
+            : (activeChip?.label ?? null);
       return {
-        text: t('inbox.scopeSearch', { query: debouncedQuery.trim() }),
+        text: scopeName
+          ? t('inbox.scopeSearchIn', { query: debouncedQuery.trim(), scope: scopeName })
+          : t('inbox.scopeSearch', { query: debouncedQuery.trim() }),
         icon: 'search-outline',
         action: 'clear-search',
         a11y: t('inbox.scopeClearSearchA11y'),
@@ -1228,6 +1239,7 @@ export default function InboxScreen() {
           <View style={styles.searchWrap}>
             <TextInput
               ref={searchRef}
+              testID="inbox-search-input"
               style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
               placeholder={searchPlaceholder}
               placeholderTextColor={palette.textSecondary}

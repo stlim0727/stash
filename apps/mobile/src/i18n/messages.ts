@@ -102,6 +102,10 @@ export const en = {
   // clear/✕ action is shown.
   'inbox.scopeFiltered': 'Filtered: {label}',
   'inbox.scopeSearch': 'Results for “{query}”',
+  // When a search runs inside an active facet (a collection, a tag, or the
+  // Inbox/no-collection view), the results are scoped to that facet — so the
+  // banner names it, e.g. "Results for “파스” in Inbox".
+  'inbox.scopeSearchIn': 'Results for “{query}” in {scope}',
   'inbox.scopeClearA11y': 'Clear filter and show all bookmarks',
   'inbox.scopeClearSearchA11y': 'Clear the search',
   // Site-name chip on a search result (generated site metadata, not a user
