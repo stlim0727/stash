@@ -457,11 +457,46 @@ jobs:
               echo "FIREBASE_SERVICE_ACCOUNT is not valid service-account JSON."; exit 1
             fi
             export GOOGLE_APPLICATION_CREDENTIALS="$SA"
-            export GITHUB_OUTPUT="$(mktemp)"
+            GH_OUT="$(mktemp)"; export GITHUB_OUTPUT="$GH_OUT"
             export FIREBASE_TESTER_GROUPS="${FIREBASE_TESTER_GROUPS:-testers}"
             APK_PATH="dist/${APK}" \
             RELEASE_NOTES="${REL_NAME} · ${SHA_SHORT} (${EXPO_PUBLIC_GIT_REF})" \
               node scripts/firebase-app-distribution.mjs
+            # Hand the uploaded release name to the App Testing step below.
+            REL_NAME_OUT="$(sed -n 's/^release_name=//p' "$GH_OUT" | tail -1)"
+            echo "export FIREBASE_DISTRIBUTED_RELEASE='${REL_NAME_OUT}'" >> "$BASH_ENV"
+      # Mirrors android-apk.yml's post-distribution "Run App Testing Agent" step:
+      # exercise the just-uploaded release when the App Testing vars are set, so a
+      # tagged/manual release build still gets that coverage. Skips cleanly when
+      # the release wasn't distributed or the test vars are absent.
+      - run:
+          name: Run App Testing Agent (when configured)
+          command: |
+            set -euo pipefail
+            if [ -z "${FIREBASE_DISTRIBUTED_RELEASE:-}" ]; then
+              echo "No distributed release (Firebase not configured) — skipping App Testing Agent."; exit 0
+            fi
+            if [ -z "${FIREBASE_TEST_CASES:-}" ] || [ -z "${FIREBASE_TEST_DEVICES:-}" ]; then
+              echo "FIREBASE_TEST_CASES / FIREBASE_TEST_DEVICES not set — skipping App Testing Agent."; exit 0
+            fi
+            SA="$(mktemp)"
+            if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
+              printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
+            else
+              printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
+            fi
+            trap 'rm -f "$SA"' EXIT
+            export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+            export GITHUB_OUTPUT="$(mktemp)"
+            RELEASE_NAME="$FIREBASE_DISTRIBUTED_RELEASE" \
+            TEST_CASES="$FIREBASE_TEST_CASES" \
+            TEST_DEVICES="$FIREBASE_TEST_DEVICES" \
+            TEST_NON_BLOCKING="${FIREBASE_TEST_NON_BLOCKING:-false}" \
+            TEST_USERNAME="${FIREBASE_TEST_USERNAME:-}" \
+            TEST_PASSWORD="${FIREBASE_TEST_PASSWORD:-}" \
+            TEST_USERNAME_RESOURCE="${FIREBASE_TEST_USERNAME_RESOURCE:-}" \
+            TEST_PASSWORD_RESOURCE="${FIREBASE_TEST_PASSWORD_RESOURCE:-}" \
+              node scripts/firebase-app-distribution-test.mjs
       - store_artifacts:
           path: dist
           destination: apk

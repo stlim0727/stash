@@ -21,6 +21,7 @@ preserved in git history under `.github/workflows/` before this change.
    | `FIREBASE_SERVICE_ACCOUNT` | apk, app-testing, ops | raw or base64 service-account JSON |
    | `FIREBASE_TESTER_GROUPS` | apk | defaults to `testers` |
    | `FIREBASE_TEST_DEVICES` / `FIREBASE_TEST_NAME_PATTERN` | app-testing | optional |
+   | `FIREBASE_TEST_CASES` / `FIREBASE_TEST_DEVICES` | apk (post-distribution App Testing) | both required to run the agent after a release build; `FIREBASE_TEST_NON_BLOCKING` / `FIREBASE_TEST_USERNAME` / `FIREBASE_TEST_PASSWORD` / `*_RESOURCE` optional |
    | `SENTRY_AUTH_TOKEN` / `SENTRY_ORG` / `SENTRY_PROJECT` | sentry release | release skips if token unset |
    | `GH_TOKEN` (or `GITHUB_TOKEN`) | apk | PAT with `contents:write`, used to publish the GitHub Release; the build still runs (APK in CircleCI artifacts) without it |
 
