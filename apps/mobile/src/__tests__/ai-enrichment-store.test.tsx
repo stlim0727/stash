@@ -236,6 +236,36 @@ test('a freshly captured bookmark gets AI suggestions automatically once it sync
   await waitFor(() => expect(store.current!.getEnrichment(REMOTE_ID)).toBeDefined());
 });
 
+test('getBookmark still resolves a bookmark by its pre-sync local id after the create swaps it onto the remote id', async () => {
+  // Regression: share a link, open its Detail immediately (navigated with the
+  // local id), and moments later its create syncs — swapping the row's id from
+  // local-* to the remote UUID. A Detail screen still holding the local id used
+  // to read "this bookmark could not be found" until you backed out and
+  // re-entered. getBookmark must follow the id alias so the live row resolves.
+  fakeRepo.__reset([]);
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([REMOTE_ID]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  let localId = '';
+  await act(async () => {
+    const result = store.current!.addBookmark({ url: 'example.com/shared-then-opened' });
+    if (result.status !== 'invalid') {
+      localId = result.bookmark.id;
+    }
+  });
+  expect(localId).toMatch(/^local-/);
+
+  // The create uploads and the row adopts the remote id.
+  await waitFor(() => expect(apiMock.__spies.createBookmark).toHaveBeenCalled());
+  await waitFor(() => expect(store.current!.getBookmark(REMOTE_ID)?.id).toBe(REMOTE_ID));
+
+  // The still-open Detail's stale local id now resolves to the same live row
+  // instead of "not found".
+  expect(store.current!.getBookmark(localId)?.id).toBe(REMOTE_ID);
+});
+
 test('re-hydrates a persisted deferred AI trigger and fires it after a restart', async () => {
   // Simulates: a create synced, then the app was killed during the metadata
   // fetch window. The marker was persisted; metadata is settled on relaunch.
