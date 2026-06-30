@@ -201,6 +201,7 @@ export const en = {
   'add.notePlaceholder': 'Why are you saving this?',
   'add.save': 'Save bookmark',
   'add.hint': 'Saved instantly. Sync happens in the background.',
+  'add.saving': 'Saving…',
 
   // Capture toasts (also used by the share flow).
   'toast.saved': 'Saved to Stash',

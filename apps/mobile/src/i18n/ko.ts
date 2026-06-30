@@ -140,6 +140,7 @@ export const ko: Catalog = {
   'add.notePlaceholder': '왜 저장하나요?',
   'add.save': '북마크 저장',
   'add.hint': '즉시 저장됩니다. 동기화는 백그라운드에서 진행됩니다.',
+  'add.saving': '저장 중…',
 
   'toast.saved': 'Stash에 저장됨',
   'toast.savedCount': { one: 'Stash에 저장됨', other: '{count}개 Stash에 저장됨' },
