@@ -192,6 +192,13 @@ async function main() {
     console.log("No tester groups configured; release uploaded but not distributed.");
   }
 
+  // Expose the release name to downstream workflow steps (e.g. App Testing Agent).
+  const ghOutput = process.env.GITHUB_OUTPUT;
+  if (ghOutput) {
+    const { appendFileSync } = await import("node:fs");
+    appendFileSync(ghOutput, `release_name=${releaseName}\n`);
+  }
+
   console.log("Firebase App Distribution upload complete.");
 }
 

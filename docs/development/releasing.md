@@ -139,6 +139,43 @@ group aliases if you don't want the `testers` default.
 > inline CLI flag) and deleted after upload. Treat the JSON key like a password;
 > rotate it from the Cloud Console if it leaks.
 
+### App Testing Agent (Gemini-powered AI tests)
+
+The `android-apk.yml` workflow includes an optional step — **Run App Testing Agent** — that runs immediately after distribution. It uses the Gemini-powered [Firebase App Testing Agent](https://firebase.google.com/docs/app-distribution/android/app-testing-agent) to execute test cases you define in natural language in the Firebase console.
+
+The step is skipped when either repo variable is absent, so it is truly additive.
+
+#### One-time setup (Firebase console, ~10 min)
+
+1. In Firebase → App Distribution → **Test Cases**, click **Create test case**.
+2. Give each test case a name (e.g. "Load app") and describe the goal in plain English (e.g. "Open the app and verify the inbox loads without errors"). The console assigns each test case a short ID — copy it from the list.
+3. Back in the GitHub repo → *Settings* → *Secrets and variables* → *Actions* → **Variables**, add:
+
+| Variable | Value |
+| --- | --- |
+| `FIREBASE_TEST_CASES` | comma-separated test case IDs, e.g. `load-app,complete-onboarding` |
+| `FIREBASE_TEST_DEVICES` | semicolon-separated device specs, e.g. `model=shiba,version=34,locale=en,orientation=portrait` |
+
+Device `model` and `version` values come from the Firebase Test Lab device catalog (same catalog as Firebase Test Lab / Robo tests).
+
+#### Optional variables
+
+| Variable / Secret | Default | Purpose |
+| --- | --- | --- |
+| `FIREBASE_TEST_NON_BLOCKING` | `false` | Set `true` to fire tests and exit immediately without waiting for results |
+| `FIREBASE_TEST_USERNAME` *(secret)* | — | Auto-login username for apps behind a sign-in screen |
+| `FIREBASE_TEST_PASSWORD` *(secret)* | — | Auto-login password |
+| `FIREBASE_TEST_USERNAME_RESOURCE` | — | Android resource name of the username field (e.g. `com.stash.app:id/email`) |
+| `FIREBASE_TEST_PASSWORD_RESOURCE` | — | Android resource name of the password field |
+
+#### How it works in CI
+
+After the APK is uploaded and distributed, the workflow:
+1. Passes the release resource name (output by the distribute step) to `scripts/firebase-app-distribution-test.mjs`.
+2. The script calls the App Distribution REST API to create a test run for all specified test cases × devices.
+3. Unless `TEST_NON_BLOCKING=true`, it polls until every device execution reaches a terminal state and prints a per-device, per-test-case summary.
+4. A `PASSED` result exits 0; any other terminal state fails the step (won't block the Release — the release is already published before this step runs).
+
 The rest of this doc covers the EAS-based path for store/internal builds.
 
 ## Supabase edge functions & backend deploy

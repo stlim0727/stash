@@ -372,6 +372,7 @@ jobs:
       # secrets are absent, so the workflow still runs without Firebase set up.
       # Setup: docs/development/releasing.md → "Firebase App Distribution".
       - name: Distribute to Firebase App Distribution (when configured)
+        id: firebase-distribute
         env:
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
@@ -422,3 +423,48 @@ jobs:
           RELEASE_NOTES="${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})" \
             node scripts/firebase-app-distribution.mjs
           # The EXIT trap above removes the key; bash -e propagates any failure.
+
+      # Run the Gemini-powered App Testing Agent on the just-uploaded release.
+      # Requires the same Firebase secrets as the distribute step above, plus two
+      # repo variables that are intentionally skipped when absent so the workflow
+      # still runs without AI testing configured.
+      #
+      #   FIREBASE_TEST_CASES   comma-separated IDs from the Firebase console
+      #                         App Distribution → Test Cases page
+      #                         e.g. "load-app,complete-onboarding"
+      #   FIREBASE_TEST_DEVICES semicolon-separated device specs
+      #                         e.g. "model=shiba,version=34,locale=en,orientation=portrait"
+      #
+      # Optional variables:
+      #   FIREBASE_TEST_NON_BLOCKING  set to "true" to launch tests and exit
+      #                               without waiting for results (default: wait)
+      #   FIREBASE_TEST_USERNAME / FIREBASE_TEST_PASSWORD  auto-login credentials
+      #
+      # Setup: docs/development/releasing.md → "App Testing Agent".
+      - name: Run App Testing Agent (when configured)
+        id: firebase-test
+        if: >-
+          steps.firebase-distribute.outputs.release_name != '' &&
+          vars.FIREBASE_TEST_CASES != '' &&
+          vars.FIREBASE_TEST_DEVICES != ''
+        env:
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          RELEASE_NAME: ${{ steps.firebase-distribute.outputs.release_name }}
+          TEST_CASES: ${{ vars.FIREBASE_TEST_CASES }}
+          TEST_DEVICES: ${{ vars.FIREBASE_TEST_DEVICES }}
+          TEST_NON_BLOCKING: ${{ vars.FIREBASE_TEST_NON_BLOCKING || 'false' }}
+          TEST_USERNAME: ${{ secrets.FIREBASE_TEST_USERNAME }}
+          TEST_PASSWORD: ${{ secrets.FIREBASE_TEST_PASSWORD }}
+          TEST_USERNAME_RESOURCE: ${{ vars.FIREBASE_TEST_USERNAME_RESOURCE }}
+          TEST_PASSWORD_RESOURCE: ${{ vars.FIREBASE_TEST_PASSWORD_RESOURCE }}
+        run: |
+          SA="$RUNNER_TEMP/firebase-sa.json"
+          if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
+          else
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
+          fi
+          trap 'rm -f "$SA"' EXIT
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+          node scripts/firebase-app-distribution-test.mjs
