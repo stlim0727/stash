@@ -1,0 +1,88 @@
+# Android screenshots on TestMu AI (LambdaTest) REAL devices via HyperExecute —
+# the managed-device path for #269 item 3a, to escape the GitHub-runner emulator
+# boot flakiness that blocked the self-hosted gate (#269).
+#
+# Runs our existing Maestro flows (apps/mobile/.maestro/*.yaml) on a real Android
+# device, pulls the screenshots back, and uploads them. Visual-diff (feeding
+# scripts/screenshot-diff.mjs) is wired once baselines exist — first this proves
+# the pipeline and lets us MEASURE free-tier consumption.
+#
+# MANUAL ONLY for now (workflow_dispatch) so it never spends TestMu credits
+# without an explicit trigger. Needs repo secrets LT_USERNAME + LT_ACCESS_KEY
+# (referenced by name — the values never appear in logs).
+name: Android Screenshots (TestMu cloud)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LT_USERNAME: ${{ secrets.LT_USERNAME }}
+      LT_ACCESS_KEY: ${{ secrets.LT_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check credentials are configured
+        run: |
+          if [ -z "${LT_USERNAME:-}" ] || [ -z "${LT_ACCESS_KEY:-}" ]; then
+            echo "::error::LT_USERNAME / LT_ACCESS_KEY secrets are not set on this repo."
+            exit 1
+          fi
+          echo "Credentials present for user: $LT_USERNAME"
+
+      # The app under test: the arm64 APK already published to the rolling `dev`
+      # prerelease (real devices are ARM). No throwaway build needed — this is the
+      # synergy noted in #269 item 1.
+      - name: Fetch app APK from the dev prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download dev --repo "${{ github.repository }}" \
+            --pattern '*.apk' \
+            --output apps/mobile/.maestro/hyperexecute/app.apk --clobber
+          ls -la apps/mobile/.maestro/hyperexecute/app.apk
+
+      - name: Download HyperExecute CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL -o hyperexecute https://downloads.lambdatest.com/hyperexecute/linux/hyperexecute
+          chmod +x hyperexecute
+          ./hyperexecute --version || true
+
+      # Uploads the project, runs the Maestro flows on real devices, and pulls
+      # artifacts (the screenshots) back to the runner. `|| true` so we still
+      # collect whatever screenshots/logs came back even if a flow failed.
+      - name: Run Maestro flows on TestMu real devices
+        run: |
+          set -uo pipefail
+          ./hyperexecute \
+            --user "$LT_USERNAME" --key "$LT_ACCESS_KEY" \
+            --config apps/mobile/.maestro/hyperexecute/hyperexecute.yaml \
+            --download-artifacts || true
+
+      # Gather every PNG that came back (the CLI's artifact-download location
+      # isn't documented cleanly, so search broadly) into one dir for review.
+      - name: Collect screenshots
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p cloud-screenshots
+          # Exclude the input APK dir and node_modules; copy any other PNGs.
+          find . -type f -name '*.png' \
+            -not -path './apps/mobile/.maestro/hyperexecute/*' \
+            -not -path '*/node_modules/*' -print -exec cp -f {} cloud-screenshots/ \; || true
+          echo "Collected:"; ls -la cloud-screenshots/ || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: testmu-cloud-screenshots
+          path: cloud-screenshots/*.png
+          if-no-files-found: warn
