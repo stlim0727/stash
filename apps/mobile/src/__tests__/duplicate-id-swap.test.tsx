@@ -130,4 +130,14 @@ test('a synced create-leftover does not duplicate a bookmark whose remote twin w
   expect(carbonara[0].id).toBe(REMOTE_ID);
   // The stranded local-* row is gone from the visible library.
   expect(result.current.inbox.some((b) => b.id === LOCAL_ID)).toBe(false);
+
+  // ...and durably: the replaceBookmark swap must collapse the destination twin
+  // too, so a reload (listBookmarks) can't resurface the duplicate. Guards the
+  // web/localStorage path, whose replaceBookmark renamed previousId but left a
+  // pre-existing destination-id row behind.
+  const stored = fakeRepo
+    .__bookmarks()
+    .filter((b) => b.url === 'https://youtube.com/shorts/carbonara');
+  expect(stored).toHaveLength(1);
+  expect(stored[0].id).toBe(REMOTE_ID);
 });

@@ -92,9 +92,13 @@ class WebBookmarkRepository implements BookmarkRepository {
   }
 
   async replaceBookmark(previousId: string, bookmark: Bookmark): Promise<void> {
-    this.bookmarks = this.bookmarks.map((existing) =>
-      existing.id === previousId ? bookmark : existing,
-    );
+    // Rename previousId -> bookmark AND drop any row already under the
+    // destination id (a remote twin a pull inserted) so an id swap can never
+    // leave two rows sharing one id that resurface on the next load. Mirrors the
+    // native store's `DELETE previousId` + `INSERT OR REPLACE` (PK) semantics.
+    this.bookmarks = this.bookmarks
+      .filter((existing) => existing.id === previousId || existing.id !== bookmark.id)
+      .map((existing) => (existing.id === previousId ? bookmark : existing));
     this.write(BOOKMARKS_KEY, this.bookmarks);
   }
 
