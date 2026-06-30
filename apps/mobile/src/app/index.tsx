@@ -1561,11 +1561,18 @@ export default function InboxScreen() {
                 ]}
                 onPress={openDetail}
                 onLongPress={() => setMenuItem(item)}
+                // accessible={false} demotes the row to a plain container: a
+                // Pressable is accessible by default, which would otherwise add a
+                // second, noisy a11y target (label inferred from the raw URL +
+                // sibling action text) and collapse the nested controls. With it
+                // off, only the inner title button and the ↗ / … buttons below
+                // are focusable.
+                accessible={false}
               >
                 <ItemIcon item={item} compact testID="inbox-list-monogram" />
-                {/* Only the title/body is the accessible "open details" button;
-                    the row container stays a plain (non-accessible) Pressable so
-                    the nested ↗ / … buttons remain independently focusable. */}
+                {/* The title/body is the accessible "open details" button; the
+                    row container above is accessible={false} so the nested ↗ / …
+                    buttons remain independently focusable. */}
                 <Pressable
                   style={styles.listText}
                   accessibilityRole="button"
@@ -1675,6 +1682,10 @@ export default function InboxScreen() {
                 ]}
                 onPress={openDetail}
                 onLongPress={() => setMenuItem(item)}
+                // See the list branch: keep the row a plain container so the
+                // nested title button and ↗ / … controls stay independently
+                // focusable instead of being swallowed by a noisy row target.
+                accessible={false}
               >
                 {thumbUri ? (
                   <Image
@@ -1755,6 +1766,10 @@ export default function InboxScreen() {
               <Pressable
                 onPress={openDetail}
                 onLongPress={() => setMenuItem(item)}
+                // See the list branch: keep the card a plain container so the
+                // nested title button and the sibling … control stay
+                // independently focusable.
+                accessible={false}
               >
                 {item.local_image_uri ?? item.preview_image_url ? (
                   <Image
