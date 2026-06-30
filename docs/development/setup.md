@@ -76,9 +76,9 @@ To enable it, create a React Native project in Sentry, then provide its DSN via
 the `EXPO_PUBLIC_SENTRY_DSN` environment variable wherever you build:
 
 - **Local dev** — add `EXPO_PUBLIC_SENTRY_DSN` to your `.env.local`.
-- **Android APK CI** (`.github/workflows/android-apk.yml`) — set a repository
-  secret named `EXPO_PUBLIC_SENTRY_DSN`; the workflow already passes it through
-  to the build, and a CI guard asserts it gets inlined into the bundle.
+- **Android APK CI** (CircleCI `android_apk` job) — set a CircleCI project/context
+  environment variable named `EXPO_PUBLIC_SENTRY_DSN`; the job already passes it
+  through to the build, and a CI guard asserts it gets inlined into the bundle.
 - **EAS builds** — set it as an EAS secret / `eas.json` env value.
 
 Optional tuning:

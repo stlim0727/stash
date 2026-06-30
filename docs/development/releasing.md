@@ -3,7 +3,8 @@
 ## Quick path: installable Android APK from CI (no EAS account)
 
 For a real, installable Android APK without any Expo/EAS account, use the
-**`.github/workflows/android-apk.yml`** workflow — it does `expo prebuild` →
+**CircleCI `android_apk` job** (`.circleci/config.yml`; see
+`docs/development/ci-circleci.md`) — it does `expo prebuild` →
 Gradle `assembleRelease` (debug-signed, standalone) and publishes the APK.
 
 **Every build publishes a GitHub Release with the raw `.apk` plus an install QR
@@ -11,18 +12,19 @@ code**, so the phone-only flow is: trigger → open the Release → scan the QR 
 tap the downloaded `.apk` → install (allow "install unknown apps" once). No
 desktop, no artifact zip to unpack.
 
-- Run it via **workflow dispatch** with the `version` input, or by pushing a tag:
+- Run it by starting a CircleCI pipeline with `run_apk: true` (plus an optional
+  `version` parameter), or by pushing a tag:
   - clean **`vX.Y.Z`** ⇒ a **versioned, stable** release (non-prerelease, marked
     _latest_), kept forever; its notes come from `docs/release-notes/<tag>.md`.
-  - blank dispatch / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ refreshes the single
+  - blank `version` / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ refreshes the single
     rolling **`dev`** prerelease in place, so test builds don't clutter Releases.
-- The APK is also still uploaded as a **run artifact** (`stash-android-apk`) for
-  tooling — but for installing on a phone, prefer the Release asset (no unzip).
-- `gh` CLI: `gh workflow run android-apk.yml -f version=v0.1.7-rc8 --ref main`,
-  then grab the link from `gh release view dev` (or `gh run download <run-id> -n
-  stash-android-apk` for the raw artifact).
-- Build is **arm64-v8a only** (~6–7 min). Step-by-step (incl. the GitHub MCP-tool
-  sequence for Claude Code web sessions) is in **`AGENTS.md`**.
+- The APK is also stored as a **CircleCI artifact** for tooling — but for
+  installing on a phone, prefer the Release asset (no unzip).
+- API trigger:
+  `curl -X POST https://circleci.com/api/v2/project/gh/<org>/<repo>/pipeline -H "Circle-Token: $CIRCLE_TOKEN" -H 'content-type: application/json' -d '{"branch":"main","parameters":{"run_apk":true,"version":"v0.1.7-rc8"}}'`,
+  then grab the link from the published GitHub Release (`dev` for test builds).
+- Build is **arm64-v8a only** (~6–7 min). Step-by-step is in **`AGENTS.md`**;
+  CircleCI project setup is in **`docs/development/ci-circleci.md`**.
 
 > **Why there's still an "install unknown apps" prompt:** that's inherent to
 > sideloading any APK outside an app store. To cut the repeat friction, set up
@@ -91,8 +93,8 @@ because it's a bare sideload. **Firebase App Distribution** removes the repeat
 friction: testers install once through the **App Tester** app, then every new CI
 build appears there with a push notification — no per-build toggling, no zip.
 
-The CI step already exists in `android-apk.yml` (`Distribute to Firebase App
-Distribution`). It **skips cleanly until two repo secrets are set**, so nothing
+The CI step already exists in the `android_apk` job (`Distribute to Firebase App
+Distribution`). It **skips cleanly until two env vars are set**, so nothing
 breaks before setup. Once configured, every build uploads automatically.
 
 ### One-time setup (Firebase Console, ~10 min)
@@ -141,7 +143,7 @@ group aliases if you don't want the `testers` default.
 
 ### App Testing Agent (Gemini-powered AI tests)
 
-The `android-apk.yml` workflow includes an optional step — **Run App Testing Agent** — that runs immediately after distribution. It uses the Gemini-powered [Firebase App Testing Agent](https://firebase.google.com/docs/app-distribution/android/app-testing-agent) to execute test cases you define in natural language in the Firebase console.
+A separate CircleCI **`app_testing` job** (triggered with `run_app_testing: true`, typically after an `android_apk` build) runs the **App Testing Agent**. It uses the Gemini-powered [Firebase App Testing Agent](https://firebase.google.com/docs/app-distribution/android/app-testing-agent) to execute test cases you define in natural language in the Firebase console.
 
 The step is skipped when either repo variable is absent, so it is truly additive.
 
@@ -214,7 +216,7 @@ See `apps/mobile/apptesting/README.md` for the YAML format and how to add a case
 
 **How the binary is chosen.** `apptesting:execute` runs against **the last
 release uploaded to Firebase App Distribution** when no APK path is given. Since
-`android-apk.yml` already distributes every build, the agent always tests the
+the `android_apk` job distributes every build, the agent always tests the
 most recent build — no need to pass or rebuild a binary.
 
 **Run locally** (needs the Firebase CLI and a service-account key with the
@@ -240,11 +242,11 @@ firebase apptesting:execute --app "$FIREBASE_APP_ID" \
 `apptesting:*` commands; the older `firebase login:ci --token` flow is deprecated
 and unreliable for them.
 
-**Run in CI.** The standalone **`.github/workflows/app-testing.yml`** workflow
-runs the same command — on demand via `workflow_dispatch` (choose `test-devices`
-and an optional `test-name-pattern`), or chained after a build via
-`workflow_call` (invoke it as a follow-on job to `android-apk.yml` to exercise
-the release that was just distributed). It reuses `FIREBASE_APP_ID` /
+**Run in CI.** The CircleCI **`app_testing` job** runs the same command — on
+demand via the `run_app_testing` pipeline parameter (override `test-devices`
+with `FIREBASE_TEST_DEVICES` and pass an optional `FIREBASE_TEST_NAME_PATTERN`).
+With no binary argument it exercises the last release uploaded to App
+Distribution, so trigger it after an `android_apk` build. It reuses `FIREBASE_APP_ID` /
 `FIREBASE_SERVICE_ACCOUNT` (raw JSON **or** base64, same as the distribute step),
 writes the key to a temp file, validates it, runs against the last App
 Distribution release, and removes the key with a `trap` on exit. When the
@@ -376,10 +378,10 @@ Two pieces make stack traces readable and trackable:
    config plugin when these build-time secrets are present:
    `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` (set via
    `eas secret:create` / the EAS dashboard).
-2. **Release + commit association** is created by the
-   `.github/workflows/sentry-release.yml` workflow when a `v*` tag is pushed
-   (or via manual dispatch). It needs the same three values as **repository
-   secrets**; the job skips cleanly if `SENTRY_AUTH_TOKEN` is unset.
+2. **Release + commit association** is created by the CircleCI `sentry_release`
+   job (part of the `release` workflow) when a `v*` tag is pushed. It needs the
+   same three values as **CircleCI environment variables**; the job skips
+   cleanly if `SENTRY_AUTH_TOKEN` is unset.
 
 ## Smoke test checklist for an internal build
 

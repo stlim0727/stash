@@ -26,7 +26,7 @@ This file captures the project state and working conventions so any agent (Codex
 ## Post-MVP work completed
 
 - **Test runner** — two lanes. `pnpm test`: Node 22's built-in runner (`--experimental-transform-types` + the `@/` alias resolver in `scripts/alias-loader.mjs`, preloaded via `--import`) over `src/**/*.test.ts` for pure logic (URL handling, enrichment, page-metadata parser, sync/pull engines; fake API/repository). `pnpm test:components`: jest-expo + @testing-library/react-native over `src/**/*.test.tsx` for hooks/components (store behavior via `renderHook`, Inbox rendering/search) with an in-memory repository fake (`src/__tests__/helpers/fake-repository.ts`); component tests live in `src/__tests__/` so expo-router never sees them as routes. RNTL v14 note: `render`/`renderHook`/`fireEvent` are async — await them, and use `await act(async () => …)` for state updates.
-- **CI** — `.github/workflows/ci.yml` runs lint, typecheck, and tests on pushes to main and on every PR.
+- **CI** — runs on **CircleCI** (`.circleci/config.yml`); the `ci` workflow runs lint, typecheck, and tests on every push/PR. Migrated off GitHub Actions after the Actions quota was exhausted (old workflows are in git history); see `docs/development/ci-circleci.md` for project setup and the full Actions→CircleCI mapping.
 - **Mutation sync** — queue entries carry an `operation` (`create`/`update`/`delete`). Archiving/editing/collection-assigning a synced bookmark enqueues an `update` (the sync service re-sends the LATEST user-editable fields **plus generated metadata** — site_name/favicon_url/preview_image_url/metadata_status — so on-device enrichment reaches the cloud; last write wins); deleting one enqueues a durable `delete` (permanent remote removal, survives restart). Completing enrichment for a synced bookmark also enqueues such an update. One queue entry per bookmark: newer mutations supersede older ones. A bookmark archived while its create was uploading gets reconciled with a follow-up update. SQLite migration: `ALTER TABLE ... ADD COLUMN operation` guarded by try/catch for pre-existing databases.
 - **Real OpenGraph fetch** — `src/domain/page-metadata.ts` fetches a page (AbortController timeout, HTML-only, size-capped) and parses og:/twitter: meta, `<title>`, and favicon links; `enrichBookmark` prefers fetched values and falls back to URL-derived ones, with the fetcher injectable for offline tests.
   - **Preview extraction for hostile portals (Naver etc.)** — header-less fetches were getting a 403/JS shell from large CJK portals, so a `naver.me/<code>` short link previewed as the bare slug. The fetcher now uses a **hybrid User-Agent**: the honest `StashBot/1.0` UA first, and only when a site refuses it (non-OK, or a 200 shell with no `<title>`) a single retry with a browser UA — transparent by default, impersonating only when a site actively gates on a browser. UTF-8 is decoded with the built-in decoder (legacy charset tables lazy-load only for euc-kr/shift_jis/…, with a UTF-8 fallback if that chunk fails to load). **Diagnostics**: the happy path is silent, a browser-UA recovery logs an `info` breadcrumb, and a run that yields no title logs an `error` (→ Sentry via the log-buffer bridge, URL-scrubbed there; full detail incl. the redirect-resolved final URL stays in the in-app diagnostics buffer) annotated with per-UA outcomes (`http_403`, `non_html:…`, `error:AbortError`, `no_title@<finalUrl> {metas=N og/tw=[…] title=bool bytes=N ct=…}`) so we can see *why* a portal failed — the `no_title` case carries a privacy-safe structural head summary (`htmlHeadSummary`, og/twitter *key names* only, no content) that distinguishes a genuinely empty JS shell from a page our parser missed, so a failed preview is debuggable from the logs/Sentry alone without re-capturing HTML. See the fetch tests in `src/domain/page-metadata.test.ts`.
@@ -116,28 +116,26 @@ This file captures the project state and working conventions so any agent (Codex
 
 ## Building an installable Android APK (no EAS account)
 
-The fastest way to get a real, installable APK is the **`.github/workflows/android-apk.yml`** GitHub Actions workflow. It runs `expo prebuild` → Gradle `assembleRelease`, signs with the debug keystore, and **publishes a standalone APK as a GitHub Release with an install QR code** — no EAS/Expo account needed. (EAS via `eas.json` is still the path for store builds; see `docs/development/releasing.md`.)
+The fastest way to get a real, installable APK is the **CircleCI `android_apk` job** (`.circleci/config.yml`, ported from the old `android-apk.yml`). It runs `expo prebuild` → Gradle `assembleRelease`, signs with the debug keystore, and **publishes a standalone APK as a GitHub Release with an install QR code** (when `GH_TOKEN` is set) — no EAS/Expo account needed. (EAS via `eas.json` is still the path for store builds; see `docs/development/releasing.md`.)
 
-**How the trigger maps to output** (`workflow_dispatch` input `version`, or a pushed git tag) — every build now publishes a Release with the raw `.apk` + QR (and still uploads a `stash-android-apk` run artifact):
+**How the trigger maps to output** (the `version` pipeline parameter on a `run_apk` dispatch, or a pushed `v*` git tag) — every build publishes a Release with the raw `.apk` + QR (and stores the APK as a CircleCI artifact):
 
 - `version` **blank** or a **hyphenated** pre-release tag (e.g. `v0.1.7-rc8`) → refreshes the single rolling **`dev`** prerelease in place (stable `dev` tag, `stash-dev-android.apk`). Use this for test builds.
 - A clean `vX.Y.Z` (no hyphen), as the input or a pushed `vX.Y.Z` git tag → publishes a **versioned** prerelease, kept forever.
 
-**From a Claude Code web session (GitHub MCP tools):**
+**Trigger it on CircleCI** (the build runs as the `android_apk` job):
 
-1. `actions_run_trigger` (method `run_workflow`) → `workflow_id: "android-apk.yml"`, `ref: "main"`, `inputs: { version: "v0.1.7-rc8" }`.
-2. `actions_list` (`list_workflow_runs`, filter `event=workflow_dispatch`) → grab the newest run's `id`.
-3. Poll `actions_get` until `status: "completed"` (~6–7 min; arm64-v8a only). Don't `sleep`-poll — arm a short background timer between checks.
-4. `get_latest_release` / `get_release_by_tag` (tag `dev` for test builds) → share the Release URL. The user opens it on their phone, scans the QR (or taps the download link), and installs the `.apk` directly — no artifact unzip. (The Release only appears once the build succeeds.)
+1. **Manual / test build** — start a pipeline with `run_apk: true` (and an optional `version`). Via the API:
 
-**With the `gh` CLI** (non-MCP shells):
+   ```bash
+   curl -X POST https://circleci.com/api/v2/project/gh/<org>/<repo>/pipeline \
+     -H "Circle-Token: $CIRCLE_TOKEN" -H 'content-type: application/json' \
+     -d '{"branch":"main","parameters":{"run_apk":true,"version":"v0.1.7-rc8"}}'
+   ```
 
-```bash
-gh workflow run android-apk.yml -f version=v0.1.7-rc8 --ref main
-gh run list --workflow android-apk.yml -L 1     # find the run id
-gh run watch <run-id>                            # wait for it
-gh run download <run-id> -n stash-android-apk    # downloads the .apk
-```
+   …or from the CircleCI UI: *Trigger Pipeline* → add the `run_apk` (and `version`) parameters.
+2. **Versioned build** — push a `v*` git tag; the `release` workflow runs `android_apk` automatically.
+3. Watch the run in the CircleCI UI (~6–7 min; arm64-v8a only). When it finishes, the GitHub Release (tag `dev` for test builds, `vX.Y.Z` for versioned) carries the `.apk` + QR; share that URL. Publishing the Release needs `GH_TOKEN` set in CircleCI — without it the APK is still downloadable from the run's CircleCI artifacts. See `docs/development/ci-circleci.md`.
 
 Notes: the build is **arm64-v8a only** (every modern phone) to stay fast/small; the APK is debug-signed but fully standalone (installs + runs on its own). If the repo's `EXPO_PUBLIC_SUPABASE_*` secrets are set, cloud sync is baked in; otherwise it's a local-only build. The app self-reports its build commit in Settings (via `EXPO_PUBLIC_GIT_SHA`), so you can confirm which commit an installed APK came from.
 
