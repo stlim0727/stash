@@ -1,8 +1,0 @@
-apps/mobile/.maestro/inbox.yaml
-apps/mobile/.maestro/settings.yaml
-apps/mobile/.maestro/review.yaml
-apps/mobile/.maestro/add.yaml
-apps/mobile/.maestro/archived.yaml
-apps/mobile/.maestro/report.yaml
-apps/mobile/.maestro/detail.yaml
-apps/mobile/.maestro/tag-cloud.yaml
