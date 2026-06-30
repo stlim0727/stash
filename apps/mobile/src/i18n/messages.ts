@@ -80,10 +80,10 @@ export const en = {
   'inbox.sortNameAsc': 'Name A–Z',
   'inbox.sortNameDesc': 'Name Z–A',
   'inbox.viewAsA11y': 'View as {mode}',
-  // "Browse by tag" toggle: navigates to the dedicated tag-browse route
-  // (/browse/tags), carrying the current facet as its scope.
-  'inbox.browseTags': 'Tags',
+  // "Browse by tag" toggle: an icon-only control that navigates to the dedicated
+  // tag-browse route (/browse/tags), carrying the current facet as its scope.
   'inbox.browseTagsA11y': 'Browse by tag',
+  'inbox.openBookmarkHint': 'Opens bookmark details',
   'inbox.filterAll': 'All',
   'inbox.filterNoCollection': 'Inbox',
   'inbox.sectionMatches': { one: '{count} result', other: '{count} results' },
@@ -200,8 +200,7 @@ export const en = {
   'add.noteLabel': 'Note (optional)',
   'add.notePlaceholder': 'Why are you saving this?',
   'add.save': 'Save bookmark',
-  'add.hint':
-    'Saved instantly to your device and synced to the cloud in the background — capture never waits on the network.',
+  'add.hint': 'Saved instantly. Sync happens in the background.',
 
   // Capture toasts (also used by the share flow).
   'toast.saved': 'Saved to Stash',
