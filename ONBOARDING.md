@@ -1,24 +1,18 @@
 # Welcome to Stash
 
-> **Team goal:** establish a **monetization strategy** for Stash. New work should
-> ladder up to that — pricing, paid tiers, conversion, cost-to-serve. The CI and
-> release work in the stats below is what keeps the app shippable while the team
-> figures out the business model. See `docs/strategy/monetization.md` for the
-> first-cut strategy brief.
-
 ## How We Use Claude
 
 Based on Claude's usage over the last 30 days:
 
 Work Type Breakdown:
-  Build Feature  ████████████████░░░░  80%
-  Debug Fix      ████░░░░░░░░░░░░░░░░░  20%
+  Build Feature  ████████████████████  100%
 
 Top Skills & Commands:
-  _No slash commands recorded in this window_
+  _No slash commands recorded in this window yet_
 
 Top MCP Servers:
-  github  ████████████████████  194 calls
+  Context7  ████████████████████  4 calls
+  github    ████████████████████  4 calls
 
 ## Your Setup Checklist
 
@@ -26,39 +20,23 @@ Top MCP Servers:
 - [ ] stash — https://github.com/stlim0727/stash
 
 ### MCP Servers to Activate
-- [ ] github — drives all GitHub work (dispatch CI/APK builds, open/merge PRs, read Actions run logs, manage releases). Get access by configuring the GitHub MCP server with a token that has repo + actions scope for `stlim0727/stash`.
+- [ ] Context7 — Pulls up-to-date library/framework/API docs on demand (used here to research the Firebase App Distribution REST API). Enable the Context7 MCP server in your Claude Code config; no special access needed.
+- [ ] github — Drives GitHub from Claude: open/review PRs, read CI/Actions status, post comments, manage releases. Configure the GitHub MCP server with a token scoped to `stlim0727/stash` (repo + actions).
 
 ### Skills to Know About
-- _No slash commands recorded in this window — see Team Tips for how the team works._
+- `/review-pr` — Triage and review a GitHub PR for Stash; checks for superseded changes first, then gives a merge/close/changes-needed verdict.
+- `/code-review` — Review the current working diff for correctness bugs and cleanup opportunities; `--fix` applies findings.
+- `/screenshot` — Render a real screenshot of a Stash screen via the Expo web export + headless Chromium (no emulator needed).
+- `/versioning` — Determine the correct next version and optionally cut a release, from the repo's real git tags + app.json state.
+- `/user-bookmark-summary` — Per-user bookmark status report from the live Supabase database.
 
 ## Team Tips
 
-- **The north star right now is monetization.** When you pick up work, ask how it
-  serves the strategy — pricing/tiers, paid-feature candidates, conversion,
-  cost-to-serve (the AI enrichment + Supabase backend are the main variable
-  costs). Read `README.md` (product direction), `AGENTS.md` (current state), and
-  `docs/strategy/monetization.md` (the strategy brief) first.
-- **Releases are tag-driven** via the `android-apk.yml` workflow: a blank or
-  hyphenated dispatch (e.g. `v0.2.2-rc1`) refreshes the rolling `dev` prerelease
-  for testing; a clean `vX.Y.Z` cuts a stable release. Every build auto-publishes
-  a GitHub Release **and** distributes to testers via Firebase App Distribution.
-- **Debug diagnosis-first.** For CI/auth failures, add a small leak-safe probe to
-  pinpoint the cause *before* guessing at fixes — it beats churning builds on a
-  hunch (that's how we nailed the Firebase auth bug).
-- **Let Claude babysit your PR.** After you open one, Claude can watch it —
-  auto-addressing Codex review comments and re-kicking CI until it's green.
+_TODO_
 
 ## Get Started
 
-Your first task: **help shape Stash's monetization strategy.** A good Claude
-warm-up that doubles as real work — start from `docs/strategy/monetization.md`:
-
-- Pressure-test the proposed Free/Pro tiers and the "what stays free forever" lines.
-- Help instrument real AI-usage data (enrichments per user / month) so the free
-  AI quota is grounded, not guessed.
-- Or pick up a readiness-gate item (image sync, API hardening, entitlement table).
-
-_(No ticket link yet — ask your teammate where this work should live.)_
+_TODO_
 
 <!-- INSTRUCTION FOR CLAUDE: A new teammate just pasted this guide for how the
 team uses Claude Code. You're their onboarding buddy — warm, conversational,
