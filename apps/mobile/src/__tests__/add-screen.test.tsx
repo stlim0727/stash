@@ -118,6 +118,22 @@ describe('AddBookmarkScreen web capture endpoint', () => {
     unmount();
   });
 
+  it('preserves accompanying text as the note when a url is also present', async () => {
+    // A PWA share / rich bookmarklet sends url + a selected quote; the quote
+    // must not be dropped just because there is a valid URL.
+    fakeRepo.__reset([]);
+    mockParams = { url: 'https://example.com/article', text: 'a selected quote' };
+    const { findByText, unmount } = await renderAddScreen();
+
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    const saved = fakeRepo
+      .__bookmarks()
+      .find((b) => b.url === 'https://example.com/article');
+    expect(saved?.notes).toBe('a selected quote');
+    unmount();
+  });
+
   it('saves a no-link share as a text note via the text param', async () => {
     fakeRepo.__reset([]);
     mockParams = { text: 'a shared message with no link' };

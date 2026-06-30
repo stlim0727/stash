@@ -43,7 +43,14 @@ export default function AddBookmarkScreen() {
     }
     captureHandledRef.current = true;
     const result = capture.url
-      ? addBookmark({ url: capture.url, title: capture.title })
+      ? addBookmark({
+          url: capture.url,
+          title: capture.title,
+          // Preserve any accompanying text (a PWA Web Share Target's selected
+          // quote / description) as the note. A share target that merely echoes
+          // the URL back into `text` shouldn't duplicate it as a note.
+          notes: capture.text && capture.text !== capture.url ? capture.text : undefined,
+        })
       : addBookmark({ shared_text: capture.text, title: capture.title });
     const message =
       result.status === 'invalid'
