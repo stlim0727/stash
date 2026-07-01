@@ -212,7 +212,7 @@ test('renders AI suggestions with a model badge, summary, and trigger button', a
   expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
 });
 
-test('a stale enrichment shows an out-of-date hint', async () => {
+test('a stale enrichment shows an out-of-date hint (when there are suggestions to be stale against)', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
     [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
@@ -222,6 +222,9 @@ test('a stale enrichment shows an out-of-date hint', async () => {
         bookmark_id: SYNCED_ID,
         summary: 'A url from example.com.',
         status: 'stale',
+        // The stale hint explains why the suggestions look out of date, so it
+        // only makes sense when there ARE suggestions on screen.
+        suggested_tags: [{ name: 'design', confidence: 0.8 }],
       }),
     ],
   );
@@ -232,7 +235,90 @@ test('a stale enrichment shows an out-of-date hint', async () => {
   expect(screen.getByText(/Edited since these suggestions/)).toBeTruthy();
 });
 
-test('a degraded enrichment shows a non-error "basic suggestions" note', async () => {
+test('a dummy-v0 fallback with nothing to suggest collapses to just the affordance', async () => {
+  mockRouteId = SYNCED_ID;
+  // The exact case the user flagged: AI couldn't be reached, dummy-v0 produced
+  // no tags and no folder, yet the row still carries a boilerplate summary and a
+  // degraded note. All of it is noise — silence it, but never the way to retry.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'Url from share.google — “○○”. Auto-categorized by dummy-v0.',
+        model: 'dummy-v0',
+        degraded: true,
+        degraded_reason: 'provider_error',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  // Pin the whole summary, not just its signature, so a partial-leak refactor
+  // can't slip past: both the head ("Url from share.google") and the tail
+  // ("Auto-categorized by dummy-v0") must be gone.
+  expect(screen.queryByText(/share\.google/)).toBeNull();
+  expect(screen.queryByText(/Auto-categorized by dummy-v0/)).toBeNull();
+  expect(screen.queryByText(/reach AI/)).toBeNull();
+  expect(screen.queryByText('dummy-v0')).toBeNull();
+  // The affordance to ask for AI never disappears (capture stays reachable).
+  expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
+});
+
+test('a healthy dummy-v0 result with no suggestions still hides its boilerplate summary', async () => {
+  mockRouteId = SYNCED_ID;
+  // Not degraded, but dummy-v0 matched nothing — the generic "Url from …" line is
+  // just as meaningless, so it stays silenced.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'Url from share.google — “○○”. Auto-categorized by dummy-v0.',
+        model: 'dummy-v0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  expect(screen.queryByText(/Auto-categorized by dummy-v0/)).toBeNull();
+  expect(screen.queryByText('dummy-v0')).toBeNull();
+  expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
+});
+
+test('a real-model summary is kept even with no tags to suggest', async () => {
+  mockRouteId = SYNCED_ID;
+  // A genuine model summary is real content — only the dummy-v0 boilerplate is
+  // noise, so a non-dummy summary shows (with its badge) even when tags are empty.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'A thoughtful overview of local-first software.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  expect(screen.getByText('A thoughtful overview of local-first software.')).toBeTruthy();
+  expect(screen.getByText('gemini-2.0')).toBeTruthy();
+});
+
+test('a degraded enrichment WITH suggestions shows a non-error "basic suggestions" note', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
     [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
@@ -244,6 +330,8 @@ test('a degraded enrichment shows a non-error "basic suggestions" note', async (
         model: 'dummy-v0',
         degraded: true,
         degraded_reason: 'rate_limited',
+        // Basic suggestions DID surface, so the note truthfully explains them.
+        suggested_tags: [{ name: 'design', confidence: 0.8 }],
       }),
     ],
   );
@@ -252,6 +340,36 @@ test('a degraded enrichment shows a non-error "basic suggestions" note', async (
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
 
   expect(screen.getByText(/AI is over capacity right now — showing basic suggestions/)).toBeTruthy();
+});
+
+test('a rate-limited fallback with nothing to suggest shows a standalone retry note, no badge', async () => {
+  mockRouteId = SYNCED_ID;
+  // Rate limit is the one reason worth keeping when the card is otherwise empty
+  // — but there are no basic suggestions to point at, so the copy must be the
+  // standalone "try again later" line, not "showing basic suggestions", and the
+  // dummy-v0 badge stays hidden.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'Url from share.google — “○○”. Auto-categorized by dummy-v0.',
+        model: 'dummy-v0',
+        degraded: true,
+        degraded_reason: 'rate_limited',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  expect(screen.getByText(/hit their limit for now/)).toBeTruthy();
+  expect(screen.queryByText(/showing basic suggestions/)).toBeNull();
+  expect(screen.queryByText('dummy-v0')).toBeNull();
+  expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
 });
 
 test('dismissing a suggested tag removes it from the list', async () => {

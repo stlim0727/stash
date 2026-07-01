@@ -286,6 +286,35 @@ export default function BookmarkDetailScreen() {
     ...hashtagTags.map((name) => ({ name, confidence: 1 })),
   ];
 
+  // AI card visibility. The dummy-v0 heuristic fallback (see
+  // supabase/functions/ai-enrich/dummy-provider.ts) still emits a generic
+  // "Url from {host} — … Auto-categorized by dummy-v0." summary and a degraded
+  // note even when it produced nothing to act on — three lines of ceremony over
+  // an empty result. Collapse the card to just its affordance in that case:
+  //  - `hasActionableSuggestions` mirrors the Inbox "✨ N" badge rule exactly
+  //    (pending AI tags OR a live folder chip — the same filtered lists, never
+  //    the raw enrichment), so a card the Inbox refuses to badge never shouts
+  //    here either.
+  //  - a summary counts as real content only from a real model; the dummy-v0
+  //    boilerplate is noise once there is nothing actionable beside it. Keying
+  //    on the model (not the persisted `degraded` flag) also silences older
+  //    dummy rows that were never marked degraded, and it survives re-sync
+  //    without a backfill.
+  const hasActionableSuggestions = pending.length > 0 || folderSuggestionVisible;
+  const showAiSummary =
+    Boolean(enrichment?.summary?.trim()) &&
+    (hasActionableSuggestions || enrichment?.model !== 'dummy-v0');
+  const showAiReport = hasActionableSuggestions || showAiSummary;
+  // The degraded note explains *thin* results — keep it only when there is
+  // something to explain, or when the cause is one the user can act on (a
+  // transient rate limit). A generic "Couldn't reach AI" over an otherwise
+  // empty card is exactly the noise to silence; the outage still reaches
+  // monitoring via the breadcrumb reported above.
+  const showDegradedNote =
+    !!enrichment?.degraded &&
+    !aiWorking &&
+    (showAiReport || enrichment.degraded_reason === 'rate_limited');
+
   const notesValue = draftNotes ?? bookmark.notes ?? '';
 
   // Auto-save on blur: edit in place, no explicit "Save" button.
@@ -794,7 +823,7 @@ export default function BookmarkDetailScreen() {
           // centered spinner + "working…" label, which reads as a modal wait —
           // the screen stays fully interactive while this pulses.
           <SuggestionSkeleton style={styles.suggestHeader} />
-        ) : enrichment?.model ? (
+        ) : enrichment?.model && showAiReport ? (
           <View style={styles.suggestHeader}>
             <View style={[styles.aiBadge, { borderColor: palette.border }]}>
               <Text style={[styles.aiBadgeLabel, { color: palette.textSecondary }]}>
@@ -804,21 +833,28 @@ export default function BookmarkDetailScreen() {
           </View>
         ) : null}
 
-        {enrichment?.status === 'stale' ? (
+        {enrichment?.status === 'stale' && showAiReport ? (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
         ) : null}
 
-        {enrichment?.degraded && !aiWorking ? (
+        {showDegradedNote ? (
           <Text
             accessibilityRole="text"
             style={[styles.hint, { color: palette.textSecondary }]}
           >
-            {enrichmentDegradedLabel(t, enrichment.degraded_reason)}
+            {/* When the card is collapsed (nothing actionable) we only keep this
+                note for a rate limit — and there are no "basic suggestions" on
+                screen to point at, so use the standalone retry copy rather than
+                the "showing basic suggestions" variant, which would describe
+                content that isn't there. */}
+            {showAiReport
+              ? enrichmentDegradedLabel(t, enrichment?.degraded_reason ?? null)
+              : t('detail.aiRateLimited')}
           </Text>
         ) : null}
 
-        {enrichment?.summary ? (
-          <Text style={[styles.fieldValue, { color: palette.text }]}>{enrichment.summary}</Text>
+        {showAiSummary ? (
+          <Text style={[styles.fieldValue, { color: palette.text }]}>{enrichment?.summary}</Text>
         ) : null}
 
         {canOrganizeRemotely ? (

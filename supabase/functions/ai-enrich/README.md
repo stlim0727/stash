@@ -85,15 +85,16 @@ auto-trigger retry later.
 | rolling day  | 200       | 50        |
 
 The limit is **only** enforced when `GEMINI_API_KEY` is set (a real, billable
-provider). With no key the network-free `DummyProvider` runs unthrottled, and a
-missing/failing rate-limit function fails **open** so suggestions never break.
+provider). With no key the network-free `DummyProvider` runs unthrottled (it
+does no work and costs nothing), and a missing/failing rate-limit function fails
+**open** so suggestions never break.
 
 ## Files
 
 | File                 | Role                                                            |
 | -------------------- | --------------------------------------------------------------- |
 | `provider.ts`        | `EnrichmentProvider` interface + I/O types — the swappable seam |
-| `dummy-provider.ts`  | `DummyProvider`: deterministic keyword heuristics, no network   |
+| `dummy-provider.ts`  | `DummyProvider`: empty no-op fallback (suggests nothing), no network |
 | `gemini-provider.ts` | `GeminiProvider`: structured-output call to the Google Gemini API |
 | `request-auth.ts`    | Pure caller-auth decision: app JWT vs server-trigger shared secret |
 | `index.ts`           | Deno HTTP shell: auth → load bookmark → rate-limit → provider → upsert row |
@@ -112,13 +113,14 @@ function selectProvider(): EnrichmentProvider {
 }
 ```
 
-- **No key set** → deterministic heuristics, zero external calls. Nothing else
-  to configure; the pipeline works out of the box. The heuristic tags/topics and
-  summary are localized to the caller's `locale` (currently en/ko) so the
-  fallback — including the degraded path below — still answers in the user's
-  language; the collection hint stays as-is. When no keyword rule matches, the
-  fallback suggests no tag at all rather than inventing a low-confidence
-  host-derived one the app would only filter out as noise.
+- **No key set** → the empty `DummyProvider`, zero external calls. The pipeline
+  still runs and records a row, but suggests **nothing**: the old keyword→category
+  heuristics ("programming", "video", …) were broad, obvious noise, so the
+  fallback now returns no tags, no collection hint, and no summary rather than
+  padding the bookmark with filler the user only dismisses. On a no-key
+  deployment this means the AI card stays empty (the app collapses it to just the
+  retry affordance); the genuinely useful offline signal — hashtags the user
+  wrote into the content — is a separate app-side path and is unaffected.
 - **`GEMINI_API_KEY` set** → a single structured-output Gemini call produces the
   note (summary), topics, tags-with-confidence, and a collection routing hint.
   The user's existing collection names are passed in so the model routes into a
@@ -130,11 +132,14 @@ function selectProvider(): EnrichmentProvider {
 
 ### Degraded mode (visible, not silent)
 
-When the result comes from the heuristic fallback, the row records `degraded =
+When the result comes from the empty fallback, the row records `degraded =
 true` and a coarse `degraded_reason` — `not_configured` (no key), `rate_limited`
-(429 / free-tier `limit:0`), `timeout`, or `provider_error`. The app reads these
-to show a calm "basic suggestions" note with the cause, so a rate-limit/outage is
-never mistaken for real AI output (issue #101).
+(429 / free-tier `limit:0`), `timeout`, or `provider_error`. Because the fallback
+now suggests nothing, the app has no "basic suggestions" to show: the card
+collapses to just the retry affordance, and only a transient `rate_limited`
+still surfaces a calm "try again later" note (the outage cause still reaches
+monitoring). This keeps a rate-limit/outage from ever being mistaken for real AI
+output (issue #101).
 
 ### Configuration
 
