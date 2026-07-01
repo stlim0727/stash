@@ -6,6 +6,7 @@ import {
   parseImport,
   parseJsonBackup,
   parseNetscapeHtml,
+  parsePocketCsv,
 } from './import.ts';
 import { buildJsonBackup, toNetscapeHtml, type ExportInput } from './export.ts';
 import type { Bookmark, Collection, Tag } from './types.ts';
@@ -204,4 +205,46 @@ test('a Stash HTML export round-trips back through parseNetscapeHtml', () => {
 test('parseImport dispatches to the right parser by kind', () => {
   assert.equal(parseImport('json', JSON.stringify({ bookmarks: [{ url: 'https://x' }] })).length, 1);
   assert.equal(parseImport('html', '<DL><p><DT><A HREF="https://x">X</A></DL><p>').length, 1);
+  assert.equal(parseImport('csv', 'url,title\nhttps://x,X').length, 1);
+});
+
+test('parsePocketCsv maps url/title/tags by header and splits tags on a pipe', () => {
+  const csv = [
+    'title,url,time_added,tags,status',
+    'My Article,https://example.com/a,1699999999,reading|tech,unread',
+    'Archived One,https://example.com/b,1700000000,,archive',
+  ].join('\n');
+  const items = parsePocketCsv(csv);
+  assert.equal(items.length, 2);
+  assert.deepEqual(items[0], {
+    url: 'https://example.com/a',
+    title: 'My Article',
+    notes: null,
+    tags: ['reading', 'tech'],
+    collection: null,
+  });
+  // Archived items are imported alike, with no tags.
+  assert.equal(items[1]?.url, 'https://example.com/b');
+  assert.deepEqual(items[1]?.tags, []);
+});
+
+test('parsePocketCsv is column-order independent and handles quoted fields + BOM', () => {
+  // BOM prefix, url before title, a quoted title containing a comma and quotes,
+  // and a CRLF line ending.
+  const csv =
+    '﻿url,title,tags\r\n' +
+    'https://example.com/c,"Hello, ""World""",a|b\r\n';
+  const items = parsePocketCsv(csv);
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.url, 'https://example.com/c');
+  assert.equal(items[0]?.title, 'Hello, "World"');
+  assert.deepEqual(items[0]?.tags, ['a', 'b']);
+});
+
+test('parsePocketCsv skips rows without a url and rejects a file with no url column', () => {
+  const csv = ['title,url', 'Has URL,https://example.com/d', 'No URL,'].join('\n');
+  assert.equal(parsePocketCsv(csv).length, 1);
+
+  assert.throws(() => parsePocketCsv('title,note\nfoo,bar'), ImportError);
+  assert.throws(() => parsePocketCsv(''), ImportError);
 });

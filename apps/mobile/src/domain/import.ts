@@ -4,7 +4,7 @@
  * re-ingest, so a user can move into Stash (or restore a backup) as easily as
  * they can leave it.
  *
- * Two sources are understood, both parsed by these platform-free helpers (so
+ * Three sources are understood, all parsed by these platform-free helpers (so
  * they are unit-testable and reused by the web/native import shims in
  * src/share/import-data):
  *
@@ -12,6 +12,8 @@
  *  - Netscape bookmark HTML — the universal format exported by every browser
  *    and most bookmark apps (and by Stash's own HTML export). Folders map to a
  *    collection name; the `TAGS` attribute maps to tags.
+ *  - Pocket CSV — the export from getpocket.com, so the wave of users leaving
+ *    Pocket can move into Stash directly. `tags` (pipe-separated) map to tags.
  */
 
 /** A single re-ingestable item, normalized across both source formats. */
@@ -159,7 +161,109 @@ export function parseNetscapeHtml(text: string): ImportItem[] {
   return items;
 }
 
+/**
+ * Parse RFC 4180-ish CSV into rows of fields. Handles quoted fields (with commas
+ * and newlines inside quotes), `""` escaped quotes, CRLF or LF line endings, and
+ * a leading UTF-8 BOM. Blank lines are dropped.
+ */
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  // Strip a leading UTF-8 BOM so the first header cell isn't "﻿title".
+  const src = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+
+  const endField = () => {
+    row.push(field);
+    field = '';
+  };
+  const endRow = () => {
+    endField();
+    // Skip blank lines (a single empty field).
+    if (!(row.length === 1 && row[0].trim() === '')) {
+      rows.push(row);
+    }
+    row = [];
+  };
+
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (src[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inQuotes = true;
+    } else if (c === ',') {
+      endField();
+    } else if (c === '\n') {
+      endRow();
+    } else if (c !== '\r') {
+      field += c;
+    }
+  }
+  // Flush the trailing field/row when the file doesn't end with a newline.
+  if (field.length > 0 || row.length > 0) {
+    endRow();
+  }
+  return rows;
+}
+
+/**
+ * Parse a Pocket CSV export (`getpocket.com/export`, the format the shutdown
+ * data export produces). Columns are matched by header name so column order
+ * doesn't matter: `url` (required), `title`, and `tags` (Pocket separates tags
+ * with `|`). `time_added`/`status` are ignored — archived and unread items are
+ * imported alike, as active bookmarks. Rows without a URL are skipped.
+ */
+export function parsePocketCsv(text: string): ImportItem[] {
+  const rows = parseCsv(text);
+  if (rows.length === 0) {
+    throw new ImportError('This file is empty.');
+  }
+
+  const header = (rows[0] ?? []).map((cell) => cell.trim().toLowerCase());
+  const urlIdx = header.indexOf('url');
+  if (urlIdx === -1) {
+    throw new ImportError("This doesn't look like a Pocket export — no 'url' column was found.");
+  }
+  const titleIdx = header.indexOf('title');
+  const tagsIdx = header.indexOf('tags');
+
+  const items: ImportItem[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r] ?? [];
+    const url = cleanString(row[urlIdx]);
+    if (!url) {
+      continue;
+    }
+    const rawTags = tagsIdx >= 0 ? (row[tagsIdx] ?? '') : '';
+    items.push({
+      url,
+      title: titleIdx >= 0 ? cleanString(row[titleIdx]) : null,
+      notes: null,
+      // Pocket delimits tags with a pipe within the single CSV field.
+      tags: rawTags ? normalizeTags(rawTags.split('|')) : [],
+      collection: null,
+    });
+  }
+  return items;
+}
+
 /** Pick the right parser for a file kind. */
-export function parseImport(kind: 'json' | 'html', text: string): ImportItem[] {
-  return kind === 'json' ? parseJsonBackup(text) : parseNetscapeHtml(text);
+export function parseImport(kind: 'json' | 'html' | 'csv', text: string): ImportItem[] {
+  if (kind === 'json') {
+    return parseJsonBackup(text);
+  }
+  return kind === 'csv' ? parsePocketCsv(text) : parseNetscapeHtml(text);
 }

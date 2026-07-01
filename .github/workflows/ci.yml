@@ -20,6 +20,12 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:components
+      # Guard the web target: the static export must keep building so a change
+      # can't silently break web (the /add capture route, the PWA manifest, the
+      # web-only Settings section). Headless — no emulator needed. dist/ is
+      # gitignored and discarded with the ephemeral runner.
+      - name: Web export builds
+        run: cd apps/mobile && CI=1 pnpm exec expo export --platform web
       # The logic lane writes a rendered SVG preview of the tag cloud; rasterize
       # it to PNG (system librsvg, no repo dependency) and publish both so the
       # layout can be eyeballed without the Android emulator job.

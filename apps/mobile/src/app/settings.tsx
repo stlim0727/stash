@@ -19,6 +19,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { BookmarkletButton } from '@/ui/BookmarkletButton';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { ActionSheet } from '@/ui/ActionSheet';
@@ -205,7 +206,7 @@ export default function SettingsScreen() {
   const [importSheetOpen, setImportSheetOpen] = useState(false);
   const [importing, setImporting] = useState(false);
 
-  const runImport = async (kind: 'json' | 'html') => {
+  const runImport = async (kind: 'json' | 'html' | 'csv') => {
     setImportSheetOpen(false);
     if (importing) {
       return;
@@ -530,6 +531,24 @@ export default function SettingsScreen() {
         />
       </Group>
 
+      {/* Save from your browser — the desktop bookmarklet (web only). Native
+          apps capture via the OS share sheet, so this is meaningless there. */}
+      {Platform.OS === 'web' ? (
+        <Group
+          styles={styles}
+          title={t('settings.section.browser')}
+          footnote={t('settings.bookmarklet.note')}
+        >
+          <View style={styles.bookmarkletRow}>
+            <BookmarkletButton
+              label={t('settings.bookmarklet.button')}
+              copiedLabel={t('settings.bookmarklet.copied')}
+              accent={palette.accent}
+            />
+          </View>
+        </Group>
+      ) : null}
+
       {/* Your data — export / import / portability. */}
       <Group
         styles={styles}
@@ -695,6 +714,12 @@ export default function SettingsScreen() {
             label: t('settings.importSheet.json'),
             icon: 'code-slash-outline',
             onPress: () => void runImport('json'),
+          },
+          {
+            key: 'csv',
+            label: t('settings.importSheet.pocket'),
+            icon: 'bookmark-outline',
+            onPress: () => void runImport('csv'),
           },
         ]}
       />
@@ -899,6 +924,10 @@ const makeStyles = (palette: AppPalette) =>
       paddingHorizontal: 0,
       paddingVertical: 0,
       overflow: 'hidden',
+    },
+    bookmarkletRow: {
+      padding: 16,
+      alignItems: 'flex-start',
     },
     row: {
       flexDirection: 'row',

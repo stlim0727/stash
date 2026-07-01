@@ -205,6 +205,7 @@ export const en = {
   'add.notePlaceholder': 'Why are you saving this?',
   'add.save': 'Save bookmark',
   'add.hint': 'Saved instantly. Sync happens in the background.',
+  'add.saving': 'Saving…',
 
   // Capture toasts (also used by the share flow).
   'toast.saved': 'Saved to Stash',
@@ -219,6 +220,11 @@ export const en = {
   'settings.section.preferences': 'Preferences',
   'settings.section.data': 'Your data',
   'settings.section.advanced': 'Advanced',
+  'settings.section.browser': 'Save from your browser',
+  'settings.bookmarklet.button': '⊕ Save to Stash',
+  'settings.bookmarklet.copied': 'Copied!',
+  'settings.bookmarklet.note':
+    'Drag this button to your bookmarks bar (or click to copy it). Then click it on any page to stash it.',
   'settings.account.signedIn': 'Signed in',
   'settings.account.signIn': 'Sign In',
   'settings.account.signOut': 'Sign out',
@@ -287,6 +293,7 @@ export const en = {
   'settings.importSheet.title': 'Import data',
   'settings.importSheet.html': 'Bookmarks file (HTML)',
   'settings.importSheet.json': 'Stash backup (JSON)',
+  'settings.importSheet.pocket': 'Pocket export (CSV)',
   'settings.export.failedTitle': 'Export failed',
   'settings.export.failedBody': 'Could not export your data. Please try again.',
   'settings.import.nothingTitle': 'Nothing to import',

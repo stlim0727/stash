@@ -1,7 +1,8 @@
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { parseCaptureParams } from '@/domain/web-capture';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
@@ -14,11 +15,66 @@ export default function AddBookmarkScreen() {
   const palette = usePalette();
   const router = useRouter();
   const t = useT();
-  const { addBookmark } = useBookmarks();
+  const { addBookmark, isLoading } = useBookmarks();
   const { show } = useCaptureToast();
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  // A capture intent passed via query params — the web counterpart of the
+  // native share handler. The desktop bookmarklet, the PWA Web Share Target,
+  // and plain `/add?url=…` deep links all land here. When present we skip the
+  // manual editor and save immediately: capture is sacred and fast.
+  const params = useLocalSearchParams<{
+    url?: string;
+    title?: string;
+    text?: string;
+    note?: string;
+  }>();
+  const capture = parseCaptureParams(params);
+  const captureHandledRef = useRef(false);
+
+  useEffect(() => {
+    // Save once the store has loaded so the in-memory dedupe sees existing
+    // bookmarks instead of running against an empty set during a cold start
+    // (mirrors ShareIntentHandler). Handle exactly once.
+    if (!capture || isLoading || captureHandledRef.current) {
+      return;
+    }
+    captureHandledRef.current = true;
+    const result = capture.url
+      ? addBookmark({
+          url: capture.url,
+          title: capture.title,
+          // Preserve any accompanying text (a PWA Web Share Target's selected
+          // quote / description) as the note. A share target that merely echoes
+          // the URL back into `text` shouldn't duplicate it as a note.
+          notes: capture.text && capture.text !== capture.url ? capture.text : undefined,
+        })
+      : addBookmark({ shared_text: capture.text, title: capture.title });
+    const message =
+      result.status === 'invalid'
+        ? t('toast.noLink')
+        : result.status === 'duplicate'
+          ? t('toast.duplicate')
+          : t('toast.saved');
+    show(message);
+    // Land on the Inbox so the freshly stashed item is immediately visible.
+    router.replace('/');
+  }, [capture, isLoading, addBookmark, router, show, t]);
+
+  // Capture mode: a deep-linked save is in flight — show a calm placeholder
+  // instead of flashing the manual editor before the redirect.
+  if (capture) {
+    return (
+      <View style={[styles.capturing, { backgroundColor: palette.background }]}>
+        <ActivityIndicator color={palette.accent} />
+        <Text style={[styles.capturingLabel, { color: palette.textSecondary }]}>
+          {t('add.saving')}
+        </Text>
+      </View>
+    );
+  }
 
   function handleSave() {
     const result = addBookmark({ url, notes: note });
@@ -83,6 +139,16 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 16,
     gap: 14,
+  },
+  capturing: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    padding: 24,
+  },
+  capturingLabel: {
+    fontSize: 15,
   },
   captureCard: {
     borderRadius: 24,

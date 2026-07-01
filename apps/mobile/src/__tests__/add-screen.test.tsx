@@ -22,8 +22,11 @@ jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
 const mockBack = jest.fn();
+const mockReplace = jest.fn();
+let mockParams: Record<string, string> = {};
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: mockBack }),
+  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: mockReplace, back: mockBack }),
+  useLocalSearchParams: () => mockParams,
 }));
 
 import AddBookmarkScreen from '@/app/add';
@@ -47,6 +50,8 @@ async function renderAddScreen() {
 
 beforeEach(() => {
   mockBack.mockClear();
+  mockReplace.mockClear();
+  mockParams = {};
 });
 
 describe('AddBookmarkScreen duplicate UX', () => {
@@ -91,6 +96,51 @@ describe('AddBookmarkScreen duplicate UX', () => {
 
     await findByText('Saved to Stash');
     expect(mockBack).toHaveBeenCalled();
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    unmount();
+  });
+});
+
+describe('AddBookmarkScreen web capture endpoint', () => {
+  it('auto-saves a url passed via query params and lands on the Inbox', async () => {
+    // The bookmarklet / PWA share target / deep link opens /add?url=…; the
+    // screen skips the manual editor and captures immediately.
+    fakeRepo.__reset([]);
+    mockParams = { url: 'https://example.com/from-bookmarklet', title: 'From bookmarklet' };
+    const { findByText, queryByPlaceholderText, unmount } = await renderAddScreen();
+
+    // Confirms with the shared capture toast and never shows the manual form.
+    await findByText('Saved to Stash');
+    expect(queryByPlaceholderText('https://')).toBeNull();
+    // Landed the freshly stashed item by replacing to the Inbox.
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/'));
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    unmount();
+  });
+
+  it('preserves accompanying text as the note when a url is also present', async () => {
+    // A PWA share / rich bookmarklet sends url + a selected quote; the quote
+    // must not be dropped just because there is a valid URL.
+    fakeRepo.__reset([]);
+    mockParams = { url: 'https://example.com/article', text: 'a selected quote' };
+    const { findByText, unmount } = await renderAddScreen();
+
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    const saved = fakeRepo
+      .__bookmarks()
+      .find((b) => b.url === 'https://example.com/article');
+    expect(saved?.notes).toBe('a selected quote');
+    unmount();
+  });
+
+  it('saves a no-link share as a text note via the text param', async () => {
+    fakeRepo.__reset([]);
+    mockParams = { text: 'a shared message with no link' };
+    const { findByText, unmount } = await renderAddScreen();
+
+    await findByText('Saved to Stash');
+    await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/'));
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     unmount();
   });
