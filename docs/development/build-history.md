@@ -38,7 +38,8 @@ stable cut. The stable target is **`v1.1.0`**. Note: the 1.0.0 cycle below shipp
 
 | Build | Date (UTC) | `main` SHA | What's new since last RC |
 | ----- | ---------- | ---------- | ------------------------ |
-| `v1.1.0-rc1` | 2026-07-01 | _(pending — filled on dispatch)_ | First build at version `1.1.0`: opens the 1.1 cycle (`app.json` bump `1.0.0 → 1.1.0`). Carries all 1.0.0-cycle code through rc18 plus the merged fix for the "bookmark could not be found" flash after sharing (Detail resolving a bookmark by its pre-sync local id across the sync id-swap, #289). Build = `android-apk.yml` run #_(TBD)_. |
+| `v1.1.0-rc2` | 2026-07-01 | `158f0a5` | AI cleanup (#295): the `dummy-v0` fallback no longer suggests anything — the low-value keyword→category tags (github → "programming", …) are gone — and the Bookmark Detail AI card silences its model badge, degraded note, and generic summary when there's nothing actionable, collapsing to just the retry affordance. A transient rate-limit still shows a standalone "try again later" note; real-model summaries and content hashtags are untouched. Build = `android-apk.yml` run #132. |
+| `v1.1.0-rc1` | 2026-07-01 | `7305be9` | First build at version `1.1.0`: opens the 1.1 cycle (`app.json` bump `1.0.0 → 1.1.0`). Carries all 1.0.0-cycle code through rc18 plus web capture (the `/add` endpoint, bookmarklet, and PWA share target, #285) and the merged fix for the "bookmark could not be found" flash after sharing (Detail resolving a bookmark by its pre-sync local id across the sync id-swap, #289). Build = `android-apk.yml` run #131. |
 
 ## 1.0.0 cycle (superseded — 18 RCs, no stable `v1.0.0` cut)
 
