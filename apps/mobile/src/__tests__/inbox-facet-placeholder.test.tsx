@@ -127,6 +127,44 @@ test('the placeholder scopes to the active facet and reverts to the default on A
   expect(screen.queryByPlaceholderText('Search in Work')).toBeNull();
 });
 
+test('the search banner names the facet the search is scoped to', async () => {
+  seedFacetedLibrary();
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
+
+  const tapBrowseChip = async (label: string) => {
+    await act(async () => {
+      fireEvent.press(within(screen.getByTestId('browse-shelf')).getByText(label));
+    });
+  };
+  const search = async (text: string) => {
+    const input = screen.getByTestId('inbox-search-input');
+    await act(async () => {
+      fireEvent.changeText(input, text);
+    });
+  };
+
+  // Folder facet: the banner names the folder it's searching within.
+  await tapBrowseChip('Work');
+  await search('Design');
+  let bar = await waitFor(() => screen.getByTestId('inbox-filter-bar'));
+  await waitFor(() => expect(within(bar).getByText('Results for “Design” in Work')).toBeTruthy());
+
+  // Inbox (no-collection) facet: the fixed "Inbox" scope name (the reported case).
+  await search('');
+  await tapBrowseChip('Inbox');
+  await search('Loose');
+  bar = await waitFor(() => screen.getByTestId('inbox-filter-bar'));
+  await waitFor(() => expect(within(bar).getByText('Results for “Loose” in Inbox')).toBeTruthy());
+
+  // All (no facet): the bare banner with no scope clause.
+  await search('');
+  await tapBrowseChip('All');
+  await search('Design');
+  bar = await waitFor(() => screen.getByTestId('inbox-filter-bar'));
+  await waitFor(() => expect(within(bar).getByText('Results for “Design”')).toBeTruthy());
+});
+
 test('the scoped placeholder coexists with the focus-empty suggestion shelf', async () => {
   seedFacetedLibrary();
   const screen = await renderInbox();
