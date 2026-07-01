@@ -34,7 +34,12 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
       bookmarks = bookmarks.map((b) => (b.id === bookmark.id ? bookmark : b));
     },
     replaceBookmark: async (previousId, bookmark) => {
-      bookmarks = bookmarks.map((b) => (b.id === previousId ? bookmark : b));
+      // Mirror the real repositories: rename previousId AND collapse any row
+      // already under the destination id (a remote twin a pull inserted), so the
+      // fake reflects durable state, not just the in-memory array.
+      bookmarks = bookmarks
+        .filter((b) => b.id === previousId || b.id !== bookmark.id)
+        .map((b) => (b.id === previousId ? bookmark : b));
     },
     deleteBookmark: async (id) => {
       bookmarks = bookmarks.filter((b) => b.id !== id);

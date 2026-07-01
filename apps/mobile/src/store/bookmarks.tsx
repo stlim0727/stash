@@ -9,6 +9,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 
+import { swapBookmarkId } from '@/domain/bookmark-id-swap';
 import { mockUserId } from '@/domain/mock-data';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
@@ -1729,9 +1730,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (syncedLeftovers.length > 0) {
         const swaps = planLeftoverReconciliation(syncedLeftovers, bookmarksRef.current ?? []);
         for (const { localId, reconciled } of swaps) {
-          setBookmarks((current) =>
-            (current ?? []).map((bookmark) => (bookmark.id === localId ? reconciled : bookmark)),
-          );
+          // Collapse onto the remote id: if the pull already brought this
+          // bookmark down under its UUID, a plain map would leave two entries
+          // sharing that id (a duplicate Inbox card that storage doesn't have,
+          // so it clears on the next cold start). swapBookmarkId folds the
+          // lingering local-* row into the existing remote twin instead.
+          setBookmarks((current) => swapBookmarkId(current ?? [], localId, reconciled));
           void repository
             .replaceBookmark(localId, reconciled)
             .catch((error) => logStorageError('synced leftover reconcile', error));
@@ -1840,11 +1844,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 }
               : null;
             if (merged) {
-              setBookmarks((current) =>
-                (current ?? []).map((bookmark) =>
-                  bookmark.id === previousId ? merged : bookmark,
-                ),
-              );
+              // Collapse onto the remote id (see swapBookmarkId): a pull that
+              // already inserted this bookmark under its UUID would otherwise
+              // coexist with the just-renamed local-* row as a same-id duplicate.
+              setBookmarks((current) => swapBookmarkId(current ?? [], previousId, merged));
               // replaceBookmark (not update) so a concurrent enrichment persist
               // that resurrected the old local-ID row gets cleaned up too.
               const persisted: Bookmark = merged;
