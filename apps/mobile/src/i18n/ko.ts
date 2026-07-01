@@ -153,6 +153,11 @@ export const ko: Catalog = {
   'settings.section.preferences': '환경설정',
   'settings.section.data': '내 데이터',
   'settings.section.advanced': '고급',
+  'settings.section.browser': '브라우저에서 저장',
+  'settings.bookmarklet.button': '⊕ Stash에 저장',
+  'settings.bookmarklet.copied': '복사됨!',
+  'settings.bookmarklet.note':
+    '이 버튼을 북마크 바로 드래그하세요 (또는 클릭해서 복사). 이후 아무 페이지에서나 눌러 저장할 수 있습니다.',
   'settings.account.signedIn': '로그인됨',
   'settings.account.signIn': '로그인',
   'settings.account.signOut': '로그아웃',

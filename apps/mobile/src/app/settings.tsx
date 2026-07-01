@@ -19,6 +19,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { BookmarkletButton } from '@/ui/BookmarkletButton';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { ActionSheet } from '@/ui/ActionSheet';
@@ -530,6 +531,24 @@ export default function SettingsScreen() {
         />
       </Group>
 
+      {/* Save from your browser — the desktop bookmarklet (web only). Native
+          apps capture via the OS share sheet, so this is meaningless there. */}
+      {Platform.OS === 'web' ? (
+        <Group
+          styles={styles}
+          title={t('settings.section.browser')}
+          footnote={t('settings.bookmarklet.note')}
+        >
+          <View style={styles.bookmarkletRow}>
+            <BookmarkletButton
+              label={t('settings.bookmarklet.button')}
+              copiedLabel={t('settings.bookmarklet.copied')}
+              accent={palette.accent}
+            />
+          </View>
+        </Group>
+      ) : null}
+
       {/* Your data — export / import / portability. */}
       <Group
         styles={styles}
@@ -899,6 +918,10 @@ const makeStyles = (palette: AppPalette) =>
       paddingHorizontal: 0,
       paddingVertical: 0,
       overflow: 'hidden',
+    },
+    bookmarkletRow: {
+      padding: 16,
+      alignItems: 'flex-start',
     },
     row: {
       flexDirection: 'row',

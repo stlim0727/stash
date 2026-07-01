@@ -216,6 +216,11 @@ export const en = {
   'settings.section.preferences': 'Preferences',
   'settings.section.data': 'Your data',
   'settings.section.advanced': 'Advanced',
+  'settings.section.browser': 'Save from your browser',
+  'settings.bookmarklet.button': '⊕ Save to Stash',
+  'settings.bookmarklet.copied': 'Copied!',
+  'settings.bookmarklet.note':
+    'Drag this button to your bookmarks bar (or click to copy it). Then click it on any page to stash it.',
   'settings.account.signedIn': 'Signed in',
   'settings.account.signIn': 'Sign In',
   'settings.account.signOut': 'Sign out',
