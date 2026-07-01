@@ -70,8 +70,10 @@ firebase apptesting:execute --app "$FIREBASE_APP_ID" \
 ```
 
 Omitting the binary makes the agent test the **last release uploaded to Firebase
-App Distribution**. The service account needs the **Firebase Test Admin** +
-**Firebase App Distribution Admin** roles.
+App Distribution**. The service account needs the **Firebase App Testing Admin**
+(`roles/firebaseapptesting.admin`) + **Firebase App Distribution Admin** roles —
+with only App Distribution Admin, the run authenticates and finds the release but
+fails with `403 PERMISSION_DENIED` when it tries to create the release test.
 
 ## Run in CI
 
