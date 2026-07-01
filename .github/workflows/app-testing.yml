@@ -35,6 +35,11 @@ on:
         description: 'Optional regex to run only matching test cases (by name). Blank = all cases.'
         required: false
         default: ''
+      debug:
+        description: 'Pass --debug to firebase apptesting:execute to surface the underlying API error.'
+        type: boolean
+        required: false
+        default: false
   workflow_call:
     inputs:
       test-devices:
@@ -77,6 +82,7 @@ jobs:
           # inputs.* is populated for both workflow_dispatch and workflow_call.
           TEST_DEVICES: ${{ inputs.test-devices }}
           TEST_NAME_PATTERN: ${{ inputs.test-name-pattern }}
+          DEBUG: ${{ inputs.debug }}
         run: |
           set -euo pipefail
 
@@ -125,6 +131,11 @@ jobs:
             --test-devices "$DEVICES")
           if [ -n "${TEST_NAME_PATTERN:-}" ]; then
             ARGS+=(--test-name-pattern "$TEST_NAME_PATTERN")
+          fi
+          # --debug surfaces the underlying API error when the agent rejects the
+          # test-execution request (the default error is terse). Opt-in via input.
+          if [ "${DEBUG:-false}" = "true" ]; then
+            ARGS+=(--debug)
           fi
 
           firebase "${ARGS[@]}"
