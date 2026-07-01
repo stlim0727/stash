@@ -54,15 +54,15 @@ test('caps suggestions at five tags', async () => {
   assert.ok(out.suggested_tags.length <= 5);
 });
 
-test('suggests no tag (and null confidence) when nothing matches, rather than host noise', async () => {
+test('suggests no tag (and null confidence) when nothing matches, and stays silent', async () => {
   const out = await provider.enrich(input({ url: 'https://kittens.example/page' }));
   assert.deepEqual(out.suggested_tags, []);
   assert.equal(out.suggested_collection, null);
   assert.equal(out.confidence, null);
-  // The summary still grounds the bookmark even with no tags to suggest, but it
-  // must NOT tell the user to review tags that aren't there.
-  assert.match(out.summary ?? '', /dummy-v0/);
-  assert.doesNotMatch(out.summary ?? '', /review the suggested tags/);
+  // Nothing matched — no tag AND no collection hint — so there is nothing worth
+  // saying. Emit no summary rather than a generic "Item from {host} —
+  // Auto-categorized by dummy-v0." line the client would only have to hide.
+  assert.equal(out.summary, null);
 });
 
 test('drops sub-threshold rule hits the app would hide (and the summary stops promising them)', async () => {
@@ -87,9 +87,14 @@ test('still points at the suggested tags when at least one will surface', async 
   assert.match(out.summary ?? '', /review the suggested tags below/);
 });
 
-test('produces a summary for a URL and none for a text-only share', async () => {
-  const withUrl = await provider.enrich(input({ url: 'https://example.com', title: 'Hi' }));
+test('produces a summary for a matched URL and none for a text-only share', async () => {
+  // A URL the heuristics can place (github → programming) gets a grounding
+  // summary; a bare thought with no URL — and a URL nothing matches — do not.
+  const withUrl = await provider.enrich(input({ url: 'https://github.com/facebook/react', title: 'Hi' }));
   assert.match(withUrl.summary ?? '', /dummy-v0/);
+
+  const unmatchedUrl = await provider.enrich(input({ url: 'https://example.com', title: 'Hi' }));
+  assert.equal(unmatchedUrl.summary, null);
 
   const textOnly = await provider.enrich(input({ url: null, notes: 'just a thought' }));
   assert.equal(textOnly.summary, null);

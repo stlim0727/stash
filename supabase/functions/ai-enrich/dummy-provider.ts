@@ -182,7 +182,15 @@ export class DummyProvider implements EnrichmentProvider {
     // Only point the user at the suggested tags when there is at least one to
     // review; otherwise the summary would promise tags the client never shows.
     const hasTags = suggested_tags.length > 0;
-    const summary = input.url
+    // When the heuristics matched nothing at all — no surfaced tag AND no
+    // collection hint — there is genuinely nothing to say. Emit no summary
+    // rather than a generic "Item from {host} — … Auto-categorized by dummy-v0."
+    // line, which is just a restatement of the URL bar plus the model's
+    // signature: pure noise the client would have to hide (and which otherwise
+    // rides on the persisted row into sync, export, and diagnostics). An empty
+    // result stays honestly silent.
+    const hasHint = hasTags || Boolean(suggested_collection);
+    const summary = input.url && hasHint
       ? base === 'ko'
         ? `${host || '알 수 없는 사이트'}의 항목` +
           (input.title ? ` — “${input.title}”` : '') +
