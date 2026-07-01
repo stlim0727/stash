@@ -842,7 +842,14 @@ export default function BookmarkDetailScreen() {
             accessibilityRole="text"
             style={[styles.hint, { color: palette.textSecondary }]}
           >
-            {enrichmentDegradedLabel(t, enrichment?.degraded_reason ?? null)}
+            {/* When the card is collapsed (nothing actionable) we only keep this
+                note for a rate limit — and there are no "basic suggestions" on
+                screen to point at, so use the standalone retry copy rather than
+                the "showing basic suggestions" variant, which would describe
+                content that isn't there. */}
+            {showAiReport
+              ? enrichmentDegradedLabel(t, enrichment?.degraded_reason ?? null)
+              : t('detail.aiRateLimited')}
           </Text>
         ) : null}
 
