@@ -126,19 +126,24 @@ export default function BookmarkDetailScreen() {
   // (a background auto-enrichment finishing) is dismissed immediately rather
   // than re-announcing it on the Inbox.
   const reportedDegradedRef = useRef<Set<string>>(new Set());
-  const reportEnrichment = id ? getEnrichment(id) : undefined;
+  // Key witness/access tracking off the *resolved* bookmark id, not the raw
+  // route param: a freshly-shared bookmark adopts its remote id when its create
+  // syncs while this screen is open, so the route's local id would otherwise
+  // point at a row that no longer exists.
+  const resolvedId = bookmark?.id;
+  const reportEnrichment = resolvedId ? getEnrichment(resolvedId) : undefined;
   useEffect(() => {
-    if (id) {
-      markSuggestionsSeen(id);
+    if (resolvedId) {
+      markSuggestionsSeen(resolvedId);
     }
-  }, [id, reportEnrichment, markSuggestionsSeen]);
+  }, [resolvedId, reportEnrichment, markSuggestionsSeen]);
   // Viewing a bookmark's Detail counts as opening it — record the access so the
   // "Recently opened" Inbox sort reflects it. Once per id (a re-open remounts).
   useEffect(() => {
-    if (id) {
-      markBookmarkAccessed(id);
+    if (resolvedId) {
+      markBookmarkAccessed(resolvedId);
     }
-  }, [id, markBookmarkAccessed]);
+  }, [resolvedId, markBookmarkAccessed]);
   useEffect(() => {
     if (!reportEnrichment?.degraded) {
       return;

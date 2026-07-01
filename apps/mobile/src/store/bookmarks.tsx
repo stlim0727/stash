@@ -492,6 +492,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // snapshot, so a delete that lands mid-run must be visible to it — both
   // before uploading an entry and before applying an upload's result.
   const deletedIds = useRef(new Set<string>());
+  // Maps a bookmark's *former* id to the id it was re-keyed onto. A freshly
+  // captured row adopts its remote id when its create syncs, and an
+  // anonymous→real re-home swaps it for a new local id — both change the id out
+  // from under any holder of the old one. The reported case: open a just-shared
+  // bookmark's Detail (navigated with the local id), then its create syncs
+  // moments later and `getBookmark(localId)` would read "not found". Following
+  // this alias keeps the screen pointed at the live row across the swap.
+  const idAliases = useRef(new Map<string, string>());
   // Mirror of the bookmarks state so async loops can read the LATEST rows
   // instead of the stale closure captured when they started.
   const bookmarksRef = useRef<Bookmark[] | null>(null);
@@ -864,7 +872,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const loadedBookmarks = useMemo(() => bookmarks ?? [], [bookmarks]);
 
   const getBookmark = useCallback(
-    (id: string) => loadedBookmarks.find((bookmark) => bookmark.id === id),
+    (id: string) => {
+      const direct = loadedBookmarks.find((bookmark) => bookmark.id === id);
+      if (direct) {
+        return direct;
+      }
+      // The id may have been re-keyed under a holder of the old one (a create
+      // syncing to its remote id, or an account re-home). Follow the alias chain
+      // — guarding against cycles — so a stale id still resolves to the live row
+      // instead of reading as "not found".
+      const seen = new Set<string>([id]);
+      let next = idAliases.current.get(id);
+      while (next && !seen.has(next)) {
+        const match = loadedBookmarks.find((bookmark) => bookmark.id === next);
+        if (match) {
+          return match;
+        }
+        seen.add(next);
+        next = idAliases.current.get(next);
+      }
+      return undefined;
+    },
     [loadedBookmarks],
   );
 
@@ -1730,6 +1758,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (syncedLeftovers.length > 0) {
         const swaps = planLeftoverReconciliation(syncedLeftovers, bookmarksRef.current ?? []);
         for (const { localId, reconciled } of swaps) {
+          // Remember the old→new id so a screen still holding the local id (a
+          // Detail opened right after a share) resolves the live row via
+          // getBookmark instead of flashing "not found".
+          if (localId !== reconciled.id) {
+            idAliases.current.set(localId, reconciled.id);
+          }
           // Collapse onto the remote id: if the pull already brought this
           // bookmark down under its UUID, a plain map would leave two entries
           // sharing that id (a duplicate Inbox card that storage doesn't have,
@@ -1861,6 +1895,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // create was uploading) stays parked on a dead local id that
               // syncTagOps skips via hasRemoteIdentity, and never uploads.
               if (previousId !== persisted.id) {
+                // Remember the old→new id so a screen still holding the old id
+                // (e.g. a Detail opened right after a share) resolves the live
+                // row through getBookmark instead of flashing "not found".
+                idAliases.current.set(previousId, persisted.id);
                 const idMap = new Map([[previousId, persisted.id]]);
                 applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
                 const links = tagDataRef.current.bookmarkTags.map((link) =>
@@ -1943,6 +1981,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           ensureRepositoryReady,
           {
             rehome: (idMap) => {
+              // Carry the old→new id forward so a screen holding a re-homed
+              // bookmark's old id still resolves it via getBookmark.
+              for (const [oldId, newId] of idMap) {
+                idAliases.current.set(oldId, newId);
+              }
               // Re-key tag state from the re-homed bookmarks' old ids onto their
               // new local ids so the carried-over tags upload (via the syncTagOps
               // call below) against the row that now exists in the new account.
