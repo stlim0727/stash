@@ -18,99 +18,45 @@ function input(overrides: Partial<EnrichmentInput> = {}): EnrichmentInput {
   };
 }
 
-test('suggests programming tag and Development collection for a GitHub repo', async () => {
-  const out = await provider.enrich(
-    input({ url: 'https://github.com/facebook/react', title: 'React' }),
-  );
-  const names = out.suggested_tags.map((tag) => tag.name);
-  assert.ok(names.includes('programming'));
-  assert.equal(out.suggested_collection, 'Development');
-  assert.ok(out.topics.includes('programming'));
+const EMPTY = {
+  summary: null,
+  topics: [],
+  suggested_tags: [],
+  suggested_collection: null,
+  confidence: null,
+};
+
+test('is tagged with the dummy-v0 model id (the fallback the client keys off)', () => {
+  assert.equal(provider.model, 'dummy-v0');
 });
 
-test('every suggested tag carries a 0..1 confidence', async () => {
-  const out = await provider.enrich(input({ url: 'https://www.youtube.com/watch?v=abc' }));
-  assert.ok(out.suggested_tags.length > 0);
-  for (const tag of out.suggested_tags) {
-    assert.ok(tag.confidence > 0 && tag.confidence <= 0.9, `confidence ${tag.confidence}`);
-  }
-  assert.ok(out.suggested_tags.some((tag) => tag.name === 'video'));
+test('suggests nothing — no tags, no collection, no summary — for any URL', async () => {
+  // Even a URL the old heuristics would have matched (github → "programming")
+  // now yields nothing: broad keyword categories were noise, not suggestions.
+  const out = await provider.enrich(input({ url: 'https://github.com/facebook/react', title: 'React' }));
+  assert.deepEqual(out, EMPTY);
 });
 
-test('is deterministic — same input yields identical output', async () => {
-  const args = input({ url: 'https://figma.com/file/x', notes: 'design system' });
-  const a = await provider.enrich(args);
-  const b = await provider.enrich(args);
-  assert.deepEqual(a, b);
-});
-
-test('caps suggestions at five tags', async () => {
-  const out = await provider.enrich(
-    input({
-      url: 'https://github.com/x',
-      title: 'react typescript design figma video youtube blog arxiv docs amazon reddit',
-    }),
-  );
-  assert.ok(out.suggested_tags.length <= 5);
-});
-
-test('suggests no tag (and null confidence) when nothing matches, and stays silent', async () => {
+test('suggests nothing for an unmatched URL', async () => {
   const out = await provider.enrich(input({ url: 'https://kittens.example/page' }));
-  assert.deepEqual(out.suggested_tags, []);
-  assert.equal(out.suggested_collection, null);
-  assert.equal(out.confidence, null);
-  // Nothing matched — no tag AND no collection hint — so there is nothing worth
-  // saying. Emit no summary rather than a generic "Item from {host} —
-  // Auto-categorized by dummy-v0." line the client would only have to hide.
-  assert.equal(out.summary, null);
+  assert.deepEqual(out, EMPTY);
 });
 
-test('drops sub-threshold rule hits the app would hide (and the summary stops promising them)', async () => {
-  // A lone "blog" keyword fires the reading rule at 0.56 confidence — below the
-  // app's 0.6 surface threshold — so no tag is emitted, even though the
-  // collection hint still resolves. The summary must not point at absent tags.
-  const out = await provider.enrich(
-    input({ url: 'https://blog.naver.com/recipe', title: 'Recipe', locale: 'ko' }),
-  );
-  assert.deepEqual(out.suggested_tags, []);
-  assert.equal(out.confidence, null);
-  assert.equal(out.suggested_collection, 'Reading');
-  assert.match(out.summary ?? '', /dummy-v0/);
-  assert.doesNotMatch(out.summary ?? '', /아래 제안 태그를 확인하세요/);
+test('suggests nothing for a text-only share', async () => {
+  const out = await provider.enrich(input({ url: null, notes: 'just a thought' }));
+  assert.deepEqual(out, EMPTY);
 });
 
-test('still points at the suggested tags when at least one will surface', async () => {
-  const out = await provider.enrich(
-    input({ url: 'https://github.com/facebook/react', title: 'React' }),
-  );
-  assert.ok(out.suggested_tags.length > 0);
-  assert.match(out.summary ?? '', /review the suggested tags below/);
-});
-
-test('produces a summary for a matched URL and none for a text-only share', async () => {
-  // A URL the heuristics can place (github → programming) gets a grounding
-  // summary; a bare thought with no URL — and a URL nothing matches — do not.
-  const withUrl = await provider.enrich(input({ url: 'https://github.com/facebook/react', title: 'Hi' }));
-  assert.match(withUrl.summary ?? '', /dummy-v0/);
-
-  const unmatchedUrl = await provider.enrich(input({ url: 'https://example.com', title: 'Hi' }));
-  assert.equal(unmatchedUrl.summary, null);
-
-  const textOnly = await provider.enrich(input({ url: null, notes: 'just a thought' }));
-  assert.equal(textOnly.summary, null);
-});
-
-test('localizes heuristic tags and topics for a Korean locale', async () => {
+test('ignores locale — there is nothing to localize', async () => {
   const out = await provider.enrich(
     input({ url: 'https://github.com/facebook/react', title: 'React', locale: 'ko' }),
   );
-  const names = out.suggested_tags.map((tag) => tag.name);
-  assert.ok(names.includes('프로그래밍'), `expected Korean tag, got: ${names.join(', ')}`);
-  assert.ok(!names.includes('programming'), 'English tag should not leak through');
-  assert.ok(out.topics.includes('프로그래밍'), `topics not localized: ${out.topics.join(', ')}`);
+  assert.deepEqual(out, EMPTY);
 });
 
-test('keeps English heuristic tags when locale is English or absent', async () => {
-  const out = await provider.enrich(input({ url: 'https://github.com/facebook/react', locale: 'en' }));
-  assert.ok(out.suggested_tags.map((tag) => tag.name).includes('programming'));
+test('is deterministic — same (empty) output regardless of input', async () => {
+  const a = await provider.enrich(input({ url: 'https://figma.com/file/x', notes: 'design system' }));
+  const b = await provider.enrich(input({ url: 'https://youtube.com/watch?v=abc' }));
+  assert.deepEqual(a, EMPTY);
+  assert.deepEqual(b, EMPTY);
 });
