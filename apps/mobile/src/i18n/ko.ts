@@ -220,6 +220,7 @@ export const ko: Catalog = {
   'settings.importSheet.title': '데이터 가져오기',
   'settings.importSheet.html': '북마크 파일 (HTML)',
   'settings.importSheet.json': 'Stash 백업 (JSON)',
+  'settings.importSheet.pocket': 'Pocket 내보내기 (CSV)',
   'settings.export.failedTitle': '내보내기 실패',
   'settings.export.failedBody': '데이터를 내보낼 수 없습니다. 다시 시도해 주세요.',
   'settings.import.nothingTitle': '가져올 항목 없음',

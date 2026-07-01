@@ -289,6 +289,7 @@ export const en = {
   'settings.importSheet.title': 'Import data',
   'settings.importSheet.html': 'Bookmarks file (HTML)',
   'settings.importSheet.json': 'Stash backup (JSON)',
+  'settings.importSheet.pocket': 'Pocket export (CSV)',
   'settings.export.failedTitle': 'Export failed',
   'settings.export.failedBody': 'Could not export your data. Please try again.',
   'settings.import.nothingTitle': 'Nothing to import',

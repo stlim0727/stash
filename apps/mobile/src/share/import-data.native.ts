@@ -15,12 +15,15 @@ export type { ImportPickResult } from '@/share/import-data';
 // MIME types per kind. 'text/plain' is included because some providers hand
 // back .json/.html files with a generic text type, and being permissive here is
 // safer than hiding the user's file behind a too-strict filter.
-const PICKER_TYPES: Record<'json' | 'html', string[]> = {
+const PICKER_TYPES: Record<'json' | 'html' | 'csv', string[]> = {
   json: ['application/json', 'text/plain'],
   html: ['text/html', 'text/plain'],
+  csv: ['text/csv', 'text/comma-separated-values', 'text/plain'],
 };
 
-export async function pickImportFile(kind: 'json' | 'html'): Promise<ImportPickResult | null> {
+export async function pickImportFile(
+  kind: 'json' | 'html' | 'csv',
+): Promise<ImportPickResult | null> {
   const result = await DocumentPicker.getDocumentAsync({
     type: PICKER_TYPES[kind],
     // Copy into the cache dir so the URI is a stable local file we can read.

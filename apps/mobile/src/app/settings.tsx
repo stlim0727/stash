@@ -206,7 +206,7 @@ export default function SettingsScreen() {
   const [importSheetOpen, setImportSheetOpen] = useState(false);
   const [importing, setImporting] = useState(false);
 
-  const runImport = async (kind: 'json' | 'html') => {
+  const runImport = async (kind: 'json' | 'html' | 'csv') => {
     setImportSheetOpen(false);
     if (importing) {
       return;
@@ -714,6 +714,12 @@ export default function SettingsScreen() {
             label: t('settings.importSheet.json'),
             icon: 'code-slash-outline',
             onPress: () => void runImport('json'),
+          },
+          {
+            key: 'csv',
+            label: t('settings.importSheet.pocket'),
+            icon: 'bookmark-outline',
+            onPress: () => void runImport('csv'),
           },
         ]}
       />

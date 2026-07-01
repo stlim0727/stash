@@ -13,13 +13,16 @@ export interface ImportPickResult {
 }
 
 /** File-type hints per import kind, so the picker filters to sensible files. */
-const ACCEPT: Record<'json' | 'html', string> = {
+const ACCEPT: Record<'json' | 'html' | 'csv', string> = {
   json: '.json,application/json',
   html: '.html,.htm,text/html',
+  csv: '.csv,text/csv',
 };
 
 /** Returns the picked file's text, or null if the user cancelled. */
-export async function pickImportFile(kind: 'json' | 'html'): Promise<ImportPickResult | null> {
+export async function pickImportFile(
+  kind: 'json' | 'html' | 'csv',
+): Promise<ImportPickResult | null> {
   if (typeof document === 'undefined') {
     throw new Error('Importing is not available in this environment.');
   }
