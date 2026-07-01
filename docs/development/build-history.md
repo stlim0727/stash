@@ -27,12 +27,25 @@ candidates** (`vX.Y.Z-rcN`) that lead up to each stable cut.
   "what's new since the last RC." Skipping this is exactly how `v1.0.0-rc4` went
   unlogged and the next build's number became a guess.
 
-## 1.0.0 cycle (current trunk)
+## 1.1.0 cycle (current trunk)
+
+`apps/mobile/app.json` `version` = `1.1.0` (bumped `1.0.0 → 1.1.0` to open the
+1.1 line, ahead of the first 1.1 release candidate; the `version` input passed to
+the **Android APK** workflow stamps the full `1.1.0-rcN` onto the build via
+`APP_VERSION`). These are the release candidates leading to the first `v1.1.0`
+stable cut. The stable target is **`v1.1.0`**. Note: the 1.0.0 cycle below shipped
+18 RCs but was never cut to a stable `v1.0.0` tag — the 1.1 line supersedes it.
+
+| Build | Date (UTC) | `main` SHA | What's new since last RC |
+| ----- | ---------- | ---------- | ------------------------ |
+| `v1.1.0-rc1` | 2026-07-01 | _(pending — filled on dispatch)_ | First build at version `1.1.0`: opens the 1.1 cycle (`app.json` bump `1.0.0 → 1.1.0`). Carries all 1.0.0-cycle code through rc18 plus the merged fix for the "bookmark could not be found" flash after sharing (Detail resolving a bookmark by its pre-sync local id across the sync id-swap, #289). Build = `android-apk.yml` run #_(TBD)_. |
+
+## 1.0.0 cycle (superseded — 18 RCs, no stable `v1.0.0` cut)
 
 `apps/mobile/app.json` `version` = `1.0.0` (bumped `0.2.2 → 1.0.0` in #223,
 commit `d48c01f`, ahead of the first 1.0 release candidate). Stash is
-feature-complete for 1.0; these are the release candidates leading to the first
-`v1.0.0` stable cut. The stable target is **`v1.0.0`**.
+feature-complete for 1.0; these were the release candidates leading toward a
+`v1.0.0` stable cut that never happened — the 1.1 line above supersedes this one.
 
 | Build | Date (UTC) | `main` SHA | What's new since last RC |
 | ----- | ---------- | ---------- | ------------------------ |
