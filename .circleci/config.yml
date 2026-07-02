@@ -303,10 +303,15 @@ jobs:
             - ccache-v1-{{ .Branch }}
             - ccache-v1-
       - run:
-          name: Install ccache + zero stats
+          name: Install ccache + ninja + zero stats
           command: |
-            sudo apt-get update -qq && sudo apt-get install -y -qq ccache
+            # ninja-build is required by the CMake native builds (e.g.
+            # react-native-screens' configureCMake* task) — the cimg/android
+            # image ships CMake but no Ninja, so AGP fails with
+            # "[CXX1416] Could not find Ninja on PATH or in SDK CMake bin folders".
+            sudo apt-get update -qq && sudo apt-get install -y -qq ccache ninja-build
             ccache --version | head -1
+            ninja --version
             ccache -z
       - run:
           name: Compute build metadata
