@@ -157,16 +157,24 @@ jobs:
       # /tmp/metro-*. Without this, every run re-transforms all source files even
       # though most haven't changed, so bundleReleaseJsAndAssets — the single
       # biggest chunk of the release build — runs cold each time. Restoring it lets
-      # Metro skip unchanged files (same fix as android-apk.yml). The transform
-      # cache is ABI-independent, so it shares the `metro-<os>-` namespace with the
-      # arm64 APK build and each warms the other.
+      # Metro skip unchanged files (same fix as android-apk.yml).
+      #
+      # Namespaced `metro-screens-` — deliberately NOT shared with android-apk.yml's
+      # `metro-` cache. Metro's content-keyed transform cache does NOT bust on
+      # EXPO_PUBLIC_* changes (that's why provenance is routed through expoConfig
+      # `extra`, not inlined — see android-apk.yml + domain/build-info.ts). This
+      # screenshots build runs with NO EXPO_PUBLIC_SUPABASE_URL/SENTRY_DSN, so its
+      # transforms inline empty config; sharing the namespace would let a later
+      # release APK restore those no-env transforms and ship with Supabase/Sentry
+      # config missing. Isolating keeps release inlining correct — each workflow
+      # still warms its own cache run-over-run (matching the ccache-screens- split).
       - name: Restore Metro cache
         uses: actions/cache/restore@v4
         with:
           path: /tmp/metro-*
-          key: metro-${{ runner.os }}-${{ github.sha }}
+          key: metro-screens-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            metro-${{ runner.os }}-
+            metro-screens-${{ runner.os }}-
 
       - name: Prebuild Android project
         working-directory: apps/mobile
@@ -229,7 +237,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: /tmp/metro-*
-          key: metro-${{ runner.os }}-${{ github.sha }}
+          key: metro-screens-${{ runner.os }}-${{ github.sha }}
 
       # The emulator boot is the flaky part (#269): ~1 in 3 CI emulators boot
       # with a broken UiAutomator layer (every element reads "not found"), and
