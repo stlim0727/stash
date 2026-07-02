@@ -97,5 +97,5 @@ Backend: `supabase/migrations` (owner-scoped RLS) and `supabase/functions` edge 
 
 - **Branch strategy: trunk-based + release branches** (`docs/development/branching.md`). `main` is the trunk (next release); each `release/*` branch is the maintenance line for an already-shipped version. Base each change on the line it ships in — features → `main`; bug fixes for a shipped version → its `release/*` branch, then **cherry-pick the fix forward into `main`**. Never merge `main` into a release branch.
 - **Pull requests: open as regular (non-draft) PRs, not drafts.**
-- CI (`.github/workflows/ci.yml`) runs lint, typecheck, and tests on every PR.
-- Installable Android APK without an EAS account: the `android-apk.yml` workflow (`expo prebuild` → Gradle `assembleRelease`, debug-signed standalone, arm64-v8a only). Trigger/output mapping and the MCP/`gh` invocation steps are documented in `AGENTS.md`. EAS profiles for store builds live in `apps/mobile/eas.json`; release flow in `docs/development/releasing.md`.
+- CI runs on **CircleCI** (`.circleci/config.yml`): the `ci` workflow runs lint, typecheck, and tests on every PR. Migrated off GitHub Actions (quota exhausted); see `docs/development/ci-circleci.md`.
+- Installable Android APK without an EAS account: the CircleCI `android_apk` job (`expo prebuild` → Gradle `assembleRelease`, debug-signed standalone, arm64-v8a only). Trigger/output mapping is documented in `AGENTS.md`. EAS profiles for store builds live in `apps/mobile/eas.json`; release flow in `docs/development/releasing.md`.

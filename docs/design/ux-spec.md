@@ -354,7 +354,7 @@ See [use-cases.md](use-cases.md) §7 for the diagrammed flows.
   delivers in-app reports (§13) to Sentry via a swappable `ReportSink`
   (`SentrySink` today; the HTTP transport is injected so it's testable without
   the network). The DSN/secret live server-side, off-device.
-- ✅ **Release tooling**: `.github/workflows/sentry-release.yml` creates a Sentry
+- ✅ **Release tooling**: the CircleCI `sentry_release` job creates a Sentry
   release and associates commits on `v*` tags (skips cleanly without secrets).
   Source maps upload during EAS Build via the `@sentry/react-native/expo`
   config plugin.

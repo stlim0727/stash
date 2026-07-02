@@ -270,7 +270,7 @@ flowchart LR
     crash[["Unhandled JS / native error"]] --> capture["Captured & grouped per device"]
     setuser --> capture
     capture --> sentry(("🛰️ Sentry"))
-    release["v* tag pushed"] --> wf[".github/workflows/sentry-release.yml"] --> sentry
+    release["v* tag pushed"] --> wf["CircleCI sentry_release job"] --> sentry
 ```
 
 ---

@@ -68,11 +68,16 @@ lower.
 | Apple Developer Program | $99/yr | Required to ship on the iOS App Store. |
 | Google Play registration | $25 once | Required to ship on Play. |
 | Sentry | Free → $26/mo+ | Already wired; free tier (5k errors/mo) covers early. |
-| EAS Build (Expo) | Free → $19/mo+ | Optional — the `android-apk.yml` workflow builds an APK on GitHub Actions without EAS. |
+| EAS Build (Expo) | Free → $19/mo+ | Optional — the CircleCI `android_apk` job builds an APK without EAS. |
 | Firebase App Distribution | **Free** | Tester APK delivery; no per-build/per-tester charge (Spark plan). |
 | Expo push notifications | Free | — |
 
 ## GitHub (and the private-repo switch)
+
+> **CI moved to CircleCI.** After the GitHub Actions quota below was exhausted,
+> all CI/build workflows were ported to CircleCI (`.circleci/config.yml`; see
+> `ci-circleci.md`). CircleCI has its own free-tier credit budget; the figures
+> below are kept for historical context on the Actions setup.
 
 The repo itself is **free** (unlimited private repos on the Free plan). The one
 thing that changes when private is **GitHub Actions**:
@@ -98,8 +103,8 @@ cheap. Watch out for:
 
 - **Firebase App Distribution** — testers install via the App Tester app, not
   GitHub, so distribution is unaffected and stays free. (The CI upload step in
-  `android-apk.yml` works the same; it just needs the `FIREBASE_APP_ID` and
-  `FIREBASE_SERVICE_ACCOUNT` secrets — see `releasing.md`.)
+  the `android_apk` job works the same; it just needs the `FIREBASE_APP_ID` and
+  `FIREBASE_SERVICE_ACCOUNT` env vars — see `releasing.md`.)
 - **Supabase GitHub integration**, **Claude Code**, and other authorized
   integrations keep working on a private repo.
 - ⚠️ **GitHub Release / artifact download links become private** — if you shared
