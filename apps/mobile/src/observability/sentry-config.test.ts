@@ -5,6 +5,7 @@ import {
   buildSentryInitOptions,
   describeSentryConfig,
   getSentryConfigState,
+  parseAppHangTimeout,
   parseSampleRate,
   parseSentryDsn,
 } from './sentry-config.ts';
@@ -13,6 +14,7 @@ const ENV_KEYS = [
   'EXPO_PUBLIC_SENTRY_DSN',
   'EXPO_PUBLIC_SENTRY_ENVIRONMENT',
   'EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE',
+  'EXPO_PUBLIC_SENTRY_APP_HANG_TIMEOUT',
 ];
 
 function clearEnv() {
@@ -42,6 +44,7 @@ test('enabled with a DSN; environment defaults to development', () => {
   assert.equal(state.config.dsn, 'https://k@o1.ingest.sentry.io/2');
   assert.equal(state.config.environment, 'development');
   assert.equal(state.config.tracesSampleRate, 0);
+  assert.equal(state.config.appHangTimeoutSeconds, 2);
   assert.match(describeSentryConfig(state), /Enabled \(development\)/);
 });
 
@@ -58,6 +61,17 @@ test('reads environment and traces sample rate from env', () => {
   assert.equal(state.config.tracesSampleRate, 0.25);
 });
 
+test('reads a tuned app-hang timeout from env', () => {
+  clearEnv();
+  process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://k@o1.ingest.sentry.io/2';
+  process.env.EXPO_PUBLIC_SENTRY_APP_HANG_TIMEOUT = '4';
+  const state = getSentryConfigState();
+  if (state.status !== 'enabled') {
+    throw new Error('expected enabled');
+  }
+  assert.equal(state.config.appHangTimeoutSeconds, 4);
+});
+
 test('parseSampleRate clamps invalid/out-of-range values to 0 (tracing off)', () => {
   assert.equal(parseSampleRate(''), 0);
   assert.equal(parseSampleRate('abc'), 0);
@@ -65,6 +79,16 @@ test('parseSampleRate clamps invalid/out-of-range values to 0 (tracing off)', ()
   assert.equal(parseSampleRate('2'), 0);
   assert.equal(parseSampleRate('0.5'), 0.5);
   assert.equal(parseSampleRate('1'), 1);
+});
+
+test('parseAppHangTimeout falls back to 2s for missing/invalid/too-small values', () => {
+  assert.equal(parseAppHangTimeout(''), 2);
+  assert.equal(parseAppHangTimeout('abc'), 2);
+  assert.equal(parseAppHangTimeout('0'), 2);
+  assert.equal(parseAppHangTimeout('0.5'), 2); // sub-second would spam on jank
+  assert.equal(parseAppHangTimeout('-3'), 2);
+  assert.equal(parseAppHangTimeout('1'), 1);
+  assert.equal(parseAppHangTimeout('5'), 5);
 });
 
 test('buildSentryInitOptions sets safe defaults and attaches release', () => {
@@ -75,6 +99,8 @@ test('buildSentryInitOptions sets safe defaults and attaches release', () => {
   });
   assert.ok(options);
   assert.equal(options.enableNativeCrashHandling, true);
+  assert.equal(options.enableAppHangTracking, true);
+  assert.equal(options.appHangTimeoutInterval, 2);
   assert.equal(options.sendDefaultPii, false);
   assert.equal(options.release, '1.4.0');
   assert.equal(options.dist, '42');
