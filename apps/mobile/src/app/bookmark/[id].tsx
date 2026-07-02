@@ -301,10 +301,13 @@ export default function BookmarkDetailScreen() {
   //    the raw enrichment), so a card the Inbox refuses to badge never shouts
   //    here either.
   //  - a summary counts as real content only from a real model; the dummy-v0
-  //    boilerplate is noise once there is nothing actionable beside it. Keying
-  //    on the model (not the persisted `degraded` flag) also silences older
-  //    dummy rows that were never marked degraded, and it survives re-sync
-  //    without a backfill.
+  //    boilerplate ("Url from {host} — … Auto-categorized by dummy-v0[; review
+  //    the suggested tags below]") is noise *regardless* of what else is on the
+  //    card — surfacing it as a proposed note next to real tag suggestions just
+  //    leaks the internal model name and points at "tags below" that live in a
+  //    separate widget. Keying on the model (not the persisted `degraded` flag)
+  //    also silences older dummy rows that were never marked degraded, and it
+  //    survives re-sync without a backfill.
   const hasActionableSuggestions = pending.length > 0 || folderSuggestionVisible;
   // The summary is offered as a proposed note (see ProposedSummary below). A
   // stable token derived from the summary text lets "use as note" / dismiss
@@ -315,7 +318,7 @@ export default function BookmarkDetailScreen() {
   const showAiSummary =
     Boolean(enrichment?.summary?.trim()) &&
     !summaryReviewed &&
-    (hasActionableSuggestions || enrichment?.model !== 'dummy-v0');
+    enrichment?.model !== 'dummy-v0';
   const showAiReport = hasActionableSuggestions || showAiSummary;
   // The screen-level "Dismiss all suggestions" (in the AI control strip) only
   // earns its place once suggestions are spread across 2+ widgets — folder,

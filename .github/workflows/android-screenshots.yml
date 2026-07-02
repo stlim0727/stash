@@ -245,9 +245,11 @@ jobs:
       # found" → "Timeout waiting for emulator to boot"). A dead emulator can't
       # be recovered in place, so we retry at the JOB level on a fresh emulator —
       # now up to THREE attempts, since two consecutive boot failures have been
-      # seen. Each attempt is hardened: explicit cores/RAM, and a 7-min boot cap
-      # (a healthy emulator boots in ~2-4 min; a dead one is abandoned fast so
-      # all three attempts still fit the 45-min job budget). `default` (AOSP)
+      # seen. Each attempt is hardened: explicit cores/RAM, and a 5-min boot cap
+      # (a healthy emulator boots in ~2-4 min; a dead one — which spams
+      # "device 'emulator-5554' not found" as the action polls sys.boot_completed
+      # against a QEMU process that already exited — is abandoned fast so all
+      # three attempts still fit the 45-min job budget). `default` (AOSP)
       # images avoid the Google Play Services dialogs that can steal the
       # foreground. (GitHub Actions doesn't reliably support YAML anchors, so the
       # three attempts duplicate the same hardened `with:` block.)
@@ -263,7 +265,9 @@ jobs:
           cores: 2
           ram-size: 4096M
           # Fail a dead boot fast (default is 600s) so retries fit the budget.
-          emulator-boot-timeout: 420
+          # 300s = ~5 min: still generous over a healthy ~2-4 min boot, but a
+          # dead emulator is abandoned ~2 min sooner than the old 420s.
+          emulator-boot-timeout: 300
           disable-animations: true
           # Headless, accelerated, no extras that slow boot or destabilise the
           # system server on CI.
@@ -286,7 +290,7 @@ jobs:
           profile: pixel_5
           cores: 2
           ram-size: 4096M
-          emulator-boot-timeout: 420
+          emulator-boot-timeout: 300
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"
@@ -310,7 +314,7 @@ jobs:
           profile: pixel_5
           cores: 2
           ram-size: 4096M
-          emulator-boot-timeout: 420
+          emulator-boot-timeout: 300
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: bash "$GITHUB_WORKSPACE/apps/mobile/.maestro/run-ci-screenshots.sh"

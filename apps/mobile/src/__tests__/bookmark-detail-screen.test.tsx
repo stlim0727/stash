@@ -192,12 +192,12 @@ test('renders AI suggestions with a model badge, summary, and trigger button', a
     [
       makeEnrichment({
         bookmark_id: SYNCED_ID,
-        summary: 'A url from example.com.',
+        summary: 'A thoughtful overview.',
         suggested_tags: [
           { name: 'design', confidence: 0.8 },
           { name: 'video', confidence: 0.6 },
         ],
-        model: 'dummy-v0',
+        model: 'gemini-2.0',
       }),
     ],
   );
@@ -205,12 +205,44 @@ test('renders AI suggestions with a model badge, summary, and trigger button', a
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
 
-  expect(screen.getByText('dummy-v0')).toBeTruthy();
-  expect(screen.getByText('A url from example.com.')).toBeTruthy();
+  expect(screen.getByText('gemini-2.0')).toBeTruthy();
+  expect(screen.getByText('A thoughtful overview.')).toBeTruthy();
   expect(screen.getByLabelText('Accept suggested tag design')).toBeTruthy();
   expect(screen.getByLabelText('Accept suggested tag video')).toBeTruthy();
   // Synced bookmark → the on-demand trigger is offered.
   expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
+});
+
+test('a dummy-v0 boilerplate summary stays hidden even beside real tag suggestions', async () => {
+  mockRouteId = SYNCED_ID;
+  // The exact case the user flagged: dummy-v0 produced tag suggestions AND a
+  // generic "Url from … Auto-categorized by dummy-v0; review the suggested tags
+  // below" summary. The tags are actionable and belong on the card, but the
+  // boilerplate summary must never surface as a proposed note — it leaks the
+  // internal model name and points at "tags below" that live in another widget.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary:
+          'Url from youtu.be — “○○”. Auto-categorized by dummy-v0; review the suggested tags below.',
+        model: 'dummy-v0',
+        suggested_tags: [{ name: 'food', confidence: 0.6 }],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  // The tag suggestion still shows — it's genuinely actionable.
+  expect(screen.getByLabelText('Accept suggested tag food')).toBeTruthy();
+  // The boilerplate summary does not, in any part.
+  expect(screen.queryByText(/Auto-categorized by dummy-v0/)).toBeNull();
+  expect(screen.queryByText(/review the suggested tags below/)).toBeNull();
+  expect(screen.queryByText(/Url from youtu\.be/)).toBeNull();
 });
 
 test('a stale enrichment shows an out-of-date hint (when there are suggestions to be stale against)', async () => {
