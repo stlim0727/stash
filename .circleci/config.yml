@@ -335,9 +335,18 @@ jobs:
           working_directory: ~/stash/apps/mobile
           command: npx expo prebuild --platform android --no-install
       - run:
-          name: Give Gradle more heap + enable build cache
+          name: Tune Gradle heap + cap native build parallelism
           working_directory: ~/stash/apps/mobile/android
-          command: printf '\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\norg.gradle.caching=true\n' >> gradle.properties
+          command: |
+            # CircleCI Docker containers report the HOST's full CPU count via
+            # availableProcessors(), so Gradle and AGP's CMake/ninja over-parallelize
+            # the native C/C++ compiles far beyond the 4 real cores. The resulting
+            # swarm of clang processes OOM-kills the build JVM on the 8GB `large`
+            # box ("Gradle build daemon disappeared unexpectedly"). Pin the visible
+            # processor count with -XX:ActiveProcessorCount so ninja runs ~-j2
+            # (matching the 2-core runner this used to build on under Actions), and
+            # keep the heap modest so the off-heap clang processes have room.
+            printf '\norg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2\norg.gradle.caching=true\norg.gradle.workers.max=2\n' >> gradle.properties
       - run:
           name: Build release APK (arm64-v8a)
           working_directory: ~/stash/apps/mobile/android
