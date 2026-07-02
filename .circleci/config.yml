@@ -335,7 +335,7 @@ jobs:
           working_directory: ~/stash/apps/mobile
           command: npx expo prebuild --platform android --no-install
       - run:
-          name: Tune Gradle heap + serialize native builds
+          name: Tune Gradle heap + bound native build parallelism
           working_directory: ~/stash/apps/mobile/android
           command: |
             # CircleCI Docker containers report the HOST's full CPU count via
@@ -343,15 +343,25 @@ jobs:
             # the native C/C++ compiles far beyond the real cores. The resulting
             # swarm of heavy RN-codegen clang processes OOM-kills the build JVM on
             # the 8GB `large` box ("Gradle build daemon disappeared unexpectedly").
-            # Serialize to keep peak memory well under 8GB: workers.max=1 runs one
-            # module's native build at a time and -XX:ActiveProcessorCount=1 makes
-            # ninja compile one translation unit at a time (~1 clang + the Gradle
-            # heap, well under 8GB). Slower, but this is a release-only job and
-            # ccache (cached across runs) recovers most of the cost on warm builds.
-            printf '\norg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=1\norg.gradle.caching=true\norg.gradle.workers.max=1\n' >> gradle.properties
+            # Bound it so peak memory fits in 8GB while keeping compiles moving:
+            #   workers.max=1            -> only one module's native build at a time,
+            #                               so at most one ninja invocation runs.
+            #   -XX:ActiveProcessorCount=2 -> that ninja compiles -j2 (2 clang),
+            #                               which keeps output flowing (avoids the
+            #                               10-min no-output timeout a -j1 build hit)
+            #                               and roughly halves compile time.
+            #   -Xmx2048m/512m           -> the RN/Expo default heap; leaves ~1.75GB
+            #                               more headroom for the off-heap clang
+            #                               processes than the old -Xmx3g/768m.
+            # Peak ~= 2 clang + the JVM, comfortably under 8GB.
+            printf '\norg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m -XX:ActiveProcessorCount=2\norg.gradle.caching=true\norg.gradle.workers.max=1\n' >> gradle.properties
       - run:
           name: Build release APK (arm64-v8a)
           working_directory: ~/stash/apps/mobile/android
+          # A single heavy RN-codegen C++ translation unit can compile for many
+          # minutes with no stdout; raise CircleCI's default 10-min no-output
+          # timeout so such a unit can't get the step canceled mid-build.
+          no_output_timeout: 30m
           environment:
             EXPO_PUBLIC_SENTRY_ENVIRONMENT: production
             CMAKE_C_COMPILER_LAUNCHER: ccache
