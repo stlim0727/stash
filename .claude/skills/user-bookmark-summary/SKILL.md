@@ -48,7 +48,12 @@ SELECT
   -- Per-user app version, stamped into user_metadata on auth (see below).
   u.raw_user_meta_data->>'app_version' AS app_version,
   u.raw_user_meta_data->>'platform'    AS platform,
-  (u.raw_user_meta_data->>'app_version_updated_at')::timestamptz::date AS version_seen,
+  -- Date prefix as TEXT — never cast user_metadata to timestamp. These values
+  -- are user-writable via GoTrue updateUser, so one malformed
+  -- app_version_updated_at would abort the whole report with an invalid-syntax
+  -- error. left(...,10) of a well-formed ISO string is the YYYY-MM-DD date;
+  -- anything malformed stays harmless text instead of erroring.
+  left(u.raw_user_meta_data->>'app_version_updated_at', 10) AS version_seen,
   MAX(b.last_saved_at)::date AS last_saved
 FROM auth.users u
 LEFT JOIN public.bookmarks b ON b.user_id = u.id
