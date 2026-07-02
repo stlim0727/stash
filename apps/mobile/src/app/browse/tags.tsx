@@ -198,6 +198,16 @@ export default function BrowseTagsScreen() {
     router.navigate('/browse/tags');
   }, [router]);
 
+  // Cloud overflow footer → the full (frequency-ranked) list. COUNTS only, never
+  // a tag name (hard rule): `cloud` = chips actually shown, `total` = all tags.
+  const onShowAll = useCallback(() => {
+    trackBreadcrumb('browse', 'cloud show all', {
+      cloud: cloudEntries.length,
+      total: ranked.length,
+    });
+    setView('all');
+  }, [cloudEntries.length, ranked.length]);
+
   // Library-empties guard: if the underlying scoped set is empty (the facet has
   // no bookmarks at all — NOT merely a zero-result search), there's nothing to
   // browse, so pop back. Don't fire while loading (facets are empty mid-load) or
@@ -392,6 +402,28 @@ export default function BrowseTagsScreen() {
               );
             })}
           </View>
+          {ranked.length > cloudEntries.length ? (
+            <Pressable
+              testID="browse-tags-show-all"
+              accessibilityRole="button"
+              accessibilityLabel={t('inbox.tagCloudShowAllA11y', { count: ranked.length })}
+              hitSlop={10}
+              onPress={onShowAll}
+              style={({ pressed }) => [
+                styles.showAll,
+                {
+                  backgroundColor: palette.surface,
+                  borderColor: palette.border,
+                  opacity: pressed ? 0.7 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.showAllLabel, { color: palette.textSecondary }]}>
+                {t('inbox.tagCloudShowAll', { count: ranked.length })}
+              </Text>
+              <Ionicons name="chevron-forward" size={14} color={palette.textSecondary} />
+            </Pressable>
+          ) : null}
         </View>
       ) : (
         <FlatList
@@ -539,5 +571,22 @@ const styles = StyleSheet.create({
   browseAllLabel: {
     fontSize: 14,
     fontWeight: '700',
+  },
+  // Muted overflow pill pinned below the cloud wrap. Reads as a control, not a
+  // tag: surface fill, hairline border, secondary text, no # / monogram / weight.
+  showAll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 6,
+    marginTop: 16,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  showAllLabel: {
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

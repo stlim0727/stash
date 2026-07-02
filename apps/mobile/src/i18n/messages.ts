@@ -174,6 +174,17 @@ export const en = {
   'inbox.tagsUncollectedEmpty': 'No tags in the Inbox yet.',
   'inbox.tagsBrowseAll': 'Browse all tags',
   'inbox.tagsSearchZero': 'No tags match “{query}”.',
+  // Cloud-surface overflow footer: shown only when the adaptive cap hides tags.
+  // {count} is the TOTAL tag count (what the All list reveals), not the hidden
+  // count. Tapping switches to the All list.
+  'inbox.tagCloudShowAll': {
+    one: 'Show all {count} tag',
+    other: 'Show all {count} tags',
+  },
+  'inbox.tagCloudShowAllA11y': {
+    one: 'Show all {count} tag',
+    other: 'Show all {count} tags',
+  },
 
   // Search suggestion shelf (focused-empty state).
   'search.shelfAffordance': 'Jump to',
