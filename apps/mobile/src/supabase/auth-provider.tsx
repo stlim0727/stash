@@ -25,6 +25,11 @@ export type SupabaseAuthStatus =
   | 'anonymous'
   | 'authenticated'
   | 'signed_out'
+  // A real (non-anonymous) account's session could not be refreshed on launch.
+  // We deliberately do NOT mint an anonymous replacement (that logs the user out
+  // and drops their local cache); the local data stays put and we prompt a
+  // re-sign-in. Distinct from `signed_out`, which is an explicit user action.
+  | 'session_expired'
   | 'error';
 
 interface SupabaseAuthContextValue {
@@ -97,17 +102,35 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     const run = (async (): Promise<SupabaseAuthSession | null> => {
       try {
         const restored = await client.restoreSession(forceRefresh);
-        if (restored) {
-          setSession(restored);
-          setStatus(statusForSession(restored));
+        if (restored.outcome === 'active') {
+          const { session: active } = restored;
+          setSession(active);
+          setStatus(statusForSession(active));
           setMessage(
-            restored.user.is_anonymous === false
+            active.user.is_anonymous === false
               ? 'Restored Supabase session.'
               : 'Restored anonymous Supabase session.',
           );
-          return restored;
+          return active;
         }
 
+        if (restored.outcome === 'expired' && !restored.wasAnonymous) {
+          // A REAL account's session could not be refreshed (its token expired
+          // or rotated while the app sat idle). Do NOT mint a fresh anonymous
+          // user: that silently logs the user out AND makes the sync
+          // account-transition treat it as an account switch and drop their
+          // local bookmark cache — the empty "logged out" Inbox this fixes.
+          // Keep the local data and surface a re-sign-in prompt; signing back
+          // into the same account restores cloud sync.
+          setSession(null);
+          setStatus('session_expired');
+          setMessage('Session expired. Sign back in to resume syncing.');
+          return null;
+        }
+
+        // No stored session, or an anonymous one that lapsed — mint a fresh
+        // anonymous user. Anonymous data carries over on the next sync (see
+        // account-transition.ts), so a new anonymous identity is safe here.
         const created = await client.signInAnonymously();
         setSession(created);
         setStatus('anonymous');

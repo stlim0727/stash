@@ -73,6 +73,7 @@ import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
 import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
+import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
@@ -278,6 +279,7 @@ export default function InboxScreen() {
   const t = useT();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const auth = useSupabaseAuth();
   // Pick the wordmark: bilingual lockup when the locale has a native form
   // (app.nameLocal differs from app.name), and the variant that matches the
   // active light/dark theme. The a11y label mirrors what sighted users see, so
@@ -1173,6 +1175,36 @@ export default function InboxScreen() {
             <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
               {t('inbox.storageError')}
             </Text>
+          </Pressable>
+        ) : null}
+        {auth.status === 'session_expired' ? (
+          // A signed-in account's session expired on launch. The local bookmarks
+          // are preserved (not dropped), but cloud sync is paused until the user
+          // signs back in. Route to Settings, where the sign-in buttons live.
+          <Pressable
+            testID="session-expired-banner"
+            accessibilityRole="button"
+            accessibilityLabel={t('inbox.sessionExpiredA11y')}
+            onPress={() => router.push('/settings')}
+            style={({ pressed }) => [
+              styles.suggestBanner,
+              {
+                backgroundColor: palette.card,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: palette.border,
+                paddingRight: 14,
+                opacity: pressed ? 0.7 : 1,
+              },
+            ]}
+          >
+            <View style={styles.suggestBannerMain}>
+              <Text style={[styles.suggestBannerText, { color: palette.text }]} numberOfLines={1}>
+                {t('inbox.sessionExpired')}
+              </Text>
+              <Text style={[styles.suggestBannerCta, { color: palette.accent }]}>
+                {t('inbox.sessionExpiredCta')}
+              </Text>
+            </View>
           </Pressable>
         ) : null}
         {pendingReviewCount > 0 ? (

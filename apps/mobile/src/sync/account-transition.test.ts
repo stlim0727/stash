@@ -91,6 +91,27 @@ test('real account A -> real account B drops A’s local cache (no merge)', () =
   assert.equal(plan.resetWatermark, true);
 });
 
+test('real account -> anonymous PRESERVES the cache (never drops) — session-expiry guard', () => {
+  // A real session that fails to restore can leave the app minting a throwaway
+  // anonymous user. That is never a deliberate "different person" switch, so it
+  // must NOT be treated like real A -> real B: dropping the cache here produced
+  // the silent empty-Inbox "logged out" screen. Every row is preserved; the
+  // user's data is still theirs and reappears when they re-sign-in.
+  const plan = planAccountTransition(
+    { id: 'real-A', isAnonymous: false },
+    { id: 'anon-B', isAnonymous: true },
+    [
+      bookmark({ id: REMOTE_A, sync_status: 'synced' }),
+      bookmark({ id: REMOTE_B, sync_status: 'pending' }),
+      bookmark({ id: 'local-keep', sync_status: 'pending' }),
+    ],
+  );
+  assert.equal(plan.kind, 'none');
+  assert.deepEqual(plan.drop, []);
+  assert.deepEqual(plan.dropQueue, []);
+  assert.deepEqual(plan.rehome, []);
+});
+
 test('real A→real B also drops pending-edit cloud rows (and their queued ops)', () => {
   // A row A synced then edited flips to `pending` with an update op keyed to A's
   // UUID. The old synced-only filter KEPT it, so it would fire under B and 404.

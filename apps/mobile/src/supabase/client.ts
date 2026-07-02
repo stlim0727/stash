@@ -71,6 +71,22 @@ function toSession(response: SupabaseAuthResponse): SupabaseAuthSession {
   };
 }
 
+/**
+ * Outcome of restoring a persisted session:
+ *  - `active`: a usable session (the stored one, or a freshly refreshed one).
+ *  - `none`: no stored session at all (fresh install / signed out) — mint anew.
+ *  - `expired`: a stored session's refresh token was rejected. `wasAnonymous`
+ *    lets the caller decide what to do: an anonymous session is safely replaced
+ *    by a fresh one (its data carries over on the next sync), but a REAL account
+ *    must NOT be silently swapped for an anonymous user — that logs the user out
+ *    AND makes the sync account-transition drop their local cache. The caller
+ *    surfaces a re-sign-in prompt for that case instead of minting.
+ */
+export type SessionRestoreResult =
+  | { outcome: 'active'; session: SupabaseAuthSession }
+  | { outcome: 'none' }
+  | { outcome: 'expired'; wasAnonymous: boolean };
+
 const EXPIRY_MARGIN_SECONDS = 60;
 
 function isSessionExpired(session: SupabaseAuthSession): boolean {
@@ -246,32 +262,42 @@ export class StashSupabaseClient {
   }
 
   /**
-   * Returns a usable session: the stored one while its access token is still
-   * valid, a refreshed one when it is about to expire, or null when no
-   * recoverable session exists. Network/server failures during refresh are
-   * rethrown so callers do not silently mint a second anonymous user (which
-   * would orphan the original user's data).
+   * Returns a usable session (the stored one while its access token is still
+   * valid, or a refreshed one when it is about to expire), or reports why none
+   * is available — see {@link SessionRestoreResult}. Network/server failures
+   * during refresh are rethrown so callers do not silently mint a second
+   * anonymous user (which would orphan the original user's data).
    *
    * Pass `forceRefresh` to refresh even when the stored token still looks valid
    * — useful after the server rejects a token we believed current (clock skew
    * or rotation), so a retry uses a genuinely fresh one.
    */
-  async restoreSession(forceRefresh = false): Promise<SupabaseAuthSession | null> {
+  async restoreSession(forceRefresh = false): Promise<SessionRestoreResult> {
     const stored = await readSupabaseSession();
     if (!stored) {
-      return null;
+      return { outcome: 'none' };
     }
     if (!forceRefresh && !isSessionExpired(stored)) {
-      return stored;
+      return { outcome: 'active', session: stored };
     }
 
+    const wasAnonymous = stored.user.is_anonymous !== false;
     try {
-      return await this.refreshSession(stored.refresh_token);
+      const session = await this.refreshSession(stored.refresh_token);
+      return { outcome: 'active', session };
     } catch (error) {
       if (error instanceof SupabaseRequestError && error.status >= 400 && error.status < 500) {
         // The refresh token was rejected — this session is unrecoverable.
-        await clearSupabaseSession();
-        return null;
+        // Clear ONLY an anonymous session: a fresh anonymous user is minted next
+        // and its data carries over safely. A REAL account's dead session is
+        // deliberately LEFT in place so the auth provider keeps re-deriving the
+        // `session_expired` state (and never silently mints an anonymous
+        // replacement, which would drop the local cache) until the user signs
+        // back in — at which point the OAuth flow overwrites it.
+        if (wasAnonymous) {
+          await clearSupabaseSession();
+        }
+        return { outcome: 'expired', wasAnonymous };
       }
       throw error;
     }

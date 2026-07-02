@@ -145,6 +145,11 @@ export const en = {
     one: 'Review {count} AI suggestion',
     other: 'Review {count} AI suggestions',
   },
+  // Shown when a signed-in account's session expired on launch: the local
+  // bookmarks are preserved but cloud sync is paused until the user re-signs-in.
+  'inbox.sessionExpired': 'Signed out — cloud sync is paused',
+  'inbox.sessionExpiredCta': 'Sign in',
+  'inbox.sessionExpiredA11y': 'Session expired. Open settings to sign back in and resume syncing.',
   'inbox.inCollection': 'in {name}',
   'inbox.addBookmark': 'Add bookmark',
   'inbox.openExternal': 'Open ↗',
@@ -238,6 +243,8 @@ export const en = {
     'Drag this button to your bookmarks bar (or click to copy it). Then click it on any page to stash it.',
   'settings.account.signedIn': 'Signed in',
   'settings.account.signIn': 'Sign In',
+  'settings.account.sessionExpired': 'Session expired',
+  'settings.account.sessionExpiredBody': 'Sign back in to resume syncing. Your bookmarks are safe.',
   'settings.account.signOut': 'Sign out',
   'settings.account.cloudUnavailable': 'Cloud sync unavailable',
   'settings.account.worksOffline': 'Stash works fully offline',
