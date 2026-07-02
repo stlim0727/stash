@@ -664,7 +664,12 @@ export class BookmarkApi {
           select: '*',
           user_id: `eq.${this.session.user.id}`,
           url_hash: `eq.${urlHash}`,
+          // "Active" must match the app's own inbox filter (deleted_at null AND
+          // not archived). Without the deleted_at guard a trashed row still
+          // matched here, so re-saving a trashed URL folded into the trashed row
+          // as a "duplicate" and never came back — it stayed invisible in Trash.
           is_archived: 'eq.false',
+          deleted_at: 'is.null',
           limit: '1',
         }),
       ),
