@@ -355,11 +355,20 @@ jobs:
               REL_NAME="Stash $LABEL"; PRERELEASE="false"; MAKE_LATEST="true"
             else
               TAG="dev"; APK="stash-dev-android.apk"
-              REL_NAME="Development build (latest)"; PRERELEASE="true"; MAKE_LATEST="false"
+              # Carry the -rcN label (the `version` param / tag) into the rolling
+              # dev release name so the release self-records which RC it is — the
+              # rc-build skill derives the next rc from this. Blank ⇒ no label.
+              if [ -n "$LABEL" ]; then
+                REL_NAME="Development build — $LABEL (latest)"
+              else
+                REL_NAME="Development build (latest)"
+              fi
+              PRERELEASE="true"; MAKE_LATEST="false"
             fi
             URL="https://github.com/$REPO/releases/download/${TAG}/${APK}"
             {
               echo "export TAG='$TAG'"; echo "export APK='$APK'"
+              echo "export LABEL='$LABEL'"
               echo "export REL_NAME='$REL_NAME'"; echo "export PRERELEASE='$PRERELEASE'"
               echo "export MAKE_LATEST='$MAKE_LATEST'"; echo "export REL_URL='$URL'"
             } >> "$BASH_ENV"
@@ -391,10 +400,14 @@ jobs:
             NOTES="docs/release-notes/${TAG}.md"
             : > "$BODY"
             if [ -f "$NOTES" ]; then cat "$NOTES" >> "$BODY"; printf '\n\n---\n\n' >> "$BODY"; fi
+            # Lead the build line with the -rcN label when present (self-records
+            # the RC, mirroring #302), else just the commit.
+            LABEL_MD=""
+            if [ -n "${LABEL:-}" ]; then LABEL_MD="\`${LABEL}\` · "; fi
             cat >> "$BODY" \<<EOF
             Standalone debug-signed Android APK built in CI.
 
-            **Commit** [\`${SHA_SHORT}\`](https://github.com/${REPO}/commit/${CIRCLE_SHA1}) · \`${EXPO_PUBLIC_GIT_REF}\`
+            **Build** ${LABEL_MD}[\`${SHA_SHORT}\`](https://github.com/${REPO}/commit/${CIRCLE_SHA1}) · \`${EXPO_PUBLIC_GIT_REF}\`
 
             ### 📲 Install on Android
             Scan this on your phone (or open the link), then tap the downloaded
@@ -527,6 +540,15 @@ jobs:
           command: |
             curl -Ls "https://get.maestro.mobile.dev" | bash
             echo 'export PATH="$HOME/.maestro/bin:$PATH"' >> "$BASH_ENV"
+      # Restore the Gradle cache so the x86_64 build reuses task outputs
+      # run-over-run (the reliable half of #309). Metro's transform cache isn't
+      # cached here: its dir path (/tmp/metro-*) isn't fixed, and CircleCI's
+      # save_cache can't glob — so caching it would be a silent no-op. Left as a
+      # future improvement (needs a pinned Metro cache dir via metro config).
+      - restore_cache:
+          keys:
+            - gradle-screens-v1-{{ .Branch }}
+            - gradle-screens-v1-
       - run:
           name: Prebuild + build release APK (x86_64)
           command: |
@@ -534,6 +556,13 @@ jobs:
             cd apps/mobile/android
             printf '\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\norg.gradle.caching=true\n' >> gradle.properties
             ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=x86_64 -x lintVitalRelease
+      # Save now, BEFORE the flaky emulator phase — a hung emulator hitting the
+      # timeout would cancel the job and drop a post-job save (ports #309).
+      - save_cache:
+          key: gradle-screens-v1-{{ .Branch }}-{{ epoch }}
+          paths:
+            - ~/.gradle/caches
+            - ~/.gradle/wrapper
       - android/create-avd:
           avd-name: stash-avd
           system-image: system-images;android-30;default;x86_64
