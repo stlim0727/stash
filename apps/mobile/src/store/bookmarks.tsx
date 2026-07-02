@@ -345,6 +345,16 @@ function currentDedupeKey(bookmark: Pick<Bookmark, 'url' | 'url_hash'>): string 
   return bookmark.url ? canonicalizeUrl(bookmark.url) : bookmark.url_hash;
 }
 
+/**
+ * "Active" the same way the inbox filter defines it: not trashed and not
+ * archived. Save-time dedupe must only match active rows — otherwise re-saving a
+ * URL that is sitting in Trash folds into the trashed row and leaves it hidden,
+ * so it never comes back. Mirrors the server-side active-URL predicate.
+ */
+function isActiveBookmark(bookmark: Pick<Bookmark, 'deleted_at' | 'is_archived'>): boolean {
+  return !bookmark.deleted_at && !bookmark.is_archived;
+}
+
 /** Parse the persisted tag-op queue, tolerating absent/corrupt values. */
 function parseTagOps(raw: string | null): PendingTagOp[] {
   if (!raw) {
@@ -1222,7 +1232,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Idempotent saves: reuse the existing bookmark for the same URL. Dedupe
       // on the canonical form so tracking params / fragments don't create dupes.
       const dedupeKey = canonicalizeUrl(normalized);
-      const existing = loadedBookmarks.find((bookmark) => currentDedupeKey(bookmark) === dedupeKey);
+      const existing = loadedBookmarks.find(
+        (bookmark) => isActiveBookmark(bookmark) && currentDedupeKey(bookmark) === dedupeKey,
+      );
       if (existing) {
         const updated = { ...existing, last_saved_at: now };
         setBookmarks((current) =>
@@ -1317,6 +1329,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Latest committed rows (the ref), so an import right after a save sees it.
       const seen = new Set(
         (bookmarksRef.current ?? loadedBookmarks)
+          .filter((bookmark) => isActiveBookmark(bookmark))
           .map((bookmark) => currentDedupeKey(bookmark))
           .filter((hash): hash is string => hash !== null),
       );
@@ -2426,7 +2439,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isLoading: bookmarks === null,
       loadError,
       inbox: loadedBookmarks
-        .filter((bookmark) => !bookmark.deleted_at && !bookmark.is_archived)
+        .filter((bookmark) => isActiveBookmark(bookmark))
         .sort((a, b) => b.created_at.localeCompare(a.created_at)),
       trash: loadedBookmarks
         .filter((bookmark) => bookmark.deleted_at != null)
