@@ -56,15 +56,22 @@ which fits its built-in tasks exactly (no `run-command` needed). Fire both:
     workflow_id="ops.yml", ref="main",
     inputs={ "task": "delete-artifacts-older-than-days", "days": "1" })
   ```
-- **Firebase App Distribution releases** (keeps the newest 20 regardless of age):
+- **Firebase App Distribution releases** (keeps the newest 5 regardless of age):
   ```
   mcp__github__actions_run_trigger(
     method="run_workflow", owner="stlim0727", repo="stash",
     workflow_id="ops.yml", ref="main",
-    inputs={ "task": "firebase-delete-old-releases", "days": "1", "keep": "20" })
+    inputs={ "task": "firebase-delete-old-releases", "days": "1", "keep": "5" })
   ```
 
 Notes:
+- **`keep` is a floor that overrides the age filter — set it *below* the number
+  you actually want to prune, or the cleanup silently deletes nothing.** The
+  script keeps the newest `keep` releases *regardless of age*, then deletes only
+  the rest that are older than `days`. So with the old `keep=20` and ≤20 total
+  releases, a "delete > 24h" run correctly found nothing to delete. `keep=5`
+  retains the last ~5 RC builds for testers and lets everything older self-prune;
+  raise it only if a wider tester set needs older builds kept.
 - **Sub-day thresholds aren't supported.** `date -d "0.5 days ago"` is rejected and
   the Firebase cleanup script's `intInput` requires a whole non-negative integer.
   If the user asks for e.g. "12 hours", either round to `days=1` (confirm) or use
