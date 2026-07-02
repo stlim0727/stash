@@ -391,7 +391,7 @@ jobs:
             NOTES="docs/release-notes/${TAG}.md"
             : > "$BODY"
             if [ -f "$NOTES" ]; then cat "$NOTES" >> "$BODY"; printf '\n\n---\n\n' >> "$BODY"; fi
-            cat >> "$BODY" <<EOF
+            cat >> "$BODY" \<<EOF
             Standalone debug-signed Android APK built in CI.
 
             **Commit** [\`${SHA_SHORT}\`](https://github.com/${REPO}/commit/${CIRCLE_SHA1}) · \`${EXPO_PUBLIC_GIT_REF}\`
