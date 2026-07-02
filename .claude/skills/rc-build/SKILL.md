@@ -25,10 +25,12 @@ the `dev` release self-records the label, see Step 1).
 
 ## Step 1 — Build the next RC APK
 
-1. **Find the next rc number.** In order of authority:
-   - **Read the rolling `dev` release** — `mcp__github__get_release_by_tag(owner="stlim0727", repo="stash", tag="dev")`. Its `name` now carries the label (`Development build — v1.1.0-rcN (latest)`, stamped by `android-apk.yml` since #302). Parse `vX.Y.Z-rcN` → next is `rc(N+1)`.
-   - **Fallback / cross-check:** the current cycle's table in `docs/development/build-history.md` (next = highest `-rcN` + 1) and `apps/mobile/app.json` `version` (the `X.Y.Z`). If `app.json`'s version has no matching build-history cycle yet (a fresh version bump), the cycle is new → next is `rc1`.
-   - If the `dev` label and the ledger disagree, prefer the `dev` release (it reflects the last *actual* build) and note the discrepancy.
+1. **Find the next rc number.** Resolve the target `X.Y.Z` from `apps/mobile/app.json` `version` **first** — that is the cycle you're building. Then:
+   - **Read the rolling `dev` release** — `mcp__github__get_release_by_tag(owner="stlim0727", repo="stash", tag="dev")`. Its `name` now carries the label (`Development build — vX.Y.Z-rcN (latest)`, stamped by `android-apk.yml` since #302). **Only trust its `rcN` when the label's `X.Y.Z` equals `app.json`'s `version`.**
+     - **Match** → next is `rc(N+1)`.
+     - **`app.json` is ahead of the `dev` label** (a fresh cycle bump with no RC built yet — e.g. `app.json` says `1.2.0` but `dev` still reads `v1.1.0-rcN`) → the label is **stale**; start the new cycle at **`rc1`** (`vX.Y.Z-rc1` from `app.json`). Do **not** carry the old cycle's number forward.
+   - **Cross-check** the current cycle's table in `docs/development/build-history.md` (next = highest `-rcN` + 1). If that cycle has no table yet (a fresh version bump), it's `rc1` and you create the section.
+   - Break ties **only within the same `X.Y.Z`**: if the `dev` label and the ledger disagree for the *same* version, prefer the `dev` release (it reflects the last *actual* build) and note the discrepancy. A cross-version disagreement is not a tie — `app.json` wins and the cycle restarts at `rc1`.
 2. **Confirm there's new code to ship.** `git fetch origin main` then compare the `dev` release's `target_commitish` to `origin/main` HEAD (`git log <dev_sha>..origin/main --oneline`). If **nothing** changed, do **not** cut a new rc for identical code — say so (per the versioning golden rule: same code ⇒ keep the version, only the build number changes). Proceed only when there are new commits.
 3. **Check for open PRs against `main`** — `mcp__github__list_pull_requests(state="open", base="main")`. If any open PR looks like it belongs in this RC, ask the user whether to wait for it before building; otherwise proceed. (Ignore infra/docs PRs that clearly don't belong.)
 4. **Dispatch the build:**
