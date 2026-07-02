@@ -1,5 +1,5 @@
 // Relative .ts import (not the @ alias) so Node's test runner can resolve it.
-import { fetchPageMetadata } from './page-metadata.ts';
+import { fetchPageMetadata, youtubeVideoId } from './page-metadata.ts';
 import type { FetchedMetadata } from './page-metadata.ts';
 import type { Bookmark, MetadataStatus } from '@/domain/types';
 
@@ -41,7 +41,13 @@ export function deriveMetadata(rawUrl: string): DerivedMetadata {
   const host = url.hostname.replace(/^www\./, '');
 
   const lastSegment = url.pathname.split('/').filter(Boolean).pop();
-  const title = lastSegment ? titleCaseFromSlug(lastSegment) : host;
+  // A YouTube video's identifying path/query segment is an opaque id (e.g.
+  // `LNysDlsp26Q` for `youtu.be/LNysDlsp26Q`, or the bare `watch` path for a
+  // `?v=` link) — as a title it reads like a random/"encrypted" string, not a
+  // name. When the real title can't be fetched (oEmbed and HTML both failed),
+  // the host is a far better fallback than that id.
+  const title =
+    lastSegment && !youtubeVideoId(rawUrl) ? titleCaseFromSlug(lastSegment) : host;
 
   return {
     title: title ?? host,

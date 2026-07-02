@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { swapBookmarkId } from './bookmark-id-swap.ts';
+import { resolveAliasedId, swapBookmarkId } from './bookmark-id-swap.ts';
 import type { Bookmark } from './types.ts';
 
 function bm(id: string, overrides: Partial<Bookmark> = {}): Bookmark {
@@ -77,4 +77,33 @@ test('handles a same-id replacement (no rename) without dropping the row', () =>
     ['a', 'x'],
   );
   assert.equal(result[1].title, 'new');
+});
+
+test('resolveAliasedId returns the id unchanged when there is no alias', () => {
+  assert.equal(resolveAliasedId('local-1', new Map()), 'local-1');
+});
+
+test('resolveAliasedId follows a local -> remote swap to the remote id', () => {
+  // The create-sync case behind the "preview turned into an encrypted URL"
+  // bug: a background enrichment started under the local id must resolve to the
+  // remote UUID the row was re-keyed onto, so its result is not dropped.
+  const aliases = new Map([['local-1', 'uuid-remote']]);
+  assert.equal(resolveAliasedId('local-1', aliases), 'uuid-remote');
+});
+
+test('resolveAliasedId walks a multi-hop chain to its end', () => {
+  const aliases = new Map([
+    ['local-1', 'uuid-a'],
+    ['uuid-a', 'uuid-b'],
+  ]);
+  assert.equal(resolveAliasedId('local-1', aliases), 'uuid-b');
+});
+
+test('resolveAliasedId is cycle-safe', () => {
+  const aliases = new Map([
+    ['a', 'b'],
+    ['b', 'a'],
+  ]);
+  // Stops at the first repeat rather than looping forever.
+  assert.equal(resolveAliasedId('a', aliases), 'b');
 });

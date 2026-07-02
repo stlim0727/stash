@@ -9,7 +9,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 
-import { swapBookmarkId } from '@/domain/bookmark-id-swap';
+import { resolveAliasedId, swapBookmarkId } from '@/domain/bookmark-id-swap';
 import { mockUserId } from '@/domain/mock-data';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
@@ -699,14 +699,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const { patch, metadata_status } = await enrichBookmark(bookmark);
-        if (deletedIds.current.has(bookmark.id)) {
+        // A `create` that synced while the fetch was in flight re-keys the row
+        // from its local id onto its remote UUID (see the create-sync swap). If
+        // the enriched fields are written against the now-dead local id they are
+        // dropped from state, and the row is stranded `metadata_status:'pending'`
+        // — a later re-enrichment then fills the title from the bare URL slug
+        // (e.g. a YouTube video id, which reads like a random string), which is
+        // exactly the "preview turned into an encrypted-looking URL" report.
+        //
+        // Resolve the row's CURRENT id by walking the id-alias chain to its end.
+        // The alias map is a ref updated synchronously at the swap, so — unlike
+        // the bookmarks ref, which lags a render behind the state swap — it never
+        // points at a stale id. We then merge onto the freshest row we can find
+        // (preferring the remote row, then the pre-swap local row, then the
+        // snapshot the fetch was invoked with) but always write under the resolved
+        // id, so the update lands even while the bookmarks ref is catching up.
+        const currentId = resolveAliasedId(bookmark.id, idAliases.current);
+        if (deletedIds.current.has(bookmark.id) || deletedIds.current.has(currentId)) {
           return; // deleted while the fetch was in flight
         }
-        // Merge onto the LATEST committed row (via the ref), not the pre-fetch
-        // snapshot, so a user edit made while the fetch ran is preserved. The
-        // ref can briefly lag for a just-created bookmark, so fall back to the
-        // snapshot it was invoked with.
-        const latest = bookmarksRef.current?.find((item) => item.id === bookmark.id) ?? bookmark;
+        const rows = bookmarksRef.current;
+        const source =
+          rows?.find((item) => item.id === currentId) ??
+          rows?.find((item) => item.id === bookmark.id) ??
+          bookmark;
+        const latest: Bookmark = source.id === currentId ? source : { ...source, id: currentId };
         // Fill only generated fields that are still empty, so a user-authored
         // title is never overwritten by generated metadata.
         const safePatch: Partial<Bookmark> = {};

@@ -44,6 +44,18 @@ test('deriveMetadata falls back to the host for bare domains', () => {
   assert.equal(derived.site_name, 'raindrop.io');
 });
 
+test('deriveMetadata does not use an opaque YouTube video id as the title', () => {
+  // youtu.be/<id> and youtube.com/watch?v=<id> both carry an opaque id as their
+  // identifying segment; the fallback title must be the host, not the id (which
+  // reads like a random/"encrypted" string).
+  const short = deriveMetadata('https://youtu.be/LNysDlsp26Q');
+  assert.equal(short.title, 'youtu.be');
+  assert.equal(short.site_name, 'youtu.be');
+
+  const watch = deriveMetadata('https://www.youtube.com/watch?v=LNysDlsp26Q');
+  assert.equal(watch.title, 'youtube.com');
+});
+
 // Offline fetcher: forces the URL-derived fallback, keeping tests off the network.
 const offline = async () => null;
 
