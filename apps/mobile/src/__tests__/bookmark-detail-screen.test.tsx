@@ -1,5 +1,5 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Linking } from 'react-native';
+import { Linking, StyleSheet } from 'react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -373,6 +373,25 @@ test('the summary "Add to note" appends without overwriting existing text', asyn
   await waitFor(() =>
     expect(screen.getByLabelText('Notes').props.value).toBe('My own thoughts.\n\nAn AI overview.'),
   );
+});
+
+test('the note field is a borderless prompt when empty and contained when it has text', async () => {
+  mockRouteId = SYNCED_ID;
+
+  // Empty note: labeled section, but the box has no fill/border — a light prompt.
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', notes: null })]);
+  let screen = await renderDetail();
+  expect(screen.getByText('Note')).toBeTruthy();
+  let box = screen.getByLabelText('Notes').parent;
+  expect(StyleSheet.flatten(box?.props.style).backgroundColor).toBe('transparent');
+
+  // A note with text: the box gains its elevated fill so the content feels held.
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', notes: 'My own thoughts.' }),
+  ]);
+  screen = await renderDetail();
+  box = screen.getByLabelText('Notes').parent;
+  expect(StyleSheet.flatten(box?.props.style).backgroundColor).not.toBe('transparent');
 });
 
 test('dismissing the summary hides it durably and never touches the note', async () => {

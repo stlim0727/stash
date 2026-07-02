@@ -253,6 +253,7 @@ export const ko: Catalog = {
   'detail.titlePlaceholder': '제목 없음 — 메타데이터 대기 중',
   'detail.editTitleA11y': '제목 편집',
   'detail.editTitleHint': '제목을 편집합니다',
+  'detail.notesLabel': '메모',
   'detail.notesA11y': '메모',
   'detail.notesPlaceholder': '메모 추가…',
   'detail.tagsDisabledHint': '이 북마크가 동기화되면 태그를 편집할 수 있습니다.',
