@@ -240,7 +240,17 @@ jobs:
           else
             TAG="dev"
             APK="stash-dev-android.apk"
-            REL_NAME="Development build (latest)"
+            # Carry the -rcN label (the dispatch's `version` input) into the
+            # rolling dev release name so the release itself self-records which
+            # RC it is. Without this the label is dropped and the rc number has
+            # to be re-recorded by hand (a per-build docs PR to build-history.md);
+            # stamping it here makes "what's the next rc?" answerable from the
+            # live `dev` release, no ledger PR required. Blank dispatch ⇒ no label.
+            if [ -n "$LABEL" ]; then
+              REL_NAME="Development build — $LABEL (latest)"
+            else
+              REL_NAME="Development build (latest)"
+            fi
             # Rolling dev / hyphenated test builds stay prereleases and never "latest".
             PRERELEASE="true"
             MAKE_LATEST="false"
@@ -248,6 +258,7 @@ jobs:
           URL="${{ github.server_url }}/${{ github.repository }}/releases/download/${TAG}/${APK}"
           {
             echo "tag=$TAG"
+            echo "label=$LABEL"
             echo "apk=$APK"
             echo "rel_name=$REL_NAME"
             echo "sha_short=$SHA_SHORT"
@@ -333,7 +344,7 @@ jobs:
           cat >> "$BODY" <<EOF
           Standalone debug-signed Android APK built in CI.
 
-          **Commit** [\`${{ steps.meta.outputs.sha_short }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) · \`${{ github.ref_name }}\`
+          **Build** ${{ steps.meta.outputs.label && format('\`{0}\` · ', steps.meta.outputs.label) }}[\`${{ steps.meta.outputs.sha_short }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) · \`${{ github.ref_name }}\`
 
           ### 📲 Install on Android
           Scan this on your phone (or open the link), then tap the downloaded
