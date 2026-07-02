@@ -63,10 +63,14 @@ executors:
       - image: cimg/node:22.20
     working_directory: ~/stash
   # Android SDK + NDK + Java for the (non-emulator) APK build.
+  # xlarge (8 vCPU / 16 GB): the app's RN-fabric-codegen native compile peaks
+  # over the 8 GB `large` box even at -j1, and CircleCI Docker has no swap to
+  # absorb the spike, so the build OOM-kills there. 16 GB gives the compile the
+  # headroom it needs (still bounded via -XX:ActiveProcessorCount below).
   android-build:
     docker:
       - image: cimg/android:2024.11.1
-    resource_class: large
+    resource_class: xlarge
     working_directory: ~/stash
 
 commands:
@@ -339,22 +343,16 @@ jobs:
           working_directory: ~/stash/apps/mobile/android
           command: |
             # CircleCI Docker containers report the HOST's full CPU count via
-            # availableProcessors(), so Gradle and AGP's CMake/ninja over-parallelize
-            # the native C/C++ compiles far beyond the real cores. The resulting
-            # swarm of heavy RN-codegen clang processes OOM-kills the build JVM on
-            # the 8GB `large` box ("Gradle build daemon disappeared unexpectedly").
-            # Bound it so peak memory fits in 8GB while keeping compiles moving:
-            #   workers.max=1            -> only one module's native build at a time,
-            #                               so at most one ninja invocation runs.
-            #   -XX:ActiveProcessorCount=2 -> that ninja compiles -j2 (2 clang),
-            #                               which keeps output flowing (avoids the
-            #                               10-min no-output timeout a -j1 build hit)
-            #                               and roughly halves compile time.
-            #   -Xmx2048m/512m           -> the RN/Expo default heap; leaves ~1.75GB
-            #                               more headroom for the off-heap clang
-            #                               processes than the old -Xmx3g/768m.
-            # Peak ~= 2 clang + the JVM, comfortably under 8GB.
-            printf '\norg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m -XX:ActiveProcessorCount=2\norg.gradle.caching=true\norg.gradle.workers.max=1\n' >> gradle.properties
+            # availableProcessors(), so Gradle and AGP's CMake/ninja would spawn
+            # far more parallel clang processes than the real cores. A single
+            # RN-fabric-codegen translation unit already compiles at ~4 GB, so this
+            # must stay bounded even on the 16 GB xlarge box:
+            #   workers.max=1              -> one module's native build at a time,
+            #                                 so only one ninja invocation runs.
+            #   -XX:ActiveProcessorCount=2 -> that ninja compiles -j2 (~2 clang),
+            #                                 keeping two lanes of output flowing.
+            # Peak ~= 2 * ~4 GB clang + the JVM ~= 12 GB, safely under 16 GB.
+            printf '\norg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2\norg.gradle.caching=true\norg.gradle.workers.max=1\n' >> gradle.properties
       - run:
           name: Build release APK (arm64-v8a)
           working_directory: ~/stash/apps/mobile/android
