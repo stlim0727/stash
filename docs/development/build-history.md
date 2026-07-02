@@ -8,14 +8,25 @@ candidates** (`vX.Y.Z-rcN`) that lead up to each stable cut.
 ## How to read / extend this
 
 - Each RC is built from `main` (the trunk) via the **Android APK** workflow.
-- **The next RC number comes from THIS FILE, not from git tags.** An RC build is
-  a `workflow_dispatch` run that only refreshes the rolling **`dev`** prerelease
-  — it creates **no git tag and no versioned Release**, and the `dev` release
-  body shows only the built commit, never the `-rcN` label. So `list_tags` /
-  releases are blind to RC history; the **current cycle's table below is the
-  single source of truth**. Next rc = (highest `-rcN` in the current cycle's
-  table) **+ 1**. If the cycle has no table yet (a fresh `app.json` version
-  bump), start at `rc1` and create the section.
+- **The `dev` release now self-records its `-rcN`, so per-build logging here is
+  optional (history/narrative only), not required to derive the next number.**
+  As of the `android-apk.yml` change that stamps the dispatch's `version` input
+  into the rolling **`dev`** prerelease, that release's **name** (`Development
+  build — v1.1.0-rcN (latest)`) and body carry the label. So the next rc is now
+  answerable straight from the live `dev` release — read it, add 1 — with **no
+  ledger PR**. This table remains the durable *narrative* (what changed per RC)
+  and the record for builds that predate the self-recording change; keep
+  extending it when you want that history, but you no longer *have* to open a PR
+  just to make the next number derivable.
+- **Historically the next RC number came from THIS FILE, not from git tags.** An
+  RC build is a `workflow_dispatch` run that only refreshes the rolling **`dev`**
+  prerelease — it creates **no git tag and no versioned Release**, and (before
+  the self-recording change) the `dev` release body showed only the built commit,
+  never the `-rcN` label. So `list_tags` / releases were blind to RC history and
+  the **current cycle's table below was the single source of truth**. Next rc =
+  (highest `-rcN` in the current cycle's table) **+ 1**. If the cycle has no
+  table yet (a fresh `app.json` version bump), start at `rc1` and create the
+  section.
 - **Always pass the `version` input** (e.g. `v1.0.0-rc5`) so the build carries a
   real label in the run instead of being an anonymous blank dispatch — that
   label plus the row you add here is what makes this history trustworthy. A
