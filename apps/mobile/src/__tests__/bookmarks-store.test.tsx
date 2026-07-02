@@ -148,6 +148,33 @@ test('trashing moves a bookmark from inbox to trash and back', async () => {
   expect(result.current.trash).toHaveLength(0);
 });
 
+test('re-adding a trashed URL creates a fresh active bookmark instead of folding into the trashed row', async () => {
+  // A trashed row must not count as "already in stash": local dedupe only
+  // matches active rows, so re-saving revives the URL as a new inbox item
+  // rather than silently bumping the hidden trashed one.
+  const { result } = await renderStore();
+  await act(async () => {
+    result.current.addBookmark({ url: 'example.com/revive' });
+  });
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+  const id = result.current.inbox[0]!.id;
+
+  await act(async () => {
+    result.current.trashBookmark(id);
+  });
+  expect(result.current.inbox).toHaveLength(0);
+  expect(result.current.trash).toHaveLength(1);
+
+  let status = '';
+  await act(async () => {
+    status = result.current.addBookmark({ url: 'https://example.com/revive' }).status;
+  });
+
+  expect(status).toBe('created');
+  expect(result.current.inbox).toHaveLength(1);
+  expect(result.current.trash).toHaveLength(1);
+});
+
 test('deleting a local bookmark also clears its queued upload', async () => {
   const { result } = await renderStore();
   await act(async () => {
