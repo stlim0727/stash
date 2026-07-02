@@ -167,6 +167,58 @@ test('the cloud caps how many tags it renders at the conservative floor before m
   expect(screen.getAllByTestId('browse-tags-list-row').length).toBeGreaterThan(0);
 });
 
+test('no "Show all" footer when the whole ranked set fits in the cloud', async () => {
+  // Three tags — well under the conservative floor, so the cloud shows them all
+  // and there are no hidden tags: the overflow footer must not render.
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
+  expect(screen.getAllByTestId('browse-tags-cloud-tag')).toHaveLength(3);
+  expect(screen.queryByTestId('browse-tags-show-all')).toBeNull();
+});
+
+test('the "Show all" footer renders with the TOTAL tag count when the cloud is truncated', async () => {
+  // 60 tags → the cloud caps at the conservative floor (24), hiding 36. The
+  // footer's label carries the TOTAL (60), which is what the All list reveals.
+  const bookmarkId = '7e64cf1e-0000-4000-8000-0000000000f5';
+  const tagCount = 60;
+  const tags: Tag[] = [];
+  const bookmarkTags = [];
+  for (let i = 0; i < tagCount; i += 1) {
+    const suffix = String(i).padStart(3, '0');
+    const tagId = `t-${suffix}`;
+    tags.push(makeTag(tagId, `tag-${suffix}`));
+    bookmarkTags.push({
+      bookmark_id: bookmarkId,
+      tag_id: tagId,
+      source: 'user' as const,
+      confidence: null,
+      created_at: '2026-06-12T00:00:00.000Z',
+    });
+  }
+  fakeRepo.__reset([makeStoredBookmark({ id: bookmarkId, title: 'Heavily tagged' })], {
+    tags,
+    bookmarkTags,
+    collections: [],
+  });
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('browse-tags-cloud')).toBeTruthy());
+  expect(screen.getAllByTestId('browse-tags-cloud-tag')).toHaveLength(24);
+
+  const footer = screen.getByTestId('browse-tags-show-all');
+  expect(footer).toBeTruthy();
+  expect(screen.getByText('Show all 60 tags')).toBeTruthy();
+
+  // Tapping the footer switches to the All list (frequency-ranked from the top).
+  await fireEvent.press(footer);
+  const list = await waitFor(() => screen.getByTestId('browse-tags-list'));
+  expect(list.props.data).toHaveLength(tagCount);
+  // The footer lives only on the cloud surface, so it's gone once we're in All.
+  expect(screen.queryByTestId('browse-tags-show-all')).toBeNull();
+});
+
 test('the co-occurrence search narrows to the tags on matching bookmarks', async () => {
   seedLibrary();
 

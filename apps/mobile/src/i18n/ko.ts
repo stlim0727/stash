@@ -116,6 +116,8 @@ export const ko: Catalog = {
   'inbox.tagsUncollectedEmpty': '받은함에 아직 태그가 없습니다.',
   'inbox.tagsBrowseAll': '전체 태그 보기',
   'inbox.tagsSearchZero': '“{query}”에 해당하는 태그가 없습니다.',
+  'inbox.tagCloudShowAll': { other: '태그 {count}개 모두 보기' },
+  'inbox.tagCloudShowAllA11y': { other: '태그 {count}개 모두 보기' },
 
   'search.shelfAffordance': '바로가기',
   'search.shelfA11y': '검색 추천',
