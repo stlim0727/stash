@@ -17,6 +17,10 @@ export interface SentryConfig {
   environment: string;
   /** 0..1 — fraction of transactions sampled for performance tracing. */
   tracesSampleRate: number;
+  /** iOS app-hang threshold in seconds: the UI thread must be unresponsive at
+   *  least this long to be reported as a hang. Android ANR detection is handled
+   *  by the native SDK (no JS threshold knob), so this only tunes iOS. */
+  appHangTimeoutSeconds: number;
 }
 
 export type SentryConfigState =
@@ -27,11 +31,30 @@ const DSN_ENV = 'EXPO_PUBLIC_SENTRY_DSN';
 
 const DEFAULT_ENVIRONMENT = 'development';
 
+// iOS app-hang default, aligned with the SDK's own 2s default. Deliberately not
+// lower: sub-second thresholds turn ordinary cold-start jank into a flood of
+// hang events. Overridable per-build via EXPO_PUBLIC_SENTRY_APP_HANG_TIMEOUT.
+const DEFAULT_APP_HANG_TIMEOUT_SECONDS = 2;
+
 /** Parse a 0..1 sample rate; anything missing or out of range disables tracing. */
 export function parseSampleRate(raw: string): number {
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     return 0;
+  }
+  return value;
+}
+
+/**
+ * Parse the iOS app-hang threshold (seconds). Falls back to the SDK-aligned
+ * default for anything missing, non-numeric, or implausibly small (< 1s would
+ * report on ordinary jank), so a bad env value can never make hang reporting
+ * noisy — it just reverts to the safe default.
+ */
+export function parseAppHangTimeout(raw: string): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 1) {
+    return DEFAULT_APP_HANG_TIMEOUT_SECONDS;
   }
   return value;
 }
@@ -51,6 +74,9 @@ export function getSentryConfigState(): SentryConfigState {
       tracesSampleRate: parseSampleRate(
         (process.env.EXPO_PUBLIC_SENTRY_TRACES_SAMPLE_RATE ?? '').trim(),
       ),
+      appHangTimeoutSeconds: parseAppHangTimeout(
+        (process.env.EXPO_PUBLIC_SENTRY_APP_HANG_TIMEOUT ?? '').trim(),
+      ),
     },
   };
 }
@@ -69,6 +95,13 @@ export interface SentryInitOptions {
   release?: string;
   dist?: string;
   enableNativeCrashHandling: boolean;
+  /** iOS: report when the UI thread stays unresponsive for at least
+   *  `appHangTimeoutInterval` seconds, so a wedged screen self-reports with a JS
+   *  stack instead of only arriving as a fuzzy in-app "screen frozen" report.
+   *  Android ANRs are captured by the native Sentry Android SDK (wired via the
+   *  `@sentry/react-native/expo` config plugin) and have no JS toggle here. */
+  enableAppHangTracking: boolean;
+  appHangTimeoutInterval: number;
   /** Privacy: never auto-attach IP/cookies/headers. We set only an opaque user
    *  id explicitly when we choose to. */
   sendDefaultPii: boolean;
@@ -90,6 +123,11 @@ export function buildSentryInitOptions(
     environment: state.config.environment,
     tracesSampleRate: state.config.tracesSampleRate,
     enableNativeCrashHandling: true,
+    // Opt in to hang detection so a frozen UI thread becomes a real, actionable
+    // event (with a stack) instead of only a user-typed "screen stuck" report.
+    // iOS is tuned here; Android ANR is native-default via the Expo plugin.
+    enableAppHangTracking: true,
+    appHangTimeoutInterval: state.config.appHangTimeoutSeconds,
     sendDefaultPii: false,
   };
   const release = input.release?.trim();
