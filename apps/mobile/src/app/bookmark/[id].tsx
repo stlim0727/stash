@@ -28,9 +28,10 @@ import { useCaptureToast } from '@/ui/capture-toast';
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle } from '@/domain/item-display';
-import { pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
+import { pendingSuggestions, suggestedFolderTokens, summaryToken } from '@/domain/ai-suggestions';
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
+import { ProposedSummary } from '@/ui/ProposedSummary';
 import { collectionMatchKey } from '@/domain/collection-match';
 import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
@@ -69,6 +70,9 @@ export default function BookmarkDetailScreen() {
     getDismissedFolderSuggestions,
     dismissFolderSuggestion,
     clearDismissedFolderSuggestions,
+    getReviewedSummary,
+    markSummaryReviewed,
+    clearReviewedSummary,
     markSuggestionsSeen,
     assignCollection,
     createCollection,
@@ -301,10 +305,26 @@ export default function BookmarkDetailScreen() {
   //    dummy rows that were never marked degraded, and it survives re-sync
   //    without a backfill.
   const hasActionableSuggestions = pending.length > 0 || folderSuggestionVisible;
+  // The summary is offered as a proposed note (see ProposedSummary below). A
+  // stable token derived from the summary text lets "use as note" / dismiss
+  // persist durably: an identical re-pull stays quiet, a genuinely new summary
+  // from a later enrichment yields a new token and re-surfaces.
+  const summaryTok = summaryToken(enrichment?.summary);
+  const summaryReviewed = summaryTok !== null && getReviewedSummary(bookmark.id).has(summaryTok);
   const showAiSummary =
     Boolean(enrichment?.summary?.trim()) &&
+    !summaryReviewed &&
     (hasActionableSuggestions || enrichment?.model !== 'dummy-v0');
   const showAiReport = hasActionableSuggestions || showAiSummary;
+  // The screen-level "Dismiss all suggestions" (in the AI control strip) only
+  // earns its place once suggestions are spread across 2+ widgets — folder,
+  // tags, summary — since no single widget can own the sweep then. With one
+  // surface live, that widget's own dismiss is enough.
+  const activeSuggestionSurfaces =
+    (folderSuggestionVisible ? 1 : 0) +
+    (tagSuggestions.length > 0 ? 1 : 0) +
+    (showAiSummary ? 1 : 0);
+  const showDismissAllSuggestions = activeSuggestionSurfaces > 1;
   // The degraded note explains *thin* results — keep it only when there is
   // something to explain, or when the cause is one the user can act on (a
   // transient rate limit). A generic "Couldn't reach AI" over an otherwise
@@ -402,11 +422,11 @@ export default function BookmarkDetailScreen() {
       markSuggestionsReviewed(bookmark.id, [name]);
     }
   };
-  // One-tap "yes to all" mirror of dismiss-all: apply every chip at once, AND
-  // file into the suggested folder when one is showing — so "Add all" reflects
-  // the folder + tags together, like the Review screen's "Accept all". AI tags
+  // One-tap "yes to all" for the tag row: apply every tag chip at once. AI tags
   // go through acceptSuggestedTags (records the accept review); hashtag chips
-  // become plain user tags; the folder is filed (existing) or created+filed.
+  // become plain user tags. The folder now lives under the picker with its own
+  // ✓, and the summary is a deliberate note action, so neither is swept here —
+  // "Add all" means the tags, unambiguously.
   const handleAcceptAll = () => {
     const hashtagNames = tagSuggestions
       .filter((suggestion) => !aiSuggestionNames.has(suggestion.name.toLowerCase()))
@@ -424,29 +444,13 @@ export default function BookmarkDetailScreen() {
           return error;
         }
       }
-      // File into the suggested folder last so a failed tag add doesn't also
-      // move the bookmark. Existing folder → assign; "create" → make it first.
-      if (showCollectionSuggestion && suggestedCollection) {
-        assignCollection(bookmark.id, suggestedCollection.id);
-        recordFolderActedOn();
-        offerMoveUndo(suggestedCollection.name);
-      } else if (showCreateCollectionSuggestion && suggestedByName) {
-        const result = await createCollection(suggestedByName);
-        if (result.collection) {
-          assignCollection(bookmark.id, result.collection.id);
-          recordFolderActedOn();
-          offerMoveUndo(suggestedByName);
-        } else {
-          return result.error ?? t('detail.errorCreateCollection');
-        }
-      }
       return null;
     });
   };
-  // One-tap "no thanks" for the whole row: session-dismiss every chip, persist
-  // the AI ones as reviewed (same rule as a single dismiss), and durably dismiss
-  // the folder suggestion too — mirroring Review's "Dismiss all".
-  const handleDismissAll = () => {
+  // Tags-only "no thanks": session-dismiss every tag chip and persist the AI
+  // ones as reviewed (same rule as a single dismiss). Passed to TagField, so it
+  // sweeps only the tag row — the folder and summary each own their own dismiss.
+  const handleDismissAllTags = () => {
     const names = tagSuggestions.map((suggestion) => suggestion.name);
     setDismissed((prev) => {
       const next = new Set(prev);
@@ -459,9 +463,6 @@ export default function BookmarkDetailScreen() {
     if (aiNames.length > 0) {
       markSuggestionsReviewed(bookmark.id, aiNames);
     }
-    if (folderSuggestionVisible) {
-      handleDismissFolder();
-    }
   };
 
   // A manual re-run is a deliberate "reconsider": forget prior dismissals so the
@@ -469,6 +470,7 @@ export default function BookmarkDetailScreen() {
   const handleSuggestAi = () => {
     clearReviewedSuggestions(bookmark.id);
     clearDismissedFolderSuggestions(bookmark.id);
+    clearReviewedSummary(bookmark.id);
     // Also forget this session's not-yet-persisted tag dismissals, so a tag the
     // user waved off earlier this session can re-surface if the model still
     // recommends it (matches the durable "reconsider" above).
@@ -510,6 +512,48 @@ export default function BookmarkDetailScreen() {
     }
   };
   const handleDismissFolder = recordFolderActedOn;
+
+  // Accept the proposed summary into the note. Sacred-fields rule: the summary is
+  // never poured into the note field silently — it lands only when the user taps
+  // here. An empty note is filled; a note with text is *appended* to (never
+  // overwritten), so the action stays live and non-destructive. `notesValue`
+  // already folds in any in-progress draft, so we build on the latest text and
+  // clear the draft (the store write supersedes it).
+  const handleUseSummary = () => {
+    const summary = enrichment?.summary?.trim();
+    if (!summary) {
+      return;
+    }
+    const nextNotes = notesValue.trim() === '' ? summary : `${notesValue}\n\n${summary}`;
+    updateBookmarkFields(bookmark.id, { notes: nextNotes });
+    setDraftNotes(null);
+    // Durable: don't re-surface an identical summary we've already used.
+    if (summaryTok) {
+      markSummaryReviewed(bookmark.id, summaryTok);
+    }
+  };
+
+  // Dismiss the proposed summary — durable, mirroring tag/folder dismissals, so
+  // an identical re-pull stays quiet (a genuinely new summary re-surfaces).
+  const handleDismissSummary = () => {
+    if (summaryTok) {
+      markSummaryReviewed(bookmark.id, summaryTok);
+    }
+  };
+
+  // Screen-level "no thanks to everything": now that folder, tags, and summary
+  // live in three separate widgets, no single one can own the bulk gesture — so
+  // it lives in the AI control strip and sweeps all three, each honoring its own
+  // durability rule.
+  const handleDismissAllSuggestions = () => {
+    handleDismissAllTags();
+    if (folderSuggestionVisible) {
+      handleDismissFolder();
+    }
+    if (showAiSummary) {
+      handleDismissSummary();
+    }
+  };
 
   const handleAcceptCollection = () => {
     if (!suggestedCollection) {
@@ -762,8 +806,25 @@ export default function BookmarkDetailScreen() {
         />
       </View>
 
+      {/* The AI summary is proposed as a note here — in its own clearly-labeled
+          dashed ghost block, never poured into the field above — so it can't be
+          mistaken for user-authored text (sacred-fields principle). Accept fills
+          an empty note or appends to a non-empty one; both are durable. */}
+      {showAiSummary ? (
+        <ProposedSummary
+          summary={enrichment?.summary ?? ''}
+          noteEmpty={notesValue.trim() === ''}
+          busy={busy}
+          onUse={handleUseSummary}
+          onDismiss={handleDismissSummary}
+        />
+      ) : null}
+
       {/* Collection — no title; the folder-icon picker speaks for itself.
-          It leads the organize controls, directly above the tag field. */}
+          It leads the organize controls, directly above the tag field. The AI's
+          folder recommendation lives right under the picker (not inside its
+          browse panel, which only exists while open) as a dashed ghost pill, so
+          the suggestion reads as "a proposed value for *this* field". */}
       <View style={styles.collectionBlock}>
         <CollectionPicker
           collections={collections.map((item) => ({ id: item.id, name: item.name }))}
@@ -773,6 +834,39 @@ export default function BookmarkDetailScreen() {
           onSelect={(value) => assignCollection(bookmark.id, value)}
           onCreate={handleCreateCollection}
         />
+        {folderSuggestionChip ? (
+          <View style={styles.folderSuggestionBlock}>
+            <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+              {t('detail.suggestedFolderLabel')}
+            </Text>
+            <View style={styles.folderSuggestionRow}>
+              <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
+                {/* The whole label + ✓ is one accept target (tap anywhere on it
+                    files the bookmark) — the explicit ✓ removes any "does this
+                    open the picker?" doubt now that the pill sits beside a
+                    tappable picker row, matching Review's tap-to-accept chip. */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={folderSuggestionChip.acceptA11y}
+                  disabled={busy}
+                  style={styles.folderAccept}
+                  onPress={folderSuggestionChip.onAccept}
+                >
+                  <Text style={styles.ghostLabel}>{folderSuggestionChip.label}</Text>
+                  <Text style={[styles.ghostAccept, { color: palette.accent }]}>{' ✓'}</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={folderSuggestionChip.dismissA11y}
+                  disabled={busy}
+                  hitSlop={6}
+                  onPress={folderSuggestionChip.onDismiss}
+                >
+                  <Text style={[styles.ghostRemove, { color: palette.textSecondary }]}>✕</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        ) : null}
         {collection && !collections.some((item) => item.id === collection.id) ? (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>
             {t('detail.currentlyIn', { name: collection.name })}
@@ -781,9 +875,9 @@ export default function BookmarkDetailScreen() {
       </View>
 
       {/* Tags sit under the folder picker as a compact token field. The folder
-          recommendation rides in the field's suggestion row as the leading chip
-          (a folder is just a tag you can hold one of), so "Add all"/"Dismiss
-          all" sweep folder + tags together — the same grouping as Review. */}
+          recommendation now lives under the picker (above), so this field's
+          suggestion row and its "Add all"/"Dismiss all" are tags-only — the
+          bulk actions plainly mean "these tags". */}
       <TagField
         tags={tags.map((tag) => ({ id: tag.id, name: tag.name }))}
         suggestions={tagSuggestions}
@@ -809,8 +903,7 @@ export default function BookmarkDetailScreen() {
         onAcceptSuggestion={handleAcceptSuggestion}
         onDismissSuggestion={handleDismissTag}
         onAcceptAllSuggestions={handleAcceptAll}
-        onDismissAllSuggestions={handleDismissAll}
-        folderSuggestion={folderSuggestionChip}
+        onDismissAllSuggestions={handleDismissAllTags}
         disabledHint={
           canOrganizeRemotely ? undefined : t('detail.tagsDisabledHint')
         }
@@ -853,10 +946,6 @@ export default function BookmarkDetailScreen() {
           </Text>
         ) : null}
 
-        {showAiSummary ? (
-          <Text style={[styles.fieldValue, { color: palette.text }]}>{enrichment?.summary}</Text>
-        ) : null}
-
         {canOrganizeRemotely ? (
           <Pressable
             accessibilityRole="button"
@@ -878,6 +967,25 @@ export default function BookmarkDetailScreen() {
         ) : (
           <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiNeedsSync')}</Text>
         )}
+
+        {/* One "no thanks to everything" gesture, at bulk scope — shown only when
+            suggestions span 2+ widgets, since with one live surface that widget's
+            own dismiss suffices. There is deliberately no "Accept all": accepting
+            the summary mutates the user's note, so accepts stay in-context. */}
+        {showDismissAllSuggestions ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t('detail.aiDismissAllA11y')}
+            disabled={busy}
+            hitSlop={6}
+            style={styles.dismissAll}
+            onPress={handleDismissAllSuggestions}
+          >
+            <Text style={[styles.dismissAllLabel, { color: palette.textSecondary }]}>
+              {t('detail.aiDismissAll')}
+            </Text>
+          </Pressable>
+        ) : null}
       </Card>
 
       <View style={styles.detailsSection}>
@@ -1113,8 +1221,53 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  fieldValue: {
-    fontSize: 15,
+  folderSuggestionBlock: {
+    gap: 6,
+    marginTop: 2,
+  },
+  folderSuggestionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  folderAccept: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  // Dashed ghost pill matching the tag suggestion chips (TagField), so the folder
+  // recommendation reads in the same visual language across surfaces.
+  ghostChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    paddingVertical: 5,
+    paddingHorizontal: 11,
+    borderStyle: 'dashed',
+  },
+  ghostLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 18,
+    includeFontPadding: false,
+  },
+  ghostAccept: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  ghostRemove: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  dismissAll: {
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+  },
+  dismissAllLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
   suggestHeader: {
     flexDirection: 'row',

@@ -343,6 +343,19 @@ export const en = {
   'detail.aiCreateCollectionChip': '📁 ＋ Create “{name}”',
   'detail.aiCreateCollectionA11y': 'Create collection {name} and file into it',
   'detail.aiDismissCollectionA11y': 'Dismiss suggested collection {name}',
+  // Micro-label above the folder suggestion pill under the collection picker.
+  'detail.suggestedFolderLabel': 'Suggested folder',
+  // The AI summary, proposed as a note in its own dashed block under the note field.
+  'detail.summaryLabel': '✨ Suggested summary',
+  'detail.summaryUseAsNote': 'Use as note',
+  'detail.summaryUseAsNoteA11y': 'Use the suggested summary as your note',
+  'detail.summaryAppendToNote': 'Add to note',
+  'detail.summaryAppendToNoteA11y': 'Append the suggested summary to your note',
+  'detail.summaryDismiss': 'Dismiss',
+  'detail.summaryDismissA11y': 'Dismiss the suggested summary',
+  // Screen-level sweep in the AI control strip, when 2+ suggestion surfaces are live.
+  'detail.aiDismissAll': 'Dismiss all suggestions',
+  'detail.aiDismissAllA11y': 'Dismiss all AI suggestions',
   'detail.aiGenerating': 'Generating suggestions…',
   'detail.aiRefresh': 'Refresh AI suggestions',
   'detail.aiSuggest': 'Suggest with AI',

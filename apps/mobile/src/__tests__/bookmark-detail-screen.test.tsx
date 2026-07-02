@@ -39,6 +39,7 @@ jest.mock('expo-router', () => ({
 }));
 
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
+import { summaryToken } from '@/domain/ai-suggestions';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -318,6 +319,117 @@ test('a real-model summary is kept even with no tags to suggest', async () => {
   expect(screen.getByText('gemini-2.0')).toBeTruthy();
 });
 
+test('the summary "Use as note" fills an empty note', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', notes: null })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'A concise overview of the article.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Use the suggested summary as your note')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Use the suggested summary as your note'));
+
+  // The note now holds the summary text, and the proposed-summary block is gone.
+  await waitFor(() =>
+    expect(screen.getByLabelText('Notes').props.value).toBe('A concise overview of the article.'),
+  );
+  expect(screen.queryByLabelText('Use the suggested summary as your note')).toBeNull();
+});
+
+test('the summary "Add to note" appends without overwriting existing text', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', notes: 'My own thoughts.' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'An AI overview.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  // A non-empty note relabels the accept to "Add to note" (append, never replace).
+  await waitFor(() =>
+    expect(screen.getByLabelText('Append the suggested summary to your note')).toBeTruthy(),
+  );
+
+  await fireEvent.press(screen.getByLabelText('Append the suggested summary to your note'));
+
+  // The user's original text is preserved and the summary is appended below it.
+  await waitFor(() =>
+    expect(screen.getByLabelText('Notes').props.value).toBe('My own thoughts.\n\nAn AI overview.'),
+  );
+});
+
+test('dismissing the summary hides it durably and never touches the note', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', notes: 'Untouched.' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'A summary to dismiss.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByLabelText('Dismiss the suggested summary')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Dismiss the suggested summary'));
+
+  // The block is gone, the note is untouched, and the decision is persisted so a
+  // re-open (or an identical re-pull) won't re-surface it.
+  expect(screen.queryByText('A summary to dismiss.')).toBeNull();
+  expect(screen.getByLabelText('Notes').props.value).toBe('Untouched.');
+  await waitFor(() => {
+    const raw = fakeRepo.__meta('reviewed_ai_summaries');
+    expect(raw).toContain(SYNCED_ID);
+  });
+});
+
+test('a durably-reviewed summary is hidden on first render', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'Already-reviewed summary.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+  // Seed the durable reviewed-summary token for this exact summary text.
+  fakeRepo.__setMeta(
+    'reviewed_ai_summaries',
+    JSON.stringify({ [SYNCED_ID]: [summaryToken('Already-reviewed summary.')] }),
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+  expect(screen.queryByText('Already-reviewed summary.')).toBeNull();
+});
+
 test('a degraded enrichment WITH suggestions shows a non-error "basic suggestions" note', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
@@ -466,7 +578,7 @@ function collectionTagData() {
   };
 }
 
-test('add all also files into the suggested folder, not just the tags', async () => {
+test('add all applies only the tags, leaving the folder to its own pill', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
     [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
@@ -488,15 +600,14 @@ test('add all also files into the suggested folder, not just the tags', async ()
 
   await fireEvent.press(screen.getByLabelText('Add all suggestions'));
 
-  // Tags become real, and the folder is filed in — its chip disappears.
+  // Tags become real. The folder now has its own ✓ under the picker, so "Add
+  // all" (tags-only) leaves it in place — accepting a folder is deliberate.
   await waitFor(() => expect(screen.getByLabelText('Browse #design')).toBeTruthy());
   expect(screen.getByLabelText('Browse #video')).toBeTruthy();
-  await waitFor(() =>
-    expect(screen.queryByLabelText('File A synced bookmark into Recipes')).toBeNull(),
-  );
+  expect(screen.getByLabelText('File A synced bookmark into Recipes')).toBeTruthy();
 });
 
-test('dismiss all also dismisses the suggested folder, not just the tags', async () => {
+test('the screen-level "dismiss all" sweeps the folder and the tags together', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
     [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
@@ -514,9 +625,11 @@ test('dismiss all also dismisses the suggested folder, not just the tags', async
   );
 
   const screen = await renderDetail();
-  await waitFor(() => expect(screen.getByLabelText('Dismiss all suggestions')).toBeTruthy());
+  // Folder + tags = 2 live surfaces, so the AI control strip's screen-level
+  // sweep appears (distinct from TagField's tags-only "Dismiss all suggestions").
+  await waitFor(() => expect(screen.getByLabelText('Dismiss all AI suggestions')).toBeTruthy());
 
-  await fireEvent.press(screen.getByLabelText('Dismiss all suggestions'));
+  await fireEvent.press(screen.getByLabelText('Dismiss all AI suggestions'));
 
   // Both the tag suggestions and the folder chip are gone.
   expect(screen.queryByLabelText('Accept suggested tag design')).toBeNull();
@@ -525,7 +638,7 @@ test('dismiss all also dismisses the suggested folder, not just the tags', async
   );
 });
 
-test('the bulk row shows for a folder plus a single tag suggestion', async () => {
+test('a folder plus a single tag shows the screen-level sweep but no tags-only bulk row', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
     [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
@@ -540,10 +653,12 @@ test('the bulk row shows for a folder plus a single tag suggestion', async () =>
   );
 
   const screen = await renderDetail();
-  // One tag alone wouldn't reach the >1 threshold; the folder makes it two
-  // actionable suggestions, so "Add all"/"Dismiss all" appear.
-  await waitFor(() => expect(screen.getByLabelText('Add all suggestions')).toBeTruthy());
-  expect(screen.getByLabelText('Dismiss all suggestions')).toBeTruthy();
+  // One tag alone doesn't reach TagField's tags-only >1 threshold now that the
+  // folder lives elsewhere — so no tags "Add all". But folder + tag = 2 live
+  // surfaces, so the screen-level "Dismiss all AI suggestions" appears.
+  await waitFor(() => expect(screen.getByLabelText('Dismiss all AI suggestions')).toBeTruthy());
+  expect(screen.queryByLabelText('Add all suggestions')).toBeNull();
+  expect(screen.queryByLabelText('Dismiss all suggestions')).toBeNull();
 });
 
 test('shows the suggested folder as a chip beside the picker and files into it', async () => {
