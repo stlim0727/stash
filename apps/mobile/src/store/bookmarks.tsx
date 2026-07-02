@@ -715,6 +715,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // snapshot the fetch was invoked with) but always write under the resolved
         // id, so the update lands even while the bookmarks ref is catching up.
         const currentId = resolveAliasedId(bookmark.id, idAliases.current);
+        if (currentId !== bookmark.id) {
+          // Diagnostic: the row was re-keyed (its create synced, or a
+          // leftover/account re-home reconciled it) while this fetch was in
+          // flight — the exact condition that used to drop the enriched title.
+          // Logging it confirms whether the race actually fires in the wild.
+          recordLog(
+            'info',
+            `enrich: bookmark re-keyed ${bookmark.id} -> ${currentId} mid-fetch; applying metadata to current id`,
+          );
+        }
         if (deletedIds.current.has(bookmark.id) || deletedIds.current.has(currentId)) {
           return; // deleted while the fetch was in flight
         }

@@ -268,12 +268,18 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // fetches, so scraping yields a useless "YouTube" title and logo. Prefer
   // their oEmbed endpoint, which returns the real title + thumbnail; fall back
   // to HTML scraping when there's no oEmbed provider or it fails.
+  let oembedOutcome: string | null = null;
   const oembed = oembedEndpoint(url);
   if (oembed) {
     const fromOembed = await fetchOembed(oembed);
     if (fromOembed?.title) {
       return fromOembed;
     }
+    // Record why oEmbed didn't provide a title so the failure breadcrumb below
+    // can pinpoint the provider (e.g. YouTube) rather than only the HTML shell:
+    // `failed` = the endpoint errored/was non-OK, `no_title` = it answered but
+    // carried no usable title.
+    oembedOutcome = fromOembed ? 'no_title' : 'failed';
   }
 
   const bot = await fetchHtmlMetadata(url, BOT_USER_AGENT);
@@ -307,9 +313,10 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
     // fire-and-forget and no-title is expected for JS-heavy or dead-link pages,
     // so this does not warrant a Sentry error.
     const spaPart = spa ? `, spa=${spa.outcome}` : '';
+    const oembedPart = oembedOutcome ? `, oembed=${oembedOutcome}` : '';
     recordLog(
       'warn',
-      `preview: no title for ${url} (bot=${bot.outcome}, browser=${browser.outcome}${spaPart})`,
+      `preview: no title for ${url} (bot=${bot.outcome}, browser=${browser.outcome}${spaPart}${oembedPart})`,
     );
   } else {
     // Recovered via the browser fallback; keep an info breadcrumb in-app.
