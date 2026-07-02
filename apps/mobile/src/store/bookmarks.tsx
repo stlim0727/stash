@@ -52,6 +52,7 @@ import {
 } from '@/domain/pending-tags';
 import { useI18n } from '@/i18n';
 import { recordLog } from '@/observability/log-buffer';
+import { armHydrationWatchdog } from '@/observability/hydration-watchdog';
 import { repository } from '@/storage/repository';
 import { copyImageToLibrary } from '@/storage/image-store';
 import type { EnrichmentMetadataHint } from '@/api/bookmarks';
@@ -754,6 +755,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Observe (never abort) the cold-start load: if it wedges — the Android
+    // background-handle SQLite stall, or any await that never resolves — the
+    // Inbox stays stuck on its loading state with no crash and no event
+    // (Sentry STASH-F). The watchdog makes that stall self-report; `phase`
+    // gives the report a coarse, non-identifying hint of how far we got.
+    let phase = 'opening';
+    const disarmWatchdog = armHydrationWatchdog({ describe: () => phase });
     (async () => {
       // Opening SQLite can fail transiently right after a warm relaunch (the
       // native handle is briefly invalid). Retry a few times before falling
@@ -762,7 +770,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const MAX_ATTEMPTS = 3;
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
         try {
+          phase = `attempt ${attempt}: opening`;
           await ensureRepositoryReady();
+          phase = `attempt ${attempt}: reading`;
           const [
             storedBookmarks,
             storedQueue,
@@ -863,9 +873,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           setBookmarks((current) => current ?? []);
         }
       }
-    })();
+    })().finally(() => {
+      // Disarm once the load settles by any path — success, terminal fallback,
+      // or an unexpected throw. Idempotent with the unmount cleanup below.
+      disarmWatchdog();
+    });
     return () => {
       cancelled = true;
+      disarmWatchdog();
     };
   }, []);
 
