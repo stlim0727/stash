@@ -29,9 +29,6 @@ orbs:
 # matching parameter set to true (CircleCI UI "Trigger Pipeline", or the API)
 # to run just that workflow; left false, they cost nothing on a normal push.
 parameters:
-  run_apk:
-    type: boolean
-    default: false
   run_screenshots:
     type: boolean
     default: false
@@ -62,17 +59,6 @@ executors:
     docker:
       - image: cimg/node:22.20
     working_directory: ~/stash
-  # Android SDK + NDK + Java for the (non-emulator) APK build.
-  # xlarge (8 vCPU / 16 GB): the app's RN-fabric-codegen native compile peaks
-  # over the 8 GB `large` box even at -j1, and CircleCI Docker has no swap to
-  # absorb the spike, so the build OOM-kills there. 16 GB gives the compile the
-  # headroom it needs (still bounded via -XX:ActiveProcessorCount below).
-  android-build:
-    docker:
-      - image: cimg/android:2024.11.1
-    resource_class: xlarge
-    working_directory: ~/stash
-
 commands:
   setup_pnpm:
     description: Activate the repo-pinned pnpm via corepack and install deps (cached).
@@ -285,279 +271,6 @@ jobs:
             export DRY_RUN="<< parameters.dry_run >>"
             node scripts/firebase-app-distribution-cleanup.mjs
 
-  # --- Standalone installable Android APK (ports android-apk.yml) ------------
-  android_apk:
-    executor: android-build
-    steps:
-      - checkout
-      - install_node22
-      # Hoisted (npm-like) layout is friendliest for RN Gradle autolinking.
-      - run:
-          name: Install dependencies (hoisted)
-          command: |
-            echo "node-linker=hoisted" >> .npmrc
-            pnpm config set store-dir ~/.pnpm-store
-            pnpm install --no-frozen-lockfile
-      - restore_cache:
-          keys:
-            - gradle-v1-{{ .Branch }}
-            - gradle-v1-
-      - restore_cache:
-          keys:
-            - ccache-v1-{{ .Branch }}
-            - ccache-v1-
-      - run:
-          name: Install ccache + ninja + zero stats
-          command: |
-            # ninja-build is required by the CMake native builds (e.g.
-            # react-native-screens' configureCMake* task) — the cimg/android
-            # image ships CMake but no Ninja, so AGP fails with
-            # "[CXX1416] Could not find Ninja on PATH or in SDK CMake bin folders".
-            sudo apt-get update -qq && sudo apt-get install -y -qq ccache ninja-build
-            ccache --version | head -1
-            ninja --version
-            ccache -z
-      - run:
-          name: Compute build metadata
-          command: |
-            SHA_SHORT="${CIRCLE_SHA1:0:7}"
-            REF="${CIRCLE_TAG:-$CIRCLE_BRANCH}"
-            REPO="$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME"
-            VERSION="<< pipeline.parameters.version >>"
-            if [ -z "$VERSION" ] && [ -n "${CIRCLE_TAG:-}" ]; then VERSION="$CIRCLE_TAG"; fi
-            {
-              echo "export SHA_SHORT='$SHA_SHORT'"
-              echo "export EXPO_PUBLIC_GIT_SHA='$CIRCLE_SHA1'"
-              echo "export EXPO_PUBLIC_GIT_REF='$REF'"
-              echo "export EXPO_PUBLIC_COMMIT_URL='https://github.com/$REPO/commit/$CIRCLE_SHA1'"
-              echo "export APP_VERSION='$VERSION'"
-              echo "export ANDROID_VERSION_CODE='$CIRCLE_BUILD_NUM'"
-              echo "export REPO='$REPO'"
-            } >> "$BASH_ENV"
-      - run:
-          name: Prebuild Android project
-          working_directory: ~/stash/apps/mobile
-          command: npx expo prebuild --platform android --no-install
-      - run:
-          name: Tune Gradle heap + bound native build parallelism
-          working_directory: ~/stash/apps/mobile/android
-          command: |
-            # CircleCI Docker containers report the HOST's full CPU count via
-            # availableProcessors(), so Gradle and AGP's CMake/ninja would spawn
-            # far more parallel clang processes than the real cores. A single
-            # RN-fabric-codegen translation unit already compiles at ~4 GB, so this
-            # must stay bounded even on the 16 GB xlarge box:
-            #   workers.max=1              -> one module's native build at a time,
-            #                                 so only one ninja invocation runs.
-            #   -XX:ActiveProcessorCount=2 -> that ninja compiles -j2 (~2 clang),
-            #                                 keeping two lanes of output flowing.
-            # Peak ~= 2 * ~4 GB clang + the JVM ~= 12 GB, safely under 16 GB.
-            printf '\norg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2\norg.gradle.caching=true\norg.gradle.workers.max=1\n' >> gradle.properties
-      - run:
-          name: Build release APK (arm64-v8a)
-          working_directory: ~/stash/apps/mobile/android
-          # A single heavy RN-codegen C++ translation unit can compile for many
-          # minutes with no stdout; raise CircleCI's default 10-min no-output
-          # timeout so such a unit can't get the step canceled mid-build.
-          no_output_timeout: 30m
-          environment:
-            EXPO_PUBLIC_SENTRY_ENVIRONMENT: production
-            CMAKE_C_COMPILER_LAUNCHER: ccache
-            CMAKE_CXX_COMPILER_LAUNCHER: ccache
-            CCACHE_DIR: /home/circleci/.ccache
-            CCACHE_MAXSIZE: 3G
-            CCACHE_BASEDIR: /home/circleci/stash
-            CCACHE_COMPILERCHECK: content
-            CCACHE_NOHASHDIR: "true"
-            CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,locale
-          command: ./gradlew :app:assembleRelease --no-daemon --stacktrace --build-cache -PreactNativeArchitectures=arm64-v8a -x lintVitalRelease
-      - run:
-          name: ccache stats
-          when: always
-          command: ccache -s || true
-      - save_cache:
-          key: gradle-v1-{{ .Branch }}-{{ epoch }}
-          paths:
-            - ~/.gradle/caches
-            - ~/.gradle/wrapper
-      - save_cache:
-          key: ccache-v1-{{ .Branch }}-{{ epoch }}
-          paths:
-            - ~/.ccache
-      - run:
-          name: Determine release target + stage APK
-          command: |
-            set -euo pipefail
-            LABEL=""
-            if [ -n "<< pipeline.parameters.version >>" ]; then
-              LABEL="<< pipeline.parameters.version >>"
-            elif [ -n "${CIRCLE_TAG:-}" ]; then
-              LABEL="$CIRCLE_TAG"
-            fi
-            if [[ "$LABEL" == v* && "$LABEL" != *-* ]]; then
-              TAG="$LABEL"; APK="stash-${LABEL}-${SHA_SHORT}-android.apk"
-              REL_NAME="Stash $LABEL"; PRERELEASE="false"; MAKE_LATEST="true"
-            else
-              TAG="dev"; APK="stash-dev-android.apk"
-              # Carry the -rcN label (the `version` param / tag) into the rolling
-              # dev release name so the release self-records which RC it is — the
-              # rc-build skill derives the next rc from this. Blank ⇒ no label.
-              if [ -n "$LABEL" ]; then
-                REL_NAME="Development build — $LABEL (latest)"
-              else
-                REL_NAME="Development build (latest)"
-              fi
-              PRERELEASE="true"; MAKE_LATEST="false"
-            fi
-            URL="https://github.com/$REPO/releases/download/${TAG}/${APK}"
-            {
-              echo "export TAG='$TAG'"; echo "export APK='$APK'"
-              echo "export LABEL='$LABEL'"
-              echo "export REL_NAME='$REL_NAME'"; echo "export PRERELEASE='$PRERELEASE'"
-              echo "export MAKE_LATEST='$MAKE_LATEST'"; echo "export REL_URL='$URL'"
-            } >> "$BASH_ENV"
-            mkdir -p dist
-            cp apps/mobile/android/app/build/outputs/apk/release/app-release.apk "dist/${APK}"
-            ls -la dist
-      - run:
-          name: Assert EXPO_PUBLIC_SUPABASE_URL inlined (when configured)
-          command: |
-            if [ -z "${EXPO_PUBLIC_SUPABASE_URL:-}" ]; then
-              echo "No Supabase URL — local-only build; skipping inline assertion."; exit 0
-            fi
-            APK_FILE=$(ls dist/stash-*-android.apk | head -1)
-            rm -rf /tmp/apkassets && unzip -o -q "$APK_FILE" 'assets/*' -d /tmp/apkassets || true
-            BUNDLE=$(find /tmp/apkassets -name '*.bundle' | head -1)
-            if [ -z "$BUNDLE" ]; then echo "No JS bundle in APK; skipping."; exit 0; fi
-            if grep -aqF ".supabase.co" "$BUNDLE"; then
-              echo "✓ Supabase URL inlined into the release bundle."
-            else
-              echo "EXPO_PUBLIC_SUPABASE_URL was set but '.supabase.co' is absent — Expo did not inline it."
-              exit 1
-            fi
-      - run:
-          name: Generate install QR + release notes
-          command: |
-            sudo apt-get update -qq && sudo apt-get install -y -qq qrencode
-            qrencode -o dist/install-qr.png -s 8 -m 2 "$REL_URL"
-            BODY=dist/RELEASE_BODY.md
-            NOTES="docs/release-notes/${TAG}.md"
-            : > "$BODY"
-            if [ -f "$NOTES" ]; then cat "$NOTES" >> "$BODY"; printf '\n\n---\n\n' >> "$BODY"; fi
-            # Lead the build line with the -rcN label when present (self-records
-            # the RC, mirroring #302), else just the commit.
-            LABEL_MD=""
-            if [ -n "${LABEL:-}" ]; then LABEL_MD="\`${LABEL}\` · "; fi
-            cat >> "$BODY" \<<EOF
-            Standalone debug-signed Android APK built in CI.
-
-            **Build** ${LABEL_MD}[\`${SHA_SHORT}\`](https://github.com/${REPO}/commit/${CIRCLE_SHA1}) · \`${EXPO_PUBLIC_GIT_REF}\`
-
-            ### 📲 Install on Android
-            Scan this on your phone (or open the link), then tap the downloaded
-            \`.apk\` to install. The first time, allow "install unknown apps".
-
-            ![Install QR](https://github.com/${REPO}/releases/download/${TAG}/install-qr.png)
-
-            ➡️ **[Download ${APK}](${REL_URL})**
-
-            Local-only unless the repo's \`EXPO_PUBLIC_SUPABASE_*\` env vars were set at build time.
-            EOF
-            echo "----- release body -----"; cat "$BODY"
-      - run:
-          name: Publish GitHub Release (when GH_TOKEN set)
-          command: |
-            set -euo pipefail
-            if [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
-              echo "No GH_TOKEN/GITHUB_TOKEN — skipping GitHub Release (APK is in CircleCI artifacts)."
-              exit 0
-            fi
-            export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
-            if ! command -v gh >/dev/null 2>&1; then
-              GH_VER=2.62.0
-              curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_amd64.tar.gz" \
-                | sudo tar xz -C /usr/local --strip-components=1
-            fi
-            # Rolling dev release: recreate in place (deletes the old tag+release)
-            # so the tag always points at this commit. Versioned tags are new each
-            # time and just get created.
-            if [ "$TAG" = "dev" ]; then
-              gh release delete dev --yes --cleanup-tag --repo "$REPO" 2>/dev/null || true
-            fi
-            LATEST_FLAG="--latest=false"
-            if [ "$MAKE_LATEST" = "true" ]; then LATEST_FLAG="--latest"; fi
-            PRE_FLAG=""
-            if [ "$PRERELEASE" = "true" ]; then PRE_FLAG="--prerelease"; fi
-            if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-              gh release upload "$TAG" dist/*.apk dist/install-qr.png --clobber --repo "$REPO"
-              gh release edit "$TAG" --notes-file dist/RELEASE_BODY.md --title "$REL_NAME" $PRE_FLAG $LATEST_FLAG --repo "$REPO"
-            else
-              gh release create "$TAG" dist/*.apk dist/install-qr.png \
-                --title "$REL_NAME" --notes-file dist/RELEASE_BODY.md \
-                --target "$CIRCLE_SHA1" $PRE_FLAG $LATEST_FLAG --repo "$REPO"
-            fi
-      - run:
-          name: Distribute to Firebase App Distribution (when configured)
-          command: |
-            set -euo pipefail
-            if [ -z "${FIREBASE_APP_ID:-}" ] || [ -z "${FIREBASE_SERVICE_ACCOUNT:-}" ]; then
-              echo "Firebase secrets not set — skipping App Distribution upload."; exit 0
-            fi
-            SA="$(mktemp)"
-            if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
-              printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
-            else
-              printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
-            fi
-            trap 'rm -f "$SA"' EXIT
-            if ! node -e 'let j;try{j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))}catch{process.exit(1)}if(j.type!=="service_account"||!j.client_email||!j.private_key){process.exit(1)}console.log("Firebase service account: "+j.client_email)' "$SA"; then
-              echo "FIREBASE_SERVICE_ACCOUNT is not valid service-account JSON."; exit 1
-            fi
-            export GOOGLE_APPLICATION_CREDENTIALS="$SA"
-            GH_OUT="$(mktemp)"; export GITHUB_OUTPUT="$GH_OUT"
-            export FIREBASE_TESTER_GROUPS="${FIREBASE_TESTER_GROUPS:-testers}"
-            APK_PATH="dist/${APK}" \
-            RELEASE_NOTES="${REL_NAME} · ${SHA_SHORT} (${EXPO_PUBLIC_GIT_REF})" \
-              node scripts/firebase-app-distribution.mjs
-            # Hand the uploaded release name to the App Testing step below.
-            REL_NAME_OUT="$(sed -n 's/^release_name=//p' "$GH_OUT" | tail -1)"
-            echo "export FIREBASE_DISTRIBUTED_RELEASE='${REL_NAME_OUT}'" >> "$BASH_ENV"
-      # Mirrors android-apk.yml's post-distribution "Run App Testing Agent" step:
-      # exercise the just-uploaded release when the App Testing vars are set, so a
-      # tagged/manual release build still gets that coverage. Skips cleanly when
-      # the release wasn't distributed or the test vars are absent.
-      - run:
-          name: Run App Testing Agent (when configured)
-          command: |
-            set -euo pipefail
-            if [ -z "${FIREBASE_DISTRIBUTED_RELEASE:-}" ]; then
-              echo "No distributed release (Firebase not configured) — skipping App Testing Agent."; exit 0
-            fi
-            if [ -z "${FIREBASE_TEST_CASES:-}" ] || [ -z "${FIREBASE_TEST_DEVICES:-}" ]; then
-              echo "FIREBASE_TEST_CASES / FIREBASE_TEST_DEVICES not set — skipping App Testing Agent."; exit 0
-            fi
-            SA="$(mktemp)"
-            if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
-              printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
-            else
-              printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
-            fi
-            trap 'rm -f "$SA"' EXIT
-            export GOOGLE_APPLICATION_CREDENTIALS="$SA"
-            export GITHUB_OUTPUT="$(mktemp)"
-            RELEASE_NAME="$FIREBASE_DISTRIBUTED_RELEASE" \
-            TEST_CASES="$FIREBASE_TEST_CASES" \
-            TEST_DEVICES="$FIREBASE_TEST_DEVICES" \
-            TEST_NON_BLOCKING="${FIREBASE_TEST_NON_BLOCKING:-false}" \
-            TEST_USERNAME="${FIREBASE_TEST_USERNAME:-}" \
-            TEST_PASSWORD="${FIREBASE_TEST_PASSWORD:-}" \
-            TEST_USERNAME_RESOURCE="${FIREBASE_TEST_USERNAME_RESOURCE:-}" \
-            TEST_PASSWORD_RESOURCE="${FIREBASE_TEST_PASSWORD_RESOURCE:-}" \
-              node scripts/firebase-app-distribution-test.mjs
-      - store_artifacts:
-          path: dist
-          destination: apk
-
   # --- Android screenshots on an emulator (ports android-screenshots.yml) ----
   #
   # NOTE: the Actions version auto-ran on PRs touching apps/mobile/src/app/** via
@@ -644,7 +357,6 @@ workflows:
   ci:
     when:
       and:
-        - not: << pipeline.parameters.run_apk >>
         - not: << pipeline.parameters.run_screenshots >>
         - not: << pipeline.parameters.run_app_testing >>
         - not: << pipeline.parameters.run_secrets_check >>
@@ -652,23 +364,20 @@ workflows:
     jobs:
       - checks
 
-  # On a v* tag: build/publish the APK and mark the Sentry release.
+  # On a v* tag: mark the Sentry release. The APK itself is built on GitHub
+  # Actions (.github/workflows/android-apk.yml) — the app's RN native compile
+  # needs more RAM than this project's CircleCI Docker plan allows (Docker caps
+  # at the 8 GB `large` class, which OOM-kills the build), so that one heavy,
+  # infrequent job stays on the GitHub-hosted runners (16 GB + swap) it already
+  # built on, while the every-push CI gate stays here on CircleCI.
   release:
     jobs:
-      - android_apk:
-          filters:
-            tags: { only: /^v.*/ }
-            branches: { ignore: /.*/ }
       - sentry_release:
           filters:
             tags: { only: /^v.*/ }
             branches: { ignore: /.*/ }
 
   # Opt-in manual workflows (trigger a pipeline with the matching parameter).
-  manual-apk:
-    when: << pipeline.parameters.run_apk >>
-    jobs:
-      - android_apk
   manual-screenshots:
     when: << pipeline.parameters.run_screenshots >>
     jobs:

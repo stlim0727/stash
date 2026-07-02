@@ -30,21 +30,29 @@ preserved in git history under `.github/workflows/` before this change.
 | Workflow | Trigger | Ported from |
 | --- | --- | --- |
 | `ci` (lint + typecheck + tests) | every push / PR | `ci.yml` |
-| `release` (APK build + GitHub Release + Sentry release) | a `v*` git tag | `android-apk.yml` + `sentry-release.yml` |
+| `release` (Sentry release) | a `v*` git tag | `sentry-release.yml` |
 | `nightly-ops` (Firebase release cleanup) | daily 04:17 UTC on `main` | `ops.yml` (Firebase task only) |
-| `manual-apk` | pipeline param `run_apk=true` | `android-apk.yml` (dispatch) |
 | `manual-screenshots` | pipeline param `run_screenshots=true` | `android-screenshots.yml` |
 | `manual-app-testing` | pipeline param `run_app_testing=true` | `app-testing.yml` |
 | `manual-secrets-check` | pipeline param `run_secrets_check=true` | `secrets-check.yml` |
 | `manual-ops` | pipeline param `run_ops=true` (dry-run cleanup) | `ops.yml` |
 
-Trigger a manual workflow from the CircleCI UI (*Trigger Pipeline* → add the
-parameter) or the API, e.g.:
+> **The Android APK build runs on GitHub Actions, not CircleCI**
+> (`.github/workflows/android-apk.yml`). The app's React Native native compile
+> needs more memory than this project's CircleCI plan allows — CircleCI Docker
+> caps at the 8 GB `large` class (and `xlarge` is not in-plan), which OOM-kills
+> the build; the GitHub-hosted runners (16 GB + swap) build it fine. It's the
+> one heavy, infrequent job (release `v*` tags + manual dispatch), so it stays
+> on Actions while the every-push CI gate stays on CircleCI. Trigger it by
+> pushing a `v*` tag or via the workflow's `workflow_dispatch` (`version` input).
+
+Trigger a manual CircleCI workflow from the CircleCI UI (*Trigger Pipeline* → add
+the parameter) or the API, e.g.:
 
 ```sh
 curl -X POST https://circleci.com/api/v2/project/gh/<org>/<repo>/pipeline \
   -H "Circle-Token: $CIRCLE_TOKEN" -H 'content-type: application/json' \
-  -d '{"branch":"main","parameters":{"run_apk":true,"version":"v0.1.0"}}'
+  -d '{"branch":"main","parameters":{"run_screenshots":true}}'
 ```
 
 ## GitHub Actions → CircleCI mapping

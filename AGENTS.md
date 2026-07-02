@@ -116,26 +116,28 @@ This file captures the project state and working conventions so any agent (Codex
 
 ## Building an installable Android APK (no EAS account)
 
-The fastest way to get a real, installable APK is the **CircleCI `android_apk` job** (`.circleci/config.yml`, ported from the old `android-apk.yml`). It runs `expo prebuild` → Gradle `assembleRelease`, signs with the debug keystore, and **publishes a standalone APK as a GitHub Release with an install QR code** (when `GH_TOKEN` is set) — no EAS/Expo account needed. (EAS via `eas.json` is still the path for store builds; see `docs/development/releasing.md`.)
+The fastest way to get a real, installable APK is the **GitHub Actions `android-apk.yml` workflow** (`.github/workflows/android-apk.yml`). It runs `expo prebuild` → Gradle `assembleRelease`, signs with the debug keystore, and **publishes a standalone APK as a GitHub Release with an install QR code** — no EAS/Expo account needed. (EAS via `eas.json` is still the path for store builds; see `docs/development/releasing.md`.)
 
-**How the trigger maps to output** (the `version` pipeline parameter on a `run_apk` dispatch, or a pushed `v*` git tag) — every build publishes a Release with the raw `.apk` + QR (and stores the APK as a CircleCI artifact):
+> **Why this one job is on GitHub Actions, not CircleCI:** the app's React Native native compile peaks over the 8 GB CircleCI Docker `large` class (and Docker `xlarge` is not in this project's plan), and CircleCI Docker has no swap to absorb the spike, so the build OOM-kills there. The GitHub-hosted runners (16 GB + swap) build it fine. It's the one heavy job and runs infrequently (release `v*` tags + manual dispatch), so it stays on Actions while the every-push CI gate (lint/typecheck/tests) stays on CircleCI.
+
+**How the trigger maps to output** (the `version` dispatch input, or a pushed `v*` git tag) — every build publishes a Release with the raw `.apk` + QR (and stores the APK as a run artifact):
 
 - `version` **blank** or a **hyphenated** pre-release tag (e.g. `v0.1.7-rc8`) → refreshes the single rolling **`dev`** prerelease in place (stable `dev` tag, `stash-dev-android.apk`). Use this for test builds.
 - A clean `vX.Y.Z` (no hyphen), as the input or a pushed `vX.Y.Z` git tag → publishes a **versioned** prerelease, kept forever.
 
-**Trigger it on CircleCI** (the build runs as the `android_apk` job):
+**Trigger it on GitHub Actions** (the build runs as `android-apk.yml`):
 
-1. **Manual / test build** — start a pipeline with `run_apk: true` (and an optional `version`). Via the API:
+1. **Manual / test build** — dispatch the workflow with an optional `version` input (this is what the `rc-build` skill does):
 
-   ```bash
-   curl -X POST https://circleci.com/api/v2/project/gh/<org>/<repo>/pipeline \
-     -H "Circle-Token: $CIRCLE_TOKEN" -H 'content-type: application/json' \
-     -d '{"branch":"main","parameters":{"run_apk":true,"version":"v0.1.7-rc8"}}'
+   ```
+   mcp__github__actions_run_trigger(method="run_workflow", owner="stlim0727",
+     repo="stash", workflow_id="android-apk.yml", ref="main",
+     inputs={ "version": "v0.1.7-rc8" })
    ```
 
-   …or from the CircleCI UI: *Trigger Pipeline* → add the `run_apk` (and `version`) parameters.
-2. **Versioned build** — push a `v*` git tag; the `release` workflow runs `android_apk` automatically.
-3. Watch the run in the CircleCI UI (~6–7 min; arm64-v8a only). When it finishes, the GitHub Release (tag `dev` for test builds, `vX.Y.Z` for versioned) carries the `.apk` + QR; share that URL. Publishing the Release needs `GH_TOKEN` set in CircleCI — without it the APK is still downloadable from the run's CircleCI artifacts. See `docs/development/ci-circleci.md`.
+   …or from the GitHub UI: *Actions → Android APK → Run workflow* (set `version`).
+2. **Versioned build** — push a `v*` git tag; the workflow runs automatically.
+3. Watch the run in the GitHub Actions UI (arm64-v8a only). When it finishes, the GitHub Release (tag `dev` for test builds, `vX.Y.Z` for versioned) carries the `.apk` + QR; share that URL. The Release is published with the workflow's built-in `GITHUB_TOKEN`. See `docs/development/ci-circleci.md`.
 
 Notes: the build is **arm64-v8a only** (every modern phone) to stay fast/small; the APK is debug-signed but fully standalone (installs + runs on its own). If the repo's `EXPO_PUBLIC_SUPABASE_*` secrets are set, cloud sync is baked in; otherwise it's a local-only build. The app self-reports its build commit in Settings (via `EXPO_PUBLIC_GIT_SHA`), so you can confirm which commit an installed APK came from.
 

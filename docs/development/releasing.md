@@ -12,19 +12,21 @@ code**, so the phone-only flow is: trigger → open the Release → scan the QR 
 tap the downloaded `.apk` → install (allow "install unknown apps" once). No
 desktop, no artifact zip to unpack.
 
-- Run it by starting a CircleCI pipeline with `run_apk: true` (plus an optional
-  `version` parameter), or by pushing a tag:
+- Run it by dispatching the **GitHub Actions `android-apk.yml`** workflow with an
+  optional `version` input, or by pushing a tag:
   - clean **`vX.Y.Z`** ⇒ a **versioned, stable** release (non-prerelease, marked
     _latest_), kept forever; its notes come from `docs/release-notes/<tag>.md`.
   - blank `version` / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ refreshes the single
     rolling **`dev`** prerelease in place, so test builds don't clutter Releases.
-- The APK is also stored as a **CircleCI artifact** for tooling — but for
+- The APK is also stored as a **workflow run artifact** for tooling — but for
   installing on a phone, prefer the Release asset (no unzip).
-- API trigger:
-  `curl -X POST https://circleci.com/api/v2/project/gh/<org>/<repo>/pipeline -H "Circle-Token: $CIRCLE_TOKEN" -H 'content-type: application/json' -d '{"branch":"main","parameters":{"run_apk":true,"version":"v0.1.7-rc8"}}'`,
-  then grab the link from the published GitHub Release (`dev` for test builds).
-- Build is **arm64-v8a only** (~6–7 min). Step-by-step is in **`AGENTS.md`**;
-  CircleCI project setup is in **`docs/development/ci-circleci.md`**.
+- Dispatch it from *Actions → Android APK → Run workflow* (set `version`), or via
+  the API (`POST /repos/<org>/<repo>/actions/workflows/android-apk.yml/dispatches`
+  with `{"ref":"main","inputs":{"version":"v0.1.7-rc8"}}`), then grab the link
+  from the published GitHub Release (`dev` for test builds).
+- Build is **arm64-v8a only**. Step-by-step is in **`AGENTS.md`**. The APK build
+  runs on GitHub Actions (not CircleCI) because the RN native compile needs more
+  RAM than the CircleCI Docker plan allows; see **`docs/development/ci-circleci.md`**.
 
 > **Why there's still an "install unknown apps" prompt:** that's inherent to
 > sideloading any APK outside an app store. To cut the repeat friction, set up
