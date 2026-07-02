@@ -723,7 +723,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           rows?.find((item) => item.id === currentId) ??
           rows?.find((item) => item.id === bookmark.id) ??
           bookmark;
-        const latest: Bookmark = source.id === currentId ? source : { ...source, id: currentId };
+        // Reconstruct the row under `currentId` when we only found it under its
+        // pre-swap id (the bookmarks ref lagging the alias). Reaching this branch
+        // means an alias re-keyed the row — which happens only once its `create`
+        // synced (or a leftover/account re-home reconciled it), so the row is
+        // 'synced' on the server. Force that here rather than carrying the stale
+        // snapshot's `sync_status: 'pending'` forward, which would otherwise
+        // revert a successfully-created bookmark to pending and, if its follow-up
+        // update never lands, strand it as pending/failed.
+        const latest: Bookmark =
+          source.id === currentId
+            ? source
+            : {
+                ...source,
+                id: currentId,
+                sync_status: hasRemoteIdentity(currentId) ? 'synced' : source.sync_status,
+              };
         // Fill only generated fields that are still empty, so a user-authored
         // title is never overwritten by generated metadata.
         const safePatch: Partial<Bookmark> = {};
