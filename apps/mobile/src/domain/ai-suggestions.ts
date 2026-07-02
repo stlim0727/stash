@@ -241,3 +241,61 @@ export function addDismissedFolderToken(
 ): DismissedFolderMap {
   return addToStringSet(map, bookmarkId, [token]);
 }
+
+/**
+ * A stable token identifying a specific AI summary, so a user's decision to use
+ * it or dismiss it can be remembered durably (per bookmark) and *only that*
+ * summary stays hidden. Derived from the summary's normalized text (trimmed,
+ * whitespace-collapsed, lowercased) hashed to a short string, so an identical
+ * re-pull of the same summary stays quiet while a genuinely *new* summary from a
+ * later enrichment yields a different token and re-surfaces. Returns null for an
+ * empty/whitespace-only summary (nothing to review). djb2 is deterministic and
+ * platform-free — the same summary text always maps to the same token on every
+ * device, which is what makes the reviewed state portable across a re-pull.
+ */
+export function summaryToken(summary: string | null | undefined): string | null {
+  const normalized = (summary ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (normalized === '') {
+    return null;
+  }
+  let hash = 5381;
+  for (let i = 0; i < normalized.length; i += 1) {
+    // djb2: hash * 33 + char, kept in 32-bit unsigned range.
+    hash = ((hash << 5) + hash + normalized.charCodeAt(i)) >>> 0;
+  }
+  return `s:${hash.toString(36)}`;
+}
+
+/**
+ * A per-bookmark record of AI-summary tokens (see {@link summaryToken}) the user
+ * has reviewed (used as a note or dismissed), keyed by bookmark id. Same shape
+ * and machinery as {@link DismissedFolderMap} (both are {@link StringSetMap}s),
+ * persisted under its own meta key so a summary the user acted on stays gone
+ * across remounts and relaunches. Tokens arrive pre-hashed, so they are stored
+ * verbatim (no extra normalization).
+ */
+export type ReviewedSummaryMap = StringSetMap;
+
+/** Parse the JSON meta blob into a {@link ReviewedSummaryMap}, tolerating
+ *  malformed/legacy values by returning an empty map. */
+export function parseReviewedSummaryMap(raw: string | null): ReviewedSummaryMap {
+  return parseStringSetMap(raw);
+}
+
+/** The reviewed summary tokens for one bookmark, as a Set. */
+export function reviewedSummaryTokensFor(map: ReviewedSummaryMap, bookmarkId: string): Set<string> {
+  return stringSetFor(map, bookmarkId);
+}
+
+/**
+ * Record `token` as a reviewed summary for `bookmarkId`. Returns the SAME map
+ * reference when the token was already present (so callers can skip a
+ * re-persist), otherwise a new map with the token merged in.
+ */
+export function addReviewedSummaryToken(
+  map: ReviewedSummaryMap,
+  bookmarkId: string,
+  token: string,
+): ReviewedSummaryMap {
+  return addToStringSet(map, bookmarkId, [token]);
+}

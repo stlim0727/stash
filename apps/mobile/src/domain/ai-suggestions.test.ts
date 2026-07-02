@@ -4,15 +4,19 @@ import { test } from 'node:test';
 import {
   addDismissedFolderToken,
   addReviewedNames,
+  addReviewedSummaryToken,
   dismissedFolderTokensFor,
   parseDismissedFolderMap,
   parseReviewedMap,
+  parseReviewedSummaryMap,
   pendingSuggestedFolder,
   pendingSuggestions,
   resolveSuggestedFolder,
   reviewedNamesFor,
+  reviewedSummaryTokensFor,
   suggestedFolderToken,
   suggestedFolderTokens,
+  summaryToken,
   SUGGESTION_MIN_CONFIDENCE,
 } from './ai-suggestions.ts';
 import type { AIEnrichment, SuggestedTag } from './types.ts';
@@ -292,4 +296,41 @@ test('pendingSuggestedFolder ignores an unrelated dismissal', () => {
     name: 'Recipes',
     from: null,
   });
+});
+
+test('summaryToken is stable across whitespace/case-only differences', () => {
+  const a = summaryToken('A concise overview of the article.');
+  const b = summaryToken('  a   concise overview   of the article.  ');
+  assert.equal(a, b);
+  assert.ok(a?.startsWith('s:'));
+});
+
+test('summaryToken differs for a genuinely different summary', () => {
+  assert.notEqual(summaryToken('Summary one about cooking.'), summaryToken('Summary two about travel.'));
+});
+
+test('summaryToken is null for empty/whitespace-only input', () => {
+  assert.equal(summaryToken(''), null);
+  assert.equal(summaryToken('   \n\t '), null);
+  assert.equal(summaryToken(null), null);
+  assert.equal(summaryToken(undefined), null);
+});
+
+test('reviewed-summary map records and reads tokens per bookmark', () => {
+  const token = summaryToken('A summary to remember.')!;
+  const map = addReviewedSummaryToken({}, 'bm-1', token);
+  assert.ok(reviewedSummaryTokensFor(map, 'bm-1').has(token));
+  // A different bookmark is unaffected.
+  assert.equal(reviewedSummaryTokensFor(map, 'bm-2').size, 0);
+});
+
+test('addReviewedSummaryToken returns the same reference when already present', () => {
+  const token = summaryToken('Already reviewed.')!;
+  const map = addReviewedSummaryToken({}, 'bm-1', token);
+  assert.equal(addReviewedSummaryToken(map, 'bm-1', token), map);
+});
+
+test('parseReviewedSummaryMap tolerates malformed JSON', () => {
+  assert.deepEqual(parseReviewedSummaryMap('not json'), {});
+  assert.deepEqual(parseReviewedSummaryMap(null), {});
 });
