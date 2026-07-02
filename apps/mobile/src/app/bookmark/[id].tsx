@@ -85,6 +85,7 @@ export default function BookmarkDetailScreen() {
   // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
+  const [notesFocused, setNotesFocused] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   // Long titles (e.g. a full Instagram caption pasted as the title) are
   // collapsed to a few lines with a "Show more" toggle so they don't push the
@@ -336,6 +337,9 @@ export default function BookmarkDetailScreen() {
     (showAiReport || enrichment.degraded_reason === 'rate_limited');
 
   const notesValue = draftNotes ?? bookmark.notes ?? '';
+  // Show the contained (bordered/elevated) treatment only when there's a note to
+  // hold or the user is editing; otherwise render a light borderless prompt.
+  const notesFilled = notesValue.trim() !== '' || notesFocused;
 
   // Auto-save on blur: edit in place, no explicit "Save" button.
   const commitTitle = () => {
@@ -780,30 +784,38 @@ export default function BookmarkDetailScreen() {
         )}
       </View>
 
-      {/* Notes — a pencil affordance + filled field so it reads as editable
-          (an unlabeled box alone looked like a divider on the dark theme). */}
-      <View
-        style={[
-          styles.notesBox,
-          { backgroundColor: palette.surfaceElevated, borderColor: palette.border },
-        ]}
-      >
-        <Ionicons
-          name="create-outline"
-          size={16}
-          color={palette.textSecondary}
-          style={styles.notesIcon}
-        />
-        <TextInput
-          accessibilityLabel={t('detail.notesA11y')}
-          style={[styles.notesInput, { color: palette.text }]}
-          placeholder={t('detail.notesPlaceholder')}
-          placeholderTextColor={palette.textSecondary}
-          multiline
-          value={notesValue}
-          onChangeText={setDraftNotes}
-          onBlur={commitNotes}
-        />
+      {/* Notes — a labeled section (the header names the field, so the box no
+          longer needs a pencil glyph to avoid reading as a divider). Empty and
+          unfocused, it's a light borderless prompt so a note-less bookmark
+          doesn't show a big empty form; once it has text or focus, it becomes an
+          elevated bordered box that grows with the content. */}
+      <View style={styles.notesBlock}>
+        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+          {t('detail.notesLabel')}
+        </Text>
+        <View
+          style={[
+            styles.notesBox,
+            notesFilled
+              ? { backgroundColor: palette.surfaceElevated, borderColor: palette.border }
+              : styles.notesBoxEmpty,
+          ]}
+        >
+          <TextInput
+            accessibilityLabel={t('detail.notesA11y')}
+            style={[styles.notesInput, { color: palette.text }]}
+            placeholder={t('detail.notesPlaceholder')}
+            placeholderTextColor={palette.textSecondary}
+            multiline
+            value={notesValue}
+            onChangeText={setDraftNotes}
+            onFocus={() => setNotesFocused(true)}
+            onBlur={() => {
+              setNotesFocused(false);
+              commitNotes();
+            }}
+          />
+        </View>
       </View>
 
       {/* The AI summary is proposed as a note here — in its own clearly-labeled
@@ -1300,23 +1312,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     fontSize: 15,
   },
+  notesBlock: {
+    gap: 6,
+  },
   notesBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
     borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: 14,
-    paddingVertical: 12,
-    minHeight: 64,
+    paddingVertical: 10,
   },
-  notesIcon: {
-    marginTop: 3,
+  // Empty & unfocused: no fill or border (a transparent border keeps the height
+  // steady when it flips to the contained state), flush left as a plain prompt.
+  notesBoxEmpty: {
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
+    paddingHorizontal: 0,
   },
   notesInput: {
-    flex: 1,
     fontSize: 15,
-    padding: 0,
+    // Android shaves the tops of the first line of a top-aligned multiline
+    // TextInput when it sits flush to the content box: a small paddingTop gives
+    // the ascenders room, lineHeight guarantees vertical space regardless of the
+    // device font, and includeFontPadding:false keeps first-line placement
+    // consistent across Android fonts so it doesn't regress elsewhere.
+    lineHeight: 21,
+    includeFontPadding: false,
+    paddingTop: 2,
+    paddingBottom: 0,
+    paddingHorizontal: 0,
     minHeight: 40,
     textAlignVertical: 'top',
   },

@@ -330,6 +330,7 @@ export const en = {
   'detail.titlePlaceholder': 'Untitled — metadata pending',
   'detail.editTitleA11y': 'Edit title',
   'detail.editTitleHint': 'Edits the title',
+  'detail.notesLabel': 'Note',
   'detail.notesA11y': 'Notes',
   'detail.notesPlaceholder': 'Add a note…',
   'detail.tagsDisabledHint': 'Tags can be edited once this bookmark has synced.',
