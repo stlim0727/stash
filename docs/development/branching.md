@@ -55,9 +55,10 @@ say so in the PR description so it's clear the omission is intentional.
 
 ## Releasing from either line
 
-Releases are **tag-driven** and a tag can point at any branch (the CircleCI
-`release` workflow — `android_apk` + `sentry_release` — triggers on `v*` tags
-from any ref), so the release line isn't tied to `main`:
+Releases are **tag-driven** and a tag can point at any branch (a `v*` tag fires
+the GitHub Actions `android-apk.yml` workflow for the APK + GitHub Release, and
+the CircleCI `release` workflow for `sentry_release`, from any ref), so the
+release line isn't tied to `main`:
 
 - **0.1.x patch** → tag `v0.1.9` on `release/0.1.x` (notes in
   `docs/release-notes/v0.1.9.md`).
