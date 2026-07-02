@@ -1,6 +1,7 @@
 // Relative .ts import (not the @ alias) so Node's test runner can resolve it.
-import { fetchPageMetadata } from './page-metadata.ts';
+import { fetchPageMetadata, youtubeVideoId } from './page-metadata.ts';
 import type { FetchedMetadata } from './page-metadata.ts';
+import { recordLog } from '../observability/log-buffer.ts';
 import type { Bookmark, MetadataStatus } from '@/domain/types';
 
 /**
@@ -41,7 +42,13 @@ export function deriveMetadata(rawUrl: string): DerivedMetadata {
   const host = url.hostname.replace(/^www\./, '');
 
   const lastSegment = url.pathname.split('/').filter(Boolean).pop();
-  const title = lastSegment ? titleCaseFromSlug(lastSegment) : host;
+  // A YouTube video's identifying path/query segment is an opaque id (e.g.
+  // `LNysDlsp26Q` for `youtu.be/LNysDlsp26Q`, or the bare `watch` path for a
+  // `?v=` link) — as a title it reads like a random/"encrypted" string, not a
+  // name. When the real title can't be fetched (oEmbed and HTML both failed),
+  // the host is a far better fallback than that id.
+  const title =
+    lastSegment && !youtubeVideoId(rawUrl) ? titleCaseFromSlug(lastSegment) : host;
 
   return {
     title: title ?? host,
@@ -88,6 +95,17 @@ export async function enrichBookmark(
     const patch: Partial<Bookmark> = {};
     if (bookmark.title == null) {
       patch.title = derived.title;
+      // Diagnostic: the page fetch gave no title, so we're labelling the
+      // bookmark with a value derived from its URL (a path slug or host). This
+      // is the "the preview is just the URL / a random-looking string" moment —
+      // logging it (with the fetched-vs-fallback signal) lets us tell, after the
+      // fact, that the real title never arrived rather than guessing.
+      if (!fetched.title) {
+        recordLog(
+          'warn',
+          `enrich: URL-derived fallback title "${derived.title}" for ${bookmark.url} (no fetched title)`,
+        );
+      }
     }
     if (bookmark.site_name == null) {
       patch.site_name = derived.site_name;
