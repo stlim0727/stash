@@ -38,6 +38,12 @@ parameters:
   run_app_testing:
     type: boolean
     default: false
+  # Pass --debug to `firebase apptesting:execute` to surface the underlying API
+  # error when the agent rejects the run (the default message is terse). Opt-in;
+  # ports the `debug` input added to app-testing.yml (#286).
+  app_testing_debug:
+    type: boolean
+    default: false
   run_secrets_check:
     type: boolean
     default: false
@@ -131,6 +137,14 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:components
+      # Guard the web target: the static export must keep building so a change
+      # can't silently break web (the /add capture route, the PWA manifest, the
+      # web-only Settings section). Headless — no emulator needed. dist/ is
+      # gitignored and discarded with the ephemeral runner. This step lived in
+      # ci.yml (#285) but was dropped in the CircleCI port; restore it here.
+      - run:
+          name: Web export builds
+          command: cd apps/mobile && CI=1 pnpm exec expo export --platform web
       # Decorative tag-cloud preview, mirroring ci.yml. Never fail the gate over
       # it (|| true) — it's a nice-to-have artifact for eyeballing layout.
       - run:
@@ -199,6 +213,7 @@ jobs:
           name: Run App Testing Agent (when configured)
           environment:
             TEST_DEVICES: "model=shiba,version=34,locale=en,orientation=portrait"
+            DEBUG: "<< pipeline.parameters.app_testing_debug >>"
           command: |
             set -euo pipefail
             if [ -z "${FIREBASE_APP_ID:-}" ] || [ -z "${FIREBASE_SERVICE_ACCOUNT:-}" ]; then
@@ -222,6 +237,11 @@ jobs:
             ARGS=(apptesting:execute --app "$FIREBASE_APP_ID" --test-dir apps/mobile/apptesting --test-devices "$DEVICES")
             if [ -n "${FIREBASE_TEST_NAME_PATTERN:-}" ]; then
               ARGS+=(--test-name-pattern "$FIREBASE_TEST_NAME_PATTERN")
+            fi
+            # --debug surfaces the underlying API error when the agent rejects the
+            # request (default error is terse). Opt-in via app_testing_debug (#286).
+            if [ "${DEBUG:-false}" = "true" ]; then
+              ARGS+=(--debug)
             fi
             firebase "${ARGS[@]}"
 
