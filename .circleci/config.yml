@@ -335,18 +335,20 @@ jobs:
           working_directory: ~/stash/apps/mobile
           command: npx expo prebuild --platform android --no-install
       - run:
-          name: Tune Gradle heap + cap native build parallelism
+          name: Tune Gradle heap + serialize native builds
           working_directory: ~/stash/apps/mobile/android
           command: |
             # CircleCI Docker containers report the HOST's full CPU count via
             # availableProcessors(), so Gradle and AGP's CMake/ninja over-parallelize
-            # the native C/C++ compiles far beyond the 4 real cores. The resulting
-            # swarm of clang processes OOM-kills the build JVM on the 8GB `large`
-            # box ("Gradle build daemon disappeared unexpectedly"). Pin the visible
-            # processor count with -XX:ActiveProcessorCount so ninja runs ~-j2
-            # (matching the 2-core runner this used to build on under Actions), and
-            # keep the heap modest so the off-heap clang processes have room.
-            printf '\norg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=2\norg.gradle.caching=true\norg.gradle.workers.max=2\n' >> gradle.properties
+            # the native C/C++ compiles far beyond the real cores. The resulting
+            # swarm of heavy RN-codegen clang processes OOM-kills the build JVM on
+            # the 8GB `large` box ("Gradle build daemon disappeared unexpectedly").
+            # Serialize to keep peak memory well under 8GB: workers.max=1 runs one
+            # module's native build at a time and -XX:ActiveProcessorCount=1 makes
+            # ninja compile one translation unit at a time (~1 clang + the Gradle
+            # heap, well under 8GB). Slower, but this is a release-only job and
+            # ccache (cached across runs) recovers most of the cost on warm builds.
+            printf '\norg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -XX:ActiveProcessorCount=1\norg.gradle.caching=true\norg.gradle.workers.max=1\n' >> gradle.properties
       - run:
           name: Build release APK (arm64-v8a)
           working_directory: ~/stash/apps/mobile/android
