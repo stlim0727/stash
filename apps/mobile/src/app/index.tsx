@@ -1006,10 +1006,14 @@ export default function InboxScreen() {
     const node = shelfNode();
     if (!node) return;
     const onWheel = (event: WheelEvent) => {
-      if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
-        node.scrollLeft += event.deltaY;
-        event.preventDefault();
-      }
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      const before = node.scrollLeft;
+      node.scrollLeft += event.deltaY;
+      // Only swallow the page's vertical scroll when the shelf actually moved.
+      // scrollLeft clamps itself, so a short row (no overflow) or one already at
+      // its edge stays put — and we must let the wheel fall through to the page
+      // instead of trapping it under the shelf's hover area.
+      if (node.scrollLeft !== before) event.preventDefault();
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
