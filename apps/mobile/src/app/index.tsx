@@ -390,6 +390,11 @@ export default function InboxScreen() {
   const wmSet = hasLocalName ? WORDMARK.local : WORDMARK.en;
   const wordmark = { source: scheme === 'dark' ? wmSet.dark : wmSet.light, ratio: wmSet.ratio };
   const wordmarkLabel = hasLocalName ? `${t('app.name')} ${t('app.nameLocal')}` : t('app.name');
+  // The wordmark is a pre-rendered PNG. If it ever fails to load — a browser that
+  // blocks the asset, or a request dropped across the OAuth redirect (seen in a
+  // Brave private window after sign-in) — fall back to plain text so the
+  // top-left brand mark is never blank.
+  const [wordmarkFailed, setWordmarkFailed] = useState(false);
   const {
     inbox,
     isLoading,
@@ -1363,22 +1368,36 @@ export default function InboxScreen() {
                 (app.nameLocal differs from app.name) use the bilingual lockup;
                 others use the plain "Stash". A light/dark variant matches the
                 theme. */}
-            <Image
-              accessibilityRole="header"
-              accessibilityLabel={wordmarkLabel}
-              source={wordmark.source}
-              resizeMode="contain"
-              // Size with an EXPLICIT width+height (derived from the asset ratio),
-              // not height+aspectRatio. In this flex row, height+aspectRatio let
-              // Yoga fall back toward the PNG's huge intrinsic size and the
-              // wordmark blew up to fill the screen on native (the column layout
-              // this came from constrained it via alignSelf:'flex-start'). An
-              // explicit box removes that ambiguity.
-              style={[
-                styles.heroWordmark,
-                { width: Math.round(WORDMARK_HEIGHT * wordmark.ratio), height: WORDMARK_HEIGHT },
-              ]}
-            />
+            {wordmarkFailed ? (
+              <Text
+                accessibilityRole="header"
+                accessibilityLabel={wordmarkLabel}
+                style={[styles.heroWordmarkFallback, { color: palette.text }]}
+                numberOfLines={1}
+              >
+                {t('app.name')}
+              </Text>
+            ) : (
+              <Image
+                accessibilityRole="header"
+                accessibilityLabel={wordmarkLabel}
+                source={wordmark.source}
+                resizeMode="contain"
+                // If the asset can't be loaded, show the text wordmark instead of
+                // a blank space (see wordmarkFailed above).
+                onError={() => setWordmarkFailed(true)}
+                // Size with an EXPLICIT width+height (derived from the asset ratio),
+                // not height+aspectRatio. In this flex row, height+aspectRatio let
+                // Yoga fall back toward the PNG's huge intrinsic size and the
+                // wordmark blew up to fill the screen on native (the column layout
+                // this came from constrained it via alignSelf:'flex-start'). An
+                // explicit box removes that ambiguity.
+                style={[
+                  styles.heroWordmark,
+                  { width: Math.round(WORDMARK_HEIGHT * wordmark.ratio), height: WORDMARK_HEIGHT },
+                ]}
+              />
+            )}
             <Text
               style={[styles.heroCountText, { color: palette.textSecondary }]}
               numberOfLines={1}
@@ -2300,6 +2319,15 @@ const styles = StyleSheet.create({
     // Concrete width+height are set inline from WORDMARK_HEIGHT × the asset
     // ratio (see the Image above). flexShrink:0 so the row never squeezes it.
     flexShrink: 0,
+  },
+  // Text stand-in when the wordmark PNG fails to load, sized to sit on the same
+  // baseline as the saved-count beside it.
+  heroWordmarkFallback: {
+    flexShrink: 0,
+    fontSize: 24,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    lineHeight: WORDMARK_HEIGHT,
   },
   heroCountText: {
     fontSize: 13,
