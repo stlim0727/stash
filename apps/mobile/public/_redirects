@@ -1,0 +1,8 @@
+# Cloudflare Pages routing. Real files are served first — the per-route HTML
+# (/, /add, /settings, /auth/callback, …), /manifest.webmanifest, the PWA icons,
+# and the /_expo/* asset bundles — so this rule only catches paths with no
+# matching file: chiefly the dynamic /bookmark/<id> route and any deep link.
+# Those fall back to the app shell (200, URL preserved), which expo-router then
+# client-renders to the correct screen. Capture links like /add?url=… still hit
+# the real add.html, so web capture is unaffected.
+/*    /index.html    200
