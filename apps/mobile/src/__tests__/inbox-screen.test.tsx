@@ -364,6 +364,58 @@ test('search filters the list and shows the match count', async () => {
   expect(screen.queryByText('Raindrop review')).toBeNull();
 });
 
+test('slims the header while searching: the sort row and browse shelf fold away', async () => {
+  // "Search results, keyboard down" (searching, field blurred): the sort-controls
+  // row and the browse shelf hide so the results ribbon rises under the input.
+  // fireEvent.changeText doesn't focus the field, so this is exactly that state.
+  const a = '7e64cf1e-0000-4000-8000-0000000000d1';
+  const b = '7e64cf1e-0000-4000-8000-0000000000d2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: a,
+        title: 'Local-first software',
+        url: 'https://www.inkandswitch.com/local-first/',
+        url_hash: 'https://www.inkandswitch.com/local-first/',
+        collection_id: 'col-work',
+      }),
+      makeStoredBookmark({ id: b, title: 'Raindrop review', collection_id: null }),
+    ],
+    {
+      tags: [makeTag('t-design', 'design')],
+      bookmarkTags: [
+        { bookmark_id: a, tag_id: 't-design', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [makeCollection('col-work', 'Work')],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
+
+  // Before searching, the sort pill and browse shelf are present.
+  expect(screen.getByText('Newest')).toBeTruthy();
+  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+
+  await fireEvent.changeText(
+    screen.getByPlaceholderText('Search titles, tags, folders'),
+    'local-first',
+  );
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
+
+  // Slimmed: the sort row and the browse shelf are gone — but the input stays and
+  // the persistent results ribbon (with its clear ✕) remains under it.
+  expect(screen.queryByText('Newest')).toBeNull();
+  expect(screen.queryByTestId('browse-shelf')).toBeNull();
+  expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
+  expect(screen.getByTestId('inbox-filter-bar')).toBeTruthy();
+
+  // Clearing the search restores the sort row and the browse shelf.
+  await fireEvent.press(screen.getByTestId('inbox-filter-clear'));
+  await waitFor(() => expect(screen.getByText('Newest')).toBeTruthy());
+  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+});
+
 test('highlights the matched span in a result title while searching', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
@@ -1084,12 +1136,13 @@ test('a 4th+ tag that matched the query is promoted into the shown tag chips', a
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'kubernetes');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
-  // The matched tag is promoted into the card's (max 3) shown meta chips — the
-  // card meta chip uses accentText, distinguishing it from the browse-shelf
-  // facet chip that also carries "#kubernetes". Without promotion the
-  // alphabetical first-3 (alpha/beta/gamma) would hide it.
+  // The matched tag is promoted into the card's (max 3) shown meta chips. While
+  // searching the header slims (the browse shelf, which also carries a
+  // "#kubernetes" facet chip, is folded away), so the ONLY "#kubernetes" left is
+  // the promoted card meta chip — present despite sorting 4th alphabetically,
+  // where the first-3 slice (alpha/beta/gamma) would otherwise hide it.
   const k8sChips = screen.getAllByText('#kubernetes');
-  expect(k8sChips.length).toBeGreaterThanOrEqual(2);
+  expect(k8sChips.length).toBe(1);
 });
 
 test('the debounced query does not filter until typing settles', async () => {
