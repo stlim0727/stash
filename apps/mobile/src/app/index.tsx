@@ -18,6 +18,7 @@ import {
   FlatList,
   Image,
   Keyboard,
+  LayoutAnimation,
   Linking,
   Platform,
   Pressable,
@@ -922,11 +923,33 @@ export default function InboxScreen() {
   // non-empty query that matches nothing yields zero suggestions, so this same
   // condition cleanly produces the typing-no-match "hide the shelf" state.
   const showSuggestions = searchFocused && suggestions.length > 0;
+  // "Search results, keyboard down" — a settled search with the field blurred.
+  // In this state the header slims: the sort-controls row and the browse shelf
+  // fold away so the blue results ribbon (pinned at `top: headerHeight`) rises to
+  // sit right under the search input, instead of being split off by two rows the
+  // user isn't browsing with mid-search. Keyed on the DEBOUNCED `searching` (not
+  // the raw query) so the header reflows once per search enter/exit, never on
+  // each keystroke; and on `!searchFocused` so the focused suggestion-shelf
+  // behavior is untouched — this only reshapes the blurred results screen.
+  const slimSearchHeader = searching && !searchFocused;
+  // Smooth the one reflow at the moment that state toggles (search enter/exit,
+  // including blur→confirm). configureNext animates only the NEXT commit's layout
+  // changes, so gating it on the slim flag flipping keeps it a single easing —
+  // it never fires per keystroke — and it stays off the header's native-driver
+  // translateY, so the two don't fight. Native only (no-op/irrelevant on web).
+  const prevSlimSearchHeader = useRef(slimSearchHeader);
+  if (prevSlimSearchHeader.current !== slimSearchHeader) {
+    prevSlimSearchHeader.current = slimSearchHeader;
+    if (Platform.OS !== 'web') {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    }
+  }
   // The browse shelf is suppressed for the WHOLE focused state (§13.2, widening
   // Phase-1 Q1): while focused at most one chip row may show — the suggestion
-  // shelf — never the browse shelf. The browse shelf returns only on blur. This
-  // also keeps it hidden in the typing-no-match case, where neither row shows.
-  const showShelf = chips.length > 0 && !searchFocused;
+  // shelf — never the browse shelf. The browse shelf returns only on blur. It's
+  // also folded away in the slimmed search-results state (above). This also keeps
+  // it hidden in the typing-no-match case, where neither row shows.
+  const showShelf = chips.length > 0 && !searchFocused && !slimSearchHeader;
   // On a brand-new (empty) library the search/sort/view controls are just cold
   // chrome over a "nothing here yet" screen — fold them away so the first run
   // is all about the first save. Keyed on the unfiltered library, not the
@@ -1551,7 +1574,7 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {showControls && !showSuggestions ? (
+        {showControls && !showSuggestions && !slimSearchHeader ? (
         <View style={[styles.sortRow, { maxWidth: contentMaxWidth }]}>
           {/* No "Browse" caption: the Sort pill, Tags pill, and view segment are
               self-evident controls, and the caption's width was forcing the
