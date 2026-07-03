@@ -10,6 +10,17 @@
 name = "keepory7"
 compatibility_date = "2026-07-03"
 
+# Publish to the keepory.app custom domain, not a *.workers.dev subdomain. The
+# account has no workers.dev subdomain registered, so wrangler's default
+# (workers_dev = true) had nowhere to publish and failed the deploy at the final
+# step ("register a workers.dev subdomain … or specify routes"). Declaring the
+# custom domain here gives the deploy a target and keeps the site custom-domain-
+# only (no public workers.dev URL). `custom_domain = true` attaches/verifies the
+# domain on Cloudflare (idempotent once it's attached to this Worker); it assumes
+# keepory.app is set up on the account per docs/development/deploy-web.md.
+workers_dev = false
+routes = [{ pattern = "keepory.app", custom_domain = true }]
+
 # Build the static bundle as part of `wrangler deploy` itself, so the deploy is
 # self-contained: it produces ./apps/mobile/dist regardless of the Cloudflare
 # project's dashboard "Build command" setting. `dist/` is gitignored, so without
