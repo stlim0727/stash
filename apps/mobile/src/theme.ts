@@ -34,7 +34,7 @@ const shared = {
   },
 } as const;
 
-const palettes = {
+export const palettes = {
   light: {
     ...shared,
     text: '#101828',
