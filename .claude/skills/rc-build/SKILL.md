@@ -2,10 +2,10 @@
 name: rc-build
 description: >-
   Cut the next Android RC build for Stash and run the standard follow-ups in one
-  go: (1) build the next `vX.Y.Z-rcN` APK via the Android APK workflow, (2) clean
-  up stale CI artifacts on GitHub + old Firebase App Distribution releases via the
-  Ops workflow, and (3) print a QA checklist of everything fixed/changed in the
-  last 24h. Use whenever the user asks to "build the next rc", "cut an rc + clean
+  go: (1) build the next `vX.Y.Z-rcN` APK via the Android APK workflow, (2) confirm
+  the Firebase App Distribution cleanup (now a nightly CircleCI job, no longer an
+  agent-dispatched step), and (3) print a QA checklist of everything fixed/changed
+  in the last 24h. Use whenever the user asks to "build the next rc", "cut an rc + clean
   up", "ship a new rc build", "new rc apk", or "rc checklist". Produces the same
   three-part outcome every time from the repo's real state.
 ---
@@ -19,9 +19,11 @@ MINOR/PATCH or a stable cut; run **this** to actually build the next RC and do
 the housekeeping. Do the three steps in order and report all three at the end.
 
 Repo: **`stlim0727/stash`**. Branch to build from: **`main`** (RCs always ship
-from the trunk). All three steps are GitHub Actions `workflow_dispatch` calls via
-`mcp__github__actions_run_trigger` — no git tag, no PR required (RCs leave no tag;
-the `dev` release self-records the label, see Step 1).
+from the trunk). Only **Step 1** is an agent action — a GitHub Actions
+`workflow_dispatch` on `android-apk.yml` via `mcp__github__actions_run_trigger`
+(no git tag, no PR required; the `dev` release self-records the label, see Step 1).
+**Step 2 (cleanup) is no longer an agent step** — it runs automatically on
+CircleCI (see Step 2). Step 3 is a local `git log` + classification.
 
 ## Step 1 — Build the next RC APK
 
@@ -43,42 +45,31 @@ the `dev` release self-records the label, see Step 1).
    Always pass the `version` input — it stamps `APP_VERSION` into the APK and, since #302, into the `dev` release name/body, which is what makes the rc number self-recording (no ledger PR needed). A hyphenated `-rcN` refreshes the rolling **`dev`** prerelease in place.
 5. **Logging is now optional.** The `dev` release self-records the label, so a `build-history.md` row is narrative-only, not required. Only add one (via a normal PR) if the user wants the per-rc "what's new" history preserved.
 
-## Step 2 — Clean up stale artifacts (> 24h)
+## Step 2 — Cleanup runs automatically on CircleCI (nothing to dispatch)
 
-Both use the **Ops** workflow (`ops.yml`), which is day-granular — 24h = `days=1`,
-which fits its built-in tasks exactly (no `run-command` needed). Fire both:
+The GitHub Actions `ops.yml` this step used to fire **was removed** in the
+CircleCI migration (#288). Do **not** try to `workflow_dispatch` it — that 422s
+("Workflow does not have 'workflow_dispatch' trigger"). Cleanup is now split:
 
-- **GitHub Actions artifacts** (the ~80 MB APK per build eats the account's
-  artifact quota):
-  ```
-  mcp__github__actions_run_trigger(
-    method="run_workflow", owner="stlim0727", repo="stash",
-    workflow_id="ops.yml", ref="main",
-    inputs={ "task": "delete-artifacts-older-than-days", "days": "1" })
-  ```
-- **Firebase App Distribution releases** (keeps the newest 5 regardless of age):
-  ```
-  mcp__github__actions_run_trigger(
-    method="run_workflow", owner="stlim0727", repo="stash",
-    workflow_id="ops.yml", ref="main",
-    inputs={ "task": "firebase-delete-old-releases", "days": "1", "keep": "5" })
-  ```
+- **Firebase App Distribution releases** → ported to the CircleCI job
+  `ops_firebase_cleanup` (`.circleci/config.yml`). It runs **nightly** — the
+  `nightly-ops` schedule, `cron: "17 4 * * *"` (UTC) on `main` — as a real delete
+  that keeps the newest `KEEP=20` and prunes releases older than `MAX_AGE_DAYS=7`.
+  Those bounds are **baked into the job as env**, not per-run inputs, so there is
+  nothing to pass and nothing for the agent to fire during an RC build.
+- **GitHub Actions artifact prune** → **retired** (intentionally not ported in
+  #288). Only `android-apk.yml` still produces Actions artifacts now; if that
+  quota ever needs pruning it's a separate, manual concern.
 
-Notes:
-- **`keep` is a floor that overrides the age filter — set it *below* the number
-  you actually want to prune, or the cleanup silently deletes nothing.** The
-  script keeps the newest `keep` releases *regardless of age*, then deletes only
-  the rest that are older than `days`. So with the old `keep=20` and ≤20 total
-  releases, a "delete > 24h" run correctly found nothing to delete. `keep=5`
-  retains the last ~5 RC builds for testers and lets everything older self-prune;
-  raise it only if a wider tester set needs older builds kept.
-- **Sub-day thresholds aren't supported.** `date -d "0.5 days ago"` is rejected and
-  the Firebase cleanup script's `intInput` requires a whole non-negative integer.
-  If the user asks for e.g. "12 hours", either round to `days=1` (confirm) or use
-  the `run-command` task with a custom `date -d '12 hours ago'` cutoff for the
-  GitHub side (Firebase has no hours path without a workflow change).
-- **Want a preview first?** Run `firebase-list-releases` (dry run, same `days`/`keep`)
-  before the delete to show exactly what would go.
+So for an RC build there is **no cleanup to dispatch** — just note that tonight's
+nightly CircleCI job handles Firebase. The agent **cannot** trigger it: CircleCI
+is not reachable through the GitHub MCP tools (`mcp__github__actions_*` only see
+GitHub Actions). If a manual run is genuinely needed:
+- **Preview** — the `run_ops` CircleCI pipeline runs `ops_firebase_cleanup` with
+  `dry_run: true` (lists what would go, deletes nothing).
+- **Force a real prune** — trigger `ops_firebase_cleanup` from the CircleCI UI/API
+  (or just wait for `nightly-ops`). Changing `KEEP`/`MAX_AGE_DAYS` means editing
+  the job in `.circleci/config.yml`, not passing an input.
 
 ## Step 3 — Checklist of what changed in the last 24h
 
@@ -100,6 +91,7 @@ Notes:
 
 End with a compact summary of all three:
 - **Built:** `vX.Y.Z-rcN` (android-apk.yml on `main` @ `<sha>`) → refreshes `dev`.
-- **Cleaned:** GitHub artifacts + Firebase releases > 24h (which runs, dispatched).
+- **Cleaned:** nothing to dispatch — Firebase cleanup runs nightly on CircleCI
+  (`ops_firebase_cleanup`, `17 4 * * *` UTC); the GitHub-artifact prune is retired.
 - **Checklist:** the grouped 24h QA list.
-- Offer to confirm each run's outcome once the dispatched workflows finish.
+- Offer to confirm the **build** outcome once `android-apk.yml` finishes.
