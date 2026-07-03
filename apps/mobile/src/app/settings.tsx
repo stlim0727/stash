@@ -12,6 +12,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  useWindowDimensions,
   View,
   type StyleProp,
   type ViewStyle,
@@ -81,6 +82,10 @@ export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
   const router = useRouter();
+  // Wide viewports present Settings as a right-side sheet over a dimmed Inbox;
+  // phones keep the full-screen layout. One width rule, no Platform branch.
+  const { width } = useWindowDimensions();
+  const asSheet = width >= 760;
   const { t, preference: languagePref, setLocalePreference, formatDate } = useI18n();
   const {
     queue,
@@ -383,9 +388,9 @@ export default function SettingsScreen() {
     Constants.expoConfig?.sdkVersion ?? '56'
   })`;
 
-  return (
+  const content = (
     <ScrollView
-      style={{ backgroundColor: palette.background }}
+      style={styles.scroll}
       contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 24 }]}
     >
       {/* Account & sync — identity, sign in/out, and sync status in one card.
@@ -758,6 +763,50 @@ export default function SettingsScreen() {
       />
     </ScrollView>
   );
+
+  // The Stack header is hidden for this screen, so Settings supplies its own
+  // header row (title + close) for both layouts.
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+      <Text style={styles.headerTitle}>{t('nav.settings')}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+        hitSlop={8}
+        style={({ pressed }) => [styles.headerClose, pressed && { opacity: 0.6 }]}
+      >
+        <Ionicons name="close" size={24} color={palette.text} />
+      </Pressable>
+    </View>
+  );
+
+  if (asSheet) {
+    // Right-side sheet: the Inbox shows dimmed behind the backdrop; tapping the
+    // backdrop closes. The panel caps at 460px on the right.
+    return (
+      <View style={styles.sheetOverlay}>
+        <Pressable
+          testID="settings-sheet-backdrop"
+          style={styles.sheetBackdrop}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.close')}
+          onPress={() => router.back()}
+        />
+        <View style={styles.sheetPanel}>
+          {header}
+          {content}
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.fullScreen}>
+      {header}
+      {content}
+    </View>
+  );
 }
 
 /** Rounded card that groups settings rows with hairline dividers, under an
@@ -900,6 +949,47 @@ function InfoRow({
 
 const makeStyles = (palette: AppPalette) =>
   StyleSheet.create({
+    scroll: {
+      flex: 1,
+      backgroundColor: palette.background,
+    },
+    fullScreen: {
+      flex: 1,
+      backgroundColor: palette.background,
+    },
+    sheetOverlay: {
+      flex: 1,
+      flexDirection: 'row',
+    },
+    sheetBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+    },
+    sheetPanel: {
+      width: '100%',
+      maxWidth: 460,
+      backgroundColor: palette.background,
+      borderLeftWidth: StyleSheet.hairlineWidth,
+      borderColor: palette.border,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: palette.border,
+      backgroundColor: palette.background,
+    },
+    headerTitle: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: palette.text,
+    },
+    headerClose: {
+      padding: 4,
+    },
     container: {
       padding: 16,
       gap: 18,

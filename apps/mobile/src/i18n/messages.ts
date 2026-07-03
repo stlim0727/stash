@@ -38,6 +38,7 @@ export const en = {
   'common.trash': 'Move to Trash',
   'common.restore': 'Restore',
   'common.back': '‹ Back',
+  'common.close': 'Close',
   'common.signOut': 'Sign out',
   'common.untitled': 'Untitled',
   'common.ok': 'OK',

@@ -22,6 +22,7 @@ export const ko: Catalog = {
   'common.trash': '휴지통으로 이동',
   'common.restore': '복원',
   'common.back': '‹ 뒤로',
+  'common.close': '닫기',
   'common.signOut': '로그아웃',
   'common.untitled': '제목 없음',
 
