@@ -413,12 +413,26 @@ export default function InboxScreen() {
   const pathname = usePathname();
   const settingsOpen = pathname === '/settings' && winWidth >= SETTINGS_SHEET_MIN_WIDTH;
   const settingsShift = useRef(new Animated.Value(0)).current;
+  // A permanent `transform` on the root promotes the whole screen to its own
+  // GPU layer on web, and Chrome then drops subpixel text antialiasing for
+  // everything underneath — every label and thumbnail renders softer/blurrier.
+  // The slide is a no-op almost all the time (the sheet only docks on wide
+  // viewports), so keep the transform out of the tree entirely unless the sheet
+  // is open or still animating shut; idle Inbox stays crisp.
+  const [sliding, setSliding] = useState(false);
   useEffect(() => {
+    if (settingsOpen) {
+      setSliding(true);
+    }
     Animated.timing(settingsShift, {
       toValue: settingsOpen ? -SETTINGS_PANEL_WIDTH / 2 : 0,
       duration: 200,
       useNativeDriver: true,
-    }).start();
+    }).start(({ finished }) => {
+      if (finished && !settingsOpen) {
+        setSliding(false);
+      }
+    });
   }, [settingsOpen, settingsShift]);
 
   // How many inbox bookmarks have AI suggestions that arrived while the user
@@ -1168,7 +1182,8 @@ export default function InboxScreen() {
     <Animated.View
       style={[
         styles.container,
-        { backgroundColor: palette.background, transform: [{ translateX: settingsShift }] },
+        { backgroundColor: palette.background },
+        sliding ? { transform: [{ translateX: settingsShift }] } : null,
       ]}
     >
       <Animated.View
