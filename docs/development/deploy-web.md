@@ -1,26 +1,25 @@
-# Deploying Stash on the web (Cloudflare Pages)
+# Deploying Stash on the web (Cloudflare Workers)
 
-The web build is a **static** Expo export (`expo export --platform web` → `apps/mobile/dist`) talking to the existing Supabase backend over REST. There is no server to run, so it hosts on any static host; this guide uses **Cloudflare Pages** (free, unlimited bandwidth, at-cost registrar, a Workers escape hatch if web ever needs a server bit).
+The web build is a **static** Expo export (`expo export --platform web` → `apps/mobile/dist`) talking to the existing Supabase backend over REST. There is no server to run — it deploys as a **Workers Static Assets** project (assets-only, no Worker script). Cloudflare Workers is free, serves from the global CDN, and pairs with the at-cost Cloudflare Registrar. (New Cloudflare accounts create static sites under **Workers**; the older **Pages** flow works too if your dashboard still offers it — the difference is only the create screen.)
 
 Working brand/domain: **`keepory.app`**. Nothing in the code hard-codes the origin — the bookmarklet and the PWA manifest are origin-relative — so the same build works on any domain and picks up `keepory.app` automatically once it's served from there.
 
 ## 1. Connect the repo (Git integration)
 
-Cloudflare dashboard → **Workers & Pages → Create → Pages → Connect to Git** → pick the `stash` repo → set the build config below → **Save and Deploy**. Every push to the production branch then auto-deploys, and each PR gets a preview URL.
+Cloudflare dashboard → **Workers & Pages → Create → Import a repository** → pick the `stash` repo → set the build config below → **Deploy**. Every push to the production branch then auto-deploys, and each PR gets a preview URL.
 
 | Setting | Value |
 | --- | --- |
 | Production branch | `main` |
-| Root directory | *(repo root)* |
 | Build command | `pnpm install && cd apps/mobile && CI=1 pnpm exec expo export --platform web` |
-| Build output directory | `apps/mobile/dist` |
+| Deploy command | `npx wrangler deploy` *(the default)* |
 | Node version | 22 (auto-detected from `.node-version`) |
 
-`wrangler.toml` at the repo root already declares `pages_build_output_dir = "apps/mobile/dist"`, so `wrangler pages deploy` works too if you ever want to deploy from a CLI/CI instead of the Git integration.
+There is **no output-directory field to fill in** — `wrangler.toml` at the repo root supplies it: it declares `assets.directory = "./apps/mobile/dist"` and `assets.not_found_handling = "single-page-application"`, and `wrangler deploy` uploads that folder as an assets-only Worker (no `main` script). The same config drives a manual `npx wrangler deploy` from a CLI/CI.
 
 ### Build environment variables
 
-Cloud sync is compiled into the bundle at build time, so set these as **build-time** environment variables on the Pages project (Settings → Environment variables). Without them the site still runs, but local-only (no sign-in / sync):
+Cloud sync is compiled into the bundle at build time, so set these as **build-time** environment variables on the project (Settings → Variables and Secrets → *Build* variables). Without them the site still runs, but local-only (no sign-in / sync):
 
 - `EXPO_PUBLIC_SUPABASE_URL` — the Supabase project URL.
 - `EXPO_PUBLIC_SUPABASE_ANON_KEY` — the publishable anon key.
@@ -29,7 +28,7 @@ Cloud sync is compiled into the bundle at build time, so set these as **build-ti
 
 ## 2. Custom domain
 
-Buy `keepory.app` at **Cloudflare Registrar** (at-cost, free WHOIS privacy; note Registrar domains must keep Cloudflare nameservers, though DNS records stay editable). Then in the Pages project → **Custom domains → Set up a domain** → `keepory.app`; DNS is wired automatically and HTTPS is issued in a few minutes. Optionally grab `keepory.co` and redirect it to `keepory.app`.
+Buy `keepory.app` at **Cloudflare Registrar** (at-cost, free WHOIS privacy; note Registrar domains must keep Cloudflare nameservers, though DNS records stay editable). Then in the Worker → **Settings → Domains & Routes → Add → Custom domain** → `keepory.app`; DNS is wired automatically and HTTPS is issued in a few minutes. Optionally grab `keepory.co` and redirect it to `keepory.app`.
 
 ## 3. Register the OAuth redirect (required for web sign-in)
 
@@ -41,11 +40,11 @@ Web sign-in uses the same hand-rolled PKCE flow as native, but its redirect reso
 
 The provider-side redirect (Google/Apple) stays pointed at Supabase's own `…supabase.co/auth/v1/callback` and needs no change — Supabase validates the app's `redirectTo` against the allow-list above.
 
-## 4. How routing works (no config needed)
+## 4. How routing works
 
-Cloudflare Pages serves the per-route HTML the export emits — `/`, `/add`, `/settings`, `/auth/callback` are all real files, and capture deep links like `/add?url=…` hit the real `add.html`. Because the export includes **no top-level `404.html`**, Pages treats the build as a single-page application and falls back any unmatched path — chiefly the dynamic `/bookmark/<id>` route — to `index.html`, which expo-router then client-renders. That is Pages' built-in behavior; nothing to configure.
+`wrangler.toml` sets [`assets.not_found_handling = "single-page-application"`](https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/). Cloudflare serves the exported files directly for matching paths — every route's HTML (`/`, `/add`, `/settings`, `/auth/callback`), `/manifest.webmanifest`, the PWA icons, and the `/_expo/*` bundles — and for a **navigation** request that matches no file (chiefly the dynamic `/bookmark/<id>` route or any deep link) it serves `/index.html` (200), which expo-router then client-renders. Asset requests are matched first, so the SPA fallback never rewrites the app's own JS/manifest/icons.
 
-Do **not** add a `_redirects` catch-all (`/* /index.html 200`) for this: on Cloudflare Pages, `_redirects` rules are [always followed even when an asset matches the request](https://developers.cloudflare.com/pages/configuration/redirects/), so a `/*` rule would rewrite the JS bundles, manifest, and icons to `index.html` too and the app would never load.
+> On the older **Pages** flow this is automatic (no `404.html` → Pages assumes an SPA), and you must **not** add a `_redirects` catch-all — on Pages, `_redirects` rules are [always followed even when an asset matches](https://developers.cloudflare.com/pages/configuration/redirects/), which would rewrite the JS bundles/manifest/icons and break the app. The Workers `not_found_handling` setting above is the equivalent that is asset-safe by design.
 
 ## 5. Capture surfaces pick up the domain automatically
 

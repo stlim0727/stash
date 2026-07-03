@@ -1,10 +1,18 @@
-# Cloudflare Pages project config (config-as-code). Used by both the Git
-# integration and `wrangler pages deploy`. The static bundle is produced by
-# `expo export --platform web` into apps/mobile/dist (see docs/development/
-# deploy-web.md for the build command and dashboard settings).
+# Cloudflare Workers config for the static web build (Workers Static Assets).
+# The build command runs `expo export --platform web` into apps/mobile/dist,
+# then `wrangler deploy` uploads that directory as an assets-only Worker — no
+# Worker script (`main`) is needed. See docs/development/deploy-web.md.
 #
-# `name` is the Pages project name — change it if you name the project
+# `name` is the Worker/project name — change it if you name the project
 # differently in the Cloudflare dashboard.
 name = "keepory"
-pages_build_output_dir = "apps/mobile/dist"
-compatibility_date = "2026-06-30"
+compatibility_date = "2026-07-03"
+
+[assets]
+# Path (relative to this file) to the exported static bundle.
+directory = "./apps/mobile/dist"
+# Serve /index.html for navigation requests that don't match a file — this is
+# the SPA fallback for the dynamic /bookmark/<id> route and any deep link.
+# Real assets (/_expo/*, /manifest.webmanifest, the PWA icons, /add, …) are
+# matched and served directly first, so it never rewrites the app's own code.
+not_found_handling = "single-page-application"
