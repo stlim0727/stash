@@ -30,6 +30,10 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
 // the bound exists to catch a hang, not to police latency.
 const DEFAULT_WORK_TIMEOUT_MS = 5000;
 const DEFAULT_REOPEN_ALERT_THRESHOLD = 5;
+// Only record a tail wait past this bound. A healthy op on this tiny local DB
+// starts near-instantly, so anything above this is head-of-line blocking worth
+// a breadcrumb — while the steady state (fast, uncontended ops) stays silent.
+const TAIL_WAIT_LOG_MS = 250;
 
 /**
  * Coalesced, self-healing SQLite connection manager.
@@ -88,6 +92,13 @@ export class SqliteConnection<DB> {
   // is head-of-line blocking — acceptable here because each operation is a small,
   // fast statement on a tiny local DB (and SQLite serializes writes regardless).
   private tail: Promise<unknown> = Promise.resolve();
+  // Number of units currently on the tail (queued + the one running). Reported
+  // as a coarse depth when an op waits a non-trivial time, to make head-of-line
+  // blocking visible.
+  private pending = 0;
+  // Wall-clock of the last reopen, for the inter-reopen cadence in noteReopen
+  // (rapid reopens = thrash, not normal lifecycle).
+  private lastReopenAt: number | null = null;
   // Count of successful opens this session. The first is the initial open; every
   // one after it is a reopen (a handle died or was proactively closed), which we
   // track as a freeze-risk signal (see noteReopen).
@@ -167,13 +178,31 @@ export class SqliteConnection<DB> {
 
   /** Chain a task onto the serialization tail so units of work never overlap. */
   private serialize<T>(task: () => Promise<T>): Promise<T> {
+    // Measure head-of-line blocking: every unit waits behind whatever already
+    // owns the tail, and a share→foreground reopen burst stacking here is the
+    // prime freeze suspect (Sentry STASH-C/H). Record only a non-trivial wait so
+    // the steady state stays silent; coarse numbers only, never bookmark content.
+    this.pending += 1;
+    const enqueuedAt = Date.now();
+    const instrumented = () => {
+      const waitMs = Date.now() - enqueuedAt;
+      if (waitMs >= TAIL_WAIT_LOG_MS) {
+        recordLog('info', `sqlite tail wait ${waitMs}ms (depth ${this.pending})`);
+      }
+      return task();
+    };
     // Run after the current tail settles, regardless of its outcome; a prior
     // rejection must not break the chain for the next caller.
-    const result = this.tail.then(task, task);
+    const result = this.tail.then(instrumented, instrumented);
     this.tail = result.then(
       () => undefined,
       () => undefined,
     );
+    // Release the depth slot once this unit settles (either outcome).
+    const release = () => {
+      this.pending -= 1;
+    };
+    result.then(release, release);
     return result;
   }
 
@@ -239,9 +268,16 @@ export class SqliteConnection<DB> {
    *  breadcrumb in the local diagnostics buffer; once they cross the alert
    *  threshold in a session the churn is escalated to a single tracked `error`
    *  (the leading indicator of the Android background-handle wedge). */
-  private noteReopen(): void {
+  private noteReopen(timings: { probeMs: number; closeMs: number; openMs: number }): void {
     const reopens = this.opens - 1;
-    recordLog('info', `sqlite connection reopened (reopen #${reopens} this session)`);
+    const at = Date.now();
+    const cadence = this.lastReopenAt === null ? '' : ` ${at - this.lastReopenAt}ms after the last`;
+    this.lastReopenAt = at;
+    recordLog(
+      'info',
+      `sqlite connection reopened (reopen #${reopens} this session${cadence}; ` +
+        `probe ${timings.probeMs}ms, close ${timings.closeMs}ms, open ${timings.openMs}ms)`,
+    );
     if (reopens === this.reopenAlertThreshold) {
       recordLog(
         'error',
@@ -252,8 +288,15 @@ export class SqliteConnection<DB> {
 
   private async resolve(): Promise<DB> {
     const existing = this.db;
+    // Time each reopen phase separately (see noteReopen): a probe or close
+    // riding its multi-second timeout is the head-of-line stall behind the
+    // freeze, and this is what tells probe/close/open apart.
+    let probeMs = 0;
+    let closeMs = 0;
     if (existing) {
+      const probeStart = Date.now();
       const { alive, error } = await this.probeAlive(existing);
+      probeMs = Date.now() - probeStart;
       if (alive) {
         return existing;
       }
@@ -270,14 +313,18 @@ export class SqliteConnection<DB> {
       // handle — and once reopened against that binding, the trailing close only
       // drops a refcount instead of freeing it, so it never recovers. The wait
       // is time-bounded so a wedged close can't deadlock the reopen.
+      const closeStart = Date.now();
       await this.closeQuietly(existing);
+      closeMs = Date.now() - closeStart;
     }
     try {
+      const openStart = Date.now();
       const db = await this.opener();
+      const openMs = Date.now() - openStart;
       this.db = db;
       this.opens += 1;
       if (this.opens > 1) {
-        this.noteReopen();
+        this.noteReopen({ probeMs, closeMs, openMs });
       }
       return db;
     } catch (error) {

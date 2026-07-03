@@ -166,6 +166,18 @@ export default function BookmarkDetailScreen() {
       markBookmarkAccessed(resolvedId);
     }
   }, [resolvedId, markBookmarkAccessed]);
+  // One breadcrumb on first mount so a freeze right after opening a
+  // freshly-shared bookmark (Sentry STASH-H) places the Detail screen on the
+  // event timeline. Coarse only: whether the row resolved from local state — a
+  // resolved row that still froze points at the tail/render, not data-loading.
+  const mountReportedRef = useRef(false);
+  useEffect(() => {
+    if (mountReportedRef.current) {
+      return;
+    }
+    mountReportedRef.current = true;
+    trackBreadcrumb('detail', 'mounted', { resolved: bookmark !== undefined });
+  }, [bookmark]);
   useEffect(() => {
     if (!reportEnrichment?.degraded) {
       return;

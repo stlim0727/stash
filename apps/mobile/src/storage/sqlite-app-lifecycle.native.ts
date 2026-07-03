@@ -1,9 +1,52 @@
 import { AppState, type AppStateStatus } from 'react-native';
 
 type CloseHandler = () => void;
+interface ForegroundStateHandler {
+  onBackground?: () => void;
+  onForeground?: () => void;
+}
 
-const handlers = new Set<CloseHandler>();
+const closeHandlers = new Set<CloseHandler>();
+const foregroundStateHandlers = new Set<ForegroundStateHandler>();
 let subscribed = false;
+
+function safe(handler: (() => void) | undefined): void {
+  if (!handler) {
+    return;
+  }
+  try {
+    handler();
+  } catch {
+    // Best-effort; a failing handler must never crash the lifecycle listener.
+  }
+}
+
+/**
+ * Subscribe once to AppState and dispatch background/foreground transitions. We
+ * react only to a genuine `background` transition, not the `inactive` flicker
+ * iOS emits for the control centre / notification shade / biometric prompts —
+ * acting on those would churn the connection (and the watchdog) needlessly.
+ */
+function ensureSubscribed(): void {
+  if (subscribed) {
+    return;
+  }
+  subscribed = true;
+  AppState.addEventListener('change', (state: AppStateStatus) => {
+    if (state === 'background') {
+      for (const handler of closeHandlers) {
+        safe(handler);
+      }
+      for (const handler of foregroundStateHandlers) {
+        safe(handler.onBackground);
+      }
+    } else if (state === 'active') {
+      for (const handler of foregroundStateHandlers) {
+        safe(handler.onForeground);
+      }
+    }
+  });
+}
 
 /**
  * Register a SQLite connection's `closeCurrent` to fire when the app enters the
@@ -13,27 +56,22 @@ let subscribed = false;
  * after the `prepareAsync` NullPointerException. This complements the in-band
  * self-healing in SqliteConnection; it doesn't replace it (a handle can still
  * die between a foreground op and the next).
- *
- * We react only to a genuine `background` transition, not the `inactive` flicker
- * iOS emits for the control centre / notification shade / biometric prompts —
- * closing on those would churn the connection needlessly.
  */
 export function registerForBackgroundClose(close: CloseHandler): void {
-  handlers.add(close);
-  if (subscribed) {
-    return;
-  }
-  subscribed = true;
-  AppState.addEventListener('change', (state: AppStateStatus) => {
-    if (state !== 'background') {
-      return;
-    }
-    for (const handler of handlers) {
-      try {
-        handler();
-      } catch {
-        // Best-effort; a failing close must never crash the lifecycle listener.
-      }
-    }
-  });
+  closeHandlers.add(close);
+  ensureSubscribed();
+}
+
+/**
+ * Register background/foreground callbacks. Used by the JS event-loop stall
+ * watchdog (`observability/loop-stall-watchdog.ts`) to pause on `background` and
+ * resume on `active`, so the frozen-then-resumed gap of a backgrounded app is
+ * never misread as a multi-second JS-thread stall.
+ */
+export function registerForForegroundState(handler: ForegroundStateHandler): () => void {
+  foregroundStateHandlers.add(handler);
+  ensureSubscribed();
+  return () => {
+    foregroundStateHandlers.delete(handler);
+  };
 }

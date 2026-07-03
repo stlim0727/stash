@@ -11,6 +11,7 @@ import {
 import { pickSharedImage, type SharedImage } from '@/domain/image-share';
 import { extractFirstUrl } from '@/domain/urls';
 import { useT } from '@/i18n';
+import { trackBreadcrumb } from '@/observability/sentry';
 import { canDismissAfterShare, dismissAfterShare } from '@/share/dismiss';
 import { recordPendingShareConfirm } from '@/share/pending-confirm';
 import { getPreference } from '@/storage/preferences';
@@ -71,24 +72,30 @@ export function ShareIntentHandler() {
       return;
     }
     capturedRef.current = true;
-    setPendingShare({
-      // `webUrl` is expo-share-intent's best guess, but it can still be a value
-      // our capture path rejects: a non-http scheme, or a link carrying interior
-      // whitespace (a source app that appends a title after the URL, or a query
-      // value with a space). `normalizeUrl` — which addBookmark runs — returns
-      // null for those, so handing such a webUrl straight through made addBookmark
-      // return `invalid`; the share was then dropped and, in toast mode, the app
-      // dismissed back to the source app with nothing saved. Run BOTH candidates
-      // through extractFirstUrl so share.url is always a normalized, saveable URL
-      // or null — falling through to the text-note path below rather than losing
-      // the capture. Capture is sacred.
-      url: extractFirstUrl(shareIntent.webUrl) ?? extractFirstUrl(shareIntent.text),
-      title: shareIntent.meta?.title ?? undefined,
-      // Keep the raw shared text so a no-link share (e.g. a KakaoTalk message)
-      // can still be saved as a text note instead of being dropped.
-      text: shareIntent.text ?? undefined,
-      // A shared image (e.g. a screenshot) — captured when there is no link.
-      image: pickSharedImage(shareIntent.files),
+    // `webUrl` is expo-share-intent's best guess, but it can still be a value
+    // our capture path rejects: a non-http scheme, or a link carrying interior
+    // whitespace (a source app that appends a title after the URL, or a query
+    // value with a space). `normalizeUrl` — which addBookmark runs — returns
+    // null for those, so handing such a webUrl straight through made addBookmark
+    // return `invalid`; the share was then dropped and, in toast mode, the app
+    // dismissed back to the source app with nothing saved. Run BOTH candidates
+    // through extractFirstUrl so share.url is always a normalized, saveable URL
+    // or null — falling through to the text-note path below rather than losing
+    // the capture. Capture is sacred.
+    const url = extractFirstUrl(shareIntent.webUrl) ?? extractFirstUrl(shareIntent.text);
+    // Keep the raw shared text so a no-link share (e.g. a KakaoTalk message)
+    // can still be saved as a text note instead of being dropped.
+    const text = shareIntent.text ?? undefined;
+    // A shared image (e.g. a screenshot) — captured when there is no link.
+    const image = pickSharedImage(shareIntent.files);
+    setPendingShare({ url, title: shareIntent.meta?.title ?? undefined, text, image });
+    // Coarse capture breadcrumb (kind of share only — never URL/title/text) so a
+    // freeze right after a share (Sentry STASH-H) shows the share on the event
+    // timeline that attaches to the loop-stall report.
+    trackBreadcrumb('share', 'received', {
+      hasUrl: url !== null,
+      hasImage: image !== null,
+      hasText: text !== undefined,
     });
     resetShareIntent();
   }, [hasShareIntent, shareIntent, resetShareIntent]);
@@ -109,6 +116,7 @@ export function ShareIntentHandler() {
     // failing that fall back to saving the shared text as a note. addBookmark
     // returns 'invalid' only when there is none of the three, which keeps the
     // "nothing to save" toast for a genuinely empty share.
+    const saveStartedAt = Date.now();
     const result = share.url
       ? addBookmark({ url: share.url, title: share.title })
       : share.image
@@ -122,6 +130,14 @@ export function ShareIntentHandler() {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
       persisted = result.persisted;
     }
+    // Bracket the save so a post-share freeze can be tied to how long the durable
+    // write took. Coarse only — status/duration/durability, never content.
+    trackBreadcrumb('share', 'saving', { status: result.status });
+    void persisted?.then(
+      (durable) =>
+        trackBreadcrumb('share', 'persisted', { ms: Date.now() - saveStartedAt, durable }),
+      () => {},
+    );
 
     // Resolve the post-share behavior, then either jump to the Inbox (inbox
     // mode) or get back out of the way (toast mode). Reading the preference is
