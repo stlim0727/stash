@@ -48,6 +48,17 @@ COMMIT_URL=""
 
 echo "web-build: provenance SHA=[$SHA] REF=[$REF] (git=$(command -v git || echo none), dotgit=$( [ -e .git ] && echo yes || echo no ))"
 
+# Bust Metro/Expo caches before exporting. The Cloudflare dashboard "Build
+# command" runs an export moments earlier WITHOUT these provenance env vars,
+# priming Metro's transform cache with an empty extra.gitSha; the provenance
+# rides app.config.js's `extra`, which the content-keyed cache then freezes. So
+# without this, the export reuses that cache and emits a byte-identical,
+# commit-less bundle even though EXPO_PUBLIC_GIT_SHA is set (observed in a
+# production build log: SHA resolved fine, yet the bundle was unchanged and built
+# in ~1.5s from cache). Clearing forces a full re-transform that picks up the SHA.
+rm -rf "${TMPDIR:-/tmp}"/metro-* "${TMPDIR:-/tmp}"/haste-map-* \
+  apps/mobile/.expo apps/mobile/node_modules/.cache node_modules/.cache 2>/dev/null || true
+
 cd apps/mobile || exit 1
 EXPO_PUBLIC_GIT_SHA="$SHA" \
   EXPO_PUBLIC_GIT_REF="$REF" \
