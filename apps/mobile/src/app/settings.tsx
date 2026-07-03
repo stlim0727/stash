@@ -387,6 +387,11 @@ export default function SettingsScreen() {
   const appVersion = `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
     Constants.expoConfig?.sdkVersion ?? '56'
   })`;
+  // Always-visible footer line so the deployed version/commit is verifiable
+  // without opening Developer mode. Appends the commit when one is baked in.
+  const buildLine =
+    `Stash ${Constants.expoConfig?.version ?? '0.0.0'}` +
+    (build.shortSha ? ` · ${build.ref ? `${build.ref} @ ` : ''}${build.shortSha}` : '');
 
   const content = (
     <ScrollView
@@ -693,6 +698,15 @@ export default function SettingsScreen() {
         accessibilityLabel={t('settings.report.label')}
       >
         <Text style={styles.reportLinkText}>{t('settings.report.label')}</Text>
+      </Pressable>
+
+      <Pressable
+        onPress={build.commitUrl ? () => void Linking.openURL(build.commitUrl!) : undefined}
+        disabled={!build.commitUrl}
+        style={styles.buildLine}
+        accessibilityRole={build.commitUrl ? 'link' : undefined}
+      >
+        <Text style={styles.buildLineText}>{buildLine}</Text>
       </Pressable>
 
       <ActionSheet
@@ -1132,6 +1146,16 @@ const makeStyles = (palette: AppPalette) =>
       fontSize: 13,
       color: palette.textSecondary,
       textDecorationLine: 'underline',
+    },
+    buildLine: {
+      alignItems: 'center',
+      paddingTop: 4,
+      paddingBottom: 2,
+    },
+    buildLineText: {
+      fontSize: 11,
+      color: palette.textSecondary,
+      opacity: 0.7,
     },
     emptyQueue: {
       fontSize: 14,
