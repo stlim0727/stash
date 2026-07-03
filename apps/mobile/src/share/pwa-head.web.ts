@@ -1,13 +1,28 @@
 /**
- * Native OS UI font stack — the same idea as the Android APK, which renders in
- * the system font (Roboto). This resolves to San Francisco on Apple, Segoe UI on
- * Windows, and Roboto on Android/ChromeOS, so web text looks native everywhere
- * with zero loading overhead: no webfont request, no downloaded payload, no FOUT.
+ * Native OS UI font stack — the fallback shown instantly while Inter loads (and
+ * if it fails): San Francisco on Apple, Segoe UI on Windows, Roboto on
+ * Android/ChromeOS. Same idea as the Android APK, which renders in the system
+ * font (Roboto).
  */
 const SYSTEM_FONT_STACK =
   'system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",' +
   'Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji",' +
   '"Segoe UI Symbol","Noto Color Emoji"';
+
+/**
+ * Web base font: a self-hosted Inter subset for a prettier, more distinctive
+ * look than the bare system font. Overhead is kept negligible on purpose — one
+ * ~48 KB variable `woff2` (latin, all weights) served as a static asset, cached
+ * forever, with `font-display: swap` so text renders immediately in the system
+ * fallback and upgrades to Inter with no blocking (no FOIT). No third-party
+ * request (self-hosted, not Google Fonts).
+ */
+const BASE_FONT_CSS =
+  "@font-face{font-family:'Inter';font-style:normal;font-weight:100 900;" +
+  "font-display:swap;src:url('/fonts/inter-var-latin.woff2') format('woff2');}" +
+  `html{font-family:'Inter',${SYSTEM_FONT_STACK};` +
+  '-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;' +
+  'text-rendering:optimizeLegibility;}';
 
 /**
  * Inject the PWA <head> tags at runtime (web only).
@@ -33,16 +48,13 @@ export function installPwaHead() {
     }
     document.head.appendChild(el);
   };
-  // Apply the native system font stack. Text with no explicit `fontFamily`
-  // inherits from `html`, so this styles the whole UI while leaving the few
-  // intentional overrides (e.g. the monospace report view) untouched.
+  // Apply the base font. Text with no explicit `fontFamily` inherits from
+  // `html`, so this styles the whole UI while leaving the few intentional
+  // overrides (e.g. the monospace report view) untouched.
   if (!document.head.querySelector('style#stash-base-font')) {
     const style = document.createElement('style');
     style.id = 'stash-base-font';
-    style.textContent =
-      `html{font-family:${SYSTEM_FONT_STACK};` +
-      '-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;' +
-      'text-rendering:optimizeLegibility;}';
+    style.textContent = BASE_FONT_CSS;
     document.head.appendChild(style);
   }
   ensure('link[rel="manifest"]', 'link', { rel: 'manifest', href: '/manifest.webmanifest' });

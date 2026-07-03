@@ -1,3 +1,6 @@
 packages:
   - apps/*
   - packages/*
+
+patchedDependencies:
+  react-native-web@0.21.2: patches/react-native-web@0.21.2.patch
