@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   BackHandler,
@@ -292,6 +293,7 @@ export default function InboxScreen() {
   const {
     inbox,
     isLoading,
+    isSyncing,
     loadError,
     getTagsForBookmark,
     getCollection,
@@ -1519,6 +1521,24 @@ export default function InboxScreen() {
             // A facet/filter with zero rows: not the first-run case, so keep the
             // terse "nothing in this view" line rather than the onboarding card.
             <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('inbox.emptyView')}</Text>
+          ) : isSyncing ? (
+            // Signed in and a pull is in flight, but the local cache is still
+            // empty — the several-seconds-empty gap after sign-in (fresh install
+            // or an account switch that replaced the cache). Show a progress
+            // state, NOT the "your stash is empty" onboarding: until the first
+            // pull completes we don't actually know the account is empty, and
+            // flashing the empty card reads as if signing in lost the user's
+            // data. When the pull lands the rows replace this; a genuinely empty
+            // account falls through to the onboarding once isSyncing clears.
+            <View style={styles.emptyState} testID="inbox-syncing">
+              <ActivityIndicator color={palette.accent} style={styles.emptyGlyph} />
+              <Text style={[styles.emptyTitle, { color: palette.text }]}>
+                {t('inbox.syncing')}
+              </Text>
+              <Text style={[styles.emptySearchHint, { color: palette.textSecondary }]}>
+                {t('inbox.syncingHint')}
+              </Text>
+            </View>
           ) : (
             // First run: teach the share-sheet capture (the app's whole point),
             // not just "add below" — otherwise Stash reads as a manual URL box.

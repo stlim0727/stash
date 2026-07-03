@@ -91,6 +91,11 @@ export const en = {
   'inbox.sectionFacet': '{label} · {count}',
   'inbox.sectionRecent': 'Recently saved',
   'inbox.loading': 'Loading your bookmarks…',
+  // Shown in the empty Inbox while a post-sign-in pull is in flight and the local
+  // cache is still empty (fresh install / account switch). Distinct from
+  // `inbox.loading` (the local durable read) — this is the cloud fetch.
+  'inbox.syncing': 'Syncing your bookmarks…',
+  'inbox.syncingHint': 'Fetching your saved links from the cloud.',
   'inbox.emptySearch': 'No bookmarks match your search.',
   // Recovery affordances shown beneath the empty-search message: a hint that the
   // search reaches beyond titles, and a button to drop the query.
