@@ -396,6 +396,12 @@ export default function InboxScreen() {
   const { width: winWidth } = useWindowDimensions();
   const columns = viewMode === 'card' ? Math.min(3, Math.max(1, Math.floor(winWidth / 380))) : 1;
   const contentMaxWidth = columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
+  // The suggest/session banners are cards carrying a 16px horizontal margin
+  // (styles.suggestBanner), so capping them with `width: '100%'` would lay out
+  // as full width PLUS 32px of margin and overflow the row on phones. Give them
+  // an explicit width that already subtracts that gutter, then cap to the shared
+  // content column so they align with the other centered header rows.
+  const bannerWidth = Math.min(winWidth - 32, contentMaxWidth);
 
   // Slide the Inbox aside for the wide-screen Settings sheet. Settings is a
   // separate route presented as a transparent modal on top, so the Inbox stays
@@ -1266,7 +1272,7 @@ export default function InboxScreen() {
             onPress={() => router.push('/settings')}
             style={({ pressed }) => [
               styles.suggestBanner,
-              { alignSelf: 'center', width: '100%', maxWidth: contentMaxWidth },
+              { alignSelf: 'center', width: bannerWidth },
               {
                 backgroundColor: palette.card,
                 borderWidth: StyleSheet.hairlineWidth,
@@ -1298,7 +1304,7 @@ export default function InboxScreen() {
             testID="review-banner"
             style={[
               styles.suggestBanner,
-              { alignSelf: 'center', width: '100%', maxWidth: contentMaxWidth },
+              { alignSelf: 'center', width: bannerWidth },
               hasNewSuggestions
                 ? { backgroundColor: palette.accentSoft }
                 : {
