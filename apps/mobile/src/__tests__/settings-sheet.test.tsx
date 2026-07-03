@@ -59,3 +59,18 @@ test('phone viewport renders full-screen with no backdrop', async () => {
   const screen = await renderSettings();
   expect(screen.queryByTestId('settings-sheet-backdrop')).toBeNull();
 });
+
+// Settings is a transparentModal with the Inbox mounted behind it. On web the
+// modal container sizes to content, so a `flex: 1` root collapses and the Inbox
+// bleeds through below Settings. Pinning the root to the viewport height keeps
+// the opaque background covering the full screen.
+test('phone viewport pins the full-screen root to the viewport height', async () => {
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
+  const screen = await renderSettings();
+  const root = screen.getByTestId('settings-fullscreen');
+  const flat = Array.isArray(root.props.style)
+    ? Object.assign({}, ...root.props.style.flat())
+    : root.props.style;
+  expect(flat.height).toBe(844);
+});

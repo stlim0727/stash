@@ -84,7 +84,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   // Wide viewports present Settings as a right-side sheet over a dimmed Inbox;
   // phones keep the full-screen layout. One width rule, no Platform branch.
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const asSheet = width >= 760;
   const { t, preference: languagePref, setLocalePreference, formatDate } = useI18n();
   const {
@@ -781,11 +781,17 @@ export default function SettingsScreen() {
     </View>
   );
 
+  // Settings is a `transparentModal`, so the Inbox is mounted behind it. On web
+  // the modal container sizes to its content instead of the viewport, which
+  // collapses the `flex: 1` roots to content height and lets the Inbox bleed
+  // through below Settings. Pin both layouts to the real viewport height so the
+  // opaque background always covers the full screen (a no-op on native, where
+  // the modal already fills the screen and this height equals the flex fill).
   if (asSheet) {
     // Right-side sheet: the Inbox shows dimmed behind the backdrop; tapping the
     // backdrop closes. The panel caps at 460px on the right.
     return (
-      <View style={styles.sheetOverlay}>
+      <View style={[styles.sheetOverlay, { height }]}>
         <Pressable
           testID="settings-sheet-backdrop"
           style={styles.sheetBackdrop}
@@ -802,7 +808,7 @@ export default function SettingsScreen() {
   }
 
   return (
-    <View style={styles.fullScreen}>
+    <View testID="settings-fullscreen" style={[styles.fullScreen, { height }]}>
       {header}
       {content}
     </View>
