@@ -124,6 +124,15 @@ export default function SettingsScreen() {
     }
   };
   const handleSignOut = () => {
+    if (Platform.OS === 'web') {
+      // Alert.alert has no button support on web, so the confirm dialog never
+      // appears and sign-out never fires ("logout does not work"). Fall back to
+      // window.confirm like the other destructive confirms on this screen.
+      if (typeof confirm === 'undefined' || confirm(t('settings.account.signOutConfirmBody'))) {
+        void runSignOut();
+      }
+      return;
+    }
     Alert.alert(
       t('settings.account.signOutConfirmTitle'),
       t('settings.account.signOutConfirmBody'),
