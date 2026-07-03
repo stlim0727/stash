@@ -42,6 +42,13 @@ function htmlHeaders(userAgent: string): Record<string, string> {
     'User-Agent': userAgent,
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en;q=0.9,*;q=0.5',
+    // Metadata lives in <head>, so ask for only the first MAX_HTML_BYTES. A
+    // server that honors ranges (GitHub Pages, most CDNs) then sends a 206 with
+    // just that slice instead of the whole document — the difference between a
+    // few KB and, for one reported page, a 24 MB body inlining megabytes of
+    // base64 in <body>. Servers that ignore the header return the full 200 body,
+    // which the decode cap in `fetchHtmlMetadata` still bounds.
+    Range: `bytes=0-${MAX_HTML_BYTES - 1}`,
   };
 }
 
@@ -188,7 +195,16 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     // Read raw bytes and decode with the page's real charset. Many Korean/CJK
     // sites serve legacy encodings (EUC-KR, Shift_JIS, …), often declared only
     // in a <meta> tag, so decoding as UTF-8 produces mojibake.
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    //
+    // Cap what we DECODE to the head we actually parse. The Range header above
+    // asks servers for only the first MAX_HTML_BYTES, but one that ignores it
+    // returns the full body — and decoding a multi-megabyte string on the JS
+    // thread blocks input for seconds (a 24 MB page froze the app for ~15 s and
+    // triggered a native SQLite crash under the GC pressure: Sentry STASH-K/J).
+    // Slicing before the decode keeps the synchronous cost bounded regardless of
+    // body size; `parsePageMetadata` slices to the same bound anyway.
+    const raw = new Uint8Array(await response.arrayBuffer());
+    const bytes = raw.length > MAX_HTML_BYTES ? raw.subarray(0, MAX_HTML_BYTES) : raw;
     const charset = detectCharset(contentType, bytes);
     const html = await decodeHtml(bytes, charset);
     // Redirects may have moved us; resolve relative URLs against the final URL.
@@ -198,7 +214,7 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
       // A 200 with no parseable title is the classic "content-free JS shell".
       // Note the final URL (so a redirect chain like naver.me → m.place shows)
       // and a structural head summary so the failure log says *why* on its own.
-      const detail = `${htmlHeadSummary(html)} bytes=${bytes.length} ct=${contentType.split(';')[0] || 'unknown'}`;
+      const detail = `${htmlHeadSummary(html)} bytes=${raw.length} ct=${contentType.split(';')[0] || 'unknown'}`;
       return { metadata, outcome: `no_title@${finalUrl} {${detail}}`, finalUrl };
     }
     return { metadata, outcome: 'ok', finalUrl };
