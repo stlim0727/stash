@@ -21,30 +21,23 @@ compatibility_date = "2026-07-03"
 workers_dev = false
 routes = [{ pattern = "keepory.app", custom_domain = true }]
 
-# Build the static bundle as part of `wrangler deploy` itself, so the deploy is
-# self-contained: it produces ./apps/mobile/dist regardless of the Cloudflare
-# project's dashboard "Build command" setting. `dist/` is gitignored, so without
-# this a deploy that skips or misconfigures the build step runs against a missing
-# assets directory and fails. Cloudflare Workers Builds installs dependencies
-# before the deploy runs, and a manual `wrangler deploy` runs against an already-
-# installed tree, so the hook only needs the export step. Idempotent — harmless
-# if the dashboard build command already produced dist.
+# Build the static bundle as part of `wrangler deploy` — but ONLY as a fallback.
+# `dist/` is gitignored, so without a build the deploy would upload a missing
+# assets directory and fail.
 #
-# Stamp build provenance into the bundle so Settings shows the deployed commit
-# ("<branch> @ <sha>") instead of "local build". Prefer Cloudflare Workers
-# Builds' git env vars, but FALL BACK to `git rev-parse` on the cloned repo:
-# WORKERS_CI_COMMIT_SHA is populated in the build-command phase, not necessarily
-# in the deploy-command phase where this wrangler [build] hook runs, so the env
-# var alone came through empty. app.config.js reads EXPO_PUBLIC_GIT_SHA/REF/
-# COMMIT_URL into `extra`; when both sources are empty it degrades to "local
-# build", and the `:+` guard leaves COMMIT_URL empty so it never links to a bare
-# /commit/ URL. The `|| true` on each git fallback is load-bearing: a failed
-# `git rev-parse` (no .git in the checkout) exits non-zero, and since the
-# assignments are `&&`-chained before `expo export`, that would abort the whole
-# build — `|| true` makes the substitution succeed with an empty value instead,
-# so the export always runs and the deploy degrades gracefully.
+# Phase ordering matters for build provenance. Cloudflare Workers Builds runs the
+# dashboard "Build command" FIRST (the build phase, where WORKERS_CI_COMMIT_SHA /
+# WORKERS_CI_BRANCH exist), then the "Deploy command" `npx wrangler deploy` —
+# which is where THIS hook runs. The commit env vars are NOT present in that
+# deploy phase (and `.git` may be absent too), so if this hook re-exported it
+# would overwrite the build phase's provenance-stamped dist with an empty one.
+#
+# So: SKIP when dist already exists (the dashboard "Build command" — expected to
+# be `bash scripts/web-build.sh` — built it in the build phase with provenance
+# stamped). Only build here when dist is missing, as a self-contained safety net,
+# via the same script (which falls back to git, then empty, for provenance).
 [build]
-command = 'cd apps/mobile && SHA="${WORKERS_CI_COMMIT_SHA:-$(git -C .. rev-parse HEAD 2>/dev/null || true)}" && REF="${WORKERS_CI_BRANCH:-$(git -C .. rev-parse --abbrev-ref HEAD 2>/dev/null || true)}" && EXPO_PUBLIC_GIT_SHA="$SHA" EXPO_PUBLIC_GIT_REF="$REF" EXPO_PUBLIC_COMMIT_URL="${SHA:+https://github.com/stlim0727/stash/commit/$SHA}" CI=1 pnpm exec expo export --platform web'
+command = 'if [ -d apps/mobile/dist ]; then echo "dist already built in the build phase; keeping its provenance, skipping deploy-phase re-export"; else bash scripts/web-build.sh; fi'
 
 [assets]
 # Path (relative to this file) to the exported static bundle.
