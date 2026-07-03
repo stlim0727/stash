@@ -46,15 +46,18 @@ cd apps/mobile && CI=1 pnpm exec expo export --platform web
 
 ## Step 2 — Verify the two things web uniquely gets wrong
 
-1. **SPA routing.** `wrangler.toml` sets `assets.not_found_handling =
-   "single-page-application"`: navigation requests that match no file fall back
-   to `/index.html` (the dynamic `/bookmark/<id>` route, deep links), while real
-   assets (`/_expo/*`, `/manifest.webmanifest`, PWA icons, `/add`, …) are matched
-   **first** so the fallback never rewrites the app's own JS. If a change adds a
-   route or an asset path, confirm `dist/` contains the expected files.
-   **Never add a Pages-style `_redirects` catch-all** — on Pages it is always
-   followed and rewrites the bundles; `not_found_handling` is the asset-safe
-   equivalent and the reason we're on Workers Static Assets.
+1. **SPA routing.** The app exports with `web.output: "single"` (SPA) in
+   `app.json`, so the export emits **`index.html` plus static assets only**
+   (`/_expo/*`, `/manifest.webmanifest`, PWA icons) — **not** per-route HTML.
+   `wrangler.toml` sets `assets.not_found_handling = "single-page-application"`,
+   so **every route** — `/`, `/add`, `/settings`, `/auth/callback`, and the
+   dynamic `/bookmark/<id>` — is served by the fallback to `/index.html`, which
+   expo-router then client-renders. Real assets are matched **first**, so the
+   fallback never rewrites the app's own JS. Do **not** expect a `dist/add.html`
+   (or any route file) to exist — a correct SPA build has none; only assets are
+   emitted. **Never add a Pages-style `_redirects` catch-all** — on Pages it is
+   always followed and rewrites the bundles; `not_found_handling` is the
+   asset-safe equivalent and the reason we're on Workers Static Assets.
 2. **Origin-relative capture surfaces.** Nothing hard-codes the origin. The
    **bookmarklet** (`src/ui/BookmarkletButton.web.tsx` + pure
    `src/domain/web-capture.ts`) is built from `window.location.origin` at click

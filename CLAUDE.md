@@ -59,13 +59,13 @@ Stash is a mobile bookmark app (React Native + Expo, Supabase backend) inspired 
 pnpm workspace, **Node 22, pnpm 10**. Run everything from the repo root:
 
 - `pnpm dev` (and `dev:android` / `dev:ios` / `dev:web`) — Expo dev server for `apps/mobile`.
-- `pnpm lint` — runs `format:check` (whitespace/final-newline only — there is no ESLint config) **and** `lint:env` (`scripts/check-static-env.mjs`, which enforces how `EXPO_PUBLIC_*` env vars may be referenced). `pnpm format` auto-fixes formatting.
+- `pnpm lint` — runs three checks (there is no ESLint config): `format:check` (whitespace/final-newline only), `lint:env` (`scripts/check-static-env.mjs`, which enforces how `EXPO_PUBLIC_*` env vars may be referenced), and `lint:overlay` (`scripts/check-overlay-elevation.mjs`, no zIndex-without-elevation overlays). `pnpm format` auto-fixes formatting.
 - `pnpm typecheck` — `tsc --noEmit` in `apps/mobile`.
 - `pnpm test` — two lanes: the mobile **Node-runner** logic tests **plus** `test:functions` (Supabase edge-function tests under `supabase/functions/**/*.test.ts`).
 - `pnpm test:components` — jest-expo + React Native Testing Library for hooks/components.
 - `pnpm verify:supabase` — 16-check end-to-end script against a live Supabase project; needs `EXPO_PUBLIC_SUPABASE_URL` + `EXPO_PUBLIC_SUPABASE_ANON_KEY` and anonymous sign-ins enabled.
 
-Test lanes are split by extension (run a single file by passing the path):
+Test lanes are split by extension. The jest lane (`test:components`) accepts a single file path; the Node lanes hard-code a glob, so appending a path to `pnpm test` unions with it (runs the whole lane) rather than narrowing — to run one `.test.ts` file, invoke node directly: `cd apps/mobile && node --experimental-transform-types --import ../../scripts/register-alias.mjs --test src/domain/<file>.test.ts`.
 
 - **`src/**/*.test.ts`** — pure logic, via Node's built-in runner (`--experimental-transform-types`, `@/` alias resolved by `scripts/register-alias.mjs`). Use fakes, no React.
 - **`src/**/*.test.tsx`** — jest, for hooks/components. Lives under `src/__tests__/` so expo-router never treats tests as routes. RNTL v14: `render`/`renderHook`/`fireEvent` are async — `await` them and wrap state changes in `await act(async () => …)`.

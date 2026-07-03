@@ -49,8 +49,10 @@ Every table with user data must:
 alter table public.<t> enable row level security;
 ```
 
-…and then carry **all four** owner-scoped policies (the pattern used throughout
-`20260611000000_initial_schema.sql`):
+…and then carry a policy for **each operation the API actually exposes** — no
+more. For a real CRUD table that's all four owner-scoped policies (the pattern
+throughout `20260611000000_initial_schema.sql`); do **not** grant `update`/
+`delete` the product doesn't offer:
 
 ```sql
 create policy "Users can read their <t>"   on public.<t> for select
@@ -63,6 +65,12 @@ create policy "Users can delete their <t>" on public.<t> for delete
   using (auth.uid() = user_id);
 ```
 
+- **Append-only / support / ledger tables** get only the operations they expose:
+  e.g. `feedback_reports` enables RLS with just owner `select` + `insert` (no
+  update/delete). Some tables intentionally enable RLS with **no client policies
+  at all** — the rate-limit / audit tables are reached only through
+  `SECURITY DEFINER` functions, so a client has no direct access. Match the
+  table's real access shape; the four-policy template is for genuine CRUD tables.
 - **Join/child tables** (no direct `user_id`, e.g. `bookmark_tags`) scope through
   the parent with `using (exists (select 1 from public.<parent> p where p.id =
   <t>.<parent>_id and p.user_id = auth.uid()))` and the matching `with check` —
