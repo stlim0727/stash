@@ -29,6 +29,7 @@ jest.mock('expo-router', () => {
     Link: ({ children }: { children: ReactNode }) => children,
     useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
     useLocalSearchParams: () => mockParams,
+    usePathname: () => '/',
     // Honour the callback identity ([cb]) — unlike the always-focused mount mock,
     // the real useFocusEffect re-runs when the callback changes, which is what
     // re-registers the hardware-back handler with fresh query/filter state.

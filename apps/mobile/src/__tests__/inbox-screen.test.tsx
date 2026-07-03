@@ -38,6 +38,7 @@ jest.mock('expo-router', () => {
     Link: ({ children }: { children: ReactNode }) => children,
     useRouter: () => ({ push: mockPush, navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
     useLocalSearchParams: () => mockParams,
+    usePathname: () => '/',
     // Run the focus callback as a mount effect (the screen is always focused in
     // these tests); honours the returned cleanup like the real hook.
     useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, []),
