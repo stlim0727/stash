@@ -1,0 +1,10 @@
+# Cloudflare Pages project config (config-as-code). Used by both the Git
+# integration and `wrangler pages deploy`. The static bundle is produced by
+# `expo export --platform web` into apps/mobile/dist (see docs/development/
+# deploy-web.md for the build command and dashboard settings).
+#
+# `name` is the Pages project name — change it if you name the project
+# differently in the Cloudflare dashboard.
+name = "keepory"
+pages_build_output_dir = "apps/mobile/dist"
+compatibility_date = "2026-06-30"
