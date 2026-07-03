@@ -4,33 +4,52 @@
 # provenance (commit SHA / branch) into the bundle so Settings shows the deployed
 # build ("<branch> @ <sha>") instead of "local build".
 #
-# Used in two places:
-#   1. The Cloudflare dashboard "Build command" — keep it short: `bash
-#      scripts/web-build.sh`. This runs in the BUILD phase, where Workers Builds
-#      exposes WORKERS_CI_COMMIT_SHA / WORKERS_CI_BRANCH, so the commit is stamped.
-#   2. The wrangler.toml [build] hook (deploy phase) as a self-contained fallback
-#      when dist wasn't produced by the build command. The commit env vars are not
-#      present there, so provenance falls back to git and, failing that, empty
-#      (degrading to "local build") — the deploy still succeeds.
+# This runs from wrangler.toml's [build] hook during `wrangler deploy` (the deploy
+# phase). Cloudflare's WORKERS_CI_* env vars are only guaranteed in the *build*
+# phase, so we resolve the commit from whatever is present, in order:
+#   1. $WORKERS_CI_COMMIT_SHA / $WORKERS_CI_BRANCH (build phase, or if set here)
+#   2. the `git` binary, if on PATH
+#   3. reading `.git/HEAD` directly — works in a checkout that has .git but no
+#      git binary and no env vars (handles both a detached HEAD and a branch ref)
+# Provenance is best-effort: it must never fail the build. If nothing resolves,
+# the bundle degrades to "local build" and the deploy still succeeds.
 #
-# Keeping the logic here (versioned, testable) means the dashboard command stays a
-# single trivial token instead of a long, special-character-heavy one that the
-# Cloudflare build-config form can reject.
-set -eo pipefail
+# Not using `set -e`: provenance resolution intentionally tolerates failures, so
+# only the genuinely required steps (install, export) gate the build via `|| exit`.
 
-# Repo root, regardless of where this is invoked from.
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
-pnpm install
+pnpm install || exit 1
 
-# Prefer Cloudflare's git env vars; fall back to the checkout's git metadata.
-# `|| true` keeps a failed `git rev-parse` (no .git in the checkout) from aborting
-# under `set -e`, so the export always runs.
-SHA="${WORKERS_CI_COMMIT_SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
-REF="${WORKERS_CI_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)}"
+# --- resolve commit SHA (best-effort) ---
+SHA="${WORKERS_CI_COMMIT_SHA:-}"
+if [ -z "$SHA" ] && command -v git >/dev/null 2>&1; then
+  SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+fi
+if [ -z "$SHA" ] && [ -f .git/HEAD ]; then
+  head="$(cat .git/HEAD 2>/dev/null || true)"
+  case "$head" in
+    "ref: "*) SHA="$(cat ".git/${head#ref: }" 2>/dev/null || true)" ;;
+    *) SHA="$head" ;;
+  esac
+fi
+# Keep only a valid hex SHA; anything else becomes empty (→ "local build").
+SHA="$(printf '%s' "$SHA" | tr -cd '0-9a-f')"
 
-cd apps/mobile
+# --- resolve branch/ref (best-effort; cosmetic) ---
+REF="${WORKERS_CI_BRANCH:-}"
+if [ -z "$REF" ] && command -v git >/dev/null 2>&1; then
+  REF="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+fi
+[ "$REF" = "HEAD" ] && REF=""  # detached checkout: no meaningful branch name
+
+COMMIT_URL=""
+[ -n "$SHA" ] && COMMIT_URL="https://github.com/stlim0727/stash/commit/$SHA"
+
+echo "web-build: provenance SHA=[$SHA] REF=[$REF] (git=$(command -v git || echo none), dotgit=$( [ -e .git ] && echo yes || echo no ))"
+
+cd apps/mobile || exit 1
 EXPO_PUBLIC_GIT_SHA="$SHA" \
   EXPO_PUBLIC_GIT_REF="$REF" \
-  EXPO_PUBLIC_COMMIT_URL="${SHA:+https://github.com/stlim0727/stash/commit/$SHA}" \
-  CI=1 pnpm exec expo export --platform web
+  EXPO_PUBLIC_COMMIT_URL="$COMMIT_URL" \
+  CI=1 pnpm exec expo export --platform web || exit 1
