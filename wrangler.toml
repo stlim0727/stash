@@ -36,11 +36,15 @@ routes = [{ pattern = "keepory.app", custom_domain = true }]
 # WORKERS_CI_COMMIT_SHA is populated in the build-command phase, not necessarily
 # in the deploy-command phase where this wrangler [build] hook runs, so the env
 # var alone came through empty. app.config.js reads EXPO_PUBLIC_GIT_SHA/REF/
-# COMMIT_URL into `extra`; when both sources are empty (rare) it degrades to
-# "local build", and the `:+` guard leaves COMMIT_URL empty so it never links to
-# a bare /commit/ URL.
+# COMMIT_URL into `extra`; when both sources are empty it degrades to "local
+# build", and the `:+` guard leaves COMMIT_URL empty so it never links to a bare
+# /commit/ URL. The `|| true` on each git fallback is load-bearing: a failed
+# `git rev-parse` (no .git in the checkout) exits non-zero, and since the
+# assignments are `&&`-chained before `expo export`, that would abort the whole
+# build — `|| true` makes the substitution succeed with an empty value instead,
+# so the export always runs and the deploy degrades gracefully.
 [build]
-command = 'cd apps/mobile && SHA="${WORKERS_CI_COMMIT_SHA:-$(git -C .. rev-parse HEAD 2>/dev/null)}" && REF="${WORKERS_CI_BRANCH:-$(git -C .. rev-parse --abbrev-ref HEAD 2>/dev/null)}" && EXPO_PUBLIC_GIT_SHA="$SHA" EXPO_PUBLIC_GIT_REF="$REF" EXPO_PUBLIC_COMMIT_URL="${SHA:+https://github.com/stlim0727/stash/commit/$SHA}" CI=1 pnpm exec expo export --platform web'
+command = 'cd apps/mobile && SHA="${WORKERS_CI_COMMIT_SHA:-$(git -C .. rev-parse HEAD 2>/dev/null || true)}" && REF="${WORKERS_CI_BRANCH:-$(git -C .. rev-parse --abbrev-ref HEAD 2>/dev/null || true)}" && EXPO_PUBLIC_GIT_SHA="$SHA" EXPO_PUBLIC_GIT_REF="$REF" EXPO_PUBLIC_COMMIT_URL="${SHA:+https://github.com/stlim0727/stash/commit/$SHA}" CI=1 pnpm exec expo export --platform web'
 
 [assets]
 # Path (relative to this file) to the exported static bundle.
