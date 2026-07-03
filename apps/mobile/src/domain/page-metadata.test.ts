@@ -116,6 +116,60 @@ test('parseOembed ignores blank/non-string fields', () => {
   assert.equal(meta.preview_image_url, undefined);
 });
 
+// The oEmbed thumbnail is the soft 480×360 `hqdefault`; enrichment upgrades it
+// to the 640×480 `sddefault` when the video has one (a HEAD 200), keeping the
+// preview crisp on a 2× display.
+test('fetchPageMetadata upgrades a YouTube thumbnail to sddefault when available', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method?: string }> = [];
+  globalThis.fetch = (async (target: string, init?: RequestInit) => {
+    calls.push({ url: target, method: init?.method });
+    if (init?.method === 'HEAD') {
+      return { ok: true } as unknown as Response;
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        title: 'Never Gonna Give You Up',
+        provider_name: 'YouTube',
+        thumbnail_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+      }),
+    } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    assert.equal(meta?.preview_image_url, 'https://i.ytimg.com/vi/dQw4w9WgXcQ/sddefault.jpg');
+    assert.ok(calls.some((c) => c.method === 'HEAD' && c.url.endsWith('/sddefault.jpg')));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// Older / SD-only uploads 404 the higher tiers, so the upgrade falls back to the
+// oEmbed `hqdefault` rather than leaving a broken preview.
+test('fetchPageMetadata keeps hqdefault when sddefault is missing (404)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_target: string, init?: RequestInit) => {
+    if (init?.method === 'HEAD') {
+      return { ok: false } as unknown as Response;
+    }
+    return {
+      ok: true,
+      json: async () => ({
+        title: 'Me at the zoo',
+        provider_name: 'YouTube',
+        thumbnail_url: 'https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg',
+      }),
+    } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://youtu.be/jNQXAC9IVRw');
+    assert.equal(meta?.preview_image_url, 'https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('fetchPageMetadata sends the honest bot UA first and does not retry on success', async () => {
   const originalFetch = globalThis.fetch;
   const userAgents: string[] = [];
