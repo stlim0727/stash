@@ -236,6 +236,12 @@ const WORDMARK = {
 // lockstep (see heroWordmark / the hero Image).
 const WORDMARK_HEIGHT = 30;
 
+// On wide (desktop-web) viewports, cap the content column and center it so
+// cards, the header, and the browse shelf don't stretch edge-to-edge. No effect
+// on phones (their width is already below this), so it reads as a web-only
+// improvement while staying a single cross-platform rule.
+const CONTENT_MAX_WIDTH = 720;
+
 /**
  * One pill in the Inbox browse shelf. Memoized so a filter change (which
  * re-renders the whole screen) only re-renders the chips whose `active` flag
@@ -1996,6 +2002,9 @@ const styles = StyleSheet.create({
   list: {
     padding: 16,
     gap: 16,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
   },
   listModeList: {
     gap: 8,
@@ -2007,6 +2016,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 8,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
   },
   heroTitleBlock: {
     flex: 1,
@@ -2181,6 +2193,9 @@ const styles = StyleSheet.create({
   searchWrap: {
     paddingHorizontal: 16,
     paddingTop: 10,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
   },
   searchInput: {
     borderRadius: 20,
@@ -2202,6 +2217,9 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
     paddingTop: 8,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
   },
   sortPill: {
     flexDirection: 'row',
@@ -2249,6 +2267,9 @@ const styles = StyleSheet.create({
     minHeight: 42,
     marginTop: 6,
     marginBottom: 0,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
   },
   shelfContent: {
     paddingHorizontal: 16,
