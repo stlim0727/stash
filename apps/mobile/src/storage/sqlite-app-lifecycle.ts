@@ -7,3 +7,16 @@
 export function registerForBackgroundClose(_close: () => void): void {
   // Intentionally empty on web.
 }
+
+/**
+ * Web/default no-op twin of the native foreground-state registration. The share
+ * capture path this guards against (Android background-handle thrash) does not
+ * exist on web, so the loop-stall watchdog runs unpaused here.
+ */
+export function registerForForegroundState(_handler: {
+  onBackground?: () => void;
+  onForeground?: () => void;
+}): () => void {
+  // Intentionally empty on web.
+  return () => {};
+}

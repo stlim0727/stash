@@ -55,6 +55,8 @@ import {
 import { useI18n } from '@/i18n';
 import { recordLog } from '@/observability/log-buffer';
 import { armHydrationWatchdog } from '@/observability/hydration-watchdog';
+import { armLoopStallWatchdog } from '@/observability/loop-stall-watchdog';
+import { registerForForegroundState } from '@/storage/sqlite-app-lifecycle';
 import { repository } from '@/storage/repository';
 import { copyImageToLibrary } from '@/storage/image-store';
 import type { EnrichmentMetadataHint } from '@/api/bookmarks';
@@ -987,6 +989,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
       disarmWatchdog();
+    };
+  }, []);
+
+  // Continuously watch the JS event loop for multi-second stalls — the "button
+  // press does nothing for several seconds after sharing" freeze (Sentry
+  // STASH-H) the native ANR/app-hang detectors miss because they watch the main
+  // thread, not the JS thread. Reporting-only: it self-reports a coarse,
+  // non-identifying snapshot (sync/queue counts — never bookmark content) so an
+  // otherwise invisible freeze reaches monitoring. Paused while backgrounded so
+  // a frozen-then-resumed app is not misread as a stall.
+  useEffect(() => {
+    const watchdog = armLoopStallWatchdog({
+      describe: () => `syncing=${syncInFlight.current} queue=${queueRef.current.length}`,
+    });
+    const unregister = registerForForegroundState({
+      onBackground: () => watchdog.pause(),
+      onForeground: () => watchdog.resume(),
+    });
+    return () => {
+      unregister();
+      watchdog.disarm();
     };
   }, []);
 
