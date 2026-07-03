@@ -105,6 +105,23 @@ export default function BookmarkDetailScreen() {
   const flushRef = useRef<() => void>(() => {});
   useEffect(() => () => flushRef.current(), []);
 
+  // On web a multiline TextInput renders as a fixed-height <textarea> that
+  // scrolls instead of growing (native auto-grows on its own). Size the notes
+  // field to its content on every render so the whole memo is visible without an
+  // inner scrollbar. No-op on native, where the field already grows.
+  const notesRef = useRef<TextInput | null>(null);
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    const node = notesRef.current as unknown as HTMLTextAreaElement | null;
+    if (!node) {
+      return;
+    }
+    node.style.height = 'auto';
+    node.style.height = `${node.scrollHeight}px`;
+  });
+
   const bookmark = id ? getBookmark(id) : undefined;
 
   // The title shown when not editing. Background metadata enrichment can swap
@@ -805,6 +822,7 @@ export default function BookmarkDetailScreen() {
           ]}
         >
           <TextInput
+            ref={notesRef}
             accessibilityLabel={t('detail.notesA11y')}
             style={[styles.notesInput, { color: palette.text }]}
             placeholder={t('detail.notesPlaceholder')}
