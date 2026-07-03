@@ -62,6 +62,8 @@ export const ko: Catalog = {
   'inbox.sortNameDesc': '이름 ㅎ–ㄱ',
   'inbox.viewAsA11y': '{mode}로 보기',
   'inbox.browseTagsA11y': '태그로 둘러보기',
+  'inbox.shelfMoreA11y': '필터 더 보기',
+  'inbox.shelfPrevA11y': '이전 필터 보기',
   'inbox.openBookmarkHint': '북마크 상세 열기',
   'inbox.filterAll': '전체',
   'inbox.filterNoCollection': '받은함',

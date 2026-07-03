@@ -84,6 +84,10 @@ export const en = {
   // "Browse by tag" toggle: an icon-only control that navigates to the dedicated
   // tag-browse route (/browse/tags), carrying the current facet as its scope.
   'inbox.browseTagsA11y': 'Browse by tag',
+  // Web-only overflow affordance on the horizontal browse shelf: chevron buttons
+  // that appear at the clipped edges to reveal filter chips scrolled off-screen.
+  'inbox.shelfMoreA11y': 'Show more filters',
+  'inbox.shelfPrevA11y': 'Show previous filters',
   'inbox.openBookmarkHint': 'Opens bookmark details',
   'inbox.filterAll': 'All',
   'inbox.filterNoCollection': 'Inbox',
