@@ -1,0 +1,26 @@
+diff --git a/dist/cjs/exports/StyleSheet/compiler/createReactDOMStyle.js b/dist/cjs/exports/StyleSheet/compiler/createReactDOMStyle.js
+index bb2b3ca0132fcb7772b3b74518853b3fe4c1f431..e93ca00727b8dd05871dacd7226ac7160ca07d0b 100644
+--- a/dist/cjs/exports/StyleSheet/compiler/createReactDOMStyle.js
++++ b/dist/cjs/exports/StyleSheet/compiler/createReactDOMStyle.js
+@@ -28,7 +28,7 @@ var _canUseDom = _interopRequireDefault(require("../../../modules/canUseDom"));
+ var emptyObject = {};
+ var supportsCSS3TextDecoration = !_canUseDom.default || window.CSS != null && window.CSS.supports != null && (window.CSS.supports('text-decoration-line', 'none') || window.CSS.supports('-webkit-text-decoration-line', 'none'));
+ var MONOSPACE_FONT_STACK = 'monospace,monospace';
+-var SYSTEM_FONT_STACK = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
++var SYSTEM_FONT_STACK = 'Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
+ var STYLE_SHORT_FORM_EXPANSIONS = {
+   borderColor: ['borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor'],
+   borderBlockColor: ['borderTopColor', 'borderBottomColor'],
+diff --git a/dist/exports/StyleSheet/compiler/createReactDOMStyle.js b/dist/exports/StyleSheet/compiler/createReactDOMStyle.js
+index dc4ffb98c20a10e3f2c890ffef33e75793d789f2..7ea5f290ec186add6c5dfc178e6e68e41ea94089 100644
+--- a/dist/exports/StyleSheet/compiler/createReactDOMStyle.js
++++ b/dist/exports/StyleSheet/compiler/createReactDOMStyle.js
+@@ -23,7 +23,7 @@ import canUseDOM from '../../../modules/canUseDom';
+ var emptyObject = {};
+ var supportsCSS3TextDecoration = !canUseDOM || window.CSS != null && window.CSS.supports != null && (window.CSS.supports('text-decoration-line', 'none') || window.CSS.supports('-webkit-text-decoration-line', 'none'));
+ var MONOSPACE_FONT_STACK = 'monospace,monospace';
+-var SYSTEM_FONT_STACK = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
++var SYSTEM_FONT_STACK = 'Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif';
+ var STYLE_SHORT_FORM_EXPANSIONS = {
+   borderColor: ['borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor'],
+   borderBlockColor: ['borderTopColor', 'borderBottomColor'],
