@@ -273,6 +273,13 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   if (oembed) {
     const fromOembed = await fetchOembed(oembed);
     if (fromOembed?.title) {
+      const videoId = youtubeVideoId(url);
+      if (videoId && fromOembed.preview_image_url) {
+        fromOembed.preview_image_url = await preferHiResYoutubeThumbnail(
+          videoId,
+          fromOembed.preview_image_url,
+        );
+      }
       return fromOembed;
     }
     // Record why oEmbed didn't provide a title so the failure breadcrumb below
@@ -487,6 +494,30 @@ async function fetchOembed(endpoint: string): Promise<FetchedMetadata | null> {
     return parseOembed((await response.json()) as OembedResponse);
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * YouTube oEmbed hands back the 480×360 `hqdefault` thumbnail, which upscales
+ * soft into a preview card on a 2× display. Prefer the 640×480 `sddefault`
+ * (~1.5× the bytes, ≈1:1 for the card) when the video actually has one; older /
+ * SD-only uploads 404 it, so fall back to the oEmbed thumbnail. `maxresdefault`
+ * would ~triple the bytes for resolution the card can't show, so it isn't worth
+ * fetching here. The thumbnails are served straight from YouTube's CDN, so this
+ * costs no storage or egress of ours — only one HEAD during background
+ * enrichment, which never blocks capture.
+ */
+async function preferHiResYoutubeThumbnail(videoId: string, fallback: string): Promise<string> {
+  const sd = `https://i.ytimg.com/vi/${videoId}/sddefault.jpg`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(sd, { method: 'HEAD', signal: controller.signal });
+    return response.ok ? sd : fallback;
+  } catch {
+    return fallback;
   } finally {
     clearTimeout(timer);
   }
