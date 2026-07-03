@@ -47,7 +47,13 @@ class WebBookmarkRepository implements BookmarkRepository {
     seedTagData?: TagData,
     seedEnrichments?: AIEnrichment[],
   ): Promise<void> {
-    const seeded = storageAvailable() && localStorage.getItem(SEEDED_KEY) === '1';
+    // Read the flag through the same helper `write` mirrors: the marker is
+    // persisted with `write` (which JSON.stringifies, storing `"1"`), so a raw
+    // `getItem(...) === '1'` never matched — the seed check always failed and
+    // every reload re-seeded, overwriting saved bookmarks with the empty seed
+    // (the "bookmarks disappear after refresh" bug on web). `read` JSON-parses,
+    // so an already-persisted `"1"` reads back as '1' and no re-wipe occurs.
+    const seeded = this.read<string | null>(SEEDED_KEY, null) === '1';
     this.bookmarks = this.read<Bookmark[]>(BOOKMARKS_KEY, []);
     // Entries persisted before mutation sync lack the operation field.
     this.queue = this.read<LocalPendingBookmark[]>(QUEUE_KEY, []).map((entry) => ({
