@@ -1212,7 +1212,11 @@ export default function InboxScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('inbox.reportStorageProblem')}
             onPress={() => router.push('/report')}
-            style={({ pressed }) => [styles.errorBanner, { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 }]}
+            style={({ pressed }) => [
+              styles.errorBanner,
+              { alignSelf: 'center', width: '100%', maxWidth: contentMaxWidth },
+              { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 },
+            ]}
           >
             <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
               {t('inbox.storageError')}
@@ -1230,6 +1234,7 @@ export default function InboxScreen() {
             onPress={() => router.push('/settings')}
             style={({ pressed }) => [
               styles.suggestBanner,
+              { alignSelf: 'center', width: '100%', maxWidth: contentMaxWidth },
               {
                 backgroundColor: palette.card,
                 borderWidth: StyleSheet.hairlineWidth,
@@ -1261,6 +1266,7 @@ export default function InboxScreen() {
             testID="review-banner"
             style={[
               styles.suggestBanner,
+              { alignSelf: 'center', width: '100%', maxWidth: contentMaxWidth },
               hasNewSuggestions
                 ? { backgroundColor: palette.accentSoft }
                 : {
