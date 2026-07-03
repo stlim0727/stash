@@ -69,6 +69,8 @@ export const ko: Catalog = {
   'inbox.sectionFacet': '{label} · {count}',
   'inbox.sectionRecent': '최근 저장됨',
   'inbox.loading': '북마크를 불러오는 중…',
+  'inbox.syncing': '북마크를 동기화하는 중…',
+  'inbox.syncingHint': '클라우드에서 저장한 링크를 가져오고 있어요.',
   'inbox.emptySearch': '검색과 일치하는 북마크가 없습니다.',
   'inbox.emptySearchHint': '태그, 폴더, 사이트 이름에서도 검색해요.',
   'inbox.clearSearch': '검색 지우기',
