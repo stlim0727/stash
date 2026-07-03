@@ -21,23 +21,20 @@ compatibility_date = "2026-07-03"
 workers_dev = false
 routes = [{ pattern = "keepory.app", custom_domain = true }]
 
-# Build the static bundle as part of `wrangler deploy` — but ONLY as a fallback.
-# `dist/` is gitignored, so without a build the deploy would upload a missing
-# assets directory and fail.
+# Build the static bundle as part of `wrangler deploy` itself, and stamp build
+# provenance so Settings shows the deployed commit. This runs in the deploy phase.
+# `dist/` is gitignored, so this also guarantees the assets directory exists.
 #
-# Phase ordering matters for build provenance. Cloudflare Workers Builds runs the
-# dashboard "Build command" FIRST (the build phase, where WORKERS_CI_COMMIT_SHA /
-# WORKERS_CI_BRANCH exist), then the "Deploy command" `npx wrangler deploy` —
-# which is where THIS hook runs. The commit env vars are NOT present in that
-# deploy phase (and `.git` may be absent too), so if this hook re-exported it
-# would overwrite the build phase's provenance-stamped dist with an empty one.
-#
-# So: SKIP when dist already exists (the dashboard "Build command" — expected to
-# be `bash scripts/web-build.sh` — built it in the build phase with provenance
-# stamped). Only build here when dist is missing, as a self-contained safety net,
-# via the same script (which falls back to git, then empty, for provenance).
+# We build here unconditionally (rather than trusting a dashboard "Build command")
+# because Cloudflare's commit env vars (WORKERS_CI_*) live only in the build phase,
+# and the dashboard build-config form on this project currently rejects edits — so
+# provenance has to be resolved here. scripts/web-build.sh derives the commit from
+# WORKERS_CI_* → the git binary → reading `.git/HEAD` directly, whichever the
+# deploy phase actually exposes, and degrades to "local build" (deploy still
+# succeeds) if none are present. It overwrites any dist a dashboard build produced;
+# that rebuild is the price of getting the commit stamped without dashboard access.
 [build]
-command = 'if [ -d apps/mobile/dist ]; then echo "dist already built in the build phase; keeping its provenance, skipping deploy-phase re-export"; else bash scripts/web-build.sh; fi'
+command = 'bash scripts/web-build.sh'
 
 [assets]
 # Path (relative to this file) to the exported static bundle.
