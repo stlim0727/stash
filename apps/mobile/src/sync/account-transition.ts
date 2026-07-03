@@ -149,6 +149,21 @@ export function planAccountTransition(
       resetWatermark: true,
     };
   }
+  if (current.isAnonymous) {
+    // Real account → anonymous. This is NEVER a deliberate "different person"
+    // switch: an explicit sign-out routes through planLogoutCacheClear, not
+    // here. It only happens when a real session fails to restore and the app
+    // minted a throwaway anonymous user (e.g. a transient secure-store read
+    // miss the auth layer couldn't classify as a real account). Dropping the
+    // cache here destroyed the user's local view of data that is still theirs
+    // (and still in their cloud) — the silent empty-Inbox "logged out" screen.
+    // So PRESERVE it: leave every row in place. The pull's deletion-skip guard
+    // (userChanged) already prevents these rows being wiped, and re-signing into
+    // the real account (same user id) restores full sync. Defense-in-depth
+    // alongside the auth layer's `session_expired` handling, which normally
+    // prevents this anonymous mint from happening at all.
+    return { kind: 'none', rehome: [], drop: [], dropQueue: [], resetWatermark: true };
+  }
   // Real A → real B: drop ALL of A's cloud-identity rows (synced AND
   // pending-edit/delete) plus their queued ops, same data-loss reasoning as
   // logout — keeping a pending update/delete keyed to A's UUID would fire it

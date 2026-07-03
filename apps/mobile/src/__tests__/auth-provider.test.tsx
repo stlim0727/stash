@@ -31,7 +31,7 @@ jest.mock('@/supabase/config', () => ({
 
 jest.mock('@/supabase/client', () => {
   const client = {
-    restoreSession: jest.fn(async () => null),
+    restoreSession: jest.fn(async () => ({ outcome: 'none' })),
     signInAnonymously: jest.fn(async () => mockAnonSession),
     signOut: jest.fn(async () => {}),
   };
@@ -45,7 +45,7 @@ jest.mock('@/supabase/run-oauth', () => ({
 import { SupabaseAuthProvider, useSupabaseAuth } from '@/supabase/auth-provider';
 
 const { __client: fakeClient } = jest.requireMock('@/supabase/client') as {
-  __client: { signOut: jest.Mock; signInAnonymously: jest.Mock };
+  __client: { signOut: jest.Mock; signInAnonymously: jest.Mock; restoreSession: jest.Mock };
 };
 // Same client instance — aliased for readability where we assert on minting.
 const fakeAnonClient = fakeClient;
@@ -67,6 +67,33 @@ test('bootstraps an anonymous session on mount', async () => {
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
   expect(result.current.isSignedIn).toBe(true);
   expect(result.current.email).toBeNull();
+});
+
+test('a REAL account whose session cannot be refreshed enters session_expired without minting anonymous', async () => {
+  // The reported bug: a signed-in user whose refresh token was rejected on
+  // launch got silently downgraded to a fresh anonymous user, which then made
+  // the sync account-transition drop their local cache (empty "logged out"
+  // Inbox). We must NOT mint anonymous here — keep the local data, prompt a
+  // re-sign-in.
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'expired', wasAnonymous: false });
+
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+
+  await waitFor(() => expect(result.current.status).toBe('session_expired'));
+  expect(result.current.session).toBeNull();
+  expect(result.current.isSignedIn).toBe(false);
+  // Crucially: NO anonymous user was minted (that is what dropped the cache).
+  expect(fakeAnonClient.signInAnonymously).not.toHaveBeenCalled();
+});
+
+test('an ANONYMOUS session that lapses still mints a fresh anonymous user (data carries over)', async () => {
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'expired', wasAnonymous: true });
+
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+  expect(result.current.isSignedIn).toBe(true);
+  expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(1);
 });
 
 test('signIn links the anonymous user and becomes authenticated', async () => {

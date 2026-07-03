@@ -417,8 +417,17 @@ export default function SettingsScreen() {
             <>
               <View style={styles.accountText}>
                 <Text style={styles.accountName} numberOfLines={1}>
-                  {t('settings.account.signIn')}
+                  {t(
+                    auth.status === 'session_expired'
+                      ? 'settings.account.sessionExpired'
+                      : 'settings.account.signIn',
+                  )}
                 </Text>
+                {auth.status === 'session_expired' ? (
+                  <Text style={styles.accountMeta} numberOfLines={2}>
+                    {t('settings.account.sessionExpiredBody')}
+                  </Text>
+                ) : null}
               </View>
               <View style={styles.authButtons}>
                 {AUTH_PROVIDERS.map(({ id, label, icon, a11yKey }) => (

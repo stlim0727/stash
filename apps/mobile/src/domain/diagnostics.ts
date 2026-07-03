@@ -17,6 +17,7 @@ export type DiagnosticsAuthStatus =
   | 'anonymous'
   | 'authenticated'
   | 'signed_out'
+  | 'session_expired'
   | 'error';
 
 export interface DiagnosticsInput {
@@ -79,6 +80,7 @@ function normalizeAuthStatus(
     case 'anonymous':
     case 'authenticated':
     case 'signed_out':
+    case 'session_expired':
     case 'error':
       return value;
     default:

@@ -83,7 +83,7 @@ try {
   session = refreshed;
 
   const restored = await client.restoreSession();
-  if (!restored || restored.user.id !== session.user.id) {
+  if (restored.outcome !== 'active' || restored.session.user.id !== session.user.id) {
     fail('session restore', 'restored session missing or for a different user');
   }
   ok('session restore');
