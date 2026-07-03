@@ -29,8 +29,15 @@ routes = [{ pattern = "keepory.app", custom_domain = true }]
 # before the deploy runs, and a manual `wrangler deploy` runs against an already-
 # installed tree, so the hook only needs the export step. Idempotent — harmless
 # if the dashboard build command already produced dist.
+#
+# Stamp build provenance into the bundle from Cloudflare Workers Builds' default
+# git env vars (WORKERS_CI_COMMIT_SHA / WORKERS_CI_BRANCH) so Settings shows the
+# deployed commit ("<branch> @ <sha>") instead of "local build". app.config.js
+# reads EXPO_PUBLIC_GIT_SHA/REF/COMMIT_URL into `extra`; unset (local wrangler
+# deploy) falls back to "local build". The `:+` guard leaves COMMIT_URL empty
+# when no SHA is present so it never links to a bare /commit/ URL.
 [build]
-command = "cd apps/mobile && CI=1 pnpm exec expo export --platform web"
+command = 'cd apps/mobile && EXPO_PUBLIC_GIT_SHA="$WORKERS_CI_COMMIT_SHA" EXPO_PUBLIC_GIT_REF="$WORKERS_CI_BRANCH" EXPO_PUBLIC_COMMIT_URL="${WORKERS_CI_COMMIT_SHA:+https://github.com/stlim0727/stash/commit/$WORKERS_CI_COMMIT_SHA}" CI=1 pnpm exec expo export --platform web'
 
 [assets]
 # Path (relative to this file) to the exported static bundle.
