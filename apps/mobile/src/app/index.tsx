@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import {
   ActivityIndicator,
@@ -243,6 +243,15 @@ const WORDMARK_HEIGHT = 30;
 // improvement while staying a single cross-platform rule.
 const CONTENT_MAX_WIDTH = 720;
 
+// The wide-screen Settings sheet docks on the right at this width (mirrors
+// `sheetPanel.maxWidth` in settings.tsx) over a threshold shared with its
+// `asSheet` rule. When it's open we slide the whole Inbox left by half this
+// width so the content re-centers in the visible region (window − panel)
+// instead of hiding its right column behind the panel — a translate, not a
+// re-layout, so the card grid keeps its column count and sizes.
+const SETTINGS_PANEL_WIDTH = 460;
+const SETTINGS_SHEET_MIN_WIDTH = 760;
+
 // A filler cell used to pad the last row of the multi-column card grid so the
 // real cards on that row keep their column width. Never rendered as a card — the
 // renderItem short-circuits it to an empty flex spacer.
@@ -387,6 +396,30 @@ export default function InboxScreen() {
   const { width: winWidth } = useWindowDimensions();
   const columns = viewMode === 'card' ? Math.min(3, Math.max(1, Math.floor(winWidth / 380))) : 1;
   const contentMaxWidth = columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
+  // The suggest/session banners are cards carrying a 16px horizontal margin
+  // (styles.suggestBanner), so capping them with `width: '100%'` would lay out
+  // as full width PLUS 32px of margin and overflow the row on phones. Give them
+  // an explicit width that already subtracts that gutter, then cap to the shared
+  // content column so they align with the other centered header rows.
+  const bannerWidth = Math.min(winWidth - 32, contentMaxWidth);
+
+  // Slide the Inbox aside for the wide-screen Settings sheet. Settings is a
+  // separate route presented as a transparent modal on top, so the Inbox stays
+  // mounted underneath; `usePathname` re-renders it when that route comes and
+  // goes. When the sheet is docked (wide viewport only), translate the whole
+  // screen left by half the panel width so the content re-centers in the
+  // visible region rather than tucking its right column behind the panel. The
+  // shift is animated so it reads as the content making room, not a jump.
+  const pathname = usePathname();
+  const settingsOpen = pathname === '/settings' && winWidth >= SETTINGS_SHEET_MIN_WIDTH;
+  const settingsShift = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(settingsShift, {
+      toValue: settingsOpen ? -SETTINGS_PANEL_WIDTH / 2 : 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [settingsOpen, settingsShift]);
 
   // How many inbox bookmarks have AI suggestions that arrived while the user
   // wasn't looking (auto-enrichment, a server-side trigger, another device) and
@@ -1132,7 +1165,12 @@ export default function InboxScreen() {
   }, [router, filter]);
 
   return (
-    <View style={[styles.container, { backgroundColor: palette.background }]}>
+    <Animated.View
+      style={[
+        styles.container,
+        { backgroundColor: palette.background, transform: [{ translateX: settingsShift }] },
+      ]}
+    >
       <Animated.View
         // The cluster is absolutely positioned so it floats over the list and
         // can translate out of view. It needs an opaque background so list rows
@@ -1212,7 +1250,11 @@ export default function InboxScreen() {
             accessibilityRole="button"
             accessibilityLabel={t('inbox.reportStorageProblem')}
             onPress={() => router.push('/report')}
-            style={({ pressed }) => [styles.errorBanner, { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 }]}
+            style={({ pressed }) => [
+              styles.errorBanner,
+              { alignSelf: 'center', width: '100%', maxWidth: contentMaxWidth },
+              { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 },
+            ]}
           >
             <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
               {t('inbox.storageError')}
@@ -1230,6 +1272,7 @@ export default function InboxScreen() {
             onPress={() => router.push('/settings')}
             style={({ pressed }) => [
               styles.suggestBanner,
+              { alignSelf: 'center', width: bannerWidth },
               {
                 backgroundColor: palette.card,
                 borderWidth: StyleSheet.hairlineWidth,
@@ -1261,6 +1304,7 @@ export default function InboxScreen() {
             testID="review-banner"
             style={[
               styles.suggestBanner,
+              { alignSelf: 'center', width: bannerWidth },
               hasNewSuggestions
                 ? { backgroundColor: palette.accentSoft }
                 : {
@@ -2032,7 +2076,7 @@ export default function InboxScreen() {
         }))}
         onClose={() => setSortMenuOpen(false)}
       />
-    </View>
+    </Animated.View>
   );
 }
 
