@@ -41,9 +41,11 @@ Web sign-in uses the same hand-rolled PKCE flow as native, but its redirect reso
 
 The provider-side redirect (Google/Apple) stays pointed at Supabase's own `…supabase.co/auth/v1/callback` and needs no change — Supabase validates the app's `redirectTo` against the allow-list above.
 
-## 4. How routing works
+## 4. How routing works (no config needed)
 
-`apps/mobile/public/_redirects` ships a single SPA fallback (`/* /index.html 200`). Cloudflare serves real files first — every route's HTML, `/manifest.webmanifest`, the PWA icons, and `/_expo/*` assets — so the rule only catches paths with no matching file (chiefly the dynamic `/bookmark/<id>` route), which fall back to the app shell and client-render. Capture deep links like `/add?url=…` hit the real `add.html`, so web capture is unaffected.
+Cloudflare Pages serves the per-route HTML the export emits — `/`, `/add`, `/settings`, `/auth/callback` are all real files, and capture deep links like `/add?url=…` hit the real `add.html`. Because the export includes **no top-level `404.html`**, Pages treats the build as a single-page application and falls back any unmatched path — chiefly the dynamic `/bookmark/<id>` route — to `index.html`, which expo-router then client-renders. That is Pages' built-in behavior; nothing to configure.
+
+Do **not** add a `_redirects` catch-all (`/* /index.html 200`) for this: on Cloudflare Pages, `_redirects` rules are [always followed even when an asset matches the request](https://developers.cloudflare.com/pages/configuration/redirects/), so a `/*` rule would rewrite the JS bundles, manifest, and icons to `index.html` too and the app would never load.
 
 ## 5. Capture surfaces pick up the domain automatically
 
