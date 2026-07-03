@@ -3,9 +3,11 @@
 # then `wrangler deploy` uploads that directory as an assets-only Worker — no
 # Worker script (`main`) is needed. See docs/development/deploy-web.md.
 #
-# `name` is the Worker/project name — change it if you name the project
-# differently in the Cloudflare dashboard.
-name = "keepory"
+# `name` must match the Worker/project name in the Cloudflare dashboard, so the
+# Git build's `wrangler deploy` targets the right Worker. ("keepory" was already
+# taken in the account, so the project was created as "keepory7"; the public URL
+# is the keepory.app custom domain, not this internal name.)
+name = "keepory7"
 compatibility_date = "2026-07-03"
 
 [assets]
