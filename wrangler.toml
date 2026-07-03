@@ -30,14 +30,21 @@ routes = [{ pattern = "keepory.app", custom_domain = true }]
 # installed tree, so the hook only needs the export step. Idempotent — harmless
 # if the dashboard build command already produced dist.
 #
-# Stamp build provenance into the bundle from Cloudflare Workers Builds' default
-# git env vars (WORKERS_CI_COMMIT_SHA / WORKERS_CI_BRANCH) so Settings shows the
-# deployed commit ("<branch> @ <sha>") instead of "local build". app.config.js
-# reads EXPO_PUBLIC_GIT_SHA/REF/COMMIT_URL into `extra`; unset (local wrangler
-# deploy) falls back to "local build". The `:+` guard leaves COMMIT_URL empty
-# when no SHA is present so it never links to a bare /commit/ URL.
+# Stamp build provenance into the bundle so Settings shows the deployed commit
+# ("<branch> @ <sha>") instead of "local build". Prefer Cloudflare Workers
+# Builds' git env vars, but FALL BACK to `git rev-parse` on the cloned repo:
+# WORKERS_CI_COMMIT_SHA is populated in the build-command phase, not necessarily
+# in the deploy-command phase where this wrangler [build] hook runs, so the env
+# var alone came through empty. app.config.js reads EXPO_PUBLIC_GIT_SHA/REF/
+# COMMIT_URL into `extra`; when both sources are empty it degrades to "local
+# build", and the `:+` guard leaves COMMIT_URL empty so it never links to a bare
+# /commit/ URL. The `|| true` on each git fallback is load-bearing: a failed
+# `git rev-parse` (no .git in the checkout) exits non-zero, and since the
+# assignments are `&&`-chained before `expo export`, that would abort the whole
+# build — `|| true` makes the substitution succeed with an empty value instead,
+# so the export always runs and the deploy degrades gracefully.
 [build]
-command = 'cd apps/mobile && EXPO_PUBLIC_GIT_SHA="$WORKERS_CI_COMMIT_SHA" EXPO_PUBLIC_GIT_REF="$WORKERS_CI_BRANCH" EXPO_PUBLIC_COMMIT_URL="${WORKERS_CI_COMMIT_SHA:+https://github.com/stlim0727/stash/commit/$WORKERS_CI_COMMIT_SHA}" CI=1 pnpm exec expo export --platform web'
+command = 'cd apps/mobile && SHA="${WORKERS_CI_COMMIT_SHA:-$(git -C .. rev-parse HEAD 2>/dev/null || true)}" && REF="${WORKERS_CI_BRANCH:-$(git -C .. rev-parse --abbrev-ref HEAD 2>/dev/null || true)}" && EXPO_PUBLIC_GIT_SHA="$SHA" EXPO_PUBLIC_GIT_REF="$REF" EXPO_PUBLIC_COMMIT_URL="${SHA:+https://github.com/stlim0727/stash/commit/$SHA}" CI=1 pnpm exec expo export --platform web'
 
 [assets]
 # Path (relative to this file) to the exported static bundle.
