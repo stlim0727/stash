@@ -134,8 +134,12 @@ test('the search banner names the facet the search is scoped to', async () => {
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
   const tapBrowseChip = async (label: string) => {
+    // The browse shelf folds away while a search is active (the slimmed
+    // search-results header), so switching facets between searches waits for the
+    // cleared query to settle and the shelf to remount before tapping.
+    const shelf = await waitFor(() => screen.getByTestId('browse-shelf'));
     await act(async () => {
-      fireEvent.press(within(screen.getByTestId('browse-shelf')).getByText(label));
+      fireEvent.press(within(shelf).getByText(label));
     });
   };
   const search = async (text: string) => {
