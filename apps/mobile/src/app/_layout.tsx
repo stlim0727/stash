@@ -8,6 +8,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { I18nProvider, useT } from '@/i18n';
 import { initSentry, wrapWithSentry } from '@/observability/sentry';
 import { installConsoleCapture } from '@/observability/log-buffer';
+import { installPwaHead } from '@/share/pwa-head';
 import { compareSemver } from '@/domain/version';
 import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
@@ -25,6 +26,11 @@ installConsoleCapture();
 // Start crash & error monitoring as early as possible — a no-op until a DSN is
 // configured (see observability/sentry-config).
 initSentry();
+
+// Inject the PWA <head> tags (manifest, theme color, apple-touch-icon) — needed
+// on web because output:"single" (SPA) doesn't use the +html.tsx template. A
+// no-op on native.
+installPwaHead();
 
 // The navigator lives in its own component so it can read the active locale
 // from `I18nProvider` (a hook can't run in the same component that mounts the

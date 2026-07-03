@@ -22,6 +22,14 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+// Drive the responsive card grid off a controllable viewport. Defaults to a
+// phone width so every existing test keeps columns === 1 (single column);
+// individual tests widen it to exercise the multi-column path.
+const mockWindowSize = { width: 390, height: 844, scale: 2, fontScale: 1 };
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => mockWindowSize,
+}));
 let mockParams: Record<string, string> = {};
 const mockPush = jest.fn();
 jest.mock('expo-router', () => {
@@ -69,6 +77,8 @@ function renderInbox() {
 beforeEach(() => {
   mockParams = {};
   mockPush.mockClear();
+  // Reset to a phone-width viewport so a widened test can't leak into others.
+  mockWindowSize.width = 390;
 });
 
 test('renders stored bookmarks with their titles', async () => {
@@ -1140,4 +1150,40 @@ test('the empty-search state offers a clear control and a searchable-fields hint
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
   expect(screen.queryByTestId('inbox-empty-search')).toBeNull();
   expect(input.props.value).toBe('');
+});
+
+test('a wide viewport flows the card layout into multiple columns', async () => {
+  // A desktop-web-width window: the card grid widens from the single fixed
+  // column to columns = min(3, floor(width / 380)). At 1280 that's 3.
+  mockWindowSize.width = 1280;
+  // Four cards in a 3-column grid → the final row is padded up to a multiple of
+  // 3 (6 cells) with two filler placeholders so the real cards keep their column
+  // width. numColumns is a composite FlatList prop RNTL v14 can't query on a host
+  // element, so we assert its observable consequence: the placeholder padding
+  // count uniquely pins the column count (4 cards, 2 fillers → 3 columns).
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000e1', title: 'Card one' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000e2', title: 'Card two' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000e3', title: 'Card three' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000e4', title: 'Card four' }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Card one')).toBeTruthy());
+
+  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(2);
+});
+
+test('a phone-width viewport keeps the card layout single-column (no grid padding)', async () => {
+  // The default phone width (390) yields floor(390 / 380) = 1 → single column,
+  // so no placeholder padding is added and the native path is unchanged.
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f1', title: 'Card one' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f2', title: 'Card two' }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Card one')).toBeTruthy());
+
+  expect(screen.queryByTestId('inbox-grid-filler')).toBeNull();
 });

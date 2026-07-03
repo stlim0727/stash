@@ -18,6 +18,7 @@ import {
   Text,
   TextInput,
   useColorScheme,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -236,6 +237,17 @@ const WORDMARK = {
 // lockstep (see heroWordmark / the hero Image).
 const WORDMARK_HEIGHT = 30;
 
+// On wide (desktop-web) viewports, cap the content column and center it so
+// cards, the header, and the browse shelf don't stretch edge-to-edge. No effect
+// on phones (their width is already below this), so it reads as a web-only
+// improvement while staying a single cross-platform rule.
+const CONTENT_MAX_WIDTH = 720;
+
+// A filler cell used to pad the last row of the multi-column card grid so the
+// real cards on that row keep their column width. Never rendered as a card — the
+// renderItem short-circuits it to an empty flex spacer.
+type GridPlaceholder = { id: string; __placeholder: true };
+
 /**
  * One pill in the Inbox browse shelf. Memoized so a filter change (which
  * re-renders the whole screen) only re-renders the chips whose `active` flag
@@ -366,6 +378,15 @@ export default function InboxScreen() {
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+
+  // Responsive multi-column card grid on wide (desktop-web) viewports. Only the
+  // card layout flows into 2–3 columns; compact/list stay single-column. On
+  // phones the width is below one column's worth (~380dp), so columns collapses
+  // to 1 and the content cap falls back to the fixed 720px column — the current
+  // phone behavior is preserved exactly with no Platform.OS branch.
+  const { width: winWidth } = useWindowDimensions();
+  const columns = viewMode === 'card' ? Math.min(3, Math.max(1, Math.floor(winWidth / 380))) : 1;
+  const contentMaxWidth = columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
 
   // How many inbox bookmarks have AI suggestions that arrived while the user
   // wasn't looking (auto-enrichment, a server-side trigger, another device) and
@@ -725,6 +746,25 @@ export default function InboxScreen() {
     [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
+  // In a multi-column card grid, pad the final row up to a full multiple of
+  // `columns` with lightweight placeholders so the last row's real cards keep
+  // their column width (flex: 1) instead of stretching across the leftover
+  // space. Single-column (phones, compact/list) passes `visible` through
+  // untouched, so those paths are byte-for-byte unchanged.
+  const gridData = useMemo<(Bookmark | GridPlaceholder)[]>(() => {
+    if (columns <= 1 || visible.length === 0) {
+      return visible;
+    }
+    const remainder = visible.length % columns;
+    if (remainder === 0) {
+      return visible;
+    }
+    const placeholders: GridPlaceholder[] = Array.from(
+      { length: columns - remainder },
+      (_, i) => ({ id: `__ph-${i}`, __placeholder: true }),
+    );
+    return [...visible, ...placeholders];
+  }, [visible, columns]);
   // A query is only a search when it produces at least one real search token. A
   // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
   // zero tokens, so `filterBookmarks` returns everything — treating that as a
@@ -1117,7 +1157,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
         ]}
       >
-        <View style={[styles.hero, { paddingTop: insets.top + 10 }]}>
+        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 10 }]}>
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -1270,7 +1310,7 @@ export default function InboxScreen() {
           </View>
         ) : null}
         {showControls ? (
-          <View style={styles.searchWrap}>
+          <View style={[styles.searchWrap, { maxWidth: contentMaxWidth }]}>
             <TextInput
               ref={searchRef}
               testID="inbox-search-input"
@@ -1313,7 +1353,7 @@ export default function InboxScreen() {
           />
         ) : null}
         {showControls && !showSuggestions ? (
-        <View style={styles.sortRow}>
+        <View style={[styles.sortRow, { maxWidth: contentMaxWidth }]}>
           {/* No "Browse" caption: the Sort pill, Tags pill, and view segment are
               self-evident controls, and the caption's width was forcing the
               view segment to wrap onto its own near-empty second row. Dropping
@@ -1376,7 +1416,7 @@ export default function InboxScreen() {
             horizontal
             showsHorizontalScrollIndicator={false}
             testID="browse-shelf"
-            style={styles.shelf}
+            style={[styles.shelf, { maxWidth: contentMaxWidth }]}
             contentContainerStyle={styles.shelfContent}
           >
             <BrowseChip
@@ -1458,8 +1498,13 @@ export default function InboxScreen() {
         </Animated.View>
       ) : null}
       <AnimatedFlatList
-        data={visible}
+        data={gridData}
         keyExtractor={(item) => item.id}
+        // Remount when the column count changes: FlatList forbids mutating
+        // numColumns on an existing instance.
+        key={`grid-${viewMode}-${columns}`}
+        numColumns={columns}
+        columnWrapperStyle={columns > 1 ? { gap: 16 } : undefined}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: true,
         })}
@@ -1473,6 +1518,7 @@ export default function InboxScreen() {
         scrollIndicatorInsets={{ top: scrollInsetTop }}
         contentContainerStyle={[
           styles.list,
+          { maxWidth: contentMaxWidth },
           viewMode !== 'card' ? styles.listModeList : null,
           // Start the list below the floating header (and the pinned filter bar
           // when active), and clear the Add button so it never covers the last row.
@@ -1579,6 +1625,11 @@ export default function InboxScreen() {
         }
         extraData={`${viewMode}|${searching}|${debouncedQuery}`}
         renderItem={({ item }) => {
+          // A grid-padding filler: render an empty flex cell so the real cards
+          // on the final row keep their column width instead of stretching.
+          if ('__placeholder' in item) {
+            return <View testID="inbox-grid-filler" style={{ flex: 1 }} />;
+          }
           const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
@@ -1825,7 +1876,7 @@ export default function InboxScreen() {
             );
           }
 
-          return (
+          const cardElement = (
             <Card style={styles.card}>
               <Pressable
                 onPress={openDetail}
@@ -1943,6 +1994,10 @@ export default function InboxScreen() {
               ) : null}
             </Card>
           );
+          // In a multi-column grid each cell must claim its column width (flex:
+          // 1) so cards don't collapse to content width. Single-column leaves the
+          // card unwrapped — the native/phone path is byte-for-byte unchanged.
+          return columns > 1 ? <View style={{ flex: 1 }}>{cardElement}</View> : cardElement;
         }}
       />
       <Pressable
@@ -1996,6 +2051,8 @@ const styles = StyleSheet.create({
   list: {
     padding: 16,
     gap: 16,
+    width: '100%',
+    alignSelf: 'center',
   },
   listModeList: {
     gap: 8,
@@ -2007,6 +2064,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 18,
     paddingBottom: 8,
+    width: '100%',
+    alignSelf: 'center',
   },
   heroTitleBlock: {
     flex: 1,
@@ -2181,6 +2240,8 @@ const styles = StyleSheet.create({
   searchWrap: {
     paddingHorizontal: 16,
     paddingTop: 10,
+    width: '100%',
+    alignSelf: 'center',
   },
   searchInput: {
     borderRadius: 20,
@@ -2202,6 +2263,8 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 16,
     paddingTop: 8,
+    width: '100%',
+    alignSelf: 'center',
   },
   sortPill: {
     flexDirection: 'row',
@@ -2249,6 +2312,8 @@ const styles = StyleSheet.create({
     minHeight: 42,
     marginTop: 6,
     marginBottom: 0,
+    width: '100%',
+    alignSelf: 'center',
   },
   shelfContent: {
     paddingHorizontal: 16,

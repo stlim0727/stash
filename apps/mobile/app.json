@@ -21,7 +21,7 @@
       "package": "com.stash.app"
     },
     "web": {
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
@@ -45,7 +45,10 @@
             "NSExtensionActivationSupportsWebPageWithMaxCount": 1,
             "NSExtensionActivationSupportsImageWithMaxCount": 1
           },
-          "androidIntentFilters": ["text/*", "image/*"]
+          "androidIntentFilters": [
+            "text/*",
+            "image/*"
+          ]
         }
       ],
       "@sentry/react-native/expo"
