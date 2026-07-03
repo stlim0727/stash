@@ -10,6 +10,17 @@
 name = "keepory7"
 compatibility_date = "2026-07-03"
 
+# Build the static bundle as part of `wrangler deploy` itself, so the deploy is
+# self-contained: it produces ./apps/mobile/dist regardless of the Cloudflare
+# project's dashboard "Build command" setting. `dist/` is gitignored, so without
+# this a deploy that skips or misconfigures the build step runs against a missing
+# assets directory and fails. Cloudflare Workers Builds installs dependencies
+# before the deploy runs, and a manual `wrangler deploy` runs against an already-
+# installed tree, so the hook only needs the export step. Idempotent — harmless
+# if the dashboard build command already produced dist.
+[build]
+command = "cd apps/mobile && CI=1 pnpm exec expo export --platform web"
+
 [assets]
 # Path (relative to this file) to the exported static bundle.
 directory = "./apps/mobile/dist"
