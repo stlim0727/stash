@@ -4,6 +4,8 @@
  * Android/ChromeOS. Same idea as the Android APK, which renders in the system
  * font (Roboto).
  */
+import { palettes } from '@/theme';
+
 const SYSTEM_FONT_STACK =
   'system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",' +
   'Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji",' +
@@ -55,6 +57,22 @@ export function installPwaHead() {
     const style = document.createElement('style');
     style.id = 'stash-base-font';
     style.textContent = BASE_FONT_CSS;
+    document.head.appendChild(style);
+  }
+  // The SPA shell (index.html) leaves html/body transparent — only the app's
+  // ScrollView paints the theme background, and it's sized to the `height:100%`
+  // root. Any area outside that box falls through to the browser's default
+  // white: the strip a mobile browser exposes when its URL bar collapses and
+  // grows the visual viewport past 100%, or an overscroll bounce. Paint the
+  // page itself the theme background so that gap matches the app instead of
+  // flashing white. Theme-aware via prefers-color-scheme, which is exactly what
+  // useColorScheme() keys the in-app theme off of.
+  if (!document.head.querySelector('style#stash-page-bg')) {
+    const style = document.createElement('style');
+    style.id = 'stash-page-bg';
+    style.textContent =
+      `html,body{background-color:${palettes.light.background};}` +
+      `@media (prefers-color-scheme:dark){html,body{background-color:${palettes.dark.background};}}`;
     document.head.appendChild(style);
   }
   ensure('link[rel="manifest"]', 'link', { rel: 'manifest', href: '/manifest.webmanifest' });
