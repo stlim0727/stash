@@ -1,15 +1,27 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useMemo, useRef, useState } from 'react';
-import { Animated, PanResponder, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  InteractionManager,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import {
   buildSettledGraph,
+  layoutTickBudget,
   UNTAGGED_HUB_ID,
   type DeriveGraphInput,
   type PositionedNode,
+  type SettledGraph,
 } from '@/domain/graph';
 import type { BookmarkTag, Tag } from '@/domain/types';
 import { useT } from '@/i18n';
@@ -25,8 +37,11 @@ const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
 const LABEL_SIZE = 24;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
-// the fit-to-bounds edge.
-const VIEWBOX_PAD = 90;
+// the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
+// HUB_MAX_R, and its label sits a further ~LABEL_SIZE below the circle (with
+// another line-height of glyph beneath the baseline), so the pad has to clear
+// the radius plus the full label drop or the busiest hub clips at the edge.
+const VIEWBOX_PAD = HUB_MAX_R + LABEL_SIZE * 2;
 // Pinch-zoom clamps.
 const MIN_SCALE = 0.4;
 const MAX_SCALE = 6;
@@ -53,9 +68,30 @@ export default function GraphScreen() {
   const router = useRouter();
   const { inbox, getTagsForBookmark } = useBookmarks();
 
+  // Content signature of the tag topology: sorted bookmark ids each joined with
+  // their sorted tag ids. The store's `inbox` is a fresh `.filter().sort()` array
+  // on every context-value recompute (verified in store/bookmarks.tsx — the memo
+  // that builds `value` depends on `queue`/`isSyncing`/`lastPulledAt`/
+  // `loadedBookmarks`, all of which churn on a background pull/enrich), so keying
+  // the settle on the array reference would re-settle — and re-scramble the
+  // layout under the user — on any sync, even one that changed no tags. Keying on
+  // this signature instead resettles ONLY when the topology actually changes.
+  const signature = useMemo(() => {
+    const parts: string[] = [];
+    for (const bookmark of inbox) {
+      const tagIds = getTagsForBookmark(bookmark.id)
+        .map((tag) => tag.id)
+        .sort();
+      parts.push(`${bookmark.id}:${tagIds.join(',')}`);
+    }
+    parts.sort();
+    return parts.join('|');
+  }, [inbox, getTagsForBookmark]);
+
   // Rebuild the derive-input from what the store exposes. deriveGraph only reads
   // bookmark_id/tag_id from links and id/name/slug from tags, so this is exact.
-  // Keyed on inbox + the tag accessor so it doesn't rebuild every render.
+  // Keyed on the topology signature so a background sync that changed no tags
+  // yields the same input reference and never triggers a resettle.
   const input = useMemo<DeriveGraphInput>(() => {
     const tagsById = new Map<string, Tag>();
     const bookmarkTags: BookmarkTag[] = [];
@@ -72,30 +108,64 @@ export default function GraphScreen() {
       }
     }
     return { bookmarks: inbox, tags: [...tagsById.values()], bookmarkTags };
-  }, [inbox, getTagsForBookmark]);
+    // Intentionally keyed on `signature`, not the churning `inbox`/accessor refs.
+  }, [signature]);
 
-  // The one, memoized settle. buildSettledGraph is a synchronous seeded layout —
-  // deterministic, and only re-runs when the input changes.
-  const graph = useMemo(() => buildSettledGraph(input), [input]);
+  // The settle is O(ticks·n²) and would block the JS thread through the screen's
+  // slide-in if run during render — enough to trip Stash's 2s hang detector on a
+  // large stash. So we hold the result in state and compute it in an effect AFTER
+  // `runAfterInteractions`, letting the screen paint and the navigation animation
+  // finish first. Deterministic seeded layout, so it only runs once per topology.
+  const [settled, setSettled] = useState<SettledGraph | null>(null);
+  useEffect(() => {
+    if (input.bookmarks.length === 0) {
+      // Nothing to lay out — the empty state renders; skip the settle entirely.
+      return;
+    }
+    let cancelled = false;
+    // Re-settling replaces every position, so show the loading state meanwhile
+    // rather than a stale graph.
+    setSettled(null);
+    const handle = InteractionManager.runAfterInteractions(() => {
+      if (cancelled) {
+        return;
+      }
+      // Upper bound on the derived node count (bookmarks + distinct tags + the
+      // possible single untagged hub). layoutTickBudget is non-increasing in n,
+      // so an overestimate only ever spends fewer ticks — never over budget.
+      const n = input.bookmarks.length + input.tags.length + 1;
+      const result = buildSettledGraph(input, { ticks: layoutTickBudget(n) });
+      if (!cancelled) {
+        setSettled(result);
+      }
+    });
+    return () => {
+      cancelled = true;
+      handle.cancel();
+    };
+  }, [input]);
 
   const nodeById = useMemo(() => {
     const map = new Map<string, PositionedNode>();
-    for (const node of graph.nodes) {
+    for (const node of settled?.nodes ?? []) {
       map.set(node.id, node);
     }
     return map;
-  }, [graph.nodes]);
+  }, [settled]);
 
   // Fit-to-bounds: a padded viewBox over the settled bounds, centered by the
   // Svg's preserveAspectRatio="xMidYMid meet". Guard zero-span (all-collapsed).
   const viewBox = useMemo(() => {
-    const b = graph.bounds;
+    const b = settled?.bounds;
+    if (!b) {
+      return `0 0 1 1`;
+    }
     const spanX = b.width || 1;
     const spanY = b.height || 1;
     return `${b.min_x - VIEWBOX_PAD} ${b.min_y - VIEWBOX_PAD} ${spanX + VIEWBOX_PAD * 2} ${
       spanY + VIEWBOX_PAD * 2
     }`;
-  }, [graph.bounds]);
+  }, [settled]);
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const onLayout = (event: LayoutChangeEvent) => {
@@ -160,6 +230,21 @@ export default function GraphScreen() {
     [translateX, translateY, scale],
   );
 
+  // Reset the pan/zoom transform to identity, which restores the initial
+  // fit-to-bounds view: the fit itself lives in the SVG's viewBox +
+  // preserveAspectRatio, so an untransformed canvas IS the fitted canvas. Lets a
+  // user who flung the graph off-screen get back without a way-out dead end.
+  const recenter = () => {
+    translateX.setOffset(0);
+    translateX.setValue(0);
+    translateY.setOffset(0);
+    translateY.setValue(0);
+    scale.setValue(1);
+    lastScale.current = 1;
+    liveScale.current = 1;
+    pinch.current = null;
+  };
+
   const openBookmark = (bookmarkId: string) => {
     router.push({ pathname: '/bookmark/[id]', params: { id: bookmarkId } });
   };
@@ -171,7 +256,10 @@ export default function GraphScreen() {
   };
 
   // No active bookmarks → a calm, intentional empty state (never a blank canvas).
-  if (graph.nodes.length === 0) {
+  // This short-circuits BEFORE the loading state: an empty stash shows the empty
+  // state, not a spinner. `input.bookmarks` is the active inbox, which is exactly
+  // what deriveGraph keeps, so an empty input means an empty graph.
+  if (input.bookmarks.length === 0) {
     return (
       <View
         testID="graph-empty"
@@ -186,8 +274,24 @@ export default function GraphScreen() {
     );
   }
 
+  // There ARE bookmarks but the off-render-path settle hasn't produced a layout
+  // yet → a light loading state while the map builds.
+  if (settled === null) {
+    return (
+      <View
+        testID="graph-loading"
+        style={[styles.emptyContainer, { backgroundColor: palette.background }]}
+      >
+        <ActivityIndicator color={palette.accent} />
+        <Text style={[styles.emptyHint, { color: palette.textSecondary }]}>
+          {t('graph.building')}
+        </Text>
+      </View>
+    );
+  }
+
   // Everything sits under the single untagged hub → surface the "add tags" hint.
-  const hasTags = graph.nodes.some((node) => node.kind === 'tag');
+  const hasTags = settled.nodes.some((node) => node.kind === 'tag');
 
   const w = viewport.w || 320;
   const h = viewport.h || 320;
@@ -206,7 +310,7 @@ export default function GraphScreen() {
         ]}
       >
         <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
-          {graph.edges.map((edge, i) => {
+          {settled.edges.map((edge, i) => {
             const source = nodeById.get(edge.source);
             const target = nodeById.get(edge.target);
             if (!source || !target) {
@@ -225,7 +329,7 @@ export default function GraphScreen() {
               />
             );
           })}
-          {graph.nodes.map((node) => {
+          {settled.nodes.map((node) => {
             if (node.kind === 'bookmark') {
               return (
                 <Circle
@@ -259,11 +363,15 @@ export default function GraphScreen() {
                     ? t('graph.untaggedA11y', { count: node.degree })
                     : t('graph.tagA11y', { name: node.label, count: node.degree })
                 }
+                // The untagged hub stays a no-op on tap: routing to the Inbox's
+                // "uncollected" facet would be semantically wrong (that's a
+                // collections concept, not a tag). The real fix is a dedicated
+                // untagged-tag facet, deferred.
                 onPress={isUntagged ? undefined : () => applyTagFacet(node.tag_id)}
               />
             );
           })}
-          {graph.nodes.map((node) => {
+          {settled.nodes.map((node) => {
             if (node.kind === 'bookmark') {
               return null;
             }
@@ -292,6 +400,24 @@ export default function GraphScreen() {
           </Text>
         </View>
       ) : null}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('graph.recenterA11y')}
+        testID="graph-recenter"
+        hitSlop={8}
+        onPress={recenter}
+        style={({ pressed }) => [
+          styles.recenter,
+          {
+            backgroundColor: palette.surface,
+            borderColor: palette.border,
+            opacity: pressed ? 0.6 : 1,
+          },
+        ]}
+      >
+        <Ionicons name="locate-outline" size={22} color={palette.text} />
+      </Pressable>
     </View>
   );
 }
@@ -328,5 +454,19 @@ const styles = StyleSheet.create({
   hintText: {
     fontSize: 14,
     textAlign: 'center',
+  },
+  recenter: {
+    position: 'absolute',
+    right: 20,
+    bottom: 28,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // elevation (no zIndex) keeps Android paint + touch in agreement so the
+    // control can't go visible-but-dead over the pan surface (STASH-7).
+    elevation: 3,
   },
 });

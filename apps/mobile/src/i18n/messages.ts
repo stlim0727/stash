@@ -69,6 +69,8 @@ export const en = {
   'graph.emptyHint': 'Save a few bookmarks and they’ll appear here, linked to their tags.',
   'graph.untaggedLabel': 'Untagged',
   'graph.untaggedHint': 'Add tags to your bookmarks to see how they connect.',
+  'graph.building': 'Building your map…',
+  'graph.recenterA11y': 'Recenter the graph',
   'graph.openA11y': 'Open the tag graph',
   'graph.tagA11y': {
     one: 'Tag {name}, {count} bookmark',
