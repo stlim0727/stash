@@ -13,6 +13,89 @@ _Brainstorm, 2026-07-04. Prompt: "let all team members look at the UX of the lat
 
 One thing the frames make unmissable: the list is a **firehose of spam** trading/forex/crypto channels with five-digit unread counts (`GOLDHUNTER PAUL 15610`, `Binance Killers 6822`). Much of Telegram's chrome — badges, counts, folders, archive — is *coping machinery for overwhelm*. That context matters for what we borrow.
 
+## Observed patterns catalog (team observation round)
+
+_A separate, deliberately non-prescriptive pass: the team re-watched the recording just to name **what UX is actually there**, before deciding anything. Three lenses — IA/interaction, UI mechanics, and the honest "what it reveals" read. Frame numbers refer to the 20 extracted frames._
+
+**Navigation & information architecture**
+- **Two-tier nav, cleanly separated** — bottom bar = 4 *destinations* (Chats/Contacts/Settings/Profile, icon+label, active tinted blue); top row = *filters* over the current list. The app never lets "where you are" look like "what you're filtering." (1–20)
+- **Folder/filter chip row** — scrollable pills `All 173 · Forex 60 · Unread 276 · Personal 146 · Stocks`, each with an inline count; active chip fills solid blue; re-scopes the list in place. (1–6)
+- **Pinned special rows at the top** — Archived Chats (own `76` count) and Saved Messages sit above real chats using the same row grammar. (1)
+- **Entity-type subtitles teach identity** — rows label *what a thing is*: "private channel", "public channel", "bot", "last seen 3:10 PM". (17–20)
+
+**Count/badge system**
+- **Count pills do double duty** — unread indicator on rows, size indicator on folder chips; blue = active-unread, muted grey = muted-but-unread (with a crossed-speaker glyph). (1–6)
+- **A dedicated "Unread 276" folder** — a first-class filter just for "stuff I haven't dealt with."
+
+**Search model**
+- **Scoped unified search** — field + second-level sub-tabs `Chats · Channels · Apps · Posts · Media` to switch query scope by content type. (17–20)
+- **Recent + "Clear All"** — prior targets listed with type captions before you type; one action wipes them. (18–20)
+- **Two entry points** — app-bar magnifier *and* a persistent search field atop the list, both morphing into the same search surface. (1–6)
+
+**List & density mechanics**
+- **Consistent row anatomy** — avatar/monogram · bold title (inline verified/scam/emoji badges) · one-line preview (sender bolded, media glyph) · right-aligned timestamp · unread pill. (1–20)
+- **High density** — 8–9 full rows/screen, edge-to-edge, content bleeding under header and nav.
+- **Compose FAB** — blue circular "+", floating bottom-right, distinct from tab nav. (1–3)
+- **Flat, high-radius visual system** — fully-rounded chips/pills/avatars, ~12px rounded fields, near-black bg with one accent blue; separation by color/spacing, not shadow.
+
+**Identity surfaces**
+- **Profile action-button trio** — `Set Photo · Edit Info · Settings` as three equal tiles, then labeled info rows. (10)
+- **Profile "Posts / Archived Posts"** — a lightweight publish-to-profile feed with empty state + "Add a post". (10)
+- **Settings rows with descriptive subtitles** — "Account — Number, Username, Bio" previews what's inside before you tap. (8–9)
+
+**Microcopy, states & confirmations**
+- **Inline confirmation card** — "Is +82… still your number?" with reassuring copy, "Learn more", and **No / 👍 Yes** — non-blocking, dismissible, lives *inside* the settings list. (8–9)
+- **Inline error state** — "This channel can't be displayed…" shown in the preview slot, not a modal. (1–3)
+- **Real Android status bar / safe area** retained throughout; top inset respected, list runs to the gesture pill.
+
+**The honest read — what these patterns _reveal_**
+Nearly every polished pattern above is coping machinery for a content problem, and that's the load-bearing lesson:
+- The list is almost entirely **monetized channel spam** (one channel is literally named *"Alphabet Forex is a scammer"*); folders, the Unread tab, archive, and count pills exist to *survive the firehose*, not to organize a life.
+- **Five-digit pills are dread, not signal** — nobody clears 15,610; past ~99 a badge trains you to ignore all badges, breaking the one that matters.
+- The **"Unread" folder is a debt-tracker** — a healthy app doesn't need a permanent tab for its own backlog.
+- **"This channel can't be displayed"** still carries an `834` badge — a dead row you can't read *or* dismiss, nagging anyway. (1–3)
+- The **verification card** is retention instrumentation colonizing a utility screen; the 👍 on "Yes" is a nudge, not clarity. (8–9)
+- **"Posts"** is a social feed most users never fill — its "Add a post" CTA overlaps its own empty-state text. (10)
+- **Two "profile" doors** (Profile tab *and* Settings tab, same avatar/@handle) — visible org-chart seams in the IA.
+- Content **bleeds under the bottom bar** (급등일보 peeking beneath the nav) — a floating bar eating the last row instead of resting on a safe inset. (1, 3, 5)
+
+**The takeaway that shapes the rest of this doc:** the video is a masterclass in *patterns* and a cautionary tale in *application* at once. The structural grammar (two-tier nav, scoped search, chip filters, inline states, descriptive subtitles) is worth learning from; the loud, anxiety-driven surface (big counts, a debt-tab, a feed, chat density, the inset-eating bar) is scar tissue around overwhelm we don't have. **Borrow the grammar, reject the anxiety.**
+
+## Design hints (interpretive round)
+
+_A third pass, one level deeper than observation: not "what patterns exist" or "what to build," but **what the patterns hint at** — the design DNA a keep-and-find app could inherit. Each hint reads: pattern → principle → provocation. Where all three lenses landed on the same idea independently, it's flagged as convergent._
+
+**1. Kill the number that reads as debt.** _(convergent — all three lenses)_ Telegram's five-digit pills quantify neglect and call it information. The inversion is Keepory's signature: nothing on screen accrues *against* you. If a count exists, it's one you'd be proud of ("3 things you'd lost, re-found this week") or an un-triaged count that ticks *down* with a soft settle as you file — the feel of a shrinking pile, never a growing dread.
+
+**2. Capture is sacred, made *physical*.** The chat bubble lands the instant you send; reconciliation is invisible. The release-to-save moment should land instantly and visibly — the row drops to position-zero with a settling haptic the moment your thumb lifts, fully decoupled from enrichment/sync. "Capture is sacred" becomes something *felt* on every save, which is what earns the next thousand.
+
+**3. Retrieval memory is an asset, not exhaust.** Telegram treats Recent searches as disposable ("Clear All"). Backwards for a keep-app: a query you repeat is recurring intent. Search can stage the answer before the question (just-saved, just-opened, "saved near here"), and a search run three times can offer to become a named shelf — retrieval habits promoting themselves into structure the user never had to author.
+
+**4. The app talks to you where you already are.** Telegram's error sits *in* the row; its confirmation card sits *in* the settings list — non-blocking, ignorable. Steal the mechanism, reject the nagging content: AI suggestions arrive as ambient, swipe-away in-stream cards (accept is a tap, ignore costs nothing), and a broken link keeps its row and gets *quieter* rather than growing a nag badge. Capture is never punished for enrichment failing.
+
+**5. Containers should smell of their contents.** "Account — Number, Username, Bio" tells you what's inside before you tap. The provocation: a collection's subtitle is a generated (clearly-generated) content fingerprint — "mostly recipes · last added yesterday" — not a raw count.
+
+**6. Visual recall is a right, not a luxury of good OG tags.** Every Telegram row has a monogram handle for the eye to grab. So: no save is ever a grey wall of title text — an honest domain-derived colored monogram renders optimistically from frame one, stable before enrichment returns.
+
+**The productive tension — time.** UX's headline bet was *time as the primary recall axis*: memory is episodic ("the article I saved during that flight"), the app stamps time for free, enrichment can't corrupt it, so scrub-to-when would feel like *remembering* rather than filing. Grumpy's near-opposite: *don't default-sort by arrival* — you saved it because it matters later, so a recency list re-buries intent. The reconciliation is the insight: **time is a powerful retrieval *lens* (a scrub-to-find gesture), not the default list *order* (which should lead with intent — un-triaged / pinned / revisited).**
+
+**The spine.** If one sentence ties the hints together: *a keep-and-find app should feel like a calm, single-player memory — you drop something in and it's instantly, physically yours; nothing ever accrues against you; and finding it later feels like remembering, not searching.* Every hint above is a facet of that sentence. These are directional, not committed scope.
+
+## Stress-test — the top 3 bets, adversarially broken (then narrowed)
+
+_Before getting attached, we ran the three highest-momentum hints through an inversion pass: try to break each. All three came back **wounded**, and the objections were good enough to change course. What survives is each bet narrowed to its honest core._
+
+**Bet 1 — Kill the debt-number.** _Kill shot:_ a down-ticking un-triaged count is *still a debt number if it never reaches zero* — a fast-saver / slow-filer watches it climb (save 40, triage 6 → "calm" counter reads 34 and rising). And the one "proud" number ("3 re-found this week") reads "**0** re-found this week" for a diligent saver — inventing productivity guilt where there was none. _Hidden cost:_ "no count ever accrues" becomes a global veto on every future count (shelf totals, search results).
+→ **Narrowed:** the debt-feeling comes from *any count that can't reach zero*. Our nav decision already fixes this — **Inbox = un-triaged only**, a queue designed to empty, so its count *can* hit zero (the actual "inbox zero" feeling). Keep that count; **drop the "re-found this week" vanity metric** (the fragile piece that manufactures guilt). _Open question:_ what does a fast-save/slow-file user see on day 30, and what's the honest "done" definition per item?
+
+**Bet 2 — Capture made physical.** _Kill shot:_ position-zero-on-release only feels physical if the row *stays* at position-zero — but the thesis is "don't default-sort by arrival." Under any non-newest sort or active facet, the thumb lifts and the row lands offscreen or vanishes (doesn't match the shelf); the haptic fires where the eye isn't — a promise the layout can't keep. Enrichment reorders the row seconds later anyway, and a haptic felt 50×/day habituates into the badge-blindness we mock.
+→ **Narrowed:** decouple reassurance from *position*. Confirm with a brief **settling highlight wherever the row belongs under the current sort**, plus the existing `CaptureToast`, and fire the haptic **only on a genuinely new capture** (duplicates already write nothing, bounding frequency). Reassurance you can always keep; a position-promise you can't. _Open question:_ does the haptic survive being felt 50× a day, or does it need a rarer trigger?
+
+**Bet 3 — Time as a recall lens.** _Kill shot:_ `created_at` is *capture* time, not *experience* time — you read the article on the flight and saved it 3 days later from your laptop, so for the highest-value (deliberate, deferred, re-saved) items save-time ≠ memory-time exactly. Co-occurrence surfaces whatever you bulk-imported that afternoon (noise, not narrative). Episodic labels need save *density* the median user (≈2 saves/week) lacks → the rail is a featureless smear. Biggest build, thinnest validated need; the honest v1 collapses into one more facet chip.
+→ **Demoted** from bet to **cheap gated experiment:** ship *only* the temporal search chips inside Search-as-a-tab, measure whether "that weekend" out-taps scrolling, and never build the rail/filmstrip speculatively. _Open question:_ what fraction of saves land in the same session as the memory being reached for — if it's low, there's nothing here but a fancy date filter.
+
+**Net:** the spine holds, but the two cheap bets get sharper and the expensive one is parked behind a metric. **Drop-first if forced to two: Bet 3** — prototype it only after Search-as-a-tab proves people re-find at all.
+
 ## Where the team agreed
 
 **Bottom tabs are the right structural move.** Keepory today has no tab bar; Review, Trash, Graph, Settings, and Report all hang off stack-pushes from the single Inbox screen (`apps/mobile/src/app/_layout.tsx`, the `router.push('/settings')`/`/report` calls in `index.tsx`). That buries the whole app behind one screen. A `(tabs)` group — **Inbox · Search · Library · You** — makes Keepory read as a *product* instead of a screen with buttons. Effort **M** (expo-router `Tabs`), with two known snags: `settings` (`transparentModal`) and `add` (`presentation:'modal'`) must stay modals presented *over* the tabs, and the Inbox hardware-back "peel" handler assumes the Inbox is the app root — a tab bar redefines "root," so that logic needs re-checking.
