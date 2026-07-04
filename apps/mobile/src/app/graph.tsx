@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -401,15 +401,126 @@ export default function GraphScreen() {
     pinch.current = null;
   };
 
-  const openBookmark = (bookmarkId: string) => {
-    router.push({ pathname: '/bookmark/[id]', params: { id: bookmarkId } });
-  };
-  const applyTagFacet = (tagId: string) => {
-    // Exactly how /browse/tags hands a facet to the root Inbox: dismiss this
-    // pushed route and re-apply the tag on the Inbox beneath, with a fresh nonce
-    // so re-selecting the same tag still re-applies.
-    router.dismissTo({ pathname: '/', params: { tag: tagId, t: nextFacetNonce() } });
-  };
+  // useCallback so these stay referentially stable across the `interacting`
+  // toggle — the memoized SVG node tree below depends on them, and rebuilding it
+  // on every gesture start/end is exactly the repaint hitch the raster hint exists
+  // to avoid.
+  const openBookmark = useCallback(
+    (bookmarkId: string) => {
+      router.push({ pathname: '/bookmark/[id]', params: { id: bookmarkId } });
+    },
+    [router],
+  );
+  const applyTagFacet = useCallback(
+    (tagId: string) => {
+      // Exactly how /browse/tags hands a facet to the root Inbox: dismiss this
+      // pushed route and re-apply the tag on the Inbox beneath, with a fresh nonce
+      // so re-selecting the same tag still re-applies.
+      router.dismissTo({ pathname: '/', params: { tag: tagId, t: nextFacetNonce() } });
+    },
+    [router],
+  );
+
+  // The edge + node + label SVG elements, memoized so a `setInteracting` toggle
+  // (which flips the transient raster hint at gesture start/end) re-renders ONLY
+  // the outer Animated.View/transform wrapper — NOT this whole vector tree. On a
+  // hundreds-of-node stash reconciling every <Line>/<Circle> twice per gesture is
+  // the very jank the raster hint is meant to hide. `interacting` is deliberately
+  // NOT a dep. Keyed on everything the JSX reads.
+  const svgChildren = useMemo(() => {
+    if (!settled) {
+      return null;
+    }
+    return (
+      <>
+        {settled.edges.map((edge, i) => {
+          const source = nodeById.get(edge.source);
+          const target = nodeById.get(edge.target);
+          if (!source || !target) {
+            return null;
+          }
+          return (
+            <Line
+              key={`e${i}`}
+              x1={source.x}
+              y1={source.y}
+              x2={target.x}
+              y2={target.y}
+              stroke={palette.border}
+              strokeWidth={EDGE_WIDTH}
+              strokeOpacity={0.55}
+            />
+          );
+        })}
+        {settled.nodes.map((node) => {
+          if (node.kind === 'bookmark') {
+            return (
+              <Circle
+                key={node.id}
+                testID={`graph-bookmark-${node.bookmark_id}`}
+                cx={node.x}
+                cy={node.y}
+                r={BOOKMARK_R}
+                fill={palette.textSecondary}
+                fillOpacity={0.55}
+                accessibilityLabel={t('graph.bookmarkA11y', { title: node.label })}
+                onPress={() => openBookmark(node.bookmark_id)}
+              />
+            );
+          }
+          const isUntagged = node.kind === 'untagged-hub';
+          const r = hubRadius(node.degree);
+          return (
+            <Circle
+              key={node.id}
+              testID={isUntagged ? 'graph-untagged-hub' : `graph-tag-${node.tag_id}`}
+              cx={node.x}
+              cy={node.y}
+              r={r}
+              fill={isUntagged ? palette.textSecondary : palette.accent}
+              fillOpacity={isUntagged ? 0.4 : 0.92}
+              stroke={isUntagged ? palette.border : palette.accentText}
+              strokeWidth={1.5}
+              accessibilityLabel={
+                isUntagged
+                  ? t('graph.untaggedA11y', { count: node.degree })
+                  : t('graph.tagA11y', { name: node.label, count: node.degree })
+              }
+              // The untagged hub stays a no-op on tap: routing to the Inbox's
+              // "uncollected" facet would be semantically wrong (that's a
+              // collections concept, not a tag). The real fix is a dedicated
+              // untagged-tag facet, deferred.
+              onPress={isUntagged ? undefined : () => applyTagFacet(node.tag_id)}
+            />
+          );
+        })}
+        {settled.nodes.map((node) => {
+          if (node.kind === 'bookmark') {
+            return null;
+          }
+          // Decluttered placement (may sit above/nudged instead of the fixed
+          // below position); the baseline is already resolved for either side.
+          const placement = labelById.get(node.id);
+          if (!placement) {
+            return null;
+          }
+          return (
+            <SvgText
+              key={`l${node.id}`}
+              x={placement.x}
+              y={placement.y}
+              fill={palette.text}
+              fontSize={LABEL_SIZE}
+              fontWeight="700"
+              textAnchor="middle"
+            >
+              {node.id === UNTAGGED_HUB_ID ? t('graph.untaggedLabel') : node.label}
+            </SvgText>
+          );
+        })}
+      </>
+    );
+  }, [settled, nodeById, labelById, palette, t, openBookmark, applyTagFacet]);
 
   // No active bookmarks → a calm, intentional empty state (never a blank canvas).
   // This short-circuits BEFORE the loading state: an empty stash shows the empty
@@ -474,91 +585,7 @@ export default function GraphScreen() {
         ]}
       >
         <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
-          {settled.edges.map((edge, i) => {
-            const source = nodeById.get(edge.source);
-            const target = nodeById.get(edge.target);
-            if (!source || !target) {
-              return null;
-            }
-            return (
-              <Line
-                key={`e${i}`}
-                x1={source.x}
-                y1={source.y}
-                x2={target.x}
-                y2={target.y}
-                stroke={palette.border}
-                strokeWidth={EDGE_WIDTH}
-                strokeOpacity={0.55}
-              />
-            );
-          })}
-          {settled.nodes.map((node) => {
-            if (node.kind === 'bookmark') {
-              return (
-                <Circle
-                  key={node.id}
-                  testID={`graph-bookmark-${node.bookmark_id}`}
-                  cx={node.x}
-                  cy={node.y}
-                  r={BOOKMARK_R}
-                  fill={palette.textSecondary}
-                  fillOpacity={0.55}
-                  accessibilityLabel={t('graph.bookmarkA11y', { title: node.label })}
-                  onPress={() => openBookmark(node.bookmark_id)}
-                />
-              );
-            }
-            const isUntagged = node.kind === 'untagged-hub';
-            const r = hubRadius(node.degree);
-            return (
-              <Circle
-                key={node.id}
-                testID={isUntagged ? 'graph-untagged-hub' : `graph-tag-${node.tag_id}`}
-                cx={node.x}
-                cy={node.y}
-                r={r}
-                fill={isUntagged ? palette.textSecondary : palette.accent}
-                fillOpacity={isUntagged ? 0.4 : 0.92}
-                stroke={isUntagged ? palette.border : palette.accentText}
-                strokeWidth={1.5}
-                accessibilityLabel={
-                  isUntagged
-                    ? t('graph.untaggedA11y', { count: node.degree })
-                    : t('graph.tagA11y', { name: node.label, count: node.degree })
-                }
-                // The untagged hub stays a no-op on tap: routing to the Inbox's
-                // "uncollected" facet would be semantically wrong (that's a
-                // collections concept, not a tag). The real fix is a dedicated
-                // untagged-tag facet, deferred.
-                onPress={isUntagged ? undefined : () => applyTagFacet(node.tag_id)}
-              />
-            );
-          })}
-          {settled.nodes.map((node) => {
-            if (node.kind === 'bookmark') {
-              return null;
-            }
-            // Decluttered placement (may sit above/nudged instead of the fixed
-            // below position); the baseline is already resolved for either side.
-            const placement = labelById.get(node.id);
-            if (!placement) {
-              return null;
-            }
-            return (
-              <SvgText
-                key={`l${node.id}`}
-                x={placement.x}
-                y={placement.y}
-                fill={palette.text}
-                fontSize={LABEL_SIZE}
-                fontWeight="700"
-                textAnchor="middle"
-              >
-                {node.id === UNTAGGED_HUB_ID ? t('graph.untaggedLabel') : node.label}
-              </SvgText>
-            );
-          })}
+          {svgChildren}
         </Svg>
       </Animated.View>
 
