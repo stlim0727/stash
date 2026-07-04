@@ -13,6 +13,12 @@ dist/
 build/
 coverage/
 
+# Netlify preview tooling (web-preview skill) — transient, regenerated per run.
+# Production web deploys use Cloudflare (wrangler.toml); these never get committed.
+netlify.toml
+.netlify/
+**/.netlify/
+
 # Logs
 *.log
 npm-debug.log*
