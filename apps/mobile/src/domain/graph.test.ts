@@ -239,6 +239,45 @@ test('layout is deterministic: same input -> identical positions', () => {
   assert.deepEqual(a.bounds, b.bounds);
 });
 
+test('mass-weighting (ablation) pulls the high-degree tag closer to the centroid', () => {
+  // Real ablation: settle the SAME graph twice — once with production
+  // mass-weighting (default massK) and once with it OFF (massK: 0) — everything
+  // else (seed, ticks, input) identical, so the mass term is the only variable.
+  //
+  // Balanced fixture: one popular tag (8 bookmarks) and two symmetric minor
+  // tags (6 each). Symmetry keeps the unweighted centroid from being pinned on
+  // the popular cluster by topology alone, so any centering must come from mass.
+  const bookmarks: Bookmark[] = [];
+  const bookmarkTags: BookmarkTag[] = [];
+  const tags = [makeTag('popular'), makeTag('minor0'), makeTag('minor1')];
+  let idc = 0;
+  const addCluster = (tagId: string, count: number) => {
+    for (let i = 0; i < count; i += 1) {
+      const id = `bk${idc++}`;
+      bookmarks.push(makeBookmark(id));
+      bookmarkTags.push(link(id, tagId));
+    }
+  };
+  addCluster('popular', 8);
+  addCluster('minor0', 6);
+  addCluster('minor1', 6);
+  const input: DeriveGraphInput = { bookmarks, tags, bookmarkTags };
+
+  const distToPopular = (settled: ReturnType<typeof buildSettledGraph>) => {
+    const cx = settled.nodes.reduce((s, n) => s + n.x, 0) / settled.nodes.length;
+    const cy = settled.nodes.reduce((s, n) => s + n.y, 0) / settled.nodes.length;
+    const node = settled.nodes.find((n) => n.id === 't:popular')!;
+    return Math.hypot(node.x - cx, node.y - cy);
+  };
+
+  const massOn = distToPopular(buildSettledGraph(input));
+  const massOff = distToPopular(buildSettledGraph(input, { massK: 0 }));
+  assert.ok(
+    massOn < massOff,
+    `mass-weighting must move the popular tag closer to the centroid: on=${massOn} off=${massOff}`,
+  );
+});
+
 test('different seeds produce different layouts', () => {
   const graph = deriveGraph(smallFixture());
   const a = layoutGraph(graph, { seed: 1 });
