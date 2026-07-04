@@ -116,3 +116,57 @@ test('input order does not matter: reversed input yields identical output', () =
   const reversed = resolveHubLabels([...hubs].reverse(), FONT);
   assert.deepEqual(reversed, normal);
 });
+
+function boxWidth(box: LabelBox): number {
+  return box.max_x - box.min_x;
+}
+
+test('a 2-char Korean tag is measured ~2 ems wide, not ~1.3 ems', () => {
+  // "여행" (travel) is two full-width Hangul syllables → ~2 ems. The old flat
+  // Latin factor (2 * 0.65 = 1.3 ems) badly under-measures it.
+  const [placement] = resolveHubLabels(
+    [{ id: 't:travel', x: 0, y: 0, r: 20, text: '여행', degree: 5 }],
+    FONT,
+  );
+  const width = boxWidth(placement.box);
+  // Wide glyphs counted wide: ~2 ems, and well clear of the old 1.3-em estimate.
+  assert.equal(width, 2 * FONT);
+  assert.ok(width > 1.5 * FONT, `Korean label width ${width} was measured too narrow`);
+});
+
+test('nearby Korean hub labels the old flat factor missed now declutter', () => {
+  // Centers 35 units apart. Under the OLD flat 0.65-em model each 2-char Korean
+  // box is only 2*24*0.65 = 31.2 wide (half 15.6): box A x[-15.6,15.6],
+  // box B x[19.4,50.6] → NO x-overlap, so the old code leaves BOTH below and the
+  // real (full-width) glyphs visibly collide. Under the per-glyph model each box
+  // is 2*24 = 48 wide (half 24): A x[-24,24], B x[11,59] → they overlap, so the
+  // declutter must move one off the default below row.
+  const hubs: HubLabelInput[] = [
+    { id: 't:여행', x: 0, y: 0, r: 20, text: '여행', degree: 5 },
+    { id: 't:투자', x: 35, y: 0, r: 20, text: '투자', degree: 3 },
+  ];
+  const placements = resolveHubLabels(hubs, FONT);
+  const byId = new Map(placements.map((p) => [p.id, p]));
+
+  // The regression the old flat factor produced: BOTH labels below. The fix must
+  // move the lower-priority one (this assertion fails against the old code).
+  const positions = placements.map((p) => p.position);
+  assert.ok(
+    positions.some((pos) => pos !== 'below'),
+    'both Korean labels stayed below — overlap not resolved (old flat-factor regression)',
+  );
+  // Busiest hub keeps below; the other flips above.
+  assert.equal(byId.get('t:여행')!.position, 'below');
+  assert.equal(byId.get('t:투자')!.position, 'above');
+  // Resolved boxes no longer overlap.
+  assert.equal(boxesOverlap(byId.get('t:여행')!.box, byId.get('t:투자')!.box), false);
+});
+
+test('Latin-only labels keep the narrow factor (unchanged width)', () => {
+  const [placement] = resolveHubLabels(
+    [{ id: 't:cooking', x: 0, y: 0, r: 20, text: 'cooking', degree: 5 }],
+    FONT,
+  );
+  // 7 narrow glyphs at 0.65 em each.
+  assert.equal(boxWidth(placement.box), 7 * 0.65 * FONT);
+});

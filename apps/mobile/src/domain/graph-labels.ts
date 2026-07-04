@@ -55,14 +55,22 @@ export interface HubLabelPlacement {
 }
 
 /**
- * Estimated glyph width per character as a fraction of the font size. Exact glyph
- * metrics aren't available to SVG here, so we approximate with a monospace-ish
- * factor. The labels render BOLD (fontWeight 700), which runs wider than the
- * regular-weight average, so this deliberately over-estimates a touch: a slightly
- * wider box only makes the declutter MORE conservative (catches marginal
- * collisions a narrower box would miss), never less.
+ * Estimated glyph width per code point, as a fraction of the font size. Exact
+ * glyph metrics aren't available to SVG here, so we approximate per-glyph and sum.
+ *
+ * Latin/narrow glyphs get `NARROW_EM`. The labels render BOLD (fontWeight 700),
+ * which runs wider than the regular-weight average, so this narrow factor
+ * deliberately over-estimates a touch — a slightly wider box only makes the
+ * declutter MORE conservative, never less.
+ *
+ * CJK/full-width glyphs (Korean/Chinese/Japanese/full-width forms) render ~1 em
+ * square — roughly 1.5× the narrow estimate — so a flat narrow factor badly
+ * under-estimates a Korean tag like "여행" and would leave two nearby Korean hub
+ * labels judged non-overlapping when they visually collide. `WIDE_EM` counts
+ * those glyphs at ~1 em so the box tracks their real width.
  */
-const CHAR_WIDTH_FACTOR = 0.65;
+const NARROW_EM = 0.65;
+const WIDE_EM = 1.0;
 
 /**
  * Bounded nudge offsets (in multiples of fontSize) tried in order for each side.
@@ -78,8 +86,46 @@ export function maxLabelOffset(fontSize: number): number {
   return 2 * fontSize;
 }
 
+/**
+ * Whether a code point renders as a wide/full-width glyph (~1 em square). A
+ * pragmatic range check that errs WIDE/conservative rather than reproducing the
+ * full Unicode East-Asian-Width table:
+ *  - Hangul Jamo (1100–11FF) + Hangul Compatibility Jamo (3130–318F)
+ *  - CJK Symbols & Punctuation (3000–303F)
+ *  - Hiragana + Katakana (3040–30FF)
+ *  - CJK Unified Ideographs Ext-A (3400–4DBF) + base (4E00–9FFF)
+ *  - Hangul Syllables (AC00–D7A3)
+ *  - Fullwidth Forms (FF00–FF60) + Fullwidth signs (FFE0–FFE6)
+ *  - CJK Unified Ideographs Ext-B and beyond (>= 20000, matched by code point so
+ *    surrogate pairs count as one wide glyph)
+ */
+function isWideCodePoint(cp: number): boolean {
+  return (
+    (cp >= 0x1100 && cp <= 0x11ff) ||
+    (cp >= 0x3000 && cp <= 0x303f) ||
+    (cp >= 0x3040 && cp <= 0x30ff) ||
+    (cp >= 0x3130 && cp <= 0x318f) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    cp >= 0x20000
+  );
+}
+
+/**
+ * Estimated label width: sum of per-code-point glyph widths. Iterating by code
+ * point (spread, not `.length`) means a CJK Ext-B surrogate pair counts as one
+ * wide glyph, and mixed Latin/CJK tags are measured segment-by-segment.
+ */
 function estimateWidth(text: string, fontSize: number): number {
-  return text.length * fontSize * CHAR_WIDTH_FACTOR;
+  let ems = 0;
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    ems += isWideCodePoint(cp) ? WIDE_EM : NARROW_EM;
+  }
+  return ems * fontSize;
 }
 
 /** Area of the intersection of two boxes (0 when they merely touch or miss). */
