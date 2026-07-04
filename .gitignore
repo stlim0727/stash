@@ -13,9 +13,9 @@ dist/
 build/
 coverage/
 
-# Netlify preview tooling (web-preview skill) — transient, regenerated per run.
-# Production web deploys use Cloudflare (wrangler.toml); these never get committed.
-netlify.toml
+# Netlify CLI local state (web-preview skill). netlify.toml IS committed (it
+# drives Netlify's Git-integration builds); only the CLI's local state dir is
+# transient. Production web deploys still use Cloudflare (wrangler.toml).
 .netlify/
 **/.netlify/
 
