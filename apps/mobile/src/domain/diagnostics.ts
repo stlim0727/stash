@@ -141,7 +141,7 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 export function formatDiagnosticsReport(context: DiagnosticsContext): string {
   const { logs, ...summary } = context;
   const lines = [
-    `Stash diagnostics — ${context.build ?? context.appVersion}`,
+    `Keepory diagnostics — ${context.build ?? context.appVersion}`,
     '',
     JSON.stringify(summary, null, 2),
   ];

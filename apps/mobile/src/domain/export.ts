@@ -186,10 +186,10 @@ export function toNetscapeHtml(input: ExportInput): string {
   const lines: string[] = [
     '<!DOCTYPE NETSCAPE-Bookmark-file-1>',
     '<!-- This is an automatically generated file. It will be read and overwritten.',
-    '     Exported from Stash. -->',
+    '     Exported from Keepory. -->',
     '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">',
     '<TITLE>Bookmarks</TITLE>',
-    '<H1>Stash Bookmarks</H1>',
+    '<H1>Keepory Bookmarks</H1>',
     '<DL><p>',
   ];
 

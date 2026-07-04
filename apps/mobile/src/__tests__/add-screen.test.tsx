@@ -55,7 +55,7 @@ beforeEach(() => {
 });
 
 describe('AddBookmarkScreen duplicate UX', () => {
-  it('shows "Already in Stash" when adding a URL already stashed', async () => {
+  it('shows "Already in Keepory" when adding a URL already stashed', async () => {
     fakeRepo.__reset([makeStoredBookmark({ url: 'https://example.com/stored' })]);
     const { findByText, getByPlaceholderText, unmount } = await renderAddScreen();
     // Let the store finish loading so the in-memory dedupe sees the stored row.
@@ -68,7 +68,7 @@ describe('AddBookmarkScreen duplicate UX', () => {
       fireEvent.press(await findByText('Save bookmark'));
     });
 
-    await findByText('Already in Stash');
+    await findByText('Already in Keepory');
     expect(mockBack).toHaveBeenCalled();
     // Dedupe held: no new create was enqueued.
     expect(fakeRepo.__queue()).toHaveLength(0);
@@ -82,7 +82,7 @@ describe('AddBookmarkScreen duplicate UX', () => {
     unmount();
   });
 
-  it('shows "Saved to Stash" for a genuinely new URL', async () => {
+  it('shows "Saved to Keepory" for a genuinely new URL', async () => {
     fakeRepo.__reset([makeStoredBookmark({ url: 'https://example.com/stored' })]);
     const { findByText, getByPlaceholderText, unmount } = await renderAddScreen();
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
@@ -94,7 +94,7 @@ describe('AddBookmarkScreen duplicate UX', () => {
       fireEvent.press(await findByText('Save bookmark'));
     });
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     expect(mockBack).toHaveBeenCalled();
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     unmount();
@@ -110,7 +110,7 @@ describe('AddBookmarkScreen web capture endpoint', () => {
     const { findByText, queryByPlaceholderText, unmount } = await renderAddScreen();
 
     // Confirms with the shared capture toast and never shows the manual form.
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     expect(queryByPlaceholderText('https://')).toBeNull();
     // Landed the freshly stashed item by replacing to the Inbox.
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/'));
@@ -125,7 +125,7 @@ describe('AddBookmarkScreen web capture endpoint', () => {
     mockParams = { url: 'https://example.com/article', text: 'a selected quote' };
     const { findByText, unmount } = await renderAddScreen();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     const saved = fakeRepo
       .__bookmarks()
@@ -139,7 +139,7 @@ describe('AddBookmarkScreen web capture endpoint', () => {
     mockParams = { text: 'a shared message with no link' };
     const { findByText, unmount } = await renderAddScreen();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/'));
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     unmount();

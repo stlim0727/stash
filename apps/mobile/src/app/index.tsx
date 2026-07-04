@@ -382,10 +382,10 @@ export default function InboxScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const auth = useSupabaseAuth();
-  // Pick the wordmark: bilingual lockup when the locale has a native form
-  // (app.nameLocal differs from app.name), and the variant that matches the
-  // active light/dark theme. The a11y label mirrors what sighted users see, so
-  // screen readers announce the native wordmark too (e.g. "Stash 스태시").
+  // Pick the wordmark variant that matches the active light/dark theme. If a
+  // locale ever ships a native form (app.nameLocal differs from app.name) the
+  // bilingual lockup is used; today every locale shares the "Keepory" lockup.
+  // The a11y label mirrors what sighted users see (e.g. "Keepory").
   const scheme = useColorScheme();
   const hasLocalName = t('app.nameLocal') !== t('app.name');
   const wmSet = hasLocalName ? WORDMARK.local : WORDMARK.en;

@@ -122,8 +122,8 @@ export const en = {
   // field). Marks WHY a result matched when nothing else on the card shows it.
   'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': 'Nothing in this view yet.',
-  'inbox.emptyTitle': 'Your stash is empty',
-  'inbox.emptyHintShare': 'Share a link from any app and pick Stash to save it in a tap.',
+  'inbox.emptyTitle': 'Nothing saved yet',
+  'inbox.emptyHintShare': 'Share a link from any app and pick Keepory to save it in a tap.',
   'inbox.emptyHintAdd': 'Or tap ＋ below to add one by hand.',
   'inbox.moreActions': 'More actions',
   'inbox.moveToCollectionAction': 'Move to collection…',
@@ -234,11 +234,11 @@ export const en = {
   'add.saving': 'Saving…',
 
   // Capture toasts (also used by the share flow).
-  'toast.saved': 'Saved to Stash',
-  'toast.savedCount': { one: 'Saved to Stash', other: '{count} saved to Stash' },
-  'toast.duplicate': 'Already in Stash',
+  'toast.saved': 'Saved to Keepory',
+  'toast.savedCount': { one: 'Saved to Keepory', other: '{count} saved to Keepory' },
+  'toast.duplicate': 'Already in Keepory',
   'toast.trashed': 'Moved to Trash',
-  'toast.noLink': 'No link found to stash',
+  'toast.noLink': 'No link found to save',
 
   // Settings.
   'settings.section.account': 'Account',
@@ -247,18 +247,18 @@ export const en = {
   'settings.section.data': 'Your data',
   'settings.section.advanced': 'Advanced',
   'settings.section.browser': 'Save from your browser',
-  'settings.bookmarklet.button': '⊕ Save to Stash',
+  'settings.bookmarklet.button': '⊕ Save to Keepory',
   'settings.bookmarklet.copied': 'Copied!',
   'settings.bookmarklet.note':
-    'Drag this button to your bookmarks bar (or click to copy it). Then click it on any page to stash it.',
+    'Drag this button to your bookmarks bar (or click to copy it). Then click it on any page to save it.',
   'settings.account.signedIn': 'Signed in',
   'settings.account.signIn': 'Sign In',
   'settings.account.sessionExpired': 'Session expired',
   'settings.account.sessionExpiredBody': 'Sign back in to resume syncing. Your bookmarks are safe.',
   'settings.account.signOut': 'Sign out',
   'settings.account.cloudUnavailable': 'Cloud sync unavailable',
-  'settings.account.worksOffline': 'Stash works fully offline',
-  'settings.account.signOutConfirmTitle': 'Sign out of Stash?',
+  'settings.account.worksOffline': 'Keepory works fully offline',
+  'settings.account.signOutConfirmTitle': 'Sign out of Keepory?',
   'settings.account.signOutConfirmBody':
     'Your bookmarks are safely backed up to your account. Sign back in anytime to see them again.',
   'settings.account.signOutConfirm': 'Sign out',
@@ -320,7 +320,7 @@ export const en = {
   'settings.exportSheet.json': 'Full backup (JSON)',
   'settings.importSheet.title': 'Import data',
   'settings.importSheet.html': 'Bookmarks file (HTML)',
-  'settings.importSheet.json': 'Stash backup (JSON)',
+  'settings.importSheet.json': 'Keepory backup (JSON)',
   'settings.importSheet.pocket': 'Pocket export (CSV)',
   'settings.export.failedTitle': 'Export failed',
   'settings.export.failedBody': 'Could not export your data. Please try again.',
@@ -345,7 +345,7 @@ export const en = {
   'trash.restore': 'Restore',
 
   'update.title': 'Update Required',
-  'update.body': 'This version of Stash is no longer supported. Please update to continue.',
+  'update.body': 'This version of Keepory is no longer supported. Please update to continue.',
   'update.button': 'Download Update',
 
   // Bookmark detail.

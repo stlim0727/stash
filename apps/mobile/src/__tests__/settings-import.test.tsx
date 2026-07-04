@@ -78,8 +78,8 @@ test('imports bookmarks from a Stash JSON backup and reports the count', async (
   await waitFor(() => view.getByText('Nothing to export yet'));
 
   await fireEvent.press(view.getByLabelText('Import data'));
-  await waitFor(() => view.getByLabelText('Stash backup (JSON)'));
-  await fireEvent.press(view.getByLabelText('Stash backup (JSON)'));
+  await waitFor(() => view.getByLabelText('Keepory backup (JSON)'));
+  await fireEvent.press(view.getByLabelText('Keepory backup (JSON)'));
 
   await waitFor(() => expect(alertSpy).toHaveBeenCalled());
   expect(mockPickImportFile).toHaveBeenCalledWith('json');
@@ -111,8 +111,8 @@ test('imports an HTML bookmarks file and dedupes against the existing library', 
   mockPickImportFile.mockResolvedValueOnce({ name: 'seed.json', text: firstImport });
 
   await fireEvent.press(view.getByLabelText('Import data'));
-  await waitFor(() => view.getByLabelText('Stash backup (JSON)'));
-  await fireEvent.press(view.getByLabelText('Stash backup (JSON)'));
+  await waitFor(() => view.getByLabelText('Keepory backup (JSON)'));
+  await fireEvent.press(view.getByLabelText('Keepory backup (JSON)'));
   await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
   // Now import the HTML file: one URL overlaps (duplicate), one is new.

@@ -390,7 +390,7 @@ export default function SettingsScreen() {
   // Always-visible footer line so the deployed version/commit is verifiable
   // without opening Developer mode. Appends the commit when one is baked in.
   const buildLine =
-    `Stash ${Constants.expoConfig?.version ?? '0.0.0'}` +
+    `Keepory ${Constants.expoConfig?.version ?? '0.0.0'}` +
     (build.shortSha ? ` · ${build.ref ? `${build.ref} @ ` : ''}${build.shortSha}` : '');
 
   const content = (

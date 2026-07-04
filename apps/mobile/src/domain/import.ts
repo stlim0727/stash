@@ -83,7 +83,7 @@ export function parseJsonBackup(text: string): ImportItem[] {
 
   const bookmarks = (parsed as { bookmarks?: unknown })?.bookmarks;
   if (!Array.isArray(bookmarks)) {
-    throw new ImportError("This doesn't look like a Stash backup — no bookmarks were found.");
+    throw new ImportError("This doesn't look like a Keepory backup — no bookmarks were found.");
   }
 
   return bookmarks.map((raw): ImportItem => {
