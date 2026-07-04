@@ -1082,13 +1082,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [tagData],
   );
 
+  // Precompute bookmarkId -> newest enrichment once per `enrichments` change, so
+  // getEnrichment is an O(1) Map lookup instead of an O(E) filter+sort per call.
+  // The Inbox recomputes `pendingReviewCount`/`newSuggestionsCount` over every
+  // bookmark on each render and calls getEnrichment for each — the old per-call
+  // scan made that O(bookmarks x enrichments) and allocated a throwaway array
+  // every time, a freeze/GC risk on a large library. Mirrors `tagsByBookmark`.
+  const enrichmentsById = useMemo(() => {
+    const map = new Map<string, AIEnrichment>();
+    for (const enrichment of enrichments) {
+      const current = map.get(enrichment.bookmark_id);
+      // Newest wins; on a tie keep the first seen (matches the old descending
+      // sort + stable-sort + [0], which returned the earliest-indexed of the max).
+      if (!current || enrichment.created_at.localeCompare(current.created_at) > 0) {
+        map.set(enrichment.bookmark_id, enrichment);
+      }
+    }
+    return map;
+  }, [enrichments]);
+
   const getEnrichment = useCallback(
-    (bookmarkId: string) => {
-      return enrichments
-        .filter((enrichment) => enrichment.bookmark_id === bookmarkId)
-        .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-    },
-    [enrichments],
+    (bookmarkId: string) => enrichmentsById.get(bookmarkId),
+    [enrichmentsById],
   );
 
   const addBookmark = useCallback(
@@ -1739,7 +1754,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             throw error;
           }
         }
-        // Newest enrichment for this bookmark wins (getEnrichment sorts too).
+        // Newest enrichment for this bookmark wins (getEnrichment also picks newest).
         setEnrichments((current) => [
           enrichment,
           ...current.filter((item) => item.bookmark_id !== bookmarkId),
