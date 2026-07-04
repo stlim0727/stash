@@ -61,6 +61,26 @@ Nearly every polished pattern above is coping machinery for a content problem, a
 
 **The takeaway that shapes the rest of this doc:** the video is a masterclass in *patterns* and a cautionary tale in *application* at once. The structural grammar (two-tier nav, scoped search, chip filters, inline states, descriptive subtitles) is worth learning from; the loud, anxiety-driven surface (big counts, a debt-tab, a feed, chat density, the inset-eating bar) is scar tissue around overwhelm we don't have. **Borrow the grammar, reject the anxiety.**
 
+## Design hints (interpretive round)
+
+_A third pass, one level deeper than observation: not "what patterns exist" or "what to build," but **what the patterns hint at** — the design DNA a keep-and-find app could inherit. Each hint reads: pattern → principle → provocation. Where all three lenses landed on the same idea independently, it's flagged as convergent._
+
+**1. Kill the number that reads as debt.** _(convergent — all three lenses)_ Telegram's five-digit pills quantify neglect and call it information. The inversion is Keepory's signature: nothing on screen accrues *against* you. If a count exists, it's one you'd be proud of ("3 things you'd lost, re-found this week") or an un-triaged count that ticks *down* with a soft settle as you file — the feel of a shrinking pile, never a growing dread.
+
+**2. Capture is sacred, made *physical*.** The chat bubble lands the instant you send; reconciliation is invisible. The release-to-save moment should land instantly and visibly — the row drops to position-zero with a settling haptic the moment your thumb lifts, fully decoupled from enrichment/sync. "Capture is sacred" becomes something *felt* on every save, which is what earns the next thousand.
+
+**3. Retrieval memory is an asset, not exhaust.** Telegram treats Recent searches as disposable ("Clear All"). Backwards for a keep-app: a query you repeat is recurring intent. Search can stage the answer before the question (just-saved, just-opened, "saved near here"), and a search run three times can offer to become a named shelf — retrieval habits promoting themselves into structure the user never had to author.
+
+**4. The app talks to you where you already are.** Telegram's error sits *in* the row; its confirmation card sits *in* the settings list — non-blocking, ignorable. Steal the mechanism, reject the nagging content: AI suggestions arrive as ambient, swipe-away in-stream cards (accept is a tap, ignore costs nothing), and a broken link keeps its row and gets *quieter* rather than growing a nag badge. Capture is never punished for enrichment failing.
+
+**5. Containers should smell of their contents.** "Account — Number, Username, Bio" tells you what's inside before you tap. The provocation: a collection's subtitle is a generated (clearly-generated) content fingerprint — "mostly recipes · last added yesterday" — not a raw count.
+
+**6. Visual recall is a right, not a luxury of good OG tags.** Every Telegram row has a monogram handle for the eye to grab. So: no save is ever a grey wall of title text — an honest domain-derived colored monogram renders optimistically from frame one, stable before enrichment returns.
+
+**The productive tension — time.** UX's headline bet was *time as the primary recall axis*: memory is episodic ("the article I saved during that flight"), the app stamps time for free, enrichment can't corrupt it, so scrub-to-when would feel like *remembering* rather than filing. Grumpy's near-opposite: *don't default-sort by arrival* — you saved it because it matters later, so a recency list re-buries intent. The reconciliation is the insight: **time is a powerful retrieval *lens* (a scrub-to-find gesture), not the default list *order* (which should lead with intent — un-triaged / pinned / revisited).**
+
+**The spine.** If one sentence ties the hints together: *a keep-and-find app should feel like a calm, single-player memory — you drop something in and it's instantly, physically yours; nothing ever accrues against you; and finding it later feels like remembering, not searching.* Every hint above is a facet of that sentence. These are directional, not committed scope.
+
 ## Where the team agreed
 
 **Bottom tabs are the right structural move.** Keepory today has no tab bar; Review, Trash, Graph, Settings, and Report all hang off stack-pushes from the single Inbox screen (`apps/mobile/src/app/_layout.tsx`, the `router.push('/settings')`/`/report` calls in `index.tsx`). That buries the whole app behind one screen. A `(tabs)` group — **Inbox · Search · Library · You** — makes Keepory read as a *product* instead of a screen with buttons. Effort **M** (expo-router `Tabs`), with two known snags: `settings` (`transparentModal`) and `add` (`presentation:'modal'`) must stay modals presented *over* the tabs, and the Inbox hardware-back "peel" handler assumes the Inbox is the app root — a tab bar redefines "root," so that logic needs re-checking.
