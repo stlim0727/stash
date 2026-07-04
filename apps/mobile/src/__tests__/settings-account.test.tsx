@@ -85,7 +85,7 @@ test('authenticated: Sign out asks to confirm before signing out', async () => {
 
   // The dialog reassures and offers Cancel + a destructive Sign out.
   const [title, body, buttons] = alertSpy.mock.calls[0];
-  expect(title).toBe('Sign out of Stash?');
+  expect(title).toBe('Sign out of Keepory?');
   expect(body).toBe(
     'Your bookmarks are safely backed up to your account. Sign back in anytime to see them again.',
   );

@@ -97,7 +97,7 @@ test('build and logs are included when provided and formatted for sharing', () =
   ]);
 
   const report = formatDiagnosticsReport(context);
-  assert.match(report, /Stash diagnostics — main @ d0ae427/);
+  assert.match(report, /Keepory diagnostics — main @ d0ae427/);
   assert.match(report, /Recent logs \(2\):/);
   assert.match(report, /sqlite open failed: boom/);
   // The logs array is rendered as a trailing block, not inside the JSON summary.

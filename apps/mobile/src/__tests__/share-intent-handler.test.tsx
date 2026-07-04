@@ -153,7 +153,7 @@ describe('ShareIntentHandler', () => {
 
     // It waits for the store to load, finds the existing bookmark, and reports a
     // duplicate instead of enqueuing a new create.
-    await findByText('Already in Stash');
+    await findByText('Already in Keepory');
     await waitFor(() => expect(mockShareIntent.resetShareIntent).toHaveBeenCalled());
     expect(fakeRepo.__queue()).toHaveLength(0);
     unmount();
@@ -169,7 +169,7 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     expect(fakeRepo.__queue()[0].payload.url).toBe('https://example.com/fresh');
     unmount();
@@ -209,7 +209,7 @@ describe('ShareIntentHandler', () => {
       mockLoadGate.release?.();
     });
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     expect(fakeRepo.__queue()[0].payload.url).toBe('https://example.com/slow');
     unmount();
@@ -240,7 +240,7 @@ describe('ShareIntentHandler', () => {
     const { findByText, rerender, unmount } = await render(freshTree());
 
     // First share saves and enqueues exactly one create.
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
 
     // The OS clears the intent after handling; re-fire it with the same link but
@@ -264,7 +264,7 @@ describe('ShareIntentHandler', () => {
 
     // Second share reuses the existing bookmark: duplicate toast, no new create,
     // and still exactly one bookmark in the store.
-    await findByText('Already in Stash');
+    await findByText('Already in Keepory');
     expect(fakeRepo.__queue()).toHaveLength(1);
     expect(await fakeRepo.repository.listBookmarks()).toHaveLength(1);
     unmount();
@@ -285,9 +285,9 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
-    expect(mockDismiss).toHaveBeenCalledWith('Saved to Stash');
+    expect(mockDismiss).toHaveBeenCalledWith('Saved to Keepory');
     // The in-app toast + Inbox already confirmed the save in this session, so no
     // "confirm on next open" record is left behind to re-confirm on next launch.
     expect(parsePendingShareConfirm(await fakeRepo.repository.getMeta(SHARE_CONFIRM_PREF_KEY))).toBeNull();
@@ -309,7 +309,7 @@ describe('ShareIntentHandler', () => {
 
     const { unmount } = await renderHandler();
 
-    await waitFor(() => expect(mockDismiss).toHaveBeenCalledWith('Saved to Stash'));
+    await waitFor(() => expect(mockDismiss).toHaveBeenCalledWith('Saved to Keepory'));
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     expect(mockRouter.replace).not.toHaveBeenCalled();
     // The system toast is gone by the time the app reopens, so a record is left
@@ -342,7 +342,7 @@ describe('ShareIntentHandler', () => {
     try {
       const { findByText, unmount } = await renderHandler();
 
-      await findByText('Saved to Stash');
+      await findByText('Saved to Keepory');
       await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
       expect(mockDismiss).not.toHaveBeenCalled();
       unmount();
@@ -369,7 +369,7 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     expect(fakeRepo.__queue()[0].payload.url).toBe(
       'https://www.welaaa.com/ebook/detail/180284?appRedirect=true',
@@ -394,7 +394,7 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     expect(fakeRepo.__queue()[0].payload.url).toBe('https://www.welaaa.com/ebook/detail/180284');
     unmount();
@@ -414,7 +414,7 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('No link found to stash');
+    await findByText('No link found to save');
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
     expect(mockDismiss).not.toHaveBeenCalled();
     unmount();
@@ -433,7 +433,7 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     const entry = fakeRepo.__queue()[0];
     expect(entry.payload.url).toBeUndefined();
@@ -456,7 +456,7 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('No link found to stash');
+    await findByText('No link found to save');
     await waitFor(() => expect(mockShareIntent.resetShareIntent).toHaveBeenCalled());
     expect(fakeRepo.__queue()).toHaveLength(0);
     expect(await fakeRepo.repository.listBookmarks()).toHaveLength(0);
@@ -480,7 +480,7 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     // The temp file was copied into the document directory under <id>.png.
     await waitFor(() => expect(mockCopyImage).toHaveBeenCalledTimes(1));
     const [sourceUri, fileName] = mockCopyImage.mock.calls[0];
@@ -512,7 +512,7 @@ describe('ShareIntentHandler', () => {
 
     const { findByText, unmount } = await renderHandler();
 
-    await findByText('Saved to Stash');
+    await findByText('Saved to Keepory');
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
     expect(mockDismiss).not.toHaveBeenCalled();
     unmount();

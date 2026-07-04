@@ -5,11 +5,11 @@ import type { Catalog } from '@/i18n/messages';
  * omitted here falls back to English at lookup time. Korean has no grammatical
  * plural, so count-sensitive entries supply only `other`.
  *
- * The brand name "Stash" is intentionally left untranslated.
+ * The brand name "Keepory" is intentionally left untranslated.
  */
 export const ko: Catalog = {
-  // Native Hangul wordmark, shown after "Stash" with a thin divider.
-  'app.nameLocal': '스태시',
+  // Brand name is not localized; Korean reuses the same "Keepory" wordmark.
+  'app.nameLocal': 'Keepory',
   'app.tagline': '지금 저장하고, 정리는 나중에.',
 
   'common.cancel': '취소',
@@ -98,7 +98,7 @@ export const ko: Catalog = {
   'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': '이 보기에는 아직 아무것도 없습니다.',
   'inbox.emptyTitle': '아직 비어 있습니다',
-  'inbox.emptyHintShare': '어떤 앱에서든 링크를 공유할 때 Stash를 선택하면 한 번에 저장됩니다.',
+  'inbox.emptyHintShare': '어떤 앱에서든 링크를 공유할 때 Keepory를 선택하면 한 번에 저장됩니다.',
   'inbox.emptyHintAdd': '또는 아래 ＋ 를 눌러 직접 추가하세요.',
   'inbox.moreActions': '더보기',
   'inbox.moveToCollectionAction': '컬렉션으로 이동…',
@@ -165,9 +165,9 @@ export const ko: Catalog = {
   'add.hint': '즉시 저장됩니다. 동기화는 백그라운드에서 진행됩니다.',
   'add.saving': '저장 중…',
 
-  'toast.saved': 'Stash에 저장됨',
-  'toast.savedCount': { one: 'Stash에 저장됨', other: '{count}개 Stash에 저장됨' },
-  'toast.duplicate': '이미 Stash에 있음',
+  'toast.saved': 'Keepory에 저장됨',
+  'toast.savedCount': { one: 'Keepory에 저장됨', other: '{count}개 Keepory에 저장됨' },
+  'toast.duplicate': '이미 Keepory에 있음',
   'toast.trashed': '휴지통으로 이동됨',
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
 
@@ -177,7 +177,7 @@ export const ko: Catalog = {
   'settings.section.data': '내 데이터',
   'settings.section.advanced': '고급',
   'settings.section.browser': '브라우저에서 저장',
-  'settings.bookmarklet.button': '⊕ Stash에 저장',
+  'settings.bookmarklet.button': '⊕ Keepory에 저장',
   'settings.bookmarklet.copied': '복사됨!',
   'settings.bookmarklet.note':
     '이 버튼을 북마크 바로 드래그하세요 (또는 클릭해서 복사). 이후 아무 페이지에서나 눌러 저장할 수 있습니다.',
@@ -187,8 +187,8 @@ export const ko: Catalog = {
   'settings.account.sessionExpiredBody': '다시 로그인하면 동기화가 재개됩니다. 북마크는 안전합니다.',
   'settings.account.signOut': '로그아웃',
   'settings.account.cloudUnavailable': '클라우드 동기화 사용 불가',
-  'settings.account.worksOffline': 'Stash는 오프라인에서도 완전히 작동합니다',
-  'settings.account.signOutConfirmTitle': 'Stash에서 로그아웃할까요?',
+  'settings.account.worksOffline': 'Keepory는 오프라인에서도 완전히 작동합니다',
+  'settings.account.signOutConfirmTitle': 'Keepory에서 로그아웃할까요?',
   'settings.account.signOutConfirmBody':
     '북마크는 계정에 안전하게 백업돼 있어요. 다시 로그인하면 언제든 볼 수 있어요.',
   'settings.account.signOutConfirm': '로그아웃',
@@ -244,7 +244,7 @@ export const ko: Catalog = {
   'settings.exportSheet.json': '전체 백업 (JSON)',
   'settings.importSheet.title': '데이터 가져오기',
   'settings.importSheet.html': '북마크 파일 (HTML)',
-  'settings.importSheet.json': 'Stash 백업 (JSON)',
+  'settings.importSheet.json': 'Keepory 백업 (JSON)',
   'settings.importSheet.pocket': 'Pocket 내보내기 (CSV)',
   'settings.export.failedTitle': '내보내기 실패',
   'settings.export.failedBody': '데이터를 내보낼 수 없습니다. 다시 시도해 주세요.',
@@ -265,7 +265,7 @@ export const ko: Catalog = {
   'trash.restore': '복원',
 
   'update.title': '업데이트 필요',
-  'update.body': '이 버전의 Stash는 더 이상 지원되지 않습니다. 계속하려면 최신 버전으로 업데이트하세요.',
+  'update.body': '이 버전의 Keepory는 더 이상 지원되지 않습니다. 계속하려면 최신 버전으로 업데이트하세요.',
   'update.button': '업데이트 다운로드',
 
   'detail.notFound': '이 북마크를 찾을 수 없습니다.',

@@ -139,7 +139,7 @@ test('toNetscapeHtml renders a valid header and a top-level entry', () => {
   );
 
   assert.ok(html.startsWith('<!DOCTYPE NETSCAPE-Bookmark-file-1>'));
-  assert.match(html, /<H1>Stash Bookmarks<\/H1>/);
+  assert.match(html, /<H1>Keepory Bookmarks<\/H1>/);
   // created_at 2026-01-02T03:04:05Z -> 1767323045 unix seconds.
   assert.match(html, /ADD_DATE="1767323045"/);
   assert.match(html, /HREF="https:\/\/example\.com\/article"/);
