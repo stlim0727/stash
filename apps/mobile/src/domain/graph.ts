@@ -133,6 +133,34 @@ const DEFAULT_TICKS = 300;
 const DEFAULT_SIZE = 1000;
 const DEFAULT_SEED = 0x9e3779b9;
 
+/** Lower bound on ticks: even huge graphs get a minimum-quality settle. */
+const MIN_TICKS = 60;
+/**
+ * Work ceiling for the settle, expressed as ticks·n² pairs. Set to
+ * DEFAULT_TICKS·50² so a small graph (n ≤ 50) still runs the full 300 ticks;
+ * see {@link layoutTickBudget}.
+ */
+const LAYOUT_TICK_BUDGET = DEFAULT_TICKS * 50 * 50; // 750_000
+
+/**
+ * Tick budget for {@link layoutGraph}, scaled DOWN as the node count grows so
+ * the O(ticks·n²) settle can never cost DEFAULT_TICKS·n² on a large stash.
+ *
+ * Small graphs (n ≤ 50) get the full-quality DEFAULT_TICKS. Past that we spend
+ * a fixed work budget: ticks·n² is capped at LAYOUT_TICK_BUDGET (~750k) until
+ * the MIN_TICKS floor takes over (around n > 112), beyond which every graph
+ * settles at 60 ticks — 60·n², still 5× cheaper than a naive 300·n² run.
+ *
+ * This is the SINGLE SOURCE OF TRUTH for the budget: the /graph screen calls
+ * `buildSettledGraph(input, { ticks: layoutTickBudget(n) })`, so tests and prod
+ * settle with the same tick count. Safe (no divide-by-zero) at n = 0/1.
+ */
+export function layoutTickBudget(nodeCount: number): number {
+  if (nodeCount <= 1) return DEFAULT_TICKS;
+  const scaled = Math.floor(LAYOUT_TICK_BUDGET / (nodeCount * nodeCount));
+  return Math.min(DEFAULT_TICKS, Math.max(MIN_TICKS, scaled));
+}
+
 function bookmarkNodeId(id: string): string {
   return `b:${id}`;
 }

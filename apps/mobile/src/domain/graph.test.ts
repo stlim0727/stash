@@ -6,6 +6,7 @@ import {
   buildSettledGraph,
   deriveGraph,
   layoutGraph,
+  layoutTickBudget,
   type DeriveGraphInput,
   type GraphNode,
   type PositionedNode,
@@ -265,10 +266,31 @@ test('synthetic ~400-bookmark graph settles to finite, bounded positions', () =>
   const graph = deriveGraph(input);
   // 400 bookmarks + 20 tags + 1 untagged hub = 421 nodes.
   assert.equal(graph.nodes.length, 421);
-  const settled = layoutGraph(graph, { ticks: 120 });
+  // Use the exact shipped budget the /graph screen runs (test == prod).
+  const ticks = layoutTickBudget(graph.nodes.length);
+  assert.ok(ticks < 300, 'a 421-node graph must be scaled below the full budget');
+  const settled = layoutGraph(graph, { ticks });
   assert.equal(settled.nodes.length, 421);
   for (const node of settled.nodes) {
     assert.ok(Number.isFinite(node.x) && Number.isFinite(node.y));
   }
   assert.ok(Number.isFinite(settled.bounds.width) && settled.bounds.width > 0);
+});
+
+test('layoutTickBudget: full budget for small graphs, scaled down for large ones', () => {
+  // Tiny graphs get the full-quality settle.
+  assert.equal(layoutTickBudget(12), 300);
+  assert.equal(layoutTickBudget(50), 300);
+  // Large graphs strictly fewer, never below the floor.
+  const large = layoutTickBudget(400);
+  assert.ok(large < 300, 'a 400-node graph must run fewer ticks');
+  assert.ok(large >= 60, 'never below the min floor');
+  assert.equal(layoutTickBudget(1000), 60);
+  // Monotonic: more nodes never means more ticks.
+  assert.ok(layoutTickBudget(1000) <= layoutTickBudget(400));
+  // Deterministic: same input -> same number.
+  assert.equal(layoutTickBudget(400), layoutTickBudget(400));
+  // Safe at degenerate node counts (no divide-by-zero).
+  assert.equal(layoutTickBudget(0), 300);
+  assert.equal(layoutTickBudget(1), 300);
 });
