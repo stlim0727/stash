@@ -39,7 +39,7 @@ import { usePalette } from '@/theme';
 // pins the busiest hub to HUB_MAX_R). VIEWBOX_PAD below derives from HUB_MAX_R,
 // so the bounds padding tracks this max and the busiest hub never clips.
 const HUB_MIN_R = 18;
-const HUB_MAX_R = 100;
+const HUB_MAX_R = 54;
 const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
 const LABEL_SIZE = 24;
@@ -54,9 +54,12 @@ const VIEWBOX_PAD = HUB_MAX_R + LABEL_SIZE * 3;
 // Pinch-zoom clamps.
 export const MIN_SCALE = 0.4;
 export const MAX_SCALE = 6;
-// A small fixed slack (screen px) the pan may exceed the content's overflow by,
-// so edge nodes stay reachable without letting the graph drift into empty space.
-const PAN_MARGIN = 32;
+// How much fitted content must stay on-screen at the pan extremes: a minimum
+// visible sliver so the graph can be swept nearly off the viewport (uncaged pan)
+// yet never fully leaves. Per axis it's a fraction of that axis's viewport,
+// capped so a very tall/wide viewport doesn't demand an oversized sliver.
+const MIN_VISIBLE_FRACTION = 0.15;
+const MIN_VISIBLE_CAP = 80;
 // Pinch throttle: only push a new scale to the Animated value once the pinch has
 // moved this far since the last applied scale, so we re-rasterize the SVG far less
 // often per pinch. The exact final scale is always committed on gesture end.
@@ -68,21 +71,26 @@ const SCALE_APPLY_STEP = 0.02;
 const WEB_COMPOSITE_LAYER = { willChange: 'transform' } as unknown as ViewStyle;
 
 function hubRadius(degree: number): number {
-  return Math.min(HUB_MAX_R, Math.max(HUB_MIN_R, HUB_MIN_R + 16 * Math.sqrt(degree)));
+  return Math.min(HUB_MAX_R, Math.max(HUB_MIN_R, HUB_MIN_R + 10 * Math.sqrt(degree)));
 }
 
 export function clampToRange(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-// Max translate (in screen px) that still keeps the fitted content covering the
-// main area at a given scale. The SVG's viewBox + preserveAspectRatio="…meet"
-// already fits the content to the viewport at scale 1, so at scale `s` the content
-// overflows the viewport by (s - 1) * size / 2 per side; we allow PAN_MARGIN of
-// slack on top. At s <= 1 the content is no larger than the viewport, so the pan
-// is pinned to ±PAN_MARGIN (barely moves — correct, it already fits).
-export function maxPanOffset(scale: number, size: number): number {
-  return Math.max(0, ((scale - 1) * size) / 2) + PAN_MARGIN;
+// Max translate (in screen px) per axis: allow panning until only a minimum
+// sliver of the fitted content remains on-screen — never let it leave entirely,
+// but otherwise don't cage it. `fittedExtent` is the on-screen span of the
+// content at scale 1 for this axis (fitScale * viewBoxDim, where fitScale is the
+// preserveAspectRatio="…meet" fit = min(vw/vbW, vh/vbH)); at scale `s` the span is
+// fittedExtent * s. The content's near edge fully clears the viewport once its
+// center translates (span + viewport)/2; we stop MIN_VISIBLE short of that so a
+// sliver stays visible. Deriving the extent per axis from the ACTUAL fitted span
+// (not the viewport) gives the letterboxed axis its correct, tighter bound.
+export function maxPanOffset(scale: number, viewportDim: number, fittedExtent: number): number {
+  const contentExtent = fittedExtent * scale;
+  const minVisible = Math.min(viewportDim * MIN_VISIBLE_FRACTION, MIN_VISIBLE_CAP);
+  return Math.max(0, (contentExtent + viewportDim) / 2 - minVisible);
 }
 
 function touchDistance(a: { pageX: number; pageY: number }, b: { pageX: number; pageY: number }): number {
@@ -142,7 +150,10 @@ export default function GraphScreen() {
         });
       }
     }
-    return { bookmarks: inbox, tags: [...tagsById.values()], bookmarkTags };
+    // minSharedDegree: 2 keeps only tags shared by ≥2 bookmarks — the shared
+    // backbone — instead of a cloud of single-use tags. Bookmarks whose only tags
+    // were filtered out fall back to the untagged hub (handled in the domain layer).
+    return { bookmarks: inbox, tags: [...tagsById.values()], bookmarkTags, minSharedDegree: 2 };
     // Intentionally keyed on `signature`, not the churning `inbox`/accessor refs.
   }, [signature]);
 
@@ -218,19 +229,28 @@ export default function GraphScreen() {
     return map;
   }, [settled, t]);
 
+  // Padded viewBox dimensions over the settled bounds. The pan clamp derives the
+  // per-axis fitted content extent from these (fitScale * vbDim), so it's kept
+  // alongside the viewBox string. Guard zero-span (all-collapsed).
+  const vbSize = useMemo(() => {
+    const b = settled?.bounds;
+    if (!b) {
+      return { w: 1, h: 1 };
+    }
+    const spanX = b.width || 1;
+    const spanY = b.height || 1;
+    return { w: spanX + VIEWBOX_PAD * 2, h: spanY + VIEWBOX_PAD * 2 };
+  }, [settled]);
+
   // Fit-to-bounds: a padded viewBox over the settled bounds, centered by the
-  // Svg's preserveAspectRatio="xMidYMid meet". Guard zero-span (all-collapsed).
+  // Svg's preserveAspectRatio="xMidYMid meet".
   const viewBox = useMemo(() => {
     const b = settled?.bounds;
     if (!b) {
       return `0 0 1 1`;
     }
-    const spanX = b.width || 1;
-    const spanY = b.height || 1;
-    return `${b.min_x - VIEWBOX_PAD} ${b.min_y - VIEWBOX_PAD} ${spanX + VIEWBOX_PAD * 2} ${
-      spanY + VIEWBOX_PAD * 2
-    }`;
-  }, [settled]);
+    return `${b.min_x - VIEWBOX_PAD} ${b.min_y - VIEWBOX_PAD} ${vbSize.w} ${vbSize.h}`;
+  }, [settled, vbSize]);
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   // The pan clamp reads the live viewport from a ref (not the state) because the
@@ -241,6 +261,19 @@ export default function GraphScreen() {
     viewportRef.current = { w: width, h: height };
     setViewport({ w: width, h: height });
   };
+  // The memoized panResponder also needs the current viewBox size to derive the
+  // fitted content extent for the clamp; mirror it into a ref for the same reason.
+  const vbSizeRef = useRef({ w: 1, h: 1 });
+  useEffect(() => {
+    vbSizeRef.current = vbSize;
+  }, [vbSize]);
+
+  // Whether a pan/pinch gesture is currently active. Drives a TRANSIENT
+  // raster/composite hint: promoting the layer to a cached texture keeps the
+  // gesture smooth, but leaving it promoted scales that cached bitmap and blurs
+  // on zoom-in. So it's on only while interacting and off at rest, letting the
+  // static view re-render as crisp vector SVG at the settled zoom.
+  const [interacting, setInteracting] = useState(false);
 
   // Pan/zoom over the static canvas — zero new deps: PanResponder drives an
   // Animated transform on the outer view. Taps fall through to the SVG nodes
@@ -264,10 +297,26 @@ export default function GraphScreen() {
 
   const panResponder = useMemo(
     () => {
+      // Per-axis pan bound at the live scale. Derives each axis's fitted content
+      // extent from the actual viewBox span (fitScale * vbDim, fitScale being the
+      // preserveAspectRatio="…meet" fit over the live viewport) so the letterboxed
+      // axis gets its correct, tighter bound. Reads viewport + viewBox from refs so
+      // the memoized responder never closes over stale sizes.
+      const axisBounds = () => {
+        const { w: vw, h: vh } = viewportRef.current;
+        const { w: vbW, h: vbH } = vbSizeRef.current;
+        const fit = Math.min(vw / vbW, vh / vbH);
+        return {
+          x: maxPanOffset(liveScale.current, vw, fit * vbW),
+          y: maxPanOffset(liveScale.current, vh, fit * vbH),
+        };
+      };
       // Flatten the offset and re-clamp the pan against the (possibly just-changed)
       // scale — a pinch-out shrinks the allowed range, so an out-of-bounds pan must
-      // be pulled back in — then commit the exact final pinch scale.
+      // be pulled back in — then commit the exact final pinch scale. Also drops the
+      // transient raster hint so the settled view re-renders as crisp vector SVG.
       const settle = () => {
+        setInteracting(false);
         translateX.flattenOffset();
         translateY.flattenOffset();
         lastScale.current = liveScale.current;
@@ -275,8 +324,7 @@ export default function GraphScreen() {
           appliedScale.current = liveScale.current;
           scale.setValue(liveScale.current);
         }
-        const maxX = maxPanOffset(liveScale.current, viewportRef.current.w);
-        const maxY = maxPanOffset(liveScale.current, viewportRef.current.h);
+        const { x: maxX, y: maxY } = axisBounds();
         const clampedX = clampToRange(panOffset.current.x, -maxX, maxX);
         const clampedY = clampToRange(panOffset.current.y, -maxY, maxY);
         if (clampedX !== panOffset.current.x || clampedY !== panOffset.current.y) {
@@ -294,6 +342,7 @@ export default function GraphScreen() {
           Math.abs(gesture.dx) > 4 ||
           Math.abs(gesture.dy) > 4,
         onPanResponderGrant: () => {
+          setInteracting(true);
           translateX.extractOffset();
           translateY.extractOffset();
           panStart.current = { x: panOffset.current.x, y: panOffset.current.y };
@@ -318,9 +367,8 @@ export default function GraphScreen() {
             }
           } else if (!pinch.current) {
             // Clamp the absolute pan into ±maxPanOffset so the content can't drift
-            // off the main area into empty space.
-            const maxX = maxPanOffset(liveScale.current, viewportRef.current.w);
-            const maxY = maxPanOffset(liveScale.current, viewportRef.current.h);
+            // fully off the main area into empty space (a sliver always stays).
+            const { x: maxX, y: maxY } = axisBounds();
             const nextX = clampToRange(panStart.current.x + gesture.dx, -maxX, maxX);
             const nextY = clampToRange(panStart.current.y + gesture.dy, -maxY, maxY);
             translateX.setValue(nextX - panStart.current.x);
@@ -412,15 +460,16 @@ export default function GraphScreen() {
     >
       <Animated.View
         {...panResponder.panHandlers}
-        // Promote this layer to its own GPU/composited texture so a pan/zoom
-        // composites the cached layer instead of repainting the vector SVG every
-        // frame (the web pinch stutter). Web uses `will-change: transform`; native
-        // uses the platform rasterization hints.
-        renderToHardwareTextureAndroid
-        shouldRasterizeIOS
+        // Promote this layer to its own GPU/composited texture ONLY while a gesture
+        // is active, so a pan/zoom composites the cached layer instead of repainting
+        // the vector SVG every frame (the web pinch stutter). The hint is dropped on
+        // settle so the static view re-renders as crisp vector SVG at the new zoom
+        // rather than scaling a stale cached bitmap (the zoom-in blur). Web uses
+        // `will-change: transform`; native uses the platform rasterization hints.
+        {...(interacting ? { renderToHardwareTextureAndroid: true, shouldRasterizeIOS: true } : null)}
         style={[
           StyleSheet.absoluteFill,
-          Platform.OS === 'web' ? WEB_COMPOSITE_LAYER : null,
+          interacting && Platform.OS === 'web' ? WEB_COMPOSITE_LAYER : null,
           { transform: [{ translateX }, { translateY }, { scale }] },
         ]}
       >

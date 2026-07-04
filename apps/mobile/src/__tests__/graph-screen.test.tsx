@@ -88,8 +88,9 @@ beforeEach(() => {
   pendingInteractions = [];
 });
 
-// A small stash: two bookmarks, one shared tag, plus an untagged bookmark that
-// parks under the synthetic hub.
+// A small stash: `cooking` is shared by two bookmarks (survives the ≥2 shared-tag
+// backbone filter), `reading` is single-use (filtered out — its bookmark keeps the
+// shared `cooking` tag), plus an untagged bookmark that parks under the synthetic hub.
 function seedLibrary() {
   const cooked = '7e64cf1e-0000-4000-8000-0000000000a1';
   const reading = '7e64cf1e-0000-4000-8000-0000000000a2';
@@ -112,7 +113,7 @@ function seedLibrary() {
   );
 }
 
-test('renders tag hubs, the untagged hub, and a node per bookmark', async () => {
+test('renders the shared-tag backbone hub, the untagged hub, and a node per bookmark', async () => {
   seedLibrary();
 
   const screen = await renderScreen();
@@ -126,14 +127,15 @@ test('renders tag hubs, the untagged hub, and a node per bookmark', async () => 
   await flushSettle();
 
   await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
-  // Two tag hubs, sized/labelled by how many bookmarks carry them.
+  // The shared tag (≥2 bookmarks) survives, sized/labelled by its degree.
   expect(screen.getByTestId('graph-tag-t-cooking')).toBeTruthy();
-  expect(screen.getByTestId('graph-tag-t-reading')).toBeTruthy();
   expect(screen.getByLabelText('Tag cooking, 2 bookmarks')).toBeTruthy();
-  expect(screen.getByLabelText('Tag reading, 1 bookmark')).toBeTruthy();
+  // The single-use `reading` tag is filtered out by the shared-tag backbone
+  // (minSharedDegree: 2) — no hub for it.
+  expect(screen.queryByTestId('graph-tag-t-reading')).toBeNull();
   // The untagged bookmark parks under the synthetic hub.
   expect(screen.getByTestId('graph-untagged-hub')).toBeTruthy();
-  // One node per bookmark.
+  // Still one node per bookmark — the reading bookmark keeps its shared cooking tag.
   expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a1')).toBeTruthy();
   expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a2')).toBeTruthy();
   expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a3')).toBeTruthy();
@@ -185,49 +187,68 @@ test('tapping a tag hub hands the facet to the root Inbox', async () => {
   expect(arg.params.t).toBeTruthy();
 });
 
-// The pan is clamped so a fling can't drift the graph into empty space. These
-// exercise the exact math the panResponder runs each frame: it clamps the
-// ABSOLUTE resulting position (panStart + gesture delta) into ±maxPanOffset,
-// where maxPanOffset grows with the zoom-in overflow. PanResponder's gestureState
-// isn't computed under the jest event pipeline (no native touchHistory), so we
-// assert the bound + clamp directly rather than through synthetic touch events.
+// The pan is clamped so a fling can't drift the graph fully off-screen, but the
+// pan is otherwise UNcaged: it's allowed until only a minimum sliver of the fitted
+// content remains visible. These exercise the exact math the panResponder runs
+// each frame: it clamps the ABSOLUTE position (panStart + gesture delta) into
+// ±maxPanOffset(scale, viewportDim, fittedExtent), where fittedExtent is the
+// per-axis on-screen span of the content at scale 1 (fitScale * viewBoxDim, fitScale
+// being the preserveAspectRatio="…meet" fit = min(vw/vbW, vh/vbH)). PanResponder's
+// gestureState isn't computed under the jest event pipeline (no native
+// touchHistory), so we assert the bound + clamp directly.
 describe('pan clamp', () => {
-  const W = 320;
-  const H = 640;
+  // A square viewport over non-square fitted content, so the two axes take
+  // genuinely different bounds. With "…meet", fitScale = min over axes; the axis
+  // that hits the min FILLS the viewport, the other is letterboxed.
+  const W = 400;
+  const H = 400;
+  const VB_W = 1000;
+  const VB_H = 500;
+  const fit = Math.min(W / VB_W, H / VB_H); // 0.4 — width constrains
+  const extentX = fit * VB_W; // 400 — content fills the width
+  const extentY = fit * VB_H; // 200 — letterboxed height
 
-  test('at scale 1 the fitted content pins the pan to a small margin', () => {
-    // The SVG already fits the viewport at scale 1, so a huge fling barely moves.
-    const maxX = maxPanOffset(1, W);
-    expect(maxX).toBe(32);
-    expect(clampToRange(0 + 99999, -maxX, maxX)).toBe(32);
-    expect(clampToRange(0 - 99999, -maxX, maxX)).toBe(-32);
+  test('at scale 1 the pan is looser than the old margin but content never fully leaves', () => {
+    const maxX = maxPanOffset(1, W, extentX);
+    // (400 + 400)/2 - min(400*0.15, 80) = 400 - 60 = 340.
+    expect(maxX).toBe(340);
+    // Bounded: less than the (extent + viewport)/2 = 400 that would push content
+    // fully off-screen, so a sliver always stays visible.
+    expect(maxX).toBeLessThan((extentX + W) / 2);
+    // Yet looser than the old fixed ±32 margin (the "caged" feel).
+    expect(maxX).toBeGreaterThan(32);
+    // A huge fling is still clamped to the bound → never off-screen.
+    expect(clampToRange(99999, -maxX, maxX)).toBe(340);
+    expect(clampToRange(-99999, -maxX, maxX)).toBe(-340);
   });
 
-  test('bounds hold at MIN_SCALE (content smaller than the viewport)', () => {
-    const maxX = maxPanOffset(MIN_SCALE, W);
-    const maxY = maxPanOffset(MIN_SCALE, H);
-    // At s < 1 the content is no larger than the viewport → pinned to ±margin.
-    expect(maxX).toBe(32);
-    expect(maxY).toBe(32);
-    expect(clampToRange(5000, -maxX, maxX)).toBe(maxX);
-    expect(clampToRange(-5000, -maxY, maxY)).toBe(-maxY);
+  test('the letterboxed axis gets a tighter, content-derived bound than the filled axis', () => {
+    const maxX = maxPanOffset(1, W, extentX); // filled → 340
+    const maxY = maxPanOffset(1, H, extentY); // letterboxed → (200 + 400)/2 - 60 = 240
+    expect(maxY).toBe(240);
+    expect(maxY).toBeLessThan(maxX);
   });
 
-  test('bounds hold at MAX_SCALE and still bound a large fling', () => {
-    const maxX = maxPanOffset(MAX_SCALE, W); // (6-1)*320/2 + 32
-    const maxY = maxPanOffset(MAX_SCALE, H); // (6-1)*640/2 + 32
-    expect(maxX).toBe(832);
-    expect(maxY).toBe(1632);
+  test('at MIN_SCALE the bound shrinks below the scale-1 bound but stays bounded', () => {
+    const maxX = maxPanOffset(MIN_SCALE, W, extentX);
+    expect(maxX).toBeLessThan(maxPanOffset(1, W, extentX));
+    expect(maxX).toBeGreaterThan(0);
+  });
+
+  test('at MAX_SCALE the bound is much larger but a giant fling is still clamped', () => {
+    const maxX = maxPanOffset(MAX_SCALE, W, extentX);
+    // (400*6 + 400)/2 - 60 = 1400 - 60 = 1340.
+    expect(maxX).toBe(1340);
+    expect(maxX).toBeGreaterThan(maxPanOffset(1, W, extentX));
     // A giant drag is clamped to the axis bound, never beyond → never off-screen.
-    expect(clampToRange(50000, -maxX, maxX)).toBe(maxX);
-    expect(clampToRange(-50000, -maxY, maxY)).toBe(-maxY);
+    expect(clampToRange(50000, -maxX, maxX)).toBe(1340);
     // In-range positions pass through untouched so edge nodes stay reachable.
-    expect(clampToRange(400, -maxX, maxX)).toBe(400);
+    expect(clampToRange(200, -maxX, maxX)).toBe(200);
   });
 
   test('zooming in strictly widens the pan range', () => {
-    expect(maxPanOffset(MAX_SCALE, W)).toBeGreaterThan(maxPanOffset(2, W));
-    expect(maxPanOffset(2, W)).toBeGreaterThan(maxPanOffset(1, W));
+    expect(maxPanOffset(MAX_SCALE, W, extentX)).toBeGreaterThan(maxPanOffset(2, W, extentX));
+    expect(maxPanOffset(2, W, extentX)).toBeGreaterThan(maxPanOffset(1, W, extentX));
   });
 });
 
