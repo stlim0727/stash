@@ -239,6 +239,39 @@ test('layout is deterministic: same input -> identical positions', () => {
   assert.deepEqual(a.bounds, b.bounds);
 });
 
+test('mass-weighting anchors the high-degree tag closer to the centroid', () => {
+  // One clearly popular hub (many bookmarks) vs one clearly minor hub (one
+  // bookmark). The mass-biased gravity should pull the popular tag toward the
+  // layout centroid and leave the minor tag orbiting the rim.
+  const bookmarks: Bookmark[] = [];
+  const bookmarkTags: BookmarkTag[] = [];
+  const tags = [makeTag('popular'), makeTag('minor')];
+  for (let i = 0; i < 20; i += 1) {
+    const id = `pop${i}`;
+    bookmarks.push(makeBookmark(id));
+    bookmarkTags.push(link(id, 'popular'));
+  }
+  bookmarks.push(makeBookmark('lonely'));
+  bookmarkTags.push(link('lonely', 'minor'));
+  const input: DeriveGraphInput = { bookmarks, tags, bookmarkTags };
+
+  const settled = buildSettledGraph(input);
+  const cx = settled.nodes.reduce((s, n) => s + n.x, 0) / settled.nodes.length;
+  const cy = settled.nodes.reduce((s, n) => s + n.y, 0) / settled.nodes.length;
+  const distTo = (id: string) => {
+    const node = settled.nodes.find((n) => n.id === id)!;
+    return Math.hypot(node.x - cx, node.y - cy);
+  };
+
+  const popularNode = settled.nodes.find((n) => n.id === 't:popular')!;
+  const minorNode = settled.nodes.find((n) => n.id === 't:minor')!;
+  assert.ok(popularNode.degree > minorNode.degree, 'fixture: popular must outrank minor');
+  assert.ok(
+    distTo('t:popular') < distTo('t:minor'),
+    `high-degree tag must sit closer to the centroid: popular=${distTo('t:popular')} minor=${distTo('t:minor')}`,
+  );
+});
+
 test('different seeds produce different layouts', () => {
   const graph = deriveGraph(smallFixture());
   const a = layoutGraph(graph, { seed: 1 });

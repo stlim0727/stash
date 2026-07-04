@@ -310,6 +310,19 @@ export function layoutGraph(graph: Graph, options: LayoutOptions = {}): SettledG
     }
   }
 
+  // Mass per node, proportional to degree, so heavily-referenced tags act as
+  // stable central anchors. Bookmark nodes stay light (unit mass); tag/hub
+  // nodes get `1 + MASS_K * sqrt(degree)`. The sqrt keeps mass bounded so one
+  // mega-tag can't dominate, and degree ≥ 1 on hubs means no divide-by-zero
+  // (sqrt(0) would still yield mass 1). Mass biases central gravity below: a
+  // heavier node is pulled toward the origin (≈ layout centroid) more strongly,
+  // so popular tags settle in the middle while light nodes orbit the rim.
+  const MASS_K = 0.5;
+  const mass = new Float64Array(n);
+  graph.nodes.forEach((node, i) => {
+    mass[i] = node.kind === 'bookmark' ? 1 : 1 + MASS_K * Math.sqrt(node.degree);
+  });
+
   const dx = new Float64Array(n);
   const dy = new Float64Array(n);
   const eps = 1e-4;
@@ -357,10 +370,11 @@ export function layoutGraph(graph: Graph, options: LayoutOptions = {}): SettledG
       dy[b] += fy;
     }
 
-    // Gravity toward origin keeps disconnected components bounded.
+    // Gravity toward origin keeps disconnected components bounded, and is
+    // mass-weighted so heavy (high-degree) tags are drawn to the center.
     for (let i = 0; i < n; i += 1) {
-      dx[i] -= xs[i] * gravity * k;
-      dy[i] -= ys[i] * gravity * k;
+      dx[i] -= xs[i] * gravity * k * mass[i];
+      dy[i] -= ys[i] * gravity * k * mass[i];
     }
 
     // Move each node by its displacement, capped by the cooling temperature.
