@@ -92,6 +92,14 @@ export interface DeriveGraphInput {
   bookmarks: Bookmark[];
   tags: Tag[];
   bookmarkTags: BookmarkTag[];
+  /**
+   * Minimum active-bookmark degree a tag must reach to become a tag node
+   * (shared-tag backbone). Tags below the threshold are dropped entirely (no
+   * node, no edges) and their bookmarks fall back to the untagged hub if no
+   * surviving tag remains. Defaults to 1 (every used tag survives), which
+   * reproduces the pre-filter behavior exactly.
+   */
+  minSharedDegree?: number;
 }
 
 /** A node with its settled position. */
@@ -191,12 +199,15 @@ function isActive(bookmark: Bookmark): boolean {
  * Derive the bipartite graph from local bookmarks + tag links.
  *
  * - Only active (not trashed, not archived) bookmarks become nodes.
- * - Tag nodes are created only for tags that link to at least one active
- *   bookmark, so isolated tags don't float as disconnected noise.
- * - Bookmarks with no such tag link connect to the single UNTAGGED_HUB_ID node,
- *   which is only created when at least one untagged bookmark exists.
+ * - Tag nodes are created only for tags that link to at least
+ *   `minSharedDegree` (default 1) active bookmarks, so isolated tags don't
+ *   float as disconnected noise and single-use tags can be filtered out to
+ *   surface the shared-tag backbone.
+ * - Bookmarks with no surviving tag link connect to the single UNTAGGED_HUB_ID
+ *   node, which is only created when at least one such bookmark exists.
  */
 export function deriveGraph(input: DeriveGraphInput): Graph {
+  const minSharedDegree = input.minSharedDegree ?? 1;
   const activeBookmarks = input.bookmarks.filter(isActive);
   const activeIds = new Set(activeBookmarks.map((b) => b.id));
   const tagById = new Map(input.tags.map((tag) => [tag.id, tag]));
@@ -214,12 +225,24 @@ export function deriveGraph(input: DeriveGraphInput): Graph {
     linksByBookmark.set(link.bookmark_id, list);
   }
 
+  // Raw active-bookmark degree per tag, then keep only those meeting the
+  // threshold. A surviving tag's node degree equals this raw count (every
+  // active bookmark carrying it still links to it).
+  const rawTagDegree = new Map<string, number>();
+  for (const tagIds of linksByBookmark.values()) {
+    for (const tagId of tagIds) {
+      rawTagDegree.set(tagId, (rawTagDegree.get(tagId) ?? 0) + 1);
+    }
+  }
+  const survives = (tagId: string): boolean =>
+    (rawTagDegree.get(tagId) ?? 0) >= minSharedDegree;
+
   const edges: GraphEdge[] = [];
   const tagDegree = new Map<string, number>();
   let untaggedCount = 0;
 
   const bookmarkNodes: GraphNode[] = activeBookmarks.map((bookmark) => {
-    const tagIds = linksByBookmark.get(bookmark.id) ?? [];
+    const tagIds = (linksByBookmark.get(bookmark.id) ?? []).filter(survives);
     if (tagIds.length === 0) {
       edges.push({ source: bookmarkNodeId(bookmark.id), target: UNTAGGED_HUB_ID });
       untaggedCount += 1;

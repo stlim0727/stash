@@ -190,6 +190,90 @@ test('duplicate links collapse to one edge', () => {
   assert.equal((graph.nodes.find((n) => n.id === 't:t') as GraphNode).degree, 1);
 });
 
+test('minSharedDegree 2: single-use tags produce no nodes/edges, only the shared tag survives', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [makeBookmark('a'), makeBookmark('b'), makeBookmark('c')],
+    tags: [makeTag('shared'), makeTag('solo1'), makeTag('solo2')],
+    bookmarkTags: [
+      link('a', 'shared'),
+      link('b', 'shared'),
+      link('a', 'solo1'),
+      link('b', 'solo2'),
+    ],
+  };
+  const graph = deriveGraph({ ...input, minSharedDegree: 2 });
+  const tagNodes = graph.nodes.filter((n) => n.kind === 'tag');
+  assert.equal(tagNodes.length, 1);
+  assert.equal(tagNodes[0].id, 't:shared');
+  assert.equal(tagNodes[0].degree, 2); // a, b
+  // The single-use tags are gone entirely — no nodes, no edges.
+  assert.ok(!graph.nodes.some((n) => n.id === 't:solo1' || n.id === 't:solo2'));
+  assert.ok(
+    !graph.edges.some((e) => e.target === 't:solo1' || e.target === 't:solo2'),
+  );
+});
+
+test('minSharedDegree 2: a bookmark whose only tags are single-use routes to the untagged hub', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [makeBookmark('a'), makeBookmark('b'), makeBookmark('orphan')],
+    tags: [makeTag('shared'), makeTag('once')],
+    bookmarkTags: [link('a', 'shared'), link('b', 'shared'), link('orphan', 'once')],
+  };
+  const graph = deriveGraph({ ...input, minSharedDegree: 2 });
+  // orphan lost its only (single-use) tag -> lands under the hub, degree 1.
+  const orphan = graph.nodes.find((n) => n.id === 'b:orphan');
+  assert.ok(orphan && orphan.kind === 'bookmark');
+  assert.equal(orphan.degree, 1);
+  const orphanEdges = graph.edges.filter((e) => e.source === 'b:orphan');
+  assert.equal(orphanEdges.length, 1);
+  assert.equal(orphanEdges[0].target, UNTAGGED_HUB_ID);
+});
+
+test('minSharedDegree 2: untagged hub aggregates genuinely-untagged and newly-orphaned bookmarks', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [
+      makeBookmark('a'),
+      makeBookmark('b'),
+      makeBookmark('orphan'), // only a single-use tag
+      makeBookmark('bare'), // no tags at all
+    ],
+    tags: [makeTag('shared'), makeTag('once')],
+    bookmarkTags: [link('a', 'shared'), link('b', 'shared'), link('orphan', 'once')],
+  };
+  const graph = deriveGraph({ ...input, minSharedDegree: 2 });
+  const hub = graph.nodes.find((n) => n.id === UNTAGGED_HUB_ID);
+  assert.ok(hub && hub.kind === 'untagged-hub');
+  assert.equal(hub.degree, 2); // orphan + bare
+  const hubSources = graph.edges
+    .filter((e) => e.target === UNTAGGED_HUB_ID)
+    .map((e) => e.source)
+    .sort();
+  assert.deepEqual(hubSources, ['b:bare', 'b:orphan']);
+});
+
+test('back-compat: minSharedDegree absent equals minSharedDegree 1 and reproduces default behavior', () => {
+  const input = smallFixture();
+  const baseline = deriveGraph(input);
+  const explicitOne = deriveGraph({ ...input, minSharedDegree: 1 });
+  const key = (g: ReturnType<typeof deriveGraph>) => ({
+    nodes: g.nodes.map((n) => [n.id, n.kind, n.degree]),
+    edges: g.edges.map((e) => [e.source, e.target]),
+  });
+  assert.deepEqual(key(explicitOne), key(baseline));
+  // And the default fixture keeps all three shared tags as nodes.
+  const tagNodes = baseline.nodes.filter((n) => n.kind === 'tag');
+  assert.equal(tagNodes.length, 3);
+});
+
+test('minSharedDegree is deterministic: same input -> identical graph', () => {
+  const input = { ...smallFixture(), minSharedDegree: 2 };
+  const key = (g: ReturnType<typeof deriveGraph>) => ({
+    nodes: g.nodes.map((n) => [n.id, n.kind, n.degree]),
+    edges: g.edges.map((e) => [e.source, e.target]),
+  });
+  assert.deepEqual(key(deriveGraph(input)), key(deriveGraph(input)));
+});
+
 test('empty input does not throw and returns an empty settled graph', () => {
   const empty: DeriveGraphInput = { bookmarks: [], tags: [], bookmarkTags: [] };
   const graph = deriveGraph(empty);
