@@ -239,36 +239,42 @@ test('layout is deterministic: same input -> identical positions', () => {
   assert.deepEqual(a.bounds, b.bounds);
 });
 
-test('mass-weighting anchors the high-degree tag closer to the centroid', () => {
-  // One clearly popular hub (many bookmarks) vs one clearly minor hub (one
-  // bookmark). The mass-biased gravity should pull the popular tag toward the
-  // layout centroid and leave the minor tag orbiting the rim.
+test('mass-weighting (ablation) pulls the high-degree tag closer to the centroid', () => {
+  // Real ablation: settle the SAME graph twice — once with production
+  // mass-weighting (default massK) and once with it OFF (massK: 0) — everything
+  // else (seed, ticks, input) identical, so the mass term is the only variable.
+  //
+  // Balanced fixture: one popular tag (8 bookmarks) and two symmetric minor
+  // tags (6 each). Symmetry keeps the unweighted centroid from being pinned on
+  // the popular cluster by topology alone, so any centering must come from mass.
   const bookmarks: Bookmark[] = [];
   const bookmarkTags: BookmarkTag[] = [];
-  const tags = [makeTag('popular'), makeTag('minor')];
-  for (let i = 0; i < 20; i += 1) {
-    const id = `pop${i}`;
-    bookmarks.push(makeBookmark(id));
-    bookmarkTags.push(link(id, 'popular'));
-  }
-  bookmarks.push(makeBookmark('lonely'));
-  bookmarkTags.push(link('lonely', 'minor'));
+  const tags = [makeTag('popular'), makeTag('minor0'), makeTag('minor1')];
+  let idc = 0;
+  const addCluster = (tagId: string, count: number) => {
+    for (let i = 0; i < count; i += 1) {
+      const id = `bk${idc++}`;
+      bookmarks.push(makeBookmark(id));
+      bookmarkTags.push(link(id, tagId));
+    }
+  };
+  addCluster('popular', 8);
+  addCluster('minor0', 6);
+  addCluster('minor1', 6);
   const input: DeriveGraphInput = { bookmarks, tags, bookmarkTags };
 
-  const settled = buildSettledGraph(input);
-  const cx = settled.nodes.reduce((s, n) => s + n.x, 0) / settled.nodes.length;
-  const cy = settled.nodes.reduce((s, n) => s + n.y, 0) / settled.nodes.length;
-  const distTo = (id: string) => {
-    const node = settled.nodes.find((n) => n.id === id)!;
+  const distToPopular = (settled: ReturnType<typeof buildSettledGraph>) => {
+    const cx = settled.nodes.reduce((s, n) => s + n.x, 0) / settled.nodes.length;
+    const cy = settled.nodes.reduce((s, n) => s + n.y, 0) / settled.nodes.length;
+    const node = settled.nodes.find((n) => n.id === 't:popular')!;
     return Math.hypot(node.x - cx, node.y - cy);
   };
 
-  const popularNode = settled.nodes.find((n) => n.id === 't:popular')!;
-  const minorNode = settled.nodes.find((n) => n.id === 't:minor')!;
-  assert.ok(popularNode.degree > minorNode.degree, 'fixture: popular must outrank minor');
+  const massOn = distToPopular(buildSettledGraph(input));
+  const massOff = distToPopular(buildSettledGraph(input, { massK: 0 }));
   assert.ok(
-    distTo('t:popular') < distTo('t:minor'),
-    `high-degree tag must sit closer to the centroid: popular=${distTo('t:popular')} minor=${distTo('t:minor')}`,
+    massOn < massOff,
+    `mass-weighting must move the popular tag closer to the centroid: on=${massOn} off=${massOff}`,
   );
 });
 

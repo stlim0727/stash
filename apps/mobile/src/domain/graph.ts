@@ -127,11 +127,24 @@ export interface LayoutOptions {
   height?: number;
   /** PRNG seed. Same seed + same graph ⇒ identical positions. */
   seed?: number;
+  /**
+   * Mass coefficient for the degree-weighted central gravity (see {@link
+   * MASS_K}). Defaults to the production constant; a test can pass `0` to settle
+   * the identical graph with mass-weighting disabled (ablation baseline).
+   * Production callers leave this unset.
+   */
+  massK?: number;
 }
 
 const DEFAULT_TICKS = 300;
 const DEFAULT_SIZE = 1000;
 const DEFAULT_SEED = 0x9e3779b9;
+
+/**
+ * Mass coefficient: a tag/hub node's mass is `1 + MASS_K * sqrt(degree)`, which
+ * scales its pull toward the layout center so popular tags anchor centrally.
+ */
+const MASS_K = 0.5;
 
 /** Lower bound on ticks: even huge graphs get a minimum-quality settle. */
 const MIN_TICKS = 60;
@@ -312,15 +325,15 @@ export function layoutGraph(graph: Graph, options: LayoutOptions = {}): SettledG
 
   // Mass per node, proportional to degree, so heavily-referenced tags act as
   // stable central anchors. Bookmark nodes stay light (unit mass); tag/hub
-  // nodes get `1 + MASS_K * sqrt(degree)`. The sqrt keeps mass bounded so one
+  // nodes get `1 + massK * sqrt(degree)`. The sqrt keeps mass bounded so one
   // mega-tag can't dominate, and degree ≥ 1 on hubs means no divide-by-zero
   // (sqrt(0) would still yield mass 1). Mass biases central gravity below: a
   // heavier node is pulled toward the origin (≈ layout centroid) more strongly,
   // so popular tags settle in the middle while light nodes orbit the rim.
-  const MASS_K = 0.5;
+  const massK = options.massK ?? MASS_K;
   const mass = new Float64Array(n);
   graph.nodes.forEach((node, i) => {
-    mass[i] = node.kind === 'bookmark' ? 1 : 1 + MASS_K * Math.sqrt(node.degree);
+    mass[i] = node.kind === 'bookmark' ? 1 : 1 + massK * Math.sqrt(node.degree);
   });
 
   const dx = new Float64Array(n);
