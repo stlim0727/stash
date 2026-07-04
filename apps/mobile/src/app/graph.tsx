@@ -25,6 +25,7 @@ import {
   type PositionedNode,
   type SettledGraph,
 } from '@/domain/graph';
+import { resolveHubLabels, type HubLabelInput } from '@/domain/graph-labels';
 import type { BookmarkTag, Tag } from '@/domain/types';
 import { useT } from '@/i18n';
 import { useBookmarks } from '@/store/bookmarks';
@@ -44,10 +45,12 @@ const EDGE_WIDTH = 1.4;
 const LABEL_SIZE = 24;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
 // the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
-// HUB_MAX_R, and its label sits a further ~LABEL_SIZE below the circle (with
-// another line-height of glyph beneath the baseline), so the pad has to clear
-// the radius plus the full label drop or the busiest hub clips at the edge.
-const VIEWBOX_PAD = HUB_MAX_R + LABEL_SIZE * 2;
+// HUB_MAX_R, and its label sits below (or, after the render-side declutter,
+// ABOVE) the circle — one line-height plus up to the declutter's bounded nudge
+// (2*LABEL_SIZE, see maxLabelOffset). So the pad clears the radius plus a full
+// nudged label on EITHER side or an edge hub clips. The viewBox pads min and max
+// symmetrically, so this covers both an above- and a below-flipped edge label.
+const VIEWBOX_PAD = HUB_MAX_R + LABEL_SIZE * 3;
 // Pinch-zoom clamps.
 export const MIN_SCALE = 0.4;
 export const MAX_SCALE = 6;
@@ -184,6 +187,36 @@ export default function GraphScreen() {
     }
     return map;
   }, [settled]);
+
+  // Resolve hub-label positions ONCE per settled graph (the mass-weighting can
+  // pull two popular hubs close enough that their default below-labels collide).
+  // Keyed on `settled` (content-stable) + `t` (only churns on locale change), so
+  // this never runs per pan/zoom frame. Returns a per-hub id → placement map the
+  // label render looks up.
+  const labelById = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof resolveHubLabels>[number]>();
+    if (!settled) {
+      return map;
+    }
+    const hubs: HubLabelInput[] = [];
+    for (const node of settled.nodes) {
+      if (node.kind === 'bookmark') {
+        continue;
+      }
+      hubs.push({
+        id: node.id,
+        x: node.x,
+        y: node.y,
+        r: hubRadius(node.degree),
+        text: node.id === UNTAGGED_HUB_ID ? t('graph.untaggedLabel') : node.label,
+        degree: node.degree,
+      });
+    }
+    for (const placement of resolveHubLabels(hubs, LABEL_SIZE)) {
+      map.set(placement.id, placement);
+    }
+    return map;
+  }, [settled, t]);
 
   // Fit-to-bounds: a padded viewBox over the settled bounds, centered by the
   // Svg's preserveAspectRatio="xMidYMid meet". Guard zero-span (all-collapsed).
@@ -457,12 +490,17 @@ export default function GraphScreen() {
             if (node.kind === 'bookmark') {
               return null;
             }
-            const r = hubRadius(node.degree);
+            // Decluttered placement (may sit above/nudged instead of the fixed
+            // below position); the baseline is already resolved for either side.
+            const placement = labelById.get(node.id);
+            if (!placement) {
+              return null;
+            }
             return (
               <SvgText
                 key={`l${node.id}`}
-                x={node.x}
-                y={node.y + r + LABEL_SIZE}
+                x={placement.x}
+                y={placement.y}
                 fill={palette.text}
                 fontSize={LABEL_SIZE}
                 fontWeight="700"
