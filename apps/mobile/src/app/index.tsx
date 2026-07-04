@@ -245,7 +245,7 @@ const WORDMARK = {
 // Rendered height of the hero wordmark in dp; its width is this × the asset
 // ratio. Kept as a constant so the Image's explicit width and height stay in
 // lockstep (see heroWordmark / the hero Image).
-const WORDMARK_HEIGHT = 30;
+const WORDMARK_HEIGHT = 36;
 
 // On wide (desktop-web) viewports, cap the content column and center it so
 // cards, the header, and the browse shelf don't stretch edge-to-edge. No effect
@@ -1378,7 +1378,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
         ]}
       >
-        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 10 }]}>
+        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 20 }]}>
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -2338,7 +2338,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 18,
-    paddingBottom: 8,
+    paddingBottom: 14,
     width: '100%',
     alignSelf: 'center',
   },
