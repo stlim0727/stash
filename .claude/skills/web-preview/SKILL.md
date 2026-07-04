@@ -61,17 +61,21 @@ branch unless the user wants parallel previews.
 ## Steps
 
 ### 1. Build the web export for the current branch, with sync wired up
+Run everything from the **repo root** — later steps use repo-root-relative
+`apps/mobile/dist` paths, so do the export in a subshell to keep the caller's cwd
+at the root (otherwise a persisted `cd apps/mobile` makes them resolve to
+`apps/mobile/apps/mobile/dist`):
 ```sh
-cd apps/mobile
 export EXPO_PUBLIC_SUPABASE_URL="https://<ref>.supabase.co"
 export EXPO_PUBLIC_SUPABASE_ANON_KEY="<publishable-or-anon-key>"
 export CI=1
-rm -rf dist
-pnpm exec expo export --platform web
+rm -rf apps/mobile/dist
+( cd apps/mobile && pnpm exec expo export --platform web )
 ```
 A failing export is the fastest signal the branch broke the web bundle — read the
 error (Metro/expo-router issues surface here, not in `pnpm typecheck`). Confirm
-`dist/index.html` exists and that there are **no** per-route `.html` files (a
+`apps/mobile/dist/index.html` exists and that there are **no** per-route `.html`
+files (a
 correct SPA build emits only `index.html` + assets).
 
 ### 2. Make the static build SPA-safe on Netlify
