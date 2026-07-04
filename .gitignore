@@ -13,6 +13,12 @@ dist/
 build/
 coverage/
 
+# Netlify CLI local state (web-preview skill). netlify.toml IS committed (it
+# drives Netlify's Git-integration builds); only the CLI's local state dir is
+# transient. Production web deploys still use Cloudflare (wrangler.toml).
+.netlify/
+**/.netlify/
+
 # Logs
 *.log
 npm-debug.log*
