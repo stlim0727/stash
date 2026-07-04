@@ -57,6 +57,7 @@ function RootStack() {
       <Stack.Screen name="report" options={{ title: t('nav.report') }} />
       <Stack.Screen name="trash" options={{ title: t('nav.trash') }} />
       <Stack.Screen name="browse/tags" options={{ title: t('nav.browseTags') }} />
+      <Stack.Screen name="graph" options={{ title: t('nav.graph') }} />
       <Stack.Screen name="bookmark/[id]" options={{ title: t('nav.bookmark') }} />
     </Stack>
   );

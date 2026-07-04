@@ -43,6 +43,16 @@ export const ko: Catalog = {
   'nav.trash': '휴지통',
   'nav.bookmark': '북마크',
   'nav.browseTags': '태그',
+  'nav.graph': '그래프',
+
+  'graph.empty': '아직 지도로 만들 항목이 없어요',
+  'graph.emptyHint': '북마크를 몇 개 저장하면 태그와 연결되어 여기에 표시됩니다.',
+  'graph.untaggedLabel': '태그 없음',
+  'graph.untaggedHint': '북마크에 태그를 추가하면 서로 어떻게 연결되는지 볼 수 있어요.',
+  'graph.openA11y': '태그 그래프 열기',
+  'graph.tagA11y': { other: '태그 {name}, 북마크 {count}개' },
+  'graph.untaggedA11y': { other: '태그 없음, 북마크 {count}개' },
+  'graph.bookmarkA11y': '북마크 {title}',
 
   'inbox.savedCount': '{count}개 저장됨',
   'inbox.storageError':

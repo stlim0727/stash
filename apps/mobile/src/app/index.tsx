@@ -1625,6 +1625,20 @@ export default function InboxScreen() {
               <Ionicons name="pricetags-outline" size={15} color={palette.textSecondary} />
             </Pressable>
           ) : null}
+          {inbox.length > 0 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('graph.openA11y')}
+              testID="inbox-graph-open"
+              onPress={() => router.push('/graph')}
+              style={[
+                styles.sortPill,
+                { backgroundColor: palette.surface, borderColor: palette.border },
+              ]}
+            >
+              <Ionicons name="git-network-outline" size={15} color={palette.textSecondary} />
+            </Pressable>
+          ) : null}
           <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
             {VIEW_MODES.map((mode) => {
               const active = viewMode === mode;
