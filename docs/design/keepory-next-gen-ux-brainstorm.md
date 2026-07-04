@@ -13,6 +13,54 @@ _Brainstorm, 2026-07-04. Prompt: "let all team members look at the UX of the lat
 
 One thing the frames make unmissable: the list is a **firehose of spam** trading/forex/crypto channels with five-digit unread counts (`GOLDHUNTER PAUL 15610`, `Binance Killers 6822`). Much of Telegram's chrome — badges, counts, folders, archive — is *coping machinery for overwhelm*. That context matters for what we borrow.
 
+## Observed patterns catalog (team observation round)
+
+_A separate, deliberately non-prescriptive pass: the team re-watched the recording just to name **what UX is actually there**, before deciding anything. Three lenses — IA/interaction, UI mechanics, and the honest "what it reveals" read. Frame numbers refer to the 20 extracted frames._
+
+**Navigation & information architecture**
+- **Two-tier nav, cleanly separated** — bottom bar = 4 *destinations* (Chats/Contacts/Settings/Profile, icon+label, active tinted blue); top row = *filters* over the current list. The app never lets "where you are" look like "what you're filtering." (1–20)
+- **Folder/filter chip row** — scrollable pills `All 173 · Forex 60 · Unread 276 · Personal 146 · Stocks`, each with an inline count; active chip fills solid blue; re-scopes the list in place. (1–6)
+- **Pinned special rows at the top** — Archived Chats (own `76` count) and Saved Messages sit above real chats using the same row grammar. (1)
+- **Entity-type subtitles teach identity** — rows label *what a thing is*: "private channel", "public channel", "bot", "last seen 3:10 PM". (17–20)
+
+**Count/badge system**
+- **Count pills do double duty** — unread indicator on rows, size indicator on folder chips; blue = active-unread, muted grey = muted-but-unread (with a crossed-speaker glyph). (1–6)
+- **A dedicated "Unread 276" folder** — a first-class filter just for "stuff I haven't dealt with."
+
+**Search model**
+- **Scoped unified search** — field + second-level sub-tabs `Chats · Channels · Apps · Posts · Media` to switch query scope by content type. (17–20)
+- **Recent + "Clear All"** — prior targets listed with type captions before you type; one action wipes them. (18–20)
+- **Two entry points** — app-bar magnifier *and* a persistent search field atop the list, both morphing into the same search surface. (1–6)
+
+**List & density mechanics**
+- **Consistent row anatomy** — avatar/monogram · bold title (inline verified/scam/emoji badges) · one-line preview (sender bolded, media glyph) · right-aligned timestamp · unread pill. (1–20)
+- **High density** — 8–9 full rows/screen, edge-to-edge, content bleeding under header and nav.
+- **Compose FAB** — blue circular "+", floating bottom-right, distinct from tab nav. (1–3)
+- **Flat, high-radius visual system** — fully-rounded chips/pills/avatars, ~12px rounded fields, near-black bg with one accent blue; separation by color/spacing, not shadow.
+
+**Identity surfaces**
+- **Profile action-button trio** — `Set Photo · Edit Info · Settings` as three equal tiles, then labeled info rows. (10)
+- **Profile "Posts / Archived Posts"** — a lightweight publish-to-profile feed with empty state + "Add a post". (10)
+- **Settings rows with descriptive subtitles** — "Account — Number, Username, Bio" previews what's inside before you tap. (8–9)
+
+**Microcopy, states & confirmations**
+- **Inline confirmation card** — "Is +82… still your number?" with reassuring copy, "Learn more", and **No / 👍 Yes** — non-blocking, dismissible, lives *inside* the settings list. (8–9)
+- **Inline error state** — "This channel can't be displayed…" shown in the preview slot, not a modal. (1–3)
+- **Real Android status bar / safe area** retained throughout; top inset respected, list runs to the gesture pill.
+
+**The honest read — what these patterns _reveal_**
+Nearly every polished pattern above is coping machinery for a content problem, and that's the load-bearing lesson:
+- The list is almost entirely **monetized channel spam** (one channel is literally named *"Alphabet Forex is a scammer"*); folders, the Unread tab, archive, and count pills exist to *survive the firehose*, not to organize a life.
+- **Five-digit pills are dread, not signal** — nobody clears 15,610; past ~99 a badge trains you to ignore all badges, breaking the one that matters.
+- The **"Unread" folder is a debt-tracker** — a healthy app doesn't need a permanent tab for its own backlog.
+- **"This channel can't be displayed"** still carries an `834` badge — a dead row you can't read *or* dismiss, nagging anyway. (1–3)
+- The **verification card** is retention instrumentation colonizing a utility screen; the 👍 on "Yes" is a nudge, not clarity. (8–9)
+- **"Posts"** is a social feed most users never fill — its "Add a post" CTA overlaps its own empty-state text. (10)
+- **Two "profile" doors** (Profile tab *and* Settings tab, same avatar/@handle) — visible org-chart seams in the IA.
+- Content **bleeds under the bottom bar** (급등일보 peeking beneath the nav) — a floating bar eating the last row instead of resting on a safe inset. (1, 3, 5)
+
+**The takeaway that shapes the rest of this doc:** the video is a masterclass in *patterns* and a cautionary tale in *application* at once. The structural grammar (two-tier nav, scoped search, chip filters, inline states, descriptive subtitles) is worth learning from; the loud, anxiety-driven surface (big counts, a debt-tab, a feed, chat density, the inset-eating bar) is scar tissue around overwhelm we don't have. **Borrow the grammar, reject the anxiety.**
+
 ## Where the team agreed
 
 **Bottom tabs are the right structural move.** Keepory today has no tab bar; Review, Trash, Graph, Settings, and Report all hang off stack-pushes from the single Inbox screen (`apps/mobile/src/app/_layout.tsx`, the `router.push('/settings')`/`/report` calls in `index.tsx`). That buries the whole app behind one screen. A `(tabs)` group — **Inbox · Search · Library · You** — makes Keepory read as a *product* instead of a screen with buttons. Effort **M** (expo-router `Tabs`), with two known snags: `settings` (`transparentModal`) and `add` (`presentation:'modal'`) must stay modals presented *over* the tabs, and the Inbox hardware-back "peel" handler assumes the Inbox is the app root — a tab bar redefines "root," so that logic needs re-checking.
