@@ -19,7 +19,7 @@ test('falls back to English when the locale lacks a key', () => {
   // Construct a key present in English; if Korean ever drops it, English shows.
   const t = createT('ko');
   // 'app.name' is intentionally not in the ko catalog (brand name).
-  assert.equal(t('app.name'), 'Stash');
+  assert.equal(t('app.name'), 'Keepory');
 });
 
 test('English plural selects one vs other by count', () => {

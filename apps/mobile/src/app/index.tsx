@@ -224,19 +224,19 @@ function ItemIcon({
 // FlatList's generic item typing (Animated.FlatList erases it to `any`).
 const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
 
-// Pre-rendered brand wordmark (in place of bundled display fonts): the Gothic A1
-// "Stash" and Gowun Dodum 스태시 baked into PNGs. Two locale forms — plain
-// "Stash" vs the bilingual "Stash | 스태시" lockup — each with a light/dark
-// variant. `ratio` is the asset's intrinsic width/height so the Image can be
-// sized by height alone.
+// Pre-rendered brand wordmark: the Keepory duckling lockup (mascot + "Keepory")
+// baked into PNGs, each with a light/dark variant (navy text on light, near-white
+// on dark; the duckling is unchanged). The Korean locale reuses the same lockup —
+// the brand name is "Keepory" in every locale. `ratio` is the asset's intrinsic
+// width/height so the Image can be sized by height alone.
 const WORDMARK = {
   en: {
-    ratio: 3.118,
+    ratio: 4.27,
     light: require('../../assets/images/wordmark-en-light.png'),
     dark: require('../../assets/images/wordmark-en-dark.png'),
   },
   local: {
-    ratio: 6.158,
+    ratio: 4.27,
     light: require('../../assets/images/wordmark-ko-light.png'),
     dark: require('../../assets/images/wordmark-ko-dark.png'),
   },
@@ -1385,12 +1385,10 @@ export default function InboxScreen() {
               vertical chrome that pushed the first card down ~40% of the
               screen, so they're folded away here to reclaim that space. */}
           <View style={styles.heroTitleBlock}>
-            {/* The brand wordmark is a pre-rendered image (Gothic A1 "Stash" +
-                Gowun Dodum 스태시) rather than bundled fonts — a few KB of PNG
-                instead of multi-MB font files. Locales with a native wordmark
-                (app.nameLocal differs from app.name) use the bilingual lockup;
-                others use the plain "Stash". A light/dark variant matches the
-                theme. */}
+            {/* The brand wordmark is a pre-rendered image (the Keepory duckling
+                lockup) rather than bundled fonts — a few KB of PNG instead of
+                multi-MB font files. Every locale uses the same lockup; a
+                light/dark variant matches the theme. */}
             {wordmarkFailed ? (
               <Text
                 accessibilityRole="header"

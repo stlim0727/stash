@@ -20,11 +20,11 @@ export type Message = string | PluralMessage;
 
 export const en = {
   // App identity (brand name is intentionally never translated).
-  'app.name': 'Stash',
-  // Locale-native wordmark shown beside the brand name (e.g. 스태시 in Korean).
-  // Defaults to the brand name itself, which the hero reads as "no native
-  // wordmark" and renders just "Stash"; locales override it to opt in.
-  'app.nameLocal': 'Stash',
+  'app.name': 'Keepory',
+  // Locale-native wordmark shown beside the brand name. Defaults to the brand
+  // name itself, which the hero reads as "no native wordmark" and renders just
+  // "Keepory"; locales override it to opt in.
+  'app.nameLocal': 'Keepory',
   'app.tagline': 'Save now. Organize later.',
 
   // Shared, reused across screens.
