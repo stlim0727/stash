@@ -210,6 +210,41 @@ test('fetchPageMetadata retries as a browser when the bot UA is refused (403)', 
   }
 });
 
+test('fetchPageMetadata requests only the head via a Range header', async () => {
+  const originalFetch = globalThis.fetch;
+  const ranges: (string | undefined)[] = [];
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    ranges.push((init?.headers as Record<string, string>)?.Range);
+    return htmlResponse('<head><meta property="og:title" content="OK"></head>');
+  }) as typeof fetch;
+  try {
+    await fetchPageMetadata('https://example.com/article');
+    // 512 KiB minus one: bytes 0..524287 inclusive == MAX_HTML_BYTES bytes, so a
+    // range-honoring server never sends more than we parse.
+    assert.deepEqual(ranges, ['bytes=0-524287']);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata parses the head of an oversized body (never the whole thing)', async () => {
+  const originalFetch = globalThis.fetch;
+  // Real title in the head, then ~700 KB of filler with a DIFFERENT late title.
+  // A server that ignores the Range header returns the full body; the fix caps
+  // the decode/parse to the head, so we must read the head's title and never see
+  // the tail — the multi-megabyte decode that froze the app (STASH-K/J).
+  const head = '<head><meta property="og:title" content="Head Title"></head>';
+  const filler = `<!-- ${'x'.repeat(700 * 1024)} -->`;
+  const late = '<meta property="og:title" content="Late Title">';
+  globalThis.fetch = (async () => htmlResponse(head + filler + late)) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://example.com/huge');
+    assert.equal(meta?.title, 'Head Title');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('previewSourceUrl maps a Naver Map place entry to its server-rendered page', () => {
   assert.equal(
     previewSourceUrl('https://map.naver.com/p/entry/place/1887843614'),
