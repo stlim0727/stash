@@ -6,9 +6,9 @@ description: >-
   (keepory.app). Use whenever the user asks to "preview this branch on the web",
   "host an unmerged web version", "deploy a web preview", "put this branch on
   Netlify", "share a web build", or wants to click through a WIP change in a real
-  browser before it merges. Primary path is Netlify's Git integration (every PR
-  auto-deploys, no tokens); a manual netlify-cli path covers previewing an
-  un-pushed working tree.
+  browser before it merges. Primary path is a manual netlify-cli deploy (works on
+  the Netlify Free plan with this PRIVATE repo); Git-integration auto-deploys are
+  documented too but need a public repo or Netlify Pro (see the plan note).
 ---
 
 # Host un-merged branches as Netlify web previews
@@ -40,10 +40,65 @@ site; only the CLI's local `.netlify/` state dir is gitignored.
   **public** Supabase URL + publishable anon key (build-time, so sync works),
   `SECRETS_SCAN_OMIT_KEYS` for those `EXPO_PUBLIC_*` values, and the SPA redirect.
 
-## Primary path — Git integration (tokenless, every PR auto-deploys)
+## ⚠️ Plan constraint — why the CLI path is primary here
 
-Once the repo is linked to the site (one-time dashboard step below), **every push
-builds automatically** and there is nothing to run:
+`stlim0727/stash` is a **private** repo on the Netlify **Free** plan, which allows
+**one Git contributor** on private repos. Every commit here carries a
+`Co-authored-by: Claude …` trailer, which Netlify counts as a *second*
+contributor — so Git-integration builds fail with **"Build failed: unrecognized
+Git contributor."** (learned the hard way; the linked repo just produces red
+failed builds on every push). CLI deploys upload a prebuilt folder and **skip**
+the contributor check, so **the Manual CLI path below is the one that works** for
+this repo. Git-integration only becomes viable if the repo goes **public** or the
+account upgrades to **Netlify Pro** — until then, don't link the repo (or unlink
+it) to avoid failing-build noise.
+
+## Primary path — netlify-cli deploy (works on Free + private repo)
+
+Build the branch locally with sync baked in, then upload the prebuilt dir. No Git
+build runs, so the contributor limit never applies.
+
+- **`NETLIFY_AUTH_TOKEN`** — store it once as an env var on the Claude Code web
+  environment (claude.ai/code → environment selector → settings icon →
+  Environment variables → `NETLIFY_AUTH_TOKEN=nfp_…`, `.env` format, **no quotes**;
+  note there's no encrypted secrets store yet, so it's visible to anyone who can
+  edit the environment). Then it's present as `$NETLIFY_AUTH_TOKEN` in new sessions
+  and this path is hands-free. If absent, ask the user for a personal access token
+  (Netlify → User settings → Applications → Personal access tokens); a token pasted
+  into chat is in the transcript, so suggest a short expiry + revoke. **Never**
+  commit it. Check with `test -n "$NETLIFY_AUTH_TOKEN"` before prompting.
+
+```sh
+# Build whatever is checked out (repo-root-relative paths; subshell keeps cwd).
+export CI=1
+rm -rf apps/mobile/dist
+( cd apps/mobile \
+    && EXPO_PUBLIC_SUPABASE_URL="https://stzutoejnhzxzhjsjtsi.supabase.co" \
+       EXPO_PUBLIC_SUPABASE_ANON_KEY="sb_publishable_TBMfShK_vzySRN6n3yRcpA_P-WXe-5n" \
+       pnpm exec expo export --platform web )
+printf '/*    /index.html   200\n' > apps/mobile/dist/_redirects
+
+# Deploy the prebuilt dir. --no-build skips the Git build (and its contributor
+# check). --prod overwrites stash-web-preview.netlify.app; swap for
+# --alias "<slug>" to get a distinct URL per branch without touching the primary.
+npx -y netlify-cli@latest deploy \
+  --dir apps/mobile/dist \
+  --site f7a9729d-7cf3-4405-a61b-fac5c7ec6cc0 \
+  --no-build \
+  --prod
+
+rm -rf apps/mobile/dist apps/mobile/.netlify   # gitignored, but don't leave litter
+```
+
+Then run the smoke test below. To host several branches at once, replace `--prod`
+with `--alias "$(git rev-parse --abbrev-ref HEAD | tr '/' '-' | cut -c1-37)"` →
+`https://<branch-slug>--stash-web-preview.netlify.app`.
+
+## Alternative path — Git integration (ONLY if repo is public or on Netlify Pro)
+
+Blocked on Free+private (see the plan note above). If that changes: once the repo
+is linked to the site (one-time dashboard step below), **every push builds
+automatically** and there is nothing to run:
 
 - Push to the **production branch** (`main`) → deploys to
   `https://stash-web-preview.netlify.app`.
@@ -79,42 +134,6 @@ Hand the user these steps:
 
 After linking, trigger the first build by pushing (or re-running the latest
 deploy in the dashboard). Verify with the smoke test below.
-
-## Manual path — netlify-cli (preview an un-pushed / dirty working tree)
-
-Use only when you want a preview **without committing/pushing** (e.g. local WIP).
-Needs a token; Git integration needs none.
-
-- **`NETLIFY_AUTH_TOKEN`** — store it once as a **secret env var** on the Claude
-  Code web environment (environment settings → Variables/Secrets) so it's present
-  as `$NETLIFY_AUTH_TOKEN` in every session and this path is hands-free. If
-  absent, ask the user for a personal access token (Netlify → User settings →
-  Applications → Personal access tokens); a token pasted into chat is in the
-  transcript, so suggest a short expiry + revoke. **Never** commit it.
-
-```sh
-# Build whatever is checked out (repo-root-relative paths; subshell keeps cwd).
-export CI=1
-rm -rf apps/mobile/dist
-( cd apps/mobile \
-    && EXPO_PUBLIC_SUPABASE_URL="https://stzutoejnhzxzhjsjtsi.supabase.co" \
-       EXPO_PUBLIC_SUPABASE_ANON_KEY="sb_publishable_TBMfShK_vzySRN6n3yRcpA_P-WXe-5n" \
-       pnpm exec expo export --platform web )
-printf '/*    /index.html   200\n' > apps/mobile/dist/_redirects
-
-# Deploy the prebuilt dir. --alias gives a distinct URL without touching the
-# primary site; drop it and add --prod to overwrite stash-web-preview.netlify.app.
-npx -y netlify-cli@latest deploy \
-  --dir apps/mobile/dist \
-  --site f7a9729d-7cf3-4405-a61b-fac5c7ec6cc0 \
-  --no-build \
-  --alias "$(git rev-parse --abbrev-ref HEAD | tr '/' '-' | cut -c1-37)"
-
-rm -rf apps/mobile/dist apps/mobile/.netlify   # gitignored, but don't leave litter
-```
-
-`--no-build` makes the CLI upload the prebuilt dir instead of re-running the
-`netlify.toml` build command locally.
 
 ## Smoke-test any preview URL
 
