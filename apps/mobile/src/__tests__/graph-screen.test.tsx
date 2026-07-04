@@ -35,7 +35,7 @@ jest.mock('expo-router', () => ({
   }),
 }));
 
-import GraphScreen from '@/app/graph';
+import GraphScreen, { clampToRange, maxPanOffset, MIN_SCALE, MAX_SCALE } from '@/app/graph';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -183,6 +183,52 @@ test('tapping a tag hub hands the facet to the root Inbox', async () => {
   expect(arg.params.tag).toBe('t-cooking');
   // A monotonic nonce rides along so a same-tag re-tap still re-applies.
   expect(arg.params.t).toBeTruthy();
+});
+
+// The pan is clamped so a fling can't drift the graph into empty space. These
+// exercise the exact math the panResponder runs each frame: it clamps the
+// ABSOLUTE resulting position (panStart + gesture delta) into ±maxPanOffset,
+// where maxPanOffset grows with the zoom-in overflow. PanResponder's gestureState
+// isn't computed under the jest event pipeline (no native touchHistory), so we
+// assert the bound + clamp directly rather than through synthetic touch events.
+describe('pan clamp', () => {
+  const W = 320;
+  const H = 640;
+
+  test('at scale 1 the fitted content pins the pan to a small margin', () => {
+    // The SVG already fits the viewport at scale 1, so a huge fling barely moves.
+    const maxX = maxPanOffset(1, W);
+    expect(maxX).toBe(32);
+    expect(clampToRange(0 + 99999, -maxX, maxX)).toBe(32);
+    expect(clampToRange(0 - 99999, -maxX, maxX)).toBe(-32);
+  });
+
+  test('bounds hold at MIN_SCALE (content smaller than the viewport)', () => {
+    const maxX = maxPanOffset(MIN_SCALE, W);
+    const maxY = maxPanOffset(MIN_SCALE, H);
+    // At s < 1 the content is no larger than the viewport → pinned to ±margin.
+    expect(maxX).toBe(32);
+    expect(maxY).toBe(32);
+    expect(clampToRange(5000, -maxX, maxX)).toBe(maxX);
+    expect(clampToRange(-5000, -maxY, maxY)).toBe(-maxY);
+  });
+
+  test('bounds hold at MAX_SCALE and still bound a large fling', () => {
+    const maxX = maxPanOffset(MAX_SCALE, W); // (6-1)*320/2 + 32
+    const maxY = maxPanOffset(MAX_SCALE, H); // (6-1)*640/2 + 32
+    expect(maxX).toBe(832);
+    expect(maxY).toBe(1632);
+    // A giant drag is clamped to the axis bound, never beyond → never off-screen.
+    expect(clampToRange(50000, -maxX, maxX)).toBe(maxX);
+    expect(clampToRange(-50000, -maxY, maxY)).toBe(-maxY);
+    // In-range positions pass through untouched so edge nodes stay reachable.
+    expect(clampToRange(400, -maxX, maxX)).toBe(400);
+  });
+
+  test('zooming in strictly widens the pan range', () => {
+    expect(maxPanOffset(MAX_SCALE, W)).toBeGreaterThan(maxPanOffset(2, W));
+    expect(maxPanOffset(2, W)).toBeGreaterThan(maxPanOffset(1, W));
+  });
 });
 
 test('an all-untagged stash reads as intentional with the add-tags hint', async () => {

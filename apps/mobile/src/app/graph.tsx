@@ -6,11 +6,13 @@ import {
   Animated,
   InteractionManager,
   PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
   type LayoutChangeEvent,
+  type ViewStyle,
 } from 'react-native';
 import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 
@@ -30,9 +32,13 @@ import { usePalette } from '@/theme';
 
 // Node sizing (in layout/viewBox units — the settled layout spans ~1000 units).
 // Hubs scale by degree with a sqrt so a very busy tag doesn't dwarf the canvas;
-// bookmark nodes stay small so hubs read as the anchors.
-const HUB_MIN_R = 22;
-const HUB_MAX_R = 70;
+// bookmark nodes stay small so hubs read as the anchors. The range is wide and
+// the coefficient steep so a popular tag reads visibly bigger than a lonely one
+// (the sqrt still keeps one giant tag from swallowing the canvas, and the clamp
+// pins the busiest hub to HUB_MAX_R). VIEWBOX_PAD below derives from HUB_MAX_R,
+// so the bounds padding tracks this max and the busiest hub never clips.
+const HUB_MIN_R = 18;
+const HUB_MAX_R = 100;
 const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
 const LABEL_SIZE = 24;
@@ -43,11 +49,37 @@ const LABEL_SIZE = 24;
 // the radius plus the full label drop or the busiest hub clips at the edge.
 const VIEWBOX_PAD = HUB_MAX_R + LABEL_SIZE * 2;
 // Pinch-zoom clamps.
-const MIN_SCALE = 0.4;
-const MAX_SCALE = 6;
+export const MIN_SCALE = 0.4;
+export const MAX_SCALE = 6;
+// A small fixed slack (screen px) the pan may exceed the content's overflow by,
+// so edge nodes stay reachable without letting the graph drift into empty space.
+const PAN_MARGIN = 32;
+// Pinch throttle: only push a new scale to the Animated value once the pinch has
+// moved this far since the last applied scale, so we re-rasterize the SVG far less
+// often per pinch. The exact final scale is always committed on gesture end.
+const SCALE_APPLY_STEP = 0.02;
+// Web-only: promote the transformed layer to its own compositor layer so a
+// translate/scale composites cheaply instead of repainting the whole vector SVG
+// each frame. `willChange` isn't in RN's ViewStyle, so it lives behind this cast
+// and is only ever applied under Platform.OS === 'web'.
+const WEB_COMPOSITE_LAYER = { willChange: 'transform' } as unknown as ViewStyle;
 
 function hubRadius(degree: number): number {
-  return Math.min(HUB_MAX_R, Math.max(HUB_MIN_R, HUB_MIN_R + 8 * Math.sqrt(degree)));
+  return Math.min(HUB_MAX_R, Math.max(HUB_MIN_R, HUB_MIN_R + 16 * Math.sqrt(degree)));
+}
+
+export function clampToRange(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+// Max translate (in screen px) that still keeps the fitted content covering the
+// main area at a given scale. The SVG's viewBox + preserveAspectRatio="…meet"
+// already fits the content to the viewport at scale 1, so at scale `s` the content
+// overflows the viewport by (s - 1) * size / 2 per side; we allow PAN_MARGIN of
+// slack on top. At s <= 1 the content is no larger than the viewport, so the pan
+// is pinned to ±PAN_MARGIN (barely moves — correct, it already fits).
+export function maxPanOffset(scale: number, size: number): number {
+  return Math.max(0, ((scale - 1) * size) / 2) + PAN_MARGIN;
 }
 
 function touchDistance(a: { pageX: number; pageY: number }, b: { pageX: number; pageY: number }): number {
@@ -168,8 +200,12 @@ export default function GraphScreen() {
   }, [settled]);
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  // The pan clamp reads the live viewport from a ref (not the state) because the
+  // panResponder is memoized and would otherwise close over a stale {w,h}.
+  const viewportRef = useRef({ w: 0, h: 0 });
   const onLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
+    viewportRef.current = { w: width, h: height };
     setViewport({ w: width, h: height });
   };
 
@@ -182,11 +218,43 @@ export default function GraphScreen() {
   const scale = useRef(new Animated.Value(1)).current;
   const lastScale = useRef(1);
   const liveScale = useRef(1);
+  // Last scale actually pushed to the Animated value — the pinch throttle applies
+  // a new scale only when it drifts SCALE_APPLY_STEP from this.
+  const appliedScale = useRef(1);
+  // Committed effective pan (screen px) and the value it held at gesture start.
+  // extractOffset/flattenOffset move the accumulated pan between the Animated
+  // value's offset and value, neither cheaply readable, so we track it ourselves
+  // to clamp the ABSOLUTE resulting position rather than just the frame delta.
+  const panOffset = useRef({ x: 0, y: 0 });
+  const panStart = useRef({ x: 0, y: 0 });
   const pinch = useRef<{ startDist: number; startScale: number } | null>(null);
 
   const panResponder = useMemo(
-    () =>
-      PanResponder.create({
+    () => {
+      // Flatten the offset and re-clamp the pan against the (possibly just-changed)
+      // scale — a pinch-out shrinks the allowed range, so an out-of-bounds pan must
+      // be pulled back in — then commit the exact final pinch scale.
+      const settle = () => {
+        translateX.flattenOffset();
+        translateY.flattenOffset();
+        lastScale.current = liveScale.current;
+        if (appliedScale.current !== liveScale.current) {
+          appliedScale.current = liveScale.current;
+          scale.setValue(liveScale.current);
+        }
+        const maxX = maxPanOffset(liveScale.current, viewportRef.current.w);
+        const maxY = maxPanOffset(liveScale.current, viewportRef.current.h);
+        const clampedX = clampToRange(panOffset.current.x, -maxX, maxX);
+        const clampedY = clampToRange(panOffset.current.y, -maxY, maxY);
+        if (clampedX !== panOffset.current.x || clampedY !== panOffset.current.y) {
+          panOffset.current = { x: clampedX, y: clampedY };
+          // flattenOffset zeroed the offset, so setValue is the absolute position.
+          translateX.setValue(clampedX);
+          translateY.setValue(clampedY);
+        }
+        pinch.current = null;
+      };
+      return PanResponder.create({
         onStartShouldSetPanResponder: () => false,
         onMoveShouldSetPanResponder: (event, gesture) =>
           event.nativeEvent.touches.length >= 2 ||
@@ -195,6 +263,7 @@ export default function GraphScreen() {
         onPanResponderGrant: () => {
           translateX.extractOffset();
           translateY.extractOffset();
+          panStart.current = { x: panOffset.current.x, y: panOffset.current.y };
         },
         onPanResponderMove: (event, gesture) => {
           const touches = event.nativeEvent.touches;
@@ -203,30 +272,33 @@ export default function GraphScreen() {
             if (!pinch.current) {
               pinch.current = { startDist: dist, startScale: lastScale.current };
             }
-            const next = Math.min(
+            const next = clampToRange(
+              (pinch.current.startScale * dist) / pinch.current.startDist,
+              MIN_SCALE,
               MAX_SCALE,
-              Math.max(MIN_SCALE, (pinch.current.startScale * dist) / pinch.current.startDist),
             );
             liveScale.current = next;
-            scale.setValue(next);
+            // Throttle: skip most per-frame scale writes to cut SVG re-rasters.
+            if (Math.abs(next - appliedScale.current) >= SCALE_APPLY_STEP) {
+              appliedScale.current = next;
+              scale.setValue(next);
+            }
           } else if (!pinch.current) {
-            translateX.setValue(gesture.dx);
-            translateY.setValue(gesture.dy);
+            // Clamp the absolute pan into ±maxPanOffset so the content can't drift
+            // off the main area into empty space.
+            const maxX = maxPanOffset(liveScale.current, viewportRef.current.w);
+            const maxY = maxPanOffset(liveScale.current, viewportRef.current.h);
+            const nextX = clampToRange(panStart.current.x + gesture.dx, -maxX, maxX);
+            const nextY = clampToRange(panStart.current.y + gesture.dy, -maxY, maxY);
+            translateX.setValue(nextX - panStart.current.x);
+            translateY.setValue(nextY - panStart.current.y);
+            panOffset.current = { x: nextX, y: nextY };
           }
         },
-        onPanResponderRelease: () => {
-          translateX.flattenOffset();
-          translateY.flattenOffset();
-          lastScale.current = liveScale.current;
-          pinch.current = null;
-        },
-        onPanResponderTerminate: () => {
-          translateX.flattenOffset();
-          translateY.flattenOffset();
-          lastScale.current = liveScale.current;
-          pinch.current = null;
-        },
-      }),
+        onPanResponderRelease: settle,
+        onPanResponderTerminate: settle,
+      });
+    },
     [translateX, translateY, scale],
   );
 
@@ -242,6 +314,9 @@ export default function GraphScreen() {
     scale.setValue(1);
     lastScale.current = 1;
     liveScale.current = 1;
+    appliedScale.current = 1;
+    panOffset.current = { x: 0, y: 0 };
+    panStart.current = { x: 0, y: 0 };
     pinch.current = null;
   };
 
@@ -304,8 +379,15 @@ export default function GraphScreen() {
     >
       <Animated.View
         {...panResponder.panHandlers}
+        // Promote this layer to its own GPU/composited texture so a pan/zoom
+        // composites the cached layer instead of repainting the vector SVG every
+        // frame (the web pinch stutter). Web uses `will-change: transform`; native
+        // uses the platform rasterization hints.
+        renderToHardwareTextureAndroid
+        shouldRasterizeIOS
         style={[
           StyleSheet.absoluteFill,
+          Platform.OS === 'web' ? WEB_COMPOSITE_LAYER : null,
           { transform: [{ translateX }, { translateY }, { scale }] },
         ]}
       >
