@@ -41,16 +41,24 @@ are **transient and gitignored** — this skill regenerates them each run, like
 Reuse this site every time (redeploys overwrite it) — don't create a new one per
 branch unless the user wants parallel previews.
 
-## Prerequisites the sandbox does NOT have
+## Prerequisites
 
-1. **`NETLIFY_AUTH_TOKEN`** — no token/CLI is baked into the sandbox, and the
-   Netlify **MCP** deploy hands back an `npx @netlify/mcp --proxy-path <opaque>`
-   command that Claude Code's auto-mode classifier **refuses to run**. So the
-   deploy must go through the standard `netlify-cli` with a token. Ask the user
-   for a Netlify **personal access token** (Netlify → User settings →
-   Applications → Personal access tokens → New access token). Remind them a
-   token pasted into chat is in the transcript — use a short expiry and revoke
-   after. Never hard-code or commit it.
+1. **`NETLIFY_AUTH_TOKEN`** — the deploy goes through standard `netlify-cli`,
+   which needs a Netlify **personal access token**. (The Netlify **MCP** deploy
+   is not usable here: it hands back an `npx @netlify/mcp --proxy-path <opaque>`
+   command that Claude Code's auto-mode classifier refuses to run.)
+   - **Preferred — read it from the environment.** For repeatable, hands-free
+     use, store the token once as a **secret env var** on the Claude Code web
+     environment (environment settings → Variables/Secrets → add
+     `NETLIFY_AUTH_TOKEN`). Then every session exposes it as `$NETLIFY_AUTH_TOKEN`
+     and this skill deploys silently — nothing to paste, nothing in git.
+     Check with `test -n "$NETLIFY_AUTH_TOKEN"` before prompting.
+   - **Fallback — ask once.** If the env var is absent, ask the user for a token
+     (Netlify → User settings → Applications → Personal access tokens → New
+     access token). A token pasted into chat lands in the transcript, so suggest
+     a short expiry + revoke after.
+   - **Never** hard-code the token in this file, commit it, or write it to a
+     tracked file. Env-var/secret only.
 2. **Supabase env** — `EXPO_PUBLIC_SUPABASE_URL` + anon key are compiled into the
    bundle at build time; without them the preview runs local-only (no sign-in /
    sync). Pull them from the Supabase MCP (they're publishable — the same anon
@@ -61,7 +69,9 @@ branch unless the user wants parallel previews.
 ## Steps
 
 ### 1. Build the web export for the current branch, with sync wired up
-Run everything from the **repo root** — later steps use repo-root-relative
+To preview a specific PR, check its branch out first
+(`git fetch origin <branch> && git checkout <branch>`) — the export always
+builds whatever is currently checked out. Run everything from the **repo root** — later steps use repo-root-relative
 `apps/mobile/dist` paths, so do the export in a subshell to keep the caller's cwd
 at the root (otherwise a persisted `cd apps/mobile` makes them resolve to
 `apps/mobile/apps/mobile/dist`):
@@ -103,14 +113,20 @@ printf '/*    /index.html   200\n' > apps/mobile/dist/_redirects
 ```
 
 ### 3. Deploy the prebuilt dir via netlify-cli
+`NETLIFY_AUTH_TOKEN` comes from the environment (see Prerequisites); the command
+picks it up implicitly — do not echo or inline it.
 ```sh
-NETLIFY_AUTH_TOKEN="<token>" npx -y netlify-cli@latest deploy \
+npx -y netlify-cli@latest deploy \
   --dir apps/mobile/dist \
   --site f7a9729d-7cf3-4405-a61b-fac5c7ec6cc0 \
   --prod
 ```
 `--dir` publishes the prebuilt assets; the no-op build command above keeps
 Netlify from rebuilding. Grab the **Production URL** from the output.
+
+To preview several branches at once instead of overwriting the one site, drop
+`--prod` and add `--alias <branch-slug>` — Netlify serves it at
+`https://<branch-slug>--stash-web-preview.netlify.app` (each PR its own URL).
 
 ### 4. Smoke-test the live URL
 ```sh
