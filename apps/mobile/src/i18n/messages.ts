@@ -186,7 +186,6 @@ export const en = {
   'inbox.sessionExpiredA11y': 'Session expired. Open settings to sign back in and resume syncing.',
   'inbox.inCollection': 'in {name}',
   'inbox.addBookmark': 'Add bookmark',
-  'inbox.openExternal': 'Open ↗',
   'inbox.settingsA11y': 'Settings',
   'inbox.searchOpenA11y': 'Search',
   'inbox.searchCloseA11y': 'Close search',

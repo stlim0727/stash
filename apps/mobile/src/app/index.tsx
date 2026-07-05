@@ -2267,13 +2267,24 @@ export default function InboxScreen() {
                   </Pressable>
                 </View>
                 {item.url ? (
-                  <HighlightedText
-                    style={[styles.cardUrl, { color: palette.textSecondary }]}
-                    numberOfLines={1}
-                    text={item.url}
-                    query={highlightQuery}
-                    highlightStyle={highlightStyle}
-                  />
+                  <View style={styles.cardUrlRow}>
+                    <HighlightedText
+                      style={[styles.cardUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                    <Pressable
+                      accessibilityRole="link"
+                      accessibilityLabel={t('common.openLink')}
+                      hitSlop={12}
+                      style={[styles.cardUrlOpen, { backgroundColor: palette.accentSoft }]}
+                      onPress={openLink}
+                    >
+                      <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                    </Pressable>
+                  </View>
                 ) : null}
                 {metaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
@@ -2309,17 +2320,6 @@ export default function InboxScreen() {
                   ) : null}
                 </View>
               </Pressable>
-              {item.url ? (
-                <Pressable
-                  accessibilityRole="link"
-                  accessibilityLabel={t('common.openLink')}
-                  hitSlop={8}
-                  style={[styles.cardOpen, { backgroundColor: palette.accentSoft }]}
-                  onPress={openLink}
-                >
-                  <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>{t('inbox.openExternal')}</Text>
-                </Pressable>
-              ) : null}
             </Card>
           );
           // In a multi-column grid each cell must claim its column width (flex:
@@ -2779,14 +2779,6 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 7,
   },
-  cardOpen: {
-    position: 'absolute',
-    right: 14,
-    bottom: 14,
-    borderRadius: 999,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-  },
   cardOpenLabel: {
     fontSize: 14,
     fontWeight: '600',
@@ -2840,14 +2832,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  cardUrlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   cardUrl: {
+    flex: 1,
     fontSize: 13,
+  },
+  cardUrlOpen: {
+    borderRadius: 999,
+    height: 22,
+    minWidth: 26,
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   metaChipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
-    paddingRight: 72,
   },
   metaChip: {
     borderRadius: 999,
@@ -2860,7 +2865,6 @@ const styles = StyleSheet.create({
   },
   siteChipRow: {
     flexDirection: 'row',
-    paddingRight: 72,
   },
   siteChip: {
     flexShrink: 1,
