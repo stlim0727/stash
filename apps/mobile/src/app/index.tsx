@@ -2265,26 +2265,26 @@ export default function InboxScreen() {
                   >
                     <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
                   </Pressable>
-                  {item.url ? (
+                </View>
+                {item.url ? (
+                  <View style={styles.cardUrlRow}>
+                    <HighlightedText
+                      style={[styles.cardUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
                     <Pressable
                       accessibilityRole="link"
                       accessibilityLabel={t('common.openLink')}
-                      hitSlop={8}
-                      style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
+                      hitSlop={12}
+                      style={[styles.cardUrlOpen, { backgroundColor: palette.accentSoft }]}
                       onPress={openLink}
                     >
                       <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
                     </Pressable>
-                  ) : null}
-                </View>
-                {item.url ? (
-                  <HighlightedText
-                    style={[styles.cardUrl, { color: palette.textSecondary }]}
-                    numberOfLines={1}
-                    text={item.url}
-                    query={highlightQuery}
-                    highlightStyle={highlightStyle}
-                  />
+                  </View>
                 ) : null}
                 {metaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
@@ -2832,8 +2832,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  cardUrlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   cardUrl: {
+    flex: 1,
     fontSize: 13,
+  },
+  cardUrlOpen: {
+    borderRadius: 999,
+    height: 22,
+    minWidth: 26,
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   metaChipRow: {
     flexDirection: 'row',
