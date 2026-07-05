@@ -13,9 +13,9 @@ dist/
 build/
 coverage/
 
-# Netlify CLI local state (web-preview skill). netlify.toml IS committed (it
-# drives Netlify's Git-integration builds); only the CLI's local state dir is
-# transient. Production web deploys still use Cloudflare (wrangler.toml).
+# Netlify CLI local state — legacy web-preview host, replaced by Cloudflare
+# Workers preview URLs (wrangler.toml `preview_urls`; see the web-preview skill).
+# Kept ignored so an ad-hoc `netlify` CLI run can't litter the tree.
 .netlify/
 **/.netlify/
 

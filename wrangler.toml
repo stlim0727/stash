@@ -21,6 +21,18 @@ compatibility_date = "2026-07-03"
 workers_dev = false
 routes = [{ pattern = "keepory.app", custom_domain = true }]
 
+# Preview URLs for un-merged branches (the web-preview skill). With this on,
+# Workers Builds runs `wrangler versions upload` for every non-production
+# branch/PR and publishes it at https://<alias>-keepory7.<subdomain>.workers.dev.
+# Production (keepory.app) is unaffected — it stays custom-domain-only because
+# workers_dev is false above; only preview *versions* get a workers.dev URL.
+# Preview URLs default OFF when workers_dev is false, so we opt in explicitly.
+# ⚠️ REQUIRES a workers.dev subdomain registered on the account — `wrangler
+# deploy`/`versions upload` FAILS with this true and no subdomain. Register the
+# subdomain BEFORE this reaches main (see the web-preview skill's one-time setup),
+# or the keepory.app production deploy breaks.
+preview_urls = true
+
 # Build the static bundle as part of `wrangler deploy` itself, and stamp build
 # provenance so Settings shows the deployed commit. This runs in the deploy phase.
 # `dist/` is gitignored, so this also guarantees the assets directory exists.
