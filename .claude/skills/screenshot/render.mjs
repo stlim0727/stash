@@ -238,6 +238,19 @@ async function main() {
     .catch(() => {});
   await page.waitForTimeout(injecting ? 700 : 600);
 
+  // Optional interaction: click a selector before capturing, to reach a state
+  // that only exists after a tap — a lens/filter, an expanded menu, an opened
+  // modal. RN-web maps testID to data-testid, so `--click '[data-testid="x"]'`.
+  const clickSel = arg('click', undefined);
+  if (clickSel) {
+    await page
+      .locator(clickSel)
+      .first()
+      .click({ timeout: 6000 })
+      .catch((e) => console.error('[click]', String(e).slice(0, 160)));
+    await page.waitForTimeout(600);
+  }
+
   // Dark theme: recolor any element still painted with the baked light
   // container background (static-export hydration leaves it light).
   if (theme === 'dark') {

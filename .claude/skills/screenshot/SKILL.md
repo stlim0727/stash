@@ -122,6 +122,7 @@ Route / theme / viewport:
 - `--out PATH` — output PNG (default `/tmp/stash-<route>-<theme>.png`).
 - `--width` / `--height` / `--scale` — viewport + DPR (default `390×844@2`).
 - `--full` — full-page (scrolling) screenshot instead of just the viewport.
+- `--click SELECTOR` — click an element before capturing, to reach a state that only exists after a tap (a lens/filter, an expanded menu, an opened modal). RN-web maps `testID` → `data-testid`, so use `--click '[data-testid="new-suggestions-banner"]'`. Best paired with a data flag so the thing to tap actually renders.
 
 Data (any of these switches on injected mode):
 
