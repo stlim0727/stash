@@ -10,16 +10,26 @@
 name = "keepory7"
 compatibility_date = "2026-07-03"
 
-# Publish to the keepory.app custom domain, not a *.workers.dev subdomain. The
-# account has no workers.dev subdomain registered, so wrangler's default
-# (workers_dev = true) had nowhere to publish and failed the deploy at the final
-# step ("register a workers.dev subdomain … or specify routes"). Declaring the
-# custom domain here gives the deploy a target and keeps the site custom-domain-
-# only (no public workers.dev URL). `custom_domain = true` attaches/verifies the
-# domain on Cloudflare (idempotent once it's attached to this Worker); it assumes
-# keepory.app is set up on the account per docs/development/deploy-web.md.
+# Publish to the keepory.app custom domain, not a *.workers.dev subdomain. We
+# keep this Worker's workers.dev route disabled (workers_dev = false) so the live
+# site is custom-domain-only — no public *.workers.dev URL for production.
+# (The account's workers.dev subdomain does exist — `stlim0727.workers.dev` — and
+# is used only for preview URLs; see preview_urls below.) Declaring the custom
+# domain here gives the deploy a target. `custom_domain = true` attaches/verifies
+# the domain on Cloudflare (idempotent once it's attached to this Worker); it
+# assumes keepory.app is set up on the account per docs/development/deploy-web.md.
 workers_dev = false
 routes = [{ pattern = "keepory.app", custom_domain = true }]
+
+# Preview URLs for un-merged branches (the web-preview skill). With this on,
+# Workers Builds runs `wrangler versions upload` for every non-production
+# branch/PR and publishes it at https://<alias>-keepory7.stlim0727.workers.dev.
+# Production (keepory.app) is unaffected — it stays custom-domain-only because
+# workers_dev is false above; only preview *versions* get a workers.dev URL.
+# Preview URLs default OFF when workers_dev is false, so we opt in explicitly.
+# This needs the account's workers.dev subdomain, which is registered
+# (stlim0727.workers.dev), so it does not break the production deploy.
+preview_urls = true
 
 # Build the static bundle as part of `wrangler deploy` itself, and stamp build
 # provenance so Settings shows the deployed commit. This runs in the deploy phase.
