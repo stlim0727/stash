@@ -48,6 +48,22 @@ export const ko: Catalog = {
   'nav.library': '보관함',
   'nav.tags': '태그',
 
+  'relative.now': '방금',
+  'relative.minutes': { other: '{count}분 전' },
+  'relative.hours': { other: '{count}시간 전' },
+  'relative.days': { other: '{count}일 전' },
+  'relative.weeks': { other: '{count}주 전' },
+  'relative.months': { other: '{count}개월 전' },
+  'relative.years': { other: '{count}년 전' },
+
+  'library.itemCount': { other: '{count}개 항목' },
+  'library.allItems': '전체 항목',
+  'library.lastAdded': '{time} 추가됨',
+  'library.openAllA11y': '전체 항목 보기',
+  'library.openCollectionA11y': '{name} 보기',
+  'library.empty': '보관한 모든 것이 여기 모여요',
+  'library.emptyHint': '첫 링크를 저장하면 컬렉션별로 둘러볼 수 있도록 여기에 표시돼요.',
+
   'graph.empty': '아직 지도로 만들 항목이 없어요',
   'graph.emptyHint': '북마크를 몇 개 저장하면 태그와 연결되어 여기에 표시됩니다.',
   'graph.untaggedLabel': '태그 없음',

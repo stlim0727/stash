@@ -67,6 +67,25 @@ export const en = {
   'nav.library': 'Library',
   'nav.tags': 'Tags',
 
+  // Relative time buckets ("… ago"), used by the Library row subtitles. `now`
+  // is a plain phrase; the rest interpolate a floored `{count}`.
+  'relative.now': 'just now',
+  'relative.minutes': { one: '{count} minute ago', other: '{count} minutes ago' },
+  'relative.hours': { one: '{count} hour ago', other: '{count} hours ago' },
+  'relative.days': { one: '{count} day ago', other: '{count} days ago' },
+  'relative.weeks': { one: '{count} week ago', other: '{count} weeks ago' },
+  'relative.months': { one: '{count} month ago', other: '{count} months ago' },
+  'relative.years': { one: '{count} year ago', other: '{count} years ago' },
+
+  // Library tab — "everything you've kept", browsed by collection.
+  'library.itemCount': { one: '{count} item', other: '{count} items' },
+  'library.allItems': 'All items',
+  'library.lastAdded': 'last added {time}',
+  'library.openAllA11y': 'Browse all items',
+  'library.openCollectionA11y': 'Browse {name}',
+  'library.empty': 'Everything you keep lives here',
+  'library.emptyHint': 'Save your first link and it’ll show up here, ready to browse by collection.',
+
   // Tag graph (/graph) — a pan/zoom map of bookmarks linked to their tags.
   'graph.empty': 'Nothing to map yet',
   'graph.emptyHint': 'Save a few bookmarks and they’ll appear here, linked to their tags.',
