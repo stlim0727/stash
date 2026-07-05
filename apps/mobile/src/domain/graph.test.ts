@@ -3,7 +3,9 @@ import { test } from 'node:test';
 
 import {
   UNTAGGED_HUB_ID,
+  buildSettledCoOccurrenceGraph,
   buildSettledGraph,
+  deriveCoOccurrenceGraph,
   deriveGraph,
   layoutGraph,
   layoutTickBudget,
@@ -398,6 +400,181 @@ test('synthetic ~400-bookmark graph settles to finite, bounded positions', () =>
     assert.ok(Number.isFinite(node.x) && Number.isFinite(node.y));
   }
   assert.ok(Number.isFinite(settled.bounds.width) && settled.bounds.width > 0);
+});
+
+// --- Co-occurrence (tag–tag shared-bookmark) derivation ---
+
+/** Helper: find a co-occurrence edge for an unordered tag pair. */
+function coEdge(graph: ReturnType<typeof deriveCoOccurrenceGraph>, x: string, y: string) {
+  const a = `t:${x}`;
+  const b = `t:${y}`;
+  return graph.edges.find(
+    (e) => (e.source === a && e.target === b) || (e.source === b && e.target === a),
+  );
+}
+
+test('co-occurrence: edge weight = number of bookmarks sharing both tags', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [makeBookmark('b0'), makeBookmark('b1'), makeBookmark('b2'), makeBookmark('b3')],
+    tags: [makeTag('A'), makeTag('B'), makeTag('C')],
+    bookmarkTags: [
+      // A,B share 3 bookmarks; A,C share 1.
+      link('b0', 'A'),
+      link('b0', 'B'),
+      link('b1', 'A'),
+      link('b1', 'B'),
+      link('b2', 'A'),
+      link('b2', 'B'),
+      link('b3', 'A'),
+      link('b3', 'C'),
+    ],
+  };
+  const graph = deriveCoOccurrenceGraph(input);
+  const ab = coEdge(graph, 'A', 'B');
+  assert.ok(ab, 'A–B edge present at default threshold 2');
+  assert.equal(ab!.weight, 3);
+  // A–C shared by only 1 bookmark -> below the default threshold, absent.
+  assert.equal(coEdge(graph, 'A', 'C'), undefined);
+});
+
+test('co-occurrence: threshold filters — default 2 drops single-share, passing 1 includes it', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [makeBookmark('b0'), makeBookmark('b1')],
+    tags: [makeTag('A'), makeTag('B'), makeTag('C')],
+    bookmarkTags: [
+      link('b0', 'A'),
+      link('b0', 'B'), // A,B shared by 1
+      link('b1', 'A'),
+      link('b1', 'C'), // A,C shared by 1
+    ],
+  };
+  const dflt = deriveCoOccurrenceGraph(input);
+  assert.equal(dflt.edges.length, 0);
+  assert.equal(dflt.nodes.length, 0);
+
+  const relaxed = deriveCoOccurrenceGraph({ ...input, minSharedBookmarks: 1 });
+  assert.equal(relaxed.edges.length, 2);
+  assert.equal(coEdge(relaxed, 'A', 'B')!.weight, 1);
+  assert.equal(coEdge(relaxed, 'A', 'C')!.weight, 1);
+});
+
+test('co-occurrence: isolated tags (no qualifying edge) are dropped, not floated', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [makeBookmark('b0'), makeBookmark('b1'), makeBookmark('b2')],
+    tags: [makeTag('A'), makeTag('B'), makeTag('solo')],
+    bookmarkTags: [
+      link('b0', 'A'),
+      link('b0', 'B'),
+      link('b1', 'A'),
+      link('b1', 'B'),
+      link('b2', 'solo'), // never co-occurs with anything
+    ],
+  };
+  const graph = deriveCoOccurrenceGraph(input);
+  assert.ok(graph.nodes.some((n) => n.id === 't:A'));
+  assert.ok(graph.nodes.some((n) => n.id === 't:B'));
+  assert.ok(!graph.nodes.some((n) => n.id === 't:solo'));
+});
+
+test('co-occurrence: no bookmark nodes and no untagged hub in the output', () => {
+  const graph = deriveCoOccurrenceGraph(smallFixture());
+  assert.ok(graph.nodes.every((n) => n.kind === 'tag'));
+  assert.ok(!graph.nodes.some((n) => n.id === UNTAGGED_HUB_ID));
+});
+
+test('co-occurrence: undirected/dedup — exactly one edge per pair, no reciprocal duplicate', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [makeBookmark('b0'), makeBookmark('b1')],
+    tags: [makeTag('A'), makeTag('B')],
+    bookmarkTags: [link('b0', 'A'), link('b0', 'B'), link('b1', 'A'), link('b1', 'B')],
+  };
+  const graph = deriveCoOccurrenceGraph(input);
+  assert.equal(graph.edges.length, 1);
+  // Canonical order: source/target are the tag ids sorted.
+  assert.equal(graph.edges[0].source, 't:A');
+  assert.equal(graph.edges[0].target, 't:B');
+});
+
+test('co-occurrence: trashed/archived bookmarks are excluded from co-occurrence counts', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [
+      makeBookmark('b0'),
+      makeBookmark('b1'),
+      makeBookmark('trashed', { deleted_at: NOW }),
+      makeBookmark('archived', { is_archived: true }),
+    ],
+    tags: [makeTag('A'), makeTag('B')],
+    bookmarkTags: [
+      link('b0', 'A'),
+      link('b0', 'B'),
+      link('b1', 'A'),
+      link('b1', 'B'),
+      // These would push A–B to weight 4 if counted, but they're inactive.
+      link('trashed', 'A'),
+      link('trashed', 'B'),
+      link('archived', 'A'),
+      link('archived', 'B'),
+    ],
+  };
+  const graph = deriveCoOccurrenceGraph(input);
+  assert.equal(coEdge(graph, 'A', 'B')!.weight, 2);
+});
+
+test('co-occurrence: node degree = connectivity (number of co-occurring neighbors)', () => {
+  // A co-occurs with B and C (degree 2); B and C each co-occur only with A.
+  const input: DeriveGraphInput = {
+    bookmarks: [
+      makeBookmark('b0'),
+      makeBookmark('b1'),
+      makeBookmark('b2'),
+      makeBookmark('b3'),
+    ],
+    tags: [makeTag('A'), makeTag('B'), makeTag('C')],
+    bookmarkTags: [
+      link('b0', 'A'),
+      link('b0', 'B'),
+      link('b1', 'A'),
+      link('b1', 'B'), // A,B weight 2
+      link('b2', 'A'),
+      link('b2', 'C'),
+      link('b3', 'A'),
+      link('b3', 'C'), // A,C weight 2
+    ],
+  };
+  const graph = deriveCoOccurrenceGraph(input);
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  assert.equal(byId.get('t:A')!.degree, 2); // neighbors B, C
+  assert.equal(byId.get('t:B')!.degree, 1); // neighbor A
+  assert.equal(byId.get('t:C')!.degree, 1); // neighbor A
+});
+
+test('co-occurrence: deterministic — same input yields identical graph', () => {
+  const input = smallFixture();
+  const key = (g: ReturnType<typeof deriveCoOccurrenceGraph>) => ({
+    nodes: g.nodes.map((n) => [n.id, n.kind, n.degree]),
+    edges: g.edges.map((e) => [e.source, e.target, e.weight]),
+  });
+  assert.deepEqual(key(deriveCoOccurrenceGraph(input)), key(deriveCoOccurrenceGraph(input)));
+});
+
+test('co-occurrence: settles to finite, tag-only positioned nodes', () => {
+  const input: DeriveGraphInput = {
+    bookmarks: [makeBookmark('b0'), makeBookmark('b1'), makeBookmark('b2')],
+    tags: [makeTag('A'), makeTag('B'), makeTag('C')],
+    bookmarkTags: [
+      link('b0', 'A'),
+      link('b0', 'B'),
+      link('b1', 'A'),
+      link('b1', 'B'),
+      link('b2', 'B'),
+      link('b2', 'C'),
+      link('b2', 'A'),
+    ],
+  };
+  const settled = buildSettledCoOccurrenceGraph(input);
+  assert.ok(settled.nodes.length > 0);
+  assert.ok(settled.nodes.every((n) => n.kind === 'tag'));
+  assert.ok(settled.nodes.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y)));
 });
 
 test('layoutTickBudget: full budget for small graphs, scaled down for large ones', () => {

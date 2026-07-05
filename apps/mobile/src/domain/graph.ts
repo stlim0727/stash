@@ -72,13 +72,24 @@ export interface UntaggedHubGraphNode extends GraphNodeBase {
 export type GraphNode = BookmarkGraphNode | TagGraphNode | UntaggedHubGraphNode;
 
 /**
- * A bipartite edge. `source` is always a bookmark node id; `target` is always a
- * tag or untagged-hub node id. There are never bookmark↔bookmark or tag↔tag
- * edges.
+ * A graph edge.
+ *
+ * For {@link deriveGraph} this is BIPARTITE: `source` is always a bookmark node
+ * id and `target` is always a tag or untagged-hub node id — never
+ * bookmark↔bookmark or tag↔tag. That invariant is specific to `deriveGraph`.
+ *
+ * {@link deriveCoOccurrenceGraph} produces a DIFFERENT shape on the same type:
+ * there `source`/`target` are both tag node ids (an undirected tag–tag edge in
+ * canonical id order) and `weight` carries the shared-bookmark count.
+ *
+ * `weight` is optional and additive: bipartite edges omit it (unchanged
+ * behavior); co-occurrence edges set it.
  */
 export interface GraphEdge {
   source: string;
   target: string;
+  /** Co-occurrence edges: number of active bookmarks carrying BOTH tags. */
+  weight?: number;
 }
 
 /** The derived (unpositioned) bipartite graph. */
@@ -100,6 +111,14 @@ export interface DeriveGraphInput {
    * reproduces the pre-filter behavior exactly.
    */
   minSharedDegree?: number;
+  /**
+   * Co-occurrence view only ({@link deriveCoOccurrenceGraph}): the minimum
+   * number of active bookmarks that must carry BOTH tags for a tag–tag edge to
+   * exist. Distinct from `minSharedDegree` (which is the bipartite per-tag
+   * inclusion threshold). Defaults to 2 — a pair shared by a single bookmark is
+   * usually noise; 2 surfaces genuinely related tags.
+   */
+  minSharedBookmarks?: number;
 }
 
 /** A node with its settled position. */
@@ -456,4 +475,100 @@ export function buildSettledGraph(
   options?: LayoutOptions,
 ): SettledGraph {
   return layoutGraph(deriveGraph(input), options);
+}
+
+/**
+ * Derive the TAG CO-OCCURRENCE graph: nodes are tags only (no bookmark nodes,
+ * no untagged hub), and an undirected weighted edge connects two tags with
+ * `weight` = the number of active (not trashed, not archived) bookmarks that
+ * carry BOTH tags. An edge is emitted only when `weight >= minSharedBookmarks`
+ * (default 2). A tag node is included only if it participates in at least one
+ * qualifying edge — isolated tags are dropped, not floated.
+ *
+ * Unlike {@link deriveGraph}, edges here are tag–tag (see {@link GraphEdge}):
+ * `source`/`target` are both tag node ids, emitted once per unordered pair in
+ * canonical (sorted) id order so there are no reciprocal duplicates.
+ *
+ * Node `degree` is CONNECTIVITY — the count of qualifying co-occurrence edges
+ * the tag has (its number of co-occurring neighbors), not its bookmark count.
+ * This mode is about tag relationships, so a tag that co-occurs with many
+ * others reads as more central; `layoutGraph`'s mass-weighting keys off
+ * `degree`, so well-connected tags anchor the middle.
+ *
+ * Construction is per-bookmark, not all-pairs-over-tags: for each active
+ * bookmark we increment a pair-count map over every co-tag pair within it, so
+ * cost is Σ (tags_per_bookmark choose 2) — tiny for real data (a handful of
+ * tags per bookmark) rather than O(T²) over the whole tag set. Deterministic:
+ * stable ordering, no clock/random.
+ */
+export function deriveCoOccurrenceGraph(input: DeriveGraphInput): Graph {
+  const minSharedBookmarks = input.minSharedBookmarks ?? 2;
+  const activeBookmarks = input.bookmarks.filter(isActive);
+  const activeIds = new Set(activeBookmarks.map((b) => b.id));
+  const tagById = new Map(input.tags.map((tag) => [tag.id, tag]));
+
+  // bookmark_id -> ordered, de-duped list of existing tag ids on active rows.
+  const linksByBookmark = new Map<string, string[]>();
+  for (const link of input.bookmarkTags) {
+    if (!activeIds.has(link.bookmark_id) || !tagById.has(link.tag_id)) {
+      continue;
+    }
+    const list = linksByBookmark.get(link.bookmark_id) ?? [];
+    if (!list.includes(link.tag_id)) {
+      list.push(link.tag_id);
+    }
+    linksByBookmark.set(link.bookmark_id, list);
+  }
+
+  // Per-bookmark pair counting. Key is the two tag ids in canonical order.
+  const pairKey = (a: string, b: string): string => (a < b ? `${a} ${b}` : `${b} ${a}`);
+  const pairCount = new Map<string, number>();
+  for (const tagIds of linksByBookmark.values()) {
+    const sorted = [...tagIds].sort();
+    for (let i = 0; i < sorted.length; i += 1) {
+      for (let j = i + 1; j < sorted.length; j += 1) {
+        const key = pairKey(sorted[i], sorted[j]);
+        pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
+      }
+    }
+  }
+
+  // Emit qualifying edges (sorted for determinism) and tally each tag's
+  // connectivity (neighbor/edge count) — its node degree.
+  const qualifying = [...pairCount.entries()]
+    .filter(([, weight]) => weight >= minSharedBookmarks)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+
+  const edges: GraphEdge[] = [];
+  const tagDegree = new Map<string, number>();
+  for (const [key, weight] of qualifying) {
+    const [tagA, tagB] = key.split(' ');
+    edges.push({ source: tagNodeId(tagA), target: tagNodeId(tagB), weight });
+    tagDegree.set(tagA, (tagDegree.get(tagA) ?? 0) + 1);
+    tagDegree.set(tagB, (tagDegree.get(tagB) ?? 0) + 1);
+  }
+
+  // Only tags that participate in a qualifying edge become nodes (no isolates).
+  const nodes: GraphNode[] = [];
+  for (const [tagId, degree] of tagDegree) {
+    const tag = tagById.get(tagId)!;
+    nodes.push({
+      kind: 'tag',
+      id: tagNodeId(tagId),
+      tag_id: tagId,
+      slug: tag.slug,
+      label: tag.name,
+      degree,
+    } satisfies TagGraphNode);
+  }
+
+  return { nodes, edges };
+}
+
+/** Convenience: derive the co-occurrence graph and settle it in one call. */
+export function buildSettledCoOccurrenceGraph(
+  input: DeriveGraphInput,
+  options?: LayoutOptions,
+): SettledGraph {
+  return layoutGraph(deriveCoOccurrenceGraph(input), options);
 }
