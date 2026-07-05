@@ -2307,19 +2307,19 @@ export default function InboxScreen() {
                   {status ? (
                     <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
                   ) : null}
+                  {item.url ? (
+                    <Pressable
+                      accessibilityRole="link"
+                      accessibilityLabel={t('common.openLink')}
+                      hitSlop={8}
+                      style={[styles.cardOpen, { backgroundColor: palette.accentSoft }]}
+                      onPress={openLink}
+                    >
+                      <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>{t('inbox.openExternal')}</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               </Pressable>
-              {item.url ? (
-                <Pressable
-                  accessibilityRole="link"
-                  accessibilityLabel={t('common.openLink')}
-                  hitSlop={8}
-                  style={[styles.cardOpen, { backgroundColor: palette.accentSoft }]}
-                  onPress={openLink}
-                >
-                  <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>{t('inbox.openExternal')}</Text>
-                </Pressable>
-              ) : null}
             </Card>
           );
           // In a multi-column grid each cell must claim its column width (flex:
@@ -2780,9 +2780,7 @@ const styles = StyleSheet.create({
     gap: 7,
   },
   cardOpen: {
-    position: 'absolute',
-    right: 14,
-    bottom: 14,
+    alignSelf: 'flex-end',
     borderRadius: 999,
     paddingVertical: 8,
     paddingHorizontal: 12,
@@ -2847,7 +2845,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
-    paddingRight: 72,
   },
   metaChip: {
     borderRadius: 999,
@@ -2860,7 +2857,6 @@ const styles = StyleSheet.create({
   },
   siteChipRow: {
     flexDirection: 'row',
-    paddingRight: 72,
   },
   siteChip: {
     flexShrink: 1,
