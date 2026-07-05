@@ -47,6 +47,7 @@ Transform tasks into verifiable goals:
 - "Add validation" → "Write tests for invalid inputs, then make them pass"
 - "Fix the bug" → "Write a test that reproduces it, then make it pass"
 - "Refactor X" → "Ensure tests pass before and after"
+- "Fix a mysterious failure" → "Confirm the actual cause with a minimal isolating probe *before* applying a fix" — a plausible theory can be wrong and cost a full cycle (e.g. renaming `node_modules` on the theory that Netlify skips it, when a marker-file probe showed the real cause was dot-directories like `.pnpm`).
 
 For multi-step tasks, state a brief plan with a verification check per step. Strong success criteria let you loop independently; weak criteria ("make it work") require constant clarification.
 
