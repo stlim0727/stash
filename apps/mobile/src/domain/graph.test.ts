@@ -458,6 +458,32 @@ test('co-occurrence: threshold filters — default 2 drops single-share, passing
   assert.equal(coEdge(relaxed, 'A', 'C')!.weight, 1);
 });
 
+test('co-occurrence: pair counting is delimiter-safe when tag ids contain spaces', () => {
+  // 'x' + 'y z' and 'x y' + 'z' would both flatten to "x y z" under a
+  // space-delimited composite key, merging two distinct pairs. The nested map
+  // keeps them separate.
+  const input: DeriveGraphInput = {
+    bookmarks: [makeBookmark('b0'), makeBookmark('b1'), makeBookmark('b2'), makeBookmark('b3')],
+    tags: [makeTag('x'), makeTag('y z'), makeTag('x y'), makeTag('z')],
+    bookmarkTags: [
+      link('b0', 'x'),
+      link('b0', 'y z'),
+      link('b1', 'x'),
+      link('b1', 'y z'),
+      link('b2', 'x y'),
+      link('b2', 'z'),
+      link('b3', 'x y'),
+      link('b3', 'z'),
+    ],
+  };
+  const graph = deriveCoOccurrenceGraph(input);
+  // Two independent edges, each shared by exactly 2 bookmarks — not one merged
+  // edge of weight 4.
+  assert.equal(graph.edges.length, 2);
+  assert.equal(coEdge(graph, 'x', 'y z')!.weight, 2);
+  assert.equal(coEdge(graph, 'x y', 'z')!.weight, 2);
+});
+
 test('co-occurrence: isolated tags (no qualifying edge) are dropped, not floated', () => {
   const input: DeriveGraphInput = {
     bookmarks: [makeBookmark('b0'), makeBookmark('b1'), makeBookmark('b2')],

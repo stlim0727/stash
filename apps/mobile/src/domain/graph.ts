@@ -520,29 +520,46 @@ export function deriveCoOccurrenceGraph(input: DeriveGraphInput): Graph {
     linksByBookmark.set(link.bookmark_id, list);
   }
 
-  // Per-bookmark pair counting. Key is the two tag ids in canonical order.
-  const pairKey = (a: string, b: string): string => (a < b ? `${a} ${b}` : `${b} ${a}`);
-  const pairCount = new Map<string, number>();
+  // Per-bookmark pair counting. Nested map keyed on the two tag ids in
+  // canonical order (a < b) — delimiter-safe, so a space in an id can't
+  // collide with a pair separator the way a single composite string key could.
+  const pairCount = new Map<string, Map<string, number>>();
   for (const tagIds of linksByBookmark.values()) {
     const sorted = [...tagIds].sort();
     for (let i = 0; i < sorted.length; i += 1) {
       for (let j = i + 1; j < sorted.length; j += 1) {
-        const key = pairKey(sorted[i], sorted[j]);
-        pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
+        const a = sorted[i];
+        const b = sorted[j];
+        let inner = pairCount.get(a);
+        if (!inner) {
+          inner = new Map<string, number>();
+          pairCount.set(a, inner);
+        }
+        inner.set(b, (inner.get(b) ?? 0) + 1);
       }
     }
   }
 
-  // Emit qualifying edges (sorted for determinism) and tally each tag's
-  // connectivity (neighbor/edge count) — its node degree.
-  const qualifying = [...pairCount.entries()]
-    .filter(([, weight]) => weight >= minSharedBookmarks)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  // Emit qualifying edges and tally each tag's connectivity (neighbor/edge
+  // count) — its node degree. Sort qualifying pairs by (a, then b) tuple order
+  // for determinism. Ids are space/NUL-free and the old delimiter sorted before
+  // every id character, so this yields the same order the former composite-
+  // string sort produced: layout is unchanged.
+  const qualifying: Array<{ a: string; b: string; weight: number }> = [];
+  for (const [a, inner] of pairCount) {
+    for (const [b, weight] of inner) {
+      if (weight >= minSharedBookmarks) {
+        qualifying.push({ a, b, weight });
+      }
+    }
+  }
+  qualifying.sort((x, y) =>
+    x.a < y.a ? -1 : x.a > y.a ? 1 : x.b < y.b ? -1 : x.b > y.b ? 1 : 0,
+  );
 
   const edges: GraphEdge[] = [];
   const tagDegree = new Map<string, number>();
-  for (const [key, weight] of qualifying) {
-    const [tagA, tagB] = key.split(' ');
+  for (const { a: tagA, b: tagB, weight } of qualifying) {
     edges.push({ source: tagNodeId(tagA), target: tagNodeId(tagB), weight });
     tagDegree.set(tagA, (tagDegree.get(tagA) ?? 0) + 1);
     tagDegree.set(tagB, (tagDegree.get(tagB) ?? 0) + 1);
