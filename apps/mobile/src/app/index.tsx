@@ -2378,7 +2378,7 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: 16,
-    gap: 10,
+    gap: 6,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2776,7 +2776,7 @@ const styles = StyleSheet.create({
     height: 132,
   },
   cardBody: {
-    padding: 18,
+    padding: 14,
     gap: 7,
   },
   cardOpen: {
