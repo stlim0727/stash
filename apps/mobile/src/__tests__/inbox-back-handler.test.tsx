@@ -156,13 +156,16 @@ test('hardware back clears a live search before exiting', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
 
+  // Search is tap-to-open: reveal the field, then type a live query.
+  await fireEvent.press(screen.getByTestId('tab-header-search'));
   const input = screen.getByPlaceholderText('Search titles, tags, folders');
   await fireEvent.changeText(input, 'local-first');
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
 
-  // Back clears the query (the field empties) and consumes the press.
+  // Back peels the search UI: closeSearch clears the query AND folds the field
+  // away (a live query can only exist while search is open), consuming the press.
   expect(await pressBack()).toBe(true);
-  expect(input.props.value).toBe('');
+  await waitFor(() => expect(screen.queryByTestId('inbox-search-input')).toBeNull());
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
 });
 

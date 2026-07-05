@@ -23,6 +23,14 @@ export interface FacetChip {
   // and the Inbox/no-collection set) so their weight is visible at a glance;
   // left undefined for #tag chips (the tag cloud is their frequency view).
   count?: number;
+  // Resting variant for a chip that isn't the active facet — e.g. the review
+  // chip rides in 'accent' while fresh suggestions are unseen. Omitted for
+  // ordinary facet chips (they rest as 'default'). The active-filter match still
+  // overrides this with 'selected'.
+  variant?: 'accent';
+  // Optional stable handle for a distinguished chip (e.g. the review chip), so
+  // callers/tests can target it without matching on its (count-bearing) label.
+  testID?: string;
 }
 
 /**
@@ -40,6 +48,8 @@ const BrowseChip = memo(function BrowseChip({
   label,
   icon,
   count,
+  variant,
+  testID,
   active,
   onSelect,
 }: {
@@ -47,15 +57,18 @@ const BrowseChip = memo(function BrowseChip({
   label: string;
   icon?: keyof typeof Ionicons.glyphMap;
   count?: number;
+  variant?: 'accent';
+  testID?: string;
   active: boolean;
   onSelect: (target: InboxFilter) => void;
 }) {
   return (
     <Chip
+      testID={testID}
       accessibilityRole="button"
       accessibilityState={{ selected: active }}
       onPress={() => onSelect(target)}
-      variant={active ? 'selected' : 'default'}
+      variant={active ? 'selected' : (variant ?? 'default')}
       icon={icon}
       count={count}
     >
@@ -235,6 +248,8 @@ export function FacetPills({
             label={chip.label}
             icon={chip.icon}
             count={chip.count}
+            variant={chip.variant}
+            testID={chip.testID}
             active={sameFilter(chip.filter, activeFilter)}
             onSelect={onSelect}
           />

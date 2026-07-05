@@ -98,34 +98,47 @@ test('the placeholder scopes to the active facet and reverts to the default on A
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
   // Browse-shelf chips share their text with on-card meta chips (e.g. `#design`),
-  // so always tap the chip *inside* the browse shelf.
+  // so always tap the chip *inside* the browse shelf. The chip lives on the
+  // shelf, which is only visible while search is CLOSED.
   const tapBrowseChip = async (label: string) => {
-    const shelf = screen.getByTestId('browse-shelf');
+    const shelf = await waitFor(() => screen.getByTestId('browse-shelf'));
     await act(async () => {
       fireEvent.press(within(shelf).getByText(label));
     });
   };
+  // Search is tap-to-open: the field (and its facet-scoped placeholder) only
+  // exists while open. Open, assert the placeholder, then close (which clears
+  // the query and returns the shelf so the next facet chip is tappable). The
+  // facet survives the close, so the next open reflects the still-active facet.
+  const toggleSearch = async () => {
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('tab-header-search'));
+    });
+  };
+  const expectPlaceholderWhileOpen = async (expected: string) => {
+    await toggleSearch();
+    await waitFor(() => expect(screen.getByPlaceholderText(expected)).toBeTruthy());
+    await toggleSearch();
+  };
 
   // All (default): the generic placeholder, no scoping.
-  expect(screen.getByPlaceholderText(DEFAULT_PLACEHOLDER)).toBeTruthy();
+  await expectPlaceholderWhileOpen(DEFAULT_PLACEHOLDER);
 
   // Folder facet → "Search in {folder name}".
   await tapBrowseChip('Work');
-  await waitFor(() => expect(screen.getByPlaceholderText('Search in Work')).toBeTruthy());
-  expect(screen.queryByPlaceholderText(DEFAULT_PLACEHOLDER)).toBeNull();
+  await expectPlaceholderWhileOpen('Search in Work');
 
   // Tag facet → "Search in #{tag}".
   await tapBrowseChip('#design');
-  await waitFor(() => expect(screen.getByPlaceholderText('Search in #design')).toBeTruthy());
+  await expectPlaceholderWhileOpen('Search in #design');
 
   // Uncollected facet → the fixed "Search in Inbox" label.
   await tapBrowseChip('Inbox');
-  await waitFor(() => expect(screen.getByPlaceholderText('Search in Inbox')).toBeTruthy());
+  await expectPlaceholderWhileOpen('Search in Inbox');
 
   // Clearing the facet (All chip) reverts to the default with no stale scope.
   await tapBrowseChip('All');
-  await waitFor(() => expect(screen.getByPlaceholderText(DEFAULT_PLACEHOLDER)).toBeTruthy());
-  expect(screen.queryByPlaceholderText('Search in Work')).toBeNull();
+  await expectPlaceholderWhileOpen(DEFAULT_PLACEHOLDER);
 });
 
 test('the search banner names the facet the search is scoped to', async () => {
@@ -134,38 +147,51 @@ test('the search banner names the facet the search is scoped to', async () => {
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
   const tapBrowseChip = async (label: string) => {
-    // The browse shelf folds away while a search is active (the slimmed
-    // search-results header), so switching facets between searches waits for the
-    // cleared query to settle and the shelf to remount before tapping.
+    // The browse shelf only shows while search is CLOSED (it folds away when the
+    // search UI is open), so each facet switch happens between searches.
     const shelf = await waitFor(() => screen.getByTestId('browse-shelf'));
     await act(async () => {
       fireEvent.press(within(shelf).getByText(label));
     });
   };
-  const search = async (text: string) => {
+  // Open the tap-to-open field, type, then blur to reach the "results, keyboard
+  // down" state where the pinned scope (filter) bar names the search scope.
+  const openSearchAndBlur = async (text: string) => {
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('tab-header-search'));
+    });
     const input = screen.getByTestId('inbox-search-input');
     await act(async () => {
       fireEvent.changeText(input, text);
+    });
+    await act(async () => {
+      fireEvent(input, 'blur');
+    });
+  };
+  // Close the search UI (clears the query, keeps the facet, returns the shelf).
+  const closeSearch = async () => {
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('tab-header-search'));
     });
   };
 
   // Folder facet: the banner names the folder it's searching within.
   await tapBrowseChip('Work');
-  await search('Design');
+  await openSearchAndBlur('Design');
   let bar = await waitFor(() => screen.getByTestId('inbox-filter-bar'));
   await waitFor(() => expect(within(bar).getByText('Results for “Design” in Work')).toBeTruthy());
+  await closeSearch();
 
   // Inbox (no-collection) facet: the fixed "Inbox" scope name (the reported case).
-  await search('');
   await tapBrowseChip('Inbox');
-  await search('Loose');
+  await openSearchAndBlur('Loose');
   bar = await waitFor(() => screen.getByTestId('inbox-filter-bar'));
   await waitFor(() => expect(within(bar).getByText('Results for “Loose” in Inbox')).toBeTruthy());
+  await closeSearch();
 
   // All (no facet): the bare banner with no scope clause.
-  await search('');
   await tapBrowseChip('All');
-  await search('Design');
+  await openSearchAndBlur('Design');
   bar = await waitFor(() => screen.getByTestId('inbox-filter-bar'));
   await waitFor(() => expect(within(bar).getByText('Results for “Design”')).toBeTruthy());
 });
@@ -179,9 +205,14 @@ test('the scoped placeholder coexists with the focus-empty suggestion shelf', as
   await act(async () => {
     fireEvent.press(within(screen.getByTestId('browse-shelf')).getByText('Work'));
   });
+  // Open the tap-to-open field; it auto-focuses on open, so the scoped
+  // placeholder and the focus-empty suggestion shelf are up together.
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('tab-header-search'));
+  });
   const input = await waitFor(() => screen.getByPlaceholderText('Search in Work'));
 
-  // Focusing the (still empty) field shows the suggestion shelf — the scoped
+  // The (still empty) field is focused → the suggestion shelf shows; the scoped
   // placeholder must not suppress it.
   await act(async () => {
     fireEvent(input, 'focus');

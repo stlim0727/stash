@@ -43,7 +43,7 @@ jest.mock('expo-router', () => {
     usePathname: () => '/',
     // Honour the callback identity ([cb]) so the hardware-back handler re-registers
     // when the filter changes (mirrors the real useFocusEffect) — the ✨ lens must
-    // rebind the peel handler after the banner sets the suggested filter.
+    // rebind the peel handler after the chip sets the suggested filter.
     useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, [cb]),
   };
 });
@@ -122,31 +122,32 @@ function seedOnePending() {
   );
 }
 
-test('tapping the review banner applies the ✨ lens instead of navigating to /review', async () => {
+test('tapping the review chip applies the ✨ lens instead of navigating to /review', async () => {
   seedOnePending();
 
   const screen = await renderInbox();
 
-  // Both items visible, and the standing review banner counts the one pending.
+  // Both items visible, and the standing review chip counts the one pending.
   await waitFor(() => expect(screen.getByText('Has a suggestion')).toBeTruthy());
   expect(screen.getByText('Nothing pending')).toBeTruthy();
   expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
 
   await act(async () => {
-    fireEvent.press(screen.getByTestId('new-suggestions-banner'));
+    fireEvent.press(screen.getByTestId('review-chip'));
   });
 
   // It applies an in-Inbox lens — NOT a navigation to the Review screen.
   expect(mockPush).not.toHaveBeenCalledWith('/review');
-  // The distinct scope state takes over, and the banner steps aside.
+  // The distinct scope state takes over; the review chip stays in the shelf as
+  // the (now selected) lens entry rather than disappearing like the old banner.
   await waitFor(() => expect(screen.getByText('Reviewing suggestions')).toBeTruthy());
-  expect(screen.queryByTestId('review-banner')).toBeNull();
+  expect(screen.getByTestId('review-chip')).toBeTruthy();
   // Only the pending item remains; the plain one is filtered out.
   expect(screen.getByText('Has a suggestion')).toBeTruthy();
   expect(screen.queryByText('Nothing pending')).toBeNull();
 });
 
-test('the ✨ lens count matches the banner/badge count', async () => {
+test('the ✨ lens count matches the chip/badge count', async () => {
   const SECOND_PENDING = '7e64cf1e-0000-4000-8000-0000000000a3';
   fakeRepo.__reset(
     [
@@ -163,11 +164,11 @@ test('the ✨ lens count matches the banner/badge count', async () => {
 
   const screen = await renderInbox();
 
-  // Banner promises two to review.
+  // The chip promises two to review.
   await waitFor(() => expect(screen.getByText('✨ 2 suggestions to review')).toBeTruthy());
 
   await act(async () => {
-    fireEvent.press(screen.getByTestId('new-suggestions-banner'));
+    fireEvent.press(screen.getByTestId('review-chip'));
   });
 
   // The lens section reports the same count, and shows exactly those two items.
@@ -184,17 +185,18 @@ test('clearing the scope (✕) exits the ✨ lens back to the prior filter', asy
   await waitFor(() => expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy());
 
   await act(async () => {
-    fireEvent.press(screen.getByTestId('new-suggestions-banner'));
+    fireEvent.press(screen.getByTestId('review-chip'));
   });
   await waitFor(() => expect(screen.getByText('Reviewing suggestions')).toBeTruthy());
 
-  // The scope-bar ✕ leaves the lens: the plain item returns and the banner is back.
+  // The scope-bar ✕ leaves the lens: the plain item returns and the review chip
+  // settles back to its unselected standing form.
   await act(async () => {
     fireEvent.press(screen.getByTestId('inbox-filter-clear'));
   });
   await waitFor(() => expect(screen.getByText('Nothing pending')).toBeTruthy());
   expect(screen.queryByText('Reviewing suggestions')).toBeNull();
-  expect(screen.getByTestId('review-banner')).toBeTruthy();
+  expect(screen.getByTestId('review-chip')).toBeTruthy();
 });
 
 test('hardware back peels the ✨ lens first, then hands off to the OS', async () => {
@@ -204,7 +206,7 @@ test('hardware back peels the ✨ lens first, then hands off to the OS', async (
   await waitFor(() => expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy());
 
   await act(async () => {
-    fireEvent.press(screen.getByTestId('new-suggestions-banner'));
+    fireEvent.press(screen.getByTestId('review-chip'));
   });
   await waitFor(() => expect(screen.getByText('Reviewing suggestions')).toBeTruthy());
 

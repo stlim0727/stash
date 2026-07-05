@@ -301,6 +301,16 @@ export default function InboxScreen() {
   // debounced copy so an O(C) collection lookup per bookmark doesn't re-run on
   // every keystroke and the match count doesn't flicker mid-type.
   const debouncedQuery = useDebouncedValue(query, 140);
+  // The live query, mirrored into a ref so the keyboardDidHide listener (a
+  // stable subscription) can read the latest value without re-subscribing.
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  // The search UI is tap-to-open (Telegram-style): the field mounts only when
+  // the user taps the header magnifier, so the resting top stays thin. A live
+  // query (`searching`) can only become true WHILE this is open (query is
+  // settable only via the mounted field or a suggestion tap), so `searchOpen`
+  // is the single source of truth for "the search UI is up".
+  const [searchOpen, setSearchOpen] = useState(false);
   // Whether the search field holds focus — drives the suggestion shelf (shown
   // only while focused with an empty query).
   const [searchFocused, setSearchFocused] = useState(false);
@@ -340,18 +350,43 @@ export default function InboxScreen() {
         blurHideTimer.current = null;
         setSearchFocused(false);
         searchRef.current?.blur();
+        // Keyboard dismissed with nothing typed (Back button / interactive swipe
+        // never fire onBlur) → fold the search UI away to keep the top thin. A
+        // live query keeps the field up (the "results, keyboard down" state); a
+        // recent-suggestion tap leaves a query so it won't close.
+        if (queryRef.current.length === 0) {
+          setSearchOpen(false);
+        }
       }, 0);
     });
     return () => sub.remove();
   }, [clearBlurHide]);
-  // Open the inline search: mark it focused (reveals the suggestion shelf) and
-  // focus the field so the keyboard rises. Shared by the header search icon and
-  // by the `focusSearch` route param the Library/Tags tabs hand over.
-  const focusSearch = useCallback(() => {
+  // Open the inline search: just mount the field. The focus-on-open effect below
+  // moves focus into it once it's in the tree (raising the keyboard). Shared by
+  // the header magnifier and the `focusSearch` route param the Library/Tags tabs
+  // hand over.
+  const openSearch = useCallback(() => {
+    setSearchOpen(true);
+  }, []);
+  // Fold the whole search UI away: blur, drop focus, and CLEAR the query
+  // (Telegram-faithful — opening search always starts fresh). Every close path
+  // funnels through here so the invariant "query is non-empty ⇒ search is open"
+  // holds and there's never an orphaned live search behind a hidden field.
+  const closeSearch = useCallback(() => {
     clearBlurHide();
-    setSearchFocused(true);
-    searchRef.current?.focus();
+    setSearchFocused(false);
+    searchRef.current?.blur();
+    setQuery('');
+    setSearchOpen(false);
   }, [clearBlurHide]);
+  // Move focus into the field once it has actually mounted (it only mounts while
+  // searchOpen), raising the keyboard + carrying screen-reader focus — the same
+  // thing autoFocus does, but driven by our open state so it re-fires each open.
+  useEffect(() => {
+    if (searchOpen) {
+      searchRef.current?.focus();
+    }
+  }, [searchOpen]);
   // The user's own recent searches (most-recent-first). Local-only: persisted in
   // the meta store as `pref.search.recents`, never enqueued or synced.
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -695,8 +730,8 @@ export default function InboxScreen() {
         return;
       }
       consumedFocusRef.current = key;
-      focusSearch();
-    }, [paramFocusSearch, paramNonce, focusSearch]),
+      openSearch();
+    }, [paramFocusSearch, paramNonce, openSearch]),
   );
 
   const tagIdsFor = useCallback(
@@ -871,12 +906,19 @@ export default function InboxScreen() {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     }
   }
-  // The browse shelf is suppressed for the WHOLE focused state (§13.2, widening
-  // Phase-1 Q1): while focused at most one chip row may show — the suggestion
-  // shelf — never the browse shelf. The browse shelf returns only on blur. It's
-  // also folded away in the slimmed search-results state (above). This also keeps
-  // it hidden in the typing-no-match case, where neither row shows.
-  const showShelf = chips.length > 0 && !searchFocused && !slimSearchHeader;
+  // The browse shelf is suppressed for the WHOLE focused/open search state
+  // (§13.2, widening Phase-1 Q1): while search is up at most one chip row may
+  // show — the suggestion shelf — never the browse shelf. The browse shelf
+  // returns only on close. It's also folded away in the slimmed search-results
+  // state (above). The shelf shows when there's anything to put on it — facet
+  // chips OR the review chip (which now lives here instead of a banner); without
+  // the pendingReviewCount term a brand-new user with suggestions but no folders
+  // yet would have an empty facet set and lose the Review entry point entirely.
+  const showShelf =
+    (chips.length > 0 || pendingReviewCount > 0) &&
+    !searchFocused &&
+    !slimSearchHeader &&
+    !searchOpen;
   // On a brand-new (empty) library the search/sort/view controls are just cold
   // chrome over a "nothing here yet" screen — fold them away so the first run
   // is all about the first save. Keyed on the unfiltered library, not the
@@ -897,8 +939,10 @@ export default function InboxScreen() {
   }, []);
 
   // Tap a suggestion chip (§5): a recent FILLS the query and keeps the keyboard
-  // up to edit; a tag/folder APPLIES the facet, clears the query, and blurs so
-  // the shelf closes onto the filtered list.
+  // up to edit; a tag/folder is a DESTINATION — apply the facet, then close the
+  // whole search UI (clears the query, blurs, folds the field away) so we land on
+  // the filtered list with the browse shelf back. Telegram closes search on
+  // picking a result.
   const onPickSuggestion = useCallback(
     (suggestion: SearchSuggestion) => {
       if (suggestion.kind === 'recent') {
@@ -912,15 +956,9 @@ export default function InboxScreen() {
             : { kind: 'collection', id: suggestion.filter.id },
         );
       }
-      setQuery('');
-      // A tag/folder is a destination: dismiss the shelf now. Hide synchronously
-      // (don't wait for the deferred blur) and cancel any pending blur timer so
-      // there's no second, late setState.
-      clearBlurHide();
-      setSearchFocused(false);
-      searchRef.current?.blur();
+      closeSearch();
     },
-    [applySuggestionFacet, clearBlurHide],
+    [applySuggestionFacet, closeSearch],
   );
 
   // Long-press a recent chip to remove just that entry (Q2, locked).
@@ -936,9 +974,27 @@ export default function InboxScreen() {
   // collection/tag chips. FacetPills renders them in this order and marks the
   // one matching the active filter.
   const shelfChips = useMemo<FacetChip[]>(() => {
-    const list: FacetChip[] = [
-      { key: 'all', label: t('inbox.filterAll'), filter: ALL_FILTER },
-    ];
+    const list: FacetChip[] = [];
+    // The Review entry point rides here as the FIRST chip (it used to be a
+    // full-width banner above the search — folded into the shelf to keep the top
+    // area thin, à la Telegram's folder row). Tapping it enters the in-Inbox
+    // "✨ Suggested" lens (onSelectFilter routes SUGGESTED_FILTER through
+    // enterSuggestedLens); the label already carries the count, and it rides in
+    // 'accent' while fresh arrivals are unseen, settling to default once they're
+    // witnessed. Shown only while something is left to review.
+    if (pendingReviewCount > 0) {
+      list.push({
+        key: 'review',
+        testID: 'review-chip',
+        label: hasNewSuggestions
+          ? t('inbox.newSuggestions', { count: newSuggestionsCount })
+          : t('inbox.reviewPending', { count: pendingReviewCount }),
+        filter: SUGGESTED_FILTER,
+        icon: 'sparkles-outline',
+        variant: hasNewSuggestions ? 'accent' : undefined,
+      });
+    }
+    list.push({ key: 'all', label: t('inbox.filterAll'), filter: ALL_FILTER });
     if (hasUncollected) {
       list.push({
         key: 'uncollected',
@@ -949,7 +1005,15 @@ export default function InboxScreen() {
       });
     }
     return [...list, ...chips];
-  }, [t, hasUncollected, uncollectedCount, chips]);
+  }, [
+    t,
+    pendingReviewCount,
+    hasNewSuggestions,
+    newSuggestionsCount,
+    hasUncollected,
+    uncollectedCount,
+    chips,
+  ]);
 
   // Facet-scoped search placeholder (B4): a pure projection of the active facet,
   // not stored — so it reverts for free when the facet clears. `All` keeps the
@@ -1060,11 +1124,12 @@ export default function InboxScreen() {
     setFilter(preLensFilterRef.current);
   }, []);
 
-  // Run the scope bar's trailing action: clear a live search first, then exit
-  // the ✨ lens to its prior filter, otherwise clear the facet back to All.
+  // Run the scope bar's trailing action: close a live search first (folds the
+  // field away too, since a live query can only exist while search is open),
+  // then exit the ✨ lens to its prior filter, otherwise clear the facet to All.
   const onScopeAction = useCallback(() => {
     if (searching) {
-      setQuery('');
+      closeSearch();
       return;
     }
     if (filter.kind === 'suggested') {
@@ -1072,7 +1137,7 @@ export default function InboxScreen() {
       return;
     }
     setFilter(ALL_FILTER);
-  }, [searching, filter.kind, exitSuggestedLens]);
+  }, [searching, filter.kind, exitSuggestedLens, closeSearch]);
 
   // Android hardware back peels the active narrowing layer instead of quitting
   // the app — the same most-recently-added-layer-first model as the scope bar's
@@ -1094,11 +1159,13 @@ export default function InboxScreen() {
         return;
       }
       const onBack = () => {
-        if (query.length > 0) {
-          setQuery('');
+        // Peel the search UI first: closeSearch also clears any live query, so
+        // this stands in for the old raw-query check (query non-empty ⇒ open).
+        if (searchOpen) {
+          closeSearch();
           return true;
         }
-        // Peel the ✨ lens first, back to the filter it was entered from.
+        // Then peel the ✨ lens, back to the filter it was entered from.
         if (filter.kind === 'suggested') {
           exitSuggestedLens();
           return true;
@@ -1111,7 +1178,7 @@ export default function InboxScreen() {
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBack);
       return () => subscription.remove();
-    }, [query, filter.kind, exitSuggestedLens]),
+    }, [searchOpen, filter.kind, exitSuggestedLens, closeSearch]),
   );
 
   const closeMenu = useCallback(() => {
@@ -1239,20 +1306,31 @@ export default function InboxScreen() {
     view: viewMode,
     header: Math.round(headerHeight),
   };
-  const onSelectFilter = useCallback((target: InboxFilter) => {
-    // Diagnostic trail for the "tag-cloud chips go dead after narrowing to a
-    // folder on Android" report: if this breadcrumb is ABSENT when the user
-    // says a chip tap did nothing, the touch never reached JS (a native
-    // hit-test issue with the floating header), not our filter logic. Ids are
-    // opaque UUIDs — no user content.
-    const ctx = chipTapCtx.current;
-    trackBreadcrumb('browse', 'chip tap', {
-      target: 'id' in target ? `${target.kind}:${target.id}` : target.kind,
-      view: ctx.view,
-      header: ctx.header,
-    });
-    setFilter(target);
-  }, []);
+  const onSelectFilter = useCallback(
+    (target: InboxFilter) => {
+      // The review chip is a lens entry, not a plain facet: route it through
+      // enterSuggestedLens so it remembers the filter to return to and witnesses
+      // the fresh arrivals (mirrors the old banner tap). Every other chip sets
+      // the facet directly.
+      if (target.kind === 'suggested') {
+        enterSuggestedLens();
+        return;
+      }
+      // Diagnostic trail for the "tag-cloud chips go dead after narrowing to a
+      // folder on Android" report: if this breadcrumb is ABSENT when the user
+      // says a chip tap did nothing, the touch never reached JS (a native
+      // hit-test issue with the floating header), not our filter logic. Ids are
+      // opaque UUIDs — no user content.
+      const ctx = chipTapCtx.current;
+      trackBreadcrumb('browse', 'chip tap', {
+        target: 'id' in target ? `${target.kind}:${target.id}` : target.kind,
+        view: ctx.view,
+        header: ctx.header,
+      });
+      setFilter(target);
+    },
+    [enterSuggestedLens],
+  );
 
   // Open the dedicated tag-browse route, carrying the current facet as its scope
   // so the cloud/list there opens already scoped to what the user was browsing.
@@ -1352,7 +1430,11 @@ export default function InboxScreen() {
               across all three tabs. Search focuses the inline field below;
               settings opens the existing screen. Account sign-in/management
               lives inside Settings, so the hero stays focused on bookmarks. */}
-          <TabHeaderActions onSearch={focusSearch} onSettings={() => router.push('/settings')} />
+          <TabHeaderActions
+            onSearch={() => (searchOpen ? closeSearch() : openSearch())}
+            onSettings={() => router.push('/settings')}
+            searchActive={searchOpen}
+          />
         </View>
         {loadError ? (
           <Pressable
@@ -1401,69 +1483,7 @@ export default function InboxScreen() {
             </View>
           </Pressable>
         ) : null}
-        {pendingReviewCount > 0 && filter.kind !== 'suggested' ? (
-          // The standing entry point into the "✨ Suggested" review lens.
-          // Persistent while anything is left to review; it escalates to the
-          // accent "new AI suggestions" alert — with a ✕ that acknowledges the
-          // fresh arrivals — only while `newSuggestionsCount` marks unseen ones,
-          // then settles back to the calm "to review" entry. Tapping it applies
-          // the in-Inbox lens (not a navigation); it's hidden while that lens is
-          // already active (the scope bar takes over as the review context).
-          <View
-            testID="review-banner"
-            style={[
-              styles.suggestBanner,
-              { alignSelf: 'center', width: bannerWidth },
-              hasNewSuggestions
-                ? { backgroundColor: palette.accentSoft }
-                : {
-                    backgroundColor: palette.card,
-                    borderWidth: StyleSheet.hairlineWidth,
-                    borderColor: palette.border,
-                    paddingRight: 14,
-                  },
-            ]}
-          >
-            <Pressable
-              testID="new-suggestions-banner"
-              accessibilityRole="button"
-              accessibilityLabel={
-                hasNewSuggestions
-                  ? t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })
-                  : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
-              }
-              onPress={enterSuggestedLens}
-              style={({ pressed }) => [styles.suggestBannerMain, { opacity: pressed ? 0.7 : 1 }]}
-            >
-              <Text
-                style={[
-                  styles.suggestBannerText,
-                  { color: hasNewSuggestions ? palette.accent : palette.text },
-                ]}
-                numberOfLines={1}
-              >
-                {hasNewSuggestions
-                  ? t('inbox.newSuggestions', { count: newSuggestionsCount })
-                  : t('inbox.reviewPending', { count: pendingReviewCount })}
-              </Text>
-              <Text style={[styles.suggestBannerCta, { color: palette.accent }]}>
-                {t('inbox.newSuggestionsReview')}
-              </Text>
-            </Pressable>
-            {hasNewSuggestions ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t('inbox.newSuggestionsDismiss')}
-                hitSlop={8}
-                onPress={() => clearUnseenSuggestions()}
-                style={({ pressed }) => [styles.suggestBannerClose, { opacity: pressed ? 0.5 : 1 }]}
-              >
-                <Ionicons name="close" size={18} color={palette.accent} />
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
-        {showControls ? (
+        {searchOpen ? (
           <View style={[styles.searchWrap, { maxWidth: contentMaxWidth }]}>
             <TextInput
               ref={searchRef}
@@ -1488,6 +1508,12 @@ export default function InboxScreen() {
                 blurHideTimer.current = setTimeout(() => {
                   blurHideTimer.current = null;
                   setSearchFocused(false);
+                  // Blurred with nothing typed → fold the search UI away (keep the
+                  // top thin). A live query keeps the field up so the user can
+                  // read results / refine with the keyboard down (slimSearchHeader).
+                  if (query.length === 0) {
+                    setSearchOpen(false);
+                  }
                 }, 0);
               }}
               // Submit (keyboard "search"/return) is the only recents write path:
@@ -1506,7 +1532,7 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {showControls && !showSuggestions && !slimSearchHeader ? (
+        {showControls && !showSuggestions && !slimSearchHeader && !searchOpen ? (
         <View style={[styles.sortRow, { maxWidth: contentMaxWidth }]}>
           {/* No "Browse" caption: the Sort pill, Tags pill, and view segment are
               self-evident controls, and the caption's width was forcing the

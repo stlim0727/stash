@@ -75,6 +75,19 @@ function renderInbox() {
   );
 }
 
+// Search is tap-to-open: the field mounts only after the header magnifier is
+// pressed. Idempotently reveal it (no-op if already open) and return the input,
+// so a test can just type. Programmatic focus-on-open doesn't fire onFocus in
+// the test renderer, which is fine — typing alone drives the query.
+async function openedSearchInput(screen: Awaited<ReturnType<typeof renderInbox>>) {
+  if (!screen.queryByTestId('inbox-search-input')) {
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('tab-header-search'));
+    });
+  }
+  return screen.getByTestId('inbox-search-input');
+}
+
 beforeEach(() => {
   mockParams = {};
   mockPush.mockClear();
@@ -181,7 +194,7 @@ test('shows an AI suggestion badge for pending (un-applied) suggested tags', asy
   expect(screen.getByLabelText('2 AI suggestions')).toBeTruthy();
 });
 
-test('announces unseen arrivals as a "new" alert, then settles into the standing review entry on ✕', async () => {
+test('announces unseen arrivals as a "new" alert, then settles into the standing review entry once acknowledged', async () => {
   const id = '7e64cf1e-0000-4000-8000-00000000000d';
   fakeRepo.__reset(
     [makeStoredBookmark({ id, title: 'Arrived while away' })],
@@ -194,20 +207,27 @@ test('announces unseen arrivals as a "new" alert, then settles into the standing
 
   const screen = await renderInbox();
 
-  await waitFor(() => screen.getByTestId('review-banner'));
+  await waitFor(() => screen.getByTestId('review-chip'));
   expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
   // While the alert announces, the per-card ✨ badge is suppressed so the same
   // item isn't shouted twice on one screen.
   expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
 
-  // The ✕ acknowledges the fresh arrivals: the alert downgrades to the calm,
-  // persistent "to review" entry — the banner itself STAYS (it's now the way
-  // back into Review from the Inbox), it just sheds the "new" wording and the ✕.
-  fireEvent.press(screen.getByLabelText('Dismiss new AI suggestions'));
+  // Tapping the review chip IS the acknowledgment — it enters the ✨ lens and
+  // witnesses the fresh arrivals (there's no in-place ✕ on a chip). Exiting the
+  // lens leaves the chip in its calm, persistent "to review" form (the standing
+  // way back into Review from the Inbox), shedding the "new" wording.
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('review-chip'));
+  });
+  await waitFor(() => expect(screen.getByText('Reviewing suggestions')).toBeTruthy());
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('inbox-filter-clear'));
+  });
+
   await waitFor(() => expect(screen.queryByText('✨ 1 new AI suggestion')).toBeNull());
-  expect(screen.getByTestId('review-banner')).toBeTruthy();
+  expect(screen.getByTestId('review-chip')).toBeTruthy();
   expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
-  expect(screen.queryByLabelText('Dismiss new AI suggestions')).toBeNull();
   // ...and with the alert gone, the per-card badge returns as the per-item cue.
   await waitFor(() => expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy());
 });
@@ -226,7 +246,7 @@ test('shows a persistent review banner for pending suggestions even with nothing
   const screen = await renderInbox();
 
   await waitFor(() => expect(screen.getByText('Foreground save')).toBeTruthy());
-  expect(screen.getByTestId('review-banner')).toBeTruthy();
+  expect(screen.getByTestId('review-chip')).toBeTruthy();
   expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
   // Not the "new" alert, and no acknowledge ✕ in the calm state.
   expect(screen.queryByText('✨ 1 new AI suggestion')).toBeNull();
@@ -246,7 +266,7 @@ test('the unseen banner counts a folder-only recommendation (no tags)', async ()
 
   const screen = await renderInbox();
 
-  await waitFor(() => expect(screen.getByTestId('review-banner')).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId('review-chip')).toBeTruthy());
   expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
 });
 
@@ -267,7 +287,7 @@ test('the per-card ✨ badge counts a folder-only recommendation (no tags)', asy
   // banner/Review inclusion rule (regression: the badge ignored folders).
   expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
   // ...and the same folder-only item counts toward the persistent review banner.
-  expect(screen.getByTestId('review-banner')).toBeTruthy();
+  expect(screen.getByTestId('review-chip')).toBeTruthy();
   expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
 });
 
@@ -287,7 +307,7 @@ test('a durably-dismissed folder drops the per-card ✨ badge', async () => {
   // No pending tag and the folder is dismissed → nothing to badge, and the
   // persistent review banner honors that durable dismissal (stays down).
   expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
-  expect(screen.queryByTestId('review-banner')).toBeNull();
+  expect(screen.queryByTestId('review-chip')).toBeNull();
 });
 
 test('the unseen banner ignores a folder-only item whose folder was dismissed', async () => {
@@ -305,7 +325,7 @@ test('the unseen banner ignores a folder-only item whose folder was dismissed', 
 
   await waitFor(() => expect(screen.getByText('Folder only')).toBeTruthy());
   // Nothing live remains to review, so the banner stays down despite the marker.
-  expect(screen.queryByTestId('review-banner')).toBeNull();
+  expect(screen.queryByTestId('review-chip')).toBeNull();
 });
 
 test('the unseen banner ignores items whose suggestions were already applied', async () => {
@@ -334,7 +354,7 @@ test('the unseen banner ignores items whose suggestions were already applied', a
 
   await waitFor(() => expect(screen.getByText('Already handled')).toBeTruthy());
   // No live pending suggestion remains, so the banner never shows.
-  expect(screen.queryByTestId('review-banner')).toBeNull();
+  expect(screen.queryByTestId('review-chip')).toBeNull();
 });
 
 test('search filters the list and shows the match count', async () => {
@@ -356,7 +376,7 @@ test('search filters the list and shows the match count', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'local-first');
+  await fireEvent.changeText(await openedSearchInput(screen), 'local-first');
 
   // The derived query is debounced, so the count/filter settle a beat later.
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
@@ -397,6 +417,10 @@ test('slims the header while searching: the sort row and browse shelf fold away'
   expect(screen.getByText('Newest')).toBeTruthy();
   expect(screen.getByTestId('browse-shelf')).toBeTruthy();
 
+  // Search is tap-to-open: reveal the field, then type into it.
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('tab-header-search'));
+  });
   await fireEvent.changeText(
     screen.getByPlaceholderText('Search titles, tags, folders'),
     'local-first',
@@ -502,7 +526,7 @@ test('highlights the matched span in a result title while searching', async () =
   // Before searching, the title is a single plain run (no highlighted "software").
   expect(screen.queryByText('software')).toBeNull();
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'software');
+  await fireEvent.changeText(await openedSearchInput(screen), 'software');
 
   // The matched span renders as its own run carrying the accent highlight.
   const match = await waitFor(() => screen.getByText('software'));
@@ -530,7 +554,7 @@ test('a punctuation-only query is not a search (keeps the normal Inbox section)'
 
   // A query that normalizes to zero search tokens must NOT flip to the search
   // (Matches/results) section, and must not filter the library down.
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '...');
+  await fireEvent.changeText(await openedSearchInput(screen), '...');
 
   await waitFor(() => expect(screen.getByText('Recently saved')).toBeTruthy());
   // Stays on the normal "Recently saved" section (not a results header) and the
@@ -1130,7 +1154,7 @@ test('shows the no-matches empty state for an unmatched search', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'zzz');
+  await fireEvent.changeText(await openedSearchInput(screen), 'zzz');
 
   await waitFor(() => expect(screen.getByText('No bookmarks match your search.')).toBeTruthy());
   // The recovery card stands alone — the "0 results" section label is suppressed
@@ -1166,7 +1190,7 @@ test('a search result that matched on its site name shows a distinct site chip',
   // No site chip outside search mode (it would clutter the normal Inbox).
   expect(screen.queryByTestId('inbox-card-site')).toBeNull();
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'wired');
+  await fireEvent.changeText(await openedSearchInput(screen), 'wired');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   // The matched result surfaces its site name; the chip carries the generated
@@ -1203,7 +1227,7 @@ test('a 4th+ tag that matched the query is promoted into the shown tag chips', a
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Ops runbook')).toBeTruthy());
 
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'kubernetes');
+  await fireEvent.changeText(await openedSearchInput(screen), 'kubernetes');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   // The matched tag is promoted into the card's (max 3) shown meta chips. While
@@ -1233,11 +1257,9 @@ test('the debounced query does not filter until typing settles', async () => {
     // Drain the store's async load under fake timers.
     await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
+    const input = await openedSearchInput(screen);
     await act(async () => {
-      fireEvent.changeText(
-        screen.getByPlaceholderText('Search titles, tags, folders'),
-        'local-first',
-      );
+      fireEvent.changeText(input, 'local-first');
     });
 
     // Immediately after typing (before the debounce elapses) the list is still
@@ -1262,7 +1284,7 @@ test('the empty-search state offers a clear control and a searchable-fields hint
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
-  const input = screen.getByPlaceholderText('Search titles, tags, folders');
+  const input = await openedSearchInput(screen);
   await fireEvent.changeText(input, 'zzz');
 
   await waitFor(() => expect(screen.getByTestId('inbox-empty-search')).toBeTruthy());

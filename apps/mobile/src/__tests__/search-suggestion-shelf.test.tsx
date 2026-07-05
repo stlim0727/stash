@@ -90,8 +90,22 @@ function seedTaggedLibrary() {
   fakeRepo.__setMeta(RECENT_SEARCHES_PREF_KEY, JSON.stringify(['local-first']));
 }
 
+// Search is tap-to-open now: the field mounts only after the header magnifier is
+// pressed. Idempotently reveal it (no-op if already open) and return the input,
+// so a test that drives focus/blur/submit itself can just grab the field.
+async function openField(screen: Awaited<ReturnType<typeof render>>) {
+  if (!screen.queryByTestId('inbox-search-input')) {
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('tab-header-search'));
+    });
+  }
+  return screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+}
+
 async function focusSearch(screen: Awaited<ReturnType<typeof render>>) {
-  const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+  // Open the field, then drive the focus event (programmatic focus-on-open
+  // doesn't fire onFocus in the test renderer).
+  const input = await openField(screen);
   await act(async () => {
     fireEvent(input, 'focus');
   });
@@ -196,7 +210,7 @@ test('submitting a query records it to the recents store', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
-  const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+  const input = await openField(screen);
   await act(async () => {
     fireEvent.changeText(input, '  kimchi  ');
   });
@@ -283,7 +297,7 @@ test('a recent tap survives a blur fired first (deferred-hide race)', async () =
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-    const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+    const input = await openField(screen);
     await act(async () => {
       fireEvent(input, 'focus');
     });
@@ -339,7 +353,7 @@ test('a tag tap survives a blur fired first (deferred-hide race)', async () => {
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-    const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+    const input = await openField(screen);
     await act(async () => {
       fireEvent(input, 'focus');
     });
@@ -400,7 +414,7 @@ test('submitting "a" then "b" then "a" dedupes-to-front via the screen path', as
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
-  const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+  const input = await openField(screen);
   const submit = async (text: string) => {
     await act(async () => {
       fireEvent.changeText(input, text);
@@ -579,12 +593,14 @@ test('tapping a filtered tag chip applies the facet and clears the query', async
     fireEvent.press(screen.getByLabelText('Filter by tag design'));
   });
 
-  // The tag facet is applied (only the #design bookmark remains) and the query
-  // is cleared — identical Phase-1 end-state.
+  // The tag facet is applied (only the #design bookmark remains) and picking a
+  // tag is a destination, so the whole search UI closes: the field folds away
+  // (query cleared) and the browse shelf returns — Telegram closes on pick.
   await waitFor(() => expect(screen.getByText('#design · 1')).toBeTruthy());
   expect(screen.getByText('A design doc')).toBeTruthy();
   expect(screen.queryByText('A database doc')).toBeNull();
-  expect(input.props.value).toBe('');
+  await waitFor(() => expect(screen.queryByTestId('inbox-search-input')).toBeNull());
+  expect(screen.getByTestId('browse-shelf')).toBeTruthy();
 });
 
 test('tapping a matched recent fills the query and keeps focus', async () => {
@@ -669,9 +685,10 @@ test('a filtered chip tap survives a blur fired first (Phase-2 typing race)', as
     await act(async () => {
       fireEvent.press(screen.getByLabelText('Filter by tag design'));
     });
-    // The facet is applied and the query clears — the tap succeeded.
+    // The facet is applied and the tap succeeded; picking a tag closes the whole
+    // search UI, so the field folds away (query cleared) rather than staying up.
     await waitFor(() => expect(screen.getByText('#design · 1')).toBeTruthy());
-    expect(input.props.value).toBe('');
+    expect(screen.queryByTestId('inbox-search-input')).toBeNull();
 
     await act(async () => {
       jest.runOnlyPendingTimers();
@@ -703,7 +720,7 @@ test('keyboard-hide without a blur drops the stranded shelf (Android Back button
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-    const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+    const input = await openField(screen);
     await act(async () => {
       fireEvent(input, 'focus');
     });
@@ -743,7 +760,7 @@ test('keyboard-hide defers its hide so a chip tap mid-dismiss still lands', asyn
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-    const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+    const input = await openField(screen);
     await act(async () => {
       fireEvent(input, 'focus');
     });

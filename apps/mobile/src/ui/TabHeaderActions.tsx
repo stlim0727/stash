@@ -13,17 +13,22 @@ import { usePalette } from '@/theme';
  * bespoke title/hero on the left — the cluster is the only duplicated piece, so
  * it's the only thing lifted here.
  *
- * v1 search: `onSearch` focuses/opens the Inbox's existing inline search. On the
- * Library/Tags tabs it navigates to the Inbox with a `focusSearch` param so the
- * Inbox opens its own search. The full recent-history "search destination" is a
- * later enhancement.
+ * v1 search: `onSearch` opens the Inbox's tap-to-open inline search. On the
+ * Inbox tab the field is hidden until tapped (à la Telegram), so the tab passes
+ * `searchActive` to morph this magnifier into a ✕ while the field is up and
+ * toggle it closed on a second tap. The Library/Tags tabs omit `searchActive`
+ * (they navigate to the Inbox with a `focusSearch` param rather than holding an
+ * open field of their own), so they keep the plain magnifier. The full
+ * recent-history "search destination" is a later enhancement.
  */
 export function TabHeaderActions({
   onSearch,
   onSettings,
+  searchActive = false,
 }: {
   onSearch: () => void;
   onSettings: () => void;
+  searchActive?: boolean;
 }) {
   const palette = usePalette();
   const t = useT();
@@ -32,12 +37,13 @@ export function TabHeaderActions({
       <Pressable
         testID="tab-header-search"
         accessibilityRole="button"
-        accessibilityLabel={t('common.search')}
+        accessibilityLabel={searchActive ? t('inbox.searchCloseA11y') : t('common.search')}
+        accessibilityState={{ expanded: searchActive }}
         hitSlop={8}
         onPress={onSearch}
       >
         <View style={[styles.button, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-          <Ionicons name="search" size={20} color={palette.text} />
+          <Ionicons name={searchActive ? 'close' : 'search'} size={20} color={palette.text} />
         </View>
       </Pressable>
       <Pressable
