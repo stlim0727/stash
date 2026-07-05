@@ -221,11 +221,14 @@ export default function GraphScreen() {
       if (cancelled) {
         return;
       }
-      // Upper bound on the derived node count (bookmarks + distinct tags + the
-      // possible single untagged hub; co-occurrence derives ≤ tags nodes, so this
-      // still over-estimates). layoutTickBudget is non-increasing in n, so an
-      // overestimate only ever spends fewer ticks — never over budget.
-      const n = input.bookmarks.length + input.tags.length + 1;
+      // Node count for the active mode: co-occurrence derives only tag nodes,
+      // while bipartite adds a node per bookmark plus the possible single
+      // untagged hub. Size the tick budget by the actual node count so each mode
+      // gets the right budget.
+      const n =
+        mode === 'cooccurrence'
+          ? input.tags.length
+          : input.bookmarks.length + input.tags.length + 1;
       const options = { ticks: layoutTickBudget(n) };
       // Same off-render-path settle for both views — only the derive differs.
       const result =
