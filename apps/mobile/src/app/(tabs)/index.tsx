@@ -233,7 +233,7 @@ const WORDMARK = {
 // Rendered height of the hero wordmark in dp; its width is this × the asset
 // ratio. Kept as a constant so the Image's explicit width and height stay in
 // lockstep (see heroWordmark / the hero Image).
-const WORDMARK_HEIGHT = 36;
+const WORDMARK_HEIGHT = 28;
 
 // On wide (desktop-web) viewports, cap the content column and center it so
 // cards, the header, and the browse shelf don't stretch edge-to-edge. No effect
@@ -991,7 +991,7 @@ export default function InboxScreen() {
   // filter bar's measured height when it's showing. When the bar is absent this
   // collapses back to the header-only inset (no leftover gap).
   const filterBarReserve = showFilterBar ? filterBarHeight : 0;
-  const listPaddingTop = headerHeight + filterBarReserve + 8;
+  const listPaddingTop = headerHeight + filterBarReserve + 4;
   const scrollInsetTop = headerHeight + filterBarReserve;
   const scope = useMemo((): {
     text: string;
@@ -1300,7 +1300,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
         ]}
       >
-        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 20 }]}>
+        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 6 }]}>
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -2078,13 +2078,24 @@ export default function InboxScreen() {
                   </Pressable>
                 </View>
                 {item.url ? (
-                  <HighlightedText
-                    style={[styles.cardUrl, { color: palette.textSecondary }]}
-                    numberOfLines={1}
-                    text={item.url}
-                    query={highlightQuery}
-                    highlightStyle={highlightStyle}
-                  />
+                  <View style={styles.cardUrlRow}>
+                    <HighlightedText
+                      style={[styles.cardUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                    <Pressable
+                      accessibilityRole="link"
+                      accessibilityLabel={t('common.openLink')}
+                      hitSlop={12}
+                      style={[styles.cardUrlOpen, { backgroundColor: palette.accentSoft }]}
+                      onPress={openLink}
+                    >
+                      <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                    </Pressable>
+                  </View>
                 ) : null}
                 {metaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
@@ -2120,17 +2131,6 @@ export default function InboxScreen() {
                   ) : null}
                 </View>
               </Pressable>
-              {item.url ? (
-                <Pressable
-                  accessibilityRole="link"
-                  accessibilityLabel={t('common.openLink')}
-                  hitSlop={8}
-                  style={[styles.cardOpen, { backgroundColor: palette.accentSoft }]}
-                  onPress={openLink}
-                >
-                  <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>{t('inbox.openExternal')}</Text>
-                </Pressable>
-              ) : null}
             </Card>
           );
           // In a multi-column grid each cell must claim its column width (flex:
@@ -2189,7 +2189,7 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: 16,
-    gap: 16,
+    gap: 6,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2201,8 +2201,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 14,
+    paddingTop: 12,
+    paddingBottom: 4,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2314,7 +2314,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginHorizontal: 16,
-    marginTop: 12,
+    marginTop: 8,
     borderRadius: 12,
     paddingLeft: 14,
     paddingRight: 6,
@@ -2324,7 +2324,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
   suggestBannerText: {
     flexShrink: 1,
@@ -2379,13 +2379,15 @@ const styles = StyleSheet.create({
   },
   searchWrap: {
     paddingHorizontal: 16,
-    paddingTop: 10,
+    // Packed almost flush under the title (Telegram-style), so the top reads as
+    // one tight title→search unit rather than two spaced bands.
+    paddingTop: 2,
     width: '100%',
     alignSelf: 'center',
   },
   searchInput: {
-    borderRadius: 20,
-    paddingVertical: 13,
+    borderRadius: 18,
+    paddingVertical: 9,
     paddingHorizontal: 16,
     fontSize: 16,
   },
@@ -2402,7 +2404,7 @@ const styles = StyleSheet.create({
     // pinned right and is never clipped because the Sort pill yields the space.
     gap: 8,
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 4,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2435,8 +2437,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   viewSegmentButton: {
-    width: 38,
-    height: 38,
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2508,16 +2510,8 @@ const styles = StyleSheet.create({
     height: 132,
   },
   cardBody: {
-    padding: 18,
+    padding: 14,
     gap: 7,
-  },
-  cardOpen: {
-    position: 'absolute',
-    right: 14,
-    bottom: 14,
-    borderRadius: 999,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
   },
   cardOpenLabel: {
     fontSize: 14,
@@ -2572,14 +2566,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  cardUrlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   cardUrl: {
+    flex: 1,
     fontSize: 13,
+  },
+  cardUrlOpen: {
+    borderRadius: 999,
+    height: 22,
+    minWidth: 26,
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   metaChipRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
-    paddingRight: 72,
   },
   metaChip: {
     borderRadius: 999,
@@ -2592,7 +2599,6 @@ const styles = StyleSheet.create({
   },
   siteChipRow: {
     flexDirection: 'row',
-    paddingRight: 72,
   },
   siteChip: {
     flexShrink: 1,

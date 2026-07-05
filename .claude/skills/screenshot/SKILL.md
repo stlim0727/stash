@@ -5,19 +5,22 @@ description: >-
   the Expo web export + headless Chromium — no emulator or simulator. Use when
   asked to screenshot, capture, or show the real app/a screen (e.g. "screenshot
   the inbox", "show the settings screen", "capture the review screen in dark
-  mode"). Renders the live component tree with the first-run mock seed in ~1 min,
-  so it is more faithful than the `ui-preview` skill (which hand-draws an
-  approximate SVG) but faster than the `android-screenshots` CI emulator. Not a
-  substitute for true native fidelity — Android-native layout bugs (chip
-  clipping, text measurement, safe-area) only show on the emulator; for those use
-  the `android-screenshots` workflow.
+  mode"). By default it renders whatever state the app boots into (a fresh
+  export is the empty first-run state); pass data flags (--count/--seed/--data)
+  to inject artificial bookmarks/tags/collections/AI-suggestions so any screen
+  renders with content — "screenshot the inbox with sample bookmarks", "show the
+  review screen with suggestions", "mock up a full inbox with N items". Renders
+  the live component tree in ~1 min, so it is more faithful than the `ui-preview`
+  skill (which hand-draws an approximate SVG) but faster than the
+  `android-screenshots` CI emulator. Not a substitute for true native fidelity —
+  Android-native layout bugs (chip clipping, text measurement, safe-area) only
+  show on the emulator; for those use the `android-screenshots` workflow.
 ---
 
 # Real screenshot (Expo web export → headless Chromium)
 
-Renders the **actual app** — the real component tree, theme, copy, and the
-first-run mock data — in a headless browser and saves a PNG. No emulator, no
-Metro server, no device.
+Renders the **actual app** — the real component tree, theme, and copy — in a
+headless browser and saves a PNG. No emulator, no Metro server, no device.
 
 This is the middle rung of three:
 
@@ -27,10 +30,33 @@ This is the middle rung of three:
 | **`screenshot` (this)** | real web render of app code | ~1 min | "show me the real screen" |
 | `android-screenshots` CI | true native (Android emulator + Maestro) | ~15 min | catching Android-native layout bugs before merge |
 
+## Two modes
+
+- **Default** — render whatever state the app boots into. A *fresh* export is the
+  **empty first-run state** (the app ships no sample seed), so content screens
+  come out blank. Live network, so a Supabase pull / remote images can load.
+- **Injected** — pass any data flag (`--count`/`--seed`/`--tags`/`--collections`/
+  `--archived`/`--data`) to prime `localStorage` **before the app boots** so the
+  screen renders with the bookmarks/tags/collections/AI-suggestions you choose.
+  Use this whenever an empty screen would be useless: a full Inbox, the Review
+  queue, a filled folder, search results.
+
+### How injection works (don't "fix" it away)
+
+On web, `apps/mobile/src/storage/repository.ts` loads from `localStorage`:
+`stash.bookmarks`, `stash.tagData`, `stash.enrichments`, and only re-seeds the
+(empty) sample when `stash.seeded !== "1"`. In injected mode `render.mjs` writes
+all of those in a Playwright **init script that runs before any app script**,
+with `stash.seeded` set so the app keeps the injected rows. It also **aborts
+every non-localhost request**, which (a) stops the Supabase pull that would
+otherwise replace the injected tag data wholesale, and (b) stops remote
+images/fonts from stalling `networkidle` — so injected renders are fully offline
+and deterministic (same `--seed` → same pixels). Shapes mirror `domain/types.ts`.
+
 ## What is faithful vs. not
 
 - **Faithful**: the real React component tree, theme palette, layout numbers,
-  copy/labels, icons (real Ionicons), and the seeded sample bookmarks/folders/tags.
+  copy/labels, icons (real Ionicons), and any injected/seeded content.
 - **Not faithful** (it's a browser, not Android): native shadows, true
   safe-area insets, Android `ScrollView`/text-measurement behaviour, and font
   rendering. **Do not use it to verify Android-native clipping** — that is what
@@ -61,16 +87,21 @@ Run everything from the repo root.
    `$PLAYWRIGHT_BROWSERS_PATH` (the script resolves it; it prefers the faster
    `headless_shell`). Do **not** run `playwright install`.
 
-3. **Render.** Defaults to the Inbox (`/`) in light theme at a phone viewport:
+3. **Render.** Defaults to the Inbox (`/`) in light theme at a phone viewport;
+   add data flags to fill the screen:
 
    ```bash
+   # empty first-run state
    node .claude/skills/screenshot/render.mjs --route inbox --theme light --out /tmp/inbox.png
+   # with injected sample data
+   node .claude/skills/screenshot/render.mjs --route inbox --count 8 --seed 3 --out /tmp/inbox.png
    ```
 
    Then `Read` the PNG to look at it. A blank frame means the page never
    rendered — check the `[pageerror]` lines the script prints.
 
-4. **Deliver** with `SendUserFile`, and state it's a web render (caveats above).
+4. **Deliver** with `SendUserFile`, and state it's a web render (caveats above;
+   note when the data is injected/sample).
 
 5. **Clean up** the throwaway export so it never lands in a PR (the skill's
    `node_modules` stays, gitignored, for fast reruns):
@@ -81,6 +112,8 @@ Run everything from the repo root.
 
 ## Options
 
+Route / theme / viewport:
+
 - `--route` — `inbox`/`/`, `settings`, `review`, `add`, `trash`, `browse-tags`,
   `report`, or any raw exported path. (Bookmark detail needs a real id; navigate
   by clicking a card if you need it.)
@@ -89,6 +122,24 @@ Run everything from the repo root.
 - `--out PATH` — output PNG (default `/tmp/stash-<route>-<theme>.png`).
 - `--width` / `--height` / `--scale` — viewport + DPR (default `390×844@2`).
 - `--full` — full-page (scrolling) screenshot instead of just the viewport.
+- `--click SELECTOR` — click an element before capturing, to reach a state that only exists after a tap (a lens/filter, an expanded menu, an opened modal). RN-web maps `testID` → `data-testid`, so use `--click '[data-testid="new-suggestions-banner"]'`. Best paired with a data flag so the thing to tap actually renders.
+
+Data (any of these switches on injected mode):
+
+- `--count N` — generate N bookmarks (default 8).
+- `--seed S` — PRNG seed; same seed → identical data (default 1).
+- `--tags N` / `--collections N` — how many to fabricate (defaults 6 / 3).
+- `--archived N` — make N of the items trashed (for the `trash` route).
+- `--data FILE.json` — use explicit data instead of generating. Either a full
+  bundle `{ bookmarks, tagData: { tags, bookmarkTags, collections }, enrichments }`
+  (missing keys default to empty) or a bare `bookmarks` array. See
+  `sample-data.json`. When `--data` is set, no generation happens.
+
+Which screens the generated data lights up: Inbox (all items + folder/tag
+chips), Review (items carrying pending `enrichments.suggested_tags` — the first
+few generated items get these), folder/tag filters, and search. Generated
+bookmarks leave `preview_image_url` null on purpose (no remote fetch offline);
+supply your own via `--data` with `data:`-URI images if you need thumbnails.
 
 ## The dark-theme fixup in the driver (don't "fix" it away)
 

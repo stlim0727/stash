@@ -47,6 +47,7 @@ Transform tasks into verifiable goals:
 - "Add validation" → "Write tests for invalid inputs, then make them pass"
 - "Fix the bug" → "Write a test that reproduces it, then make it pass"
 - "Refactor X" → "Ensure tests pass before and after"
+- "Fix a mysterious failure" → "Confirm the actual cause with a minimal isolating probe *before* applying a fix" — a plausible theory can be wrong and cost a full cycle (e.g. renaming `node_modules` on the theory that Netlify skips it, when a marker-file probe showed the real cause was dot-directories like `.pnpm`).
 
 For multi-step tasks, state a brief plan with a verification check per step. Strong success criteria let you loop independently; weak criteria ("make it work") require constant clarification.
 
@@ -59,7 +60,7 @@ Stash is a mobile bookmark app (React Native + Expo, Supabase backend) inspired 
 pnpm workspace, **Node 22, pnpm 10**. Run everything from the repo root:
 
 - `pnpm dev` (and `dev:android` / `dev:ios` / `dev:web`) — Expo dev server for `apps/mobile`.
-- `pnpm lint` — runs three checks (there is no ESLint config): `format:check` (whitespace/final-newline only), `lint:env` (`scripts/check-static-env.mjs`, which enforces how `EXPO_PUBLIC_*` env vars may be referenced), and `lint:overlay` (`scripts/check-overlay-elevation.mjs`, no zIndex-without-elevation overlays). `pnpm format` auto-fixes formatting.
+- `pnpm lint` — runs three checks (there is no ESLint config): `format:check` (whitespace/final-newline only), `lint:env` (`scripts/check-static-env.mjs`, which enforces how `EXPO_PUBLIC_*` env vars may be referenced), and `lint:overlay` (`scripts/check-overlay-elevation.mjs`, no zIndex-without-elevation overlays). `pnpm format` auto-fixes formatting. **Run it from the repo root — that is the CI lint.** Running `pnpm lint` *inside* `apps/mobile` invokes `expo lint` (ESLint) instead: a separate, already-red baseline **not** wired into CI that also auto-installs `eslint`/`eslint-config-expo` and writes `apps/mobile/eslint.config.js` + mutates `package.json`/`pnpm-lock.yaml` — never commit that churn.
 - `pnpm typecheck` — `tsc --noEmit` in `apps/mobile`.
 - `pnpm test` — two lanes: the mobile **Node-runner** logic tests **plus** `test:functions` (Supabase edge-function tests under `supabase/functions/**/*.test.ts`).
 - `pnpm test:components` — jest-expo + React Native Testing Library for hooks/components.
@@ -96,6 +97,8 @@ Backend: `supabase/migrations` (owner-scoped RLS) and `supabase/functions` edge 
 ## Branch / release notes
 
 - **Branch strategy: trunk-based + release branches** (`docs/development/branching.md`). `main` is the trunk (next release); each `release/*` branch is the maintenance line for an already-shipped version. Base each change on the line it ships in — features → `main`; bug fixes for a shipped version → its `release/*` branch, then **cherry-pick the fix forward into `main`**. Never merge `main` into a release branch.
+- **A large multi-PR feature whose intermediate steps aren't independently shippable** (e.g. the bottom-`(tabs)` nav migration) develops on **one integration branch** and merges to `main` as a **single reviewed unit** — do not land it in `main` step-by-step (a half-migrated trunk is the failure mode: the tab-shell step was merged to `main` and then had to be reverted). Small, self-contained changes still go straight to `main` per trunk-based above.
+  - _Corollary — using a `main`-only skill from such a branch:_ a skill added on `main` after your integration branch forked isn't in your checkout. Borrow it **without committing it** to your feature PR: `git checkout origin/main -- .claude/skills/<name>` (then `git restore --staged` it), run it, and restore with `git checkout HEAD -- .claude/skills/<name>` + delete any untracked files it added.
 - **Pull requests: open as regular (non-draft) PRs, not drafts.**
 - CI runs on **CircleCI** (`.circleci/config.yml`): the `ci` workflow runs lint, typecheck, and tests on every PR. Migrated off GitHub Actions (quota exhausted); see `docs/development/ci-circleci.md`. **Exception: the Android APK build stays on GitHub Actions** (see next bullet).
 - Installable Android APK without an EAS account: the GitHub Actions `android-apk.yml` workflow (`expo prebuild` → Gradle `assembleRelease`, debug-signed standalone, arm64-v8a only). It lives on GitHub Actions rather than CircleCI because the RN native compile needs more RAM than this project's CircleCI Docker plan allows (8 GB `large`, no swap → OOM); it's an infrequent job (release tags / manual dispatch), so only it moved back. Trigger/output mapping is documented in `AGENTS.md`. EAS profiles for store builds live in `apps/mobile/eas.json`; release flow in `docs/development/releasing.md`.
