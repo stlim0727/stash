@@ -1,23 +1,34 @@
 #!/usr/bin/env node
 // Real-render screenshot of a Stash screen via the Expo *web* export + headless
-// Chromium. No emulator: this renders the actual app code (with its first-run
-// mock seed) in ~1 min, between `ui-preview` (instant, approximate SVG) and the
-// `android-screenshots` CI emulator (native, ~15 min).
+// Chromium. No emulator: this renders the actual app code in ~1 min, between
+// `ui-preview` (instant, approximate SVG) and the `android-screenshots` CI
+// emulator (native, ~15 min).
+//
+// Two modes:
+//   • default — render whatever state the app boots into (a fresh export is the
+//     empty first-run state); live network, so a Supabase pull / remote images
+//     can load.
+//   • injected — pass any data flag (--count/--seed/--tags/--collections/
+//     --archived/--data) to prime localStorage BEFORE the app boots so the
+//     screen renders with bookmarks/tags/collections/AI-suggestions of your
+//     choosing. Injected mode also aborts every non-localhost request, so a
+//     Supabase pull can't replace the injected tag data and remote assets can't
+//     stall the render — fully offline and deterministic (same --seed → same
+//     pixels).
 //
 // Usage:
 //   node render.mjs [--route /|inbox|settings|review|add|trash|browse-tags|report]
 //                   [--theme light|dark] [--out PATH] [--width 390] [--height 844]
 //                   [--scale 2] [--full]
-//
-// Speed notes: reuses an existing apps/mobile/dist (pass --rebuild upstream to
-// force a fresh export), prefers the chromium headless_shell binary, and waits
-// on seeded content rather than fixed sleeps.
+//                   [--count N] [--seed S] [--tags N] [--collections N]
+//                   [--archived N] [--data fixture.json]
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
-import { extname, join, normalize, dirname } from 'node:path';
+import { extname, join, normalize, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { generate } from './fixtures.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = normalize(join(HERE, '..', '..', '..'));
@@ -28,6 +39,10 @@ const argv = process.argv.slice(2);
 const arg = (k, d) => {
   const i = argv.indexOf(`--${k}`);
   return i >= 0 && argv[i + 1] ? argv[i + 1] : d;
+};
+const num = (k, d) => {
+  const v = arg(k, undefined);
+  return v === undefined ? d : Number(v);
 };
 const has = (k) => argv.includes(`--${k}`);
 
@@ -40,10 +55,17 @@ const routeArg = arg('route', '/');
 const route = ROUTES[routeArg] ?? routeArg;
 const theme = arg('theme', 'light') === 'dark' ? 'dark' : 'light';
 const out = arg('out', `/tmp/stash-${routeArg.replace(/\W+/g, '-')}-${theme}.png`);
-const width = Number(arg('width', 390));
-const height = Number(arg('height', 844));
-const scale = Number(arg('scale', 2));
+const width = num('width', 390);
+const height = num('height', 844);
+const scale = num('scale', 2);
 const fullPage = has('full');
+const dataFile = arg('data', undefined);
+
+// Injected mode is on when any data flag is present. Presence, not value, so the
+// generation defaults don't force it — a bare `render.mjs` renders the real
+// boot state exactly as before.
+const DATA_FLAGS = ['data', 'count', 'seed', 'tags', 'collections', 'archived'];
+const injecting = DATA_FLAGS.some((k) => has(k));
 
 // Light-palette colors that the Expo static export prerenders and that survive
 // hydration on some components (container, the odd surface chip), leaving a
@@ -55,6 +77,35 @@ const DARK_RECOLOR = [
   { from: 'rgb(255, 255, 255)', to: '#151c2c' },
 ];
 const DARK_BG = '#0b1220';
+
+// ---- build the injectable dataset (injected mode only) ---------------------
+async function buildDataset() {
+  if (dataFile) {
+    const fp = isAbsolute(dataFile) ? dataFile : join(process.cwd(), dataFile);
+    const parsed = JSON.parse(await readFile(fp, 'utf8'));
+    // Accept a full {bookmarks, tagData, enrichments} bundle or a bare
+    // bookmarks array. Missing pieces default to empty (no generation).
+    if (Array.isArray(parsed)) {
+      return { bookmarks: parsed, tagData: { tags: [], bookmarkTags: [], collections: [] }, enrichments: [] };
+    }
+    return {
+      bookmarks: parsed.bookmarks ?? [],
+      tagData: parsed.tagData ?? {
+        tags: parsed.tags ?? [],
+        bookmarkTags: parsed.bookmarkTags ?? [],
+        collections: parsed.collections ?? [],
+      },
+      enrichments: parsed.enrichments ?? [],
+    };
+  }
+  return generate({
+    count: num('count', 8),
+    seed: num('seed', 1),
+    tags: num('tags', 6),
+    collections: num('collections', 3),
+    archived: num('archived', 0),
+  });
+}
 
 // ---- resolve the pre-installed Chromium ------------------------------------
 function resolveChromium() {
@@ -137,18 +188,55 @@ async function main() {
     colorScheme: theme,
     isMobile: true,
   });
+
+  if (injecting) {
+    const data = await buildDataset();
+    // localStorage payload mirrors storage/repository.ts's `write` (JSON.stringify
+    // per key). `stash.seeded` must be the JSON string "1" so init() skips the
+    // empty re-seed and keeps our injected rows.
+    const payload = {
+      'stash.bookmarks': JSON.stringify(data.bookmarks),
+      'stash.tagData': JSON.stringify(data.tagData),
+      'stash.enrichments': JSON.stringify(data.enrichments),
+      'stash.queue': JSON.stringify([]),
+      'stash.seeded': JSON.stringify('1'),
+    };
+    // Prime localStorage before any app script runs.
+    await ctx.addInitScript((kv) => {
+      try {
+        for (const k in kv) localStorage.setItem(k, kv[k]);
+      } catch {
+        /* SSR / no storage — ignore */
+      }
+    }, payload);
+    // Offline determinism: only localhost (our static server) is allowed. Blocks
+    // the Supabase pull that would replace tagData wholesale, and any remote
+    // image/font that would stall `networkidle`.
+    await ctx.route('**/*', (r) => {
+      const host = (() => {
+        try {
+          return new URL(r.request().url()).hostname;
+        } catch {
+          return '';
+        }
+      })();
+      if (host === 'localhost' || host === '127.0.0.1') return r.continue();
+      return r.abort();
+    });
+  }
+
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.error('[pageerror]', String(e).slice(0, 200)));
 
   await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-  // The store seeds mock data on mount; wait for real content instead of a
-  // fixed sleep. Any of these strings means the tree rendered.
+  // The tree seeds/hydrates on mount; wait for real content instead of a fixed
+  // sleep. Any of these strings means the tree rendered.
   await page
-    .waitForFunction(() => /Stash|Saved|Settings|Review|Add/i.test(document.body.innerText), null, {
+    .waitForFunction(() => /Stash|Saved|Settings|Review|Add|Inbox/i.test(document.body.innerText), null, {
       timeout: 12000,
     })
     .catch(() => {});
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(injecting ? 700 : 600);
 
   // Dark theme: recolor any element still painted with the baked light
   // container background (static-export hydration leaves it light).
