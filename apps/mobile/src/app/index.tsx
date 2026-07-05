@@ -245,7 +245,7 @@ const WORDMARK = {
 // Rendered height of the hero wordmark in dp; its width is this × the asset
 // ratio. Kept as a constant so the Image's explicit width and height stay in
 // lockstep (see heroWordmark / the hero Image).
-const WORDMARK_HEIGHT = 36;
+const WORDMARK_HEIGHT = 32;
 
 // On wide (desktop-web) viewports, cap the content column and center it so
 // cards, the header, and the browse shelf don't stretch edge-to-edge. No effect
@@ -1107,7 +1107,7 @@ export default function InboxScreen() {
   // filter bar's measured height when it's showing. When the bar is absent this
   // collapses back to the header-only inset (no leftover gap).
   const filterBarReserve = showFilterBar ? filterBarHeight : 0;
-  const listPaddingTop = headerHeight + filterBarReserve + 8;
+  const listPaddingTop = headerHeight + filterBarReserve + 4;
   const scrollInsetTop = headerHeight + filterBarReserve;
   const scope = useMemo((): {
     text: string;
@@ -1378,7 +1378,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
         ]}
       >
-        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 12 }]}>
+        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 8 }]}>
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -1800,14 +1800,18 @@ export default function InboxScreen() {
           { paddingTop: listPaddingTop, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
-          // On a zero-result search the empty-search recovery card already
-          // states "no matches"; suppress the "0 results" section label so the
-          // two don't stack into a redundant double-negative.
-          searching && visible.length === 0 ? null : (
+          // The section label only earns its vertical space while searching,
+          // where the match COUNT is real information. In the default/faceted
+          // state it's redundant chrome: a newest-first list obviously leads
+          // with the newest item, and a narrowed view is already named by the
+          // pinned filter bar — so drop it to lift the first card up the screen.
+          // (Still hidden on a zero-result search, where the recovery card
+          // already says "no matches", to avoid a double-negative.)
+          searching && visible.length > 0 ? (
             <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
               {sectionLabel}
             </Text>
-          )
+          ) : null
         }
         ListEmptyComponent={
           isLoading ? (
@@ -2338,7 +2342,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 8,
+    paddingBottom: 6,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2458,7 +2462,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginHorizontal: 16,
-    marginTop: 12,
+    marginTop: 8,
     borderRadius: 12,
     paddingLeft: 14,
     paddingRight: 6,
@@ -2468,7 +2472,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
   suggestBannerText: {
     flexShrink: 1,
@@ -2523,13 +2527,13 @@ const styles = StyleSheet.create({
   },
   searchWrap: {
     paddingHorizontal: 16,
-    paddingTop: 10,
+    paddingTop: 8,
     width: '100%',
     alignSelf: 'center',
   },
   searchInput: {
     borderRadius: 20,
-    paddingVertical: 13,
+    paddingVertical: 11,
     paddingHorizontal: 16,
     fontSize: 16,
   },
@@ -2546,7 +2550,7 @@ const styles = StyleSheet.create({
     // pinned right and is never clipped because the Sort pill yields the space.
     gap: 8,
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 6,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2579,8 +2583,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   viewSegmentButton: {
-    width: 38,
-    height: 38,
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2593,8 +2597,8 @@ const styles = StyleSheet.create({
     // shaving the rounded edge even when the text inside rendered intact. Chips
     // are vertically centred via shelfContent.alignItems. Spacing is margin
     // (outside the scroll box, so it can't clip).
-    minHeight: 42,
-    marginTop: 6,
+    minHeight: 38,
+    marginTop: 4,
     marginBottom: 0,
     width: '100%',
     alignSelf: 'center',

@@ -456,20 +456,24 @@ test('a punctuation-only query is not a search (keeps the normal Inbox section)'
   ]);
 
   const screen = await renderInbox();
-  await waitFor(() => expect(screen.getByText('Recently saved')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+  // The normal Inbox no longer carries a "Recently saved" section header — it
+  // was redundant chrome and now shows only for real searches. Verify the
+  // non-search state by its content, not a label.
+  expect(screen.queryByText('Recently saved')).toBeNull();
 
   // A query that normalizes to zero search tokens must NOT flip to the search
   // (Matches/results) section, and must not filter the library down.
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '...');
 
-  await waitFor(() => expect(screen.getByText('Recently saved')).toBeTruthy());
-  // Stays on the normal "Recently saved" section (not a results header) and the
+  // Stays on the normal Inbox (no results header, no section label) and the
   // zero-result recovery card must NOT appear — it's not a search at all.
+  await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
+  expect(screen.queryByText('Recently saved')).toBeNull();
   expect(screen.queryByText(/result/)).toBeNull();
   expect(screen.queryByTestId('inbox-empty-search')).toBeNull();
   // The library is not filtered down.
   expect(screen.getByText('Local-first software')).toBeTruthy();
-  expect(screen.getByText('Raindrop review')).toBeTruthy();
 });
 
 test('the card Open action opens the bookmark URL in the system browser', async () => {
@@ -625,7 +629,9 @@ test('a tag route param filters the Inbox to that tag on load', async () => {
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
   expect(screen.queryByText('Unrelated note')).toBeNull();
-  expect(screen.getByText('#design · 1')).toBeTruthy();
+  // The active facet is named by the pinned filter bar (the section label no
+  // longer duplicates the scope outside of search).
+  expect(screen.getByText('Filtered: #design')).toBeTruthy();
 });
 
 test('an empty library shows the onboarding card even with a legacy Tag-cloud preference', async () => {
