@@ -27,6 +27,25 @@ const BASE_FONT_CSS =
   'text-rendering:optimizeLegibility;}';
 
 /**
+ * Ionicons icon font, self-hosted at a dot-free static path.
+ *
+ * expo-router's static web export emits the vendored icon font under
+ * `/assets/__node_modules/.pnpm/…/Ionicons.<hash>.ttf`, and `@expo/vector-icons`
+ * loads it from that URL at runtime. Static hosts refuse to serve paths inside
+ * pnpm's dot-prefixed `.pnpm` directory (Netlify returns the SPA `index.html`
+ * fallback; Cloudflare 307s), so the request never yields a font and every
+ * Ionicon renders as a `□` tofu box. Registering the family ourselves from a
+ * committed `/fonts/ionicons.ttf` (same self-host trick as Inter above) means
+ * the glyphs resolve from a servable URL regardless of the broken `.pnpm`
+ * fetch. `font-display:block` keeps icons blank-then-drawn rather than flashing
+ * tofu while the (same-origin, cached) font loads. Ionicons is the only family
+ * we use, so one face covers the whole UI.
+ */
+const ICON_FONT_CSS =
+  "@font-face{font-family:'Ionicons';font-style:normal;font-weight:400;" +
+  "font-display:block;src:url('/fonts/ionicons.ttf') format('truetype');}";
+
+/**
  * Inject the PWA <head> tags at runtime (web only).
  *
  * With `web.output: "single"` (SPA) the expo-router `+html.tsx` template isn't
@@ -56,7 +75,7 @@ export function installPwaHead() {
   if (!document.head.querySelector('style#stash-base-font')) {
     const style = document.createElement('style');
     style.id = 'stash-base-font';
-    style.textContent = BASE_FONT_CSS;
+    style.textContent = BASE_FONT_CSS + ICON_FONT_CSS;
     document.head.appendChild(style);
   }
   // The SPA shell (index.html) leaves html/body transparent — only the app's
