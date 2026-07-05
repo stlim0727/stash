@@ -18,6 +18,7 @@ import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import {
+  buildSettledCoOccurrenceGraph,
   buildSettledGraph,
   layoutTickBudget,
   UNTAGGED_HUB_ID,
@@ -28,8 +29,23 @@ import {
 import { resolveHubLabels, type HubLabelInput } from '@/domain/graph-labels';
 import type { BookmarkTag, Tag } from '@/domain/types';
 import { useT } from '@/i18n';
+import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
+
+// The two graph views. `bipartite` (default) is the bookmark↔tag map; `cooccurrence`
+// is the tags-only graph where tag–tag edges are weighted by shared bookmarks. The
+// choice is persisted in the repository meta store (same KV as the inbox layout).
+type GraphMode = 'bipartite' | 'cooccurrence';
+const GRAPH_MODES: GraphMode[] = ['bipartite', 'cooccurrence'];
+const GRAPH_MODE_PREF_KEY = 'pref.graph.mode';
+const GRAPH_MODE_LABEL_KEY: Record<GraphMode, 'graph.modeBipartite' | 'graph.modeCooccurrence'> = {
+  bipartite: 'graph.modeBipartite',
+  cooccurrence: 'graph.modeCooccurrence',
+};
+function parseGraphMode(raw: string | null | undefined): GraphMode {
+  return raw === 'cooccurrence' ? 'cooccurrence' : 'bipartite';
+}
 
 // Node sizing (in layout/viewBox units — the settled layout spans ~1000 units).
 // Hubs scale by degree with a sqrt so a very busy tag doesn't dwarf the canvas;
@@ -79,16 +95,19 @@ export function clampToRange(value: number, min: number, max: number): number {
 }
 
 // Max translate (in screen px) per axis: allow panning until only a minimum
-// sliver of the fitted content remains on-screen — never let it leave entirely,
-// but otherwise don't cage it. `fittedExtent` is the on-screen span of the
-// content at scale 1 for this axis (fitScale * viewBoxDim, where fitScale is the
-// preserveAspectRatio="…meet" fit = min(vw/vbW, vh/vbH)); at scale `s` the span is
-// fittedExtent * s. The content's near edge fully clears the viewport once its
-// center translates (span + viewport)/2; we stop MIN_VISIBLE short of that so a
-// sliver stays visible. Deriving the extent per axis from the ACTUAL fitted span
-// (not the viewport) gives the letterboxed axis its correct, tighter bound.
-export function maxPanOffset(scale: number, viewportDim: number, fittedExtent: number): number {
-  const contentExtent = fittedExtent * scale;
+// sliver of the fitted NODE content remains on-screen — never let it leave
+// entirely, but otherwise don't cage it. `fittedNodeExtent` is the on-screen span
+// of the drawable NODE bbox at scale 1 for this axis (fitScale * unpadded node
+// span, fitScale being the preserveAspectRatio="…meet" fit); at scale `s` the span
+// is fittedNodeExtent * s. The node bbox is centered in the viewport at identity
+// (symmetric VIEWBOX_PAD), so its near edge fully clears the viewport once the
+// transform translates (span + viewport)/2; we stop MIN_VISIBLE short of that so a
+// sliver of REAL NODE content — not padding — always stays. Using the node extent
+// (not the padded viewBox span) is what prevents a hard fling from parking the
+// viewport over pure padding (a blank canvas). Per-axis, so the letterboxed axis
+// gets its correct, tighter bound.
+export function maxPanOffset(scale: number, viewportDim: number, fittedNodeExtent: number): number {
+  const contentExtent = fittedNodeExtent * scale;
   const minVisible = Math.min(viewportDim * MIN_VISIBLE_FRACTION, MIN_VISIBLE_CAP);
   return Math.max(0, (contentExtent + viewportDim) / 2 - minVisible);
 }
@@ -157,6 +176,32 @@ export default function GraphScreen() {
     // Intentionally keyed on `signature`, not the churning `inbox`/accessor refs.
   }, [signature]);
 
+  // Bipartite ⇄ co-occurrence view. Defaults to bipartite; the persisted choice
+  // loads once on mount (a stored 'cooccurrence' flips it, which re-settles). The
+  // ref guard drops a late pref-load that would otherwise clobber a tap the user
+  // made before persistence resolved. Declared BEFORE the settle effect so `mode`
+  // flows into its dependency array (the settle re-runs when the view changes).
+  const [mode, setMode] = useState<GraphMode>('bipartite');
+  const modeChosen = useRef(false);
+  useEffect(() => {
+    let active = true;
+    getPreference(GRAPH_MODE_PREF_KEY)
+      .then((raw) => {
+        if (active && !modeChosen.current) {
+          setMode(parseGraphMode(raw));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+  const selectMode = useCallback((next: GraphMode) => {
+    modeChosen.current = true;
+    setMode(next);
+    void setPreference(GRAPH_MODE_PREF_KEY, next).catch(() => {});
+  }, []);
+
   // The settle is O(ticks·n²) and would block the JS thread through the screen's
   // slide-in if run during render — enough to trip Stash's 2s hang detector on a
   // large stash. So we hold the result in state and compute it in an effect AFTER
@@ -177,10 +222,16 @@ export default function GraphScreen() {
         return;
       }
       // Upper bound on the derived node count (bookmarks + distinct tags + the
-      // possible single untagged hub). layoutTickBudget is non-increasing in n,
-      // so an overestimate only ever spends fewer ticks — never over budget.
+      // possible single untagged hub; co-occurrence derives ≤ tags nodes, so this
+      // still over-estimates). layoutTickBudget is non-increasing in n, so an
+      // overestimate only ever spends fewer ticks — never over budget.
       const n = input.bookmarks.length + input.tags.length + 1;
-      const result = buildSettledGraph(input, { ticks: layoutTickBudget(n) });
+      const options = { ticks: layoutTickBudget(n) };
+      // Same off-render-path settle for both views — only the derive differs.
+      const result =
+        mode === 'cooccurrence'
+          ? buildSettledCoOccurrenceGraph(input, options)
+          : buildSettledGraph(input, options);
       if (!cancelled) {
         setSettled(result);
       }
@@ -189,7 +240,7 @@ export default function GraphScreen() {
       cancelled = true;
       handle.cancel();
     };
-  }, [input]);
+  }, [input, mode]);
 
   const nodeById = useMemo(() => {
     const map = new Map<string, PositionedNode>();
@@ -297,18 +348,23 @@ export default function GraphScreen() {
 
   const panResponder = useMemo(
     () => {
-      // Per-axis pan bound at the live scale. Derives each axis's fitted content
-      // extent from the actual viewBox span (fitScale * vbDim, fitScale being the
-      // preserveAspectRatio="…meet" fit over the live viewport) so the letterboxed
-      // axis gets its correct, tighter bound. Reads viewport + viewBox from refs so
-      // the memoized responder never closes over stale sizes.
+      // Per-axis pan bound at the live scale. `fit` maps the PADDED viewBox into
+      // the viewport (that's the preserveAspectRatio="…meet" basis), but the sliver
+      // guarantee is measured against REAL NODE content, not the symmetric padding:
+      // the node bbox is centered in the padded viewBox, so its on-screen extent is
+      // `fit * unpadded-node-span` (unpadded span = padded span − VIEWBOX_PAD*2).
+      // Feeding maxPanOffset the node extent (not the padded span) stops a hard
+      // fling from parking the viewport over pure padding. Reads viewport + viewBox
+      // from refs so the memoized responder never closes over stale sizes.
       const axisBounds = () => {
         const { w: vw, h: vh } = viewportRef.current;
         const { w: vbW, h: vbH } = vbSizeRef.current;
         const fit = Math.min(vw / vbW, vh / vbH);
+        const nodeW = vbW - VIEWBOX_PAD * 2;
+        const nodeH = vbH - VIEWBOX_PAD * 2;
         return {
-          x: maxPanOffset(liveScale.current, vw, fit * vbW),
-          y: maxPanOffset(liveScale.current, vh, fit * vbH),
+          x: maxPanOffset(liveScale.current, vw, fit * nodeW),
+          y: maxPanOffset(liveScale.current, vh, fit * nodeH),
         };
       };
       // Flatten the offset and re-clamp the pan against the (possibly just-changed)
@@ -557,8 +613,12 @@ export default function GraphScreen() {
     );
   }
 
-  // Everything sits under the single untagged hub → surface the "add tags" hint.
+  // Bipartite: everything sits under the single untagged hub → surface the "add
+  // tags" hint. Co-occurrence: NO tag-pair met the shared-bookmark threshold, so
+  // the derived graph is empty → an intentional "no shared tags" hint, not a blank
+  // canvas. Both keep the mode toggle reachable so the user can switch back.
   const hasTags = settled.nodes.some((node) => node.kind === 'tag');
+  const isCoocEmpty = mode === 'cooccurrence' && settled.nodes.length === 0;
 
   const w = viewport.w || 320;
   const h = viewport.h || 320;
@@ -589,7 +649,47 @@ export default function GraphScreen() {
         </Svg>
       </Animated.View>
 
-      {!hasTags ? (
+      {/* Mode toggle — box-none so taps outside the pill still reach the canvas. */}
+      <View pointerEvents="box-none" style={styles.modeToggleWrap}>
+        <View
+          style={[styles.modeToggle, { backgroundColor: palette.surface, borderColor: palette.border }]}
+        >
+          {GRAPH_MODES.map((m) => {
+            const active = mode === m;
+            return (
+              <Pressable
+                key={m}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={t(GRAPH_MODE_LABEL_KEY[m])}
+                testID={`graph-mode-${m}`}
+                onPress={() => selectMode(m)}
+                style={[styles.modeToggleButton, active ? { backgroundColor: palette.accentSoft } : null]}
+              >
+                <Text
+                  style={[
+                    styles.modeToggleText,
+                    { color: active ? palette.accent : palette.textSecondary },
+                  ]}
+                >
+                  {t(GRAPH_MODE_LABEL_KEY[m])}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      {isCoocEmpty ? (
+        <View pointerEvents="none" style={styles.coocEmpty}>
+          <Text style={[styles.emptyTitle, { color: palette.text }]}>
+            {t('graph.cooccurrenceEmpty')}
+          </Text>
+          <Text style={[styles.emptyHint, { color: palette.textSecondary }]}>
+            {t('graph.cooccurrenceEmptyHint')}
+          </Text>
+        </View>
+      ) : mode === 'bipartite' && !hasTags ? (
         <View pointerEvents="none" style={styles.hint}>
           <Text style={[styles.hintText, { color: palette.textSecondary }]}>
             {t('graph.untaggedHint')}
@@ -650,6 +750,43 @@ const styles = StyleSheet.create({
   hintText: {
     fontSize: 14,
     textAlign: 'center',
+  },
+  // Full-width row that centers the segmented pill near the top of the canvas.
+  // No background/elevation itself (box-none in JSX) — only the pill is a control.
+  modeToggleWrap: {
+    position: 'absolute',
+    top: 16,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  modeToggle: {
+    flexDirection: 'row',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 999,
+    overflow: 'hidden',
+    // elevation (no zIndex) keeps Android paint + touch in agreement so the
+    // control stays tappable over the pan surface (same reasoning as recenter).
+    elevation: 3,
+  },
+  modeToggleButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  modeToggleText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  // Centered hint when the co-occurrence view has no qualifying tag-pairs.
+  coocEmpty: {
+    position: 'absolute',
+    left: 40,
+    right: 40,
+    top: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
   },
   recenter: {
     position: 'absolute',

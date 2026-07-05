@@ -55,6 +55,10 @@ export const ko: Catalog = {
   'graph.tagA11y': { other: '태그 {name}, 북마크 {count}개' },
   'graph.untaggedA11y': { other: '태그 없음, 북마크 {count}개' },
   'graph.bookmarkA11y': '북마크 {title}',
+  'graph.modeBipartite': '북마크',
+  'graph.modeCooccurrence': '태그',
+  'graph.cooccurrenceEmpty': '아직 함께 쓰인 태그가 없어요',
+  'graph.cooccurrenceEmptyHint': '두 개 이상의 북마크에 함께 달린 태그들이 여기에서 연결돼요.',
 
   'inbox.savedCount': '{count}개 저장됨',
   'inbox.storageError':

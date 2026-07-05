@@ -81,6 +81,11 @@ export const en = {
     other: 'Untagged, {count} bookmarks',
   },
   'graph.bookmarkA11y': 'Bookmark {title}',
+  'graph.modeBipartite': 'Bookmarks',
+  'graph.modeCooccurrence': 'Tags',
+  'graph.cooccurrenceEmpty': 'No shared tags yet',
+  'graph.cooccurrenceEmptyHint':
+    'Tags that appear together on two or more bookmarks will connect here.',
 
   // Inbox (home).
   'inbox.savedCount': '{count} saved',

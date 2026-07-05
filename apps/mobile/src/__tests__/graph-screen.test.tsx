@@ -188,41 +188,61 @@ test('tapping a tag hub hands the facet to the root Inbox', async () => {
 });
 
 // The pan is clamped so a fling can't drift the graph fully off-screen, but the
-// pan is otherwise UNcaged: it's allowed until only a minimum sliver of the fitted
-// content remains visible. These exercise the exact math the panResponder runs
-// each frame: it clamps the ABSOLUTE position (panStart + gesture delta) into
-// ±maxPanOffset(scale, viewportDim, fittedExtent), where fittedExtent is the
-// per-axis on-screen span of the content at scale 1 (fitScale * viewBoxDim, fitScale
-// being the preserveAspectRatio="…meet" fit = min(vw/vbW, vh/vbH)). PanResponder's
+// pan is otherwise UNcaged: it's allowed until only a minimum sliver of REAL NODE
+// content remains visible. The bound is `maxPanOffset(scale, viewportDim,
+// fittedNodeExtent)`, where fittedNodeExtent is the per-axis on-screen span of the
+// drawable NODE bbox at scale 1 (fitScale * UNPADDED node span). Basing the sliver
+// on the node bbox — not the padded viewBox span — is what stops a hard fling from
+// parking the viewport over pure padding (a blank canvas). PanResponder's
 // gestureState isn't computed under the jest event pipeline (no native
 // touchHistory), so we assert the bound + clamp directly.
 describe('pan clamp', () => {
-  // A square viewport over non-square fitted content, so the two axes take
-  // genuinely different bounds. With "…meet", fitScale = min over axes; the axis
-  // that hits the min FILLS the viewport, the other is letterboxed.
+  // A square viewport over a graph whose fitted NODE content is non-square, so the
+  // two axes take genuinely different bounds. With "…meet" the letterboxed axis
+  // gets the tighter bound.
   const W = 400;
   const H = 400;
-  const VB_W = 1000;
-  const VB_H = 500;
-  const fit = Math.min(W / VB_W, H / VB_H); // 0.4 — width constrains
-  const extentX = fit * VB_W; // 400 — content fills the width
-  const extentY = fit * VB_H; // 200 — letterboxed height
+  const MIN_VISIBLE = Math.min(W * 0.15, 80); // 60 (the sliver kept on screen)
+  const extentX = 400; // fitted node span on x (fills the viewport)
+  const extentY = 200; // fitted node span on y (letterboxed)
 
-  test('at scale 1 the pan is looser than the old margin but content never fully leaves', () => {
+  // How much of a node bbox of the given on-screen extent stays within the
+  // viewport when its center is translated |offset| px from the viewport center.
+  const nodeVisible = (extent: number, offset: number) =>
+    Math.max(0, extent / 2 + W / 2 - Math.abs(offset));
+
+  test('at scale 1 the clamp keeps a MIN_VISIBLE sliver of the node on screen', () => {
     const maxX = maxPanOffset(1, W, extentX);
-    // (400 + 400)/2 - min(400*0.15, 80) = 400 - 60 = 340.
+    // (400 + 400)/2 - 60 = 340.
     expect(maxX).toBe(340);
-    // Bounded: less than the (extent + viewport)/2 = 400 that would push content
-    // fully off-screen, so a sliver always stays visible.
-    expect(maxX).toBeLessThan((extentX + W) / 2);
-    // Yet looser than the old fixed ±32 margin (the "caged" feel).
+    // At the bound exactly MIN_VISIBLE of the node remains; one px past, it's less.
+    expect(nodeVisible(extentX, maxX)).toBeCloseTo(MIN_VISIBLE);
+    expect(nodeVisible(extentX, maxX + 1)).toBeLessThan(MIN_VISIBLE);
+    // Looser than the old fixed ±32 margin (the "caged" feel), still bounded.
     expect(maxX).toBeGreaterThan(32);
-    // A huge fling is still clamped to the bound → never off-screen.
     expect(clampToRange(99999, -maxX, maxX)).toBe(340);
     expect(clampToRange(-99999, -maxX, maxX)).toBe(-340);
   });
 
-  test('the letterboxed axis gets a tighter, content-derived bound than the filled axis', () => {
+  test('the guarantee is NODE content, not padding — the old padded basis leaves a blank canvas', () => {
+    // A small / all-untagged graph: the drawable node content is tiny, but the
+    // padded viewBox (node span + VIEWBOX_PAD*2) is large. The fix feeds
+    // maxPanOffset the fitted NODE extent; the OLD code fed it the fitted PADDED
+    // span. This asserts the difference — and that the padded basis flings the
+    // real node fully off-screen (the "hard-fling leaves empty canvas" nit).
+    const fittedNodeExtent = 80; // real drawable content
+    const fittedPaddedExtent = 360; // symmetric VIEWBOX_PAD inflates the span
+    const boundNode = maxPanOffset(1, W, fittedNodeExtent);
+    const boundPadded = maxPanOffset(1, W, fittedPaddedExtent); // old behavior
+    // Node basis is strictly tighter than the padded basis.
+    expect(boundNode).toBeLessThan(boundPadded);
+    // New (node) basis: a real node sliver survives at the clamp limit.
+    expect(nodeVisible(fittedNodeExtent, boundNode)).toBeCloseTo(MIN_VISIBLE);
+    // Old (padded) basis applied to the SAME real node: it's fully off screen.
+    expect(nodeVisible(fittedNodeExtent, boundPadded)).toBe(0);
+  });
+
+  test('the letterboxed axis gets a tighter bound than the filled axis', () => {
     const maxX = maxPanOffset(1, W, extentX); // filled → 340
     const maxY = maxPanOffset(1, H, extentY); // letterboxed → (200 + 400)/2 - 60 = 240
     expect(maxY).toBe(240);
@@ -265,4 +285,77 @@ test('an all-untagged stash reads as intentional with the add-tags hint', async 
   await waitFor(() => expect(screen.getByTestId('graph-untagged-hub')).toBeTruthy());
   // No tag hubs, so the "add tags to see connections" hint surfaces.
   expect(screen.getByText('Add tags to your bookmarks to see how they connect.')).toBeTruthy();
+});
+
+// Co-occurrence mode: two tags that co-occur on ≥2 bookmarks form a qualifying
+// tag–tag edge, so both become tag nodes (no bookmark nodes, no untagged hub).
+function seedCoOccurring() {
+  const one = '7e64cf1e-0000-4000-8000-0000000000c1';
+  const two = '7e64cf1e-0000-4000-8000-0000000000c2';
+  const at = '2026-06-12T00:00:00.000Z';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: one, title: 'First' }),
+      makeStoredBookmark({ id: two, title: 'Second' }),
+    ],
+    {
+      tags: [makeTag('t-alpha', 'alpha'), makeTag('t-beta', 'beta')],
+      bookmarkTags: [
+        { bookmark_id: one, tag_id: 't-alpha', source: 'user', confidence: null, created_at: at },
+        { bookmark_id: one, tag_id: 't-beta', source: 'user', confidence: null, created_at: at },
+        { bookmark_id: two, tag_id: 't-alpha', source: 'user', confidence: null, created_at: at },
+        { bookmark_id: two, tag_id: 't-beta', source: 'user', confidence: null, created_at: at },
+      ],
+      collections: [],
+    },
+  );
+}
+
+test('switching to co-occurrence renders tag-only nodes, drops bookmark nodes, and still facets on tap', async () => {
+  seedCoOccurring();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+  // Bipartite first (the default): bookmark nodes are present.
+  await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+  expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000c1')).toBeTruthy();
+
+  // Toggle to co-occurrence: the mode change re-settles off the render path, so
+  // the loading state paints first, then we flush the new settle.
+  await fireEvent.press(screen.getByTestId('graph-mode-cooccurrence'));
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+
+  // Tags-only graph: both co-occurring tags are nodes; no bookmark nodes remain.
+  await waitFor(() => expect(screen.getByTestId('graph-tag-t-alpha')).toBeTruthy());
+  expect(screen.getByTestId('graph-tag-t-beta')).toBeTruthy();
+  expect(screen.queryByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000c1')).toBeNull();
+  expect(screen.queryByTestId('graph-untagged-hub')).toBeNull();
+
+  // Tapping a tag still hands the facet to the root Inbox.
+  await fireEvent.press(screen.getByTestId('graph-tag-t-alpha'));
+  expect(mockDismissTo).toHaveBeenCalledTimes(1);
+  expect(mockDismissTo.mock.calls[0][0].params.tag).toBe('t-alpha');
+});
+
+test('co-occurrence with no qualifying tag-pairs shows an intentional empty state, not a blank canvas', async () => {
+  // seedLibrary's only shared pair (cooking, reading) co-occurs on ONE bookmark,
+  // below the ≥2 threshold → the co-occurrence graph derives no nodes.
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+  await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('graph-mode-cooccurrence'));
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+
+  // The "no shared tags yet" hint surfaces and the toggle stays reachable so the
+  // user can switch back — never a bare blank canvas.
+  await waitFor(() => expect(screen.getByText('No shared tags yet')).toBeTruthy());
+  expect(screen.getByTestId('graph-mode-bipartite')).toBeTruthy();
+  expect(screen.queryByTestId('graph-tag-t-cooking')).toBeNull();
 });
