@@ -34,7 +34,6 @@ import {
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { TAB_BAR_HEIGHT } from '@/app/(tabs)/_layout';
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
@@ -1798,7 +1797,7 @@ export default function InboxScreen() {
           viewMode !== 'card' ? styles.listModeList : null,
           // Start the list below the floating header (and the pinned filter bar
           // when active), and clear the Add button so it never covers the last row.
-          { paddingTop: listPaddingTop, paddingBottom: insets.bottom + TAB_BAR_HEIGHT + 96 },
+          { paddingTop: listPaddingTop, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
           // On a zero-result search the empty-search recovery card already
@@ -2282,7 +2281,7 @@ export default function InboxScreen() {
         onPress={() => router.push('/add')}
         style={({ pressed }) => [
           styles.fab,
-          { backgroundColor: palette.accent, bottom: insets.bottom + TAB_BAR_HEIGHT + 20, opacity: pressed ? 0.9 : 1 },
+          { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
         ]}
       >
         <Ionicons name="add" size={34} color="#ffffff" />
