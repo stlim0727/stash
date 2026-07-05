@@ -91,6 +91,11 @@ function seedTaggedLibrary() {
 }
 
 async function focusSearch(screen: Awaited<ReturnType<typeof render>>) {
+  // Search is tap-to-open: reveal the field via the hero magnifier before it
+  // exists in the tree, then focus it.
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('inbox-search-open'));
+  });
   const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
   await act(async () => {
     fireEvent(input, 'focus');
@@ -196,6 +201,9 @@ test('submitting a query records it to the recents store', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('inbox-search-open'));
+  });
   const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
   await act(async () => {
     fireEvent.changeText(input, '  kimchi  ');
@@ -283,6 +291,9 @@ test('a recent tap survives a blur fired first (deferred-hide race)', async () =
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-search-open'));
+    });
     const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
     await act(async () => {
       fireEvent(input, 'focus');
@@ -339,6 +350,9 @@ test('a tag tap survives a blur fired first (deferred-hide race)', async () => {
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-search-open'));
+    });
     const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
     await act(async () => {
       fireEvent(input, 'focus');
@@ -400,6 +414,9 @@ test('submitting "a" then "b" then "a" dedupes-to-front via the screen path', as
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('inbox-search-open'));
+  });
   const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
   const submit = async (text: string) => {
     await act(async () => {
@@ -579,12 +596,13 @@ test('tapping a filtered tag chip applies the facet and clears the query', async
     fireEvent.press(screen.getByLabelText('Filter by tag design'));
   });
 
-  // The tag facet is applied (only the #design bookmark remains) and the query
-  // is cleared — identical Phase-1 end-state.
+  // The tag facet is applied (only the #design bookmark remains) and the search
+  // UI folds away onto the filtered list — the tap-to-open field unmounts, which
+  // is the new "query cleared" end-state.
   await waitFor(() => expect(screen.getByText('Filtered: #design')).toBeTruthy());
   expect(screen.getByText('A design doc')).toBeTruthy();
   expect(screen.queryByText('A database doc')).toBeNull();
-  expect(input.props.value).toBe('');
+  expect(screen.queryByPlaceholderText(SEARCH_PLACEHOLDER)).toBeNull();
 });
 
 test('tapping a matched recent fills the query and keeps focus', async () => {
@@ -669,9 +687,10 @@ test('a filtered chip tap survives a blur fired first (Phase-2 typing race)', as
     await act(async () => {
       fireEvent.press(screen.getByLabelText('Filter by tag design'));
     });
-    // The facet is applied and the query clears — the tap succeeded.
+    // The facet is applied and the search UI folds away (the tap-to-open field
+    // unmounts) — the tap succeeded and the query is cleared.
     await waitFor(() => expect(screen.getByText('Filtered: #design')).toBeTruthy());
-    expect(input.props.value).toBe('');
+    expect(screen.queryByPlaceholderText(SEARCH_PLACEHOLDER)).toBeNull();
 
     await act(async () => {
       jest.runOnlyPendingTimers();
@@ -703,6 +722,9 @@ test('keyboard-hide without a blur drops the stranded shelf (Android Back button
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-search-open'));
+    });
     const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
     await act(async () => {
       fireEvent(input, 'focus');
@@ -743,6 +765,9 @@ test('keyboard-hide defers its hide so a chip tap mid-dismiss still lands', asyn
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-search-open'));
+    });
     const input = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
     await act(async () => {
       fireEvent(input, 'focus');

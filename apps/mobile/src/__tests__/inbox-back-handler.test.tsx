@@ -137,7 +137,7 @@ test('hardware back clears an active facet instead of exiting the app', async ()
   expect(await pressBack()).toBe(false);
 });
 
-test('hardware back clears a live search before exiting', async () => {
+test('hardware back closes a live search before exiting', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-00000000000a',
@@ -156,14 +156,17 @@ test('hardware back clears a live search before exiting', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
 
+  // Search is tap-to-open now: reveal the field, then type.
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
   const input = screen.getByPlaceholderText('Search titles, tags, folders');
   await fireEvent.changeText(input, 'local-first');
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
 
-  // Back clears the query (the field empties) and consumes the press.
+  // Back closes the search UI (clearing the query, folding the field away) and
+  // consumes the press.
   expect(await pressBack()).toBe(true);
-  expect(input.props.value).toBe('');
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
+  expect(screen.queryByPlaceholderText('Search titles, tags, folders')).toBeNull();
 });
 
 test('hardware back is left to the OS when the Inbox is not narrowed', async () => {

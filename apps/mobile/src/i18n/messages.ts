@@ -188,6 +188,8 @@ export const en = {
   'inbox.addBookmark': 'Add bookmark',
   'inbox.openExternal': 'Open ↗',
   'inbox.settingsA11y': 'Settings',
+  'inbox.searchOpenA11y': 'Search',
+  'inbox.searchCloseA11y': 'Close search',
   'inbox.tagCloudTagA11y': {
     one: '#{name}, {count} bookmark',
     other: '#{name}, {count} bookmarks',

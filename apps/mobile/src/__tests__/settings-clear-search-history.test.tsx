@@ -171,7 +171,10 @@ test('the Inbox reflects the cleared recents on its next focus', async () => {
   );
   await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
-  // Focus the empty field: the shelf shows the seeded recent chip.
+  // Open (tap-to-open) and focus the empty field: the shelf shows the recent.
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('inbox-search-open'));
+  });
   const input = screen.getByPlaceholderText('Search titles, tags, folders');
   await act(async () => {
     fireEvent(input, 'focus');
@@ -230,6 +233,9 @@ test('a focus re-read does not drop a just-submitted recent (in-flight write rac
     );
     await waitFor(() => expect(screen.getByText('Design system')).toBeTruthy());
 
+    await act(async () => {
+      fireEvent.press(screen.getByTestId('inbox-search-open'));
+    });
     const input = screen.getByPlaceholderText('Search titles, tags, folders');
     await act(async () => {
       fireEvent(input, 'focus');
