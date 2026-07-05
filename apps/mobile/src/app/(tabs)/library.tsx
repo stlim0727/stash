@@ -15,6 +15,7 @@ import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
 import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
+import { TabHeaderActions } from '@/ui/TabHeaderActions';
 
 import { TAB_BAR_HEIGHT } from './_layout';
 
@@ -110,6 +111,13 @@ export default function LibraryScreen() {
     router.navigate('/');
   }, [router]);
 
+  // Header search icon: hand the Inbox its own search open (v1 reuses the
+  // Inbox's inline search rather than a Library-local surface). A fresh nonce
+  // makes the Inbox re-open search even on a repeat tap.
+  const openSearch = useCallback(() => {
+    router.navigate({ pathname: '/', params: { focusSearch: '1', t: nextFacetNonce() } });
+  }, [router]);
+
   // Switch to the Inbox tab scoped to a collection. A fresh nonce makes the
   // Inbox re-apply the facet even if the same collection is tapped twice (its
   // (facet + nonce) consumer dedupe, see `(tabs)/index.tsx`).
@@ -182,12 +190,15 @@ export default function LibraryScreen() {
 
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + 20 }]}>
-      <Text style={[styles.title, { color: palette.text }]}>{t('nav.library')}</Text>
-      {inbox.length > 0 ? (
-        <Text style={[styles.headerCount, { color: palette.textSecondary }]}>
-          {t('library.itemCount', { count: inbox.length })}
-        </Text>
-      ) : null}
+      <View style={styles.headerText}>
+        <Text style={[styles.title, { color: palette.text }]}>{t('nav.library')}</Text>
+        {inbox.length > 0 ? (
+          <Text style={[styles.headerCount, { color: palette.textSecondary }]}>
+            {t('library.itemCount', { count: inbox.length })}
+          </Text>
+        ) : null}
+      </View>
+      <TabHeaderActions onSearch={openSearch} onSettings={() => router.push('/settings')} />
     </View>
   );
 
@@ -243,6 +254,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 16,
     paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  headerText: {
+    flex: 1,
   },
   title: {
     fontSize: 28,

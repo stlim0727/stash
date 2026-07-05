@@ -3,7 +3,9 @@ import { Tabs } from 'expo-router';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { countUntriaged } from '@/domain/untriaged';
 import { useT } from '@/i18n';
+import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
 
 // Height of the tab bar's content area (above the safe-area inset). Exported so
@@ -15,6 +17,13 @@ export default function TabsLayout() {
   const palette = usePalette();
   const t = useT();
   const insets = useSafeAreaInsets();
+  // Un-triaged count for the Inbox badge — the same "active bookmarks with no
+  // collection" rule the Inbox's "No collection" browse facet counts with
+  // (`countUntriaged`). This is deliberately NEUTRAL, not a red-alert badge, and
+  // is hidden entirely at zero: a queue that can reach empty, per the "no debt
+  // number" design bet.
+  const { inbox } = useBookmarks();
+  const untriaged = countUntriaged(inbox);
 
   return (
     <Tabs
@@ -53,6 +62,16 @@ export default function TabsLayout() {
         options={{
           title: t('nav.inbox'),
           tabBarIcon: ({ color, size }) => <Ionicons name="file-tray" size={size} color={color} />,
+          // Neutral un-triaged count — hidden at zero (`undefined`), and styled
+          // with the muted border/text palette so it reads as a calm tally, never
+          // a red danger alert.
+          tabBarBadge: untriaged > 0 ? untriaged : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: palette.border,
+            color: palette.text,
+            fontSize: 11,
+            fontWeight: '600',
+          },
         }}
       />
       <Tabs.Screen

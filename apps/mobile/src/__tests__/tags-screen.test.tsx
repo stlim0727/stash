@@ -23,10 +23,11 @@ jest.mock('@/domain/enrichment', () => ({
 }));
 
 const mockNavigate = jest.fn();
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useRouter: () => ({
     navigate: mockNavigate,
-    push: jest.fn(),
+    push: mockPush,
     replace: jest.fn(),
     back: jest.fn(),
     dismissTo: jest.fn(),
@@ -59,6 +60,7 @@ function renderTags() {
 
 beforeEach(() => {
   mockNavigate.mockClear();
+  mockPush.mockClear();
 });
 
 // A small library: two bookmarks, three tags. "cooking" is on both (count 2),
@@ -121,6 +123,37 @@ test('tapping a tag opens the Inbox tab scoped to that tag', async () => {
     pathname: '/',
     params: { tag: 't-cooking', t: expect.any(String) },
   });
+});
+
+test('renders the shared top-right header cluster: search + settings icons', async () => {
+  seedLibrary();
+
+  const screen = await renderTags();
+  await waitFor(() => expect(screen.getByTestId('tab-header-search')).toBeTruthy());
+  expect(screen.getByTestId('tab-header-settings')).toBeTruthy();
+});
+
+test('the header search icon navigates to the Inbox with a focusSearch param', async () => {
+  seedLibrary();
+
+  const screen = await renderTags();
+  await waitFor(() => expect(screen.getByTestId('tab-header-search')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('tab-header-search'));
+  expect(mockNavigate).toHaveBeenCalledWith({
+    pathname: '/',
+    params: { focusSearch: '1', t: expect.any(String) },
+  });
+});
+
+test('the header settings icon opens the Settings screen', async () => {
+  seedLibrary();
+
+  const screen = await renderTags();
+  await waitFor(() => expect(screen.getByTestId('tab-header-settings')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('tab-header-settings'));
+  expect(mockPush).toHaveBeenCalledWith('/settings');
 });
 
 test('shows the calm empty state when there are no tags yet', async () => {

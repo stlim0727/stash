@@ -35,6 +35,7 @@ import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { FacetPills, type FacetChip } from '@/ui/FacetPills';
 import { SearchSuggestionShelf } from '@/ui/SearchSuggestionShelf';
+import { TabHeaderActions } from '@/ui/TabHeaderActions';
 import { useSearchSuggestions } from '@/hooks/useSearchSuggestions';
 import {
   RECENT_SEARCHES_PREF_KEY,
@@ -342,6 +343,14 @@ export default function InboxScreen() {
     });
     return () => sub.remove();
   }, [clearBlurHide]);
+  // Open the inline search: mark it focused (reveals the suggestion shelf) and
+  // focus the field so the keyboard rises. Shared by the header search icon and
+  // by the `focusSearch` route param the Library/Tags tabs hand over.
+  const focusSearch = useCallback(() => {
+    clearBlurHide();
+    setSearchFocused(true);
+    searchRef.current?.focus();
+  }, [clearBlurHide]);
   // The user's own recent searches (most-recent-first). Local-only: persisted in
   // the meta store as `pref.search.recents`, never enqueued or synced.
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -644,12 +653,16 @@ export default function InboxScreen() {
   const params = useLocalSearchParams<{
     tag?: string | string[];
     collection?: string | string[];
+    focusSearch?: string | string[];
     t?: string | string[];
   }>();
   const paramTag = Array.isArray(params.tag) ? params.tag[0] : params.tag;
   const paramCollection = Array.isArray(params.collection)
     ? params.collection[0]
     : params.collection;
+  const paramFocusSearch = Array.isArray(params.focusSearch)
+    ? params.focusSearch[0]
+    : params.focusSearch;
   const paramNonce = Array.isArray(params.t) ? params.t[0] : params.t;
   // The last (facet + nonce) we applied, so a re-focus that carries the same
   // routed facet doesn't reset a filter the user has since changed by hand.
@@ -671,6 +684,24 @@ export default function InboxScreen() {
         paramTag ? { kind: 'tag', id: paramTag } : { kind: 'collection', id: paramCollection! },
       );
     }, [paramTag, paramCollection, paramNonce]),
+  );
+
+  // The Library/Tags tabs open the Inbox's own search by navigating here with a
+  // `focusSearch` param (+ a fresh nonce). Key on the nonce so re-tapping the
+  // search icon there re-opens search, while an unrelated re-focus is skipped.
+  const consumedFocusRef = useRef<string | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      if (!paramFocusSearch) {
+        return;
+      }
+      const key = `${paramFocusSearch}#${paramNonce ?? ''}`;
+      if (consumedFocusRef.current === key) {
+        return;
+      }
+      consumedFocusRef.current = key;
+      focusSearch();
+    }, [paramFocusSearch, paramNonce, focusSearch]),
   );
 
   const tagIdsFor = useCallback(
@@ -1263,19 +1294,11 @@ export default function InboxScreen() {
               {t('inbox.savedCount', { count: inbox.length })}
             </Text>
           </View>
-          {/* Single settings entry point. Account sign-in/management lives
-              inside Settings (the account card), so the hero stays focused on
-              bookmarks rather than carrying a second, redundant account button. */}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('inbox.settingsA11y')}
-            hitSlop={8}
-            onPress={() => router.push('/settings')}
-          >
-            <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-              <Ionicons name="settings-sharp" size={20} color={palette.text} />
-            </View>
-          </Pressable>
+          {/* Shared top-right action cluster (search + settings), consistent
+              across all three tabs. Search focuses the inline field below;
+              settings opens the existing screen. Account sign-in/management
+              lives inside Settings, so the hero stays focused on bookmarks. */}
+          <TabHeaderActions onSearch={focusSearch} onSettings={() => router.push('/settings')} />
         </View>
         {loadError ? (
           <Pressable
@@ -2157,14 +2180,6 @@ const styles = StyleSheet.create({
     // rather than its descender edge.
     marginBottom: 2,
     flexShrink: 1,
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   sectionLabel: {
     fontSize: 13,

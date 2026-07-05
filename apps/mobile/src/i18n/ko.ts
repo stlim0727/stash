@@ -25,6 +25,8 @@ export const ko: Catalog = {
   'common.close': '닫기',
   'common.signOut': '로그아웃',
   'common.untitled': '제목 없음',
+  'common.search': '검색',
+  'common.settings': '설정',
 
   'status.syncPrefix': '동기화 {status}',
   'status.metadataPrefix': '메타데이터 {status}',

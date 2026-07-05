@@ -42,6 +42,8 @@ export const en = {
   'common.signOut': 'Sign out',
   'common.untitled': 'Untitled',
   'common.ok': 'OK',
+  'common.search': 'Search',
+  'common.settings': 'Settings',
 
   // Status words (sync/metadata), composed via the prefixes below.
   'status.syncPrefix': 'sync {status}',

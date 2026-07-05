@@ -11,6 +11,7 @@ import { countTagsForBookmarks } from '@/domain/tag-counts';
 import { useT } from '@/i18n';
 import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
+import { TabHeaderActions } from '@/ui/TabHeaderActions';
 
 import { TAB_BAR_HEIGHT } from './_layout';
 
@@ -58,6 +59,13 @@ export default function TagsScreen() {
     [router],
   );
 
+  // Header search icon: hand the Inbox its own search open (v1 reuses the
+  // Inbox's inline search rather than a Tags-local surface). A fresh nonce makes
+  // the Inbox re-open search even on a repeat tap.
+  const openSearch = useCallback(() => {
+    router.navigate({ pathname: '/', params: { focusSearch: '1', t: nextFacetNonce() } });
+  }, [router]);
+
   const renderRow = useCallback(
     ({ item }: { item: TagCloudEntry }) => {
       const color = MONOGRAM_COLORS[monogramColorIndex(item.name)];
@@ -89,12 +97,15 @@ export default function TagsScreen() {
 
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + 20 }]}>
-      <Text style={[styles.title, { color: palette.text }]}>{t('nav.tags')}</Text>
-      {tags.length > 0 ? (
-        <Text style={[styles.headerCount, { color: palette.textSecondary }]}>
-          {t('tags.count', { count: tags.length })}
-        </Text>
-      ) : null}
+      <View style={styles.headerText}>
+        <Text style={[styles.title, { color: palette.text }]}>{t('nav.tags')}</Text>
+        {tags.length > 0 ? (
+          <Text style={[styles.headerCount, { color: palette.textSecondary }]}>
+            {t('tags.count', { count: tags.length })}
+          </Text>
+        ) : null}
+      </View>
+      <TabHeaderActions onSearch={openSearch} onSettings={() => router.push('/settings')} />
     </View>
   );
 
@@ -150,6 +161,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 16,
     paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  headerText: {
+    flex: 1,
   },
   title: {
     fontSize: 28,

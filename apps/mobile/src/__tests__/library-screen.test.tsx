@@ -23,10 +23,11 @@ jest.mock('@/domain/enrichment', () => ({
 }));
 
 const mockNavigate = jest.fn();
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useRouter: () => ({
     navigate: mockNavigate,
-    push: jest.fn(),
+    push: mockPush,
     replace: jest.fn(),
     back: jest.fn(),
     dismissTo: jest.fn(),
@@ -59,6 +60,7 @@ function renderLibrary() {
 
 beforeEach(() => {
   mockNavigate.mockClear();
+  mockPush.mockClear();
 });
 
 test('lists an "All items" row plus one row per non-empty collection with a fingerprint subtitle', async () => {
@@ -143,6 +145,43 @@ test('tapping a collection opens the Inbox tab scoped to that collection', async
     pathname: '/',
     params: { collection: 'col-work', t: expect.any(String) },
   });
+});
+
+test('renders the shared top-right header cluster: search + settings icons', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f1', title: 'A link' }),
+  ]);
+
+  const screen = await renderLibrary();
+  await waitFor(() => expect(screen.getByTestId('tab-header-search')).toBeTruthy());
+  expect(screen.getByTestId('tab-header-settings')).toBeTruthy();
+});
+
+test('the header search icon navigates to the Inbox with a focusSearch param', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f2', title: 'A link' }),
+  ]);
+
+  const screen = await renderLibrary();
+  await waitFor(() => expect(screen.getByTestId('tab-header-search')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('tab-header-search'));
+  expect(mockNavigate).toHaveBeenCalledWith({
+    pathname: '/',
+    params: { focusSearch: '1', t: expect.any(String) },
+  });
+});
+
+test('the header settings icon opens the Settings screen', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f3', title: 'A link' }),
+  ]);
+
+  const screen = await renderLibrary();
+  await waitFor(() => expect(screen.getByTestId('tab-header-settings')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('tab-header-settings'));
+  expect(mockPush).toHaveBeenCalledWith('/settings');
 });
 
 test('tapping "All items" switches to the Inbox tab', async () => {

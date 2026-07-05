@@ -416,6 +416,76 @@ test('slims the header while searching: the sort row and browse shelf fold away'
   expect(screen.getByTestId('browse-shelf')).toBeTruthy();
 });
 
+test('renders the shared top-right header cluster: search + settings icons', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000e1', title: 'A link' }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('A link')).toBeTruthy());
+
+  expect(screen.getByTestId('tab-header-search')).toBeTruthy();
+  expect(screen.getByTestId('tab-header-settings')).toBeTruthy();
+});
+
+test('the header settings icon opens the Settings screen', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000e2', title: 'A link' }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('tab-header-settings')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('tab-header-settings'));
+  expect(mockPush).toHaveBeenCalledWith('/settings');
+});
+
+test('the header search icon opens the inline search (browse shelf folds away)', async () => {
+  // A collection yields a browse-shelf chip, so the shelf is present until search
+  // opens. The header search icon focuses the inline field, which sets the
+  // focused state that hides the browse shelf — the observable "search opened".
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000e3',
+        title: 'Work doc',
+        collection_id: 'col-work',
+      }),
+    ],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('browse-shelf')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('tab-header-search'));
+
+  await waitFor(() => expect(screen.queryByTestId('browse-shelf')).toBeNull());
+  expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
+});
+
+test('opens the inline search when navigated to with a focusSearch param', async () => {
+  // The Library/Tags header search icons hand the Inbox a `focusSearch` param;
+  // the Inbox opens its own search when that param arrives on focus.
+  mockParams = { focusSearch: '1', t: 'nonce-1' };
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000e4',
+        title: 'Work doc',
+        collection_id: 'col-work',
+      }),
+    ],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+
+  // The param-driven focus hides the browse shelf just like the icon tap does.
+  await waitFor(() => expect(screen.queryByTestId('browse-shelf')).toBeNull());
+  expect(screen.getByTestId('inbox-search-input')).toBeTruthy();
+});
+
 test('highlights the matched span in a result title while searching', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
