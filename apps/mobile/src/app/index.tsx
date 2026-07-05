@@ -2378,7 +2378,7 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: 16,
-    gap: 16,
+    gap: 10,
     width: '100%',
     alignSelf: 'center',
   },
