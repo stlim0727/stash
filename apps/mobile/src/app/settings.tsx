@@ -491,9 +491,17 @@ export default function SettingsScreen() {
       </View>
 
       {/* Library — navigation into the user's own content. Reviewing AI
-          suggestions now lives on the Inbox (the persistent review banner), not
-          here — Settings is for configuration, not a recurring workflow. */}
+          suggestions primarily lives on the Inbox (the "✨ Suggested" lens
+          reached from the review banner); this row is the standing fallback into
+          the full Review screen. */}
       <Group styles={styles} title={t('settings.section.library')}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="sparkles-outline"
+          label={t('nav.review')}
+          onPress={() => router.push('/review')}
+        />
         <Row
           styles={styles}
           palette={palette}

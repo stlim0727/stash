@@ -151,6 +151,12 @@ export const en = {
   'inbox.sectionNoCollection': 'Inbox · {count}',
   'inbox.sectionFacet': '{label} · {count}',
   'inbox.sectionRecent': 'Recently saved',
+  // The "✨ Suggested" review lens: a transient scope over the whole Inbox
+  // corpus showing only items that still have a pending AI suggestion. Reached
+  // by tapping the review banner; cleared via the scope bar ✕ or hardware back.
+  'inbox.sectionSuggested': { one: '✨ {count} to review', other: '✨ {count} to review' },
+  'inbox.scopeSuggested': 'Reviewing suggestions',
+  'inbox.scopeClearSuggestedA11y': 'Exit suggestion review',
   'inbox.loading': 'Loading your bookmarks…',
   // Shown in the empty Inbox while a post-sign-in pull is in flight and the local
   // cache is still empty (fresh install / account switch). Distinct from

@@ -53,6 +53,7 @@ import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
 import { accessibilityTitle, displayTitle } from '@/domain/item-display';
 import {
   ALL_FILTER,
+  SUGGESTED_FILTER,
   UNCOLLECTED_FILTER,
   filterByFacet,
   sameFilter,
@@ -355,6 +356,10 @@ export default function InboxScreen() {
   // the meta store as `pref.search.recents`, never enqueued or synced.
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
+  // The filter that was active when the "✨ Suggested" lens was entered, so
+  // clearing the lens (scope-bar ✕ or hardware back) returns there instead of
+  // always snapping to All. The lens itself is transient — never persisted.
+  const preLensFilterRef = useRef<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
@@ -406,6 +411,34 @@ export default function InboxScreen() {
     });
   }, [settingsOpen, settingsShift]);
 
+  // The single source-of-truth predicate for "this bookmark still has something
+  // to review" — a pending (un-applied, un-reviewed) tag suggestion OR a pending
+  // folder recommendation (honoring durable folder dismissals). The review
+  // banner count, the per-card ✨ badge, AND the "✨ Suggested" lens all key off
+  // this exact rule, so the lens membership can never disagree with the badge.
+  // Mirrors the Review screen's inclusion rule.
+  const hasPendingReview = useCallback(
+    (bookmark: Bookmark): boolean => {
+      const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
+      const enrichment = getEnrichment(bookmark.id);
+      const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
+      const folder = pendingSuggestedFolder(
+        enrichment,
+        collections,
+        bookmark.collection_id,
+        getDismissedFolderSuggestions(bookmark.id),
+      );
+      return pending.length > 0 || Boolean(folder);
+    },
+    [
+      collections,
+      getTagsForBookmark,
+      getEnrichment,
+      getReviewedSuggestions,
+      getDismissedFolderSuggestions,
+    ],
+  );
+
   // How many inbox bookmarks have AI suggestions that arrived while the user
   // wasn't looking (auto-enrichment, a server-side trigger, another device) and
   // still carry an unreviewed suggestion. Drives the "new AI suggestions"
@@ -421,65 +454,27 @@ export default function InboxScreen() {
       if (!unseenSuggestionIds.has(bookmark.id)) {
         continue;
       }
-      const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
-      const enrichment = getEnrichment(bookmark.id);
-      const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
-      // A folder-only recommendation (no pending tags) is reviewable too, so it
-      // must keep the banner up — mirror the Review screen's inclusion rule, and
-      // honor durable folder dismissals so a waved-off folder stops counting.
-      const folder = pendingSuggestedFolder(
-        enrichment,
-        collections,
-        bookmark.collection_id,
-        getDismissedFolderSuggestions(bookmark.id),
-      );
-      if (pending.length > 0 || folder) {
+      if (hasPendingReview(bookmark)) {
         count += 1;
       }
     }
     return count;
-  }, [
-    unseenSuggestionIds,
-    inbox,
-    collections,
-    getTagsForBookmark,
-    getEnrichment,
-    getReviewedSuggestions,
-    getDismissedFolderSuggestions,
-  ]);
+  }, [unseenSuggestionIds, inbox, hasPendingReview]);
 
-  // Every inbox bookmark still worth reviewing — a pending (un-applied,
-  // un-reviewed) tag suggestion OR a pending folder recommendation — regardless
-  // of whether it arrived "unseen". This drives the *persistent* review banner:
-  // the Review screen's entry point now lives here on the Inbox (it used to be a
-  // row in Settings), so the banner stands as long as anything is left to
-  // review, escalating to the "new" styling only while `newSuggestionsCount`
-  // marks fresh arrivals. Mirrors the Review list's inclusion rule exactly.
+  // Every inbox bookmark still worth reviewing, regardless of whether it arrived
+  // "unseen". This drives the *persistent* review banner: the Review entry point
+  // now lives here on the Inbox, so the banner stands as long as anything is left
+  // to review, escalating to the "new" styling only while `newSuggestionsCount`
+  // marks fresh arrivals.
   const pendingReviewCount = useMemo(() => {
     let count = 0;
     for (const bookmark of inbox) {
-      const applied = new Set(getTagsForBookmark(bookmark.id).map((tag) => tag.name.toLowerCase()));
-      const enrichment = getEnrichment(bookmark.id);
-      const pending = pendingSuggestions(enrichment, applied, getReviewedSuggestions(bookmark.id));
-      const folder = pendingSuggestedFolder(
-        enrichment,
-        collections,
-        bookmark.collection_id,
-        getDismissedFolderSuggestions(bookmark.id),
-      );
-      if (pending.length > 0 || folder) {
+      if (hasPendingReview(bookmark)) {
         count += 1;
       }
     }
     return count;
-  }, [
-    inbox,
-    collections,
-    getTagsForBookmark,
-    getEnrichment,
-    getReviewedSuggestions,
-    getDismissedFolderSuggestions,
-  ]);
+  }, [inbox, hasPendingReview]);
 
   // Whether the review banner is in its escalated "new arrivals" state (accent
   // alert + acknowledge ✕) vs the calm standing "to review" entry.
@@ -758,12 +753,31 @@ export default function InboxScreen() {
     [inbox, filter, tagIdsFor],
   );
 
+  // The "✨ Suggested" review lens: a transient scope over the whole Inbox
+  // corpus (filed + un-triaged alike) narrowed to items that still have a
+  // pending AI suggestion — the exact `hasPendingReview` predicate behind the
+  // banner count and the per-card ✨ badge, so the lens shows precisely the
+  // items the banner promises. Any other filter passes straight through.
+  const lensFiltered = useMemo(
+    () => (filter.kind === 'suggested' ? facetFiltered.filter(hasPendingReview) : facetFiltered),
+    [facetFiltered, filter.kind, hasPendingReview],
+  );
+
   // If the active facet disappears (last member removed/unfiled), fall back to
   // All rather than stranding the user on an empty filtered view.
   useEffect(() => {
     // Wait for the durable load: facets are empty mid-load, which would
     // wrongly reset a filter handed in via route param (deep-link to a tag).
     if (isLoading || filter.kind === 'all') {
+      return;
+    }
+    if (filter.kind === 'suggested') {
+      // The ✨ lens isn't a chip; auto-exit (to the pre-lens filter) once nothing
+      // is left to review — accepting/dismissing the last item shouldn't strand
+      // the user on an empty "Reviewing suggestions" scope.
+      if (pendingReviewCount === 0) {
+        setFilter(preLensFilterRef.current);
+      }
       return;
     }
     if (filter.kind === 'uncollected') {
@@ -775,15 +789,15 @@ export default function InboxScreen() {
     if (!chips.some((chip) => sameFilter(chip.filter, filter))) {
       setFilter(ALL_FILTER);
     }
-  }, [filter, chips, hasUncollected, isLoading]);
+  }, [filter, chips, hasUncollected, isLoading, pendingReviewCount]);
 
   const filtered = useMemo(
     () =>
-      filterBookmarks(facetFiltered, debouncedQuery, {
+      filterBookmarks(lensFiltered, debouncedQuery, {
         tagNames: (b) => getTagsForBookmark(b.id).map((tag) => tag.name),
         collectionName: (b) => getCollection(b.collection_id)?.name,
       }),
-    [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
+    [lensFiltered, debouncedQuery, getTagsForBookmark, getCollection],
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
   // In a multi-column card grid, pad the final row up to a full multiple of
@@ -956,11 +970,13 @@ export default function InboxScreen() {
   }, [filter.kind, activeChip, t]);
   const sectionLabel = searching
     ? t('inbox.sectionMatches', { count: visible.length })
-    : filter.kind === 'uncollected'
-      ? t('inbox.sectionNoCollection', { count: visible.length })
-      : activeChip
-        ? t('inbox.sectionFacet', { label: activeChip.label, count: visible.length })
-        : t('inbox.sectionRecent');
+    : filter.kind === 'suggested'
+      ? t('inbox.sectionSuggested', { count: visible.length })
+      : filter.kind === 'uncollected'
+        ? t('inbox.sectionNoCollection', { count: visible.length })
+        : activeChip
+          ? t('inbox.sectionFacet', { label: activeChip.label, count: visible.length })
+          : t('inbox.sectionRecent');
 
   // Sticky active-filter bar (rendered inside the floating header). The list is
   // "narrowed" whenever a facet is applied or a real search is running; the bar
@@ -1002,6 +1018,16 @@ export default function InboxScreen() {
         a11y: t('inbox.scopeClearSearchA11y'),
       };
     }
+    if (filter.kind === 'suggested') {
+      // The transient "✨ Suggested" review lens: its own distinct scope state,
+      // cleared back to the pre-lens filter by the same ✕ / back-peel machinery.
+      return {
+        text: t('inbox.scopeSuggested'),
+        icon: 'sparkles-outline',
+        action: 'clear-facet',
+        a11y: t('inbox.scopeClearSuggestedA11y'),
+      };
+    }
     if (filter.kind === 'all') {
       return null;
     }
@@ -1015,15 +1041,38 @@ export default function InboxScreen() {
     };
   }, [searching, debouncedQuery, filter.kind, activeChip, t]);
 
-  // Run the scope bar's trailing action: clear a live search first, otherwise
-  // clear the facet back to All.
+  // Enter the "✨ Suggested" review lens from the banner: remember the current
+  // filter to return to, mark the fresh arrivals as witnessed (the banner tap IS
+  // the review, mirroring the /review screen's clear-on-open), then narrow to
+  // pending-suggestion items.
+  const enterSuggestedLens = useCallback(() => {
+    setFilter((current) => {
+      if (current.kind !== 'suggested') {
+        preLensFilterRef.current = current;
+      }
+      return SUGGESTED_FILTER;
+    });
+    clearUnseenSuggestions();
+  }, [clearUnseenSuggestions]);
+
+  // Leave the lens, restoring whatever facet was active before it.
+  const exitSuggestedLens = useCallback(() => {
+    setFilter(preLensFilterRef.current);
+  }, []);
+
+  // Run the scope bar's trailing action: clear a live search first, then exit
+  // the ✨ lens to its prior filter, otherwise clear the facet back to All.
   const onScopeAction = useCallback(() => {
     if (searching) {
       setQuery('');
       return;
     }
+    if (filter.kind === 'suggested') {
+      exitSuggestedLens();
+      return;
+    }
     setFilter(ALL_FILTER);
-  }, [searching]);
+  }, [searching, filter.kind, exitSuggestedLens]);
 
   // Android hardware back peels the active narrowing layer instead of quitting
   // the app — the same most-recently-added-layer-first model as the scope bar's
@@ -1049,6 +1098,11 @@ export default function InboxScreen() {
           setQuery('');
           return true;
         }
+        // Peel the ✨ lens first, back to the filter it was entered from.
+        if (filter.kind === 'suggested') {
+          exitSuggestedLens();
+          return true;
+        }
         if (filter.kind !== 'all') {
           setFilter(ALL_FILTER);
           return true;
@@ -1057,7 +1111,7 @@ export default function InboxScreen() {
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBack);
       return () => subscription.remove();
-    }, [query, filter.kind]),
+    }, [query, filter.kind, exitSuggestedLens]),
   );
 
   const closeMenu = useCallback(() => {
@@ -1347,14 +1401,14 @@ export default function InboxScreen() {
             </View>
           </Pressable>
         ) : null}
-        {pendingReviewCount > 0 ? (
-          // The Review screen's standing entry point (it used to be a Settings
-          // row). Persistent while anything is left to review; it escalates to
-          // the accent "new AI suggestions" alert — with a ✕ that acknowledges
-          // the fresh arrivals — only while `newSuggestionsCount` marks unseen
-          // ones, then settles back to the calm "to review" entry. The ✕ never
-          // hides the banner outright; it only downgrades the wording, so the
-          // way back into Review is always one tap from the Inbox.
+        {pendingReviewCount > 0 && filter.kind !== 'suggested' ? (
+          // The standing entry point into the "✨ Suggested" review lens.
+          // Persistent while anything is left to review; it escalates to the
+          // accent "new AI suggestions" alert — with a ✕ that acknowledges the
+          // fresh arrivals — only while `newSuggestionsCount` marks unseen ones,
+          // then settles back to the calm "to review" entry. Tapping it applies
+          // the in-Inbox lens (not a navigation); it's hidden while that lens is
+          // already active (the scope bar takes over as the review context).
           <View
             testID="review-banner"
             style={[
@@ -1371,13 +1425,14 @@ export default function InboxScreen() {
             ]}
           >
             <Pressable
+              testID="new-suggestions-banner"
               accessibilityRole="button"
               accessibilityLabel={
                 hasNewSuggestions
                   ? t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })
                   : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
               }
-              onPress={() => router.push('/review')}
+              onPress={enterSuggestedLens}
               style={({ pressed }) => [styles.suggestBannerMain, { opacity: pressed ? 0.7 : 1 }]}
             >
               <Text

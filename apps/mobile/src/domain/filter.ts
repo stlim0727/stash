@@ -2,17 +2,26 @@ import type { Bookmark } from '@/domain/types';
 
 /**
  * A browse facet applied to the Inbox: show everything, only uncollected
- * items, one collection, or one tag. Tag/collection IDs come from the local
- * snapshot refreshed by pull sync (see store/bookmarks).
+ * items, one collection, one tag, or the transient "✨ Suggested" review lens
+ * (only items with a pending AI suggestion). Tag/collection IDs come from the
+ * local snapshot refreshed by pull sync (see store/bookmarks).
+ *
+ * `suggested` is a lens, not a durable facet: its membership depends on
+ * enrichment/reviewed/dismissed state this module has no access to, so
+ * `filterByFacet` treats it as a pass-through and the Inbox screen applies the
+ * real pending-suggestion predicate (the same one that drives the review
+ * banner / per-card ✨ badge). It is never persisted in the Inbox prefs.
  */
 export type InboxFilter =
   | { kind: 'all' }
   | { kind: 'uncollected' }
   | { kind: 'collection'; id: string }
-  | { kind: 'tag'; id: string };
+  | { kind: 'tag'; id: string }
+  | { kind: 'suggested' };
 
 export const ALL_FILTER: InboxFilter = { kind: 'all' };
 export const UNCOLLECTED_FILTER: InboxFilter = { kind: 'uncollected' };
+export const SUGGESTED_FILTER: InboxFilter = { kind: 'suggested' };
 
 /** Whether two filters select the same facet (used for chip highlighting). */
 export function sameFilter(a: InboxFilter, b: InboxFilter): boolean {
@@ -42,6 +51,11 @@ export function bookmarkMatchesFilter(
       return bookmark.collection_id === filter.id;
     case 'tag':
       return tagIdsForBookmark(bookmark.id).includes(filter.id);
+    case 'suggested':
+      // The ✨ lens can't be decided here (it needs enrichment state); the Inbox
+      // screen narrows to pending-suggestion items after this pass, so treat the
+      // facet stage as a pass-through.
+      return true;
   }
 }
 

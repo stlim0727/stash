@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { bookmarkMatchesFilter, filterByFacet, sameFilter } from '@/domain/filter';
+import { SUGGESTED_FILTER, bookmarkMatchesFilter, filterByFacet, sameFilter } from '@/domain/filter';
 import type { Bookmark } from '@/domain/types';
 
 function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
@@ -93,8 +93,21 @@ test('filterByFacet narrows a list and "all" is a passthrough', () => {
   );
 });
 
+test('the ✨ suggested lens is a facet-stage pass-through (narrowed by the screen)', () => {
+  // The lens membership depends on enrichment state this module can't see, so at
+  // the facet stage it matches everything; the Inbox applies the real predicate.
+  const list = [makeBookmark({ id: 'b1' }), makeBookmark({ id: 'b2' })];
+  assert.equal(bookmarkMatchesFilter(makeBookmark(), SUGGESTED_FILTER, tagIdsFor), true);
+  assert.deepEqual(
+    filterByFacet(list, SUGGESTED_FILTER, tagIdsFor).map((b) => b.id),
+    ['b1', 'b2'],
+  );
+});
+
 test('sameFilter compares facet identity', () => {
   assert.equal(sameFilter({ kind: 'all' }, { kind: 'all' }), true);
+  assert.equal(sameFilter(SUGGESTED_FILTER, SUGGESTED_FILTER), true);
+  assert.equal(sameFilter(SUGGESTED_FILTER, { kind: 'all' }), false);
   assert.equal(sameFilter({ kind: 'uncollected' }, { kind: 'all' }), false);
   assert.equal(
     sameFilter({ kind: 'collection', id: 'a' }, { kind: 'collection', id: 'a' }),
