@@ -53,7 +53,7 @@ jest.mock('@/store/bookmarks', () => ({
   }),
 }));
 
-import InboxScreen from '@/app/index';
+import InboxScreen from '@/app/(tabs)/index';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 
 function renderInbox() {
