@@ -56,6 +56,16 @@ import type { OAuthProvider } from '@/supabase/types';
 
 const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
 
+// Web only: Settings is a `transparentModal`, so the Inbox stays mounted behind
+// it. On mobile browsers, dragging the scroll past its end rubber-bands the
+// whole page (the scroll chains up to the transparent html/body — see
+// pwa-head.web.ts), sliding this opaque modal and exposing the Inbox cards
+// underneath. Containing overscroll stops the chain so nothing bleeds through.
+// `overscrollBehavior` is a web CSS property react-native-web forwards but RN's
+// ViewStyle type doesn't model, hence the cast; it's inert on native.
+const webOverscrollContain: StyleProp<ViewStyle> =
+  Platform.OS === 'web' ? ({ overscrollBehavior: 'contain' } as ViewStyle) : undefined;
+
 type AppPalette = ReturnType<typeof usePalette>;
 
 /** Sign-in providers, in display order (Google first), with logo + a11y keys. */
@@ -395,7 +405,7 @@ export default function SettingsScreen() {
 
   const content = (
     <ScrollView
-      style={styles.scroll}
+      style={[styles.scroll, webOverscrollContain]}
       contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 24 }]}
     >
       {/* Account & sync — identity, sign in/out, and sync status in one card.
