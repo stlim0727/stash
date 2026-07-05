@@ -2265,6 +2265,17 @@ export default function InboxScreen() {
                   >
                     <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
                   </Pressable>
+                  {item.url ? (
+                    <Pressable
+                      accessibilityRole="link"
+                      accessibilityLabel={t('common.openLink')}
+                      hitSlop={8}
+                      style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
+                      onPress={openLink}
+                    >
+                      <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
                 {item.url ? (
                   <HighlightedText
@@ -2306,17 +2317,6 @@ export default function InboxScreen() {
                 ) : null}
                   {status ? (
                     <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
-                  ) : null}
-                  {item.url ? (
-                    <Pressable
-                      accessibilityRole="link"
-                      accessibilityLabel={t('common.openLink')}
-                      hitSlop={8}
-                      style={[styles.cardOpen, { backgroundColor: palette.accentSoft }]}
-                      onPress={openLink}
-                    >
-                      <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>{t('inbox.openExternal')}</Text>
-                    </Pressable>
                   ) : null}
                 </View>
               </Pressable>
@@ -2778,12 +2778,6 @@ const styles = StyleSheet.create({
   cardBody: {
     padding: 14,
     gap: 7,
-  },
-  cardOpen: {
-    alignSelf: 'flex-end',
-    borderRadius: 999,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
   },
   cardOpenLabel: {
     fontSize: 14,
