@@ -1378,7 +1378,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
         ]}
       >
-        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 20 }]}>
+        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 12 }]}>
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -2337,8 +2337,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 14,
+    paddingTop: 12,
+    paddingBottom: 8,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2373,9 +2373,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
