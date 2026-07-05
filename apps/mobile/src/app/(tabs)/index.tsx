@@ -232,13 +232,13 @@ const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
 const WORDMARK = {
   en: {
     ratio: 4.27,
-    light: require('../../assets/images/wordmark-en-light.png'),
-    dark: require('../../assets/images/wordmark-en-dark.png'),
+    light: require('../../../assets/images/wordmark-en-light.png'),
+    dark: require('../../../assets/images/wordmark-en-dark.png'),
   },
   local: {
     ratio: 4.27,
-    light: require('../../assets/images/wordmark-ko-light.png'),
-    dark: require('../../assets/images/wordmark-ko-dark.png'),
+    light: require('../../../assets/images/wordmark-ko-light.png'),
+    dark: require('../../../assets/images/wordmark-ko-dark.png'),
   },
 };
 

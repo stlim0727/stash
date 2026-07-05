@@ -33,7 +33,7 @@ jest.mock('expo-router', () => {
   };
 });
 
-import InboxScreen from '@/app/index';
+import InboxScreen from '@/app/(tabs)/index';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { RECENT_SEARCHES_PREF_KEY } from '@/domain/recent-searches';
