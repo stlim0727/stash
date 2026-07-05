@@ -44,9 +44,6 @@ export const ko: Catalog = {
   'nav.bookmark': '북마크',
   'nav.browseTags': '태그',
   'nav.graph': '그래프',
-  'nav.inbox': '수신함',
-  'nav.library': '보관함',
-  'nav.tags': '태그',
 
   'graph.empty': '아직 지도로 만들 항목이 없어요',
   'graph.emptyHint': '북마크를 몇 개 저장하면 태그와 연결되어 여기에 표시됩니다.',

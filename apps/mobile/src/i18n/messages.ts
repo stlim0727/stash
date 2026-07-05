@@ -63,9 +63,6 @@ export const en = {
   'nav.bookmark': 'Bookmark',
   'nav.browseTags': 'Tags',
   'nav.graph': 'Graph',
-  'nav.inbox': 'Inbox',
-  'nav.library': 'Library',
-  'nav.tags': 'Tags',
 
   // Tag graph (/graph) — a pan/zoom map of bookmarks linked to their tags.
   'graph.empty': 'Nothing to map yet',
