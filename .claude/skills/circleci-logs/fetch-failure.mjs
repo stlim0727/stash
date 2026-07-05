@@ -62,7 +62,11 @@ async function fetchStepLog(url) {
   const wf = await api(`/api/v2/workflow/${workflowId}`).catch(() => null);
   if (wf) console.log(`workflow: ${wf.name} — status ${wf.status}`);
   const { items: jobs } = await api(`/api/v2/workflow/${workflowId}/job`);
-  const failed = jobs.filter((j) => j.status === 'failed' || j.status === 'timedout');
+  // Terminal failure statuses. `infrastructure_fail` (runner/setup died) and
+  // `terminated-unknown` still turn the PR status red but carry no step output,
+  // so we must still surface them rather than report "No failed jobs".
+  const FAILED = new Set(['failed', 'timedout', 'infrastructure_fail', 'terminated-unknown']);
+  const failed = jobs.filter((j) => FAILED.has(j.status));
   if (!failed.length) {
     console.log('No failed jobs in this workflow. Job statuses:');
     for (const j of jobs) console.log(`  ${j.status}\t${j.name}`);
