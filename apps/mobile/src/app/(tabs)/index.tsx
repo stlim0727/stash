@@ -32,6 +32,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { useTabChrome } from './_layout';
 import { Card } from '@/ui/Card';
 import { FacetPills, type FacetChip } from '@/ui/FacetPills';
 import { SearchSuggestionShelf } from '@/ui/SearchSuggestionShelf';
@@ -527,7 +528,10 @@ export default function InboxScreen() {
   // translateY from the list's scroll position. diffClamp tracks the *net*
   // scroll movement (clamped to the header's height), so an upward flick reveals
   // the header immediately wherever you are in the list, not only at the top.
-  const scrollY = useRef(new Animated.Value(0)).current;
+  // This is the SHARED tab-shell signal: the same scrollY also drives the bottom
+  // tab bar + FAB hide (via `hidden`), so header, bar, and FAB move off one
+  // gesture and never disagree about scroll direction.
+  const { scrollY, hidden: chromeHidden } = useTabChrome();
   const [headerHeight, setHeaderHeight] = useState(0);
   // The pinned active-filter bar is measured separately (it lives in its own
   // non-translating layer below the header). When it's showing, both scroll
@@ -564,6 +568,16 @@ export default function InboxScreen() {
       extrapolate: 'clamp',
     });
   }, [headerClamp, headerHeight, insets.top]);
+
+  // Reset the shared scroll signal when the Inbox regains focus. `scrollY` is
+  // shared across all three tabs (it drives the bottom bar + FAB hide), so it's
+  // left holding another tab's offset after a switch; a fresh 0 re-shows the
+  // chrome and re-expands the header, then this screen's own scrolling takes over.
+  useFocusEffect(
+    useCallback(() => {
+      scrollY.setValue(0);
+    }, [scrollY]),
+  );
 
   // Load the saved sort + view mode once, then persist any change. The guards
   // stop the initial defaults from clobbering the stored values before they
@@ -2165,17 +2179,37 @@ export default function InboxScreen() {
           return columns > 1 ? <View style={{ flex: 1 }}>{cardElement}</View> : cardElement;
         }}
       />
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={t('inbox.addBookmark')}
-        onPress={() => router.push('/add')}
-        style={({ pressed }) => [
+      <Animated.View
+        // Slide + fade the FAB away in lockstep with the tab bar as the list
+        // scrolls down (shared `chromeHidden`), so a downward read gets an
+        // unobstructed full-height list; it returns on scroll-up. pointerEvents
+        // 'box-none' lets taps through the (transparent) wrapper to the list when
+        // the FAB is faded out. Transform + opacity are the same native-driver
+        // signal the bar uses, so they move together.
+        pointerEvents="box-none"
+        style={[
           styles.fab,
-          { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
+          {
+            bottom: insets.bottom + 20,
+            opacity: chromeHidden.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
+            transform: [
+              { translateY: Animated.multiply(chromeHidden, insets.bottom + 96) },
+            ],
+          },
         ]}
       >
-        <Ionicons name="add" size={34} color="#ffffff" />
-      </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('inbox.addBookmark')}
+          onPress={() => router.push('/add')}
+          style={({ pressed }) => [
+            styles.fabButton,
+            { backgroundColor: palette.accent, opacity: pressed ? 0.9 : 1 },
+          ]}
+        >
+          <Ionicons name="add" size={34} color="#ffffff" />
+        </Pressable>
+      </Animated.View>
       <ActionSheet
         visible={menuItem !== null}
         title={menuTitle}
@@ -2641,11 +2675,18 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  // Wrapper: positioning + the scroll-driven slide/fade. Transparent, so the
+  // shadow lives on the inner button (an iOS shadow needs an opaque background).
   fab: {
     position: 'absolute',
     right: 20,
     width: 60,
     height: 60,
+  },
+  // The visible round button fills the wrapper and carries the color + shadow.
+  fabButton: {
+    width: '100%',
+    height: '100%',
     borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { nextFacetNonce } from '@/domain/facet-nonce';
@@ -13,11 +13,15 @@ import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
 import { TabHeaderActions } from '@/ui/TabHeaderActions';
 
-import { TAB_BAR_HEIGHT } from './_layout';
+import { TAB_BAR_HEIGHT, useTabChrome } from './_layout';
 
 // Cap + center the content column on wide (desktop-web) viewports; a no-op on
 // phones, matching the Inbox/Library CONTENT_MAX_WIDTH treatment.
 const CONTENT_MAX_WIDTH = 720;
+
+// Animated list so its scroll feeds the shared tab-shell signal (bar + FAB
+// hide). The cast preserves FlatList's item typing (Animated.FlatList erases it).
+const AnimatedFlatList = Animated.FlatList as unknown as typeof FlatList;
 
 /**
  * Tags — the cross-cutting topic index over the whole library ("find by topic,
@@ -37,6 +41,16 @@ export default function TagsScreen() {
   // `inbox` is the store's active set (non-trashed, non-archived) — the same
   // bookmarks the Inbox lists and browse/tags.tsx aggregates over.
   const { inbox, getTagsForBookmark, isLoading } = useBookmarks();
+
+  // Feed this tab's scroll into the shared tab-shell signal so the bottom bar
+  // slides away as you browse down and returns on scroll-up. Reset it to 0 on
+  // focus so the bar starts shown (the signal is shared across tabs).
+  const { scrollY } = useTabChrome();
+  useFocusEffect(
+    useCallback(() => {
+      scrollY.setValue(0);
+    }, [scrollY]),
+  );
 
   // Frequency-ranked tag index over the whole library. Reuses the same pure
   // helpers browse/tags.tsx uses: count how many bookmarks carry each tag, then
@@ -130,11 +144,15 @@ export default function TagsScreen() {
     );
   } else {
     body = (
-      <FlatList
+      <AnimatedFlatList
         data={tags}
         keyExtractor={(item) => item.id}
         renderItem={renderRow}
         style={styles.list}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: true,
+        })}
+        scrollEventThrottle={16}
         contentContainerStyle={[
           styles.listContent,
           { paddingBottom: insets.bottom + TAB_BAR_HEIGHT + 24 },

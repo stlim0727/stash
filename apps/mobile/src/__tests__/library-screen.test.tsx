@@ -24,18 +24,24 @@ jest.mock('@/domain/enrichment', () => ({
 
 const mockNavigate = jest.fn();
 const mockPush = jest.fn();
-jest.mock('expo-router', () => ({
-  useRouter: () => ({
-    navigate: mockNavigate,
-    push: mockPush,
-    replace: jest.fn(),
-    back: jest.fn(),
-    dismissTo: jest.fn(),
-  }),
-  // `library.tsx` imports TAB_BAR_HEIGHT from `./_layout`, which pulls `Tabs`
-  // from expo-router at module load; a harmless stub keeps that import happy.
-  Tabs: Object.assign(() => null, { Screen: () => null }),
-}));
+jest.mock('expo-router', () => {
+  const { useEffect } = require('react');
+  return {
+    useRouter: () => ({
+      navigate: mockNavigate,
+      push: mockPush,
+      replace: jest.fn(),
+      back: jest.fn(),
+      dismissTo: jest.fn(),
+    }),
+    // The screen resets the shared scroll signal on focus; run it as a mount
+    // effect (the screen is always focused in these tests).
+    useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, []),
+    // `library.tsx` imports TAB_BAR_HEIGHT from `./_layout`, which pulls `Tabs`
+    // from expo-router at module load; a harmless stub keeps that import happy.
+    Tabs: Object.assign(() => null, { Screen: () => null }),
+  };
+});
 
 import LibraryScreen from '@/app/(tabs)/library';
 import { BookmarksProvider } from '@/store/bookmarks';
