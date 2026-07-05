@@ -123,6 +123,8 @@ export const ko: Catalog = {
   'inbox.addBookmark': '북마크 추가',
   'inbox.openExternal': '열기 ↗',
   'inbox.settingsA11y': '설정',
+  'inbox.searchOpenA11y': '검색',
+  'inbox.searchCloseA11y': '검색 닫기',
   'inbox.tagCloudTagA11y': { other: '#{name}, 북마크 {count}개' },
   'inbox.tagCloudEmpty': '아직 태그가 없습니다. 북마크에 태그를 달면 여기에 표시됩니다.',
 

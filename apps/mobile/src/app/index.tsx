@@ -245,7 +245,7 @@ const WORDMARK = {
 // Rendered height of the hero wordmark in dp; its width is this × the asset
 // ratio. Kept as a constant so the Image's explicit width and height stay in
 // lockstep (see heroWordmark / the hero Image).
-const WORDMARK_HEIGHT = 32;
+const WORDMARK_HEIGHT = 28;
 
 // On wide (desktop-web) viewports, cap the content column and center it so
 // cards, the header, and the browse shelf don't stretch edge-to-edge. No effect
@@ -407,7 +407,6 @@ export default function InboxScreen() {
     getReviewedSuggestions,
     getDismissedFolderSuggestions,
     unseenSuggestionIds,
-    clearUnseenSuggestions,
     collections,
     trashBookmark,
     restoreBookmark,
@@ -422,6 +421,17 @@ export default function InboxScreen() {
   // debounced copy so an O(C) collection lookup per bookmark doesn't re-run on
   // every keystroke and the match count doesn't flicker mid-type.
   const debouncedQuery = useDebouncedValue(query, 140);
+  // Latest query for listeners that must not re-subscribe on each keystroke
+  // (keyboardDidHide below reads this to decide whether an empty search folds
+  // away without re-registering the listener every keystroke).
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  // Telegram-style tap-to-open: the search field is NOT persistently shown — it
+  // mounts only when the user taps the hero magnifier, so the resting top stays
+  // thin. A live query (`searching`) can only become true WHILE this is open
+  // (query is settable only via the mounted field or a suggestion tap), so
+  // searchOpen is the single source of truth for "the search UI is up".
+  const [searchOpen, setSearchOpen] = useState(false);
   // Whether the search field holds focus — drives the suggestion shelf (shown
   // only while focused with an empty query).
   const [searchFocused, setSearchFocused] = useState(false);
@@ -440,6 +450,30 @@ export default function InboxScreen() {
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
   const searchRef = useRef<TextInput>(null);
+  const openSearch = useCallback(() => {
+    // The focus-on-open effect below moves focus into the field once it mounts.
+    setSearchOpen(true);
+  }, []);
+  // Fold the whole search UI away: blur, drop focus, and CLEAR the query
+  // (Telegram-faithful — opening search always starts fresh). Every close path
+  // funnels through here so the invariant "query is non-empty ⇒ search is open"
+  // holds and there's never an orphaned live search behind a hidden field.
+  const closeSearch = useCallback(() => {
+    clearBlurHide();
+    setSearchFocused(false);
+    searchRef.current?.blur();
+    setQuery('');
+    setSearchOpen(false);
+  }, [clearBlurHide]);
+  // Move focus into the field once it has actually mounted (it only mounts while
+  // searchOpen), raising the keyboard + carrying screen-reader focus — the same
+  // thing `autoFocus` does, but driven by our open state. Runs after the mount
+  // commit (the effect fires once the field is in the tree), so the ref is set.
+  useEffect(() => {
+    if (searchOpen) {
+      searchRef.current?.focus();
+    }
+  }, [searchOpen]);
   // On native, dismissing the keyboard with the Back button / interactive swipe
   // (or an on-drag list scroll) does NOT fire the TextInput's onBlur — so without
   // this the focused-only suggestion shelf would stay stranded on screen with no
@@ -461,6 +495,13 @@ export default function InboxScreen() {
         blurHideTimer.current = null;
         setSearchFocused(false);
         searchRef.current?.blur();
+        // Keyboard dismissed with nothing typed (Back button / interactive
+        // swipe never fire onBlur) → fold the search UI away to keep the top
+        // thin. A live query keeps the field up (the "results, keyboard down"
+        // state); a recent-suggestion tap leaves a query so it won't close.
+        if (queryRef.current.length === 0) {
+          setSearchOpen(false);
+        }
       }, 0);
     });
     return () => sub.remove();
@@ -949,12 +990,31 @@ export default function InboxScreen() {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     }
   }
+  // Same one-shot easing for the tap-to-open reflow: opening swaps the sort row
+  // + shelf for the field (the header's height changes), so animate that single
+  // commit instead of letting the top jump. Off the native-driver translateY, so
+  // they don't fight. Native only.
+  const prevSearchOpen = useRef(searchOpen);
+  if (prevSearchOpen.current !== searchOpen) {
+    prevSearchOpen.current = searchOpen;
+    if (Platform.OS !== 'web') {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    }
+  }
   // The browse shelf is suppressed for the WHOLE focused state (§13.2, widening
   // Phase-1 Q1): while focused at most one chip row may show — the suggestion
   // shelf — never the browse shelf. The browse shelf returns only on blur. It's
   // also folded away in the slimmed search-results state (above). This also keeps
   // it hidden in the typing-no-match case, where neither row shows.
-  const showShelf = chips.length > 0 && !searchFocused && !slimSearchHeader;
+  // The shelf shows when there's anything to put on it — facet chips OR the
+  // review chip (which now lives here instead of a banner). Without the
+  // pendingReviewCount term a brand-new user with suggestions but no folders
+  // yet would have an empty facet set and lose the Review entry point entirely.
+  const showShelf =
+    (chips.length > 0 || pendingReviewCount > 0) &&
+    !searchFocused &&
+    !slimSearchHeader &&
+    !searchOpen;
   // On a brand-new (empty) library the search/sort/view controls are just cold
   // chrome over a "nothing here yet" screen — fold them away so the first run
   // is all about the first save. Keyed on the unfiltered library, not the
@@ -990,15 +1050,12 @@ export default function InboxScreen() {
             : { kind: 'collection', id: suggestion.filter.id },
         );
       }
-      setQuery('');
-      // A tag/folder is a destination: dismiss the shelf now. Hide synchronously
-      // (don't wait for the deferred blur) and cancel any pending blur timer so
-      // there's no second, late setState.
-      clearBlurHide();
-      setSearchFocused(false);
-      searchRef.current?.blur();
+      // A tag/folder is a destination: fold the whole search UI away onto the
+      // filtered list (Telegram closes search on picking a result). closeSearch
+      // clears the query, blurs, and drops searchOpen in one funnel.
+      closeSearch();
     },
-    [applySuggestionFacet, clearBlurHide],
+    [applySuggestionFacet, closeSearch],
   );
 
   // Long-press a recent chip to remove just that entry (Q2, locked).
@@ -1147,15 +1204,16 @@ export default function InboxScreen() {
     };
   }, [searching, debouncedQuery, filter.kind, activeChip, t]);
 
-  // Run the scope bar's trailing action: clear a live search first, otherwise
-  // clear the facet back to All.
+  // Run the scope bar's trailing action: close a live search first (folds the
+  // tap-to-open field away and clears the query, leaving any underlying facet in
+  // place), otherwise clear the facet back to All.
   const onScopeAction = useCallback(() => {
     if (searching) {
-      setQuery('');
+      closeSearch();
       return;
     }
     setFilter(ALL_FILTER);
-  }, [searching]);
+  }, [searching, closeSearch]);
 
   // Android hardware back peels the active narrowing layer instead of quitting
   // the app — the same most-recently-added-layer-first model as the scope bar's
@@ -1177,8 +1235,11 @@ export default function InboxScreen() {
         return;
       }
       const onBack = () => {
-        if (query.length > 0) {
-          setQuery('');
+        // Peel the search UI first (closeSearch also clears any live query), then
+        // the facet — same most-recently-added-layer-first model as before, with
+        // searchOpen now standing in for the old raw-query check.
+        if (searchOpen) {
+          closeSearch();
           return true;
         }
         if (filter.kind !== 'all') {
@@ -1189,7 +1250,7 @@ export default function InboxScreen() {
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBack);
       return () => subscription.remove();
-    }, [query, filter.kind]),
+    }, [searchOpen, filter.kind, closeSearch]),
   );
 
   const closeMenu = useCallback(() => {
@@ -1378,7 +1439,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
         ]}
       >
-        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 8 }]}>
+        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 6 }]}>
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -1426,19 +1487,37 @@ export default function InboxScreen() {
               {t('inbox.savedCount', { count: inbox.length })}
             </Text>
           </View>
-          {/* Single settings entry point. Account sign-in/management lives
-              inside Settings (the account card), so the hero stays focused on
-              bookmarks rather than carrying a second, redundant account button. */}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t('inbox.settingsA11y')}
-            hitSlop={8}
-            onPress={() => router.push('/settings')}
-          >
-            <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
-              <Ionicons name="settings-sharp" size={20} color={palette.text} />
-            </View>
-          </Pressable>
+          {/* Right-side hero actions: a tap-to-open search magnifier (morphs to
+              ✕ while open — the search field mounts below only when this is
+              tapped, keeping the resting top thin, à la Telegram) and the single
+              settings entry point. Account sign-in/management lives inside
+              Settings, so the hero stays focused on bookmarks. */}
+          <View style={styles.heroActions}>
+            {inbox.length > 0 ? (
+              <Pressable
+                testID="inbox-search-open"
+                accessibilityRole="button"
+                accessibilityLabel={searchOpen ? t('inbox.searchCloseA11y') : t('inbox.searchOpenA11y')}
+                accessibilityState={{ expanded: searchOpen }}
+                hitSlop={8}
+                onPress={() => (searchOpen ? closeSearch() : openSearch())}
+              >
+                <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+                  <Ionicons name={searchOpen ? 'close' : 'search'} size={20} color={palette.text} />
+                </View>
+              </Pressable>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('inbox.settingsA11y')}
+              hitSlop={8}
+              onPress={() => router.push('/settings')}
+            >
+              <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
+                <Ionicons name="settings-sharp" size={20} color={palette.text} />
+              </View>
+            </Pressable>
+          </View>
         </View>
         {loadError ? (
           <Pressable
@@ -1487,68 +1566,7 @@ export default function InboxScreen() {
             </View>
           </Pressable>
         ) : null}
-        {pendingReviewCount > 0 ? (
-          // The Review screen's standing entry point (it used to be a Settings
-          // row). Persistent while anything is left to review; it escalates to
-          // the accent "new AI suggestions" alert — with a ✕ that acknowledges
-          // the fresh arrivals — only while `newSuggestionsCount` marks unseen
-          // ones, then settles back to the calm "to review" entry. The ✕ never
-          // hides the banner outright; it only downgrades the wording, so the
-          // way back into Review is always one tap from the Inbox.
-          <View
-            testID="review-banner"
-            style={[
-              styles.suggestBanner,
-              { alignSelf: 'center', width: bannerWidth },
-              hasNewSuggestions
-                ? { backgroundColor: palette.accentSoft }
-                : {
-                    backgroundColor: palette.card,
-                    borderWidth: StyleSheet.hairlineWidth,
-                    borderColor: palette.border,
-                    paddingRight: 14,
-                  },
-            ]}
-          >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={
-                hasNewSuggestions
-                  ? t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })
-                  : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
-              }
-              onPress={() => router.push('/review')}
-              style={({ pressed }) => [styles.suggestBannerMain, { opacity: pressed ? 0.7 : 1 }]}
-            >
-              <Text
-                style={[
-                  styles.suggestBannerText,
-                  { color: hasNewSuggestions ? palette.accent : palette.text },
-                ]}
-                numberOfLines={1}
-              >
-                {hasNewSuggestions
-                  ? t('inbox.newSuggestions', { count: newSuggestionsCount })
-                  : t('inbox.reviewPending', { count: pendingReviewCount })}
-              </Text>
-              <Text style={[styles.suggestBannerCta, { color: palette.accent }]}>
-                {t('inbox.newSuggestionsReview')}
-              </Text>
-            </Pressable>
-            {hasNewSuggestions ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t('inbox.newSuggestionsDismiss')}
-                hitSlop={8}
-                onPress={() => clearUnseenSuggestions()}
-                style={({ pressed }) => [styles.suggestBannerClose, { opacity: pressed ? 0.5 : 1 }]}
-              >
-                <Ionicons name="close" size={18} color={palette.accent} />
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
-        {showControls ? (
+        {searchOpen ? (
           <View style={[styles.searchWrap, { maxWidth: contentMaxWidth }]}>
             <TextInput
               ref={searchRef}
@@ -1573,6 +1591,13 @@ export default function InboxScreen() {
                 blurHideTimer.current = setTimeout(() => {
                   blurHideTimer.current = null;
                   setSearchFocused(false);
+                  // Blurred with nothing typed → fold the search UI away (keep
+                  // the top thin). A live query keeps the field up so the user
+                  // can read results / refine with the keyboard down (the
+                  // existing slimSearchHeader "results, keyboard down" state).
+                  if (query.length === 0) {
+                    setSearchOpen(false);
+                  }
                 }, 0);
               }}
               // Submit (keyboard "search"/return) is the only recents write path:
@@ -1591,7 +1616,7 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {showControls && !showSuggestions && !slimSearchHeader ? (
+        {showControls && !showSuggestions && !slimSearchHeader && !searchOpen ? (
         <View style={[styles.sortRow, { maxWidth: contentMaxWidth }]}>
           {/* No "Browse" caption: the Sort pill, Tags pill, and view segment are
               self-evident controls, and the caption's width was forcing the
@@ -1679,6 +1704,30 @@ export default function InboxScreen() {
               onLayout={isWeb ? updateShelfEdges : undefined}
               scrollEventThrottle={isWeb ? 16 : undefined}
             >
+              {pendingReviewCount > 0 ? (
+                // The Review entry point rides here as the first chip (it used
+                // to be a full-width banner above the search — folded into the
+                // shelf to keep the top area thin, à la Telegram's folder row).
+                // It's an ACTION, not a facet: it routes to /review rather than
+                // re-scoping the list. Accent-filled while unseen suggestions are
+                // fresh, calm otherwise; visiting Review is the acknowledgment
+                // (review.tsx clears the unseen set on focus), so there's no ✕.
+                <Chip
+                  testID="review-chip"
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    hasNewSuggestions
+                      ? t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })
+                      : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
+                  }
+                  variant={hasNewSuggestions ? 'accent' : 'default'}
+                  onPress={() => router.push('/review')}
+                >
+                  {hasNewSuggestions
+                    ? t('inbox.newSuggestions', { count: newSuggestionsCount })
+                    : t('inbox.reviewPending', { count: pendingReviewCount })}
+                </Chip>
+              ) : null}
               <BrowseChip
                 target={ALL_FILTER}
                 label={t('inbox.filterAll')}
@@ -2329,7 +2378,7 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: 16,
-    gap: 16,
+    gap: 6,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2342,7 +2391,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 6,
+    paddingBottom: 4,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2377,12 +2426,19 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // Right-side hero action cluster: the search magnifier and the settings gear
+  // sit as twin round buttons.
+  heroActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   sectionLabel: {
     fontSize: 13,
@@ -2484,9 +2540,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textDecorationLine: 'underline',
   },
-  suggestBannerClose: {
-    padding: 8,
-  },
   filterBar: {
     // Pinned, edge-to-edge toolbar strip in its own layer. Between the header
     // (zIndex 10) and the list (default 0) so the header covers it when revealed
@@ -2527,13 +2580,15 @@ const styles = StyleSheet.create({
   },
   searchWrap: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    // Packed almost flush under the title (Telegram-style), so the top reads as
+    // one tight title→search unit rather than two spaced bands.
+    paddingTop: 2,
     width: '100%',
     alignSelf: 'center',
   },
   searchInput: {
-    borderRadius: 20,
-    paddingVertical: 11,
+    borderRadius: 18,
+    paddingVertical: 9,
     paddingHorizontal: 16,
     fontSize: 16,
   },
@@ -2550,7 +2605,7 @@ const styles = StyleSheet.create({
     // pinned right and is never clipped because the Sort pill yields the space.
     gap: 8,
     paddingHorizontal: 16,
-    paddingTop: 6,
+    paddingTop: 4,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2598,7 +2653,7 @@ const styles = StyleSheet.create({
     // are vertically centred via shelfContent.alignItems. Spacing is margin
     // (outside the scroll box, so it can't clip).
     minHeight: 38,
-    marginTop: 4,
+    marginTop: 2,
     marginBottom: 0,
     width: '100%',
     alignSelf: 'center',
@@ -2721,7 +2776,7 @@ const styles = StyleSheet.create({
     height: 132,
   },
   cardBody: {
-    padding: 18,
+    padding: 14,
     gap: 7,
   },
   cardOpen: {
