@@ -123,6 +123,30 @@ _Before getting attached, we ran the three highest-momentum hints through an inv
 
 Quick wins that are already ~80% wired: the **chip restyle** (reuses existing count/scroll infra), a **"You" tab wrapper** (reuses Settings surfaces), and **new sort/scope presets** (`SORT_PRESETS`/`ViewMode` are additive registries).
 
+## Bottom tabs — final shape (supersedes the sketch above)
+
+_The ranked sketch above was an early draft (`Inbox · Search · Library · You`). Two rounds of team debate revised it. The rule that settles composition: a bottom tab is a **place you dwell** — a top-level job, not a filter of another tab, answering "where am I?" not "what am I filtering?" By that test Capture is an action (the FAB), Search is a query (a top-right icon), Settings is a top-right icon — so **"You" is dropped**. That leaves the three things you actually browse:_
+
+**`Inbox · Library · Tags`** — with the **capture FAB** and **search + settings as the two top-right icons** (Variant B anchored rounded-top bar; `add`/`settings` stay modals presented over the tabs).
+
+| Tab | Its one job | Contains | Must **not** contain | Badge |
+|---|---|---|---|---|
+| **Inbox** | Process what's new | Un-triaged items · per-collection pills · capture FAB · un-triaged count | Already-filed items (they've graduated to Library) | Neutral count that **ticks to zero** |
+| **Library** | Find what you've kept | Collection shelves with content-fingerprint subtitles · "All items" · sort controls | Any triage queue / "unread" pressure — it **never empties** | None |
+| **Tags** | Find by topic, across everything | Tag cloud/list with counts · tap a tag → its items library-wide | Collection structure · a filter-pill row (**it *is* the filter**) | None |
+
+Load-bearing distinction: **Inbox is a queue that empties; Library is a shelf that never does.** A new save is in Inbox until triaged but *always* in Library. Same data, two jobs. Open fork: Tags stays a tab for v1 (cheap, a real axis, `browse/tags.tsx` already exists), but wire it to the retrieval-taps metric — demote to a Library `Collections | Tags` toggle if usage is low.
+
+### Where AI-suggestion review lives
+
+Not a tab, not a stack-buried screen — that's the blocking review *queue* the hints told us to reject. It's a **cross-cutting lens over the whole corpus** (a suggestion can land on an already-filed Library item via background/other-device enrichment, so it can't be pinned to Inbox), delivered in three layers:
+
+1. **Default (ambient):** suggestions render as a **swipe-away chip row on the item wherever it lives** — Inbox card, Library card, Detail. Accept = tap, ignore = free. No navigation.
+2. **Overflow:** the existing **"✨ N new" Inbox banner** → a transient **"✨ Suggested" filter** gathering every item with pending suggestions across the library into one focused list (built like the `/browse/tags` transient view — a lens, not a permanent tab).
+3. **Discoverability:** a quiet **Settings row** ("Review AI suggestions · N") deep-links into the same filter.
+
+`review.tsx`'s content (folder + tag recs, accept-all/dismiss-all) survives — it becomes *what the "✨ Suggested" filter renders*, entered as a lens rather than a destination. Requirement: the ✨ badge/banner counts must span **all** items, not just un-triaged ones (mostly already true via the "unseen suggestions" work in `AGENTS.md`).
+
 ## Do NOT copy
 
 Unread alert badges · large tinted count pills · a social Posts feed · chat-grade forced density · scoped search *type* tabs · a re-introduced Archived section. Every one is scar tissue around Telegram's overwhelm problem — copy the look and you import the anxiety.
