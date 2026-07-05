@@ -70,12 +70,26 @@ build runs, so the contributor limit never applies.
 
 ```sh
 # Build whatever is checked out (repo-root-relative paths; subshell keeps cwd).
+# --clear is REQUIRED: a Metro cache left by an earlier `expo export` that ran
+# WITHOUT these EXPO_PUBLIC_* vars (e.g. a PR's web-export check) bakes them in as
+# empty, so sync silently comes up OFF. Clearing the transform cache re-inlines them.
 export CI=1
 rm -rf apps/mobile/dist
 ( cd apps/mobile \
     && EXPO_PUBLIC_SUPABASE_URL="https://stzutoejnhzxzhjsjtsi.supabase.co" \
        EXPO_PUBLIC_SUPABASE_ANON_KEY="sb_publishable_TBMfShK_vzySRN6n3yRcpA_P-WXe-5n" \
-       pnpm exec expo export --platform web )
+       pnpm exec expo export --platform web --clear )
+
+# Un-dot asset directories: Netlify's `deploy --dir` SKIPS any directory whose name
+# starts with "." — and Expo exports the vector-icon fonts under `.pnpm/`, so every
+# icon renders as tofu (the font 404s → SPA catch-all serves index.html). Rename the
+# `.pnpm` segment and rewrite the bundle references. (`/__node_modules/` is untouched
+# — the pattern requires a literal `/.pnpm/`.)
+( cd apps/mobile/dist \
+    && find . -depth -type d -name '.pnpm' -exec sh -c 'mv "$1" "$(dirname "$1")/pnpm_"' _ {} \; \
+    && find . -type f \( -name '*.js' -o -name '*.css' -o -name '*.json' -o -name '*.html' \) \
+         -exec sed -i 's#/\.pnpm/#/pnpm_/#g' {} + )
+
 printf '/*    /index.html   200\n' > apps/mobile/dist/_redirects
 
 # Deploy the prebuilt dir. --no-build skips the Git build (and its contributor
