@@ -159,7 +159,7 @@ Why it fits Keepory specifically: it makes the **user-authored vs. generated spl
 
 ## Suggested first slice (if we act on any of this)
 
-Ship the **tab bar + persistent muted-count shelves** together (moves 1–2) — they're mutually reinforcing, mostly reuse, and low-risk. Hold **Search-as-a-tab** for a fast follow. Prototype **Capture Stream** on a throwaway branch in parallel to learn whether it's the real direction before we invest in the incremental path.
+Ship the **`Inbox · Library · Tags` tab bar + persistent muted-count shelves** together (per "Bottom tabs — final shape" above) — mutually reinforcing, mostly reuse, low-risk. Search ships as a **top-right icon** on day one (not a later tab), scoped by the active facet with recent history. Prototype **Capture Stream** on a throwaway branch in parallel to learn whether it's the real direction before we invest in the incremental path.
 
 ---
 
