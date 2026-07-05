@@ -42,10 +42,10 @@ get the identical export + provenance stamp as production.
 ## Fixed facts about the preview setup
 
 - Worker: **`keepory7`** (the same Worker as production — `wrangler.toml`).
-- Preview URL format: **`https://<alias>-keepory7.<subdomain>.workers.dev`**,
-  where `<subdomain>` is the account's registered workers.dev subdomain and
-  `<alias>` is the branch/version alias Workers Builds assigns. Cloudflare posts
-  the exact URL as a **deployment status / comment on the PR**.
+- Preview URL format: **`https://<alias>-keepory7.stlim0727.workers.dev`**, where
+  `stlim0727.workers.dev` is the account's registered workers.dev subdomain and
+  `<alias>` is the branch/version alias Workers Builds assigns. Find the exact URL
+  in the build log (the Cloudflare PR comment links it under *View logs*).
 - Production (`keepory.app`) stays **custom-domain-only** — `wrangler.toml` keeps
   `workers_dev = false`, so only preview *versions* are exposed on workers.dev.
 - Sync works in previews: the `EXPO_PUBLIC_SUPABASE_*` **build** variables set on
@@ -53,64 +53,60 @@ get the identical export + provenance stamp as production.
   builds too, so previews talk to the real Supabase backend over REST. (Confirm
   they aren't scoped production-only — see the smoke test.)
 
-## ⚠️ One-time setup (the user must do this in the dashboard — no API path)
+## Setup state (already in place)
 
-Preview URLs require a **workers.dev subdomain**, which our production config
-deliberately never registered (it's custom-domain-only). Registering one and
-enabling preview builds is a dashboard-only action an agent cannot do. **This
-must be done *before* `preview_urls = true` in `wrangler.toml` reaches `main`** —
-`wrangler deploy` **fails** with `preview_urls = true` and no subdomain, which
-would break the `keepory.app` production deploy. Hand the user these steps:
+The prerequisites are satisfied on this account, so previews are hands-free —
+there is nothing for an agent to run:
 
-1. Cloudflare dashboard → **Workers & Pages → (account) → register a
-   `workers.dev` subdomain** if the account has none (free, one-time). This is
-   what preview URLs are served on; it does **not** expose production on
-   workers.dev (that's gated by `workers_dev = false`).
-2. The **`keepory7`** Worker → **Settings → Domains & Routes → Preview URLs →
-   Enable** (matches the committed `preview_urls = true`).
-3. The **`keepory7`** Worker → **Settings → Builds → enable "Builds for
-   non-production branches"** so every branch/PR (not just `main`) triggers a
-   build → preview.
-4. Confirm the `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY`
-   **build** variables apply to all branches (not production-only), so preview
-   sync works. They're the public URL + publishable anon key already shipping in
-   production, safe to keep as plain build vars (RLS protects the data).
-5. *(Only if testing Google/Apple sign-in on a preview — anonymous capture + sync
-   need none of this.)* The PKCE redirect resolves to `https://<origin>/auth/callback`
-   and preview origins are dynamic, so allow-list what you need in **Supabase →
-   Authentication → URL Configuration → Redirect URLs**, e.g.
-   `https://*-keepory7.<subdomain>.workers.dev/auth/callback` (add the exact
-   preview origin if wildcards aren't accepted).
+- **workers.dev subdomain: registered** as `stlim0727.workers.dev` (its route on
+  the `keepory7` Worker shows *Disabled*, which is only `workers_dev = false`
+  keeping **production** off workers.dev — the subdomain itself exists and serves
+  **preview** versions). This is why `preview_urls = true` in `wrangler.toml` is
+  safe and does **not** break the `keepory.app` production deploy.
+- **Non-production branch builds: enabled** — pushing this branch already
+  triggered a Workers build, which is the proof.
+- **Preview URLs: opted in** via `preview_urls = true` in `wrangler.toml`
+  (Cloudflare's per-Worker Preview URLs default follows `workers_dev`, so the
+  explicit opt-in is what keeps them on across production deploys).
 
-After that, the flow is hands-free — there is nothing for an agent to run.
+Two things worth a glance only if a preview misbehaves:
+
+- The `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` **build**
+  variables (Worker → Settings → Variables and Secrets → *Build*) must apply to
+  all branches, not production-only, or preview sync comes up OFF — the smoke
+  test below catches this. They're the public URL + publishable anon key already
+  shipping in production, safe as plain build vars (RLS protects the data).
+- *(Only if testing Google/Apple sign-in on a preview — anonymous capture + sync
+  need none of this.)* The PKCE redirect resolves to `https://<origin>/auth/callback`
+  and preview origins are dynamic, so allow-list what you need in **Supabase →
+  Authentication → URL Configuration → Redirect URLs**, e.g.
+  `https://*-keepory7.stlim0727.workers.dev/auth/callback` (add the exact preview
+  origin if wildcards aren't accepted).
 
 ## Primary path — push the branch / open a PR
 
-Once the one-time setup is done, "preview this branch on the web" is just:
+"Preview this branch on the web" is just:
 
 1. Make sure the branch is **pushed** to `origin`.
-2. **Open (or update) a PR** — or push any non-production branch if branch builds
-   are enabled. Workers Builds runs `bash scripts/web-build.sh` (the export +
-   provenance) and `wrangler versions upload`, then attaches the preview URL to
-   the PR as a deployment status/comment.
-3. Grab that URL from the PR and hand it to the user. Run the smoke test below.
+2. **Open (or update) a PR** — or push any non-production branch. Workers Builds
+   runs `bash scripts/web-build.sh` (the export + provenance) and `wrangler
+   versions upload`, and the Cloudflare bot comments the build result on the PR.
+3. Open that comment's **View logs** link and grab the `Version Preview URL`
+   (`https://<alias>-keepory7.stlim0727.workers.dev`) from the `versions upload`
+   output. Hand it to the user and run the smoke test below.
 
 That's the whole job. No local build, no `wrangler` CLI, no token — the agent
 sandbox has no Cloudflare credentials and doesn't need them here.
 
-### Until the one-time setup lands
-
-Before the subdomain + preview-build toggles are done, **no preview URL is
-produced** — a pushed branch just won't get one, and (until the wrangler change
-merges) the config is unchanged. If a preview is needed *right now* in that gap,
-the fastest stopgap is a local `expo export` served over a localhost static
-server (what the `screenshot` skill does) for a self-view; a *shareable* URL has
-to wait for the setup. Don't fake a `workers.dev` URL that isn't live yet.
+If the build succeeds but no `Version Preview URL` appears in the log, Preview
+URLs are off at the Worker level — the `preview_urls = true` opt-in only sticks
+once it has been applied by a deploy; confirm it under `keepory7` → Settings →
+Domains & Routes → Preview URLs. Don't fake a URL that isn't live.
 
 ## Smoke-test any preview URL
 
 ```sh
-BASE="https://<alias>-keepory7.<subdomain>.workers.dev"   # from the PR's deploy status
+BASE="https://<alias>-keepory7.stlim0727.workers.dev"   # Version Preview URL from the build log
 for p in / /settings /bookmark/abc; do
   curl -s -o /dev/null -w "$p -> %{http_code} %{content_type}\n" "$BASE$p"
 done
