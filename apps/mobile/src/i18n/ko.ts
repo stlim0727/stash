@@ -64,6 +64,11 @@ export const ko: Catalog = {
   'library.empty': '보관한 모든 것이 여기 모여요',
   'library.emptyHint': '첫 링크를 저장하면 컬렉션별로 둘러볼 수 있도록 여기에 표시돼요.',
 
+  'tags.count': { other: '태그 {count}개' },
+  'tags.openTagA11y': '#{name} 둘러보기',
+  'tags.empty': '주제가 여기에 모여요',
+  'tags.emptyHint': '북마크에 태그를 달면 사용하는 모든 주제가 여기에 표시되어 전체에서 둘러볼 수 있어요.',
+
   'graph.empty': '아직 지도로 만들 항목이 없어요',
   'graph.emptyHint': '북마크를 몇 개 저장하면 태그와 연결되어 여기에 표시됩니다.',
   'graph.untaggedLabel': '태그 없음',

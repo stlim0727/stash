@@ -86,6 +86,14 @@ export const en = {
   'library.empty': 'Everything you keep lives here',
   'library.emptyHint': 'Save your first link and it’ll show up here, ready to browse by collection.',
 
+  // Tags tab — the cross-cutting topic index over the whole library. A
+  // frequency-ranked list of tags with per-tag counts; tapping one opens the
+  // Inbox tab scoped to that tag.
+  'tags.count': { one: '{count} tag', other: '{count} tags' },
+  'tags.openTagA11y': 'Browse #{name}',
+  'tags.empty': 'Your topics gather here',
+  'tags.emptyHint': 'Tag a bookmark and every topic you use shows up here to browse across everything.',
+
   // Tag graph (/graph) — a pan/zoom map of bookmarks linked to their tags.
   'graph.empty': 'Nothing to map yet',
   'graph.emptyHint': 'Save a few bookmarks and they’ll appear here, linked to their tags.',
