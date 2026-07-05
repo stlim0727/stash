@@ -245,7 +245,7 @@ const WORDMARK = {
 // Rendered height of the hero wordmark in dp; its width is this × the asset
 // ratio. Kept as a constant so the Image's explicit width and height stay in
 // lockstep (see heroWordmark / the hero Image).
-const WORDMARK_HEIGHT = 32;
+const WORDMARK_HEIGHT = 28;
 
 // On wide (desktop-web) viewports, cap the content column and center it so
 // cards, the header, and the browse shelf don't stretch edge-to-edge. No effect
@@ -407,7 +407,6 @@ export default function InboxScreen() {
     getReviewedSuggestions,
     getDismissedFolderSuggestions,
     unseenSuggestionIds,
-    clearUnseenSuggestions,
     collections,
     trashBookmark,
     restoreBookmark,
@@ -954,7 +953,12 @@ export default function InboxScreen() {
   // shelf — never the browse shelf. The browse shelf returns only on blur. It's
   // also folded away in the slimmed search-results state (above). This also keeps
   // it hidden in the typing-no-match case, where neither row shows.
-  const showShelf = chips.length > 0 && !searchFocused && !slimSearchHeader;
+  // The shelf shows when there's anything to put on it — facet chips OR the
+  // review chip (which now lives here instead of a banner). Without the
+  // pendingReviewCount term a brand-new user with suggestions but no folders
+  // yet would have an empty facet set and lose the Review entry point entirely.
+  const showShelf =
+    (chips.length > 0 || pendingReviewCount > 0) && !searchFocused && !slimSearchHeader;
   // On a brand-new (empty) library the search/sort/view controls are just cold
   // chrome over a "nothing here yet" screen — fold them away so the first run
   // is all about the first save. Keyed on the unfiltered library, not the
@@ -1378,7 +1382,7 @@ export default function InboxScreen() {
           { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
         ]}
       >
-        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 8 }]}>
+        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 6 }]}>
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -1486,67 +1490,6 @@ export default function InboxScreen() {
               </Text>
             </View>
           </Pressable>
-        ) : null}
-        {pendingReviewCount > 0 ? (
-          // The Review screen's standing entry point (it used to be a Settings
-          // row). Persistent while anything is left to review; it escalates to
-          // the accent "new AI suggestions" alert — with a ✕ that acknowledges
-          // the fresh arrivals — only while `newSuggestionsCount` marks unseen
-          // ones, then settles back to the calm "to review" entry. The ✕ never
-          // hides the banner outright; it only downgrades the wording, so the
-          // way back into Review is always one tap from the Inbox.
-          <View
-            testID="review-banner"
-            style={[
-              styles.suggestBanner,
-              { alignSelf: 'center', width: bannerWidth },
-              hasNewSuggestions
-                ? { backgroundColor: palette.accentSoft }
-                : {
-                    backgroundColor: palette.card,
-                    borderWidth: StyleSheet.hairlineWidth,
-                    borderColor: palette.border,
-                    paddingRight: 14,
-                  },
-            ]}
-          >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={
-                hasNewSuggestions
-                  ? t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })
-                  : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
-              }
-              onPress={() => router.push('/review')}
-              style={({ pressed }) => [styles.suggestBannerMain, { opacity: pressed ? 0.7 : 1 }]}
-            >
-              <Text
-                style={[
-                  styles.suggestBannerText,
-                  { color: hasNewSuggestions ? palette.accent : palette.text },
-                ]}
-                numberOfLines={1}
-              >
-                {hasNewSuggestions
-                  ? t('inbox.newSuggestions', { count: newSuggestionsCount })
-                  : t('inbox.reviewPending', { count: pendingReviewCount })}
-              </Text>
-              <Text style={[styles.suggestBannerCta, { color: palette.accent }]}>
-                {t('inbox.newSuggestionsReview')}
-              </Text>
-            </Pressable>
-            {hasNewSuggestions ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t('inbox.newSuggestionsDismiss')}
-                hitSlop={8}
-                onPress={() => clearUnseenSuggestions()}
-                style={({ pressed }) => [styles.suggestBannerClose, { opacity: pressed ? 0.5 : 1 }]}
-              >
-                <Ionicons name="close" size={18} color={palette.accent} />
-              </Pressable>
-            ) : null}
-          </View>
         ) : null}
         {showControls ? (
           <View style={[styles.searchWrap, { maxWidth: contentMaxWidth }]}>
@@ -1679,6 +1622,30 @@ export default function InboxScreen() {
               onLayout={isWeb ? updateShelfEdges : undefined}
               scrollEventThrottle={isWeb ? 16 : undefined}
             >
+              {pendingReviewCount > 0 ? (
+                // The Review entry point rides here as the first chip (it used
+                // to be a full-width banner above the search — folded into the
+                // shelf to keep the top area thin, à la Telegram's folder row).
+                // It's an ACTION, not a facet: it routes to /review rather than
+                // re-scoping the list. Accent-filled while unseen suggestions are
+                // fresh, calm otherwise; visiting Review is the acknowledgment
+                // (review.tsx clears the unseen set on focus), so there's no ✕.
+                <Chip
+                  testID="review-chip"
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    hasNewSuggestions
+                      ? t('inbox.newSuggestionsA11y', { count: newSuggestionsCount })
+                      : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
+                  }
+                  variant={hasNewSuggestions ? 'accent' : 'default'}
+                  onPress={() => router.push('/review')}
+                >
+                  {hasNewSuggestions
+                    ? t('inbox.newSuggestions', { count: newSuggestionsCount })
+                    : t('inbox.reviewPending', { count: pendingReviewCount })}
+                </Chip>
+              ) : null}
               <BrowseChip
                 target={ALL_FILTER}
                 label={t('inbox.filterAll')}
@@ -2342,7 +2309,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 6,
+    paddingBottom: 4,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2377,9 +2344,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2484,9 +2451,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textDecorationLine: 'underline',
   },
-  suggestBannerClose: {
-    padding: 8,
-  },
   filterBar: {
     // Pinned, edge-to-edge toolbar strip in its own layer. Between the header
     // (zIndex 10) and the list (default 0) so the header covers it when revealed
@@ -2527,13 +2491,15 @@ const styles = StyleSheet.create({
   },
   searchWrap: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    // Packed almost flush under the title (Telegram-style), so the top reads as
+    // one tight title→search unit rather than two spaced bands.
+    paddingTop: 2,
     width: '100%',
     alignSelf: 'center',
   },
   searchInput: {
-    borderRadius: 20,
-    paddingVertical: 11,
+    borderRadius: 18,
+    paddingVertical: 9,
     paddingHorizontal: 16,
     fontSize: 16,
   },
@@ -2550,7 +2516,7 @@ const styles = StyleSheet.create({
     // pinned right and is never clipped because the Sort pill yields the space.
     gap: 8,
     paddingHorizontal: 16,
-    paddingTop: 6,
+    paddingTop: 4,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2598,7 +2564,7 @@ const styles = StyleSheet.create({
     // are vertically centred via shelfContent.alignItems. Spacing is margin
     // (outside the scroll box, so it can't clip).
     minHeight: 38,
-    marginTop: 4,
+    marginTop: 2,
     marginBottom: 0,
     width: '100%',
     alignSelf: 'center',
