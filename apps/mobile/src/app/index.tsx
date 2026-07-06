@@ -38,6 +38,7 @@ import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
 import { SearchSuggestionShelf } from '@/ui/SearchSuggestionShelf';
+import { ShelfEdge, useShelfEdges } from '@/ui/ShelfEdges';
 import { useSearchSuggestions } from '@/hooks/useSearchSuggestions';
 import {
   RECENT_SEARCHES_PREF_KEY,
@@ -287,55 +288,6 @@ function ShelfContainer({
   return <View style={[styles.shelfWrap, { maxWidth }]}>{children}</View>;
 }
 
-// Stops for the edge fade. expo-linear-gradient is NOT a dependency, so instead
-// of a true gradient the fade is a few absolutely-positioned strips whose
-// palette.background opacity ramps from transparent to opaque toward the clipped
-// edge — enough of a scrim to seat the chevron button and hint at overflow.
-const SHELF_FADE_STOPS = [0, 0.15, 0.35, 0.6, 0.82, 1];
-
-/**
- * Web-only edge affordance: a fade scrim plus a round chevron button (styled
- * like the sort pill) that scrolls the shelf toward `side`. Rendered only when
- * the shelf can actually scroll that way, so the small-library case stays clean.
- */
-function ShelfEdge({
-  side,
-  label,
-  onPress,
-}: {
-  side: 'left' | 'right';
-  label: string;
-  onPress: () => void;
-}) {
-  const palette = usePalette();
-  // Right edge: opaque at the right, fading left. Left edge is the mirror.
-  const stops = side === 'right' ? SHELF_FADE_STOPS : [...SHELF_FADE_STOPS].reverse();
-  return (
-    // box-none so chips under the scrim stay tappable; only the button captures.
-    <View
-      pointerEvents="box-none"
-      style={[styles.shelfEdge, side === 'right' ? styles.shelfEdgeRight : styles.shelfEdgeLeft]}
-    >
-      <View pointerEvents="none" style={styles.shelfFade}>
-        {stops.map((opacity, index) => (
-          <View key={index} style={{ flex: 1, backgroundColor: palette.background, opacity }} />
-        ))}
-      </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={onPress}
-        style={[styles.shelfNavButton, { backgroundColor: palette.surface, borderColor: palette.border }]}
-      >
-        <Ionicons
-          name={side === 'right' ? 'chevron-forward' : 'chevron-back'}
-          size={16}
-          color={palette.textSecondary}
-        />
-      </Pressable>
-    </View>
-  );
-}
 
 /**
  * One pill in the Inbox browse shelf. Memoized so a filter change (which
@@ -1064,66 +1016,18 @@ export default function InboxScreen() {
     setRecentSearches((current) => removeRecent(current, target));
   }, []);
 
-  // --- Web-only browse-shelf overflow affordance ---------------------------
-  // On desktop web the horizontal shelf renders as a clipped `div`; the mouse
-  // wheel scrolls the page, not the row, so chips past the right edge are
-  // unreachable with no visible signal. These pieces (all Platform.OS === 'web')
-  // translate vertical wheel to horizontal scroll and surface edge fades +
-  // chevron buttons. Native is untouched — the wrapper, listeners, and scroll
-  // handlers below only mount on web.
-  const isWeb = Platform.OS === 'web';
-  const shelfRef = useRef<ScrollView>(null);
-  const [canShelfLeft, setCanShelfLeft] = useState(false);
-  const [canShelfRight, setCanShelfRight] = useState(false);
-  // `getScrollableNode()` returns the underlying DOM `div` on web.
-  const shelfNode = useCallback(
-    () => (isWeb ? (shelfRef.current?.getScrollableNode() as HTMLElement | null) : null),
-    [isWeb],
-  );
-  const updateShelfEdges = useCallback(() => {
-    const node = shelfNode();
-    if (!node) return;
-    setCanShelfLeft(node.scrollLeft > 0);
-    setCanShelfRight(node.scrollLeft + node.clientWidth < node.scrollWidth - 1);
-  }, [shelfNode]);
-  const scrollShelfBy = useCallback(
-    (direction: 1 | -1) => {
-      const node = shelfNode();
-      if (!node) return;
-      shelfRef.current?.scrollTo({
-        x: node.scrollLeft + direction * node.clientWidth * 0.8,
-        animated: true,
-      });
-    },
-    [shelfNode],
-  );
-  // Translate vertical wheel to horizontal scroll on the shelf itself. Needs a
-  // native DOM listener with { passive: false } so preventDefault can stop the
-  // page from scrolling instead.
-  useEffect(() => {
-    if (!isWeb || !showShelf) return;
-    const node = shelfNode();
-    if (!node) return;
-    const onWheel = (event: WheelEvent) => {
-      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-      const before = node.scrollLeft;
-      node.scrollLeft += event.deltaY;
-      // Only swallow the page's vertical scroll when the shelf actually moved.
-      // scrollLeft clamps itself, so a short row (no overflow) or one already at
-      // its edge stays put — and we must let the wheel fall through to the page
-      // instead of trapping it under the shelf's hover area.
-      if (node.scrollLeft !== before) event.preventDefault();
-    };
-    node.addEventListener('wheel', onWheel, { passive: false });
-    return () => node.removeEventListener('wheel', onWheel);
-  }, [isWeb, showShelf, shelfNode]);
-  // Recompute the edge flags on mount and whenever the clipped geometry can
-  // change: viewport width (useWindowDimensions) and chip count. onScroll and
-  // onLayout below cover the interactive/measure cases.
-  useEffect(() => {
-    if (!isWeb || !showShelf) return;
-    updateShelfEdges();
-  }, [isWeb, showShelf, winWidth, chips.length, updateShelfEdges]);
+  // Web-only browse-shelf overflow affordance (wheel-to-horizontal + edge
+  // chevrons); see `useShelfEdges`. Recomputed on viewport-width and chip-count
+  // changes. The search-suggestion shelf uses the same hook so the chip row
+  // behaves identically whether or not search is open.
+  const {
+    shelfRef,
+    canLeft: canShelfLeft,
+    canRight: canShelfRight,
+    updateEdges: updateShelfEdges,
+    scrollBy: scrollShelfBy,
+    isWeb,
+  } = useShelfEdges(showShelf, [winWidth, chips.length]);
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
   // Facet-scoped search placeholder (B4): a pure projection of the active facet,
@@ -2673,46 +2577,13 @@ const styles = StyleSheet.create({
     minHeight: 42,
     gap: 8,
   },
-  // Web-only browse-shelf overflow affordance. These styles are only referenced
-  // behind Platform.OS === 'web', so they never touch the native layout.
+  // Web-only browse-shelf wrapper (positions the ShelfEdge overlays). Referenced
+  // only behind Platform.OS === 'web', so it never touches the native layout.
+  // The edge/fade/button styles live with `ShelfEdge` in @/ui/ShelfEdges.
   shelfWrap: {
     position: 'relative',
     width: '100%',
     alignSelf: 'center',
-  },
-  shelfEdge: {
-    position: 'absolute',
-    // Offset by the shelf's marginTop so the fade/button center on the chip row.
-    top: 6,
-    bottom: 0,
-    width: 48,
-    justifyContent: 'center',
-  },
-  shelfEdgeRight: {
-    right: 0,
-    alignItems: 'flex-end',
-    paddingRight: 4,
-  },
-  shelfEdgeLeft: {
-    left: 0,
-    alignItems: 'flex-start',
-    paddingLeft: 4,
-  },
-  shelfFade: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
-  },
-  shelfNavButton: {
-    width: 30,
-    height: 30,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   card: {
     borderRadius: 24,
