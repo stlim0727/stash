@@ -16,12 +16,13 @@ import { createSupabaseClient, SupabaseRequestError } from '@/supabase/client';
 import type { StashSupabaseClient } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
-// `local_image_uri` is a device-only field (a captured image's on-disk URI) and
-// `last_accessed_at` is a device-only "last opened" timestamp, so neither is
-// ever part of a remote row, alongside the local-only `sync_status`.
+// `local_image_uri` is a device-only field (a captured image's on-disk URI),
+// `last_accessed_at` is a device-only "last opened" timestamp, and
+// `title_is_derived` is device-only title provenance, so none is ever part of a
+// remote row, alongside the local-only `sync_status`.
 export type RemoteBookmark = Omit<
   Bookmark,
-  'sync_status' | 'local_image_uri' | 'last_accessed_at'
+  'sync_status' | 'local_image_uri' | 'last_accessed_at' | 'title_is_derived'
 >;
 
 export interface CreateBookmarkOutput {

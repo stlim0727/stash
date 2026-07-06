@@ -44,16 +44,32 @@ test('deriveMetadata falls back to the host for bare domains', () => {
   assert.equal(derived.site_name, 'raindrop.io');
 });
 
-test('deriveMetadata does not use an opaque YouTube video id as the title', () => {
+test('deriveMetadata gives YouTube links a clean label and a derived thumbnail', () => {
   // youtu.be/<id> and youtube.com/watch?v=<id> both carry an opaque id as their
-  // identifying segment; the fallback title must be the host, not the id (which
-  // reads like a random/"encrypted" string).
+  // identifying segment — as a title that reads like a random string, and the
+  // bare host ("youtu.be") is redundant with the URL shown below it. Prefer a
+  // human label plus a thumbnail we can derive from the id with no network.
   const short = deriveMetadata('https://youtu.be/LNysDlsp26Q');
-  assert.equal(short.title, 'youtu.be');
+  assert.equal(short.title, 'YouTube video');
   assert.equal(short.site_name, 'youtu.be');
+  assert.equal(short.preview_image_url, 'https://i.ytimg.com/vi/LNysDlsp26Q/hqdefault.jpg');
 
   const watch = deriveMetadata('https://www.youtube.com/watch?v=LNysDlsp26Q');
-  assert.equal(watch.title, 'youtube.com');
+  assert.equal(watch.title, 'YouTube video');
+  assert.equal(watch.preview_image_url, 'https://i.ytimg.com/vi/LNysDlsp26Q/hqdefault.jpg');
+});
+
+test('deriveMetadata labels a Threads post by author instead of the id slug', () => {
+  const derived = deriveMetadata('https://www.threads.com/@ephemeris.ai/post/Dabls52E90n');
+  assert.equal(derived.title, 'Threads post by @ephemeris.ai');
+  assert.equal(derived.site_name, 'threads.com');
+});
+
+test('deriveMetadata falls back to the host for an opaque id on an unknown site', () => {
+  // No separators + mixed-case + a digit reads like a random id, not a name;
+  // the host is a better floor than Title-Casing the id.
+  const derived = deriveMetadata('https://example.com/Dabls52E90n');
+  assert.equal(derived.title, 'example.com');
 });
 
 // Offline fetcher: forces the URL-derived fallback, keeping tests off the network.
@@ -64,6 +80,8 @@ test('enrichBookmark falls back to URL-derived metadata when the fetch fails', a
   assert.equal(result.metadata_status, 'complete');
   assert.equal(result.patch.title, 'Introduction');
   assert.equal(result.patch.site_name, 'docs.expo.dev');
+  // The title came from the URL fallback, so it is recorded as derived.
+  assert.equal(result.patch.title_is_derived, true);
 });
 
 test('enrichBookmark prefers fetched page metadata over URL-derived values', async () => {
