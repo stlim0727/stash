@@ -1213,7 +1213,13 @@ export default function InboxScreen() {
       return;
     }
     setFilter(ALL_FILTER);
-  }, [searching, closeSearch]);
+    // On web the facet is URL-backed (?tag=…/?collection=… arriving from
+    // /browse/tags), so clearing only the in-memory filter left the param in the
+    // address bar — a reload (F5) re-applied it via the focus effect above and
+    // the "cleared" facet came back. Strip the params too so the cleared state
+    // survives reload. No-op on native, which has no URL to carry them.
+    router.setParams({ tag: undefined, collection: undefined, t: undefined });
+  }, [searching, closeSearch, router]);
 
   // Android hardware back peels the active narrowing layer instead of quitting
   // the app — the same most-recently-added-layer-first model as the scope bar's

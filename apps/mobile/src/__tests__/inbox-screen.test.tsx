@@ -32,11 +32,18 @@ jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
 }));
 let mockParams: Record<string, string> = {};
 const mockPush = jest.fn();
+const mockSetParams = jest.fn();
 jest.mock('expo-router', () => {
   const { useEffect } = require('react');
   return {
     Link: ({ children }: { children: ReactNode }) => children,
-    useRouter: () => ({ push: mockPush, navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+    useRouter: () => ({
+      push: mockPush,
+      navigate: jest.fn(),
+      replace: jest.fn(),
+      back: jest.fn(),
+      setParams: mockSetParams,
+    }),
     useLocalSearchParams: () => mockParams,
     usePathname: () => '/',
     // Run the focus callback as a mount effect (the screen is always focused in
@@ -78,6 +85,7 @@ function renderInbox() {
 beforeEach(() => {
   mockParams = {};
   mockPush.mockClear();
+  mockSetParams.mockClear();
   // Reset to a phone-width viewport so a widened test can't leak into others.
   mockWindowSize.width = 390;
 });
@@ -918,6 +926,14 @@ test('the active-filter bar clears the facet back to all bookmarks', async () =>
   expect(screen.getByTestId('inbox-filter-bar')).toBeTruthy();
   await fireEvent.press(screen.getByTestId('inbox-filter-clear'));
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  // STASH-T: clearing must also strip the URL-backed facet params, or a web
+  // reload (F5) re-applies the "cleared" facet from the stale query string.
+  expect(mockSetParams).toHaveBeenCalledWith({
+    tag: undefined,
+    collection: undefined,
+    t: undefined,
+  });
 });
 
 test('the layout segment offers Cards, Compact and List (no Tag-cloud option)', async () => {
