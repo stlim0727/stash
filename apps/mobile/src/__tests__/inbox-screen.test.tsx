@@ -936,6 +936,45 @@ test('the active-filter bar clears the facet back to all bookmarks', async () =>
   });
 });
 
+test('selecting the All chip also strips the URL facet params (STASH-T, all reset paths)', async () => {
+  // The scope-bar X is not the only reset path: the visible browse shelf's
+  // "All" chip clears a URL-backed facet too. It must strip the params just the
+  // same, or a web reload re-applies the deep-linked facet the user cleared.
+  const cooked = '7e64cf1e-0000-4000-8000-0000000000e1';
+  const reading = '7e64cf1e-0000-4000-8000-0000000000e2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: cooked, title: 'Kimchi jjigae' }),
+      makeStoredBookmark({ id: reading, title: 'Local-first software' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking'), makeTag('t-reading', 'reading')],
+      bookmarkTags: [
+        { bookmark_id: cooked, tag_id: 't-cooking', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+        { bookmark_id: reading, tag_id: 't-reading', source: 'user', confidence: null, created_at: '2026-06-12T00:00:00.000Z' },
+      ],
+      collections: [],
+    },
+  );
+  // Arrive deep-linked to the #cooking facet via the URL (as /browse/tags does).
+  mockParams = { tag: 't-cooking', t: '1' };
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
+  await waitFor(() => expect(screen.queryByText('Local-first software')).toBeNull());
+
+  mockSetParams.mockClear();
+  // Tap the shelf's "All" chip: the filter resets AND the stale ?tag= param
+  // must be stripped so an F5 doesn't resurrect #cooking.
+  await fireEvent.press(screen.getByRole('button', { name: 'All' }));
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+  expect(mockSetParams).toHaveBeenCalledWith({
+    tag: undefined,
+    collection: undefined,
+    t: undefined,
+  });
+});
+
 test('the layout segment offers Cards, Compact and List (no Tag-cloud option)', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a1', title: 'Kimchi jjigae' }),

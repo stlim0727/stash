@@ -27,7 +27,7 @@ jest.mock('expo-router', () => {
   const { useEffect } = require('react');
   return {
     Link: ({ children }: { children: ReactNode }) => children,
-    useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+    useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn(), setParams: jest.fn() }),
     useLocalSearchParams: () => mockParams,
     usePathname: () => '/',
     // Honour the callback identity ([cb]) — unlike the always-focused mount mock,

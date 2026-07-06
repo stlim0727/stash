@@ -843,6 +843,16 @@ export default function InboxScreen() {
     [inbox, filter, tagIdsFor],
   );
 
+  // Drop the URL-backed facet deep-link params. On web the tag/folder facet
+  // arrives as ?tag=…/?collection=… from /browse/tags and is consumed once by
+  // the focus effect above; any path that then moves the in-memory filter away
+  // from it must also strip the param, or a reload (F5) re-applies the
+  // supposedly-cleared facet from the stale query string. No-op on native (no
+  // URL to carry them).
+  const clearFacetParams = useCallback(() => {
+    router.setParams({ tag: undefined, collection: undefined, t: undefined });
+  }, [router]);
+
   // If the active facet disappears (last member removed/unfiled), fall back to
   // All rather than stranding the user on an empty filtered view.
   useEffect(() => {
@@ -854,13 +864,15 @@ export default function InboxScreen() {
     if (filter.kind === 'uncollected') {
       if (!hasUncollected) {
         setFilter(ALL_FILTER);
+        clearFacetParams();
       }
       return;
     }
     if (!chips.some((chip) => sameFilter(chip.filter, filter))) {
       setFilter(ALL_FILTER);
+      clearFacetParams();
     }
-  }, [filter, chips, hasUncollected, isLoading]);
+  }, [filter, chips, hasUncollected, isLoading, clearFacetParams]);
 
   const filtered = useMemo(
     () =>
@@ -1117,13 +1129,8 @@ export default function InboxScreen() {
       return;
     }
     setFilter(ALL_FILTER);
-    // On web the facet is URL-backed (?tag=…/?collection=… arriving from
-    // /browse/tags), so clearing only the in-memory filter left the param in the
-    // address bar — a reload (F5) re-applied it via the focus effect above and
-    // the "cleared" facet came back. Strip the params too so the cleared state
-    // survives reload. No-op on native, which has no URL to carry them.
-    router.setParams({ tag: undefined, collection: undefined, t: undefined });
-  }, [searching, closeSearch, router]);
+    clearFacetParams();
+  }, [searching, closeSearch, clearFacetParams]);
 
   // Android hardware back peels the active narrowing layer instead of quitting
   // the app — the same most-recently-added-layer-first model as the scope bar's
@@ -1301,7 +1308,12 @@ export default function InboxScreen() {
       header: ctx.header,
     });
     setFilter(target);
-  }, []);
+    // The user is now driving the filter from the shelf (the "All" chip clears
+    // the facet; another chip moves to a different one), so the routed deep-link
+    // param is stale — strip it so a web reload doesn't resurrect it over the
+    // user's choice.
+    clearFacetParams();
+  }, [clearFacetParams]);
 
   // Open the dedicated tag-browse route, carrying the current facet as its scope
   // so the cloud/list there opens already scoped to what the user was browsing.
