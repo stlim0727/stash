@@ -122,3 +122,16 @@ export async function clearSupabaseSession(): Promise<void> {
     // Ignore — nothing to clear if secure storage is unavailable.
   }
 }
+
+/**
+ * Whether a real (non-anonymous) account was ever durably persisted on this
+ * device. Best-effort: a keystore read failure reads as `false`, degrading to
+ * the pre-fix behaviour (treat as first run) rather than blocking auth.
+ */
+export async function hadRealSupabaseSession(): Promise<boolean> {
+  try {
+    return await store.hadRealAccount();
+  } catch {
+    return false;
+  }
+}

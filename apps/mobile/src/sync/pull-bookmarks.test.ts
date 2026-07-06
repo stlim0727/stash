@@ -8,7 +8,7 @@ import {
 } from './pull-bookmarks.ts';
 import type { PullApi } from './pull-bookmarks.ts';
 import type { AIEnrichment, Bookmark } from '@/domain/types';
-import type { BookmarkRepository } from '@/storage/types';
+import type { BookmarkRepository, TagData } from '@/storage/types';
 
 const REMOTE_ID_A = '7e64cf1e-0000-4000-8000-00000000000a';
 const REMOTE_ID_B = '7e64cf1e-0000-4000-8000-00000000000b';
@@ -350,6 +350,74 @@ test('account switch skips deletions and resets the watermark', async () => {
   assert.equal(calls.includes(`deleteBookmark:${REMOTE_ID_B}`), false);
   // Full refresh: the previous account's watermark is not reused.
   assert.equal(receivedSince, null);
+});
+
+test('an anonymous session never runs the deletion diff, even after re-stamping (real→anon mint)', async () => {
+  // Incident repro: a failed real-session restore minted a throwaway anonymous
+  // user while the local cache still held a real account's 136 synced rows. The
+  // anon account's remote set is empty. Two consecutive pulls happen.
+  const { calls, meta, repository } = fakeRepository({
+    // The cache was last synced against the REAL account.
+    [SYNCED_USER_ID_KEY]: 'real-user',
+    [LAST_PULLED_AT_KEY]: '2026-07-06T02:55:12.000Z',
+  });
+  const syncedRealRow = makeBookmark({ id: REMOTE_ID_B, sync_status: 'synced' });
+  const anonUser = { id: 'anon-mint', isAnonymous: true };
+  const api = fakeApi({ listBookmarkIds: async () => [] }); // anon account is empty
+
+  // Pull #1: userChanged (real-user → anon-mint) already skips deletions, but it
+  // re-stamps SYNCED_USER_ID to the anon id at the end.
+  const first = await pullRemoteChanges(api, repository, () => [syncedRealRow], () => false, anonUser);
+  assert.equal(first.userChanged, true);
+  assert.deepEqual(first.deletions, []);
+  assert.equal(meta[SYNCED_USER_ID_KEY], 'anon-mint');
+
+  // Pull #2: previousUserId === currentUser.id, so userChanged is now FALSE.
+  // Without the anonymous guard this pass wipes the still-owned synced row as a
+  // phantom "deleted on another device" — the local data-loss incident.
+  const second = await pullRemoteChanges(api, repository, () => [syncedRealRow], () => false, anonUser);
+  assert.equal(second.userChanged, false);
+  assert.deepEqual(second.deletions, []);
+  assert.equal(calls.includes(`deleteBookmark:${REMOTE_ID_B}`), false);
+});
+
+test('an anonymous pull with an empty remote does not wipe the durable tag cache', async () => {
+  // Companion to the row-wipe: replaceTagData is a wholesale destructive replace.
+  // An anonymous session with an empty remote snapshot must not nuke a real
+  // account's tags still cached durably after a failed session restore.
+  const { calls, repository } = fakeRepository({ [SYNCED_USER_ID_KEY]: 'anon-mint' });
+  const api = fakeApi({ listBookmarkIds: async () => [] }); // empty tags/collections/links
+
+  await pullRemoteChanges(api, repository, () => [], () => false, {
+    id: 'anon-mint',
+    isAnonymous: true,
+  });
+
+  assert.equal(calls.includes('replaceTagData:0:0'), false);
+});
+
+test('an anonymous empty pull returns the preserved durable tag snapshot', async () => {
+  // Skipping the destructive replace is not enough on its own: the store applies
+  // result.tagData straight to live state, so the pull must RETURN the preserved
+  // durable snapshot (not the empty server one) or the tags/collections still
+  // vanish from the current UI until a relaunch. Assert the durable snapshot is
+  // read back and returned unchanged.
+  const durable = {
+    tags: [{ id: 't1', name: 'react' }],
+    bookmarkTags: [{ bookmark_id: REMOTE_ID_A, tag_id: 't1' }],
+    collections: [],
+  } as unknown as TagData;
+  const { calls, repository } = fakeRepository({ [SYNCED_USER_ID_KEY]: 'anon-mint' });
+  repository.listTagData = async () => durable;
+  const api = fakeApi({ listBookmarkIds: async () => [] }); // empty server tags
+
+  const result = await pullRemoteChanges(api, repository, () => [], () => false, {
+    id: 'anon-mint',
+    isAnonymous: true,
+  });
+
+  assert.equal(calls.some((call) => call.startsWith('replaceTagData')), false);
+  assert.equal(result.tagData, durable);
 });
 
 test('same user still reconciles genuine remote deletions', async () => {

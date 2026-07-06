@@ -69,3 +69,8 @@ export async function writeSupabaseSession(session: SupabaseAuthSession): Promis
 export async function clearSupabaseSession(): Promise<void> {
   await store.clear();
 }
+
+/** Whether a real (non-anonymous) account was ever durably persisted here. */
+export async function hadRealSupabaseSession(): Promise<boolean> {
+  return store.hadRealAccount();
+}

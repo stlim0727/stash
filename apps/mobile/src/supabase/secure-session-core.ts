@@ -52,6 +52,14 @@ export interface SecureSessionStore {
   read(): Promise<SupabaseAuthSession | null>;
   write(session: SupabaseAuthSession): Promise<void>;
   clear(): Promise<void>;
+  /**
+   * True when the last durably-persisted session belonged to a REAL (non-
+   * anonymous) account. Read from a standalone breadcrumb (see REAL_ACCOUNT_KEY)
+   * so it stays meaningful even when the chunked session blob reads back as
+   * absent/torn — the signal restoreSession needs to avoid minting an anonymous
+   * user over a lost real session.
+   */
+  hadRealAccount(): Promise<boolean>;
 }
 
 // Namespaced + versioned so the keys never collide with the legacy plaintext
@@ -62,6 +70,14 @@ const KEY_PREFIX = 'supabase.auth.session.v2';
 // createSecureSessionStore). The previous generation stays intact and readable
 // until the flip, so a torn/failed overwrite never corrupts the live session.
 const ACTIVE_KEY = `${KEY_PREFIX}.active`;
+// A tiny, un-chunked breadcrumb recording whether the last durably-persisted
+// session belonged to a REAL (non-anonymous) account. It lives in its own key —
+// never chunked, never part of a generation — so it survives a partial/torn
+// read of the session blob (a missing chunk, a transient keystore error). It
+// lets restoreSession tell "a real account's session is unreadable this launch"
+// (→ keep local data, prompt re-sign-in) apart from "genuine first run" (→ mint
+// an anonymous user), closing the silent-anonymous-mint data-loss path.
+const REAL_ACCOUNT_KEY = `${KEY_PREFIX}.real`;
 type Generation = 'a' | 'b';
 const countKey = (gen: Generation): string => `${KEY_PREFIX}.${gen}.count`;
 const chunkKey = (gen: Generation, index: number): string => `${KEY_PREFIX}.${gen}.${index}`;
@@ -231,6 +247,16 @@ export function createSecureSessionStore(options: SecureSessionStoreOptions): Se
     if (active) {
       await clearGeneration(active);
     }
+
+    // Stamp the standalone real-account breadcrumb. Written AFTER the commit so
+    // it can only claim a real account once one was actually persisted. An
+    // anonymous session clears it (a later real→anon write means the durable
+    // identity is no longer a real account).
+    if (session.user.is_anonymous === false) {
+      await backend.setItem(REAL_ACCOUNT_KEY, '1');
+    } else {
+      await backend.deleteItem(REAL_ACCOUNT_KEY);
+    }
   }
 
   async function clearSecure(): Promise<void> {
@@ -238,12 +264,32 @@ export function createSecureSessionStore(options: SecureSessionStoreOptions): Se
     await backend.deleteItem(ACTIVE_KEY);
     await clearGeneration('a');
     await clearGeneration('b');
+    // Sign-out / account clear also drops the real-account breadcrumb so the
+    // next lazy anonymous mint is not mistaken for a lost real session.
+    await backend.deleteItem(REAL_ACCOUNT_KEY);
   }
 
   return {
     async read(): Promise<SupabaseAuthSession | null> {
       const fromSecure = await readFromSecure();
-      if (fromSecure) return fromSecure;
+      if (fromSecure) {
+        // Backfill the real-account breadcrumb for a session persisted by a build
+        // that predates it. This read succeeded, but a real user upgraded from
+        // such a build has no REAL_ACCOUNT_KEY until some later refresh/metadata
+        // write happens — so if they hit a torn/absent read on a LATER launch
+        // first, hadRealAccount() would be false and restoreSession would mint an
+        // anonymous user again. Stamping it on a successful real read protects
+        // already-upgraded installs immediately. Best-effort; keyed on
+        // is_anonymous === false to match writeToSecure.
+        if (fromSecure.user.is_anonymous === false) {
+          try {
+            await backend.setItem(REAL_ACCOUNT_KEY, '1');
+          } catch {
+            // A keystore hiccup just defers the backfill to the next read.
+          }
+        }
+        return fromSecure;
+      }
 
       // Nothing in secure storage — try a one-time migration from the legacy
       // plaintext store so an existing user isn't signed out by the upgrade.
@@ -272,6 +318,10 @@ export function createSecureSessionStore(options: SecureSessionStoreOptions): Se
       if (legacy) {
         await legacy.clear();
       }
+    },
+
+    async hadRealAccount(): Promise<boolean> {
+      return (await backend.getItem(REAL_ACCOUNT_KEY)) === '1';
     },
   };
 }

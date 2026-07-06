@@ -125,7 +125,18 @@ export async function pullRemoteChanges(
   // Guard: on an account switch, never treat the previous account's rows as
   // remote deletions. Same-account deletions (a row removed on another device)
   // still reconcile normally.
-  const deletions = userChanged
+  //
+  // Also skip the deletion diff for ANY anonymous session: an anonymous account
+  // is single-device by definition, so "deleted on another device" can never be
+  // a valid inference — there is no other device. This is the durable guard
+  // against a failed real-session restore that mints a throwaway anonymous user
+  // while the local cache still holds a real account's synced rows. The
+  // `userChanged` skip only covers the FIRST pull after such a mint: at the end
+  // of that pull SYNCED_USER_ID is re-stamped to the anon id, so on the SECOND
+  // pull userChanged is false and — without this — the diff would wipe every
+  // still-owned synced row as a phantom "deleted on another device".
+  const skipDeletions = userChanged || currentUser?.isAnonymous === true;
+  const deletions = skipDeletions
     ? []
     : locals
         .filter(
@@ -150,12 +161,34 @@ export async function pullRemoteChanges(
   if (enrichments.length > 0) {
     await repository.upsertEnrichments(enrichments);
   }
-  await repository.replaceTagData(tagData);
+  // Same single-device reasoning as the deletion guard: never let an anonymous
+  // session's EMPTY remote snapshot nuke a non-empty durable local tag cache
+  // (e.g. a real account's tags still cached after a failed session restore).
+  // A non-empty snapshot still replaces normally, and a genuine switch to a
+  // real account (isAnonymous === false) still replaces so account B's tags load
+  // and A's never leak. Skipping only preserves the durable cache — the local
+  // tags reappear on relaunch / on re-signing into the real account.
+  const tagDataEmpty =
+    tagData.tags.length === 0 &&
+    tagData.collections.length === 0 &&
+    tagData.bookmarkTags.length === 0;
+  const skipTagReplace = currentUser?.isAnonymous === true && tagDataEmpty;
+  // When the replace is skipped, return the PRESERVED durable snapshot (not the
+  // empty server one). The store applies `result.tagData` straight to live state
+  // (store/bookmarks.tsx), so returning the empty snapshot would still blank the
+  // tags/collections from the current UI until a relaunch even though the durable
+  // cache is intact. Returning the preserved snapshot keeps the on-screen tags.
+  let effectiveTagData = tagData;
+  if (skipTagReplace) {
+    effectiveTagData = await repository.listTagData();
+  } else {
+    await repository.replaceTagData(tagData);
+  }
   await repository.setMeta(LAST_PULLED_AT_KEY, pulledAt);
   if (currentUser) {
     await repository.setMeta(SYNCED_USER_ID_KEY, currentUser.id);
     await repository.setMeta(SYNCED_USER_ANON_KEY, String(currentUser.isAnonymous));
   }
 
-  return { upserts, deletions, enrichments, tagData, pulledAt, userChanged };
+  return { upserts, deletions, enrichments, tagData: effectiveTagData, pulledAt, userChanged };
 }
