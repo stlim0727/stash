@@ -2,6 +2,7 @@ import { getSupabaseConfigState } from '@/supabase/config';
 import type { SupabaseConfig } from '@/supabase/config';
 import {
   clearSupabaseSession,
+  hadRealSupabaseSession,
   readSupabaseSession,
   writeSupabaseSession,
 } from '@/supabase/session-storage';
@@ -275,6 +276,18 @@ export class StashSupabaseClient {
   async restoreSession(forceRefresh = false): Promise<SessionRestoreResult> {
     const stored = await readSupabaseSession();
     if (!stored) {
+      // A null read is ambiguous: either a genuine first run (no session was
+      // ever stored) OR a real account whose persisted session was unreadable
+      // this launch — a missing/torn secure-store chunk or a transient
+      // Keychain/Keystore error. Minting an anonymous user for the LATTER is the
+      // data-loss trigger: it silently signs the user out and makes the sync
+      // account-transition treat it as a switch. Consult the standalone
+      // real-account breadcrumb: if a real account was ever durably persisted
+      // here, surface an expired real session (→ `session_expired`, local data
+      // preserved, re-sign-in prompt) instead of `none` (which mints anon).
+      if (await hadRealSupabaseSession()) {
+        return { outcome: 'expired', wasAnonymous: false };
+      }
       return { outcome: 'none' };
     }
     if (!forceRefresh && !isSessionExpired(stored)) {

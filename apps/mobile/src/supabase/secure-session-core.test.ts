@@ -349,3 +349,80 @@ test('clear also wipes the legacy plaintext copy', async () => {
 
   assert.equal(legacy.cleared, true);
 });
+
+// --- real-account breadcrumb -------------------------------------------------
+// This standalone marker is what lets restoreSession avoid minting an anonymous
+// user over a real account whose session blob read back as absent/torn.
+
+test('hadRealAccount is false when nothing was ever stored', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend });
+  assert.equal(await store.hadRealAccount(), false);
+});
+
+test('hadRealAccount is true after persisting a real (non-anonymous) session', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend });
+
+  await store.write(makeSession({ user: { id: 'u1', is_anonymous: false } as never }));
+
+  assert.equal(await store.hadRealAccount(), true);
+});
+
+test('hadRealAccount stays false for an anonymous session', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend });
+
+  await store.write(makeSession({ user: { id: 'anon', is_anonymous: true } as never }));
+
+  assert.equal(await store.hadRealAccount(), false);
+});
+
+test('an anonymous write clears a previously-set real-account breadcrumb', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend });
+
+  await store.write(makeSession({ user: { id: 'u1', is_anonymous: false } as never }));
+  assert.equal(await store.hadRealAccount(), true);
+
+  await store.write(makeSession({ user: { id: 'anon', is_anonymous: true } as never }));
+  assert.equal(await store.hadRealAccount(), false);
+});
+
+test('the real-account breadcrumb survives a torn read of the session blob', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend, maxChunkBytes: 16 });
+  await store.write(
+    makeSession({ access_token: 'A'.repeat(200), user: { id: 'u1', is_anonymous: false } as never }),
+  );
+
+  // Lose a chunk so the session itself reads back as absent (torn write)...
+  backend.store.delete('supabase.auth.session.v2.a.1');
+  assert.equal(await store.read(), null);
+  // ...but the standalone breadcrumb is intact, so the caller can still tell
+  // this was a lost real session rather than a first run.
+  assert.equal(await store.hadRealAccount(), true);
+});
+
+test('clear removes the real-account breadcrumb (next anon mint is not misread)', async () => {
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend });
+  await store.write(makeSession({ user: { id: 'u1', is_anonymous: false } as never }));
+  assert.equal(await store.hadRealAccount(), true);
+
+  await store.clear();
+
+  assert.equal(await store.hadRealAccount(), false);
+});
+
+test('a migrated legacy real session sets the real-account breadcrumb', async () => {
+  const backend = new FakeBackend();
+  const legacy = new FakeLegacySource(
+    makeSession({ user: { id: 'u1', is_anonymous: false } as never }),
+  );
+  const store = createSecureSessionStore({ backend, legacy });
+
+  await store.read(); // triggers the one-time carry-over into secure storage
+
+  assert.equal(await store.hadRealAccount(), true);
+});
