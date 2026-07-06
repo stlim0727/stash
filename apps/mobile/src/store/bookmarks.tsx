@@ -14,6 +14,8 @@ import { mockUserId } from '@/domain/mock-data';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
 import { isTransientNetworkError } from '@/domain/network-errors';
+import { planTitleBackfill } from '@/domain/title-backfill';
+import type { TitleBackfillPatch } from '@/domain/title-backfill';
 import {
   imageTitleFromFileName,
   localImageFileName,
@@ -816,6 +818,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const safePatch: Partial<Bookmark> = {};
         if (patch.title !== undefined && latest.title === null) {
           safePatch.title = patch.title;
+          // Carry the title's provenance alongside it, so a generated fallback
+          // title is recorded as such (and a real fetched title as not-derived).
+          safePatch.title_is_derived = patch.title_is_derived;
         }
         if (patch.site_name !== undefined && latest.site_name === null) {
           safePatch.site_name = patch.site_name;
@@ -2259,6 +2264,121 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setIsSyncing(false);
     }
   }, [auth, queue, enqueueMutation, requestAiEnrichment, syncTagOps, noteUnseenSuggestions]);
+
+  // URL-title backfill: repair bookmarks already saved with a poor URL-derived
+  // title (a bare host like "youtu.be", or an opaque id slug like "Dabls52E90n")
+  // now that `deriveMetadata` produces a human label. Only rows whose title is
+  // provably our own historical machine fallback are touched (see
+  // `planTitleBackfill`), so a user-renamed or real fetched title is never
+  // clobbered.
+  //
+  // Reactive and idempotent, deliberately: it re-scans on every `bookmarks`
+  // change rather than running once behind a durable flag, because a repaired
+  // title no longer equals its legacy fallback and so is skipped forever after
+  // — the operation is self-terminating per row. This is what lets rows that
+  // arrive *later* (a post-sign-in cloud pull) still get repaired, which a
+  // one-shot flag set on the pre-pull snapshot would have missed.
+  //
+  // Local-only cosmetic relabel: it never enqueues a sync mutation, never
+  // re-fetches (no `metadata_status` change → the enrichment effect below is not
+  // triggered), and does NOT bump `updated_at`. This runs the instant the local
+  // cache loads, before the startup pull — any of those would make a synced row
+  // out-rank or overwrite the (possibly better) cloud row the pull is about to
+  // fetch (`pullRemoteChanges` only accepts `remote.updated_at > local.updated_at`).
+  // Keeping the timestamp lets a genuinely newer remote row still win, while an
+  // unchanged remote (same bad fallback) leaves our local repair in place.
+  useEffect(() => {
+    if (bookmarks === null) {
+      return;
+    }
+    // Cheap gate: is there anything to repair? A per-row throw is caught so one
+    // malformed URL can't abort the scan.
+    const hasWork = bookmarks.some((item) => {
+      try {
+        return planTitleBackfill(item) !== null;
+      } catch {
+        return false;
+      }
+    });
+    if (!hasWork) {
+      return;
+    }
+    // In-memory: re-validate against the freshest CURRENT row and merge the
+    // patch (title/preview/provenance only — never `updated_at` or status), so a
+    // field changed concurrently is preserved and a row that no longer qualifies
+    // is left alone.
+    setBookmarks((current) => {
+      if (current === null) {
+        return current;
+      }
+      return current.map((item) => {
+        let plan: TitleBackfillPatch | null;
+        try {
+          plan = planTitleBackfill(item);
+        } catch {
+          plan = null;
+        }
+        if (!plan) {
+          return item;
+        }
+        return {
+          ...item,
+          title: plan.title,
+          preview_image_url: plan.preview_image_url ?? item.preview_image_url,
+          title_is_derived: plan.title_is_derived,
+        };
+      });
+    });
+    // Durable: repository writes replace the whole row, so persisting a row
+    // built from a stale read would clobber a concurrent notes/collection/trash
+    // edit or a pulled field. For each repair target, re-read the freshest stored
+    // row and build the write from it with NO await in between — so no other
+    // writer can interleave between this row's read and its write — and re-plan
+    // against that fresh row so one already repaired/edited is skipped.
+    const targetIds = (bookmarksRef.current ?? bookmarks)
+      .filter((item) => {
+        try {
+          return planTitleBackfill(item) !== null;
+        } catch {
+          return false;
+        }
+      })
+      .map((item) => item.id);
+    (async () => {
+      try {
+        await ensureRepositoryReady();
+        let count = 0;
+        for (const id of targetIds) {
+          const stored = await repository.listBookmarks();
+          const base = stored.find((item) => item.id === id);
+          if (!base) {
+            continue;
+          }
+          let plan: TitleBackfillPatch | null;
+          try {
+            plan = planTitleBackfill(base);
+          } catch {
+            plan = null;
+          }
+          if (!plan) {
+            continue;
+          }
+          await repository.updateBookmark({
+            ...base,
+            title: plan.title,
+            preview_image_url: plan.preview_image_url ?? base.preview_image_url,
+            title_is_derived: plan.title_is_derived,
+          });
+          count += 1;
+        }
+        if (count > 0) {
+          recordLog('info', `title-backfill: repaired ${count} URL-derived title(s)`);
+        }
+      } catch (error) {
+        logStorageError('title backfill', error);
+      }
+    })();
+  }, [bookmarks]);
 
   // Background enrichment: once local data is loaded, enrich any bookmark
   // whose metadata is still pending (seeded items, or saves from a previous

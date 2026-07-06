@@ -2026,7 +2026,10 @@ export default function InboxScreen() {
                 >
                   <HighlightedText
                     testID="inbox-list-title"
-                    style={[styles.listTitle, { color: palette.text }]}
+                    style={[
+                      styles.listTitle,
+                      { color: item.title_is_derived ? palette.textSecondary : palette.text },
+                    ]}
                     numberOfLines={1}
                     text={displayTitle(item) ?? t('common.untitled')}
                     query={highlightQuery}
@@ -2149,7 +2152,10 @@ export default function InboxScreen() {
                 >
                   <HighlightedText
                     testID="inbox-compact-title"
-                    style={[styles.listTitle, { color: palette.text }]}
+                    style={[
+                      styles.listTitle,
+                      { color: item.title_is_derived ? palette.textSecondary : palette.text },
+                    ]}
                     numberOfLines={1}
                     text={displayTitle(item) ?? t('common.untitled')}
                     query={highlightQuery}
@@ -2237,7 +2243,10 @@ export default function InboxScreen() {
                   >
                     <HighlightedText
                       testID="inbox-card-title"
-                      style={[styles.cardTitle, { color: palette.text }]}
+                      style={[
+                        styles.cardTitle,
+                        { color: item.title_is_derived ? palette.textSecondary : palette.text },
+                      ]}
                       numberOfLines={1}
                       text={displayTitle(item) ?? t('common.untitled')}
                       query={highlightQuery}

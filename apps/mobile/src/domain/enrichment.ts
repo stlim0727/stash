@@ -1,6 +1,7 @@
 // Relative .ts import (not the @ alias) so Node's test runner can resolve it.
-import { fetchPageMetadata, youtubeVideoId } from './page-metadata.ts';
+import { fetchPageMetadata } from './page-metadata.ts';
 import type { FetchedMetadata } from './page-metadata.ts';
+import { describeKnownUrl, looksOpaqueId } from './url-title.ts';
 import { recordLog } from '../observability/log-buffer.ts';
 import type { Bookmark, MetadataStatus } from '@/domain/types';
 
@@ -41,20 +42,29 @@ export function deriveMetadata(rawUrl: string): DerivedMetadata {
   const url = new URL(rawUrl);
   const host = url.hostname.replace(/^www\./, '');
 
-  const lastSegment = url.pathname.split('/').filter(Boolean).pop();
-  // A YouTube video's identifying path/query segment is an opaque id (e.g.
-  // `LNysDlsp26Q` for `youtu.be/LNysDlsp26Q`, or the bare `watch` path for a
-  // `?v=` link) — as a title it reads like a random/"encrypted" string, not a
-  // name. When the real title can't be fetched (oEmbed and HTML both failed),
-  // the host is a far better fallback than that id.
-  const title =
-    lastSegment && !youtubeVideoId(rawUrl) ? titleCaseFromSlug(lastSegment) : host;
+  // Prefer a platform-aware label (YouTube video, Threads post by @user, …)
+  // that reads like a name and — for YouTube — carries a deterministic
+  // thumbnail, so even a failed fetch looks enriched.
+  const known = describeKnownUrl(rawUrl);
+  let title: string;
+  let preview_image_url: string | null = null;
+  if (known) {
+    title = known.title;
+    preview_image_url = known.preview_image_url;
+  } else {
+    // Generic site: Title-Case the last path slug when it reads like words. An
+    // opaque id (`Dabls52E90n`) or a bare domain has no better label than the
+    // host — never a random-looking id as the headline.
+    const lastSegment = url.pathname.split('/').filter(Boolean).pop();
+    title =
+      lastSegment && !looksOpaqueId(lastSegment) ? (titleCaseFromSlug(lastSegment) ?? host) : host;
+  }
 
   return {
-    title: title ?? host,
+    title,
     site_name: host,
     favicon_url: `${url.origin}/favicon.ico`,
-    preview_image_url: null,
+    preview_image_url,
   };
 }
 
@@ -95,6 +105,10 @@ export async function enrichBookmark(
     const patch: Partial<Bookmark> = {};
     if (bookmark.title == null) {
       patch.title = derived.title;
+      // Record provenance: true when the title came from the URL fallback (no
+      // fetched title), false when it's a real fetched page title. Lets the
+      // backfill/UI trust a recorded fact instead of string-matching.
+      patch.title_is_derived = !fetched.title;
       // Diagnostic: the page fetch gave no title, so we're labelling the
       // bookmark with a value derived from its URL (a path slug or host). This
       // is the "the preview is just the URL / a random-looking string" moment —

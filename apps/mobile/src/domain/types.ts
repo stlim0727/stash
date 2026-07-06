@@ -43,6 +43,16 @@ export interface Bookmark {
    */
   client_id?: string | null;
   title: string | null;
+  /**
+   * Local-only provenance for `title`: true when the current title was generated
+   * by us from the URL as a fallback (a real page title could not be fetched),
+   * false when it is a fetched page title or user-authored. Lets the backfill and
+   * UI treat a generated placeholder differently from a real/authored title
+   * without inferring from the string — so a real title that merely resembles a
+   * fallback is never mistaken for one. Absent on rows enriched before this field
+   * existed and on remote-mapped rows; never sent to the cloud.
+   */
+  title_is_derived?: boolean;
   description: string | null;
   /** User-authored private notes. */
   notes: string | null;
