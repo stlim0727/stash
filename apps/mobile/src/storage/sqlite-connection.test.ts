@@ -86,6 +86,8 @@ function makeConnection(opts?: {
   closeTimeoutMs?: number;
   workTimeoutMs?: number;
   reopenAlertThreshold?: number;
+  reopenAlertWindowMs?: number;
+  now?: () => number;
 }) {
   let opens = 0;
   const opened: FakeDb[] = [];
@@ -449,7 +451,14 @@ test('a stalled operation is reported but left to finish on the same handle (nev
 
 test('frequent reopens escalate to a tracked error past the threshold', async () => {
   clearLogEntries();
-  const { connection, opensCount } = makeConnection({ reopenAlertThreshold: 3 });
+  // Reopens 100ms apart with a 1s window → all 3 fall inside one window and
+  // cross the threshold (the thrash/wedge signature).
+  let clock = 0;
+  const { connection, opensCount } = makeConnection({
+    reopenAlertThreshold: 3,
+    reopenAlertWindowMs: 1000,
+    now: () => (clock += 100),
+  });
 
   // Kill the handle before each call so every get() reopens.
   for (let i = 0; i < 4; i += 1) {
@@ -466,6 +475,33 @@ test('frequent reopens escalate to a tracked error past the threshold', async ()
     (e) => e.level === 'error' && e.message.includes('excessive handle churn'),
   );
   assert.equal(escalations.length, 1); // fires exactly once, when it crosses
+});
+
+test('reopens spread beyond the window do NOT escalate (benign lifecycle, STASH-C)', async () => {
+  clearLogEntries();
+  // Each reopen lands 5s apart with a 1s window, so no two ever coincide — the
+  // count within the window never exceeds 1, well under the threshold. This is
+  // the normal background/foreground pattern that used to trip the alert.
+  let clock = 0;
+  const { connection, opensCount } = makeConnection({
+    reopenAlertThreshold: 3,
+    reopenAlertWindowMs: 1000,
+    now: () => (clock += 5000),
+  });
+
+  for (let i = 0; i < 6; i += 1) {
+    const db = await connection.get();
+    db.kill();
+  }
+  assert.equal(opensCount(), 6); // initial open + 5 reopens
+
+  const reopenBreadcrumbs = getLogEntries().filter((e) => e.message.includes('connection reopened (reopen #'));
+  assert.equal(reopenBreadcrumbs.length, 5); // every reopen still leaves a breadcrumb
+
+  const escalations = getLogEntries().filter(
+    (e) => e.level === 'error' && e.message.includes('excessive handle churn'),
+  );
+  assert.equal(escalations.length, 0); // spread out → never escalates
 });
 
 test('a probe that hangs is treated as stale and reopened', async () => {
