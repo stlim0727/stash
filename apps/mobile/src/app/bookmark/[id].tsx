@@ -747,7 +747,13 @@ export default function BookmarkDetailScreen() {
                 titleLineCount === null || titleExpanded ? undefined : TITLE_COLLAPSED_LINES
               }
               onTextLayout={(event) => {
-                if (titleLineCount === null) {
+                // Only trust a real measurement. react-native-web can report an
+                // empty `lines` array; recording 0 would clamp the title to
+                // TITLE_COLLAPSED_LINES yet hide the toggle (0 is not > 4),
+                // stranding a long note with no way to see the full text ("long
+                // text silently cut off"). Staying null keeps it unclamped —
+                // the full text shows — until a trustworthy count arrives.
+                if (titleLineCount === null && event.nativeEvent.lines.length > 0) {
                   setTitleLineCount(event.nativeEvent.lines.length);
                 }
               }}
