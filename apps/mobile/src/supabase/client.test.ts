@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 
 import { errorMessageFrom, StashSupabaseClient } from './client.ts';
 
@@ -25,6 +25,30 @@ test('errorMessageFrom falls back to a plain-text body, then the HTTP status', (
   assert.equal(errorMessageFrom({}, 500), 'Supabase request failed with HTTP 500');
   // Non-string keys are ignored, not coerced.
   assert.equal(errorMessageFrom({ error: 42 }, 400), 'Supabase request failed with HTTP 400');
+});
+
+test('signOut clears the local session even when the revoke request hangs (STASH-G)', async () => {
+  // A wedged network (a hang, not an error) must not strand sign-out: the
+  // local clear has to run regardless, or the logout button appears frozen
+  // ("logout does not respond"). Without the timeout race, awaiting the
+  // never-resolving fetch below would hang this test forever.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (() => new Promise<Response>(() => {})) as typeof fetch;
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    const pending = client.signOut('access-token');
+    // Fire the revoke timeout so the race settles on it instead of the fetch.
+    mock.timers.tick(5000);
+    await pending;
+  } finally {
+    mock.timers.reset();
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('updateUserMetadata issues PUT /auth/v1/user with { data } (GoTrue rejects PATCH)', async () => {

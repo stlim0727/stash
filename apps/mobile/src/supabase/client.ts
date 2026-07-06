@@ -21,6 +21,11 @@ interface RequestOptions {
   headers?: Record<string, string>;
 }
 
+// Cap the best-effort server-side revoke during sign-out. `fetch` has no
+// timeout, so a wedged connection could otherwise hang indefinitely and strand
+// the local clear below it — leaving the logout button frozen.
+const SIGN_OUT_REVOKE_TIMEOUT_MS = 5000;
+
 export class SupabaseConfigurationError extends Error {
   constructor(message = 'Supabase is not configured. Add Expo public Supabase env values.') {
     super(message);
@@ -244,7 +249,14 @@ export class StashSupabaseClient {
   /** Revoke the current session server-side (best-effort) and clear it locally. */
   async signOut(accessToken: string): Promise<void> {
     try {
-      await this.request('/auth/v1/logout', { method: 'POST', accessToken, body: {} });
+      // Race the revoke against a timeout so a network that hangs (rather than
+      // errors) can't strand sign-out — without this the local clear below
+      // never runs and the logout button appears dead ("logout does not
+      // respond"). The catch handles failures; the race handles hangs.
+      await Promise.race([
+        this.request('/auth/v1/logout', { method: 'POST', accessToken, body: {} }),
+        new Promise<void>((resolve) => setTimeout(resolve, SIGN_OUT_REVOKE_TIMEOUT_MS)),
+      ]);
     } catch {
       // Best-effort: the local session is cleared regardless so the user is
       // signed out on this device even if the network call fails.
