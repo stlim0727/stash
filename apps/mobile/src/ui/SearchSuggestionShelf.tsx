@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { Animated, ScrollView, StyleSheet, Text } from 'react-native';
+import { Animated, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/theme';
 import { Chip } from '@/ui/Chip';
+import { ShelfEdge, useShelfEdges } from '@/ui/ShelfEdges';
 import { useT } from '@/i18n';
 import type { SearchSuggestion } from '@/domain/search-suggestions';
 
@@ -56,6 +57,13 @@ export function SearchSuggestionShelf({
   // A single container-opacity Animated.Value (§6): no translateX/height on the
   // chips, to avoid fighting the header's own translateY transform.
   const opacity = useRef(new Animated.Value(0)).current;
+  // Web-only overflow affordance (wheel-to-horizontal + edge chevrons), the same
+  // one the browse shelf uses — so the tag/folder chip row scrolls identically
+  // whether or not search is open (STASH-Q). Always active while mounted;
+  // re-measures when the suggestion count changes.
+  const { shelfRef, canLeft, canRight, updateEdges, scrollBy, isWeb } = useShelfEdges(true, [
+    suggestions.length,
+  ]);
 
   useEffect(() => {
     const reveal = Animated.timing(opacity, {
@@ -83,7 +91,9 @@ export function SearchSuggestionShelf({
       >
         {t('search.shelfAffordance')}
       </Text>
+      <View style={isWeb ? styles.shelfWrap : undefined}>
       <ScrollView
+        ref={shelfRef}
         horizontal
         showsHorizontalScrollIndicator={false}
         testID="search-suggestion-shelf"
@@ -96,6 +106,11 @@ export function SearchSuggestionShelf({
         // mid-tap (which would otherwise unmount the shelf out from under the
         // press). `handled` lets the chip's onPress fire while persisting focus.
         keyboardShouldPersistTaps="handled"
+        // Web-only: track the clipped geometry so the edge chevrons appear/
+        // disappear as the user scrolls or the row is measured.
+        onScroll={isWeb ? updateEdges : undefined}
+        onLayout={isWeb ? updateEdges : undefined}
+        scrollEventThrottle={isWeb ? 16 : undefined}
         style={styles.shelf}
         contentContainerStyle={styles.shelfContent}
       >
@@ -140,11 +155,23 @@ export function SearchSuggestionShelf({
           );
         })}
       </ScrollView>
+        {isWeb && canLeft ? (
+          <ShelfEdge side="left" label={t('inbox.shelfPrevA11y')} onPress={() => scrollBy(-1)} />
+        ) : null}
+        {isWeb && canRight ? (
+          <ShelfEdge side="right" label={t('inbox.shelfMoreA11y')} onPress={() => scrollBy(1)} />
+        ) : null}
+      </View>
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
+  // Web-only positioning context for the ShelfEdge overlays (absolute-positioned
+  // relative to this wrapper). No-op box on native.
+  shelfWrap: {
+    position: 'relative',
+  },
   // A quieter notch (11pt) than the "Browse" sortCaption (13pt) so it reads as a
   // section hint, not a control. Aligned to the chips at paddingHorizontal 16.
   affordance: {
