@@ -284,29 +284,41 @@ Deno.serve(async (req) => {
       collections = (await colRes.json()) as Array<{ id: string; name: string }>;
     }
 
-    // Load the user's existing tags (with usage counts) so the provider reuses
-    // an established tag instead of coining a near-duplicate — the fix for tag
-    // fragmentation, where most users' vocabularies are >80% single-use
-    // synonyms of a handful of real concepts. Ordered most-used-first here (not
-    // in the query, so it's independent of PostgREST aggregate-ordering
-    // support) and capped at MAX_EXISTING_TAGS to bound per-capture prompt cost.
-    // Scoped to the owner explicitly so the service-role path can't leak another
-    // user's tags (a no-op on the RLS-scoped app path).
+    // Load the user's existing tags so the provider reuses an established tag
+    // instead of coining a near-duplicate — the fix for tag fragmentation, where
+    // most users' vocabularies are >80% single-use synonyms of a handful of real
+    // concepts. Count only links on ACTIVE bookmarks (deleted_at is null and not
+    // archived, matching the Inbox's isActiveBookmark rule) and drop tags with
+    // no active links: removing a tag leaves its `tags` row behind, and trashing
+    // a bookmark keeps its links, so counting all links would resurface
+    // vocabulary the user already cleared and instruct the model to reuse it.
+    // Ranked most-used-first (in the function, so it's independent of PostgREST
+    // aggregate-ordering support) and capped at MAX_EXISTING_TAGS to bound
+    // per-capture prompt cost. Owner-scoped so the service-role path can't leak
+    // another user's tags (a no-op on the RLS-scoped app path).
     let existingTags: string[] = [];
-    const tagRes = await rest(
-      `/tags?user_id=eq.${bookmark.user_id}&select=name,bookmark_tags(count)`,
-    );
-    if (tagRes.ok) {
+    const [activeRes, tagRes] = await Promise.all([
+      rest(
+        `/bookmarks?user_id=eq.${bookmark.user_id}&deleted_at=is.null&is_archived=is.false&select=id`,
+      ),
+      rest(`/tags?user_id=eq.${bookmark.user_id}&select=name,bookmark_tags(bookmark_id)`),
+    ]);
+    if (activeRes.ok && tagRes.ok) {
+      const activeIds = new Set(
+        ((await activeRes.json()) as Array<{ id: string }>).map((b) => b.id),
+      );
       const rows = (await tagRes.json()) as Array<{
         name: unknown;
-        bookmark_tags?: Array<{ count?: number }>;
+        bookmark_tags?: Array<{ bookmark_id?: string }>;
       }>;
       existingTags = rows
         .map((row) => ({
           name: typeof row.name === 'string' ? row.name.trim() : '',
-          uses: row.bookmark_tags?.[0]?.count ?? 0,
+          uses: (row.bookmark_tags ?? []).filter(
+            (link) => link.bookmark_id && activeIds.has(link.bookmark_id),
+          ).length,
         }))
-        .filter((tag) => tag.name)
+        .filter((tag) => tag.name && tag.uses > 0)
         .sort((a, b) => b.uses - a.uses)
         .slice(0, MAX_EXISTING_TAGS)
         .map((tag) => tag.name);
