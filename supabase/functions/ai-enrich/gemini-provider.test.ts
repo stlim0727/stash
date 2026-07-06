@@ -101,6 +101,38 @@ test('sends the api key header and existing collection names in the prompt', asy
   assert.match(calls[0].init?.body ?? '', /Development, Reading/);
 });
 
+test('includes the user\'s existing tags and asks the model to reuse them', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await provider.enrich(input({ existing_tags: ['swimming', 'korean food', 'recipe'] }));
+  const body = calls[0].init?.body ?? '';
+  // The vocabulary rides in the prompt, most-used first (as passed)…
+  assert.match(body, /Existing tags \(reuse when one fits\): swimming, korean food, recipe/);
+  // …and the system instruction tells the model to reuse rather than duplicate.
+  assert.match(body, /reuse its exact name verbatim/);
+});
+
+test('omits the existing-tags line when the user has no tags yet', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await provider.enrich(input());
+  assert.doesNotMatch(calls[0].init?.body ?? '', /Existing tags/);
+});
+
 test('asks the model to answer in the user locale when one is given', async () => {
   const { fetchImpl, calls } = stubFetch({
     summary: null,

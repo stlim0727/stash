@@ -22,6 +22,12 @@ export interface EnrichmentInput {
    *  inventing a new name. Optional: heuristic providers ignore it, and the
    *  caller still resolves `suggested_collection` to a real id (or null). */
   collections?: string[];
+  /** The names of the user's existing tags (most-used first), when known. A
+   *  provider should prefer reusing one of these verbatim over coining a
+   *  near-duplicate, so a user's vocabulary stays consolidated instead of
+   *  fragmenting into single-use synonyms. Optional: heuristic providers ignore
+   *  it, and reuse is only ever a suggestion the user still reviews. */
+  existing_tags?: string[];
   /** BCP-47-ish locale of the requesting user (e.g. 'en', 'ko'), so a
    *  model-backed provider can return the summary and tags in their language.
    *  Optional: heuristic providers ignore it and the caller defaults sensibly. */

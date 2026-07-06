@@ -67,6 +67,13 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 // (`supabase secrets set AI_ENRICH_TRIGGER_SECRET=…`); unset ⇒ no server path.
 const TRIGGER_SECRET = Deno.env.get('AI_ENRICH_TRIGGER_SECRET') ?? '';
 
+// How many of the user's existing tags to show the provider so it can reuse
+// one instead of minting a near-duplicate. Capped because this list rides in
+// every per-capture prompt: a heavy user's full vocabulary (hundreds of tags)
+// would bloat token cost for marginal benefit, and the most-used tags (which
+// lead the list) are the ones worth reusing anyway.
+const MAX_EXISTING_TAGS = 80;
+
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -277,6 +284,34 @@ Deno.serve(async (req) => {
       collections = (await colRes.json()) as Array<{ id: string; name: string }>;
     }
 
+    // Load the user's existing tags (with usage counts) so the provider reuses
+    // an established tag instead of coining a near-duplicate — the fix for tag
+    // fragmentation, where most users' vocabularies are >80% single-use
+    // synonyms of a handful of real concepts. Ordered most-used-first here (not
+    // in the query, so it's independent of PostgREST aggregate-ordering
+    // support) and capped at MAX_EXISTING_TAGS to bound per-capture prompt cost.
+    // Scoped to the owner explicitly so the service-role path can't leak another
+    // user's tags (a no-op on the RLS-scoped app path).
+    let existingTags: string[] = [];
+    const tagRes = await rest(
+      `/tags?user_id=eq.${bookmark.user_id}&select=name,bookmark_tags(count)`,
+    );
+    if (tagRes.ok) {
+      const rows = (await tagRes.json()) as Array<{
+        name: unknown;
+        bookmark_tags?: Array<{ count?: number }>;
+      }>;
+      existingTags = rows
+        .map((row) => ({
+          name: typeof row.name === 'string' ? row.name.trim() : '',
+          uses: row.bookmark_tags?.[0]?.count ?? 0,
+        }))
+        .filter((tag) => tag.name)
+        .sort((a, b) => b.uses - a.uses)
+        .slice(0, MAX_EXISTING_TAGS)
+        .map((tag) => tag.name);
+    }
+
     // Per-user rate limit (enforced atomically in Postgres). Checked only after
     // the bookmark is confirmed to exist — an invalid request shouldn't spend a
     // slot — and only when a billable provider is configured. The DB function
@@ -358,6 +393,7 @@ Deno.serve(async (req) => {
       site_name: overlay(bookmark.site_name, 'site_name'),
       content_type: overlay(bookmark.content_type, 'content_type') ?? bookmark.content_type,
       collections: collections.map((col) => col.name),
+      existing_tags: existingTags,
       locale,
     };
 

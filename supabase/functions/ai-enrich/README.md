@@ -124,9 +124,14 @@ function selectProvider(): EnrichmentProvider {
 - **`GEMINI_API_KEY` set** → a single structured-output Gemini call produces the
   note (summary), topics, tags-with-confidence, and a collection routing hint.
   The user's existing collection names are passed in so the model routes into a
-  bucket that already exists. The summary/tags/topics are requested in the
-  caller's `locale`; the collection name is not (it must match an existing name
-  verbatim). If the live call fails (rate limit / outage / malformed response),
+  bucket that already exists. The user's existing **tags** (most-used first,
+  capped at `MAX_EXISTING_TAGS = 80`) are passed in the same way, with an
+  instruction to reuse an existing tag verbatim when one fits rather than coin a
+  near-duplicate — this keeps a user's vocabulary consolidated instead of
+  fragmenting into single-use synonyms (see `docs/design/library-organizing.md`).
+  The summary/tags/topics are requested in the caller's `locale`; the collection
+  name is not (it must match an existing name verbatim), and a reused tag is
+  copied verbatim rather than translated. If the live call fails (rate limit / outage / malformed response),
   the request degrades to the heuristics instead of erroring, and the saved
   `model` reflects which provider actually ran.
 
