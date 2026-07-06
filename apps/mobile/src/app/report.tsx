@@ -121,6 +121,20 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const trimmed = message.trim();
   const canSubmit = trimmed.length > 0 && auth.isSignedIn && submit.status !== 'submitting';
 
+  // Once the user starts composing a follow-up report, a prior success/error
+  // banner is stale: leaving the "thanks" message up over the form (with the
+  // now-empty field disabling Submit) reads as "I can't file another report".
+  // Clear it on the first edit so the form is unmistakably ready again.
+  const clearStaleBanner = () => {
+    setSubmit((prev) =>
+      prev.status === 'success' || prev.status === 'error' ? { status: 'idle' } : prev,
+    );
+  };
+  const handleMessageChange = (value: string) => {
+    setMessage(value);
+    clearStaleBanner();
+  };
+
   const handleSubmit = async () => {
     if (!trimmed) {
       return;
@@ -205,7 +219,10 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
                   { borderColor: palette.border },
                   selected && { backgroundColor: palette.accent, borderColor: palette.accent },
                 ]}
-                onPress={() => setCategory(item.value)}
+                onPress={() => {
+                  setCategory(item.value);
+                  clearStaleBanner();
+                }}
               >
                 <Text style={[styles.chipLabel, { color: selected ? '#ffffff' : palette.text }]}>
                   {t(item.labelKey)}
@@ -229,7 +246,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           placeholderTextColor={palette.textSecondary}
           multiline
           value={message}
-          onChangeText={setMessage}
+          onChangeText={handleMessageChange}
         />
       </View>
 

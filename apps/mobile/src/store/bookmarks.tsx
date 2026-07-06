@@ -13,6 +13,7 @@ import { resolveAliasedId, swapBookmarkId } from '@/domain/bookmark-id-swap';
 import { mockUserId } from '@/domain/mock-data';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
+import { isTransientNetworkError } from '@/domain/network-errors';
 import {
   imageTitleFromFileName,
   localImageFileName,
@@ -1787,8 +1788,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // buffer and reaches Sentry (URL/email-scrubbed at the bridge), the way
         // preview-fetch failures already do — otherwise an outage is invisible.
         const detail = error instanceof Error ? error.message : String(error);
-        const status = error instanceof SupabaseRequestError ? ` (HTTP ${error.status})` : '';
-        recordLog('error', `ai-enrich failed${status}: ${detail}`);
+        const isHttpError = error instanceof SupabaseRequestError;
+        const status = isHttpError ? ` (HTTP ${error.status})` : '';
+        // A raw client-side transport failure (device offline, DNS unresolved)
+        // never reached the function — an expected condition, not an outage — so
+        // log it as a warn breadcrumb instead of an error that forwards to Sentry
+        // and floods the issue stream (STASH-4). A SupabaseRequestError means the
+        // function actually responded with an error status: a genuine server/
+        // function failure that stays at 'error' even when its body echoes a
+        // transport-looking message (e.g. the function's own upstream fetch failed).
+        const level = !isHttpError && isTransientNetworkError(error) ? 'warn' : 'error';
+        recordLog(level, `ai-enrich failed${status}: ${detail}`);
         return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
       } finally {
         aiEnriching.current.delete(bookmarkId);

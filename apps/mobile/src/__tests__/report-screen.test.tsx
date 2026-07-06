@@ -136,6 +136,30 @@ test('submitting calls the feedback api with the message and redacted context', 
   expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
 });
 
+test('editing the message after a successful submit clears the thank-you and re-enables Submit', async () => {
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'First report');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  // Thank-you is shown and, with the field cleared, Submit is disabled.
+  expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
+  expect(screen.getByLabelText('Submit report').props.accessibilityState?.disabled).toBe(true);
+
+  // Starting a follow-up report clears the stale banner and re-enables Submit.
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'A second issue');
+
+  expect(screen.queryByText('Thanks — your report was sent.')).toBeNull();
+  expect(screen.getByLabelText('Submit report').props.accessibilityState?.disabled).toBe(false);
+});
+
 test('refreshes the session before submitting so an expired token is renewed', async () => {
   // A token that expired while the screen stayed open: ensureAnonymousSession
   // hands back a renewed session, which is what the API must be created with.
