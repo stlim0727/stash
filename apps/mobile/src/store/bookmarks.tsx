@@ -13,6 +13,7 @@ import { resolveAliasedId, swapBookmarkId } from '@/domain/bookmark-id-swap';
 import { mockUserId } from '@/domain/mock-data';
 import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
+import { isTransientNetworkError } from '@/domain/network-errors';
 import {
   imageTitleFromFileName,
   localImageFileName,
@@ -1788,7 +1789,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // preview-fetch failures already do — otherwise an outage is invisible.
         const detail = error instanceof Error ? error.message : String(error);
         const status = error instanceof SupabaseRequestError ? ` (HTTP ${error.status})` : '';
-        recordLog('error', `ai-enrich failed${status}: ${detail}`);
+        // A transport failure (device offline, DNS unresolved) never reached the
+        // function — it's an expected condition, not an outage — so log it as a
+        // warn breadcrumb instead of an error that forwards to Sentry and floods
+        // the issue stream (STASH-4). A real HTTP error from the function still
+        // logs at 'error' so a genuine outage stays visible.
+        const level = isTransientNetworkError(error) ? 'warn' : 'error';
+        recordLog(level, `ai-enrich failed${status}: ${detail}`);
         return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
       } finally {
         aiEnriching.current.delete(bookmarkId);
