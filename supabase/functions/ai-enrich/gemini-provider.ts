@@ -80,7 +80,7 @@ function buildSystemInstruction(language: string): string {
     'Given a bookmark\'s metadata, assess its content and return:',
     '- summary: one or two neutral sentences describing what the bookmark is (a usable note). Null if there is too little to go on.',
     '- topics: a few short lowercase subject keywords.',
-    '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1.',
+    '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1. If one of the provided existing tags fits the bookmark, reuse its exact name verbatim (do NOT translate it) rather than coining a near-duplicate — this keeps the user\'s tag vocabulary consolidated. Only invent a new tag (in the target language) when no existing tag fits.',
     '- suggested_collection: a single best-fit collection NAME for filing this bookmark. If one of the provided existing collections fits, copy its NAME verbatim (do NOT translate it). If none fit, propose a concise, reusable new collection name in Title Case (a broad theme, not a one-off). Use null only when the content is too sparse to categorize at all.',
     '- confidence: your overall confidence from 0 to 1.',
     'Base every field only on the supplied metadata. Do not fabricate specifics you were not given.',
@@ -141,6 +141,12 @@ function buildPrompt(input: EnrichmentInput): string {
     lines.push(`Existing collections: ${input.collections.join(', ')}`);
   } else {
     lines.push('Existing collections: (none yet)');
+  }
+  // Surface the user's established vocabulary so the model reuses an existing
+  // tag instead of minting a near-duplicate (the fragmentation this fix
+  // targets). Most-used first, so the canonical tags lead if the list is long.
+  if (input.existing_tags && input.existing_tags.length > 0) {
+    lines.push(`Existing tags (reuse when one fits): ${input.existing_tags.join(', ')}`);
   }
   const language = languageFor(input.locale);
   // Ask for the free-text fields in the user's language. suggested_collection is
