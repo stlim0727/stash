@@ -389,6 +389,23 @@ test('an anonymous write clears a previously-set real-account breadcrumb', async
   assert.equal(await store.hadRealAccount(), false);
 });
 
+test('read backfills the real-account breadcrumb for a session persisted without it', async () => {
+  // Simulate an install upgraded from a build that predates the breadcrumb: a
+  // real session sits in secure storage but REAL_ACCOUNT_KEY was never stamped.
+  const backend = new FakeBackend();
+  const store = createSecureSessionStore({ backend });
+  await store.write(makeSession({ user: { id: 'u1', is_anonymous: false } as never }));
+  // Drop the breadcrumb to mimic the pre-fix persisted state.
+  backend.store.delete('supabase.auth.session.v2.real');
+  assert.equal(await store.hadRealAccount(), false);
+
+  // A successful read of the real session backfills it, protecting the very next
+  // launch (which might hit a torn/absent read before any rewrite stamps it).
+  const session = await store.read();
+  assert.equal(session?.user.id, 'u1');
+  assert.equal(await store.hadRealAccount(), true);
+});
+
 test('the real-account breadcrumb survives a torn read of the session blob', async () => {
   const backend = new FakeBackend();
   const store = createSecureSessionStore({ backend, maxChunkBytes: 16 });

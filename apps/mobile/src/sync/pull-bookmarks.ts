@@ -173,7 +173,15 @@ export async function pullRemoteChanges(
     tagData.collections.length === 0 &&
     tagData.bookmarkTags.length === 0;
   const skipTagReplace = currentUser?.isAnonymous === true && tagDataEmpty;
-  if (!skipTagReplace) {
+  // When the replace is skipped, return the PRESERVED durable snapshot (not the
+  // empty server one). The store applies `result.tagData` straight to live state
+  // (store/bookmarks.tsx), so returning the empty snapshot would still blank the
+  // tags/collections from the current UI until a relaunch even though the durable
+  // cache is intact. Returning the preserved snapshot keeps the on-screen tags.
+  let effectiveTagData = tagData;
+  if (skipTagReplace) {
+    effectiveTagData = await repository.listTagData();
+  } else {
     await repository.replaceTagData(tagData);
   }
   await repository.setMeta(LAST_PULLED_AT_KEY, pulledAt);
@@ -182,5 +190,5 @@ export async function pullRemoteChanges(
     await repository.setMeta(SYNCED_USER_ANON_KEY, String(currentUser.isAnonymous));
   }
 
-  return { upserts, deletions, enrichments, tagData, pulledAt, userChanged };
+  return { upserts, deletions, enrichments, tagData: effectiveTagData, pulledAt, userChanged };
 }

@@ -156,9 +156,16 @@ test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
   });
 
   expect(error).toBeNull();
-  // The active locale (English in tests, no provider) rides along so the model
-  // answers in the user's language (M12).
-  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(SYNCED_ID, undefined, 'en');
+  // The anonymous initial pull no longer diffs the seeded synced row away as a
+  // phantom "deleted on another device" (that was the data-loss bug), so the row
+  // survives and requestAiEnrichment sends its on-device metadata. The active
+  // locale (English in tests, no provider) rides along so the model answers in
+  // the user's language (M12).
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
+    SYNCED_ID,
+    expect.objectContaining({ title: 'Stored bookmark', content_type: 'url' }),
+    'en',
+  );
   expect(store.current!.getEnrichment(SYNCED_ID)?.summary).toBe('Generated summary');
 });
 

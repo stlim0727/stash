@@ -8,7 +8,7 @@ import {
 } from './pull-bookmarks.ts';
 import type { PullApi } from './pull-bookmarks.ts';
 import type { AIEnrichment, Bookmark } from '@/domain/types';
-import type { BookmarkRepository } from '@/storage/types';
+import type { BookmarkRepository, TagData } from '@/storage/types';
 
 const REMOTE_ID_A = '7e64cf1e-0000-4000-8000-00000000000a';
 const REMOTE_ID_B = '7e64cf1e-0000-4000-8000-00000000000b';
@@ -394,6 +394,30 @@ test('an anonymous pull with an empty remote does not wipe the durable tag cache
   });
 
   assert.equal(calls.includes('replaceTagData:0:0'), false);
+});
+
+test('an anonymous empty pull returns the preserved durable tag snapshot', async () => {
+  // Skipping the destructive replace is not enough on its own: the store applies
+  // result.tagData straight to live state, so the pull must RETURN the preserved
+  // durable snapshot (not the empty server one) or the tags/collections still
+  // vanish from the current UI until a relaunch. Assert the durable snapshot is
+  // read back and returned unchanged.
+  const durable = {
+    tags: [{ id: 't1', name: 'react' }],
+    bookmarkTags: [{ bookmark_id: REMOTE_ID_A, tag_id: 't1' }],
+    collections: [],
+  } as unknown as TagData;
+  const { calls, repository } = fakeRepository({ [SYNCED_USER_ID_KEY]: 'anon-mint' });
+  repository.listTagData = async () => durable;
+  const api = fakeApi({ listBookmarkIds: async () => [] }); // empty server tags
+
+  const result = await pullRemoteChanges(api, repository, () => [], () => false, {
+    id: 'anon-mint',
+    isAnonymous: true,
+  });
+
+  assert.equal(calls.some((call) => call.startsWith('replaceTagData')), false);
+  assert.equal(result.tagData, durable);
 });
 
 test('same user still reconciles genuine remote deletions', async () => {

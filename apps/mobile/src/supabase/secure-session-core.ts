@@ -272,7 +272,24 @@ export function createSecureSessionStore(options: SecureSessionStoreOptions): Se
   return {
     async read(): Promise<SupabaseAuthSession | null> {
       const fromSecure = await readFromSecure();
-      if (fromSecure) return fromSecure;
+      if (fromSecure) {
+        // Backfill the real-account breadcrumb for a session persisted by a build
+        // that predates it. This read succeeded, but a real user upgraded from
+        // such a build has no REAL_ACCOUNT_KEY until some later refresh/metadata
+        // write happens — so if they hit a torn/absent read on a LATER launch
+        // first, hadRealAccount() would be false and restoreSession would mint an
+        // anonymous user again. Stamping it on a successful real read protects
+        // already-upgraded installs immediately. Best-effort; keyed on
+        // is_anonymous === false to match writeToSecure.
+        if (fromSecure.user.is_anonymous === false) {
+          try {
+            await backend.setItem(REAL_ACCOUNT_KEY, '1');
+          } catch {
+            // A keystore hiccup just defers the backfill to the next read.
+          }
+        }
+        return fromSecure;
+      }
 
       // Nothing in secure storage — try a one-time migration from the legacy
       // plaintext store so an existing user isn't signed out by the upgrade.
