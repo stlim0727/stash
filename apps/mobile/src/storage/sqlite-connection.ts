@@ -15,12 +15,22 @@ export interface SqliteConnectionOptions {
    */
   workTimeoutMs?: number;
   /**
-   * How many reopens in a single session before the churn is escalated from a
-   * local-buffer breadcrumb to a tracked error (one per session). Frequent
-   * reopens are the leading indicator of the Android background-handle thrash
-   * that wedges the DB, so we want it visible in monitoring before it bites.
+   * How many reopens *within `reopenAlertWindowMs`* before the churn is
+   * escalated from a local-buffer breadcrumb to a tracked error (one per
+   * session). Frequent reopens are the leading indicator of the Android
+   * background-handle thrash that wedges the DB, so we want it visible in
+   * monitoring before it bites.
    */
   reopenAlertThreshold?: number;
+  /**
+   * Rolling window over which `reopenAlertThreshold` reopens count as churn.
+   * Only *clustered* reopens are the thrash/wedge signature; benign lifecycle
+   * reopens (one per background/foreground) spread across a long session must
+   * not escalate, or the alert is pure noise (STASH-C).
+   */
+  reopenAlertWindowMs?: number;
+  /** Clock for reopen-cadence tracking; injectable for tests. Defaults to Date.now. */
+  now?: () => number;
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 2000;
@@ -30,6 +40,9 @@ const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
 // the bound exists to catch a hang, not to police latency.
 const DEFAULT_WORK_TIMEOUT_MS = 5000;
 const DEFAULT_REOPEN_ALERT_THRESHOLD = 5;
+// 5 reopens inside a minute is unambiguous thrash; the same 5 spread across a
+// long session is normal background/foreground lifecycle and must stay silent.
+const DEFAULT_REOPEN_ALERT_WINDOW_MS = 60_000;
 // Only record a tail wait past this bound. A healthy op on this tiny local DB
 // starts near-instantly, so anything above this is head-of-line blocking worth
 // a breadcrumb — while the steady state (fast, uncontended ops) stays silent.
@@ -99,6 +112,12 @@ export class SqliteConnection<DB> {
   // Wall-clock of the last reopen, for the inter-reopen cadence in noteReopen
   // (rapid reopens = thrash, not normal lifecycle).
   private lastReopenAt: number | null = null;
+  // Timestamps of recent reopens, pruned to the alert window — the churn alert
+  // fires on the count *within the window*, not lifetime reopens (STASH-C).
+  private reopenTimes: number[] = [];
+  // The churn error is one-per-session; latch it so a sustained thrash doesn't
+  // re-fire on every reopen past the threshold.
+  private reopenAlerted = false;
   // Count of successful opens this session. The first is the initial open; every
   // one after it is a reopen (a handle died or was proactively closed), which we
   // track as a freeze-risk signal (see noteReopen).
@@ -107,6 +126,8 @@ export class SqliteConnection<DB> {
   private readonly closeTimeoutMs: number;
   private readonly workTimeoutMs: number;
   private readonly reopenAlertThreshold: number;
+  private readonly reopenAlertWindowMs: number;
+  private readonly now: () => number;
 
   constructor(
     private readonly opener: () => Promise<DB>,
@@ -120,6 +141,8 @@ export class SqliteConnection<DB> {
     this.closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
     this.workTimeoutMs = options.workTimeoutMs ?? DEFAULT_WORK_TIMEOUT_MS;
     this.reopenAlertThreshold = options.reopenAlertThreshold ?? DEFAULT_REOPEN_ALERT_THRESHOLD;
+    this.reopenAlertWindowMs = options.reopenAlertWindowMs ?? DEFAULT_REOPEN_ALERT_WINDOW_MS;
+    this.now = options.now ?? Date.now;
   }
 
   /** Resolve to a live handle, reopening transparently if the current one died. */
@@ -270,7 +293,7 @@ export class SqliteConnection<DB> {
    *  (the leading indicator of the Android background-handle wedge). */
   private noteReopen(timings: { probeMs: number; closeMs: number; openMs: number }): void {
     const reopens = this.opens - 1;
-    const at = Date.now();
+    const at = this.now();
     const cadence = this.lastReopenAt === null ? '' : ` ${at - this.lastReopenAt}ms after the last`;
     this.lastReopenAt = at;
     recordLog(
@@ -278,10 +301,22 @@ export class SqliteConnection<DB> {
       `sqlite connection reopened (reopen #${reopens} this session${cadence}; ` +
         `probe ${timings.probeMs}ms, close ${timings.closeMs}ms, open ${timings.openMs}ms)`,
     );
-    if (reopens === this.reopenAlertThreshold) {
+    // Escalate on cadence, not lifetime count: keep only reopens inside the
+    // rolling window, and alert when *those* cross the threshold. This is the
+    // thrash/wedge signature; benign lifecycle reopens spread across a session
+    // never cluster, so they no longer trip the "excessive churn" error
+    // (STASH-C's false positive). One error per session (latched).
+    this.reopenTimes.push(at);
+    const windowStart = at - this.reopenAlertWindowMs;
+    while (this.reopenTimes.length > 0 && this.reopenTimes[0] < windowStart) {
+      this.reopenTimes.shift();
+    }
+    if (!this.reopenAlerted && this.reopenTimes.length >= this.reopenAlertThreshold) {
+      this.reopenAlerted = true;
+      const windowSeconds = Math.round(this.reopenAlertWindowMs / 1000);
       recordLog(
         'error',
-        `sqlite connection reopened ${reopens} times this session — excessive handle churn (likely background/foreground thrash or a wedging handle)`,
+        `sqlite connection reopened ${this.reopenTimes.length} times within ${windowSeconds}s — excessive handle churn (likely background/foreground thrash or a wedging handle)`,
       );
     }
   }
