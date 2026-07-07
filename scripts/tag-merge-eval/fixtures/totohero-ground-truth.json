@@ -1,0 +1,39 @@
+{
+  "_comment": "Human-approved ground truth for user A (totohero), from the live Phase 1 run (see docs/design/library-organizing.md §5). `groups` are the 18 must-MERGE equivalence classes actually applied (canonical first, then the tags merged into it). `hard_negatives` are pairs we DELIBERATELY kept separate — must-NOT-merge, zero tolerance. Every other tag in the vocab is its own singleton class. Scored by tag name (names are unique per user).",
+  "user": "A (totohero)",
+  "groups": [
+    { "canonical": "수영", "members": ["swimming", "수영 강습", "수영 팁", "수영팁", "수영기술", "swimming technique", "swimming training", "swimming pool", "aquatics"] },
+    { "canonical": "접영", "members": ["접영 킥", "butterfly stroke drills"] },
+    { "canonical": "요리", "members": ["cooking", "how to cook", "요리법", "요리 영상", "요리 챌린지", "요리 팁", "쉬운 요리", "간단 요리", "맛있는 요리", "원팬 요리"] },
+    { "canonical": "레시피", "members": ["recipe", "easy recipe", "레시피 공유"] },
+    { "canonical": "korean food", "members": ["한국 음식", "한국 요리"] },
+    { "canonical": "food", "members": ["음식", "delicious"] },
+    { "canonical": "shorts", "members": ["youtube short", "youtube shorts", "유튜브 쇼츠", "유튜브쇼츠", "쇼츠"] },
+    { "canonical": "AI", "members": ["인공지능", "large language models", "로컬 LLM", "클로드"] },
+    { "canonical": "coding", "members": ["software development", "소프트웨어 엔지니어링", "developer", "developer guide", "code generation"] },
+    { "canonical": "gpu programming", "members": ["cuda", "nvidia", "kernels", "parallel processing"] },
+    { "canonical": "marketplace", "members": ["중고거래", "당근마켓", "second-hand"] },
+    { "canonical": "운동", "members": ["fitness", "workout", "strength training"] },
+    { "canonical": "스포츠", "members": ["sports", "sports strategy"] },
+    { "canonical": "travel", "members": ["travel vlog", "여행 정보"] },
+    { "canonical": "japan travel", "members": ["일본 여행"] },
+    { "canonical": "섬여행", "members": ["섬 여행"] },
+    { "canonical": "테니스", "members": ["tennis", "tennis coach", "tennis match"] },
+    { "canonical": "낚시", "members": ["fishing", "fishing trip", "boat fishing"] }
+  ],
+  "hard_negatives": [
+    ["접영", "backstroke"],
+    ["접영", "수영"],
+    ["backstroke", "수영"],
+    ["김치찌개", "된장찌개"],
+    ["요리", "레시피"],
+    ["korean food", "food"],
+    ["운동", "스포츠"],
+    ["머신러닝", "AI"],
+    ["삼겹살", "목살"],
+    ["busan", "okinawa"],
+    ["통영여행", "양양여행"],
+    ["ramen", "sushi"],
+    ["일본 여행", "한국 여행"]
+  ]
+}
