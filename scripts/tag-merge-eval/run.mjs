@@ -57,13 +57,28 @@ function report(label, s) {
 }
 
 async function main() {
-  const outputPath = arg('output');
-  if (outputPath) {
-    const out = JSON.parse(readFileSync(resolve(outputPath), 'utf8'));
-    const groups = (out.groups ?? []).map((g) => g.tags ?? []);
-    const s = score(groups, gt, vocabNames);
-    report(`output: ${outputPath}`, s);
-    if (!passesGate(s)) process.exitCode = 1;
+  const outputArg = arg('output');
+  if (outputArg) {
+    // Score one or more precomputed outputs (comma-separated). A SINGLE output is
+    // diagnostic only — it reports the per-sample gate but never a shippable
+    // verdict, since blessing a production model needs ≥ MIN_RUNS samples (one
+    // lucky JSON must not read as a passing eval). Pass ≥ MIN_RUNS files to get a
+    // real aggregate verdict, the same rule as live provider runs.
+    const paths = outputArg.split(',').map((p) => p.trim()).filter(Boolean);
+    const results = paths.map((p) => {
+      const out = JSON.parse(readFileSync(resolve(p), 'utf8'));
+      return { p, s: score((out.groups ?? []).map((g) => g.tags ?? []), gt, vocabNames) };
+    });
+    results.forEach(({ p, s }) => report(`output: ${p}`, s));
+    const allPass = results.every((r) => passesGate(r.s));
+    if (paths.length >= MIN_RUNS) {
+      console.log(`\n══ AGGREGATE (${paths.length} outputs) ══`);
+      console.log(`  VERDICT : ${allPass ? `SHIPPABLE ✅ (gate held on all ${paths.length})` : 'NOT shippable ❌'}`);
+      if (!allPass) process.exitCode = 1;
+    } else {
+      console.log(`\nDIAGNOSTIC — ${paths.length} sample(s). A shippable verdict needs ≥ ${MIN_RUNS} outputs (or live runs); this only reports the per-sample gate.`);
+      if (!allPass) process.exitCode = 1; // still surface a broken sample for CI
+    }
     return;
   }
 

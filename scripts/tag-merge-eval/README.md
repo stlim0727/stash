@@ -63,10 +63,14 @@ node scripts/tag-merge-eval/run.mjs --provider gemini --model gemini-2.5-flash  
 node scripts/tag-merge-eval/run.mjs --provider anthropic --model <claude-model-id>  --runs 5
 ```
 
-Score a pre-computed output without any API call:
+Score pre-computed output(s) without any API call. A single file is **diagnostic
+only** (per-sample gate, never a shippable verdict); pass ≥ 5 comma-separated
+files to get a real aggregate verdict (same N ≥ 5 rule as live runs):
 
 ```sh
-node scripts/tag-merge-eval/run.mjs --output out.json   # { "groups": [ { "tags": ["a","b"] }, … ] }
+node scripts/tag-merge-eval/run.mjs --output out.json                     # diagnostic
+node scripts/tag-merge-eval/run.mjs --output r1.json,r2.json,r3.json,r4.json,r5.json   # verdict
+# output shape: { "groups": [ { "tags": ["a","b"] }, … ] }
 ```
 
 Validate the scorer itself (no key needed):
