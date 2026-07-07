@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Linking } from 'react-native';
+import { Linking, StyleSheet } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -1327,6 +1327,11 @@ test('a wide viewport flows the card layout into multiple columns', async () => 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Card one')).toBeTruthy());
 
+  const cells = screen.getAllByTestId('inbox-grid-cell');
+  expect(cells).toHaveLength(4);
+  expect(StyleSheet.flatten(cells[0].props.style)).toEqual(
+    expect.objectContaining({ flex: 1, minWidth: 0 }),
+  );
   expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(2);
 });
 
