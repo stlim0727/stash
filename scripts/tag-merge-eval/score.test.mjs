@@ -47,9 +47,37 @@ test('under-merging (dropping some 수영 members) lowers recall but keeps preci
   assert.ok(passesGate(s)); // precision-first: leaving merges on the table still passes
 });
 
-test('empty output = no merges = vacuous precision 1 but recall 0', () => {
+test('empty output (no-op model) fails the gate on the recall floor', () => {
   const s = score([], gt, vocabNames);
-  assert.equal(s.mergePrecision, 1);
+  assert.equal(s.mergePrecision, 1); // vacuous
   assert.equal(s.mergeRecall, 0);
   assert.equal(s.forbiddenCount, 0);
+  assert.equal(passesGate(s), false); // a do-nothing model is not shippable
+});
+
+test('an OVERLAPPING bad group is caught even when the tag is also in its correct group', () => {
+  // 접영 appears in both a bad [접영, backstroke] group and its correct group.
+  // A last-write-wins map would miss the violation; multi-membership catches it.
+  const overlapping = [['접영', 'backstroke'], ...perfect];
+  const s = score(overlapping, gt, vocabNames);
+  assert.ok(s.forbiddenCount >= 1);
+  assert.ok(s.overlappingTags.includes('접영'));
+  assert.equal(passesGate(s), false);
+});
+
+test('a class-equivalent forbidden merge (접영 킥 + backstroke, no literal 접영) is still caught', () => {
+  // The 접영 group is replaced by one that uses a class member instead of 접영
+  // itself; the hard negative [접영, backstroke] must still fire via class expansion.
+  const bad = perfect.map((g) => (g[0] === '접영' ? ['접영 킥', 'butterfly stroke drills', 'backstroke'] : g));
+  const s = score(bad, gt, vocabNames);
+  assert.ok(s.forbiddenViolations.some(([a, b]) => a === '접영' && b === 'backstroke'));
+  assert.equal(passesGate(s), false);
+});
+
+test('delicious is a singleton (filler), not a must-merge member of food (§8.3)', () => {
+  // Merging delicious into food should now be a forbidden filler over-merge.
+  const withFiller = perfect.map((g) => (g[0] === 'food' ? [...g, 'delicious'] : g));
+  const s = score(withFiller, gt, vocabNames);
+  assert.ok(s.forbiddenViolations.some(([a, b]) => a === 'food' && b === 'delicious'));
+  assert.equal(passesGate(s), false);
 });

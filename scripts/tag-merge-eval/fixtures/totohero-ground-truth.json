@@ -1,5 +1,5 @@
 {
-  "_comment": "Human-approved ground truth for user A (totohero), from the live Phase 1 run (see docs/design/library-organizing.md §5). `groups` are the 18 must-MERGE equivalence classes actually applied (canonical first, then the tags merged into it). `hard_negatives` are pairs we DELIBERATELY kept separate — must-NOT-merge, zero tolerance. Every other tag in the vocab is its own singleton class. Scored by tag name (names are unique per user).",
+  "_comment": "Intended-target ground truth for user A (totohero), based on the live Phase 1 run (docs/design/library-organizing.md §5). `groups` are the must-MERGE equivalence classes (canonical first, then merged members). `hard_negatives` are pairs we DELIBERATELY keep separate — must-NOT-merge, zero tolerance, expanded to full classes by the scorer. Every other tag is its own singleton. Scored by tag name (unique per user). NOTE: the live run merged 'delicious' into 'food', but §8.3 says generic filler tags (delicious, 일상, value for money) should NOT be merged (they belong to a separate deletion flow); the target here follows §8.3, so 'delicious' is a singleton + a hard negative and a model is not rewarded for that filler over-merge.",
   "user": "A (totohero)",
   "groups": [
     { "canonical": "수영", "members": ["swimming", "수영 강습", "수영 팁", "수영팁", "수영기술", "swimming technique", "swimming training", "swimming pool", "aquatics"] },
@@ -7,7 +7,7 @@
     { "canonical": "요리", "members": ["cooking", "how to cook", "요리법", "요리 영상", "요리 챌린지", "요리 팁", "쉬운 요리", "간단 요리", "맛있는 요리", "원팬 요리"] },
     { "canonical": "레시피", "members": ["recipe", "easy recipe", "레시피 공유"] },
     { "canonical": "korean food", "members": ["한국 음식", "한국 요리"] },
-    { "canonical": "food", "members": ["음식", "delicious"] },
+    { "canonical": "food", "members": ["음식"] },
     { "canonical": "shorts", "members": ["youtube short", "youtube shorts", "유튜브 쇼츠", "유튜브쇼츠", "쇼츠"] },
     { "canonical": "AI", "members": ["인공지능", "large language models", "로컬 LLM", "클로드"] },
     { "canonical": "coding", "members": ["software development", "소프트웨어 엔지니어링", "developer", "developer guide", "code generation"] },
@@ -28,6 +28,7 @@
     ["김치찌개", "된장찌개"],
     ["요리", "레시피"],
     ["korean food", "food"],
+    ["food", "delicious"],
     ["운동", "스포츠"],
     ["머신러닝", "AI"],
     ["삼겹살", "목살"],

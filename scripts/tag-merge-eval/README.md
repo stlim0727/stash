@@ -30,15 +30,20 @@ content). Scoring is by tag **name** (unique per user); production keys by id.
 
 - **Merge precision** — of all pairs the model merged, fraction the ground truth
   also merges. **Gated: ≥ 0.95.**
-- **Forbidden merges** — hard-negative pairs the model merged. **Gated: 0, across
-  every run.**
-- **Merge recall** — of ground-truth merges, fraction the model found.
-  *Informational* — precision ≫ recall (a missed merge is cheap; a wrong one is
-  destructive).
-- **Restraint** — tags left unmerged vs the truth's 214 (over-merge shows here).
+- **Forbidden merges** — hard-negative pairs the model merged. Each hard negative
+  is expanded across the full ground-truth class of both tags, and overlapping
+  model groups are handled via multi-membership, so a class-equivalent violation
+  (접영 킥 + backstroke) or one hidden by a tag's other group still counts.
+  **Gated: 0, every run.**
+- **Merge recall** — of ground-truth merges, fraction the model found. **Gated:
+  ≥ 0.5** — a floor so a no-op model (empty output → vacuous 100% precision) can't
+  pass. Above the floor it's informational; precision ≫ recall.
+- **Restraint** — tags left unmerged vs the truth's singletons (over-merge shows
+  here).
 
-A model is **shippable** only if it passes the gate on **N ≥ 5** runs (temp 0.1 is
-still stochastic; a model that trips a hard negative 1-in-5 is unshippable).
+A model is **shippable** only if **every** requested run completes **and** passes
+the gate (**N ≥ 5**; temp 0.1 is still stochastic, and a run that errors out is
+not a pass — the runner exits non-zero unless all N clean runs hold the gate).
 
 ## Run
 

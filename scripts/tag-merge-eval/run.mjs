@@ -43,7 +43,10 @@ function report(label, s) {
   if (s.badPairs.length) {
     console.log(`  sample bad merges: ${s.badPairs.slice(0, 8).map((p) => p.join('+')).join(', ')}${s.badPairs.length > 8 ? ' …' : ''}`);
   }
-  console.log(`  GATE (prec ≥ ${pct(GATE.minPrecision)} & 0 forbidden): ${passesGate(s) ? 'PASS ✅' : 'FAIL ❌'}`);
+  if (s.overlappingTags.length) {
+    console.log(`  ⚠ overlapping tags (in >1 group): ${s.overlappingTags.slice(0, 8).join(', ')}${s.overlappingTags.length > 8 ? ' …' : ''}`);
+  }
+  console.log(`  GATE (prec ≥ ${pct(GATE.minPrecision)} & recall ≥ ${pct(GATE.minRecall)} & 0 forbidden): ${passesGate(s) ? 'PASS ✅' : 'FAIL ❌'}`);
 }
 
 async function main() {
@@ -51,7 +54,9 @@ async function main() {
   if (outputPath) {
     const out = JSON.parse(readFileSync(resolve(outputPath), 'utf8'));
     const groups = (out.groups ?? []).map((g) => g.tags ?? []);
-    report(`output: ${outputPath}`, score(groups, gt, vocabNames));
+    const s = score(groups, gt, vocabNames);
+    report(`output: ${outputPath}`, s);
+    if (!passesGate(s)) process.exitCode = 1;
     return;
   }
 
@@ -64,12 +69,14 @@ async function main() {
   console.log(`Eval: ${provider}${model ? ` (${model})` : ''} · ${runs} run(s) · ${vocab.length} tags · truth = ${gt.groups.length} groups, ${gt.hard_negatives.length} hard negatives`);
 
   const scores = [];
+  let failures = 0;
   for (let i = 0; i < runs; i++) {
     let groups;
     try {
       const out = await run(vocab, { model });
       groups = out.map((g) => g.tags ?? []);
     } catch (err) {
+      failures++;
       console.error(`  run ${i + 1} failed: ${err.message}`);
       continue;
     }
@@ -78,16 +85,20 @@ async function main() {
     report(`run ${i + 1}/${runs}`, s);
   }
 
-  if (scores.length) {
-    const mean = (f) => scores.reduce((a, s) => a + f(s), 0) / scores.length;
-    const allPass = scores.every(passesGate);
-    const anyForbidden = scores.some((s) => s.forbiddenCount > 0);
-    console.log(`\n══ AGGREGATE (${scores.length} runs) ══`);
-    console.log(`  mean precision  : ${pct(mean((s) => s.mergePrecision))}`);
-    console.log(`  mean recall     : ${pct(mean((s) => s.mergeRecall))}`);
-    console.log(`  forbidden merges: ${anyForbidden ? 'PRESENT in ≥1 run ⛔' : 'none across all runs'}`);
-    console.log(`  VERDICT         : ${allPass && !anyForbidden ? 'SHIPPABLE ✅ (gate held every run)' : 'NOT shippable ❌'}`);
-  }
+  const mean = (f) => (scores.length ? scores.reduce((a, s) => a + f(s), 0) / scores.length : 0);
+  const anyForbidden = scores.some((s) => s.forbiddenCount > 0);
+  // Shippable requires EVERY requested run to complete AND pass the gate. A run
+  // that errored out (transient API/parse failure) is not a pass — one surviving
+  // clean response out of five must never read as shippable.
+  const shippable = scores.length === runs && scores.every(passesGate) && !anyForbidden;
+
+  console.log(`\n══ AGGREGATE (${scores.length}/${runs} runs completed) ══`);
+  console.log(`  mean precision  : ${pct(mean((s) => s.mergePrecision))}`);
+  console.log(`  mean recall     : ${pct(mean((s) => s.mergeRecall))}`);
+  console.log(`  forbidden merges: ${anyForbidden ? 'PRESENT in ≥1 run ⛔' : 'none across completed runs'}`);
+  if (failures) console.log(`  incomplete      : ${failures} run(s) failed → not shippable`);
+  console.log(`  VERDICT         : ${shippable ? `SHIPPABLE ✅ (gate held on all ${runs} runs)` : 'NOT shippable ❌'}`);
+  if (!shippable) process.exitCode = 1;
 }
 
 main().catch((e) => {
