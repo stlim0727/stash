@@ -73,6 +73,9 @@ These are "do not break" rules, not just implementation notes.
   - real -> anonymous preserves local data and must not wipe the cache.
 - Expired real sessions enter `session_expired`; do not mint a fresh anonymous
   user or run destructive sync while there is no real session.
+- Anonymous sessions must never run the remote-deletion diff; anonymous data is
+  single-device, so an empty remote set is not evidence that local rows vanished
+  elsewhere.
 - Signing in must trigger `syncNow` based on changed `auth.userId`, even when
   the local queue is empty.
 
