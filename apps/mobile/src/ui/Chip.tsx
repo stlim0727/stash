@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { PixelRatio, Pressable, StyleSheet, Text, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
+import { PixelRatio, Platform, Pressable, StyleSheet, Text, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { usePalette } from '@/theme';
@@ -22,6 +22,8 @@ interface ChipProps extends Omit<PressableProps, 'style'> {
 }
 
 const LABEL_FONT_SIZE = 14;
+const LABEL_WEIGHT = Platform.select({ web: '600', default: '700' }) as '600' | '700';
+const COUNT_WEIGHT = Platform.select({ web: '500', default: '600' }) as '500' | '600';
 // Line box as a ratio of the font size. ~1.57 makes the default-scale line box
 // 22px — the value verified on-device to clear the taller Samsung One UI bold
 // metrics (1.4 ≈ 20px still marginally clipped the glyphs). Deriving lineHeight
@@ -91,13 +93,13 @@ const styles = StyleSheet.create({
     // lineHeight is applied inline (scaled by getFontScale) — see the component.
     // Keep Android's default font padding (do NOT set includeFontPadding:false,
     // which tightened the box and made it clip).
-    fontWeight: '700',
+    fontWeight: LABEL_WEIGHT,
   },
   // Trailing count: same color as the label but dimmed and lighter, so it reads
   // as secondary metadata (the folder's weight) without competing with the name.
   count: {
     fontSize: LABEL_FONT_SIZE,
-    fontWeight: '600',
+    fontWeight: COUNT_WEIGHT,
     opacity: 0.55,
     marginLeft: 5,
   },
