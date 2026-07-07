@@ -1,8 +1,7 @@
 /**
- * Native OS UI font stack — the fallback shown instantly while Pretendard loads (and
- * if it fails): San Francisco on Apple, Segoe UI on Windows, Roboto on
- * Android/ChromeOS. Same idea as the Android APK, which renders in the system
- * font (Roboto).
+ * Native OS UI font stack: San Francisco on Apple, Segoe UI on Windows, Roboto
+ * on Android/ChromeOS. Same idea as the Android APK, which renders in the
+ * system font (Roboto).
  */
 import { palettes } from '@/theme';
 
@@ -12,16 +11,12 @@ const SYSTEM_FONT_STACK =
   '"Segoe UI Symbol","Noto Color Emoji"';
 
 /**
- * Web base font: self-hosted Pretendard for a cleaner Korean/English UI fit
- * than the bare system stack. It is served as a static asset and loads with
- * `font-display: swap` so text renders
- * immediately in the system fallback and upgrades without blocking (no FOIT).
- * No third-party request (self-hosted, not Google Fonts/CDN at runtime).
+ * Web base font: use the native system UI stack directly. This keeps Windows
+ * desktop text crisp and avoids synthesized/heavy webfont bold weights in the
+ * dense bookmark grid.
  */
 const BASE_FONT_CSS =
-  "@font-face{font-family:'Pretendard Variable';font-style:normal;font-weight:45 920;" +
-  "font-display:swap;src:url('/fonts/pretendard-variable.woff2') format('woff2');}" +
-  `html{font-family:'Pretendard Variable',Pretendard,${SYSTEM_FONT_STACK};` +
+  `html{font-family:${SYSTEM_FONT_STACK};` +
   '-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;' +
   'text-rendering:optimizeLegibility;}';
 
