@@ -69,6 +69,10 @@ states. Each screen links to the section that specifies its behavior; see
 
 ## 2. Inbox
 
+Visual polish guidance for the desktop/web Inbox lives in
+[web-inbox-visual-polish.md](web-inbox-visual-polish.md); after the font trials,
+layout and spacing are the next preferred levers over global typeface swaps.
+
 - ✅ Lists active (not trashed, not legacy-archived) bookmarks, newest first by default.
 - ✅ **Sort control**: a header row toggles the order — field (`Date` / `Name`)
   and direction (`↑ Asc` / `↓ Desc`). Date sorts by save time; Name is
