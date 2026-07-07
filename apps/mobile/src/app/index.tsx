@@ -25,11 +25,13 @@ import {
   ScrollView,
   Share,
   StyleSheet,
+  type StyleProp,
   Text,
   TextInput,
   useColorScheme,
   useWindowDimensions,
   View,
+  type ViewStyle,
 } from 'react-native';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -288,6 +290,74 @@ function ShelfContainer({
   return <View style={[styles.shelfWrap, { maxWidth }]}>{children}</View>;
 }
 
+function InboxRootSurface({
+  backgroundColor,
+  children,
+  shift,
+  sliding,
+}: {
+  backgroundColor: string;
+  children: ReactNode;
+  shift: Animated.Value;
+  sliding: boolean;
+}) {
+  if (sliding) {
+    return (
+      <Animated.View
+        style={[
+          styles.container,
+          { backgroundColor },
+          { transform: [{ translateX: shift }] },
+        ]}
+      >
+        {children}
+      </Animated.View>
+    );
+  }
+
+  return <View style={[styles.container, { backgroundColor }]}>{children}</View>;
+}
+
+// On Chrome/web, even an identity transform on a broad ancestor rasterizes text
+// and thumbnails into a softer composited layer. Keep those animated wrappers
+// native-only; web gets the same positioned surface without the transform.
+function WebCrispAnimatedSurface({
+  animatedStyle,
+  baseStyle,
+  children,
+  onLayout,
+  pointerEvents,
+  testID,
+  web,
+}: {
+  animatedStyle: StyleProp<ViewStyle>;
+  baseStyle: StyleProp<ViewStyle>;
+  children: ReactNode;
+  onLayout?: ComponentProps<typeof View>['onLayout'];
+  pointerEvents?: ComponentProps<typeof View>['pointerEvents'];
+  testID?: string;
+  web: boolean;
+}) {
+  if (web) {
+    return (
+      <View testID={testID} pointerEvents={pointerEvents} onLayout={onLayout} style={baseStyle}>
+        {children}
+      </View>
+    );
+  }
+
+  return (
+    <Animated.View
+      testID={testID}
+      pointerEvents={pointerEvents}
+      onLayout={onLayout}
+      style={[baseStyle, animatedStyle]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
 
 /**
  * One pill in the Inbox browse shelf. Memoized so a filter change (which
@@ -501,17 +571,27 @@ export default function InboxScreen() {
   useEffect(() => {
     if (settingsOpen) {
       setSliding(true);
+      Animated.timing(settingsShift, {
+        toValue: -SETTINGS_PANEL_WIDTH / 2,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+      return;
+    }
+    if (!sliding) {
+      settingsShift.setValue(0);
+      return;
     }
     Animated.timing(settingsShift, {
-      toValue: settingsOpen ? -SETTINGS_PANEL_WIDTH / 2 : 0,
+      toValue: 0,
       duration: 200,
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (finished && !settingsOpen) {
+      if (finished) {
         setSliding(false);
       }
     });
-  }, [settingsOpen, settingsShift]);
+  }, [settingsOpen, settingsShift, sliding]);
 
   // How many inbox bookmarks have AI suggestions that arrived while the user
   // wasn't looking (auto-enrichment, a server-side trigger, another device) and
@@ -1040,6 +1120,7 @@ export default function InboxScreen() {
     scrollBy: scrollShelfBy,
     isWeb,
   } = useShelfEdges(showShelf, [winWidth, chips.length]);
+  const InboxList = (isWeb ? FlatList : AnimatedFlatList) as typeof FlatList;
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
   // Facet-scoped search placeholder (B4): a pure projection of the active facet,
@@ -1330,14 +1411,13 @@ export default function InboxScreen() {
   }, [router, filter]);
 
   return (
-    <Animated.View
-      style={[
-        styles.container,
-        { backgroundColor: palette.background },
-        sliding ? { transform: [{ translateX: settingsShift }] } : null,
-      ]}
+    <InboxRootSurface
+      backgroundColor={palette.background}
+      shift={settingsShift}
+      sliding={sliding}
     >
-      <Animated.View
+      <WebCrispAnimatedSurface
+        web={isWeb}
         // The cluster is absolutely positioned so it floats over the list and
         // can translate out of view. It needs an opaque background so list rows
         // sliding underneath stay hidden while it is partly collapsed.
@@ -1356,10 +1436,8 @@ export default function InboxScreen() {
         // taps in empty space fall through to the cloud/list (STASH-7/STASH-8).
         pointerEvents="box-none"
         onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
-        style={[
-          styles.header,
-          { backgroundColor: palette.background, transform: [{ translateY: headerTranslate }] },
-        ]}
+        baseStyle={[styles.header, { backgroundColor: palette.background }]}
+        animatedStyle={{ transform: [{ translateY: headerTranslate }] }}
       >
         <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 6 }]}>
           {/* Compact single-row hero: the brand wordmark with the saved-count
@@ -1694,7 +1772,7 @@ export default function InboxScreen() {
             ) : null}
           </ShelfContainer>
         ) : null}
-      </Animated.View>
+      </WebCrispAnimatedSurface>
       {showFilterBar && scope ? (
         // Pinned active-filter bar: its OWN non-translating layer between the
         // header (zIndex 10, which must stay above so it covers the bar when
@@ -1702,7 +1780,8 @@ export default function InboxScreen() {
         // the safe-area top, so its clear/back action stays tappable while
         // scrolled to the bottom. Resting top = headerHeight; it slides up from
         // there. Opaque base so list rows can't bleed through the tint.
-        <Animated.View
+        <WebCrispAnimatedSurface
+          web={isWeb}
           testID="inbox-filter-bar"
           // box-none for the same reason as the header: its elevation
           // (overlayLayer, STASH-7) would otherwise capture touches across the
@@ -1712,15 +1791,15 @@ export default function InboxScreen() {
           // so the clear action stays tappable.
           pointerEvents="box-none"
           onLayout={(event) => setFilterBarHeight(event.nativeEvent.layout.height)}
-          style={[
+          baseStyle={[
             styles.filterBar,
             {
               top: headerHeight,
               backgroundColor: palette.background,
               borderBottomColor: palette.border,
-              transform: [{ translateY: filterBarTranslate }],
             },
           ]}
+          animatedStyle={{ transform: [{ translateY: filterBarTranslate }] }}
         >
           <View style={[styles.filterBarInner, { backgroundColor: palette.accentSoft }]}>
             <Ionicons name={scope.icon} size={16} color={palette.accentText} style={styles.filterBarIcon} />
@@ -1741,9 +1820,9 @@ export default function InboxScreen() {
               <Ionicons name="close" size={16} color={palette.accentText} />
             </Pressable>
           </View>
-        </Animated.View>
+        </WebCrispAnimatedSurface>
       ) : null}
-      <AnimatedFlatList
+      <InboxList
         data={gridData}
         keyExtractor={(item) => item.id}
         // Remount when the column count changes: FlatList forbids mutating
@@ -1751,6 +1830,7 @@ export default function InboxScreen() {
         key={`grid-${viewMode}-${columns}`}
         numColumns={columns}
         columnWrapperStyle={columns > 1 ? { gap: 16 } : undefined}
+        style={isWeb ? styles.webListNoTransform : undefined}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: true,
         })}
@@ -2291,7 +2371,7 @@ export default function InboxScreen() {
         }))}
         onClose={() => setSortMenuOpen(false)}
       />
-    </Animated.View>
+    </InboxRootSurface>
   );
 }
 
@@ -2312,6 +2392,9 @@ const styles = StyleSheet.create({
     gap: 6,
     width: '100%',
     alignSelf: 'center',
+  },
+  webListNoTransform: {
+    transform: [],
   },
   listModeList: {
     gap: 8,
