@@ -9,6 +9,7 @@ type ChipVariant = 'default' | 'selected' | 'accent' | 'danger';
 interface ChipProps extends Omit<PressableProps, 'style'> {
   children: ReactNode;
   variant?: ChipVariant;
+  quiet?: boolean;
   // Optional leading glyph. Used by the Inbox browse shelf to mark what KIND of
   // facet a chip is — a folder for collections (and a tray for the "no
   // collection" set) — so they read as collection filters rather than being
@@ -31,10 +32,15 @@ const COUNT_WEIGHT = Platform.select({ web: '500', default: '600' }) as '500' | 
 // font/display size.
 const LABEL_LINE_RATIO = 1.57;
 
-export function Chip({ children, variant = 'default', icon, count, disabled, style, ...props }: ChipProps) {
+export function Chip({ children, variant = 'default', quiet, icon, count, disabled, style, ...props }: ChipProps) {
   const palette = usePalette();
+  const quietDefault = quiet && variant === 'default';
   const colors = {
-    default: { backgroundColor: palette.surface, borderColor: palette.border, color: palette.text },
+    default: {
+      backgroundColor: quietDefault ? 'transparent' : palette.surface,
+      borderColor: palette.border,
+      color: quietDefault ? palette.textSecondary : palette.text,
+    },
     selected: { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft, color: palette.accentText },
     accent: { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft, color: palette.accentText },
     danger: { backgroundColor: palette.dangerSoft, borderColor: palette.dangerSoft, color: palette.danger },
@@ -60,9 +66,13 @@ export function Chip({ children, variant = 'default', icon, count, disabled, sty
       {icon ? (
         <Ionicons name={icon} size={13} color={colors.color} style={styles.icon} testID={`chip-icon-${icon}`} />
       ) : null}
-      <Text style={[styles.label, { color: colors.color, lineHeight }]}>{children}</Text>
+      <Text style={[styles.label, quietDefault ? styles.labelQuiet : null, { color: colors.color, lineHeight }]}>
+        {children}
+      </Text>
       {typeof count === 'number' ? (
-        <Text style={[styles.count, { color: colors.color, lineHeight }]}>{`· ${count}`}</Text>
+        <Text style={[styles.count, quietDefault ? styles.countQuiet : null, { color: colors.color, lineHeight }]}>
+          {`· ${count}`}
+        </Text>
       ) : null}
     </Pressable>
   );
@@ -95,6 +105,9 @@ const styles = StyleSheet.create({
     // which tightened the box and made it clip).
     fontWeight: LABEL_WEIGHT,
   },
+  labelQuiet: {
+    fontWeight: Platform.select({ web: '500', default: LABEL_WEIGHT }) as '500' | '700',
+  },
   // Trailing count: same color as the label but dimmed and lighter, so it reads
   // as secondary metadata (the folder's weight) without competing with the name.
   count: {
@@ -102,5 +115,9 @@ const styles = StyleSheet.create({
     fontWeight: COUNT_WEIGHT,
     opacity: 0.55,
     marginLeft: 5,
+  },
+  countQuiet: {
+    fontWeight: Platform.select({ web: '400', default: COUNT_WEIGHT }) as '400' | '600',
+    opacity: 0.42,
   },
 });
