@@ -37,6 +37,11 @@ import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 import { trackBreadcrumb } from '@/observability/sentry';
+import {
+  acceptSuggestionBundle,
+  dismissSuggestionBundle,
+  recordFolderSuggestionActedOn,
+} from '@/domain/suggestion-actions';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
@@ -436,18 +441,31 @@ export default function BookmarkDetailScreen() {
     return error === null;
   };
 
+  const suggestionActionDeps = {
+    acceptSuggestedTags,
+    addTagsToBookmark,
+    assignCollection,
+    createCollection,
+    dismissFolderSuggestion,
+  };
+
   const handleAddTag = (name: string) =>
     runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
   const handleRemoveTag = (name: string) =>
     void runOrganizeAction(() => removeTagFromBookmark(bookmark.id, name));
   const handleAcceptSuggestion = (name: string) => {
     const match = pending.find((suggestion) => suggestion.name === name);
-    if (match) {
-      void runOrganizeAction(() => acceptSuggestedTags(bookmark.id, [match]));
-    } else {
-      // A hashtag chip — accepting it adds a plain user tag.
-      void runOrganizeAction(() => addTagsToBookmark(bookmark.id, [name]));
-    }
+    void runOrganizeAction(() =>
+      acceptSuggestionBundle(suggestionActionDeps, {
+        bookmarkId: bookmark.id,
+        aiSuggestions: match ? [match] : [],
+        // A hashtag chip — accepting it adds a plain user tag.
+        plainTagNames: match ? [] : [name],
+        folder: null,
+        folderTokens: [],
+        createCollectionError: t('detail.errorCreateCollection'),
+      }),
+    );
   };
   const handleDismissTag = (name: string) => {
     setDismissed((prev) => new Set(prev).add(name.toLowerCase()));
@@ -455,7 +473,13 @@ export default function BookmarkDetailScreen() {
     // badge stays gone across sessions. Hashtag chips aren't AI suggestions, so
     // they only get the session-local dismissal above.
     if (aiSuggestionNames.has(name.toLowerCase())) {
-      markSuggestionsReviewed(bookmark.id, [name]);
+      dismissSuggestionBundle({
+        bookmarkId: bookmark.id,
+        aiSuggestionNames: [name],
+        folderTokens: [],
+        markSuggestionsReviewed,
+        dismissFolderSuggestion,
+      });
     }
   };
   // One-tap "yes to all" for the tag row: apply every tag chip at once. AI tags
@@ -468,19 +492,14 @@ export default function BookmarkDetailScreen() {
       .filter((suggestion) => !aiSuggestionNames.has(suggestion.name.toLowerCase()))
       .map((suggestion) => suggestion.name);
     void runOrganizeAction(async () => {
-      if (pending.length > 0) {
-        const error = await acceptSuggestedTags(bookmark.id, pending);
-        if (error) {
-          return error;
-        }
-      }
-      if (hashtagNames.length > 0) {
-        const error = await addTagsToBookmark(bookmark.id, hashtagNames);
-        if (error) {
-          return error;
-        }
-      }
-      return null;
+      return acceptSuggestionBundle(suggestionActionDeps, {
+        bookmarkId: bookmark.id,
+        aiSuggestions: pending,
+        plainTagNames: hashtagNames,
+        folder: null,
+        folderTokens: [],
+        createCollectionError: t('detail.errorCreateCollection'),
+      });
     });
   };
   // Tags-only "no thanks": session-dismiss every tag chip and persist the AI
@@ -496,9 +515,13 @@ export default function BookmarkDetailScreen() {
       return next;
     });
     const aiNames = names.filter((name) => aiSuggestionNames.has(name.toLowerCase()));
-    if (aiNames.length > 0) {
-      markSuggestionsReviewed(bookmark.id, aiNames);
-    }
+    dismissSuggestionBundle({
+      bookmarkId: bookmark.id,
+      aiSuggestionNames: aiNames,
+      folderTokens: [],
+      markSuggestionsReviewed,
+      dismissFolderSuggestion,
+    });
   };
 
   // A manual re-run is a deliberate "reconsider": forget prior dismissals so the
@@ -542,11 +565,8 @@ export default function BookmarkDetailScreen() {
   // the move (or refiling elsewhere) would re-surface a recommendation the user
   // already acted on. Mirrors how accepting a tag records it as reviewed. At most
   // one chip shows at a time, so `folderTokens` already reflects it.
-  const recordFolderActedOn = () => {
-    for (const token of folderTokens) {
-      dismissFolderSuggestion(bookmark.id, token);
-    }
-  };
+  const recordFolderActedOn = () =>
+    recordFolderSuggestionActedOn(bookmark.id, folderTokens, dismissFolderSuggestion);
   const handleDismissFolder = recordFolderActedOn;
 
   // Accept the proposed summary into the note. Sacred-fields rule: the summary is
@@ -595,9 +615,16 @@ export default function BookmarkDetailScreen() {
     if (!suggestedCollection) {
       return;
     }
-    assignCollection(bookmark.id, suggestedCollection.id);
-    recordFolderActedOn();
-    offerMoveUndo(suggestedCollection.name);
+    void runOrganizeAction(() =>
+      acceptSuggestionBundle(suggestionActionDeps, {
+        bookmarkId: bookmark.id,
+        aiSuggestions: [],
+        folder: suggestedFolder,
+        folderTokens,
+        createCollectionError: t('detail.errorCreateCollection'),
+        onAcceptedFolder: (folder) => offerMoveUndo(folder.name),
+      }),
+    );
   };
 
   const handleCreateCollection = (name: string) =>
@@ -614,16 +641,19 @@ export default function BookmarkDetailScreen() {
   // When the bookmark already lives elsewhere this is a move, so offer the Undo
   // toast once the create+assign lands (an add overwrites nothing).
   const handleAcceptCreateCollection = () => {
-    if (!suggestedByName) {
+    if (!suggestedFolder) {
       return;
     }
-    const name = suggestedByName;
-    void handleCreateCollection(name).then((ok) => {
-      if (ok) {
-        recordFolderActedOn();
-        offerMoveUndo(name);
-      }
-    });
+    void runOrganizeAction(() =>
+      acceptSuggestionBundle(suggestionActionDeps, {
+        bookmarkId: bookmark.id,
+        aiSuggestions: [],
+        folder: suggestedFolder,
+        folderTokens,
+        createCollectionError: t('detail.errorCreateCollection'),
+        onAcceptedFolder: (folder) => offerMoveUndo(folder.name),
+      }),
+    );
   };
 
   const handleOpenLink = () => {
