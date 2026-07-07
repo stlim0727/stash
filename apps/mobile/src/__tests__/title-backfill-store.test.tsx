@@ -56,6 +56,7 @@ function renderStore() {
 
 const THREADS_ID = '7e64cf1e-0000-4000-8000-0000000000b1';
 const RENAMED_ID = '7e64cf1e-0000-4000-8000-0000000000b2';
+const YOUTUBE_ID = '7e64cf1e-0000-4000-8000-0000000000b3';
 
 test('the title backfill repairs a machine-fallback title but not a user rename', async () => {
   fakeRepo.__reset([
@@ -93,4 +94,40 @@ test('the title backfill repairs a machine-fallback title but not a user rename'
   // The user's title is untouched, in memory and in storage.
   expect(store.current?.getBookmark(RENAMED_ID)?.title).toBe('My swim clip');
   expect(fakeRepo.__bookmarks().find((b) => b.id === RENAMED_ID)?.title).toBe('My swim clip');
+});
+
+test('the title backfill batches durable reads for multiple repair targets', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: THREADS_ID,
+      url: 'https://www.threads.com/@ephemeris.ai/post/Dabls52E90n',
+      title: 'Dabls52E90n',
+      metadata_status: 'complete',
+    }),
+    makeStoredBookmark({
+      id: YOUTUBE_ID,
+      url: 'https://youtu.be/MEvcN4Nwa1g',
+      title: 'youtu.be',
+      metadata_status: 'complete',
+    }),
+  ]);
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() =>
+    expect(fakeRepo.__bookmarks().find((b) => b.id === THREADS_ID)?.title).toBe(
+      'Threads post by @ephemeris.ai',
+    ),
+  );
+  await waitFor(() =>
+    expect(fakeRepo.__bookmarks().find((b) => b.id === YOUTUBE_ID)?.title).toBe(
+      'YouTube video',
+    ),
+  );
+
+  // Initial load + one batched durable backfill read, not one full read per
+  // repair target; each target is then re-read by id immediately before its
+  // full-row storage write.
+  expect(fakeRepo.__listBookmarksCalls()).toBeLessThanOrEqual(2);
+  expect(fakeRepo.__getBookmarkCalls()).toBe(2);
 });

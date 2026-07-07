@@ -132,6 +132,38 @@ test('"Dismiss all" clears the card without applying any tags', async () => {
   expect(screen.queryByText('#design')).toBeNull();
 });
 
+test('"Dismiss all" for visible tags does not persist a hidden folder dismissal', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000b4';
+  const now = '2026-06-12T00:00:00.000Z';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Already filed', collection_id: 'col-recipes' })],
+    {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        { id: 'col-recipes', user_id: 'user-test', name: 'Recipes', description: null, created_at: now, updated_at: now },
+      ],
+    },
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        suggested_collection_id: 'col-recipes',
+        suggested_collection_name: 'Recipes',
+        suggested_tags: [{ name: 'cooking', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Already filed')).toBeTruthy());
+  expect(screen.queryByText('📁 Recipes')).toBeNull();
+  await fireEvent.press(screen.getByLabelText('Dismiss all suggestions for Already filed'));
+
+  await waitFor(() => expect(screen.queryByText('Already filed')).toBeNull());
+  expect(fakeRepo.__meta('dismissed_folder_suggestions')).toBeNull();
+});
+
 test('surfaces a folder recommendation (📁 ＋) alongside tags (#) and files in on tap', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000c1';
   const now = '2026-06-12T00:00:00.000Z';

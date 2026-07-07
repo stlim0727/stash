@@ -182,6 +182,15 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     });
   }
 
+  async getBookmark(id: string): Promise<Bookmark | null> {
+    return this.connection.run(async (db) => {
+      const row = await db.getFirstAsync<BookmarkRow>('SELECT * FROM bookmarks WHERE id = ?', [
+        id,
+      ]);
+      return row ? (JSON.parse(row.data) as Bookmark) : null;
+    });
+  }
+
   async insertBookmark(bookmark: Bookmark): Promise<void> {
     await this.connection.run((db) => writeBookmark(db, bookmark));
   }

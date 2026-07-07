@@ -31,6 +31,7 @@ export interface BookmarkRepository {
    */
   init(seed: Bookmark[], seedTagData?: TagData, seedEnrichments?: AIEnrichment[]): Promise<void>;
   listBookmarks(): Promise<Bookmark[]>;
+  getBookmark(id: string): Promise<Bookmark | null>;
   insertBookmark(bookmark: Bookmark): Promise<void>;
   updateBookmark(bookmark: Bookmark): Promise<void>;
   /** Atomically swap a row's identity, e.g. local ID -> remote ID after sync. */

@@ -149,18 +149,15 @@ A separate CircleCI **`app_testing` job** (triggered with `run_app_testing: true
 
 The step is skipped when either repo variable is absent, so it is truly additive.
 
-> **Service-account permission (required).** The App Testing Agent creates
-> *release tests* (`v1alpha …/releases/{id}/tests`), which is a **separate IAM
-> permission from App Distribution upload/distribute**. The `FIREBASE_SERVICE_ACCOUNT`
-> used for distribution has **App Distribution Admin**, which is enough to upload
-> and read releases but **not** to launch tests — so a correctly-configured run
-> fails with `403 PERMISSION_DENIED` (`The caller does not have permission`) on
-> `createReleaseTest` *after* the upload succeeds. Fix it once in
-> **GCP Console → IAM & Admin → IAM**: grant the service account the
-> **Firebase App Testing Admin** role (`roles/firebaseapptesting.admin`), or
-> **Firebase Admin** (`roles/firebase.admin`) as a broader alternative. If the
-> role isn't offered in the picker, enable the **Firebase App Testing API**
-> (`firebaseapptesting.googleapis.com`) under *APIs & Services* first, then add it.
+> **Service-account permission (required).** Keep **Firebase App Distribution
+> Admin** (`roles/firebaseappdistro.admin`) on the upload service account, and
+> add the grantable Test Lab execution role when the App Testing Agent launches
+> device runs: **Firebase Test Lab Admin** (`roles/cloudtestservice.testAdmin`).
+> Google's App Distribution IAM docs list App Distribution roles under
+> `roles/firebaseappdistro.*`, and the Test Lab IAM docs list
+> `roles/cloudtestservice.testAdmin`; do not use the old
+> `roles/firebaseapptesting.admin` string, which is not a grantable predefined
+> role.
 
 #### One-time setup (Firebase console, ~10 min)
 
@@ -221,10 +218,9 @@ release uploaded to Firebase App Distribution** when no APK path is given. Since
 the `android_apk` job distributes every build, the agent always tests the
 most recent build — no need to pass or rebuild a binary.
 
-**Run locally** (needs the Firebase CLI and a service-account key with the
-**Firebase App Testing Admin** (`roles/firebaseapptesting.admin`) + **Firebase
-App Distribution Admin** roles via ADC — App Distribution Admin alone yields a
-`403 PERMISSION_DENIED` on the test-creation call):
+**Run locally** (needs the Firebase CLI and a service-account key with
+**Firebase App Distribution Admin** (`roles/firebaseappdistro.admin`) plus
+**Firebase Test Lab Admin** (`roles/cloudtestservice.testAdmin`) via ADC):
 
 ```bash
 npm install -g firebase-tools

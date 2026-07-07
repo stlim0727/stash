@@ -8,6 +8,8 @@ export interface FakeRepositoryModule {
   __queue: () => LocalPendingBookmark[];
   /** Test hook: read the current stored bookmark rows (e.g. to assert collection_id). */
   __bookmarks: () => Bookmark[];
+  __listBookmarksCalls: () => number;
+  __getBookmarkCalls: () => number;
   __meta: (key: string) => string | null;
   /** Test hook: pre-seed a durable meta value (e.g. the unseen-suggestions set). */
   __setMeta: (key: string, value: string) => void;
@@ -23,10 +25,19 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
   let enrichments: AIEnrichment[] = [];
   let tagData: TagData = { tags: [], bookmarkTags: [], collections: [] };
   let meta: Record<string, string> = {};
+  let listBookmarksCalls = 0;
+  let getBookmarkCalls = 0;
 
   const repository: BookmarkRepository = {
     init: async () => {},
-    listBookmarks: async () => [...bookmarks],
+    listBookmarks: async () => {
+      listBookmarksCalls += 1;
+      return [...bookmarks];
+    },
+    getBookmark: async (id) => {
+      getBookmarkCalls += 1;
+      return bookmarks.find((bookmark) => bookmark.id === id) ?? null;
+    },
     insertBookmark: async (bookmark) => {
       bookmarks = [bookmark, ...bookmarks.filter((b) => b.id !== bookmark.id)];
     },
@@ -77,9 +88,13 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
       enrichments = [...seedEnrichments];
       tagData = seedTagData ?? { tags: [], bookmarkTags: [], collections: [] };
       meta = {};
+      listBookmarksCalls = 0;
+      getBookmarkCalls = 0;
     },
     __queue: () => [...queue],
     __bookmarks: () => [...bookmarks],
+    __listBookmarksCalls: () => listBookmarksCalls,
+    __getBookmarkCalls: () => getBookmarkCalls,
     __meta: (key: string) => meta[key] ?? null,
     __setMeta: (key: string, value: string) => {
       meta = { ...meta, [key]: value };

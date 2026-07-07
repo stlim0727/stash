@@ -86,7 +86,9 @@ export default function ReviewScreen() {
           title: displayTitle(bookmark) ?? t('common.untitled'),
           suggestions,
           folder,
-          folderTokens: suggestedFolderTokens(folder, enrichment?.suggested_collection_name),
+          folderTokens: folder
+            ? suggestedFolderTokens(folder, enrichment?.suggested_collection_name)
+            : [],
         });
       }
     }
