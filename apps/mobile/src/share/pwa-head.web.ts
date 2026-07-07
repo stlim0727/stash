@@ -1,5 +1,5 @@
 /**
- * Native OS UI font stack — the fallback shown instantly while Inter loads (and
+ * Native OS UI font stack — the fallback shown instantly while Pretendard loads (and
  * if it fails): San Francisco on Apple, Segoe UI on Windows, Roboto on
  * Android/ChromeOS. Same idea as the Android APK, which renders in the system
  * font (Roboto).
@@ -12,17 +12,16 @@ const SYSTEM_FONT_STACK =
   '"Segoe UI Symbol","Noto Color Emoji"';
 
 /**
- * Web base font: a self-hosted Inter subset for a prettier, more distinctive
- * look than the bare system font. Overhead is kept negligible on purpose — one
- * ~48 KB variable `woff2` (latin, all weights) served as a static asset, cached
- * forever, with `font-display: swap` so text renders immediately in the system
- * fallback and upgrades to Inter with no blocking (no FOIT). No third-party
- * request (self-hosted, not Google Fonts).
+ * Web base font: self-hosted Pretendard for a cleaner Korean/English UI fit
+ * than the bare system stack. It is served as a static asset and loads with
+ * `font-display: swap` so text renders
+ * immediately in the system fallback and upgrades without blocking (no FOIT).
+ * No third-party request (self-hosted, not Google Fonts/CDN at runtime).
  */
 const BASE_FONT_CSS =
-  "@font-face{font-family:'Inter';font-style:normal;font-weight:100 900;" +
-  "font-display:swap;src:url('/fonts/inter-var-latin.woff2') format('woff2');}" +
-  `html{font-family:'Inter',${SYSTEM_FONT_STACK};` +
+  "@font-face{font-family:'Pretendard Variable';font-style:normal;font-weight:45 920;" +
+  "font-display:swap;src:url('/fonts/pretendard-variable.woff2') format('woff2');}" +
+  `html{font-family:'Pretendard Variable',Pretendard,${SYSTEM_FONT_STACK};` +
   '-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;' +
   'text-rendering:optimizeLegibility;}';
 
