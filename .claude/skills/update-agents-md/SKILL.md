@@ -14,8 +14,15 @@ description: >-
 `AGENTS.md` is the declared source of truth — CLAUDE.md says **"read `AGENTS.md`
 first"**. It drifts because it's updated by hand and features ship faster than
 anyone re-reads it (it once fell ~50 commits / an entire web-platform surface
-behind). This skill closes the gap deterministically. **Append and reconcile —
-never rewrite** bullets that are already accurate.
+behind). This skill closes the gap deterministically.
+
+**Follow the charter in `docs/development/maintaining-agents-md.md`** — it is the
+authoritative model for what belongs in `AGENTS.md`. In short: the file is an
+**index**, not a changelog or an encyclopedia. Keep facts in the lowest tier
+that surfaces them (CLAUDE.md = always-loaded rules, AGENTS.md = orientation
+read once per task, `docs/**` + PRs = deep "why"). Invariants travel as
+`assertion + one-line why + link`; relocate narrative to `docs/**` rather than
+deleting it; restructuring is fine, contradiction with CLAUDE.md is not.
 
 ## Step 1 — Find the drift window
 
@@ -26,27 +33,32 @@ never rewrite** bullets that are already accurate.
    CI/infra, observability, docs. Ignore pure `chore`/`docs`/formatting commits
    that changed no behavior.
 
-## Step 2 — Decide what's actually worth a bullet
+## Step 2 — Decide what's actually worth recording
 
-AGENTS.md captures **why**, not a changelog. A commit earns a bullet when it
+AGENTS.md captures **why**, not a changelog. A commit earns a place when it
 changes how the app behaves, how the system is built, or a convention an agent
-must follow. Skip trivial fixes already implied by an existing bullet.
+must follow. Skip trivial fixes already implied by an existing entry.
 
 - For anything non-obvious, open the PR (`mcp__github__pull_request_read`) for
   the "why" before writing — the one-line subject is rarely enough.
 - **Check it isn't already there.** Grep AGENTS.md for the feature's keywords
-  first; extend or correct the existing bullet instead of adding a duplicate.
+  first; extend or correct the existing entry instead of adding a duplicate.
+- Decide the **tier** (see the charter): a rule that must hold every turn belongs
+  in CLAUDE.md; a deep war story belongs in `docs/**` with only a one-liner +
+  link in AGENTS.md; only durable orientation stays inline.
 
-## Step 3 — Write in the house style
+## Step 3 — Write to the index model
 
-Match the existing prose exactly (skim a few current bullets first):
+Follow `docs/development/maintaining-agents-md.md`, and match the surrounding
+prose:
 
-- One **dense bullet per feature area**, leading with a bolded phrase naming the
-  change, then the mechanism, the key files, the invariant it preserves, and the
-  tests. Reference PRs by `#NNN` where it adds traceability.
-- Slot it under the right section — a labeled cycle (`## 0.2.0 cycle — …`), a new
-  `## <Area>` section for a whole new surface (that's how the web platform
-  section was added), `## Known minor gaps`, or `## Possible future work`.
+- Prefer a **short entry that names the change + its load-bearing invariant + a
+  link** (the PR `#NNN`, or the `docs/**` page that carries the detail) over a
+  paragraph-long retelling. If the "why" is long, put it in a doc and cite it.
+- New invariants travel as `assertion + one-line why + link` — never a bare rule
+  (it gets regressed), never a full narrative inline (it bloats and staleness).
+- Slot it under the right section, or add a `## <Area>` section for a whole new
+  surface. Relocate — don't delete — any detail you're trimming.
 - Keep the product invariants visible: **capture is sacred**, user-authored vs
   generated fields stay separate, RLS is owner-scoped.
 
