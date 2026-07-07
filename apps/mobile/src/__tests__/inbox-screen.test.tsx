@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Linking } from 'react-native';
+import { Linking, StyleSheet } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -518,6 +518,45 @@ test('search is tap-to-open: the field is hidden until the magnifier is pressed'
   await waitFor(() => expect(screen.queryByTestId('inbox-search-input')).toBeNull());
   expect(screen.getByText('Newest')).toBeTruthy();
   expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+});
+
+test('centers the search suggestion shelf on the same rail as the search field on desktop', async () => {
+  mockWindowSize.width = 1280;
+  const id = '7e64cf1e-0000-4000-8000-0000000000c2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id,
+        title: 'Desktop chip alignment',
+        collection_id: 'col-food',
+      }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking')],
+      bookmarkTags: [
+        {
+          bookmark_id: id,
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [makeCollection('col-food', 'Food')],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Desktop chip alignment')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  await fireEvent(screen.getByTestId('inbox-search-input'), 'focus');
+  const shelfContainer = await waitFor(() => screen.getByTestId('search-suggestion-shelf-container'));
+  const shelfStyle = StyleSheet.flatten(shelfContainer.props.style);
+
+  expect(shelfStyle.width).toBe('100%');
+  expect(shelfStyle.alignSelf).toBe('center');
+  expect(shelfStyle.maxWidth).toBe(1116);
 });
 
 test('the card Open action opens the bookmark URL in the system browser', async () => {
