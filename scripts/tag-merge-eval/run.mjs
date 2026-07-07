@@ -18,6 +18,10 @@ import { PROVIDERS } from './providers.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+// Minimum runs before a model may be blessed as shippable (temp 0.1 is still
+// stochastic; one lucky pass must not decide a production model).
+const MIN_RUNS = 5;
+
 function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
@@ -44,9 +48,12 @@ function report(label, s) {
     console.log(`  sample bad merges: ${s.badPairs.slice(0, 8).map((p) => p.join('+')).join(', ')}${s.badPairs.length > 8 ? ' …' : ''}`);
   }
   if (s.overlappingTags.length) {
-    console.log(`  ⚠ overlapping tags (in >1 group): ${s.overlappingTags.slice(0, 8).join(', ')}${s.overlappingTags.length > 8 ? ' …' : ''}`);
+    console.log(`  ⛔ overlapping tags (in >1 group): ${s.overlappingTags.slice(0, 8).join(', ')}${s.overlappingTags.length > 8 ? ' …' : ''}`);
   }
-  console.log(`  GATE (prec ≥ ${pct(GATE.minPrecision)} & recall ≥ ${pct(GATE.minRecall)} & 0 forbidden): ${passesGate(s) ? 'PASS ✅' : 'FAIL ❌'}`);
+  if (s.unknownTags.length) {
+    console.log(`  ⛔ tags not in vocab (hallucinated): ${s.unknownTags.slice(0, 8).join(', ')}${s.unknownTags.length > 8 ? ' …' : ''}`);
+  }
+  console.log(`  GATE (prec ≥ ${pct(GATE.minPrecision)} & recall ≥ ${pct(GATE.minRecall)} & 0 forbidden & no overlap/unknown): ${passesGate(s) ? 'PASS ✅' : 'FAIL ❌'}`);
 }
 
 async function main() {
@@ -63,6 +70,7 @@ async function main() {
   const provider = arg('provider', 'gemini');
   const model = arg('model');
   const runs = Number(arg('runs', '5'));
+  if (!Number.isInteger(runs) || runs < 1) throw new Error(`--runs must be a positive integer (got ${arg('runs')})`);
   const run = PROVIDERS[provider];
   if (!run) throw new Error(`Unknown provider "${provider}" (expected: ${Object.keys(PROVIDERS).join(', ')})`);
 
@@ -87,15 +95,18 @@ async function main() {
 
   const mean = (f) => (scores.length ? scores.reduce((a, s) => a + f(s), 0) / scores.length : 0);
   const anyForbidden = scores.some((s) => s.forbiddenCount > 0);
-  // Shippable requires EVERY requested run to complete AND pass the gate. A run
-  // that errored out (transient API/parse failure) is not a pass — one surviving
-  // clean response out of five must never read as shippable.
-  const shippable = scores.length === runs && scores.every(passesGate) && !anyForbidden;
+  // Shippable requires the minimum sample size AND every requested run to
+  // complete AND pass the gate. A run that errored out (transient API/parse
+  // failure) is not a pass, and fewer than MIN_RUNS is too small a sample to
+  // bless a production model (temp 0.1 is still stochastic).
+  const enoughRuns = runs >= MIN_RUNS;
+  const shippable = enoughRuns && scores.length === runs && scores.every(passesGate) && !anyForbidden;
 
   console.log(`\n══ AGGREGATE (${scores.length}/${runs} runs completed) ══`);
   console.log(`  mean precision  : ${pct(mean((s) => s.mergePrecision))}`);
   console.log(`  mean recall     : ${pct(mean((s) => s.mergeRecall))}`);
   console.log(`  forbidden merges: ${anyForbidden ? 'PRESENT in ≥1 run ⛔' : 'none across completed runs'}`);
+  if (!enoughRuns) console.log(`  sample too small: need ≥ ${MIN_RUNS} runs to bless a model → not shippable`);
   if (failures) console.log(`  incomplete      : ${failures} run(s) failed → not shippable`);
   console.log(`  VERDICT         : ${shippable ? `SHIPPABLE ✅ (gate held on all ${runs} runs)` : 'NOT shippable ❌'}`);
   if (!shippable) process.exitCode = 1;

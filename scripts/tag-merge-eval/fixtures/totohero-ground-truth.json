@@ -1,5 +1,5 @@
 {
-  "_comment": "Intended-target ground truth for user A (totohero), based on the live Phase 1 run (docs/design/library-organizing.md §5). `groups` are the must-MERGE equivalence classes (canonical first, then merged members). `hard_negatives` are pairs we DELIBERATELY keep separate — must-NOT-merge, zero tolerance, expanded to full classes by the scorer. Every other tag is its own singleton. Scored by tag name (unique per user). NOTE: the live run merged 'delicious' into 'food', but §8.3 says generic filler tags (delicious, 일상, value for money) should NOT be merged (they belong to a separate deletion flow); the target here follows §8.3, so 'delicious' is a singleton + a hard negative and a model is not rewarded for that filler over-merge.",
+  "_comment": "Intended-target ground truth for user A (totohero), based on the live Phase 1 run (docs/design/library-organizing.md §5). `groups` are the must-MERGE equivalence classes (canonical first, then merged members). `hard_negatives` are pairs we DELIBERATELY keep separate — must-NOT-merge, zero tolerance, expanded to full classes by the scorer. Every other tag is its own singleton. Scored by tag name (unique per user). NOTE: the live run merged 'delicious' into 'food', but §8.3 says generic filler tags (delicious, 일상, value for money) should NOT be merged (they belong to a separate deletion flow); the target here follows §8.3, so 'delicious' is a singleton + a hard negative and a model is not rewarded for that filler over-merge. `filler_tags` (§8.3 generic tags: delicious, value for money, 가성비, 일상) must stay singletons — the scorer forbids merging any of them with anything.",
   "user": "A (totohero)",
   "groups": [
     { "canonical": "수영", "members": ["swimming", "수영 강습", "수영 팁", "수영팁", "수영기술", "swimming technique", "swimming training", "swimming pool", "aquatics"] },
@@ -36,5 +36,6 @@
     ["통영여행", "양양여행"],
     ["ramen", "sushi"],
     ["일본 여행", "한국 여행"]
-  ]
+  ],
+  "filler_tags": ["delicious", "value for money", "가성비", "일상"]
 }

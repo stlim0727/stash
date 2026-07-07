@@ -48,7 +48,10 @@ export function buildGroundTruth(gt) {
       for (const y of membersOf(b)) forbiddenExpanded.push([x, y, la, lb]);
     }
   }
-  return { classOf, groupTags: new Set(classOf.keys()), forbiddenExpanded };
+  // Generic filler tags (§8.3) must stay singletons — merging one with ANYTHING
+  // (even another filler) is the deletion-flow behavior, not consolidation.
+  const fillerTags = new Set((gt.filler_tags ?? []).map(normalizeName));
+  return { classOf, groupTags: new Set(classOf.keys()), forbiddenExpanded, fillerTags };
 }
 
 /**
@@ -57,12 +60,20 @@ export function buildGroundTruth(gt) {
  * @param vocabNames  optional full vocab (enables the restraint metric)
  */
 export function score(modelGroups, gt, vocabNames = null) {
-  const { classOf, groupTags, forbiddenExpanded } = buildGroundTruth(gt);
+  const { classOf, groupTags, forbiddenExpanded, fillerTags } = buildGroundTruth(gt);
 
   // Normalize; keep only real merges (≥2 distinct members).
   const groups = modelGroups
     .map((g) => [...new Set(g.map(normalizeName))])
     .filter((g) => g.length >= 2);
+
+  // Any tag the model emitted that isn't in the input vocabulary — production
+  // validates ids against the loaded vocab, so a hallucinated name is a hard
+  // failure here, not a small precision penalty. Only checkable with the vocab.
+  const vocabSet = vocabNames ? new Set(vocabNames.map(normalizeName)) : null;
+  const unknownTags = vocabSet
+    ? [...new Set(groups.flat())].filter((t) => !vocabSet.has(t))
+    : [];
 
   // Multi-membership: a tag may (buggily) appear in more than one model group.
   // Track ALL groups per tag so an overlapping output can't hide a bad pairing
@@ -117,6 +128,15 @@ export function score(modelGroups, gt, vocabNames = null) {
   for (const [x, y, la, lb] of forbiddenExpanded) {
     if (coGroupedModel(x, y)) violated.set(`${la}||${lb}`, [la, lb]);
   }
+  // Filler tag grouped with anything → forbidden (folded into the same count).
+  for (const g of groups) {
+    for (const f of g) {
+      if (!fillerTags.has(f)) continue;
+      for (const other of g) {
+        if (other !== f) violated.set(`filler:${f}||${other}`, [f, other]);
+      }
+    }
+  }
   const forbiddenViolations = [...violated.values()];
 
   // Restraint — did the model leave roughly as many tags unmerged as the human?
@@ -135,6 +155,7 @@ export function score(modelGroups, gt, vocabNames = null) {
     forbiddenViolations,
     forbiddenCount: forbiddenViolations.length,
     overlappingTags: [...overlappingTags],
+    unknownTags,
     badPairs,
     mergedPairs,
     correctPairs,
@@ -145,15 +166,19 @@ export function score(modelGroups, gt, vocabNames = null) {
   };
 }
 
-// A model is shippable only if it doesn't over-merge (precision + zero forbidden)
-// AND actually consolidates something (recall floor — else a no-op returning no
-// groups would pass with vacuous 100% precision).
+// A model is shippable only if it doesn't over-merge (precision + zero forbidden,
+// which includes filler-tag merges), actually consolidates something (recall
+// floor — else a no-op passes on vacuous precision), and is structurally valid:
+// no overlapping groups and no tags outside the input vocab (both of which
+// production would reject / can't apply).
 export const GATE = { minPrecision: 0.95, maxForbidden: 0, minRecall: 0.5 };
 
 export function passesGate(s) {
   return (
     s.mergePrecision >= GATE.minPrecision &&
     s.forbiddenCount <= GATE.maxForbidden &&
-    s.mergeRecall >= GATE.minRecall
+    s.mergeRecall >= GATE.minRecall &&
+    s.overlappingTags.length === 0 &&
+    s.unknownTags.length === 0
   );
 }

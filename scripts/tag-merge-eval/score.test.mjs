@@ -81,3 +81,25 @@ test('delicious is a singleton (filler), not a must-merge member of food (§8.3)
   assert.ok(s.forbiddenViolations.some(([a, b]) => a === 'food' && b === 'delicious'));
   assert.equal(passesGate(s), false);
 });
+
+test('grouping any filler tag (value for money) with anything fails the gate', () => {
+  const s = score([...perfect, ['value for money', '가성비']], gt, vocabNames);
+  assert.ok(s.forbiddenCount >= 1);
+  assert.equal(passesGate(s), false);
+});
+
+test('a tag not in the input vocab (hallucinated) is a hard failure', () => {
+  const bad = perfect.map((g) => (g[0] === '수영' ? [...g, 'swim'] : g)); // 'swim' ∉ vocab
+  const s = score(bad, gt, vocabNames);
+  assert.ok(s.unknownTags.includes('swim'));
+  assert.equal(passesGate(s), false);
+});
+
+test('overlapping groups fail the gate even at perfect precision/recall/forbidden', () => {
+  const dup = [...perfect, [perfect[0][0], perfect[0][1]]]; // repeat 수영 + one member
+  const s = score(dup, gt, vocabNames);
+  assert.ok(s.overlappingTags.length > 0);
+  assert.equal(s.forbiddenCount, 0);
+  assert.equal(s.mergePrecision, 1);
+  assert.equal(passesGate(s), false);
+});

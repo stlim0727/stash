@@ -41,9 +41,17 @@ content). Scoring is by tag **name** (unique per user); production keys by id.
 - **Restraint** — tags left unmerged vs the truth's singletons (over-merge shows
   here).
 
-A model is **shippable** only if **every** requested run completes **and** passes
-the gate (**N ≥ 5**; temp 0.1 is still stochastic, and a run that errors out is
-not a pass — the runner exits non-zero unless all N clean runs hold the gate).
+Structural hard failures (the gate also fails on any of these):
+- **Filler merge** — grouping a `filler_tags` tag (§8.3: delicious, value for
+  money, 가성비, 일상) with anything (counts as a forbidden merge).
+- **Unknown tag** — the output names a tag not in the input vocab (production
+  validates against the loaded vocab, so a hallucinated name is a hard fail).
+- **Overlapping groups** — the same tag in more than one group (production
+  requires each tag in ≤1 group).
+
+A model is **shippable** only if **N ≥ 5** requested runs **all complete** and
+**all pass** the gate (temp 0.1 is stochastic, one lucky pass can't bless a model,
+and a run that errors out is not a pass). The runner exits non-zero otherwise.
 
 ## Run
 
