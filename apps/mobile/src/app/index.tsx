@@ -267,6 +267,8 @@ const SETTINGS_SHEET_MIN_WIDTH = 760;
 const WEB_MEDIUM_WEIGHT = Platform.select({ web: '500', default: '600' }) as '500' | '600';
 const WEB_SEMIBOLD_WEIGHT = Platform.select({ web: '600', default: '700' }) as '600' | '700';
 const WEB_BOLD_WEIGHT = Platform.select({ web: '700', default: '800' }) as '700' | '800';
+const WEB_CARD_GRID_TOP_GAP = Platform.OS === 'web' ? 12 : 4;
+const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
 
 // A filler cell used to pad the last row of the multi-column card grid so the
 // real cards on that row keep their column width. Never rendered as a card — the
@@ -1150,7 +1152,7 @@ export default function InboxScreen() {
   // filter bar's measured height when it's showing. When the bar is absent this
   // collapses back to the header-only inset (no leftover gap).
   const filterBarReserve = showFilterBar ? filterBarHeight : 0;
-  const listPaddingTop = headerHeight + filterBarReserve + 4;
+  const listPaddingTop = headerHeight + filterBarReserve + WEB_CARD_GRID_TOP_GAP;
   const scrollInsetTop = headerHeight + filterBarReserve;
   const scope = useMemo((): {
     text: string;
@@ -2741,7 +2743,7 @@ const styles = StyleSheet.create({
   },
   cardPreview: {
     width: '100%',
-    height: 132,
+    height: CARD_PREVIEW_HEIGHT,
   },
   cardBody: {
     padding: 14,
