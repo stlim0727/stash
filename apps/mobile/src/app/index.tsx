@@ -301,26 +301,22 @@ function InboxRootSurface({
   shift: Animated.Value;
   sliding: boolean;
 }) {
-  if (sliding) {
-    return (
-      <Animated.View
-        style={[
-          styles.container,
-          { backgroundColor },
-          { transform: [{ translateX: shift }] },
-        ]}
-      >
-        {children}
-      </Animated.View>
-    );
-  }
-
-  return <View style={[styles.container, { backgroundColor }]}>{children}</View>;
+  return (
+    <Animated.View
+      style={[
+        styles.container,
+        { backgroundColor },
+        sliding ? { transform: [{ translateX: shift }] } : null,
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
 }
 
 // On Chrome/web, even an identity transform on a broad ancestor rasterizes text
-// and thumbnails into a softer composited layer. Keep those animated wrappers
-// native-only; web gets the same positioned surface without the transform.
+// and thumbnails into a softer composited layer. Keep the root transform out of
+// the idle tree above, while preserving these focused overlay animations.
 function WebCrispAnimatedSurface({
   animatedStyle,
   baseStyle,
@@ -328,7 +324,6 @@ function WebCrispAnimatedSurface({
   onLayout,
   pointerEvents,
   testID,
-  web,
 }: {
   animatedStyle: StyleProp<ViewStyle>;
   baseStyle: StyleProp<ViewStyle>;
@@ -336,16 +331,7 @@ function WebCrispAnimatedSurface({
   onLayout?: ComponentProps<typeof View>['onLayout'];
   pointerEvents?: ComponentProps<typeof View>['pointerEvents'];
   testID?: string;
-  web: boolean;
 }) {
-  if (web) {
-    return (
-      <View testID={testID} pointerEvents={pointerEvents} onLayout={onLayout} style={baseStyle}>
-        {children}
-      </View>
-    );
-  }
-
   return (
     <Animated.View
       testID={testID}
@@ -1417,7 +1403,6 @@ export default function InboxScreen() {
       sliding={sliding}
     >
       <WebCrispAnimatedSurface
-        web={isWeb}
         // The cluster is absolutely positioned so it floats over the list and
         // can translate out of view. It needs an opaque background so list rows
         // sliding underneath stay hidden while it is partly collapsed.
@@ -1781,7 +1766,6 @@ export default function InboxScreen() {
         // scrolled to the bottom. Resting top = headerHeight; it slides up from
         // there. Opaque base so list rows can't bleed through the tint.
         <WebCrispAnimatedSurface
-          web={isWeb}
           testID="inbox-filter-bar"
           // box-none for the same reason as the header: its elevation
           // (overlayLayer, STASH-7) would otherwise capture touches across the
