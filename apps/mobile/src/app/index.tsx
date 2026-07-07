@@ -1602,6 +1602,7 @@ export default function InboxScreen() {
         {showSuggestions ? (
           <SearchSuggestionShelf
             suggestions={suggestions}
+            maxWidth={contentMaxWidth}
             onPick={onPickSuggestion}
             onRemoveRecent={onRemoveRecentSuggestion}
             query={debouncedQuery}

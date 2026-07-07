@@ -22,6 +22,8 @@ const KIND_ICON = {
 
 interface SearchSuggestionShelfProps {
   suggestions: SearchSuggestion[];
+  /** Align the shelf to the same centered content rail as the open search field. */
+  maxWidth?: number;
   /** Tap: fill the query (recent) or apply a facet (tag/folder). See §5. */
   onPick: (suggestion: SearchSuggestion) => void;
   /** Long-press a recent chip to remove just that entry (Phase-1 Q2). */
@@ -48,6 +50,7 @@ interface SearchSuggestionShelfProps {
  */
 export function SearchSuggestionShelf({
   suggestions,
+  maxWidth,
   onPick,
   onRemoveRecent,
   query = '',
@@ -85,7 +88,10 @@ export function SearchSuggestionShelf({
   }, [opacity]);
 
   return (
-    <Animated.View style={{ opacity }}>
+    <Animated.View
+      testID="search-suggestion-shelf-container"
+      style={[styles.container, { opacity }, maxWidth ? { maxWidth } : null]}
+    >
       <Text
         style={[styles.affordance, { color: palette.textSecondary }]}
       >
@@ -167,6 +173,10 @@ export function SearchSuggestionShelf({
 }
 
 const styles = StyleSheet.create({
+  container: {
+    width: '100%',
+    alignSelf: 'center',
+  },
   // Web-only positioning context for the ShelfEdge overlays (absolute-positioned
   // relative to this wrapper). No-op box on native.
   shelfWrap: {
