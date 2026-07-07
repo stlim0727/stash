@@ -2,6 +2,20 @@
 
 This file captures the project state and working conventions so any agent (Codex, Claude, or a human) can continue development without re-deriving context. Last updated 2026-07-05.
 
+## Agent PR workflow
+
+- Open pull requests as **ready for review** by default, not draft, unless the
+  user explicitly asks for a draft or the work is knowingly incomplete.
+- After opening or updating a PR, poll for CI failures and human review activity
+  while the agent is still active. Routine bot/status comments (for example a
+  successful deploy-preview comment) do not count as review feedback; human issue
+  comments, inline review comments, submitted reviews, and failed/pending checks
+  do.
+- If CI is green and no human review activity appears for 5 minutes, either ask
+  the user to merge or merge directly when the PR is a small, well-tested,
+  low-risk change. If any CI failure or review activity appears, stop the
+  auto-merge path, inspect it, and address or report it.
+
 ## Current state
 
 **All milestones M0–M10 in `docs/development/milestones.md` are implemented.** M0–M4 are merged to `main` (PR #1–#3) and verified; M5–M10 are code-complete and verified by typecheck/lint/web+iOS bundle/`expo prebuild`, but two kinds of verification can only happen outside this sandbox (see "Remaining verification"):
