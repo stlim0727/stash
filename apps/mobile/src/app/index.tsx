@@ -264,6 +264,9 @@ const CONTENT_MAX_WIDTH = 720;
 // re-layout, so the card grid keeps its column count and sizes.
 const SETTINGS_PANEL_WIDTH = 460;
 const SETTINGS_SHEET_MIN_WIDTH = 760;
+const WEB_MEDIUM_WEIGHT = Platform.select({ web: '500', default: '600' }) as '500' | '600';
+const WEB_SEMIBOLD_WEIGHT = Platform.select({ web: '600', default: '700' }) as '600' | '700';
+const WEB_BOLD_WEIGHT = Platform.select({ web: '700', default: '800' }) as '700' | '800';
 
 // A filler cell used to pad the last row of the multi-column card grid so the
 // real cards on that row keep their column width. Never rendered as a card — the
@@ -2565,7 +2568,7 @@ const styles = StyleSheet.create({
   filterBarText: {
     flex: 1,
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
   },
   filterBarAction: {
     flexDirection: 'row',
@@ -2708,12 +2711,12 @@ const styles = StyleSheet.create({
   },
   compactMeta: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: WEB_MEDIUM_WEIGHT,
     marginTop: 1,
   },
   listTitle: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
     letterSpacing: -0.2,
   },
   listUrl: {
@@ -2776,7 +2779,7 @@ const styles = StyleSheet.create({
   cardMonogramLetter: {
     color: '#ffffff',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
   },
   cardTitlePressable: {
     flex: 1,
@@ -2784,7 +2787,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     flex: 1,
     fontSize: 18,
-    fontWeight: '800',
+    fontWeight: WEB_BOLD_WEIGHT,
     letterSpacing: -0.2,
   },
   suggestBadge: {
@@ -2795,7 +2798,7 @@ const styles = StyleSheet.create({
   },
   suggestBadgeLabel: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
   },
   cardUrlRow: {
     flexDirection: 'row',
@@ -2826,7 +2829,7 @@ const styles = StyleSheet.create({
   },
   metaChipLabel: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
   },
   siteChipRow: {
     flexDirection: 'row',
@@ -2840,11 +2843,11 @@ const styles = StyleSheet.create({
   },
   siteChipLabel: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: WEB_MEDIUM_WEIGHT,
   },
   cardStatus: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: WEB_MEDIUM_WEIGHT,
   },
   fab: {
     position: 'absolute',
