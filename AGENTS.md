@@ -3,7 +3,7 @@
 This file is the fast-start context for agents working in this repo. It should
 stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
-`docs/development/agents-maintenance.md`.
+`docs/development/maintaining-agents-md.md`.
 
 Last updated: 2026-07-07.
 
