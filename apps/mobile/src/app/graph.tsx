@@ -13,6 +13,7 @@ import {
   View,
   type LayoutChangeEvent,
   type ViewStyle,
+  useWindowDimensions,
 } from 'react-native';
 import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 
@@ -86,6 +87,16 @@ const SCALE_APPLY_STEP = 0.02;
 // and is only ever applied under Platform.OS === 'web'.
 const WEB_COMPOSITE_LAYER = { willChange: 'transform' } as unknown as ViewStyle;
 
+export function graphCanvasSize(
+  measured: { w: number; h: number },
+  windowSize: { width: number; height: number },
+): { w: number; h: number } {
+  return {
+    w: measured.w || windowSize.width || 320,
+    h: measured.h || windowSize.height || 320,
+  };
+}
+
 function hubRadius(degree: number): number {
   return Math.min(HUB_MAX_R, Math.max(HUB_MIN_R, HUB_MIN_R + 10 * Math.sqrt(degree)));
 }
@@ -129,6 +140,7 @@ export default function GraphScreen() {
   const t = useT();
   const router = useRouter();
   const { inbox, getTagsForBookmark } = useBookmarks();
+  const windowSize = useWindowDimensions();
 
   // Content signature of the tag topology: sorted bookmark ids each joined with
   // their sorted tag ids. The store's `inbox` is a fresh `.filter().sort()` array
@@ -315,6 +327,12 @@ export default function GraphScreen() {
     viewportRef.current = { w: width, h: height };
     setViewport({ w: width, h: height });
   };
+  const canvasSize = graphCanvasSize(viewport, windowSize);
+  useEffect(() => {
+    if (viewportRef.current.w === 0 || viewportRef.current.h === 0) {
+      viewportRef.current = canvasSize;
+    }
+  }, [canvasSize]);
   // The memoized panResponder also needs the current viewBox size to derive the
   // fitted content extent for the clamp; mirror it into a ref for the same reason.
   const vbSizeRef = useRef({ w: 1, h: 1 });
@@ -623,8 +641,7 @@ export default function GraphScreen() {
   const hasTags = settled.nodes.some((node) => node.kind === 'tag');
   const isCoocEmpty = mode === 'cooccurrence' && settled.nodes.length === 0;
 
-  const w = viewport.w || 320;
-  const h = viewport.h || 320;
+  const { w, h } = canvasSize;
 
   return (
     <View

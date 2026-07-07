@@ -35,7 +35,13 @@ jest.mock('expo-router', () => ({
   }),
 }));
 
-import GraphScreen, { clampToRange, maxPanOffset, MIN_SCALE, MAX_SCALE } from '@/app/graph';
+import GraphScreen, {
+  clampToRange,
+  graphCanvasSize,
+  maxPanOffset,
+  MIN_SCALE,
+  MAX_SCALE,
+} from '@/app/graph';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -269,6 +275,29 @@ describe('pan clamp', () => {
   test('zooming in strictly widens the pan range', () => {
     expect(maxPanOffset(MAX_SCALE, W, extentX)).toBeGreaterThan(maxPanOffset(2, W, extentX));
     expect(maxPanOffset(2, W, extentX)).toBeGreaterThan(maxPanOffset(1, W, extentX));
+  });
+});
+
+describe('graph canvas sizing', () => {
+  test('uses the measured container when layout has reported a size', () => {
+    expect(graphCanvasSize({ w: 640, h: 480 }, { width: 1440, height: 900 })).toEqual({
+      w: 640,
+      h: 480,
+    });
+  });
+
+  test('falls back to the browser window instead of a phone-sized canvas before layout', () => {
+    expect(graphCanvasSize({ w: 0, h: 0 }, { width: 1440, height: 900 })).toEqual({
+      w: 1440,
+      h: 900,
+    });
+  });
+
+  test('keeps the small hard fallback only when neither layout nor window size exists', () => {
+    expect(graphCanvasSize({ w: 0, h: 0 }, { width: 0, height: 0 })).toEqual({
+      w: 320,
+      h: 320,
+    });
   });
 });
 
