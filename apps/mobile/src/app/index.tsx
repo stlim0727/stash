@@ -28,7 +28,6 @@ import {
   type StyleProp,
   Text,
   TextInput,
-  useColorScheme,
   useWindowDimensions,
   View,
   type ViewStyle,
@@ -272,6 +271,13 @@ const WEB_CARD_GRID_TOP_GAP = Platform.OS === 'web' ? 12 : 4;
 const WEB_CARD_GRID_COLUMN_GAP = 16;
 const LIST_PADDING = 16;
 const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
+const WEB_AMBIENT_BACKGROUND = Platform.OS === 'web'
+  ? ({
+      backgroundImage:
+        'radial-gradient(circle at 10% 0%, rgba(120, 184, 244, 0.16), transparent 42%), radial-gradient(circle at 90% 100%, rgba(238, 203, 105, 0.10), transparent 46%)',
+      backgroundAttachment: 'fixed',
+    } as ViewStyle)
+  : null;
 
 // A filler cell used to pad the last row of the multi-column card grid so the
 // real cards on that row keep their column width. Never rendered as a card — the
@@ -316,6 +322,7 @@ function InboxRootSurface({
       style={[
         styles.container,
         { backgroundColor },
+        WEB_AMBIENT_BACKGROUND,
         sliding ? { transform: [{ translateX: shift }] } : null,
       ]}
     >
@@ -405,10 +412,9 @@ export default function InboxScreen() {
   // locale ever ships a native form (app.nameLocal differs from app.name) the
   // bilingual lockup is used; today every locale shares the "Keepory" lockup.
   // The a11y label mirrors what sighted users see (e.g. "Keepory").
-  const scheme = useColorScheme();
   const hasLocalName = t('app.nameLocal') !== t('app.name');
   const wmSet = hasLocalName ? WORDMARK.local : WORDMARK.en;
-  const wordmark = { source: scheme === 'dark' ? wmSet.dark : wmSet.light, ratio: wmSet.ratio };
+  const wordmark = { source: wmSet.dark, ratio: wmSet.ratio };
   const wordmarkLabel = hasLocalName ? `${t('app.name')} ${t('app.nameLocal')}` : t('app.name');
   // The wordmark is a pre-rendered PNG. If it ever fails to load — a browser that
   // blocks the asset, or a request dropped across the OAuth redirect (seen in a
@@ -2496,7 +2502,7 @@ const styles = StyleSheet.create({
   },
   list: {
     padding: LIST_PADDING,
-    gap: 6,
+    gap: 10,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2512,7 +2518,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 4,
+    paddingBottom: 8,
     width: '100%',
     alignSelf: 'center',
   },
@@ -2547,9 +2553,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2736,8 +2742,8 @@ const styles = StyleSheet.create({
     gap: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
-    paddingVertical: 7,
-    paddingHorizontal: 13,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
   },
   sortPillFlexible: {
     // The Sort pill carries the only long label in the controls row; let it
@@ -2800,17 +2806,17 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   card: {
-    borderRadius: 24,
+    borderRadius: 28,
     overflow: 'hidden',
   },
   listRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    borderRadius: 16,
+    borderRadius: 22,
     borderWidth: StyleSheet.hairlineWidth,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
   },
   listIcon: {
     width: 28,
@@ -2867,8 +2873,8 @@ const styles = StyleSheet.create({
     height: CARD_PREVIEW_HEIGHT,
   },
   cardBody: {
-    padding: 14,
-    gap: 7,
+    padding: 16,
+    gap: 9,
   },
   cardBodyTextOnlyWeb: {
     paddingVertical: 13,
@@ -2913,7 +2919,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     flex: 1,
-    fontSize: 18,
+    fontSize: 19,
     fontWeight: WEB_BOLD_WEIGHT,
     letterSpacing: -0.2,
   },
