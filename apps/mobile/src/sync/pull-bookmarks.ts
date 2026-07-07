@@ -115,6 +115,8 @@ export async function pullRemoteChanges(
               ...remote,
               last_accessed_at: local.last_accessed_at,
               local_image_uri: local.local_image_uri,
+              title_is_derived:
+                remote.title === local.title ? local.title_is_derived : undefined,
             }
           : remote,
       );

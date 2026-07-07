@@ -82,6 +82,10 @@ class WebBookmarkRepository implements BookmarkRepository {
     return [...this.bookmarks].sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
+  async getBookmark(id: string): Promise<Bookmark | null> {
+    return this.bookmarks.find((bookmark) => bookmark.id === id) ?? null;
+  }
+
   async insertBookmark(bookmark: Bookmark): Promise<void> {
     this.bookmarks = [
       bookmark,

@@ -286,6 +286,7 @@ function fakeRepository(): BookmarkRepository {
   return {
     init: async () => {},
     listBookmarks: async () => [],
+    getBookmark: async () => null,
     insertBookmark: async () => {},
     updateBookmark: async () => {},
     replaceBookmark: async () => {},

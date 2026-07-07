@@ -1147,6 +1147,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // A title typed at capture is user-authored; otherwise derive a
           // readable one from the shared filename (may be null → "Untitled").
           title: title?.trim() ? title.trim() : imageTitleFromFileName(image.fileName),
+          title_is_derived: title?.trim() ? false : undefined,
           description: null,
           notes: notes?.trim() ? notes.trim() : null,
           source_app: null,
@@ -1215,6 +1216,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           url_hash: null,
           client_id: noteClientId,
           title: title?.trim() ? title.trim() : null,
+          title_is_derived: title?.trim() ? false : undefined,
           // The shared text is the note's body. Stored as the description to
           // mirror the cloud API (which maps shared_text → description), so a
           // pulled-back note matches the locally captured one.
@@ -1307,6 +1309,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // A title provided at capture (e.g. from the share payload) counts as
         // user-authored; enrichment only fills it when still null.
         title: title?.trim() ? title.trim() : null,
+        title_is_derived: title?.trim() ? false : undefined,
         description: null,
         notes: notes?.trim() ? notes.trim() : null,
         source_app: null,
@@ -1406,6 +1409,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           canonical_url: null,
           url_hash: dedupeKey,
           title,
+          title_is_derived: title ? false : undefined,
           description: null,
           notes,
           source_app: null,
@@ -1551,6 +1555,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const patch: Partial<Bookmark> = {};
       if (fields.title !== undefined) {
         patch.title = fields.title.trim() || null;
+        patch.title_is_derived = patch.title === null ? undefined : false;
       }
       if (fields.notes !== undefined) {
         patch.notes = fields.notes.trim() || null;
@@ -2349,8 +2354,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         await ensureRepositoryReady();
         let count = 0;
         for (const id of targetIds) {
-          const stored = await repository.listBookmarks();
-          const base = stored.find((item) => item.id === id);
+          const base = await repository.getBookmark(id);
           if (!base) {
             continue;
           }

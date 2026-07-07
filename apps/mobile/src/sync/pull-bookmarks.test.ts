@@ -67,6 +67,7 @@ function fakeRepository(meta: Record<string, string> = {}) {
   const repository: BookmarkRepository = {
     init: async () => {},
     listBookmarks: async () => [],
+    getBookmark: async () => null,
     insertBookmark: async (bookmark) => {
       calls.push(`insertBookmark:${bookmark.id}`);
     },
@@ -152,6 +153,7 @@ test('a winning remote upsert preserves device-only fields from the local row', 
     updated_at: '2026-06-12T00:00:00.000Z',
     last_accessed_at: '2026-06-13T09:00:00.000Z',
     local_image_uri: 'file:///stash-images/x.jpg',
+    title_is_derived: false,
   });
   const remote = makeBookmark({
     updated_at: '2026-06-12T01:00:00.000Z',
@@ -170,6 +172,29 @@ test('a winning remote upsert preserves device-only fields from the local row', 
   assert.equal(result.upserts[0]?.title, 'Edited elsewhere');
   assert.equal(result.upserts[0]?.last_accessed_at, '2026-06-13T09:00:00.000Z');
   assert.equal(result.upserts[0]?.local_image_uri, 'file:///stash-images/x.jpg');
+  assert.equal(result.upserts[0]?.title_is_derived, undefined);
+});
+
+test('a remote upsert preserves title provenance only when the title is unchanged', async () => {
+  const { repository } = fakeRepository();
+  const local = makeBookmark({
+    updated_at: '2026-06-12T00:00:00.000Z',
+    title: 'Same title',
+    title_is_derived: false,
+  });
+  const remote = makeBookmark({
+    updated_at: '2026-06-12T01:00:00.000Z',
+    title: 'Same title',
+  });
+  const api = fakeApi({
+    listBookmarksUpdatedSince: async () => [remote],
+    listBookmarkIds: async () => [remote.id],
+  });
+
+  const result = await pullRemoteChanges(api, repository, () => [local], () => false);
+
+  assert.equal(result.upserts.length, 1);
+  assert.equal(result.upserts[0]?.title_is_derived, false);
 });
 
 test('pull propagates a remote trash (deleted_at) onto the local row', async () => {

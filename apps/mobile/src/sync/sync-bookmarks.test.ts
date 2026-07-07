@@ -62,6 +62,7 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
   const repository: BookmarkRepository = {
     init: async () => {},
     listBookmarks: async () => [],
+    getBookmark: async () => null,
     insertBookmark: async () => {},
     updateBookmark: async (bookmark) => {
       calls.push(`updateBookmark:${bookmark.id}:${bookmark.sync_status}`);
