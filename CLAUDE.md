@@ -90,7 +90,8 @@ Backend: `supabase/migrations` (owner-scoped RLS) and `supabase/functions` edge 
 
 ## Core conventions
 
-- **Keep user-authored fields separate from generated/AI metadata.** This is the central product principle (`docs/api/bookmarks.md`): enrichment and sync only fill generated fields that are still null and must never overwrite user-typed values.
+- **Keep user-authored fields separate from generated/AI metadata.** This is the central product principle (`docs/api/bookmarks.md`): enrichment and sync only fill generated fields that are still null and must never overwrite user-typed values. A title has **three** provenances, not two — user-typed, a real *fetched* title, and a URL-derived *fallback* — and `metadata_status: 'complete'` does **not** distinguish the last two; the local-only `Bookmark.title_is_derived` bit records it (set by `enrichBookmark`), so a repair or the UI can trust a recorded fact instead of string-matching the title.
+- **A local-only cosmetic repair must never bump `updated_at` or enqueue a sync mutation.** It runs before the startup pull, so a bumped/uploaded *generated* value out-ranks a better cloud row under last-write-wins (`pullRemoteChanges` accepts remote only when `remote.updated_at > local.updated_at`) and strands it. Repair the local view only and let each device self-heal (this is how the title backfill works).
 - **Capture is sacred** — saves are local-first and optimistic; enrichment and sync are fire-and-forget and record a failed/skipped status instead of throwing.
 - Duplicate saves are idempotent (reuse the existing bookmark); deletes archive by default.
 - Domain types stay snake_case to mirror the DB; only reference `EXPO_PUBLIC_*` env vars in the ways `lint:env` permits.
