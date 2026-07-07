@@ -1949,7 +1949,7 @@ export default function InboxScreen() {
           // A grid-padding filler: render an empty flex cell so the real cards
           // on the final row keep their column width instead of stretching.
           if ('__placeholder' in item) {
-            return <View testID="inbox-grid-filler" style={styles.gridCell} />;
+            return <View testID="inbox-grid-filler" style={{ flex: 1 }} />;
           }
           const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
@@ -2205,11 +2205,9 @@ export default function InboxScreen() {
           }
 
           const previewUri = item.local_image_uri ?? item.preview_image_url ?? null;
-          const isWebGridCard = Platform.OS === 'web' && columns > 1;
           const cardElement = (
-            <Card style={[styles.card, isWebGridCard ? styles.cardFill : null]}>
+            <Card style={styles.card}>
               <Pressable
-                style={isWebGridCard ? styles.cardPressableFill : undefined}
                 onPress={openDetail}
                 onLongPress={() => setMenuItem(item)}
                 // See the list branch: keep the card a plain container so the
@@ -2359,13 +2357,7 @@ export default function InboxScreen() {
           // In a multi-column grid each cell must claim its column width (flex:
           // 1) so cards don't collapse to content width. Single-column leaves the
           // card unwrapped — the native/phone path is byte-for-byte unchanged.
-          return columns > 1 ? (
-            <View testID="inbox-grid-cell" style={styles.gridCell}>
-              {cardElement}
-            </View>
-          ) : (
-            cardElement
-          );
+          return columns > 1 ? <View style={{ flex: 1 }}>{cardElement}</View> : cardElement;
         }}
       />
       <Pressable
@@ -2724,16 +2716,6 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: 24,
     overflow: 'hidden',
-  },
-  gridCell: {
-    flex: 1,
-    minWidth: 0,
-  },
-  cardFill: {
-    flex: 1,
-  },
-  cardPressableFill: {
-    flex: 1,
   },
   listRow: {
     flexDirection: 'row',
