@@ -8,7 +8,7 @@ import { usePalette } from '@/theme';
 // of a true gradient the fade is a few absolutely-positioned strips whose
 // palette.background opacity ramps from transparent to opaque toward the clipped
 // edge — enough of a scrim to seat the chevron button and hint at overflow.
-const SHELF_FADE_STOPS = [0, 0.15, 0.35, 0.6, 0.82, 1];
+const SHELF_FADE_STOPS = [0, 0.1, 0.24, 0.44, 0.68, 0.9];
 
 /**
  * Web-only edge affordance: a fade scrim plus a round chevron button (styled
@@ -44,7 +44,7 @@ export function ShelfEdge({
         accessibilityRole="button"
         accessibilityLabel={label}
         onPress={onPress}
-        style={[styles.shelfNavButton, { backgroundColor: palette.surface, borderColor: palette.border }]}
+        style={[styles.shelfNavButton, { backgroundColor: palette.background, borderColor: palette.border }]}
       >
         <Ionicons
           name={side === 'right' ? 'chevron-forward' : 'chevron-back'}

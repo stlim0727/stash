@@ -267,6 +267,8 @@ const SETTINGS_SHEET_MIN_WIDTH = 760;
 const WEB_MEDIUM_WEIGHT = Platform.select({ web: '500', default: '600' }) as '500' | '600';
 const WEB_SEMIBOLD_WEIGHT = Platform.select({ web: '600', default: '700' }) as '600' | '700';
 const WEB_BOLD_WEIGHT = Platform.select({ web: '700', default: '800' }) as '700' | '800';
+const WEB_CARD_GRID_TOP_GAP = Platform.OS === 'web' ? 12 : 4;
+const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
 
 // A filler cell used to pad the last row of the multi-column card grid so the
 // real cards on that row keep their column width. Never rendered as a card — the
@@ -379,6 +381,7 @@ const BrowseChip = memo(function BrowseChip({
       accessibilityState={{ selected: active }}
       onPress={() => onSelect(target)}
       variant={active ? 'selected' : 'default'}
+      quiet={Platform.OS === 'web' && !active}
       icon={icon}
       count={count}
     >
@@ -1150,7 +1153,7 @@ export default function InboxScreen() {
   // filter bar's measured height when it's showing. When the bar is absent this
   // collapses back to the header-only inset (no leftover gap).
   const filterBarReserve = showFilterBar ? filterBarHeight : 0;
-  const listPaddingTop = headerHeight + filterBarReserve + 4;
+  const listPaddingTop = headerHeight + filterBarReserve + WEB_CARD_GRID_TOP_GAP;
   const scrollInsetTop = headerHeight + filterBarReserve;
   const scope = useMemo((): {
     text: string;
@@ -1685,7 +1688,7 @@ export default function InboxScreen() {
               showsHorizontalScrollIndicator={false}
               testID="browse-shelf"
               style={[styles.shelf, { maxWidth: contentMaxWidth }]}
-              contentContainerStyle={styles.shelfContent}
+              contentContainerStyle={[styles.shelfContent, isWeb ? styles.shelfContentWeb : null]}
               // Web-only: track the clipped geometry so the edge affordances
               // appear/disappear as the user scrolls or the row is measured.
               onScroll={isWeb ? updateShelfEdges : undefined}
@@ -1709,6 +1712,7 @@ export default function InboxScreen() {
                       : t('inbox.reviewPendingA11y', { count: pendingReviewCount })
                   }
                   variant={hasNewSuggestions ? 'accent' : 'default'}
+                  quiet={Platform.OS === 'web' && !hasNewSuggestions}
                   onPress={() => router.push('/review')}
                 >
                   {hasNewSuggestions
@@ -2088,6 +2092,7 @@ export default function InboxScreen() {
             ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
             ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
+          const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
           // Surface the site name only when it's the reason this result matched
           // (generated site metadata, kept visually distinct from the user-
           // authored chips above so we never blur the two). When the match came
@@ -2199,6 +2204,7 @@ export default function InboxScreen() {
             );
           }
 
+          const previewUri = item.local_image_uri ?? item.preview_image_url ?? null;
           const cardElement = (
             <Card style={styles.card}>
               <Pressable
@@ -2209,14 +2215,19 @@ export default function InboxScreen() {
                 // independently focusable.
                 accessible={false}
               >
-                {item.local_image_uri ?? item.preview_image_url ? (
+                {previewUri ? (
                   <Image
                     testID="inbox-card-preview"
-                    source={{ uri: (item.local_image_uri ?? item.preview_image_url)! }}
+                    source={{ uri: previewUri }}
                     style={styles.cardPreview}
                   />
                 ) : null}
-                <View style={styles.cardBody}>
+                <View
+                  style={[
+                    styles.cardBody,
+                    Platform.OS === 'web' && columns > 1 && !previewUri ? styles.cardBodyTextOnlyWeb : null,
+                  ]}
+                >
                   <View style={styles.cardTitleRow}>
                   <ItemIcon item={item} testID="inbox-card-monogram" />
                   {/* Only the title is the accessible "open details" button so
@@ -2277,18 +2288,41 @@ export default function InboxScreen() {
                       accessibilityRole="link"
                       accessibilityLabel={t('common.openLink')}
                       hitSlop={12}
-                      style={[styles.cardUrlOpen, { backgroundColor: palette.accentSoft }]}
+                      style={[
+                        styles.cardUrlOpen,
+                        Platform.OS === 'web'
+                          ? { backgroundColor: palette.surface, borderColor: palette.border }
+                          : { backgroundColor: palette.accentSoft },
+                      ]}
                       onPress={openLink}
                     >
-                      <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                      {Platform.OS === 'web' ? (
+                        <Ionicons name="open-outline" size={13} color={palette.textSecondary} />
+                      ) : (
+                        <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                      )}
                     </Pressable>
                   </View>
                 ) : null}
-                {metaParts.length > 0 ? (
+                {visibleMetaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
-                    {metaParts.slice(0, 3).map((part) => (
-                      <View key={part} style={[styles.metaChip, { backgroundColor: palette.mutedSurface }]}>
-                        <Text style={[styles.metaChipLabel, { color: palette.accentText }]} numberOfLines={1}>
+                    {visibleMetaParts.map((part) => (
+                      <View
+                        key={part}
+                        style={[
+                          styles.metaChip,
+                          Platform.OS === 'web'
+                            ? { backgroundColor: palette.surface, borderColor: palette.border }
+                            : { backgroundColor: palette.mutedSurface },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.metaChipLabel,
+                            { color: Platform.OS === 'web' ? palette.textSecondary : palette.accentText },
+                          ]}
+                          numberOfLines={1}
+                        >
                           {part}
                         </Text>
                       </View>
@@ -2668,6 +2702,9 @@ const styles = StyleSheet.create({
     minHeight: 42,
     gap: 8,
   },
+  shelfContentWeb: {
+    gap: 10,
+  },
   // Web-only browse-shelf wrapper (positions the ShelfEdge overlays). Referenced
   // only behind Platform.OS === 'web', so it never touches the native layout.
   // The edge/fade/button styles live with `ShelfEdge` in @/ui/ShelfEdges.
@@ -2741,11 +2778,15 @@ const styles = StyleSheet.create({
   },
   cardPreview: {
     width: '100%',
-    height: 132,
+    height: CARD_PREVIEW_HEIGHT,
   },
   cardBody: {
     padding: 14,
     gap: 7,
+  },
+  cardBodyTextOnlyWeb: {
+    paddingVertical: 13,
+    gap: 6,
   },
   cardOpenLabel: {
     fontSize: 14,
@@ -2807,13 +2848,16 @@ const styles = StyleSheet.create({
   },
   cardUrl: {
     flex: 1,
-    fontSize: 13,
+    fontSize: Platform.select({ web: 12, default: 13 }),
+    lineHeight: Platform.select({ web: 16, default: undefined }),
   },
   cardUrlOpen: {
     borderRadius: 999,
-    height: 22,
-    minWidth: 26,
-    paddingHorizontal: 7,
+    borderWidth: Platform.select({ web: StyleSheet.hairlineWidth, default: 0 }),
+    width: Platform.select({ web: 24, default: undefined }),
+    height: Platform.select({ web: 24, default: 22 }),
+    minWidth: Platform.select({ web: 24, default: 26 }),
+    paddingHorizontal: Platform.select({ web: 0, default: 7 }),
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2824,12 +2868,13 @@ const styles = StyleSheet.create({
   },
   metaChip: {
     borderRadius: 999,
-    paddingVertical: 4,
-    paddingHorizontal: 9,
+    borderWidth: Platform.select({ web: StyleSheet.hairlineWidth, default: 0 }),
+    paddingVertical: Platform.select({ web: 2, default: 4 }),
+    paddingHorizontal: Platform.select({ web: 8, default: 9 }),
   },
   metaChipLabel: {
-    fontSize: 12,
-    fontWeight: WEB_SEMIBOLD_WEIGHT,
+    fontSize: Platform.select({ web: 11, default: 12 }),
+    fontWeight: Platform.select({ web: WEB_MEDIUM_WEIGHT, default: WEB_SEMIBOLD_WEIGHT }),
   },
   siteChipRow: {
     flexDirection: 'row',
