@@ -275,7 +275,7 @@ const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
 // real cards on that row keep their column width. Never rendered as a card — the
 // renderItem short-circuits it to an empty flex spacer.
 type GridPlaceholder = { id: string; __placeholder: true };
-type InlineDetailItem = { id: string; __inlineDetail: true; bookmarkId: string };
+type InlineDetailItem = { id: string; __inlineDetail: true; bookmarkId: string; fullWidth?: boolean };
 type InboxListItem = Bookmark | GridPlaceholder | InlineDetailItem;
 
 /**
@@ -975,11 +975,10 @@ export default function InboxScreen() {
       setInlineDetailId(null);
     }
   }, [getBookmark, inlineDetailId, visible]);
-  // In a multi-column card grid, pad the final row up to a full multiple of
-  // `columns` with lightweight placeholders so the last row's real cards keep
-  // their column width (flex: 1) instead of stretching across the leftover
-  // space. Single-column (phones, compact/list) passes `visible` through
-  // untouched, so those paths are byte-for-byte unchanged.
+  // In a multi-column card grid, pad rows with lightweight placeholders so real
+  // cards keep their column width (flex: 1). When an inline detail is open on
+  // web, finish the clicked card row, then insert a synthetic full-width detail
+  // row before appending the remaining cards.
   const gridData = useMemo<InboxListItem[]>(() => {
     const withInlineDetail = (() => {
       if (Platform.OS !== 'web' || !inlineDetailId) {
@@ -988,6 +987,24 @@ export default function InboxScreen() {
       const index = visible.findIndex((bookmark) => bookmark.id === inlineDetailId);
       if (index === -1) {
         return visible;
+      }
+      if (columns > 1) {
+        const rowEnd = Math.min(visible.length, index + (columns - (index % columns)));
+        const detailRowFillers: GridPlaceholder[] = Array.from(
+          { length: columns - 1 },
+          (_, i) => ({ id: `__detail-ph-${inlineDetailId}-${i}`, __placeholder: true }),
+        );
+        return [
+          ...visible.slice(0, rowEnd),
+          {
+            id: `__detail-${inlineDetailId}`,
+            __inlineDetail: true as const,
+            bookmarkId: inlineDetailId,
+            fullWidth: true,
+          },
+          ...detailRowFillers,
+          ...visible.slice(rowEnd),
+        ];
       }
       return [
         ...visible.slice(0, index + 1),
@@ -1987,13 +2004,16 @@ export default function InboxScreen() {
             return <View testID="inbox-grid-filler" style={{ flex: 1 }} />;
           }
           if ('__inlineDetail' in item) {
-            return (
+            const detail = (
               <BookmarkDetailScreen
                 inlineId={item.bookmarkId}
                 onInlineClose={() => setInlineDetailId(null)}
                 markAccessOnMount={false}
               />
             );
+            return item.fullWidth ? (
+              <View style={{ width: contentMaxWidth }}>{detail}</View>
+            ) : detail;
           }
           const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;

@@ -929,10 +929,10 @@ test('web inline detail keeps the wide card grid stable', async () => {
   await fireEvent.press(screen.getByRole('button', { name: 'Card two' }));
 
   await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
-  // Four cards plus the inline detail still flow in the 3-column grid, needing
-  // one filler. The old single-column fallback removed all fillers and remounted
-  // the scrolled list.
-  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(1);
+  // The detail opens under Card two's row, not beside Card two: Card three keeps
+  // that first row's last cell, the full-width detail row reserves two cells,
+  // and Card four's trailing row still pads back to three columns.
+  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(4);
 });
 
 test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', async () => {
