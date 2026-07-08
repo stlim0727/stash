@@ -321,7 +321,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
               <Image
                 accessibilityLabel={t('report.screenshotPreviewA11y')}
                 source={{ uri: screenshot.dataUrl }}
-                resizeMode="cover"
+                resizeMode="contain"
                 style={[styles.screenshotPreview, { backgroundColor: palette.mutedSurface }]}
               />
             ) : null}
