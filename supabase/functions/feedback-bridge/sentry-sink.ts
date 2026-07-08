@@ -89,7 +89,12 @@ function extractScreenshot(context: Record<string, unknown>): ScreenshotAttachme
   if (!match) {
     return null;
   }
-  const binary = atob(match[2] ?? '');
+  let binary: string;
+  try {
+    binary = atob(match[2] ?? '');
+  } catch {
+    return null;
+  }
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);
@@ -113,7 +118,7 @@ function contextWithoutScreenshotData(
     ...context,
     screenshot: {
       ...metadata,
-      dataUrl: '[sent as Sentry attachment]',
+      dataUrl: '[redacted screenshot data]',
     },
   };
 }

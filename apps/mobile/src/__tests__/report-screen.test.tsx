@@ -141,7 +141,7 @@ test('submitting calls the feedback api with the message and redacted context', 
   expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
 });
 
-test('submits an opted-in screenshot captured before the report screen opened', async () => {
+test('shows a pending screenshot but keeps it excluded until the user opts in', async () => {
   setPendingFeedbackScreenshot({
     dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn',
     mimeType: 'image/jpeg',
@@ -154,7 +154,15 @@ test('submits an opted-in screenshot captured before the report screen opened', 
 
   const screen = await renderReport({ createApi: createApi as never });
 
-  await waitFor(() => expect(screen.getByLabelText('Screenshot preview')).toBeTruthy());
+  await waitFor(() => expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy());
+  expect(screen.queryByLabelText('Screenshot preview')).toBeNull();
+  expect(screen.getByLabelText('Diagnostic context preview').props.children).not.toContain(
+    'screenshot',
+  );
+
+  await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', true);
+
+  expect(screen.getByLabelText('Screenshot preview')).toBeTruthy();
   expect(screen.getByLabelText('Diagnostic context preview').props.children).toContain(
     '[redacted image/jpeg screenshot]',
   );

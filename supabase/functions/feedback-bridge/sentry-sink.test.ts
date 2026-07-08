@@ -165,13 +165,40 @@ test('screenshot data is sent as an attachment and stripped from diagnostics ext
   const event = JSON.parse(lines[2]);
   assert.equal(
     event.extra.diagnostics.screenshot.dataUrl,
-    '[sent as Sentry attachment]',
+    '[redacted screenshot data]',
   );
   const attachmentHeader = JSON.parse(lines[3]);
   assert.equal(attachmentHeader.type, 'attachment');
   assert.equal(attachmentHeader.filename, 'feedback-screen.jpg');
   assert.equal(attachmentHeader.content_type, 'image/jpeg');
   assert.equal(lines[4], 'jpeg-bytes');
+});
+
+test('malformed screenshot base64 is ignored instead of failing delivery', async () => {
+  const { transport, calls } = fakeTransport();
+  const result = await makeSink(transport).deliver(
+    report({
+      context: {
+        route: '/settings',
+        screenshot: {
+          dataUrl: 'data:image/jpeg;base64,%%%not-base64%%%',
+          mimeType: 'image/jpeg',
+          capturedAt: '2026-06-14T09:59:00.000Z',
+          platform: 'web',
+          surface: 'settings',
+        },
+      },
+    }),
+  );
+
+  assert.equal(result.delivered, true);
+  const lines = bodyText(calls[0]!.body).trim().split('\n');
+  assert.equal(lines.length, 3);
+  const event = JSON.parse(lines[2]);
+  assert.equal(
+    event.extra.diagnostics.screenshot.dataUrl,
+    '[redacted screenshot data]',
+  );
 });
 
 test('parseWebhookReport rejects payloads missing required fields', () => {
