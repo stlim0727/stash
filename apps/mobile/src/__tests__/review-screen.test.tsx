@@ -82,6 +82,42 @@ test('lists bookmarks with pending high-confidence suggestions and their chips',
   expect(screen.getByText('Accept all')).toBeTruthy();
 });
 
+test('keeps bulk actions anchored before the wrapping suggestion chips', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000a2';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Many suggestions' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        suggested_tags: [
+          { name: 'design', confidence: 0.9 },
+          { name: 'video', confidence: 0.8 },
+          { name: 'reading', confidence: 0.8 },
+          { name: 'research', confidence: 0.8 },
+          { name: 'archive', confidence: 0.8 },
+        ],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Many suggestions')).toBeTruthy());
+  expect(screen.getByLabelText('Accept all suggestions for Many suggestions')).toBeTruthy();
+  expect(screen.getByLabelText('Dismiss all suggestions for Many suggestions')).toBeTruthy();
+
+  const card = screen.getByTestId(`review-card-${id}`);
+  const childTestIds = card.children.map((child) =>
+    typeof child === 'string' ? null : child.props.testID,
+  );
+
+  expect(childTestIds.indexOf(`review-action-row-${id}`)).toBeGreaterThan(-1);
+  expect(childTestIds.indexOf(`review-action-row-${id}`)).toBeLessThan(
+    childTestIds.indexOf(`review-chip-row-${id}`),
+  );
+});
+
 test('shows the empty state when nothing is pending', async () => {
   fakeRepo.__reset([makeStoredBookmark({ title: 'Plain bookmark' })]);
 
