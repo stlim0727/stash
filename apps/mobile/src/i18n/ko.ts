@@ -370,6 +370,11 @@ export const ko: Catalog = {
   'report.diagnosticContext': '진단 컨텍스트',
   'report.privacyNote':
     '디버깅을 돕기 위해 앱 진단과 최근 로그 {count}줄을 포함합니다 — 북마크 목록은 포함되지 않습니다.',
+  'report.screenshotTitle': '스크린샷 포함',
+  'report.screenshotNote':
+    '이 신고를 연 화면에서 캡처됩니다. 북마크나 계정 정보가 보일 수 있습니다.',
+  'report.screenshotToggleA11y': '신고에 스크린샷 포함',
+  'report.screenshotPreviewA11y': '스크린샷 미리보기',
   'report.contextPreviewA11y': '진단 컨텍스트 미리보기',
   'report.shareDiagnosticsA11y': '진단 공유',
   'report.shareWithCount': '진단 및 로그 공유 ({count})',

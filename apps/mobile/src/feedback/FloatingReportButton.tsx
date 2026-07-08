@@ -15,7 +15,7 @@ interface FloatingReportButtonProps {
 }
 
 const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1200;
-const DEFAULT_BOTTOM_OFFSET = 18;
+const DEFAULT_BOTTOM_OFFSET = 88;
 const INBOX_BOTTOM_OFFSET = 92;
 
 function surfaceFromPath(pathname: string | null): string {
