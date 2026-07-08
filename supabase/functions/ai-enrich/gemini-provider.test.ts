@@ -119,6 +119,33 @@ test('includes the user\'s existing tags and asks the model to reuse them', asyn
   assert.match(body, /reuse its exact name verbatim/);
 });
 
+test('tells the model to derive tags from non-title metadata too', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await provider.enrich(
+    input({
+      url: 'https://example.com/research/vector-database-guide',
+      title: 'Example',
+      description: 'A practical guide to vector databases and semantic search.',
+      notes: 'Compare indexing strategies for search infrastructure.',
+      site_name: 'Example Docs',
+    }),
+  );
+  const body = calls[0].init?.body ?? '';
+
+  assert.match(body, /Description: A practical guide to vector databases/);
+  assert.match(body, /User notes: Compare indexing strategies/);
+  assert.match(body, /Tagging guidance: derive tags from the combined metadata above, not just the title/);
+  assert.match(body, /description, user notes, site name, content type, and meaningful URL path terms are as important as the title/);
+});
+
 test('omits the existing-tags line when the user has no tags yet', async () => {
   const { fetchImpl, calls } = stubFetch({
     summary: null,

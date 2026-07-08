@@ -83,6 +83,7 @@ function buildSystemInstruction(language: string): string {
     '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1. If one of the provided existing tags fits the bookmark, reuse its exact name verbatim (do NOT translate it) rather than coining a near-duplicate — this keeps the user\'s tag vocabulary consolidated. Only invent a new tag (in the target language) when no existing tag fits.',
     '- suggested_collection: a single best-fit collection NAME for filing this bookmark. If one of the provided existing collections fits, copy its NAME verbatim (do NOT translate it). If none fit, propose a concise, reusable new collection name in Title Case (a broad theme, not a one-off). Use null only when the content is too sparse to categorize at all.',
     '- confidence: your overall confidence from 0 to 1.',
+    'For topics and suggested_tags, use all supplied evidence: description, user notes, site name, content type, and meaningful URL path terms are as important as the title. When the title is generic, short, or brand-only, do not let it dominate; prefer the more specific non-title metadata.',
     'Base every field only on the supplied metadata. Do not fabricate specifics you were not given.',
   ].join('\n');
 }
@@ -133,10 +134,13 @@ function buildPrompt(input: EnrichmentInput): string {
   };
   add('URL', input.url);
   add('Title', input.title);
-  add('Site', input.site_name);
   add('Description', input.description);
   add('User notes', input.notes);
+  add('Site', input.site_name);
   lines.push(`Content type: ${input.content_type}`);
+  lines.push(
+    'Tagging guidance: derive tags from the combined metadata above, not just the title. Favor concrete concepts from description, notes, site, content type, and URL path when they add signal.',
+  );
   if (input.collections && input.collections.length > 0) {
     lines.push(`Existing collections: ${input.collections.join(', ')}`);
   } else {
