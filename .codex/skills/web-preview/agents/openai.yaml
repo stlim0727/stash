@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stash Web Preview"
+  short_description: "Create or verify Cloudflare web previews."
+  default_prompt: "Use $web-preview to prepare a shareable preview URL for this Stash branch."

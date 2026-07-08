@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stash Versioning"
+  short_description: "Determine the next Stash release version."
+  default_prompt: "Use $versioning to decide the next Stash version and build path."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update AGENTS.md"
+  short_description: "Refresh Stash handoff documentation."
+  default_prompt: "Use $update-agents-md to refresh AGENTS.md after recent merged work."

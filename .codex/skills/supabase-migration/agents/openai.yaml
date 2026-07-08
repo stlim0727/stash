@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stash Supabase Migration"
+  short_description: "Write safe Stash Supabase migrations."
+  default_prompt: "Use $supabase-migration to add a safe owner-scoped table to Stash."

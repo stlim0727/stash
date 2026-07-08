@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stash Web Deploy"
+  short_description: "Build, verify, and ship Stash web."
+  default_prompt: "Use $web-deploy to verify and ship the Stash web app."

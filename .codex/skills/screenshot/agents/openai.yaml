@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stash Screenshot"
+  short_description: "Render real Stash screens from Expo web export."
+  default_prompt: "Use $screenshot to capture the Stash inbox with sample bookmarks."

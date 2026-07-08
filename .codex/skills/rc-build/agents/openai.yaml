@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stash RC Build"
+  short_description: "Cut the next Stash Android RC build checklist."
+  default_prompt: "Use $rc-build to prepare the next Stash Android release candidate."

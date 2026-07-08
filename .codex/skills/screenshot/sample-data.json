@@ -1,0 +1,40 @@
+{
+  "bookmarks": [
+    {
+      "id": "bm-1",
+      "user_id": "mock-user-1",
+      "url": "https://example.com/hand-picked",
+      "canonical_url": "https://example.com/hand-picked",
+      "url_hash": "hash-bm-1",
+      "client_id": "client-bm-1",
+      "title": "A hand-picked bookmark",
+      "description": "Everything here is exactly what you put in the file.",
+      "notes": null,
+      "source_app": null,
+      "content_type": "article",
+      "preview_image_url": null,
+      "favicon_url": null,
+      "site_name": "Example",
+      "collection_id": "col-1",
+      "is_archived": false,
+      "deleted_at": null,
+      "created_at": "2026-07-01T10:00:00.000Z",
+      "updated_at": "2026-07-01T10:00:00.000Z",
+      "last_saved_at": "2026-07-01T10:00:00.000Z",
+      "metadata_status": "complete",
+      "sync_status": "synced"
+    }
+  ],
+  "tagData": {
+    "tags": [
+      { "id": "tag-1", "user_id": "mock-user-1", "name": "reference", "slug": "reference", "source": "user", "created_at": "2026-06-30T10:00:00.000Z" }
+    ],
+    "bookmarkTags": [
+      { "bookmark_id": "bm-1", "tag_id": "tag-1", "source": "user", "confidence": null, "created_at": "2026-07-01T10:00:00.000Z" }
+    ],
+    "collections": [
+      { "id": "col-1", "user_id": "mock-user-1", "name": "Read Later", "description": null, "created_at": "2026-06-30T10:00:00.000Z", "updated_at": "2026-06-30T10:00:00.000Z" }
+    ]
+  },
+  "enrichments": []
+}
