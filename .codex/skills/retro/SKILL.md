@@ -8,8 +8,9 @@ description: >-
   "extract what's reusable". Mines the dead-ends and course-corrections (not just
   the happy path), triages each lesson into a skill vs memory, and **upserts** it
   (create-or-update, never duplicate) into `~/.codex/skills/`, the repo's
-  `.claude/skills/` when intentionally contributing back, `AGENTS.md`, or
-  `CLAUDE.md` so the next chat starts ahead of where this one did.
+  `.codex/skills/` or `.claude/skills/` when intentionally contributing back,
+  `AGENTS.md`, or `CLAUDE.md` so the next chat starts ahead of where this one
+  did.
 ---
 
 # Retro — turn a session's trials & errors into reusable knowledge
@@ -58,8 +59,8 @@ Route every kept lesson to exactly one home:
 
 - **→ New/updated skill** — it's a repeatable *procedure* you'd re-run (a doer or
   a checker), multi-step, with a success criterion. Personal Codex procedures
-  live in `~/.codex/skills/`; repo-shared Claude procedures live in
-  `.claude/skills/`.
+  live in `~/.codex/skills/`; repo-shared Codex procedures live in
+  `.codex/skills/`; repo-shared Claude procedures live in `.claude/skills/`.
 - **→ Memory** — it's a durable *fact/convention/gotcha* that changes decisions
   but isn't itself a procedure:
   - project state / bug-class / gotcha → **`AGENTS.md`** (the right section:
@@ -76,17 +77,18 @@ they'd *know* it, it's memory.
 
 ## Step 4 — Upsert, don't duplicate
 
-- **Look before you write.** Grep `~/.codex/skills/`, `.claude/skills/`, and
-  `AGENTS.md`/`CLAUDE.md`
-  for the topic first. **Extend or correct** an existing entry rather than adding
-  a parallel one — a second doc that half-overlaps the first is worse than none.
-- **New skill** → `~/.codex/skills/<name>/SKILL.md` for personal Codex reuse, or
-  `.claude/skills/<name>/SKILL.md` when updating the Stash repo's shared Claude
-  skills, in the house style: frontmatter
-  `name` + `description` (the description must carry the trigger phrases a future
-  agent would say); deterministic numbered steps grounded in real repo state;
-  cross-reference the authoritative doc; end with a **Report** section. Match the
-  shape of an existing skill (`versioning`, `web-deploy`) before inventing one.
+- **Look before you write.** Grep `~/.codex/skills/`, `.codex/skills/`,
+  `.claude/skills/`, and `AGENTS.md`/`CLAUDE.md` for the topic first. **Extend
+  or correct** an existing entry rather than adding a parallel one — a second doc
+  that half-overlaps the first is worse than none.
+- **New skill** → `~/.codex/skills/<name>/SKILL.md` for personal Codex reuse,
+  `.codex/skills/<name>/SKILL.md` when updating Stash's repo-shared Codex skill
+  tree, or `.claude/skills/<name>/SKILL.md` when updating Stash's repo-shared
+  Claude skills. Use the house style: frontmatter `name` + `description` (the
+  description must carry the trigger phrases a future agent would say);
+  deterministic numbered steps grounded in real repo state; cross-reference the
+  authoritative doc; end with a **Report** section. Match the shape of an
+  existing skill (`versioning`, `web-deploy`) before inventing one.
 - **Memory** → if a lesson touches something both `AGENTS.md` and `CLAUDE.md`
   describe, fix **both** so they never disagree (this project has been bitten by
   the two memory files drifting apart — don't recreate that).
