@@ -270,6 +270,7 @@ const WEB_SEMIBOLD_WEIGHT = Platform.select({ web: '600', default: '700' }) as '
 const WEB_BOLD_WEIGHT = Platform.select({ web: '700', default: '800' }) as '700' | '800';
 const WEB_CARD_GRID_TOP_GAP = Platform.OS === 'web' ? 12 : 4;
 const WEB_CARD_GRID_COLUMN_GAP = 16;
+const LIST_PADDING = 16;
 const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
 
 // A filler cell used to pad the last row of the multi-column card grid so the
@@ -2023,9 +2024,10 @@ export default function InboxScreen() {
                 markAccessOnMount={false}
               />
             );
-            const detailWidth = contentMaxWidth - WEB_CARD_GRID_COLUMN_GAP * (columns - 1);
+            const detailWidth =
+              contentMaxWidth - LIST_PADDING * 2 - WEB_CARD_GRID_COLUMN_GAP * (columns - 1);
             return item.fullWidth ? (
-              <View style={{ width: detailWidth }}>{detail}</View>
+              <View testID="inbox-inline-detail-row" style={{ width: detailWidth }}>{detail}</View>
             ) : detail;
           }
           const status = statusLabel(item, t);
@@ -2488,7 +2490,7 @@ const styles = StyleSheet.create({
     ...overlayLayer(10),
   },
   list: {
-    padding: 16,
+    padding: LIST_PADDING,
     gap: 6,
     width: '100%',
     alignSelf: 'center',

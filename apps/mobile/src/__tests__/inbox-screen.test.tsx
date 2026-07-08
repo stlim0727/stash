@@ -934,6 +934,7 @@ test('web inline detail keeps the wide card grid stable', async () => {
   // and Card four's trailing row still pads back to three columns.
   expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(4);
   expect(screen.queryByTestId('inbox-grid-selected-row-filler')).toBeNull();
+  expect(screen.getByTestId('inbox-inline-detail-row').props.style).toEqual({ width: 1052 });
 
   await fireEvent.press(screen.getByRole('button', { name: 'Card four' }));
 
