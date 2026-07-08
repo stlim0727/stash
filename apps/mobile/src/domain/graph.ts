@@ -12,12 +12,9 @@
  * co-occurrence graph would produce. Tag nodes become hubs; bookmark nodes
  * orbit the tags they belong to.
  *
- * Untagged bookmarks are parked under a single synthetic "untagged" hub node
- * (see UNTAGGED_HUB_ID) rather than omitted. Omitting them would silently hide
- * real user content from a view that is meant to be a map of everything saved;
- * leaving them as disconnected nodes would create floating noise. A single
- * labelled hub keeps them present, grouped, and stylable by the UI while still
- * reading as "these have no tags yet".
+ * Untagged bookmarks are omitted. This is a tag relationship map, so showing
+ * untagged items as a synthetic cluster adds visual noise without a meaningful
+ * tag connection.
  *
  * Layout: a deterministic, seeded Fruchterman-Reingold force simulation run to
  * completion synchronously for a fixed tick budget, returning static x/y. We do
@@ -32,7 +29,7 @@
 
 import type { Bookmark, BookmarkTag, Tag } from '@/domain/types';
 
-/** Well-known id of the synthetic hub that untagged bookmarks connect to. */
+/** Legacy id for older graph data/tests; current graph derivation omits untagged bookmarks. */
 export const UNTAGGED_HUB_ID = 'untagged-hub';
 
 export type GraphNodeKind = 'bookmark' | 'tag' | 'untagged-hub';
@@ -106,9 +103,8 @@ export interface DeriveGraphInput {
   /**
    * Minimum active-bookmark degree a tag must reach to become a tag node
    * (shared-tag backbone). Tags below the threshold are dropped entirely (no
-   * node, no edges) and their bookmarks fall back to the untagged hub if no
-   * surviving tag remains. Defaults to 1 (every used tag survives), which
-   * reproduces the pre-filter behavior exactly.
+   * node, no edges), and bookmarks with no surviving tag are omitted. Defaults
+   * to 1 (every used tag survives).
    */
   minSharedDegree?: number;
   /**
@@ -222,8 +218,7 @@ function isActive(bookmark: Bookmark): boolean {
  *   `minSharedDegree` (default 1) active bookmarks, so isolated tags don't
  *   float as disconnected noise and single-use tags can be filtered out to
  *   surface the shared-tag backbone.
- * - Bookmarks with no surviving tag link connect to the single UNTAGGED_HUB_ID
- *   node, which is only created when at least one such bookmark exists.
+ * - Bookmarks with no surviving tag link are omitted.
  */
 export function deriveGraph(input: DeriveGraphInput): Graph {
   const minSharedDegree = input.minSharedDegree ?? 1;
@@ -258,26 +253,23 @@ export function deriveGraph(input: DeriveGraphInput): Graph {
 
   const edges: GraphEdge[] = [];
   const tagDegree = new Map<string, number>();
-  let untaggedCount = 0;
 
-  const bookmarkNodes: GraphNode[] = activeBookmarks.map((bookmark) => {
+  const bookmarkNodes: GraphNode[] = activeBookmarks.flatMap((bookmark) => {
     const tagIds = (linksByBookmark.get(bookmark.id) ?? []).filter(survives);
     if (tagIds.length === 0) {
-      edges.push({ source: bookmarkNodeId(bookmark.id), target: UNTAGGED_HUB_ID });
-      untaggedCount += 1;
-    } else {
-      for (const tagId of tagIds) {
-        edges.push({ source: bookmarkNodeId(bookmark.id), target: tagNodeId(tagId) });
-        tagDegree.set(tagId, (tagDegree.get(tagId) ?? 0) + 1);
-      }
+      return [];
     }
-    return {
+    for (const tagId of tagIds) {
+      edges.push({ source: bookmarkNodeId(bookmark.id), target: tagNodeId(tagId) });
+      tagDegree.set(tagId, (tagDegree.get(tagId) ?? 0) + 1);
+    }
+    return [{
       kind: 'bookmark',
       id: bookmarkNodeId(bookmark.id),
       bookmark_id: bookmark.id,
       label: bookmark.title ?? bookmark.url ?? 'Untitled',
-      degree: Math.max(tagIds.length, 1),
-    } satisfies BookmarkGraphNode;
+      degree: tagIds.length,
+    } satisfies BookmarkGraphNode];
   });
 
   const tagNodes: GraphNode[] = [];
@@ -293,17 +285,7 @@ export function deriveGraph(input: DeriveGraphInput): Graph {
     } satisfies TagGraphNode);
   }
 
-  const hubNodes: GraphNode[] = [];
-  if (untaggedCount > 0) {
-    hubNodes.push({
-      kind: 'untagged-hub',
-      id: UNTAGGED_HUB_ID,
-      label: 'Untagged',
-      degree: untaggedCount,
-    } satisfies UntaggedHubGraphNode);
-  }
-
-  return { nodes: [...tagNodes, ...hubNodes, ...bookmarkNodes], edges };
+  return { nodes: [...tagNodes, ...bookmarkNodes], edges };
 }
 
 /** Deterministic PRNG (mulberry32) — keeps the layout reproducible. */

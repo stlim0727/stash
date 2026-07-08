@@ -99,7 +99,7 @@ beforeEach(() => {
 
 // A small stash: `cooking` is shared by two bookmarks (survives the ≥2 shared-tag
 // backbone filter), `reading` is single-use (filtered out — its bookmark keeps the
-// shared `cooking` tag), plus an untagged bookmark that parks under the synthetic hub.
+// shared `cooking` tag), plus an untagged bookmark that is omitted from the graph.
 function seedLibrary() {
   const cooked = '7e64cf1e-0000-4000-8000-0000000000a1';
   const reading = '7e64cf1e-0000-4000-8000-0000000000a2';
@@ -122,7 +122,7 @@ function seedLibrary() {
   );
 }
 
-test('renders the shared-tag backbone hub, the untagged hub, and a node per bookmark', async () => {
+test('renders the shared-tag backbone and omits untagged bookmarks', async () => {
   seedLibrary();
 
   const screen = await renderScreen();
@@ -142,12 +142,12 @@ test('renders the shared-tag backbone hub, the untagged hub, and a node per book
   // The single-use `reading` tag is filtered out by the shared-tag backbone
   // (minSharedDegree: 2) — no hub for it.
   expect(screen.queryByTestId('graph-tag-t-reading')).toBeNull();
-  // The untagged bookmark parks under the synthetic hub.
-  expect(screen.getByTestId('graph-untagged-hub')).toBeTruthy();
-  // Still one node per bookmark — the reading bookmark keeps its shared cooking tag.
+  // The untagged bookmark is omitted from the graph.
+  expect(screen.queryByTestId('graph-untagged-hub')).toBeNull();
+  // Tagged bookmarks still render; the reading bookmark keeps its shared cooking tag.
   expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a1')).toBeTruthy();
   expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a2')).toBeTruthy();
-  expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a3')).toBeTruthy();
+  expect(screen.queryByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a3')).toBeNull();
 });
 
 test('shows the empty state when there are no bookmarks', async () => {
@@ -373,7 +373,7 @@ describe('graph canvas sizing', () => {
   });
 });
 
-test('an all-untagged stash reads as intentional with the add-tags hint', async () => {
+test('an all-untagged stash shows the add-tags hint without drawing an untagged cluster', async () => {
   fakeRepo.__reset(
     [makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000b1', title: 'Loose one' })],
     { tags: [], bookmarkTags: [], collections: [] },
@@ -383,7 +383,8 @@ test('an all-untagged stash reads as intentional with the add-tags hint', async 
   await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
   await flushSettle();
 
-  await waitFor(() => expect(screen.getByTestId('graph-untagged-hub')).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+  expect(screen.queryByTestId('graph-untagged-hub')).toBeNull();
   // No tag hubs, so the "add tags to see connections" hint surfaces.
   expect(screen.getByText('Add tags to your bookmarks to see how they connect.')).toBeTruthy();
 });

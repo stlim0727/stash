@@ -76,7 +76,7 @@ function smallFixture(): DeriveGraphInput {
     link('bk8', 'read'), // multi-tag bookmark
     link('bk9', 'read'),
     link('bk10', 'code'),
-    // bk11 has no tags -> untagged hub
+    // bk11 has no tags -> omitted
   ];
   return { bookmarks, tags, bookmarkTags };
 }
@@ -92,29 +92,22 @@ test('bipartite: every edge is bookmark -> tag/hub, never bookmark-bookmark or t
   for (const edge of graph.edges) {
     assert.equal(kindById.get(edge.source), 'bookmark', `source ${edge.source} must be a bookmark`);
     const targetKind = kindById.get(edge.target);
-    assert.ok(
-      targetKind === 'tag' || targetKind === 'untagged-hub',
-      `target ${edge.target} must be a tag/hub, got ${targetKind}`,
-    );
+    assert.equal(targetKind, 'tag', `target ${edge.target} must be a tag, got ${targetKind}`);
   }
 });
 
-test('edge count is O(links): one edge per active tag-link + one per untagged bookmark', () => {
+test('edge count is O(links): one edge per active surviving tag-link', () => {
   const input = smallFixture();
   const graph = deriveGraph(input);
-  // 12 real links above + 1 untagged bookmark = 13 edges.
-  assert.equal(graph.edges.length, 13);
+  // 12 real links above; the untagged bookmark is omitted.
+  assert.equal(graph.edges.length, 12);
 });
 
-test('untagged bookmarks connect to a single synthetic hub node', () => {
+test('untagged bookmarks are omitted from the tag relationship graph', () => {
   const graph = deriveGraph(smallFixture());
-  const hubs = graph.nodes.filter((n) => n.kind === 'untagged-hub');
-  assert.equal(hubs.length, 1);
-  assert.equal(hubs[0].id, UNTAGGED_HUB_ID);
-  assert.equal(hubs[0].degree, 1); // only bk11
-  const hubEdges = graph.edges.filter((e) => e.target === UNTAGGED_HUB_ID);
-  assert.equal(hubEdges.length, 1);
-  assert.equal(hubEdges[0].source, 'b:bk11');
+  assert.ok(!graph.nodes.some((n) => n.kind === 'untagged-hub'));
+  assert.ok(!graph.nodes.some((n) => n.id === 'b:bk11'));
+  assert.ok(!graph.edges.some((e) => e.source === 'b:bk11'));
 });
 
 test('tag hub degree equals its active bookmark count', () => {
@@ -175,10 +168,9 @@ test('links to non-existent tags are ignored', () => {
     bookmarkTags: [link('bk0', 'ghost')],
   };
   const graph = deriveGraph(input);
-  // No real tag -> bookmark counts as untagged.
-  assert.ok(graph.nodes.some((n) => n.id === UNTAGGED_HUB_ID));
-  assert.equal(graph.edges.length, 1);
-  assert.equal(graph.edges[0].target, UNTAGGED_HUB_ID);
+  // No real tag relationship remains, so the bookmark is omitted.
+  assert.equal(graph.nodes.length, 0);
+  assert.equal(graph.edges.length, 0);
 });
 
 test('duplicate links collapse to one edge', () => {
@@ -215,23 +207,20 @@ test('minSharedDegree 2: single-use tags produce no nodes/edges, only the shared
   );
 });
 
-test('minSharedDegree 2: a bookmark whose only tags are single-use routes to the untagged hub', () => {
+test('minSharedDegree 2: a bookmark whose only tags are single-use is omitted', () => {
   const input: DeriveGraphInput = {
     bookmarks: [makeBookmark('a'), makeBookmark('b'), makeBookmark('orphan')],
     tags: [makeTag('shared'), makeTag('once')],
     bookmarkTags: [link('a', 'shared'), link('b', 'shared'), link('orphan', 'once')],
   };
   const graph = deriveGraph({ ...input, minSharedDegree: 2 });
-  // orphan lost its only (single-use) tag -> lands under the hub, degree 1.
-  const orphan = graph.nodes.find((n) => n.id === 'b:orphan');
-  assert.ok(orphan && orphan.kind === 'bookmark');
-  assert.equal(orphan.degree, 1);
-  const orphanEdges = graph.edges.filter((e) => e.source === 'b:orphan');
-  assert.equal(orphanEdges.length, 1);
-  assert.equal(orphanEdges[0].target, UNTAGGED_HUB_ID);
+  // orphan lost its only (single-use) tag and no longer has a visible
+  // relationship to draw.
+  assert.ok(!graph.nodes.some((n) => n.id === 'b:orphan'));
+  assert.ok(!graph.edges.some((e) => e.source === 'b:orphan'));
 });
 
-test('minSharedDegree 2: untagged hub aggregates genuinely-untagged and newly-orphaned bookmarks', () => {
+test('minSharedDegree 2: genuinely-untagged and newly-orphaned bookmarks are omitted', () => {
   const input: DeriveGraphInput = {
     bookmarks: [
       makeBookmark('a'),
@@ -243,14 +232,10 @@ test('minSharedDegree 2: untagged hub aggregates genuinely-untagged and newly-or
     bookmarkTags: [link('a', 'shared'), link('b', 'shared'), link('orphan', 'once')],
   };
   const graph = deriveGraph({ ...input, minSharedDegree: 2 });
-  const hub = graph.nodes.find((n) => n.id === UNTAGGED_HUB_ID);
-  assert.ok(hub && hub.kind === 'untagged-hub');
-  assert.equal(hub.degree, 2); // orphan + bare
-  const hubSources = graph.edges
-    .filter((e) => e.target === UNTAGGED_HUB_ID)
-    .map((e) => e.source)
-    .sort();
-  assert.deepEqual(hubSources, ['b:bare', 'b:orphan']);
+  assert.ok(!graph.nodes.some((n) => n.id === UNTAGGED_HUB_ID));
+  assert.ok(!graph.nodes.some((n) => n.id === 'b:orphan'));
+  assert.ok(!graph.nodes.some((n) => n.id === 'b:bare'));
+  assert.ok(!graph.edges.some((e) => e.source === 'b:orphan' || e.source === 'b:bare'));
 });
 
 test('back-compat: minSharedDegree absent equals minSharedDegree 1 and reproduces default behavior', () => {
@@ -293,17 +278,17 @@ test('empty input does not throw and returns an empty settled graph', () => {
   });
 });
 
-test('zero-tags case: all bookmarks land under the untagged hub', () => {
+test('zero-tags case: no tag relationships produces an empty graph', () => {
   const input: DeriveGraphInput = {
     bookmarks: [makeBookmark('a'), makeBookmark('b')],
     tags: [],
     bookmarkTags: [],
   };
   const graph = deriveGraph(input);
-  assert.equal(graph.edges.length, 2);
-  assert.ok(graph.edges.every((e) => e.target === UNTAGGED_HUB_ID));
+  assert.equal(graph.nodes.length, 0);
+  assert.equal(graph.edges.length, 0);
   const settled = layoutGraph(graph);
-  assert.ok(settled.nodes.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y)));
+  assert.equal(settled.nodes.length, 0);
 });
 
 test('layout produces finite, bounded positions for the small fixture', () => {
@@ -389,13 +374,13 @@ test('synthetic ~400-bookmark graph settles to finite, bounded positions', () =>
   }
   const input: DeriveGraphInput = { bookmarks, tags, bookmarkTags };
   const graph = deriveGraph(input);
-  // 400 bookmarks + 20 tags + 1 untagged hub = 421 nodes.
-  assert.equal(graph.nodes.length, 421);
+  // 360 tagged bookmarks + 20 tags; the 40 untagged bookmarks are omitted.
+  assert.equal(graph.nodes.length, 380);
   // Use the exact shipped budget the /graph screen runs (test == prod).
   const ticks = layoutTickBudget(graph.nodes.length);
-  assert.ok(ticks < 300, 'a 421-node graph must be scaled below the full budget');
+  assert.ok(ticks < 300, 'a 380-node graph must be scaled below the full budget');
   const settled = layoutGraph(graph, { ticks });
-  assert.equal(settled.nodes.length, 421);
+  assert.equal(settled.nodes.length, 380);
   for (const node of settled.nodes) {
     assert.ok(Number.isFinite(node.x) && Number.isFinite(node.y));
   }
