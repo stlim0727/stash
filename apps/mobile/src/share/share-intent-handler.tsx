@@ -154,9 +154,14 @@ export function ShareIntentHandler() {
       behavior.current = behaviorPref;
 
       if (behaviorPref === 'inbox') {
-        // Jump to the Inbox so the freshly stashed item is immediately visible.
-        show(message);
-        router.replace('/');
+        // Jump to the Inbox only after the capture has durably landed. Without
+        // this gate, a storage hiccup or process kill could show Inbox as if the
+        // share succeeded while the row never made it to SQLite.
+        const durable = await persisted;
+        show(saved && durable === false ? t('toast.saveFailed') : message);
+        if (!saved || durable !== false) {
+          router.replace('/');
+        }
         return;
       }
 

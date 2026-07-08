@@ -264,6 +264,7 @@ export const en = {
   'toast.duplicate': 'Already in Keepory',
   'toast.trashed': 'Moved to Trash',
   'toast.noLink': 'No link found to save',
+  'toast.saveFailed': 'Could not save to Keepory',
 
   // Settings.
   'settings.section.account': 'Account',

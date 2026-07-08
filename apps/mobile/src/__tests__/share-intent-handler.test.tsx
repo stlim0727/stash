@@ -517,4 +517,29 @@ describe('ShareIntentHandler', () => {
     expect(mockDismiss).not.toHaveBeenCalled();
     unmount();
   });
+
+  it('inbox mode does not navigate as a successful save when the durable write fails', async () => {
+    fakeRepo.__reset([]);
+    await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');
+    const originalInsert = fakeRepo.repository.insertBookmark;
+    fakeRepo.repository.insertBookmark = jest.fn(async () => {
+      throw new Error('simulated storage failure');
+    });
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/inbox-fail', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    try {
+      const { findByText, unmount } = await renderHandler();
+
+      await findByText('Could not save to Keepory');
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+      expect(mockDismiss).not.toHaveBeenCalled();
+      unmount();
+    } finally {
+      fakeRepo.repository.insertBookmark = originalInsert;
+    }
+  });
 });
