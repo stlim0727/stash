@@ -68,6 +68,7 @@ test('buildEvent maps a report to a Sentry event with tags and redacted extra', 
   const tags = event.tags as Record<string, string>;
   assert.equal(tags.source, 'in-app-feedback');
   assert.equal(tags.category, 'bug');
+  assert.equal(tags.screenshot, 'absent');
   assert.equal(tags.platform_os, 'ios');
   assert.equal(tags.app_version, '1.4.0');
   const extra = event.extra as { report_id: string; diagnostics: Record<string, unknown> };
@@ -167,6 +168,8 @@ test('screenshot data is sent as an attachment and stripped from diagnostics ext
     event.extra.diagnostics.screenshot.dataUrl,
     '[redacted screenshot data]',
   );
+  assert.equal(event.tags.screenshot, 'present');
+  assert.equal(event.tags.screenshot_surface, 'settings');
   const attachmentHeader = JSON.parse(lines[3]);
   assert.equal(attachmentHeader.type, 'attachment');
   assert.equal(attachmentHeader.filename, 'feedback-screen.jpg');

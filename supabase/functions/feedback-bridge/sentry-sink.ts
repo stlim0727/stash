@@ -71,6 +71,19 @@ function levelFor(category: string): 'error' | 'info' {
   return category === 'bug' ? 'error' : 'info';
 }
 
+function screenshotTags(context: Record<string, unknown>): Record<string, string> {
+  const screenshot = context.screenshot;
+  if (!screenshot || typeof screenshot !== 'object') {
+    return { screenshot: 'absent' };
+  }
+  const record = screenshot as Record<string, unknown>;
+  const tags: Record<string, string> = { screenshot: 'present' };
+  if (typeof record.surface === 'string' && record.surface.length > 0) {
+    tags.screenshot_surface = record.surface.slice(0, 64);
+  }
+  return tags;
+}
+
 interface ScreenshotAttachment {
   bytes: Uint8Array;
   contentType: string;
@@ -160,6 +173,7 @@ export class SentrySink implements ReportSink {
     const tags: Record<string, string> = {
       source: 'in-app-feedback',
       category: report.category,
+      ...screenshotTags(report.context),
     };
     if (report.platform) {
       tags.platform_os = report.platform;
