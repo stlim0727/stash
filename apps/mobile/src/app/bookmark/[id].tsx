@@ -46,12 +46,17 @@ import {
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
 
-export default function BookmarkDetailScreen() {
+interface BookmarkDetailScreenProps {
+  inlineId?: string;
+  onInlineClose?: () => void;
+}
+
+export default function BookmarkDetailScreen({ inlineId, onInlineClose }: BookmarkDetailScreenProps = {}) {
   const palette = usePalette();
   const { t, formatDate } = useI18n();
   const router = useRouter();
   const { show: showToast } = useCaptureToast();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id: routeId } = useLocalSearchParams<{ id: string }>();
   const {
     getBookmark,
     getTagsForBookmark,
@@ -120,13 +125,15 @@ export default function BookmarkDetailScreen() {
       return;
     }
     const node = notesRef.current as unknown as HTMLTextAreaElement | null;
-    if (!node) {
+    if (!node || !('style' in node)) {
       return;
     }
     node.style.height = 'auto';
     node.style.height = `${node.scrollHeight}px`;
   });
 
+  const id = inlineId ?? routeId;
+  const inline = inlineId !== undefined;
   const bookmark = id ? getBookmark(id) : undefined;
 
   // The title shown when not editing. Background metadata enrichment can swap
@@ -706,13 +713,23 @@ export default function BookmarkDetailScreen() {
       }
     : null;
 
-  return (
-    <KeyboardAvoidingScreen style={{ backgroundColor: palette.background }}>
-    <ScrollView
-      style={{ backgroundColor: palette.background }}
-      contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 32 }]}
-      keyboardShouldPersistTaps="handled"
-    >
+  const content = (
+    <>
+      {inline && onInlineClose ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('common.close')}
+          testID="bookmark-inline-detail-close"
+          hitSlop={8}
+          onPress={onInlineClose}
+          style={({ pressed }) => [
+            styles.inlineClose,
+            { opacity: pressed ? 0.6 : 1 },
+          ]}
+        >
+          <Ionicons name="close" size={18} color={palette.textSecondary} />
+        </Pressable>
+      ) : null}
       {/* Prefer a captured image's local URI (image bookmarks) over a fetched
           preview; either renders the same hero. */}
       {(() => {
@@ -830,7 +847,14 @@ export default function BookmarkDetailScreen() {
             icon="arrow-undo"
             label={t('common.restore')}
             tint={palette.text}
-            onPress={() => { restoreBookmark(bookmark.id); router.back(); }}
+            onPress={() => {
+              restoreBookmark(bookmark.id);
+              if (inline) {
+                onInlineClose?.();
+              } else {
+                router.back();
+              }
+            }}
           />
         ) : (
           <ActionButton
@@ -846,7 +870,11 @@ export default function BookmarkDetailScreen() {
                 label: t('common.undo'),
                 onPress: () => restoreBookmark(trashedId),
               });
-              router.back();
+              if (inline) {
+                onInlineClose?.();
+              } else {
+                router.back();
+              }
             }}
           />
         )}
@@ -1103,6 +1131,36 @@ export default function BookmarkDetailScreen() {
       </View>
 
       {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
+    </>
+  );
+
+  if (inline) {
+    return (
+      <View
+        testID="bookmark-inline-detail"
+        style={[
+          styles.container,
+          styles.inlineContainer,
+          {
+            backgroundColor: palette.surfaceElevated,
+            borderColor: palette.border,
+            paddingBottom: 16,
+          },
+        ]}
+      >
+        {content}
+      </View>
+    );
+  }
+
+  return (
+    <KeyboardAvoidingScreen style={{ backgroundColor: palette.background }}>
+    <ScrollView
+      style={{ backgroundColor: palette.background }}
+      contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 32 }]}
+      keyboardShouldPersistTaps="handled"
+    >
+      {content}
     </ScrollView>
     </KeyboardAvoidingScreen>
   );
@@ -1143,6 +1201,21 @@ const styles = StyleSheet.create({
   container: {
     padding: 16,
     gap: 14,
+  },
+  inlineContainer: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 24,
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  inlineClose: {
+    alignSelf: 'flex-end',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: -8,
   },
   preview: {
     width: '100%',

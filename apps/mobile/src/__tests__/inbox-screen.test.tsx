@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Linking, StyleSheet } from 'react-native';
+import { Linking, Platform, StyleSheet } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -60,6 +60,8 @@ import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
+const defaultPlatformOS = Platform.OS;
+
 function makeCollection(id: string, name: string): Collection {
   const now = '2026-06-12T00:00:00.000Z';
   return { id, user_id: 'user-test', name, description: null, created_at: now, updated_at: now };
@@ -83,6 +85,7 @@ function renderInbox() {
 }
 
 beforeEach(() => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => defaultPlatformOS });
   mockParams = {};
   mockPush.mockClear();
   mockSetParams.mockClear();
@@ -883,6 +886,29 @@ test('the view segmented control switches between card and list layouts', async 
   await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
   expect(screen.queryByTestId('inbox-compact-title')).toBeNull();
+});
+
+test('web opens bookmark detail inline instead of pushing the detail route', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000042',
+      title: 'Inline web detail',
+      url: 'https://example.com/inline',
+      url_hash: 'https://example.com/inline',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Inline web detail')).toBeTruthy());
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Inline web detail' }));
+
+  await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  expect(mockPush).not.toHaveBeenCalledWith({
+    pathname: '/bookmark/[id]',
+    params: { id: '7e64cf1e-0000-4000-8000-000000000042' },
+  });
 });
 
 test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', async () => {

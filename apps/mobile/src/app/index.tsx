@@ -94,6 +94,7 @@ import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
+import BookmarkDetailScreen from '@/app/bookmark/[id]';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
   const parts: string[] = [];
@@ -274,6 +275,8 @@ const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
 // real cards on that row keep their column width. Never rendered as a card — the
 // renderItem short-circuits it to an empty flex spacer.
 type GridPlaceholder = { id: string; __placeholder: true };
+type InlineDetailItem = { id: string; __inlineDetail: true; bookmarkId: string };
+type InboxListItem = Bookmark | GridPlaceholder | InlineDetailItem;
 
 /**
  * Web-only positioning shell for the browse shelf. On native it renders NOTHING
@@ -527,6 +530,8 @@ export default function InboxScreen() {
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+  const [inlineDetailId, setInlineDetailId] = useState<string | null>(null);
+  const webInlineDetailOpen = Platform.OS === 'web' && inlineDetailId !== null;
 
   // Responsive multi-column card grid on wide (desktop-web) viewports. Only the
   // card layout flows into 2–3 columns; compact/list stay single-column. On
@@ -534,7 +539,9 @@ export default function InboxScreen() {
   // to 1 and the content cap falls back to the fixed 720px column — the current
   // phone behavior is preserved exactly with no Platform.OS branch.
   const { width: winWidth } = useWindowDimensions();
-  const columns = viewMode === 'card' ? Math.min(3, Math.max(1, Math.floor(winWidth / 380))) : 1;
+  const columns = !webInlineDetailOpen && viewMode === 'card'
+    ? Math.min(3, Math.max(1, Math.floor(winWidth / 380)))
+    : 1;
   const contentMaxWidth = columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
   // The suggest/session banners are cards carrying a 16px horizontal margin
   // (styles.suggestBanner), so capping them with `width: '100%'` would lay out
@@ -955,25 +962,44 @@ export default function InboxScreen() {
     [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
+  useEffect(() => {
+    if (inlineDetailId && !visible.some((bookmark) => bookmark.id === inlineDetailId)) {
+      setInlineDetailId(null);
+    }
+  }, [inlineDetailId, visible]);
   // In a multi-column card grid, pad the final row up to a full multiple of
   // `columns` with lightweight placeholders so the last row's real cards keep
   // their column width (flex: 1) instead of stretching across the leftover
   // space. Single-column (phones, compact/list) passes `visible` through
   // untouched, so those paths are byte-for-byte unchanged.
-  const gridData = useMemo<(Bookmark | GridPlaceholder)[]>(() => {
-    if (columns <= 1 || visible.length === 0) {
-      return visible;
+  const gridData = useMemo<InboxListItem[]>(() => {
+    const withInlineDetail = (() => {
+      if (Platform.OS !== 'web' || !inlineDetailId) {
+        return visible;
+      }
+      const index = visible.findIndex((bookmark) => bookmark.id === inlineDetailId);
+      if (index === -1) {
+        return visible;
+      }
+      return [
+        ...visible.slice(0, index + 1),
+        { id: `__detail-${inlineDetailId}`, __inlineDetail: true as const, bookmarkId: inlineDetailId },
+        ...visible.slice(index + 1),
+      ];
+    })();
+    if (columns <= 1 || withInlineDetail.length === 0) {
+      return withInlineDetail;
     }
-    const remainder = visible.length % columns;
+    const remainder = withInlineDetail.length % columns;
     if (remainder === 0) {
-      return visible;
+      return withInlineDetail;
     }
     const placeholders: GridPlaceholder[] = Array.from(
       { length: columns - remainder },
       (_, i) => ({ id: `__ph-${i}`, __placeholder: true }),
     );
-    return [...visible, ...placeholders];
-  }, [visible, columns]);
+    return [...withInlineDetail, ...placeholders];
+  }, [visible, columns, inlineDetailId]);
   // A query is only a search when it produces at least one real search token. A
   // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
   // zero tokens, so `filterBookmarks` returns everything — treating that as a
@@ -1819,12 +1845,12 @@ export default function InboxScreen() {
         keyExtractor={(item) => item.id}
         // Remount when the column count changes: FlatList forbids mutating
         // numColumns on an existing instance.
-        key={`grid-${viewMode}-${columns}`}
+        key={`grid-${viewMode}-${columns}-${webInlineDetailOpen ? 'inline-detail' : 'list'}`}
         numColumns={columns}
         columnWrapperStyle={columns > 1 ? { gap: 16 } : undefined}
         style={isWeb ? styles.webListNoTransform : undefined}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
-          useNativeDriver: true,
+          useNativeDriver: !isWeb,
         })}
         scrollEventThrottle={16}
         // Dragging the results dismisses the keyboard (→ keyboardDidHide drops the
@@ -1952,6 +1978,14 @@ export default function InboxScreen() {
           if ('__placeholder' in item) {
             return <View testID="inbox-grid-filler" style={{ flex: 1 }} />;
           }
+          if ('__inlineDetail' in item) {
+            return (
+              <BookmarkDetailScreen
+                inlineId={item.bookmarkId}
+                onInlineClose={() => setInlineDetailId(null)}
+              />
+            );
+          }
           const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
@@ -1974,8 +2008,13 @@ export default function InboxScreen() {
             )
               ? 1
               : 0);
-          const openDetail = () =>
+          const openDetail = () => {
+            if (Platform.OS === 'web') {
+              setInlineDetailId((current) => (current === item.id ? null : item.id));
+              return;
+            }
             router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
+          };
           const openLink = () => {
             if (item.url) {
               markBookmarkAccessed(item.id);
