@@ -48,10 +48,16 @@ lie here; verify by content.
 1. Fetch the refs: `git fetch origin <base> <head-ref>`.
 2. Find the merge base and list the PR's own commits:
    `git log --oneline $(git merge-base origin/<base> origin/<head>)..origin/<head>`.
-3. **Try the rebase as the test** — `git checkout -B <head> origin/<head>` then
-   `git rebase origin/<base>`. If every commit conflicts with "base already has
-   this," or the rebase resolves to empty/near-empty, the PR is **superseded**.
-   `git rebase --abort` and return to a clean branch afterward — do not push.
+3. **Try the rebase as the test on disposable state** — use a detached checkout,
+   temporary worktree, or uniquely named scratch branch, e.g.
+   `git switch --detach origin/<head>` or
+   `git worktree add ../review-pr-<number> origin/<head>`, then
+   `git rebase origin/<base>`. Do **not** run
+   `git checkout -B <head> origin/<head>` on a local branch name; it can clobber
+   local commits or leave the user's branch rewritten. If every commit conflicts
+   with "base already has this," or the rebase resolves to empty/near-empty, the
+   PR is **superseded**. `git rebase --abort` and remove the scratch worktree or
+   return to a clean detached state afterward — do not push.
 4. Confirm by content, not patch-id: `git show origin/<base>:<path>` for the key
    files and check the actual strings/logic the PR adds are already present.
    Watch for the doc/guidance case where base has a **newer, better** version of

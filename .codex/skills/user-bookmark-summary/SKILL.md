@@ -41,7 +41,9 @@ abandoned accounts are part of the picture):
 SELECT
   u.email,
   CASE WHEN u.is_anonymous THEN 'anonymous' ELSE 'registered' END AS account_type,
-  COUNT(b.id) FILTER (WHERE b.deleted_at IS NULL) AS bookmarks,
+  COUNT(b.id) FILTER (
+    WHERE b.deleted_at IS NULL AND COALESCE(b.is_archived, false) = false
+  ) AS bookmarks,
   COUNT(b.id) FILTER (WHERE b.is_archived AND b.deleted_at IS NULL) AS archived,
   COUNT(DISTINCT b.collection_id) FILTER (WHERE b.collection_id IS NOT NULL) AS collections_used,
   COUNT(b.id) FILTER (WHERE b.metadata_status = 'pending') AS meta_pending,
@@ -69,7 +71,11 @@ SELECT
   COUNT(*) FILTER (WHERE is_anonymous) AS anonymous_users,
   COUNT(*) FILTER (WHERE NOT is_anonymous) AS registered_users,
   COUNT(*) FILTER (WHERE raw_user_meta_data->>'app_version' IS NOT NULL) AS users_with_version,
-  (SELECT COUNT(*) FROM public.bookmarks WHERE deleted_at IS NULL) AS total_bookmarks
+  (
+    SELECT COUNT(*)
+    FROM public.bookmarks
+    WHERE deleted_at IS NULL AND COALESCE(is_archived, false) = false
+  ) AS total_bookmarks
 FROM auth.users;
 ```
 

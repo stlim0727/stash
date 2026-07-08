@@ -35,7 +35,7 @@ Needs a CircleCI API token in **`CIRCLECI_TOKEN`** (already set in this environm
 Get the workflow id from the failing status' `target_url` (the webhook `Details` link, e.g. `https://app.circleci.com/workflow/<uuid>`), then:
 
 ```
-node "%USERPROFILE%/.codex/skills/circleci-logs/fetch-failure.mjs" <workflow-id-or-url> [tailLines]
+node .codex/skills/circleci-logs/fetch-failure.mjs <workflow-id-or-url> [tailLines]
 ```
 
 It accepts a bare workflow UUID **or** any CircleCI URL containing one, prints each failed job's failing step, the extracted failure markers (`FAIL`, `✕`, `Unable to find`, `expect(`, `Exit status`, …), and the tail of the log.

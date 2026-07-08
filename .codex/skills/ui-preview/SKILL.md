@@ -52,11 +52,16 @@ Always state these caveats when you deliver the image.
    side (e.g. signed-out / signed-in / not-configured; empty / populated;
    light / dark). This is where the preview earns its keep.
 
-3. **Install the rasterizer** in the workspace that the script runs from
-   (`@resvg/resvg-js` is lightweight, no browser):
-   `pnpm --filter mobile add -D @resvg/resvg-js`
-   Node ESM resolves deps from the *script's* directory, so put the generator
-   inside `apps/mobile/` (or run it from there) — not repo root.
+3. **Install the rasterizer** without mutating app dependencies. Use a temporary
+   or skill-local npm prefix (`@resvg/resvg-js` is lightweight, no browser):
+   ```bash
+   PREVIEW_DEPS="${PREVIEW_DEPS:-/tmp/stash-ui-preview-deps}"
+   npm --prefix "$PREVIEW_DEPS" install --no-save @resvg/resvg-js
+   ```
+   Import it from the generated script with `createRequire`, or set
+   `NODE_PATH="$PREVIEW_DEPS/node_modules"` before running. Do not add it with
+   `pnpm --filter mobile add`; preview tooling should not touch
+   `apps/mobile/package.json` or `pnpm-lock.yaml`.
 
 4. **Check fonts exist** (resvg renders text using system fonts; with none,
    text comes out blank): `fc-list | head`. DejaVu Sans is typically present —
@@ -73,10 +78,11 @@ Always state these caveats when you deliver the image.
 7. **Clean up so you don't pollute a PR.** This tooling is throwaway:
    ```
    rm -f apps/mobile/<your-script>.mjs
-   git checkout -- apps/mobile/package.json pnpm-lock.yaml
-   pnpm install --offline
+   rm -rf "${PREVIEW_DEPS:-/tmp/stash-ui-preview-deps}"
    ```
-   (Skip the cleanup only if the user explicitly wants the generator committed.)
+   Before deleting or restoring anything else, check `git status --short` and
+   preserve unrelated user/task edits. Never use cleanup commands that discard
+   existing changes to `apps/mobile/package.json` or `pnpm-lock.yaml`.
 
 ## Gotchas learned the hard way
 

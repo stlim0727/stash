@@ -76,8 +76,9 @@ Run everything from the repo root.
    this skill's gitignored `node_modules`, so it does not touch the repo deps):
 
    ```bash
-   [ -d "$USERPROFILE/.codex/skills/screenshot/node_modules/playwright-core" ] || \
-     npm --prefix "$USERPROFILE/.codex/skills/screenshot" install --no-save playwright-core@1.56.0
+   SKILL_DIR="${SKILL_DIR:-.codex/skills/screenshot}"
+   [ -d "$SKILL_DIR/node_modules/playwright-core" ] || \
+     npm --prefix "$SKILL_DIR" install --no-save playwright-core@1.56.0
    ```
 
    Chromium itself is the environment's pre-installed build under
@@ -89,9 +90,10 @@ Run everything from the repo root.
 
    ```bash
    # empty first-run state
-   node "$USERPROFILE/.codex/skills/screenshot/render.mjs" --route inbox --theme light --out /tmp/inbox.png
+   SKILL_DIR="${SKILL_DIR:-.codex/skills/screenshot}"
+   node "$SKILL_DIR/render.mjs" --route inbox --theme light --out /tmp/inbox.png
    # with injected sample data
-   node "$USERPROFILE/.codex/skills/screenshot/render.mjs" --route inbox --count 8 --seed 3 --out /tmp/inbox.png
+   node "$SKILL_DIR/render.mjs" --route inbox --count 8 --seed 3 --out /tmp/inbox.png
    ```
 
    Then use Codex's local image viewer to inspect the PNG. A blank frame means the page never

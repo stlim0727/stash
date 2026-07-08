@@ -3,13 +3,18 @@
 // emulator/browser. Copy this into apps/mobile/, edit PALETTE + STATES + the
 // panel() drawing to match your component, then:
 //
-//   pnpm --filter mobile add -D @resvg/resvg-js   # once
+//   PREVIEW_DEPS="${PREVIEW_DEPS:-/tmp/stash-ui-preview-deps}"
+//   npm --prefix "$PREVIEW_DEPS" install --no-save @resvg/resvg-js
 //   node apps/mobile/<this-file>.mjs              # run from the mobile workspace
 //
 // Output: /tmp/ui-preview.png (2x scale). Caveats: icons/font/shadows are
 // stylized stand-ins; colors/spacing/copy/structure are faithful.
-import { Resvg } from '@resvg/resvg-js';
+import { createRequire } from 'node:module';
 import { writeFileSync } from 'node:fs';
+
+const PREVIEW_DEPS = process.env.PREVIEW_DEPS || '/tmp/stash-ui-preview-deps';
+const requireFromPreviewDeps = createRequire(`${PREVIEW_DEPS}/package.json`);
+const { Resvg } = requireFromPreviewDeps('@resvg/resvg-js');
 
 // 1) Paste the real palette from apps/mobile/src/theme.ts (light or dark).
 const PALETTE = {
