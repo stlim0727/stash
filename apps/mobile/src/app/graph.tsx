@@ -720,28 +720,29 @@ export default function GraphScreen() {
     <View
       ref={containerRef}
       testID="graph-screen"
-      {...panResponder.panHandlers}
       style={[styles.container, { backgroundColor: palette.background }]}
       onLayout={onLayout}
     >
-      <Animated.View
-        // Promote this layer to its own GPU/composited texture ONLY while a gesture
-        // is active, so a pan/zoom composites the cached layer instead of repainting
-        // the vector SVG every frame (the web pinch stutter). The hint is dropped on
-        // settle so the static view re-renders as crisp vector SVG at the new zoom
-        // rather than scaling a stale cached bitmap (the zoom-in blur). Web uses
-        // `will-change: transform`; native uses the platform rasterization hints.
-        {...(interacting ? { renderToHardwareTextureAndroid: true, shouldRasterizeIOS: true } : null)}
-        style={[
-          StyleSheet.absoluteFill,
-          interacting && Platform.OS === 'web' ? WEB_COMPOSITE_LAYER : null,
-          { transform: [{ translateX }, { translateY }, { scale }] },
-        ]}
-      >
-        <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
-          {svgChildren}
-        </Svg>
-      </Animated.View>
+      <View testID="graph-canvas" style={StyleSheet.absoluteFill} {...panResponder.panHandlers}>
+        <Animated.View
+          // Promote this layer to its own GPU/composited texture ONLY while a gesture
+          // is active, so a pan/zoom composites the cached layer instead of repainting
+          // the vector SVG every frame (the web pinch stutter). The hint is dropped on
+          // settle so the static view re-renders as crisp vector SVG at the new zoom
+          // rather than scaling a stale cached bitmap (the zoom-in blur). Web uses
+          // `will-change: transform`; native uses the platform rasterization hints.
+          {...(interacting ? { renderToHardwareTextureAndroid: true, shouldRasterizeIOS: true } : null)}
+          style={[
+            StyleSheet.absoluteFill,
+            interacting && Platform.OS === 'web' ? WEB_COMPOSITE_LAYER : null,
+            { transform: [{ translateX }, { translateY }, { scale }] },
+          ]}
+        >
+          <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
+            {svgChildren}
+          </Svg>
+        </Animated.View>
+      </View>
 
       {/* Mode toggle — box-none so taps outside the pill still reach the canvas. */}
       <View pointerEvents="box-none" style={styles.modeToggleWrap}>

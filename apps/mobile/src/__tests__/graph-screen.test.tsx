@@ -196,6 +196,21 @@ test('tapping a tag hub hands the facet to the root Inbox', async () => {
   expect(arg.params.t).toBeTruthy();
 });
 
+test('keeps pan responder on the canvas layer, not the overlay parent', async () => {
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+
+  const graph = await waitFor(() => screen.getByTestId('graph-screen'));
+  const canvas = screen.getByTestId('graph-canvas');
+  expect(graph.props.onMoveShouldSetResponder).toBeUndefined();
+  expect(canvas.props.onMoveShouldSetResponder).toEqual(expect.any(Function));
+  expect(screen.getByTestId('graph-mode-cooccurrence')).toBeTruthy();
+  expect(screen.getByTestId('graph-recenter')).toBeTruthy();
+});
+
 // The pan is clamped so a fling can't drift the graph fully off-screen, but the
 // pan is otherwise UNcaged: it's allowed until only a minimum sliver of REAL NODE
 // content remains visible. The bound is `maxPanOffset(scale, viewportDim,
