@@ -269,12 +269,13 @@ const WEB_MEDIUM_WEIGHT = Platform.select({ web: '500', default: '600' }) as '50
 const WEB_SEMIBOLD_WEIGHT = Platform.select({ web: '600', default: '700' }) as '600' | '700';
 const WEB_BOLD_WEIGHT = Platform.select({ web: '700', default: '800' }) as '700' | '800';
 const WEB_CARD_GRID_TOP_GAP = Platform.OS === 'web' ? 12 : 4;
+const WEB_CARD_GRID_COLUMN_GAP = 16;
 const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
 
 // A filler cell used to pad the last row of the multi-column card grid so the
 // real cards on that row keep their column width. Never rendered as a card — the
 // renderItem short-circuits it to an empty flex spacer.
-type GridPlaceholder = { id: string; __placeholder: true };
+type GridPlaceholder = { id: string; __placeholder: true; role?: 'selected-row' };
 type InlineDetailItem = { id: string; __inlineDetail: true; bookmarkId: string; fullWidth?: boolean };
 type InboxListItem = Bookmark | GridPlaceholder | InlineDetailItem;
 
@@ -989,13 +990,19 @@ export default function InboxScreen() {
         return visible;
       }
       if (columns > 1) {
-        const rowEnd = Math.min(visible.length, index + (columns - (index % columns)));
+        const rowEnd = index + (columns - (index % columns));
+        const visibleRowEnd = Math.min(visible.length, rowEnd);
+        const selectedRowFillers: GridPlaceholder[] = Array.from(
+          { length: rowEnd - visibleRowEnd },
+          (_, i) => ({ id: `__row-ph-${inlineDetailId}-${i}`, __placeholder: true, role: 'selected-row' }),
+        );
         const detailRowFillers: GridPlaceholder[] = Array.from(
           { length: columns - 1 },
           (_, i) => ({ id: `__detail-ph-${inlineDetailId}-${i}`, __placeholder: true }),
         );
         return [
-          ...visible.slice(0, rowEnd),
+          ...visible.slice(0, visibleRowEnd),
+          ...selectedRowFillers,
           {
             id: `__detail-${inlineDetailId}`,
             __inlineDetail: true as const,
@@ -1003,7 +1010,7 @@ export default function InboxScreen() {
             fullWidth: true,
           },
           ...detailRowFillers,
-          ...visible.slice(rowEnd),
+          ...visible.slice(visibleRowEnd),
         ];
       }
       return [
@@ -1872,7 +1879,7 @@ export default function InboxScreen() {
         // numColumns on an existing instance.
         key={`grid-${viewMode}-${columns}`}
         numColumns={columns}
-        columnWrapperStyle={columns > 1 ? { gap: 16 } : undefined}
+        columnWrapperStyle={columns > 1 ? { gap: WEB_CARD_GRID_COLUMN_GAP } : undefined}
         style={isWeb ? styles.webListNoTransform : undefined}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: !isWeb,
@@ -2001,7 +2008,12 @@ export default function InboxScreen() {
           // A grid-padding filler: render an empty flex cell so the real cards
           // on the final row keep their column width instead of stretching.
           if ('__placeholder' in item) {
-            return <View testID="inbox-grid-filler" style={{ flex: 1 }} />;
+            return (
+              <View
+                testID={item.role === 'selected-row' ? 'inbox-grid-selected-row-filler' : 'inbox-grid-filler'}
+                style={{ flex: 1 }}
+              />
+            );
           }
           if ('__inlineDetail' in item) {
             const detail = (
@@ -2011,8 +2023,9 @@ export default function InboxScreen() {
                 markAccessOnMount={false}
               />
             );
+            const detailWidth = contentMaxWidth - WEB_CARD_GRID_COLUMN_GAP * (columns - 1);
             return item.fullWidth ? (
-              <View style={{ width: contentMaxWidth }}>{detail}</View>
+              <View style={{ width: detailWidth }}>{detail}</View>
             ) : detail;
           }
           const status = statusLabel(item, t);

@@ -933,6 +933,15 @@ test('web inline detail keeps the wide card grid stable', async () => {
   // that first row's last cell, the full-width detail row reserves two cells,
   // and Card four's trailing row still pads back to three columns.
   expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(4);
+  expect(screen.queryByTestId('inbox-grid-selected-row-filler')).toBeNull();
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Card four' }));
+
+  await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  // Opening detail from an incomplete final row first pads that clicked row to
+  // three columns, so the detail starts on the next row instead of beside it.
+  expect(screen.getAllByTestId('inbox-grid-selected-row-filler')).toHaveLength(2);
+  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(2);
 });
 
 test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', async () => {
