@@ -123,8 +123,37 @@ export function maxPanOffset(scale: number, viewportDim: number, fittedNodeExten
   return Math.max(0, (contentExtent + viewportDim) / 2 - minVisible);
 }
 
+export function anchoredPanForScale(input: {
+  pan: { x: number; y: number };
+  focal: { x: number; y: number };
+  viewport: { w: number; h: number };
+  startScale: number;
+  nextScale: number;
+}): { x: number; y: number } {
+  const ratio = input.nextScale / input.startScale;
+  const focalFromCenter = {
+    x: input.focal.x - input.viewport.w / 2,
+    y: input.focal.y - input.viewport.h / 2,
+  };
+  return {
+    x: input.pan.x + (1 - ratio) * (focalFromCenter.x - input.pan.x),
+    y: input.pan.y + (1 - ratio) * (focalFromCenter.y - input.pan.y),
+  };
+}
+
 function touchDistance(a: { pageX: number; pageY: number }, b: { pageX: number; pageY: number }): number {
   return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
+}
+
+function touchCenter(
+  a: { pageX: number; pageY: number; locationX?: number; locationY?: number },
+  b: { pageX: number; pageY: number; locationX?: number; locationY?: number },
+) {
+  const ax = typeof a.locationX === 'number' ? a.locationX : a.pageX;
+  const ay = typeof a.locationY === 'number' ? a.locationY : a.pageY;
+  const bx = typeof b.locationX === 'number' ? b.locationX : b.pageX;
+  const by = typeof b.locationY === 'number' ? b.locationY : b.pageY;
+  return { x: (ax + bx) / 2, y: (ay + by) / 2 };
 }
 
 /**
@@ -365,7 +394,12 @@ export default function GraphScreen() {
   // to clamp the ABSOLUTE resulting position rather than just the frame delta.
   const panOffset = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
-  const pinch = useRef<{ startDist: number; startScale: number } | null>(null);
+  const pinch = useRef<{
+    startDist: number;
+    startScale: number;
+    startPan: { x: number; y: number };
+    startFocal: { x: number; y: number };
+  } | null>(null);
 
   const panResponder = useMemo(
     () => {
@@ -429,7 +463,12 @@ export default function GraphScreen() {
           if (touches.length >= 2) {
             const dist = touchDistance(touches[0], touches[1]);
             if (!pinch.current) {
-              pinch.current = { startDist: dist, startScale: lastScale.current };
+              pinch.current = {
+                startDist: dist,
+                startScale: lastScale.current,
+                startPan: panStart.current,
+                startFocal: touchCenter(touches[0], touches[1]),
+              };
             }
             const next = clampToRange(
               (pinch.current.startScale * dist) / pinch.current.startDist,
@@ -437,6 +476,19 @@ export default function GraphScreen() {
               MAX_SCALE,
             );
             liveScale.current = next;
+            const anchoredPan = anchoredPanForScale({
+              pan: pinch.current.startPan,
+              focal: pinch.current.startFocal,
+              viewport: viewportRef.current,
+              startScale: pinch.current.startScale,
+              nextScale: next,
+            });
+            const { x: maxX, y: maxY } = axisBounds();
+            const nextX = clampToRange(anchoredPan.x, -maxX, maxX);
+            const nextY = clampToRange(anchoredPan.y, -maxY, maxY);
+            translateX.setValue(nextX - panStart.current.x);
+            translateY.setValue(nextY - panStart.current.y);
+            panOffset.current = { x: nextX, y: nextY };
             // Throttle: skip most per-frame scale writes to cut SVG re-rasters.
             if (Math.abs(next - appliedScale.current) >= SCALE_APPLY_STEP) {
               appliedScale.current = next;

@@ -36,6 +36,7 @@ jest.mock('expo-router', () => ({
 }));
 
 import GraphScreen, {
+  anchoredPanForScale,
   clampToRange,
   graphCanvasSize,
   maxPanOffset,
@@ -275,6 +276,32 @@ describe('pan clamp', () => {
   test('zooming in strictly widens the pan range', () => {
     expect(maxPanOffset(MAX_SCALE, W, extentX)).toBeGreaterThan(maxPanOffset(2, W, extentX));
     expect(maxPanOffset(2, W, extentX)).toBeGreaterThan(maxPanOffset(1, W, extentX));
+  });
+});
+
+describe('pinch anchoring', () => {
+  test('keeps the viewport center fixed when pinching at the center', () => {
+    expect(
+      anchoredPanForScale({
+        pan: { x: 30, y: -20 },
+        focal: { x: 200, y: 200 },
+        viewport: { w: 400, h: 400 },
+        startScale: 1,
+        nextScale: 2,
+      }),
+    ).toEqual({ x: 60, y: -40 });
+  });
+
+  test('moves pan toward the pinch focal point so that point stays under the fingers', () => {
+    expect(
+      anchoredPanForScale({
+        pan: { x: 0, y: 0 },
+        focal: { x: 300, y: 100 },
+        viewport: { w: 400, h: 400 },
+        startScale: 1,
+        nextScale: 2,
+      }),
+    ).toEqual({ x: -100, y: 100 });
   });
 });
 
