@@ -110,7 +110,9 @@ BASE="https://<alias>-keepory7.stlim0727.workers.dev"   # Version Preview URL fr
 for p in / /settings /bookmark/abc; do
   curl -s -o /dev/null -w "$p -> %{http_code} %{content_type}\n" "$BASE$p"
 done
-curl -s -o /dev/null -w "manifest -> %{http_code}\n" "$BASE/manifest.webmanifest"
+MANIFEST=$(curl -fsS "$BASE/manifest.webmanifest")
+printf '%s' "$MANIFEST" | grep -q '"share_target"' \
+  && echo "manifest: share target present" || { echo "manifest: missing share_target"; exit 1; }
 # Confirm sync is wired: the Supabase host should appear in the entry bundle.
 JS=$(curl -s "$BASE/" | grep -oE '/_expo/static/js/web/entry-[a-f0-9]+\.js' | head -1)
 curl -s "$BASE$JS" | grep -qo 'stzutoejnhzxzhjsjtsi.supabase.co' \
@@ -119,7 +121,7 @@ curl -s "$BASE$JS" | grep -qo 'stzutoejnhzxzhjsjtsi.supabase.co' \
 
 Expect `/`, `/settings`, `/bookmark/abc` all **200 text/html** (SPA fallback via
 `not_found_handling = "single-page-application"` in `wrangler.toml`),
-`manifest.webmanifest` **200**, and the Supabase host present. `curl` reaches
+`manifest.webmanifest` containing `share_target`, and the Supabase host present. `curl` reaches
 external hosts through the agent proxy, so this works from the sandbox even though
 headless Chromium can't (see AGENTS.md).
 

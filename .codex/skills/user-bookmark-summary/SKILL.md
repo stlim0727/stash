@@ -46,7 +46,11 @@ SELECT
     WHERE b.deleted_at IS NULL AND COALESCE(b.is_archived, false) = false
   ) AS bookmarks,
   COUNT(b.id) FILTER (WHERE b.is_archived AND b.deleted_at IS NULL) AS archived,
-  COUNT(DISTINCT b.collection_id) FILTER (WHERE b.collection_id IS NOT NULL) AS collections_used,
+  COUNT(DISTINCT b.collection_id) FILTER (
+    WHERE b.collection_id IS NOT NULL
+      AND b.deleted_at IS NULL
+      AND COALESCE(b.is_archived, false) = false
+  ) AS collections_used,
   COUNT(b.id) FILTER (WHERE b.metadata_status = 'pending') AS meta_pending,
   -- Per-user app version, stamped into user_metadata on auth (see below).
   u.raw_user_meta_data->>'app_version' AS app_version,
