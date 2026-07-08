@@ -158,8 +158,9 @@ export function ShareIntentHandler() {
         // this gate, a storage hiccup or process kill could show Inbox as if the
         // share succeeded while the row never made it to SQLite.
         const durable = await persisted;
-        show(saved && durable === false ? t('toast.saveFailed') : message);
-        if (!saved || durable !== false) {
+        const newCaptureFailed = result.status === 'created' && durable === false;
+        show(newCaptureFailed ? t('toast.saveFailed') : message);
+        if (!newCaptureFailed) {
           router.replace('/');
         }
         return;

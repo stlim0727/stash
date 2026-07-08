@@ -159,6 +159,31 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('inbox mode still opens the Inbox when a duplicate refresh write fails', async () => {
+    fakeRepo.__reset([makeStoredBookmark({ url: 'https://example.com/stored' })]);
+    await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');
+    const originalUpdate = fakeRepo.repository.updateBookmark;
+    fakeRepo.repository.updateBookmark = jest.fn(async () => {
+      throw new Error('simulated duplicate refresh failure');
+    });
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/stored', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    try {
+      const { findByText, unmount } = await renderHandler();
+
+      await findByText('Already in Keepory');
+      await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+      expect(fakeRepo.__queue()).toHaveLength(0);
+      unmount();
+    } finally {
+      fakeRepo.repository.updateBookmark = originalUpdate;
+    }
+  });
+
   it('saves and enqueues a genuinely new shared URL', async () => {
     fakeRepo.__reset([makeStoredBookmark({ url: 'https://example.com/stored' })]);
     mockShareIntent = {
