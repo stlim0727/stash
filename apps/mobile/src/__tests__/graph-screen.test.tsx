@@ -42,6 +42,8 @@ import GraphScreen, {
   maxPanOffset,
   MIN_SCALE,
   MAX_SCALE,
+  pinchStartSnapshot,
+  touchCenterInViewport,
 } from '@/app/graph';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { Tag } from '@/domain/types';
@@ -280,6 +282,15 @@ describe('pan clamp', () => {
 });
 
 describe('pinch anchoring', () => {
+  test('measures the pinch focal point in stable viewport coordinates', () => {
+    const firstTouch = { pageX: 260, pageY: 350, locationX: 60, locationY: 70 };
+    const secondTouch = { pageX: 360, pageY: 370, locationX: 90, locationY: 80 };
+
+    expect(
+      touchCenterInViewport(firstTouch, secondTouch, { x: 100, y: 200 }),
+    ).toEqual({ x: 210, y: 160 });
+  });
+
   test('keeps the viewport center fixed when pinching at the center', () => {
     expect(
       anchoredPanForScale({
@@ -302,6 +313,25 @@ describe('pinch anchoring', () => {
         nextScale: 2,
       }),
     ).toEqual({ x: -100, y: 100 });
+  });
+
+  test('starts a pinch from the live pan after a one-finger drag', () => {
+    expect(
+      pinchStartSnapshot({
+        touches: [
+          { pageX: 150, pageY: 160 },
+          { pageX: 250, pageY: 160 },
+        ],
+        lastScale: 1.4,
+        panOffset: { x: 20, y: 10 },
+        containerOrigin: { x: 0, y: 0 },
+      }),
+    ).toMatchObject({
+      startDist: 100,
+      startScale: 1.4,
+      startPan: { x: 20, y: 10 },
+      startFocal: { x: 200, y: 160 },
+    });
   });
 });
 

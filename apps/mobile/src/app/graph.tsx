@@ -145,15 +145,31 @@ function touchDistance(a: { pageX: number; pageY: number }, b: { pageX: number; 
   return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
 }
 
-function touchCenter(
-  a: { pageX: number; pageY: number; locationX?: number; locationY?: number },
-  b: { pageX: number; pageY: number; locationX?: number; locationY?: number },
+type PinchTouch = { pageX: number; pageY: number };
+
+export function touchCenterInViewport(
+  a: PinchTouch,
+  b: PinchTouch,
+  containerOrigin: { x: number; y: number },
 ) {
-  const ax = typeof a.locationX === 'number' ? a.locationX : a.pageX;
-  const ay = typeof a.locationY === 'number' ? a.locationY : a.pageY;
-  const bx = typeof b.locationX === 'number' ? b.locationX : b.pageX;
-  const by = typeof b.locationY === 'number' ? b.locationY : b.pageY;
-  return { x: (ax + bx) / 2, y: (ay + by) / 2 };
+  return {
+    x: (a.pageX + b.pageX) / 2 - containerOrigin.x,
+    y: (a.pageY + b.pageY) / 2 - containerOrigin.y,
+  };
+}
+
+export function pinchStartSnapshot(input: {
+  touches: readonly [PinchTouch, PinchTouch];
+  lastScale: number;
+  panOffset: { x: number; y: number };
+  containerOrigin: { x: number; y: number };
+}) {
+  return {
+    startDist: touchDistance(input.touches[0], input.touches[1]),
+    startScale: input.lastScale,
+    startPan: { x: input.panOffset.x, y: input.panOffset.y },
+    startFocal: touchCenterInViewport(input.touches[0], input.touches[1], input.containerOrigin),
+  };
 }
 
 /**
@@ -348,6 +364,8 @@ export default function GraphScreen() {
   }, [settled, vbSize]);
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const containerRef = useRef<View>(null);
+  const containerOriginRef = useRef({ x: 0, y: 0 });
   // The pan clamp reads the live viewport from a ref (not the state) because the
   // panResponder is memoized and would otherwise close over a stale {w,h}.
   const viewportRef = useRef({ w: 0, h: 0 });
@@ -355,6 +373,9 @@ export default function GraphScreen() {
     const { width, height } = event.nativeEvent.layout;
     viewportRef.current = { w: width, h: height };
     setViewport({ w: width, h: height });
+    containerRef.current?.measureInWindow((x, y) => {
+      containerOriginRef.current = { x, y };
+    });
   };
   const canvasSize = graphCanvasSize(viewport, windowSize);
   useEffect(() => {
@@ -463,12 +484,12 @@ export default function GraphScreen() {
           if (touches.length >= 2) {
             const dist = touchDistance(touches[0], touches[1]);
             if (!pinch.current) {
-              pinch.current = {
-                startDist: dist,
-                startScale: lastScale.current,
-                startPan: panStart.current,
-                startFocal: touchCenter(touches[0], touches[1]),
-              };
+              pinch.current = pinchStartSnapshot({
+                touches: [touches[0], touches[1]],
+                lastScale: lastScale.current,
+                panOffset: panOffset.current,
+                containerOrigin: containerOriginRef.current,
+              });
             }
             const next = clampToRange(
               (pinch.current.startScale * dist) / pinch.current.startDist,
@@ -697,12 +718,13 @@ export default function GraphScreen() {
 
   return (
     <View
+      ref={containerRef}
       testID="graph-screen"
+      {...panResponder.panHandlers}
       style={[styles.container, { backgroundColor: palette.background }]}
       onLayout={onLayout}
     >
       <Animated.View
-        {...panResponder.panHandlers}
         // Promote this layer to its own GPU/composited texture ONLY while a gesture
         // is active, so a pan/zoom composites the cached layer instead of repainting
         // the vector SVG every frame (the web pinch stutter). The hint is dropped on
