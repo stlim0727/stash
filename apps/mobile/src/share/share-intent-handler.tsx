@@ -154,11 +154,11 @@ export function ShareIntentHandler() {
       behavior.current = behaviorPref;
 
       if (behaviorPref === 'inbox') {
-        // Jump to the Inbox only after the capture has durably landed. Without
-        // this gate, a storage hiccup or process kill could show Inbox as if the
-        // share succeeded while the row never made it to SQLite.
-        const durable = await persisted;
-        const newCaptureFailed = result.status === 'created' && durable === false;
+        // Jump to the Inbox only after a brand-new capture has durably landed.
+        // Duplicate refreshes are best-effort bookkeeping for an already-saved
+        // row, so they must not block the duplicate toast or Inbox navigation.
+        const newCaptureFailed =
+          result.status === 'created' && (await persisted) === false;
         show(newCaptureFailed ? t('toast.saveFailed') : message);
         if (!newCaptureFailed) {
           router.replace('/');
