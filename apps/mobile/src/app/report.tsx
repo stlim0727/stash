@@ -444,7 +444,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   screenshotPreview: {
-    height: 180,
+    width: '100%',
+    height: 220,
     borderRadius: 10,
   },
   success: {

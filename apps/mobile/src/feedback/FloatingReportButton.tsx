@@ -14,7 +14,9 @@ interface FloatingReportButtonProps {
   children: React.ReactNode;
 }
 
-const CAPTURE_TIMEOUT_MS = 1200;
+const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1200;
+const DEFAULT_BOTTOM_OFFSET = 18;
+const INBOX_BOTTOM_OFFSET = 92;
 
 function surfaceFromPath(pathname: string | null): string {
   if (!pathname || pathname === '/') {
@@ -23,14 +25,28 @@ function surfaceFromPath(pathname: string | null): string {
   return pathname.replace(/^\//, '').replace(/\//g, '_') || 'unknown';
 }
 
-function shouldHide(pathname: string | null): boolean {
-  return pathname === '/' || pathname === '/report' || pathname === '/auth/callback';
+function isInbox(pathname: string | null): boolean {
+  return !pathname || pathname === '/';
 }
 
-function timeout<T>(ms: number): Promise<T | null> {
-  return new Promise((resolve) => {
-    setTimeout(() => resolve(null), ms);
-  });
+function shouldHide(pathname: string | null): boolean {
+  return pathname === '/report' || pathname === '/auth/callback';
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export function FloatingReportButton({ children }: FloatingReportButtonProps) {
@@ -50,10 +66,10 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     setCapturing(true);
     try {
       setPendingFeedbackScreenshot(
-        await Promise.race([
+        await withTimeout(
           captureFeedbackScreenshot(captureRef, surfaceFromPath(pathname)),
-          timeout(CAPTURE_TIMEOUT_MS),
-        ]),
+          SCREENSHOT_CAPTURE_TIMEOUT_MS,
+        ),
       );
     } catch (error) {
       console.warn('feedback screenshot capture failed', error);
@@ -68,7 +84,10 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     styles.button,
     {
       backgroundColor: palette.accent,
-      bottom: Math.max(insets.bottom + 18, 18),
+      bottom: Math.max(
+        insets.bottom + (isInbox(pathname) ? INBOX_BOTTOM_OFFSET : DEFAULT_BOTTOM_OFFSET),
+        DEFAULT_BOTTOM_OFFSET,
+      ),
       opacity: capturing ? 0.7 : 1,
     },
   ];

@@ -163,6 +163,7 @@ test('shows a pending screenshot but keeps it excluded until the user opts in', 
   await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', true);
 
   expect(screen.getByLabelText('Screenshot preview')).toBeTruthy();
+  expect(screen.getByLabelText('Screenshot preview').props.resizeMode).toBe('contain');
   expect(screen.getByLabelText('Diagnostic context preview').props.children).toContain(
     '[redacted image/jpeg screenshot]',
   );
