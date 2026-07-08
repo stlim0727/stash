@@ -9,6 +9,8 @@
  * Redaction by default: the context never includes user-authored content
  * (bookmark URLs, titles, notes, search terms). Only coarse, non-identifying
  * operational signals are recorded so a report stays safe to store and share.
+ * Screenshots are the exception: callers must pass one only after explicit
+ * user opt-in because it can show the current screen.
  */
 
 export type DiagnosticsAuthStatus =
@@ -43,6 +45,16 @@ export interface DiagnosticsInput {
   build?: string | null;
   /** Recent technical log lines to aid debugging (already formatted). */
   logs?: string[] | null;
+  /** Optional user-approved screen capture from where feedback was opened. */
+  screenshot?: DiagnosticsScreenshot | null;
+}
+
+export interface DiagnosticsScreenshot {
+  dataUrl: string;
+  mimeType: 'image/jpeg';
+  capturedAt: string;
+  platform: string;
+  surface: string;
 }
 
 export interface DiagnosticsContext {
@@ -58,6 +70,8 @@ export interface DiagnosticsContext {
   build?: string;
   /** Recent technical log lines (capped). Present only when captured. */
   logs?: string[];
+  /** User-approved screenshot. May contain visible bookmark or account details. */
+  screenshot?: DiagnosticsScreenshot;
   capturedAt: string;
 }
 
@@ -130,6 +144,20 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
     context.logs = input.logs.filter((line) => typeof line === 'string' && line.length > 0);
   }
 
+  if (
+    input.screenshot &&
+    typeof input.screenshot.dataUrl === 'string' &&
+    input.screenshot.dataUrl.length > 0
+  ) {
+    context.screenshot = {
+      dataUrl: input.screenshot.dataUrl,
+      mimeType: input.screenshot.mimeType,
+      capturedAt: input.screenshot.capturedAt,
+      platform: input.screenshot.platform,
+      surface: input.screenshot.surface,
+    };
+  }
+
   return context;
 }
 
@@ -140,10 +168,19 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
  */
 export function formatDiagnosticsReport(context: DiagnosticsContext): string {
   const { logs, ...summary } = context;
+  const printableSummary = context.screenshot
+    ? {
+        ...summary,
+        screenshot: {
+          ...context.screenshot,
+          dataUrl: `[redacted ${context.screenshot.mimeType} screenshot]`,
+        },
+      }
+    : summary;
   const lines = [
     `Keepory diagnostics — ${context.build ?? context.appVersion}`,
     '',
-    JSON.stringify(summary, null, 2),
+    JSON.stringify(printableSummary, null, 2),
   ];
   if (logs && logs.length > 0) {
     lines.push('', `Recent logs (${logs.length}):`, logs.join('\n'));

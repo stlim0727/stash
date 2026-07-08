@@ -16,7 +16,7 @@ import type { DeliveryResult, FeedbackReport, ReportSink } from './sink.ts';
  *  records the request and returns a canned result. */
 export type SentryTransport = (
   url: string,
-  init: { method: 'POST'; headers: Record<string, string>; body: string },
+  init: { method: 'POST'; headers: Record<string, string>; body: string | Uint8Array },
 ) => Promise<{ ok: boolean; status: number }>;
 
 const defaultTransport: SentryTransport = async (url, init) => {
@@ -71,6 +71,66 @@ function levelFor(category: string): 'error' | 'info' {
   return category === 'bug' ? 'error' : 'info';
 }
 
+interface ScreenshotAttachment {
+  bytes: Uint8Array;
+  contentType: string;
+  filename: string;
+}
+
+function extractScreenshot(context: Record<string, unknown>): ScreenshotAttachment | null {
+  const screenshot = context.screenshot;
+  if (!screenshot || typeof screenshot !== 'object') {
+    return null;
+  }
+  const record = screenshot as Record<string, unknown>;
+  const dataUrl = typeof record.dataUrl === 'string' ? record.dataUrl : '';
+  const mimeType = typeof record.mimeType === 'string' ? record.mimeType : 'image/jpeg';
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) {
+    return null;
+  }
+  const binary = atob(match[2] ?? '');
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return {
+    bytes,
+    contentType: match[1] || mimeType,
+    filename: 'feedback-screen.jpg',
+  };
+}
+
+function contextWithoutScreenshotData(
+  context: Record<string, unknown>,
+): Record<string, unknown> {
+  const screenshot = context.screenshot;
+  if (!screenshot || typeof screenshot !== 'object') {
+    return context;
+  }
+  const { dataUrl: _dataUrl, ...metadata } = screenshot as Record<string, unknown>;
+  return {
+    ...context,
+    screenshot: {
+      ...metadata,
+      dataUrl: '[sent as Sentry attachment]',
+    },
+  };
+}
+
+function concatBytes(parts: Array<string | Uint8Array>): Uint8Array {
+  const encoder = new TextEncoder();
+  const encoded = parts.map((part) => (typeof part === 'string' ? encoder.encode(part) : part));
+  const length = encoded.reduce((sum, part) => sum + part.length, 0);
+  const out = new Uint8Array(length);
+  let offset = 0;
+  for (const part of encoded) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
 export class SentrySink implements ReportSink {
   readonly name = 'sentry';
   private readonly dsn: SentryDsn;
@@ -115,11 +175,17 @@ export class SentrySink implements ReportSink {
       tags,
       // Context is already redacted client-side; forward it verbatim under a
       // single namespaced key so it is searchable but clearly attributed.
-      extra: { report_id: report.id, diagnostics: report.context },
+      extra: {
+        report_id: report.id,
+        diagnostics: contextWithoutScreenshotData(report.context),
+      },
     };
   }
 
-  private buildEnvelope(event: Record<string, unknown>): string {
+  private buildEnvelope(
+    event: Record<string, unknown>,
+    attachment: ScreenshotAttachment | null,
+  ): string | Uint8Array {
     const header = JSON.stringify({
       event_id: event.event_id,
       sent_at: this.now().toISOString(),
@@ -127,12 +193,22 @@ export class SentrySink implements ReportSink {
     });
     const itemHeader = JSON.stringify({ type: 'event' });
     const item = JSON.stringify(event);
-    return `${header}\n${itemHeader}\n${item}\n`;
+    const eventEnvelope = `${header}\n${itemHeader}\n${item}\n`;
+    if (!attachment) {
+      return eventEnvelope;
+    }
+    const attachmentHeader = JSON.stringify({
+      type: 'attachment',
+      filename: attachment.filename,
+      content_type: attachment.contentType,
+      length: attachment.bytes.length,
+    });
+    return concatBytes([eventEnvelope, `${attachmentHeader}\n`, attachment.bytes, '\n']);
   }
 
   async deliver(report: FeedbackReport): Promise<DeliveryResult> {
     const event = this.buildEvent(report);
-    const body = this.buildEnvelope(event);
+    const body = this.buildEnvelope(event, extractScreenshot(report.context));
     const headers: Record<string, string> = {
       'Content-Type': 'application/x-sentry-envelope',
       'X-Sentry-Auth': [

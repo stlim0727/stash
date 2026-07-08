@@ -501,6 +501,11 @@ export const en = {
   'report.diagnosticContext': 'Diagnostic context',
   'report.privacyNote':
     'Includes app diagnostics and {count} recent log line(s) to aid debugging — not your bookmark list.',
+  'report.screenshotTitle': 'Include screenshot',
+  'report.screenshotNote':
+    'Captured from the screen where you opened this report. It may show bookmark or account details.',
+  'report.screenshotToggleA11y': 'Include screenshot in report',
+  'report.screenshotPreviewA11y': 'Screenshot preview',
   'report.contextPreviewA11y': 'Diagnostic context preview',
   'report.shareDiagnosticsA11y': 'Share diagnostics',
   'report.shareWithCount': 'Share diagnostics & logs ({count})',

@@ -53,6 +53,8 @@ import { pickImportFile } from '@/share/import-data';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import type { OAuthProvider } from '@/supabase/types';
+import { captureFeedbackScreenshot } from '@/feedback/screenshot';
+import { setPendingFeedbackScreenshot } from '@/feedback/screenshot-session';
 
 const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
 
@@ -110,6 +112,7 @@ export default function SettingsScreen() {
     importBookmarks,
   } = useBookmarks();
   const auth = useSupabaseAuth();
+  const reportSurfaceRef = useRef<View>(null);
 
   // Sign in / out happens inline in the account card (no separate screen).
   // `authBusy` disables the auth buttons while a provider flow or sign-out runs.
@@ -372,6 +375,18 @@ export default function SettingsScreen() {
 
   const insets = useSafeAreaInsets();
   const isAuthenticated = auth.status === 'authenticated';
+
+  const openReport = async () => {
+    try {
+      setPendingFeedbackScreenshot(
+        await captureFeedbackScreenshot(reportSurfaceRef, asSheet ? 'settings_sheet' : 'settings'),
+      );
+    } catch (error) {
+      console.warn('feedback screenshot capture failed', error);
+      setPendingFeedbackScreenshot(null);
+    }
+    router.push('/report');
+  };
 
   // Sync row is status-led: the right-hand glyph is the action/state.
   //  - cloud reachable + something queued → tappable refresh (upload-then-pull)
@@ -702,7 +717,7 @@ export default function SettingsScreen() {
       ) : null}
 
       <Pressable
-        onPress={() => router.push('/report')}
+        onPress={() => void openReport()}
         style={styles.reportLink}
         accessibilityRole="link"
         accessibilityLabel={t('settings.report.label')}
@@ -823,7 +838,7 @@ export default function SettingsScreen() {
           accessibilityLabel={t('common.close')}
           onPress={() => router.back()}
         />
-        <View style={styles.sheetPanel}>
+        <View ref={reportSurfaceRef} collapsable={false} style={styles.sheetPanel}>
           {header}
           {content}
         </View>
@@ -832,7 +847,12 @@ export default function SettingsScreen() {
   }
 
   return (
-    <View testID="settings-fullscreen" style={[styles.fullScreen, { height }]}>
+    <View
+      ref={reportSurfaceRef}
+      collapsable={false}
+      testID="settings-fullscreen"
+      style={[styles.fullScreen, { height }]}
+    >
       {header}
       {content}
     </View>

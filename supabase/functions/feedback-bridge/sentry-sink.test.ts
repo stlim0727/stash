@@ -24,7 +24,11 @@ function report(overrides: Partial<FeedbackReport> = {}): FeedbackReport {
 
 /** Records the single request a sink makes and returns a canned result. */
 function fakeTransport(result = { ok: true, status: 200 }) {
-  const calls: Array<{ url: string; headers: Record<string, string>; body: string }> = [];
+  const calls: Array<{
+    url: string;
+    headers: Record<string, string>;
+    body: string | Uint8Array;
+  }> = [];
   const transport: SentryTransport = async (url, init) => {
     calls.push({ url, headers: init.headers, body: init.body });
     return result;
@@ -38,6 +42,10 @@ function makeSink(transport: SentryTransport) {
     newEventId: () => 'deadbeefdeadbeefdeadbeefdeadbeef',
     now: () => new Date('2026-06-14T10:00:01.000Z'),
   });
+}
+
+function bodyText(body: string | Uint8Array): string {
+  return typeof body === 'string' ? body : new TextDecoder().decode(body);
 }
 
 test('parseDsn derives the envelope URL, key, and project id', () => {
@@ -87,7 +95,7 @@ test('deliver posts a Sentry envelope and reports the event id (no real network)
   assert.equal(call.headers['Content-Type'], 'application/x-sentry-envelope');
 
   // Envelope = 3 newline-delimited JSON lines: header, item header, event.
-  const lines = call.body.trim().split('\n');
+  const lines = bodyText(call.body).trim().split('\n');
   assert.equal(lines.length, 3);
   const header = JSON.parse(lines[0]);
   assert.equal(header.event_id, 'deadbeefdeadbeefdeadbeefdeadbeef');
@@ -131,6 +139,39 @@ test('parseWebhookReport reads the record from a Supabase webhook payload', () =
   assert.equal(parsed.category, 'idea');
   assert.equal(parsed.message, 'Dark mode please');
   assert.deepEqual(parsed.context, { route: '/settings' });
+});
+
+test('screenshot data is sent as an attachment and stripped from diagnostics extra', async () => {
+  const { transport, calls } = fakeTransport();
+  const result = await makeSink(transport).deliver(
+    report({
+      context: {
+        route: '/settings',
+        screenshot: {
+          dataUrl: `data:image/jpeg;base64,${btoa('jpeg-bytes')}`,
+          mimeType: 'image/jpeg',
+          capturedAt: '2026-06-14T09:59:00.000Z',
+          platform: 'web',
+          surface: 'settings',
+        },
+      },
+    }),
+  );
+
+  assert.equal(result.delivered, true);
+  const body = bodyText(calls[0]!.body);
+  const lines = body.trim().split('\n');
+  assert.equal(lines.length, 5);
+  const event = JSON.parse(lines[2]);
+  assert.equal(
+    event.extra.diagnostics.screenshot.dataUrl,
+    '[sent as Sentry attachment]',
+  );
+  const attachmentHeader = JSON.parse(lines[3]);
+  assert.equal(attachmentHeader.type, 'attachment');
+  assert.equal(attachmentHeader.filename, 'feedback-screen.jpg');
+  assert.equal(attachmentHeader.content_type, 'image/jpeg');
+  assert.equal(lines[4], 'jpeg-bytes');
 });
 
 test('parseWebhookReport rejects payloads missing required fields', () => {
