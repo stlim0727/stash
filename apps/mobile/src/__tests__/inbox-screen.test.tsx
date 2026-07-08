@@ -909,6 +909,30 @@ test('web opens bookmark detail inline instead of pushing the detail route', asy
     pathname: '/bookmark/[id]',
     params: { id: '7e64cf1e-0000-4000-8000-000000000042' },
   });
+  expect((await fakeRepo.repository.listBookmarks())[0].last_accessed_at).toBeUndefined();
+});
+
+test('web inline detail keeps the wide card grid stable', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  mockWindowSize.width = 1280;
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d1', title: 'Card one' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d2', title: 'Card two' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d3', title: 'Card three' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d4', title: 'Card four' }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Card one')).toBeTruthy());
+  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(2);
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Card two' }));
+
+  await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  // Four cards plus the inline detail still flow in the 3-column grid, needing
+  // one filler. The old single-column fallback removed all fillers and remounted
+  // the scrolled list.
+  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(1);
 });
 
 test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', async () => {

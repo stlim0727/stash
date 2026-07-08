@@ -418,6 +418,7 @@ export default function InboxScreen() {
     isLoading,
     isSyncing,
     loadError,
+    getBookmark,
     getTagsForBookmark,
     getCollection,
     getEnrichment,
@@ -531,7 +532,6 @@ export default function InboxScreen() {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
   const [inlineDetailId, setInlineDetailId] = useState<string | null>(null);
-  const webInlineDetailOpen = Platform.OS === 'web' && inlineDetailId !== null;
 
   // Responsive multi-column card grid on wide (desktop-web) viewports. Only the
   // card layout flows into 2–3 columns; compact/list stay single-column. On
@@ -539,7 +539,7 @@ export default function InboxScreen() {
   // to 1 and the content cap falls back to the fixed 720px column — the current
   // phone behavior is preserved exactly with no Platform.OS branch.
   const { width: winWidth } = useWindowDimensions();
-  const columns = !webInlineDetailOpen && viewMode === 'card'
+  const columns = viewMode === 'card'
     ? Math.min(3, Math.max(1, Math.floor(winWidth / 380)))
     : 1;
   const contentMaxWidth = columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
@@ -963,10 +963,18 @@ export default function InboxScreen() {
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
   useEffect(() => {
-    if (inlineDetailId && !visible.some((bookmark) => bookmark.id === inlineDetailId)) {
+    if (!inlineDetailId) {
+      return;
+    }
+    const resolvedInlineId = getBookmark(inlineDetailId)?.id ?? inlineDetailId;
+    if (resolvedInlineId !== inlineDetailId) {
+      setInlineDetailId(resolvedInlineId);
+      return;
+    }
+    if (!visible.some((bookmark) => bookmark.id === resolvedInlineId)) {
       setInlineDetailId(null);
     }
-  }, [inlineDetailId, visible]);
+  }, [getBookmark, inlineDetailId, visible]);
   // In a multi-column card grid, pad the final row up to a full multiple of
   // `columns` with lightweight placeholders so the last row's real cards keep
   // their column width (flex: 1) instead of stretching across the leftover
@@ -1845,7 +1853,7 @@ export default function InboxScreen() {
         keyExtractor={(item) => item.id}
         // Remount when the column count changes: FlatList forbids mutating
         // numColumns on an existing instance.
-        key={`grid-${viewMode}-${columns}-${webInlineDetailOpen ? 'inline-detail' : 'list'}`}
+        key={`grid-${viewMode}-${columns}`}
         numColumns={columns}
         columnWrapperStyle={columns > 1 ? { gap: 16 } : undefined}
         style={isWeb ? styles.webListNoTransform : undefined}
@@ -1983,6 +1991,7 @@ export default function InboxScreen() {
               <BookmarkDetailScreen
                 inlineId={item.bookmarkId}
                 onInlineClose={() => setInlineDetailId(null)}
+                markAccessOnMount={false}
               />
             );
           }

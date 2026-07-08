@@ -49,9 +49,14 @@ const TITLE_COLLAPSED_LINES = 4;
 interface BookmarkDetailScreenProps {
   inlineId?: string;
   onInlineClose?: () => void;
+  markAccessOnMount?: boolean;
 }
 
-export default function BookmarkDetailScreen({ inlineId, onInlineClose }: BookmarkDetailScreenProps = {}) {
+export default function BookmarkDetailScreen({
+  inlineId,
+  onInlineClose,
+  markAccessOnMount = true,
+}: BookmarkDetailScreenProps = {}) {
   const palette = usePalette();
   const { t, formatDate } = useI18n();
   const router = useRouter();
@@ -174,10 +179,10 @@ export default function BookmarkDetailScreen({ inlineId, onInlineClose }: Bookma
   // Viewing a bookmark's Detail counts as opening it — record the access so the
   // "Recently opened" Inbox sort reflects it. Once per id (a re-open remounts).
   useEffect(() => {
-    if (resolvedId) {
+    if (markAccessOnMount && resolvedId) {
       markBookmarkAccessed(resolvedId);
     }
-  }, [resolvedId, markBookmarkAccessed]);
+  }, [markAccessOnMount, resolvedId, markBookmarkAccessed]);
   // One breadcrumb on first mount so a freeze right after opening a
   // freshly-shared bookmark (Sentry STASH-H) places the Detail screen on the
   // event timeline. Coarse only: whether the row resolved from local state — a
@@ -1004,6 +1009,7 @@ export default function BookmarkDetailScreen({ inlineId, onInlineClose }: Bookma
           // comes from the shared module counter, not a per-screen ref: dismissTo
           // tears this screen down, so a ref would reset to 0 and re-emit the
           // same nonce, which the Inbox would skip as already-consumed (STASH-D).
+          onInlineClose?.();
           router.dismissTo({
             pathname: '/',
             params: { tag: tagId, t: nextFacetNonce() },
