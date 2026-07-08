@@ -14,6 +14,8 @@ interface FloatingReportButtonProps {
   children: React.ReactNode;
 }
 
+const CAPTURE_TIMEOUT_MS = 1200;
+
 function surfaceFromPath(pathname: string | null): string {
   if (!pathname || pathname === '/') {
     return 'inbox';
@@ -22,7 +24,13 @@ function surfaceFromPath(pathname: string | null): string {
 }
 
 function shouldHide(pathname: string | null): boolean {
-  return pathname === '/report' || pathname === '/auth/callback';
+  return pathname === '/' || pathname === '/report' || pathname === '/auth/callback';
+}
+
+function timeout<T>(ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(null), ms);
+  });
 }
 
 export function FloatingReportButton({ children }: FloatingReportButtonProps) {
@@ -42,7 +50,10 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     setCapturing(true);
     try {
       setPendingFeedbackScreenshot(
-        await captureFeedbackScreenshot(captureRef, surfaceFromPath(pathname)),
+        await Promise.race([
+          captureFeedbackScreenshot(captureRef, surfaceFromPath(pathname)),
+          timeout(CAPTURE_TIMEOUT_MS),
+        ]),
       );
     } catch (error) {
       console.warn('feedback screenshot capture failed', error);
