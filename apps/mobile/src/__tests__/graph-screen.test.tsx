@@ -36,11 +36,14 @@ jest.mock('expo-router', () => ({
 }));
 
 import GraphScreen, {
+  anchoredPanForScale,
   clampToRange,
   graphCanvasSize,
   maxPanOffset,
   MIN_SCALE,
   MAX_SCALE,
+  pinchStartSnapshot,
+  touchCenterInViewport,
 } from '@/app/graph';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { Tag } from '@/domain/types';
@@ -193,6 +196,21 @@ test('tapping a tag hub hands the facet to the root Inbox', async () => {
   expect(arg.params.t).toBeTruthy();
 });
 
+test('keeps pan responder on the canvas layer, not the overlay parent', async () => {
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+
+  const graph = await waitFor(() => screen.getByTestId('graph-screen'));
+  const canvas = screen.getByTestId('graph-canvas');
+  expect(graph.props.onMoveShouldSetResponder).toBeUndefined();
+  expect(canvas.props.onMoveShouldSetResponder).toEqual(expect.any(Function));
+  expect(screen.getByTestId('graph-mode-cooccurrence')).toBeTruthy();
+  expect(screen.getByTestId('graph-recenter')).toBeTruthy();
+});
+
 // The pan is clamped so a fling can't drift the graph fully off-screen, but the
 // pan is otherwise UNcaged: it's allowed until only a minimum sliver of REAL NODE
 // content remains visible. The bound is `maxPanOffset(scale, viewportDim,
@@ -275,6 +293,60 @@ describe('pan clamp', () => {
   test('zooming in strictly widens the pan range', () => {
     expect(maxPanOffset(MAX_SCALE, W, extentX)).toBeGreaterThan(maxPanOffset(2, W, extentX));
     expect(maxPanOffset(2, W, extentX)).toBeGreaterThan(maxPanOffset(1, W, extentX));
+  });
+});
+
+describe('pinch anchoring', () => {
+  test('measures the pinch focal point in stable viewport coordinates', () => {
+    const firstTouch = { pageX: 260, pageY: 350, locationX: 60, locationY: 70 };
+    const secondTouch = { pageX: 360, pageY: 370, locationX: 90, locationY: 80 };
+
+    expect(
+      touchCenterInViewport(firstTouch, secondTouch, { x: 100, y: 200 }),
+    ).toEqual({ x: 210, y: 160 });
+  });
+
+  test('keeps the viewport center fixed when pinching at the center', () => {
+    expect(
+      anchoredPanForScale({
+        pan: { x: 30, y: -20 },
+        focal: { x: 200, y: 200 },
+        viewport: { w: 400, h: 400 },
+        startScale: 1,
+        nextScale: 2,
+      }),
+    ).toEqual({ x: 60, y: -40 });
+  });
+
+  test('moves pan toward the pinch focal point so that point stays under the fingers', () => {
+    expect(
+      anchoredPanForScale({
+        pan: { x: 0, y: 0 },
+        focal: { x: 300, y: 100 },
+        viewport: { w: 400, h: 400 },
+        startScale: 1,
+        nextScale: 2,
+      }),
+    ).toEqual({ x: -100, y: 100 });
+  });
+
+  test('starts a pinch from the live pan after a one-finger drag', () => {
+    expect(
+      pinchStartSnapshot({
+        touches: [
+          { pageX: 150, pageY: 160 },
+          { pageX: 250, pageY: 160 },
+        ],
+        lastScale: 1.4,
+        panOffset: { x: 20, y: 10 },
+        containerOrigin: { x: 0, y: 0 },
+      }),
+    ).toMatchObject({
+      startDist: 100,
+      startScale: 1.4,
+      startPan: { x: 20, y: 10 },
+      startFocal: { x: 200, y: 160 },
+    });
   });
 });
 

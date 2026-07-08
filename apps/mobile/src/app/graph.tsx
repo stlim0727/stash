@@ -123,8 +123,53 @@ export function maxPanOffset(scale: number, viewportDim: number, fittedNodeExten
   return Math.max(0, (contentExtent + viewportDim) / 2 - minVisible);
 }
 
+export function anchoredPanForScale(input: {
+  pan: { x: number; y: number };
+  focal: { x: number; y: number };
+  viewport: { w: number; h: number };
+  startScale: number;
+  nextScale: number;
+}): { x: number; y: number } {
+  const ratio = input.nextScale / input.startScale;
+  const focalFromCenter = {
+    x: input.focal.x - input.viewport.w / 2,
+    y: input.focal.y - input.viewport.h / 2,
+  };
+  return {
+    x: input.pan.x + (1 - ratio) * (focalFromCenter.x - input.pan.x),
+    y: input.pan.y + (1 - ratio) * (focalFromCenter.y - input.pan.y),
+  };
+}
+
 function touchDistance(a: { pageX: number; pageY: number }, b: { pageX: number; pageY: number }): number {
   return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
+}
+
+type PinchTouch = { pageX: number; pageY: number };
+
+export function touchCenterInViewport(
+  a: PinchTouch,
+  b: PinchTouch,
+  containerOrigin: { x: number; y: number },
+) {
+  return {
+    x: (a.pageX + b.pageX) / 2 - containerOrigin.x,
+    y: (a.pageY + b.pageY) / 2 - containerOrigin.y,
+  };
+}
+
+export function pinchStartSnapshot(input: {
+  touches: readonly [PinchTouch, PinchTouch];
+  lastScale: number;
+  panOffset: { x: number; y: number };
+  containerOrigin: { x: number; y: number };
+}) {
+  return {
+    startDist: touchDistance(input.touches[0], input.touches[1]),
+    startScale: input.lastScale,
+    startPan: { x: input.panOffset.x, y: input.panOffset.y },
+    startFocal: touchCenterInViewport(input.touches[0], input.touches[1], input.containerOrigin),
+  };
 }
 
 /**
@@ -319,6 +364,8 @@ export default function GraphScreen() {
   }, [settled, vbSize]);
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  const containerRef = useRef<View>(null);
+  const containerOriginRef = useRef({ x: 0, y: 0 });
   // The pan clamp reads the live viewport from a ref (not the state) because the
   // panResponder is memoized and would otherwise close over a stale {w,h}.
   const viewportRef = useRef({ w: 0, h: 0 });
@@ -326,6 +373,9 @@ export default function GraphScreen() {
     const { width, height } = event.nativeEvent.layout;
     viewportRef.current = { w: width, h: height };
     setViewport({ w: width, h: height });
+    containerRef.current?.measureInWindow((x, y) => {
+      containerOriginRef.current = { x, y };
+    });
   };
   const canvasSize = graphCanvasSize(viewport, windowSize);
   useEffect(() => {
@@ -365,7 +415,12 @@ export default function GraphScreen() {
   // to clamp the ABSOLUTE resulting position rather than just the frame delta.
   const panOffset = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
-  const pinch = useRef<{ startDist: number; startScale: number } | null>(null);
+  const pinch = useRef<{
+    startDist: number;
+    startScale: number;
+    startPan: { x: number; y: number };
+    startFocal: { x: number; y: number };
+  } | null>(null);
 
   const panResponder = useMemo(
     () => {
@@ -429,7 +484,12 @@ export default function GraphScreen() {
           if (touches.length >= 2) {
             const dist = touchDistance(touches[0], touches[1]);
             if (!pinch.current) {
-              pinch.current = { startDist: dist, startScale: lastScale.current };
+              pinch.current = pinchStartSnapshot({
+                touches: [touches[0], touches[1]],
+                lastScale: lastScale.current,
+                panOffset: panOffset.current,
+                containerOrigin: containerOriginRef.current,
+              });
             }
             const next = clampToRange(
               (pinch.current.startScale * dist) / pinch.current.startDist,
@@ -437,6 +497,19 @@ export default function GraphScreen() {
               MAX_SCALE,
             );
             liveScale.current = next;
+            const anchoredPan = anchoredPanForScale({
+              pan: pinch.current.startPan,
+              focal: pinch.current.startFocal,
+              viewport: viewportRef.current,
+              startScale: pinch.current.startScale,
+              nextScale: next,
+            });
+            const { x: maxX, y: maxY } = axisBounds();
+            const nextX = clampToRange(anchoredPan.x, -maxX, maxX);
+            const nextY = clampToRange(anchoredPan.y, -maxY, maxY);
+            translateX.setValue(nextX - panStart.current.x);
+            translateY.setValue(nextY - panStart.current.y);
+            panOffset.current = { x: nextX, y: nextY };
             // Throttle: skip most per-frame scale writes to cut SVG re-rasters.
             if (Math.abs(next - appliedScale.current) >= SCALE_APPLY_STEP) {
               appliedScale.current = next;
@@ -645,29 +718,31 @@ export default function GraphScreen() {
 
   return (
     <View
+      ref={containerRef}
       testID="graph-screen"
       style={[styles.container, { backgroundColor: palette.background }]}
       onLayout={onLayout}
     >
-      <Animated.View
-        {...panResponder.panHandlers}
-        // Promote this layer to its own GPU/composited texture ONLY while a gesture
-        // is active, so a pan/zoom composites the cached layer instead of repainting
-        // the vector SVG every frame (the web pinch stutter). The hint is dropped on
-        // settle so the static view re-renders as crisp vector SVG at the new zoom
-        // rather than scaling a stale cached bitmap (the zoom-in blur). Web uses
-        // `will-change: transform`; native uses the platform rasterization hints.
-        {...(interacting ? { renderToHardwareTextureAndroid: true, shouldRasterizeIOS: true } : null)}
-        style={[
-          StyleSheet.absoluteFill,
-          interacting && Platform.OS === 'web' ? WEB_COMPOSITE_LAYER : null,
-          { transform: [{ translateX }, { translateY }, { scale }] },
-        ]}
-      >
-        <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
-          {svgChildren}
-        </Svg>
-      </Animated.View>
+      <View testID="graph-canvas" style={StyleSheet.absoluteFill} {...panResponder.panHandlers}>
+        <Animated.View
+          // Promote this layer to its own GPU/composited texture ONLY while a gesture
+          // is active, so a pan/zoom composites the cached layer instead of repainting
+          // the vector SVG every frame (the web pinch stutter). The hint is dropped on
+          // settle so the static view re-renders as crisp vector SVG at the new zoom
+          // rather than scaling a stale cached bitmap (the zoom-in blur). Web uses
+          // `will-change: transform`; native uses the platform rasterization hints.
+          {...(interacting ? { renderToHardwareTextureAndroid: true, shouldRasterizeIOS: true } : null)}
+          style={[
+            StyleSheet.absoluteFill,
+            interacting && Platform.OS === 'web' ? WEB_COMPOSITE_LAYER : null,
+            { transform: [{ translateX }, { translateY }, { scale }] },
+          ]}
+        >
+          <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
+            {svgChildren}
+          </Svg>
+        </Animated.View>
+      </View>
 
       {/* Mode toggle — box-none so taps outside the pill still reach the canvas. */}
       <View pointerEvents="box-none" style={styles.modeToggleWrap}>
