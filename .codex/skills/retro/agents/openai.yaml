@@ -1,0 +1,4 @@
+interface:
+  display_name: "Retrospective"
+  short_description: "Capture reusable lessons from completed work."
+  default_prompt: "Use $retro to turn this debugging session into reusable project knowledge."

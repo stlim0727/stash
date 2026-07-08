@@ -1,0 +1,4 @@
+interface:
+  display_name: "User Bookmark Summary"
+  short_description: "Summarize live Stash bookmarks by user."
+  default_prompt: "Use $user-bookmark-summary to report per-user bookmark counts and app versions."

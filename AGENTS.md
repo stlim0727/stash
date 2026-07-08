@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-07.
+Last updated: 2026-07-08.
 
 ## Project Snapshot
 
@@ -175,6 +175,12 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
 
 ## Collaboration And PR Workflow
 
+- When an agent makes repository changes that are meant to persist or be shared,
+  it should open a PR unless there is a clear reason not to. Clear reasons
+  include an explicit user request not to publish, missing credentials or PR
+  tools, unrelated working-tree changes that cannot be isolated, investigation
+  with no durable change, or secrets/private artifacts that must not be
+  committed. When not opening a PR, state the concrete reason.
 - Open PRs as ready for review by default. Use draft only when the user asks or
   the work is knowingly incomplete.
 - After opening or updating a PR, keep watching while active for CI failures and

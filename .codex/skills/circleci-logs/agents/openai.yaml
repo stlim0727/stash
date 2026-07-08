@@ -1,0 +1,4 @@
+interface:
+  display_name: "CircleCI Logs"
+  short_description: "Fetch failing CircleCI step logs for Stash."
+  default_prompt: "Use $circleci-logs to diagnose the failing CircleCI check on this Stash PR."

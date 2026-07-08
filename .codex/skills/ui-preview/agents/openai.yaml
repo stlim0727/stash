@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stash UI Preview"
+  short_description: "Generate approximate PNG previews for Stash UI."
+  default_prompt: "Use $ui-preview to mock the changed Settings card before implementation."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Stash PR"
+  short_description: "Review or triage a Stash pull request."
+  default_prompt: "Use $review-pr to review PR 123 in stlim0727/stash."
