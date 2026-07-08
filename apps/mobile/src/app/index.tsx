@@ -986,7 +986,8 @@ export default function InboxScreen() {
       if (Platform.OS !== 'web' || !inlineDetailId) {
         return visible;
       }
-      const index = visible.findIndex((bookmark) => bookmark.id === inlineDetailId);
+      const resolvedInlineDetailId = getBookmark(inlineDetailId)?.id ?? inlineDetailId;
+      const index = visible.findIndex((bookmark) => bookmark.id === resolvedInlineDetailId);
       if (index === -1) {
         return visible;
       }
@@ -995,19 +996,19 @@ export default function InboxScreen() {
         const visibleRowEnd = Math.min(visible.length, rowEnd);
         const selectedRowFillers: GridPlaceholder[] = Array.from(
           { length: rowEnd - visibleRowEnd },
-          (_, i) => ({ id: `__row-ph-${inlineDetailId}-${i}`, __placeholder: true, role: 'selected-row' }),
+          (_, i) => ({ id: `__row-ph-${resolvedInlineDetailId}-${i}`, __placeholder: true, role: 'selected-row' }),
         );
         const detailRowFillers: GridPlaceholder[] = Array.from(
           { length: columns - 1 },
-          (_, i) => ({ id: `__detail-ph-${inlineDetailId}-${i}`, __placeholder: true }),
+          (_, i) => ({ id: `__detail-ph-${resolvedInlineDetailId}-${i}`, __placeholder: true }),
         );
         return [
           ...visible.slice(0, visibleRowEnd),
           ...selectedRowFillers,
           {
-            id: `__detail-${inlineDetailId}`,
+            id: `__detail-${resolvedInlineDetailId}`,
             __inlineDetail: true as const,
-            bookmarkId: inlineDetailId,
+            bookmarkId: resolvedInlineDetailId,
             fullWidth: true,
           },
           ...detailRowFillers,
@@ -1016,7 +1017,11 @@ export default function InboxScreen() {
       }
       return [
         ...visible.slice(0, index + 1),
-        { id: `__detail-${inlineDetailId}`, __inlineDetail: true as const, bookmarkId: inlineDetailId },
+        {
+          id: `__detail-${resolvedInlineDetailId}`,
+          __inlineDetail: true as const,
+          bookmarkId: resolvedInlineDetailId,
+        },
         ...visible.slice(index + 1),
       ];
     })();
@@ -1032,7 +1037,7 @@ export default function InboxScreen() {
       (_, i) => ({ id: `__ph-${i}`, __placeholder: true }),
     );
     return [...withInlineDetail, ...placeholders];
-  }, [visible, columns, inlineDetailId]);
+  }, [visible, columns, inlineDetailId, getBookmark]);
   // A query is only a search when it produces at least one real search token. A
   // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
   // zero tokens, so `filterBookmarks` returns everything — treating that as a
