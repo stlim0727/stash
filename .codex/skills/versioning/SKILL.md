@@ -144,29 +144,34 @@ open work may belong in this release. List the open PRs in the question so they
 can decide, and only proceed once they have. (If there are no open PRs against
 the target, skip the question and continue.)
 
-Releases are tag-driven; pushing a `v*` tag (or dispatching the workflow)
-triggers `android-apk.yml`.
+Releases are build-triggered through `android-apk.yml`, but stable and RC builds
+use different safe paths:
 
-- **Clean `vX.Y.Z`** → versioned prerelease, marked "latest", kept forever.
-- **`vX.Y.Z-rcN`** (hyphenated) → refreshes the rolling **`dev`** prerelease.
+- **Clean `vX.Y.Z`** → push a stable tag. This creates a versioned prerelease,
+  marks it "latest", and keeps the tag/release forever.
+- **`vX.Y.Z-rcN`** (hyphenated) → **do not push an RC tag from this skill**.
+  Use the workflow-dispatch `version` input instead; the workflow refreshes the
+  rolling **`dev`** prerelease and force-moves the `dev` tag. Leaving
+  `vX.Y.Z-rcN` tags behind conflicts with the rule that RC numbers come from the
+  live `dev` release label, not `vX.Y.Z-rc*` tags.
 
-**Preferred:** push the tag.
+**Stable release path:** push the clean version tag.
 ```bash
 git fetch origin <branch>
-git tag vX.Y.Z[-rcN] <commit-on-that-branch>
-git push origin vX.Y.Z[-rcN]
+git tag vX.Y.Z <commit-on-that-branch>
+git push origin vX.Y.Z
 ```
 
-**Codex environment caveat (important):** Prefer the repository's documented
-workflow dispatch path for RC builds. Use `tool_search` to find a GitHub
-workflow-dispatch tool. If no dispatch tool is exposed, do not invent a
-different release path; report the exact payload the user should run.
+**RC / dev build path:** use workflow dispatch with the hyphenated version input.
+Use `tool_search` to find a GitHub workflow-dispatch tool. If no dispatch tool
+is exposed, do not invent a different release path; report the exact payload the
+user should run.
 
 ```
 owner/repo: stlim0727/stash
 workflow_id: android-apk.yml
 ref: <branch>
-inputs: { "version": "vX.Y.Z[-rcN]" }
+inputs: { "version": "vX.Y.Z-rcN" }
 ```
 
 It builds from the **same commit**, so the shipped app code / JS bundle is the
