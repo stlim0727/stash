@@ -2039,10 +2039,7 @@ export default function InboxScreen() {
                     />
                   ) : null}
                 </Pressable>
-                {/* While the "new AI suggestions" banner is announcing, suppress
-                    the per-card ✨ badge so the same item isn't shouted twice on
-                    one screen; dismissing the banner brings the badges back. */}
-                {suggestionCount > 0 && newSuggestionsCount === 0 ? (
+                {suggestionCount > 0 ? (
                   <View
                     accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
                     style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
@@ -2171,7 +2168,7 @@ export default function InboxScreen() {
                     </Text>
                   ) : null}
                 </Pressable>
-                {suggestionCount > 0 && newSuggestionsCount === 0 ? (
+                {suggestionCount > 0 ? (
                   <View
                     accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
                     style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
@@ -2254,7 +2251,7 @@ export default function InboxScreen() {
                       highlightStyle={highlightStyle}
                     />
                   </Pressable>
-                  {suggestionCount > 0 && newSuggestionsCount === 0 ? (
+                  {suggestionCount > 0 ? (
                     <View
                       accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
                       style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}

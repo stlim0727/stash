@@ -206,9 +206,9 @@ test('announces unseen arrivals as a "new" review chip, with no acknowledge ✕'
   // a full-width banner); unseen arrivals put it in its accent "new" state.
   await waitFor(() => screen.getByTestId('review-chip'));
   expect(screen.getByText('✨ 1 new AI suggestion')).toBeTruthy();
-  // While the alert announces, the per-card ✨ badge is suppressed so the same
-  // item isn't shouted twice on one screen.
-  expect(screen.queryByLabelText('1 AI suggestion')).toBeNull();
+  // The review chip gives an aggregate count; the per-card badge stays visible
+  // so users can see exactly which inbox item needs review.
+  expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
   // There is no acknowledge ✕ anymore — visiting Review is the acknowledgment
   // (review.tsx clears the unseen set on focus).
   expect(screen.queryByLabelText('Dismiss new AI suggestions')).toBeNull();
