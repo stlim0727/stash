@@ -39,6 +39,7 @@ abandoned accounts are part of the picture):
 
 ```sql
 SELECT
+  u.id,
   u.email,
   CASE WHEN u.is_anonymous THEN 'anonymous' ELSE 'registered' END AS account_type,
   COUNT(b.id) FILTER (
@@ -116,7 +117,7 @@ inside the result; just report it.
    version + platform + user count, with `(none yet)` for the un-stamped tail.
 3. **Table of users WITH bookmarks** (drop the long tail of 0-bookmark rows from
    the table — summarize them in one line instead). Columns: user (email, or
-   `(anonymous)` + short id prefix for anon — they have no email, so never
+   `(anonymous)` + short `id` prefix for anon — they have no email, so never
    invent one), account type, bookmarks, archived, collections used,
    meta pending, **app version**, last saved.
 4. **Insights** — surface the product-relevant signals, not just the raw table:
