@@ -16,6 +16,7 @@ import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
 import { useMinAppVersion } from '@/supabase/use-min-app-version';
 import { CaptureToastProvider } from '@/ui/capture-toast';
+import { FloatingReportButton } from '@/feedback/FloatingReportButton';
 import { UpdateRequired } from '@/ui/UpdateRequired';
 
 // Capture console output into an in-memory buffer so the "Report a problem"
@@ -76,7 +77,9 @@ function RootLayout() {
                 <CaptureToastProvider>
                   <ShareIntentHandler />
                   <ShareConfirmHandler />
-                  <RootStack />
+                  <FloatingReportButton>
+                    <RootStack />
+                  </FloatingReportButton>
                   <StatusBar style="auto" />
                 </CaptureToastProvider>
               </BookmarksProvider>

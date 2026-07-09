@@ -702,15 +702,6 @@ export default function SettingsScreen() {
       ) : null}
 
       <Pressable
-        onPress={() => router.push('/report')}
-        style={styles.reportLink}
-        accessibilityRole="link"
-        accessibilityLabel={t('settings.report.label')}
-      >
-        <Text style={styles.reportLinkText}>{t('settings.report.label')}</Text>
-      </Pressable>
-
-      <Pressable
         onPress={build.commitUrl ? () => void Linking.openURL(build.commitUrl!) : undefined}
         disabled={!build.commitUrl}
         style={styles.buildLine}
@@ -1147,15 +1138,6 @@ const makeStyles = (palette: AppPalette) =>
     queueMeta: {
       fontSize: 12,
       color: palette.textSecondary,
-    },
-    reportLink: {
-      alignItems: 'center',
-      paddingVertical: 8,
-    },
-    reportLinkText: {
-      fontSize: 13,
-      color: palette.textSecondary,
-      textDecorationLine: 'underline',
     },
     buildLine: {
       alignItems: 'center',

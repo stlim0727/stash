@@ -1,12 +1,14 @@
 import Constants from 'expo-constants';
 import { usePathname } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Image,
   Platform,
   Pressable,
   ScrollView,
   Share,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -19,6 +21,11 @@ import { buildDiagnosticsContext, formatDiagnosticsReport } from '@/domain/diagn
 import type { DiagnosticsContext } from '@/domain/diagnostics';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { getLogEntries } from '@/observability/log-buffer';
+import {
+  clearPendingFeedbackScreenshot,
+  getPendingFeedbackSource,
+  getPendingFeedbackScreenshot,
+} from '@/feedback/screenshot-session';
 import { useT } from '@/i18n';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
 import type { MessageKey } from '@/i18n/messages';
@@ -38,6 +45,23 @@ const CATEGORIES: Array<{ value: FeedbackCategory; labelKey: MessageKey }> = [
   { value: 'idea', labelKey: 'report.categoryIdea' },
   { value: 'other', labelKey: 'report.categoryOther' },
 ];
+
+function previewContext(context: DiagnosticsContext): string {
+  if (!context.screenshot) {
+    return JSON.stringify(context, null, 2);
+  }
+  return JSON.stringify(
+    {
+      ...context,
+      screenshot: {
+        ...context.screenshot,
+        dataUrl: `[redacted ${context.screenshot.mimeType} screenshot]`,
+      },
+    },
+    null,
+    2,
+  );
+}
 
 type SubmitState =
   | { status: 'idle' }
@@ -64,6 +88,16 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const [category, setCategory] = useState<FeedbackCategory>('bug');
   const [message, setMessage] = useState('');
   const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
+  const [screenshot, setScreenshot] = useState(getPendingFeedbackScreenshot);
+  const [sourceContext] = useState(getPendingFeedbackSource);
+  const [includeScreenshot, setIncludeScreenshot] = useState(false);
+
+  useEffect(
+    () => () => {
+      clearPendingFeedbackScreenshot();
+    },
+    [],
+  );
 
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
   const platform = Platform.OS;
@@ -84,7 +118,8 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         appVersion,
         platform,
         osVersion: `Expo SDK ${Constants.expoConfig?.sdkVersion ?? '56'}`,
-        route: pathname,
+        route: sourceContext?.route ?? pathname,
+        sourceSurface: sourceContext?.surface,
         authStatus: auth.status,
         queueDepth,
         isSyncing,
@@ -92,22 +127,26 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         lastError,
         build: buildLabel,
         logs: recentLogLines(),
+        screenshot: includeScreenshot ? screenshot : null,
       }),
     [
       appVersion,
       platform,
       pathname,
+      sourceContext,
       auth.status,
       queueDepth,
       isSyncing,
       lastPulledAt,
       lastError,
       buildLabel,
+      includeScreenshot,
+      screenshot,
     ],
   );
 
   const context = useMemo(collectContext, [collectContext]);
-  const contextPreview = useMemo(() => JSON.stringify(context, null, 2), [context]);
+  const contextPreview = useMemo(() => previewContext(context), [context]);
   const logCount = context.logs?.length ?? 0;
 
   const handleShare = async () => {
@@ -159,6 +198,9 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       });
       setSubmit({ status: 'success' });
       setMessage('');
+      setScreenshot(null);
+      setIncludeScreenshot(false);
+      clearPendingFeedbackScreenshot();
     } catch (error) {
       setSubmit({
         status: 'error',
@@ -257,6 +299,38 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         <Text style={[styles.privacyNote, { color: palette.textSecondary }]}>
           {t('report.privacyNote', { count: logCount })}
         </Text>
+        {screenshot ? (
+          <View style={styles.screenshotBox}>
+            <View style={styles.screenshotHeader}>
+              <View style={styles.screenshotCopy}>
+                <Text style={[styles.screenshotTitle, { color: palette.text }]}>
+                  {t('report.screenshotTitle')}
+                </Text>
+                <Text style={[styles.privacyNote, { color: palette.textSecondary }]}>
+                  {t('report.screenshotNote')}
+                </Text>
+              </View>
+              <Switch
+                accessibilityLabel={t('report.screenshotToggleA11y')}
+                value={includeScreenshot}
+                onValueChange={(value) => {
+                  setIncludeScreenshot(value);
+                  clearStaleBanner();
+                }}
+                trackColor={{ true: palette.accent, false: palette.border }}
+                thumbColor="#ffffff"
+              />
+            </View>
+            {includeScreenshot ? (
+              <Image
+                accessibilityLabel={t('report.screenshotPreviewA11y')}
+                source={{ uri: screenshot.dataUrl }}
+                resizeMode="contain"
+                style={[styles.screenshotPreview, { backgroundColor: palette.mutedSurface }]}
+              />
+            ) : null}
+          </View>
+        ) : null}
         <Text
           accessibilityLabel={t('report.contextPreviewA11y')}
           style={[styles.code, { color: palette.text, borderColor: palette.border }]}
@@ -355,6 +429,28 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 12,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  screenshotBox: {
+    gap: 10,
+  },
+  screenshotHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  screenshotCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  screenshotTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  screenshotPreview: {
+    width: '100%',
+    height: 220,
+    borderRadius: 10,
   },
   success: {
     fontSize: 14,

@@ -59,6 +59,12 @@ jest.mock('expo-router', () => ({
 }));
 
 import ReportScreen from '@/app/report';
+import {
+  clearPendingFeedbackScreenshot,
+  setPendingFeedbackSource,
+  setPendingFeedbackScreenshot,
+} from '@/feedback/screenshot-session';
+import { feedbackSourceFromPath } from '@/feedback/FloatingReportButton';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 
@@ -74,6 +80,7 @@ function renderReport(createApi?: Parameters<typeof ReportScreen>[0]) {
 
 beforeEach(() => {
   fakeRepo.__reset([]);
+  clearPendingFeedbackScreenshot();
   mockAuth = {
     status: 'anonymous',
     session: mockSession,
@@ -134,6 +141,86 @@ test('submitting calls the feedback api with the message and redacted context', 
   expect(arg.context.route).toBe('/report');
 
   expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
+});
+
+test('shows a pending screenshot but keeps it excluded until the user opts in', async () => {
+  setPendingFeedbackScreenshot({
+    dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn',
+    mimeType: 'image/jpeg',
+    capturedAt: '2026-07-08T10:00:00.000Z',
+    platform: 'web',
+    surface: 'settings',
+  });
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy());
+  expect(screen.queryByLabelText('Screenshot preview')).toBeNull();
+  expect(screen.getByLabelText('Diagnostic context preview').props.children).not.toContain(
+    'screenshot',
+  );
+
+  await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', true);
+
+  expect(screen.getByLabelText('Screenshot preview')).toBeTruthy();
+  expect(screen.getByLabelText('Screenshot preview').props.resizeMode).toBe('contain');
+  expect(screen.getByLabelText('Diagnostic context preview').props.children).toContain(
+    '[redacted image/jpeg screenshot]',
+  );
+  expect(screen.getByLabelText('Diagnostic context preview').props.children).not.toContain(
+    'ZmFrZS1qcGVn',
+  );
+
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Layout looks broken');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  const arg = submitReport.mock.calls[0]![0] as {
+    context: { screenshot?: { dataUrl?: string; surface?: string } };
+  };
+  expect(arg.context.screenshot?.dataUrl).toBe('data:image/jpeg;base64,ZmFrZS1qcGVn');
+  expect(arg.context.screenshot?.surface).toBe('settings');
+});
+
+test('excludes the screenshot when the user turns the screenshot toggle off', async () => {
+  setPendingFeedbackSource({ route: '/settings', surface: 'settings' });
+  setPendingFeedbackScreenshot({
+    dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn',
+    mimeType: 'image/jpeg',
+    capturedAt: '2026-07-08T10:00:00.000Z',
+    platform: 'web',
+    surface: 'settings',
+  });
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy());
+  await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', false);
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'No screenshot please');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  const arg = submitReport.mock.calls[0]![0] as {
+    context: { route?: string; screenshot?: unknown; sourceSurface?: string };
+  };
+  expect(arg.context.route).toBe('/settings');
+  expect(arg.context.sourceSurface).toBe('settings');
+  expect(arg.context.screenshot).toBeUndefined();
+});
+
+test('coarsens dynamic report source routes before tagging screenshots', () => {
+  expect(feedbackSourceFromPath('/bookmark/7e64cf1e-0000-4000-8000-0000000000f1')).toEqual({
+    route: '/bookmark/detail',
+    surface: 'bookmark_detail',
+  });
 });
 
 test('editing the message after a successful submit clears the thank-you and re-enables Submit', async () => {
