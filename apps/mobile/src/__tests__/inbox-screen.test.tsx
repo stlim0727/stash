@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Linking, StyleSheet } from 'react-native';
+import { Linking, Platform, StyleSheet } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -60,6 +60,8 @@ import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
+const defaultPlatformOS = Platform.OS;
+
 function makeCollection(id: string, name: string): Collection {
   const now = '2026-06-12T00:00:00.000Z';
   return { id, user_id: 'user-test', name, description: null, created_at: now, updated_at: now };
@@ -83,6 +85,7 @@ function renderInbox() {
 }
 
 beforeEach(() => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => defaultPlatformOS });
   mockParams = {};
   mockPush.mockClear();
   mockSetParams.mockClear();
@@ -883,6 +886,63 @@ test('the view segmented control switches between card and list layouts', async 
   await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
   expect(screen.queryByTestId('inbox-compact-title')).toBeNull();
+});
+
+test('web opens bookmark detail inline instead of pushing the detail route', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000042',
+      title: 'Inline web detail',
+      url: 'https://example.com/inline',
+      url_hash: 'https://example.com/inline',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Inline web detail')).toBeTruthy());
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Inline web detail' }));
+
+  await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  expect(mockPush).not.toHaveBeenCalledWith({
+    pathname: '/bookmark/[id]',
+    params: { id: '7e64cf1e-0000-4000-8000-000000000042' },
+  });
+  expect((await fakeRepo.repository.listBookmarks())[0].last_accessed_at).toBeUndefined();
+});
+
+test('web inline detail keeps the wide card grid stable', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  mockWindowSize.width = 1280;
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d1', title: 'Card one' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d2', title: 'Card two' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d3', title: 'Card three' }),
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d4', title: 'Card four' }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Card one')).toBeTruthy());
+  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(2);
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Card two' }));
+
+  await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  // The detail opens under Card two's row, not beside Card two: Card three keeps
+  // that first row's last cell, the full-width detail row reserves two cells,
+  // and Card four's trailing row still pads back to three columns.
+  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(4);
+  expect(screen.queryByTestId('inbox-grid-selected-row-filler')).toBeNull();
+  expect(screen.getByTestId('inbox-inline-detail-row').props.style).toEqual({ width: 1052 });
+
+  await fireEvent.press(screen.getByRole('button', { name: 'Card four' }));
+
+  await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  // Opening detail from an incomplete final row first pads that clicked row to
+  // three columns, so the detail starts on the next row instead of beside it.
+  expect(screen.getAllByTestId('inbox-grid-selected-row-filler')).toHaveLength(2);
+  expect(screen.getAllByTestId('inbox-grid-filler')).toHaveLength(2);
 });
 
 test('the Browse-by-tag toggle navigates to the dedicated tag-browse route', async () => {

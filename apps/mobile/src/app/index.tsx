@@ -94,6 +94,7 @@ import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
+import BookmarkDetailScreen from '@/app/bookmark/[id]';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
   const parts: string[] = [];
@@ -268,12 +269,16 @@ const WEB_MEDIUM_WEIGHT = Platform.select({ web: '500', default: '600' }) as '50
 const WEB_SEMIBOLD_WEIGHT = Platform.select({ web: '600', default: '700' }) as '600' | '700';
 const WEB_BOLD_WEIGHT = Platform.select({ web: '700', default: '800' }) as '700' | '800';
 const WEB_CARD_GRID_TOP_GAP = Platform.OS === 'web' ? 12 : 4;
+const WEB_CARD_GRID_COLUMN_GAP = 16;
+const LIST_PADDING = 16;
 const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
 
 // A filler cell used to pad the last row of the multi-column card grid so the
 // real cards on that row keep their column width. Never rendered as a card — the
 // renderItem short-circuits it to an empty flex spacer.
-type GridPlaceholder = { id: string; __placeholder: true };
+type GridPlaceholder = { id: string; __placeholder: true; role?: 'selected-row' };
+type InlineDetailItem = { id: string; __inlineDetail: true; bookmarkId: string; fullWidth?: boolean };
+type InboxListItem = Bookmark | GridPlaceholder | InlineDetailItem;
 
 /**
  * Web-only positioning shell for the browse shelf. On native it renders NOTHING
@@ -415,6 +420,7 @@ export default function InboxScreen() {
     isLoading,
     isSyncing,
     loadError,
+    getBookmark,
     getTagsForBookmark,
     getCollection,
     getEnrichment,
@@ -527,6 +533,7 @@ export default function InboxScreen() {
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+  const [inlineDetailId, setInlineDetailId] = useState<string | null>(null);
 
   // Responsive multi-column card grid on wide (desktop-web) viewports. Only the
   // card layout flows into 2–3 columns; compact/list stay single-column. On
@@ -534,7 +541,9 @@ export default function InboxScreen() {
   // to 1 and the content cap falls back to the fixed 720px column — the current
   // phone behavior is preserved exactly with no Platform.OS branch.
   const { width: winWidth } = useWindowDimensions();
-  const columns = viewMode === 'card' ? Math.min(3, Math.max(1, Math.floor(winWidth / 380))) : 1;
+  const columns = viewMode === 'card'
+    ? Math.min(3, Math.max(1, Math.floor(winWidth / 380)))
+    : 1;
   const contentMaxWidth = columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
   // The suggest/session banners are cards carrying a 16px horizontal margin
   // (styles.suggestBanner), so capping them with `width: '100%'` would lay out
@@ -955,25 +964,80 @@ export default function InboxScreen() {
     [facetFiltered, debouncedQuery, getTagsForBookmark, getCollection],
   );
   const visible = useMemo(() => sortBookmarks(filtered, sort), [filtered, sort]);
-  // In a multi-column card grid, pad the final row up to a full multiple of
-  // `columns` with lightweight placeholders so the last row's real cards keep
-  // their column width (flex: 1) instead of stretching across the leftover
-  // space. Single-column (phones, compact/list) passes `visible` through
-  // untouched, so those paths are byte-for-byte unchanged.
-  const gridData = useMemo<(Bookmark | GridPlaceholder)[]>(() => {
-    if (columns <= 1 || visible.length === 0) {
-      return visible;
+  useEffect(() => {
+    if (!inlineDetailId) {
+      return;
     }
-    const remainder = visible.length % columns;
+    const resolvedInlineId = getBookmark(inlineDetailId)?.id ?? inlineDetailId;
+    if (resolvedInlineId !== inlineDetailId) {
+      setInlineDetailId(resolvedInlineId);
+      return;
+    }
+    if (!visible.some((bookmark) => bookmark.id === resolvedInlineId)) {
+      setInlineDetailId(null);
+    }
+  }, [getBookmark, inlineDetailId, visible]);
+  // In a multi-column card grid, pad rows with lightweight placeholders so real
+  // cards keep their column width (flex: 1). When an inline detail is open on
+  // web, finish the clicked card row, then insert a synthetic full-width detail
+  // row before appending the remaining cards.
+  const gridData = useMemo<InboxListItem[]>(() => {
+    const withInlineDetail = (() => {
+      if (Platform.OS !== 'web' || !inlineDetailId) {
+        return visible;
+      }
+      const resolvedInlineDetailId = getBookmark(inlineDetailId)?.id ?? inlineDetailId;
+      const index = visible.findIndex((bookmark) => bookmark.id === resolvedInlineDetailId);
+      if (index === -1) {
+        return visible;
+      }
+      if (columns > 1) {
+        const rowEnd = index + (columns - (index % columns));
+        const visibleRowEnd = Math.min(visible.length, rowEnd);
+        const selectedRowFillers: GridPlaceholder[] = Array.from(
+          { length: rowEnd - visibleRowEnd },
+          (_, i) => ({ id: `__row-ph-${resolvedInlineDetailId}-${i}`, __placeholder: true, role: 'selected-row' }),
+        );
+        const detailRowFillers: GridPlaceholder[] = Array.from(
+          { length: columns - 1 },
+          (_, i) => ({ id: `__detail-ph-${resolvedInlineDetailId}-${i}`, __placeholder: true }),
+        );
+        return [
+          ...visible.slice(0, visibleRowEnd),
+          ...selectedRowFillers,
+          {
+            id: `__detail-${resolvedInlineDetailId}`,
+            __inlineDetail: true as const,
+            bookmarkId: resolvedInlineDetailId,
+            fullWidth: true,
+          },
+          ...detailRowFillers,
+          ...visible.slice(visibleRowEnd),
+        ];
+      }
+      return [
+        ...visible.slice(0, index + 1),
+        {
+          id: `__detail-${resolvedInlineDetailId}`,
+          __inlineDetail: true as const,
+          bookmarkId: resolvedInlineDetailId,
+        },
+        ...visible.slice(index + 1),
+      ];
+    })();
+    if (columns <= 1 || withInlineDetail.length === 0) {
+      return withInlineDetail;
+    }
+    const remainder = withInlineDetail.length % columns;
     if (remainder === 0) {
-      return visible;
+      return withInlineDetail;
     }
     const placeholders: GridPlaceholder[] = Array.from(
       { length: columns - remainder },
       (_, i) => ({ id: `__ph-${i}`, __placeholder: true }),
     );
-    return [...visible, ...placeholders];
-  }, [visible, columns]);
+    return [...withInlineDetail, ...placeholders];
+  }, [visible, columns, inlineDetailId, getBookmark]);
   // A query is only a search when it produces at least one real search token. A
   // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
   // zero tokens, so `filterBookmarks` returns everything — treating that as a
@@ -1821,10 +1885,10 @@ export default function InboxScreen() {
         // numColumns on an existing instance.
         key={`grid-${viewMode}-${columns}`}
         numColumns={columns}
-        columnWrapperStyle={columns > 1 ? { gap: 16 } : undefined}
+        columnWrapperStyle={columns > 1 ? { gap: WEB_CARD_GRID_COLUMN_GAP } : undefined}
         style={isWeb ? styles.webListNoTransform : undefined}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
-          useNativeDriver: true,
+          useNativeDriver: !isWeb,
         })}
         scrollEventThrottle={16}
         // Dragging the results dismisses the keyboard (→ keyboardDidHide drops the
@@ -1950,7 +2014,26 @@ export default function InboxScreen() {
           // A grid-padding filler: render an empty flex cell so the real cards
           // on the final row keep their column width instead of stretching.
           if ('__placeholder' in item) {
-            return <View testID="inbox-grid-filler" style={{ flex: 1 }} />;
+            return (
+              <View
+                testID={item.role === 'selected-row' ? 'inbox-grid-selected-row-filler' : 'inbox-grid-filler'}
+                style={{ flex: 1 }}
+              />
+            );
+          }
+          if ('__inlineDetail' in item) {
+            const detail = (
+              <BookmarkDetailScreen
+                inlineId={item.bookmarkId}
+                onInlineClose={() => setInlineDetailId(null)}
+                markAccessOnMount={false}
+              />
+            );
+            const detailWidth =
+              contentMaxWidth - LIST_PADDING * 2 - WEB_CARD_GRID_COLUMN_GAP * (columns - 1);
+            return item.fullWidth ? (
+              <View testID="inbox-inline-detail-row" style={{ width: detailWidth }}>{detail}</View>
+            ) : detail;
           }
           const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
@@ -1974,8 +2057,13 @@ export default function InboxScreen() {
             )
               ? 1
               : 0);
-          const openDetail = () =>
+          const openDetail = () => {
+            if (Platform.OS === 'web') {
+              setInlineDetailId((current) => (current === item.id ? null : item.id));
+              return;
+            }
             router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
+          };
           const openLink = () => {
             if (item.url) {
               markBookmarkAccessed(item.id);
@@ -2407,7 +2495,7 @@ const styles = StyleSheet.create({
     ...overlayLayer(10),
   },
   list: {
-    padding: 16,
+    padding: LIST_PADDING,
     gap: 6,
     width: '100%',
     alignSelf: 'center',
