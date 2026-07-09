@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { usePathname } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -226,9 +227,17 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           style={[styles.secondaryButton, { borderColor: palette.border }]}
           onPress={() => void handleShare()}
         >
-          <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-            {t('report.shareWithCount', { count: logCount })}
-          </Text>
+          <View style={styles.buttonRow}>
+            <Ionicons
+              testID="share-diagnostics-icon"
+              name="share-social-outline"
+              size={18}
+              color={palette.text}
+            />
+            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+              {t('report.shareWithCount', { count: logCount })}
+            </Text>
+          </View>
         </Pressable>
         <Text
           accessibilityLabel={t('report.contextPreviewA11y')}
@@ -343,9 +352,17 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           style={[styles.secondaryButton, { borderColor: palette.border }]}
           onPress={() => void handleShare()}
         >
-          <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-            {t('report.share')}
-          </Text>
+          <View style={styles.buttonRow}>
+            <Ionicons
+              testID="share-diagnostics-icon"
+              name="share-social-outline"
+              size={18}
+              color={palette.text}
+            />
+            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+              {t('report.share')}
+            </Text>
+          </View>
         </Pressable>
       </View>
 
@@ -366,9 +383,12 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         ]}
         onPress={() => void handleSubmit()}
       >
-        <Text style={styles.submitButtonLabel}>
-          {submit.status === 'submitting' ? t('report.submitting') : t('report.submit')}
-        </Text>
+        <View style={styles.buttonRow}>
+          <Ionicons testID="submit-report-icon" name="send" size={18} color="#ffffff" />
+          <Text style={styles.submitButtonLabel}>
+            {submit.status === 'submitting' ? t('report.submitting') : t('report.submit')}
+          </Text>
+        </View>
       </Pressable>
     </ScrollView>
     </KeyboardAvoidingScreen>
@@ -461,6 +481,12 @@ const styles = StyleSheet.create({
     color: '#d93636',
     fontSize: 13,
     textAlign: 'center',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
   submitButton: {
     borderRadius: 12,
