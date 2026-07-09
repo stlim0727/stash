@@ -414,6 +414,8 @@ export const en = {
   'detail.aiGenerating': 'Generating suggestions…',
   'detail.aiRefresh': 'Refresh AI suggestions',
   'detail.aiSuggest': 'Suggest with AI',
+  'detail.previewRefresh': 'Preview',
+  'detail.previewRefreshing': 'Refreshing…',
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
   'detail.aiRateLimited': 'AI suggestions have hit their limit for now — try again a little later.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
@@ -434,6 +436,7 @@ export const en = {
   'detail.rowFrom': 'From',
   'detail.errorShare': 'Could not open the share sheet.',
   'detail.errorOpen': 'Could not open this link.',
+  'detail.errorRefreshPreview': 'Could not refresh the preview.',
   'detail.errorCreateCollection': 'Could not create the collection.',
   'detail.deleteConfirmWeb': 'Delete this bookmark permanently?',
 

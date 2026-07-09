@@ -76,6 +76,8 @@ export default function BookmarkDetailScreen({
     addTagsToBookmark,
     removeTagFromBookmark,
     requestAiEnrichment,
+    refreshBookmarkPreview,
+    isRefreshingPreview,
     isEnriching,
     isManuallyEnriching,
     acceptSuggestedTags,
@@ -246,6 +248,7 @@ export default function BookmarkDetailScreen({
   // wait the user has to sit through.
   const aiWorking = isEnriching(bookmark.id);
   const aiManual = isManuallyEnriching(bookmark.id);
+  const previewRefreshing = isRefreshingPreview(bookmark.id);
 
   // AI suggestions: surface only high-confidence tags not already applied
   // (centralized in @/domain/ai-suggestions) and not dismissed this session,
@@ -441,6 +444,13 @@ export default function BookmarkDetailScreen({
       title: bookmark.title ?? undefined,
     }).catch(() => {
       setOrganizeError(t('detail.errorShare'));
+    });
+  };
+
+  const handleRefreshPreview = () => {
+    void runOrganizeAction(async () => {
+      const error = await refreshBookmarkPreview(bookmark.id);
+      return error ? t('detail.errorRefreshPreview') : null;
     });
   };
 
@@ -847,6 +857,15 @@ export default function BookmarkDetailScreen({
         {bookmark.url ? (
           <ActionButton icon="share-social" label={t('common.share')} tint={palette.text} onPress={handleShare} />
         ) : null}
+        {bookmark.url ? (
+          <ActionButton
+            icon="refresh"
+            label={previewRefreshing ? t('detail.previewRefreshing') : t('detail.previewRefresh')}
+            tint={palette.text}
+            disabled={busy || previewRefreshing}
+            onPress={handleRefreshPreview}
+          />
+        ) : null}
         {bookmark.deleted_at ? (
           <ActionButton
             icon="arrow-undo"
@@ -1177,11 +1196,13 @@ function ActionButton({
   icon,
   label,
   tint,
+  disabled = false,
   onPress,
 }: {
   icon: ComponentProps<typeof Ionicons>['name'];
   label: string;
   tint: string;
+  disabled?: boolean;
   onPress: () => void;
 }) {
   const palette = usePalette();
@@ -1189,10 +1210,16 @@ function ActionButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.action,
-        { backgroundColor: palette.card, borderColor: palette.border, opacity: pressed ? 0.7 : 1 },
+        {
+          backgroundColor: palette.card,
+          borderColor: palette.border,
+          opacity: disabled ? 0.5 : pressed ? 0.7 : 1,
+        },
       ]}
     >
       <Ionicons name={icon} size={22} color={tint} />

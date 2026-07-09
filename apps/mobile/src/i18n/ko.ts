@@ -307,6 +307,8 @@ export const ko: Catalog = {
   'detail.aiGenerating': '제안 생성 중…',
   'detail.aiRefresh': 'AI 제안 새로고침',
   'detail.aiSuggest': 'AI로 제안받기',
+  'detail.previewRefresh': '프리뷰',
+  'detail.previewRefreshing': '새로고침 중…',
   'detail.aiNeedsSync': '이 북마크가 동기화되면 AI 제안을 사용할 수 있습니다.',
   'detail.aiRateLimited': 'AI 제안이 현재 한도에 도달했습니다 — 잠시 후 다시 시도해 주세요.',
   'detail.aiDegradedRateLimited':
@@ -324,6 +326,7 @@ export const ko: Catalog = {
   'detail.rowFrom': '출처',
   'detail.errorShare': '공유 시트를 열 수 없습니다.',
   'detail.errorOpen': '이 링크를 열 수 없습니다.',
+  'detail.errorRefreshPreview': '프리뷰를 새로고침할 수 없습니다.',
   'detail.errorCreateCollection': '컬렉션을 만들 수 없습니다.',
   'detail.deleteConfirmWeb': '이 북마크를 영구적으로 삭제하시겠습니까?',
 

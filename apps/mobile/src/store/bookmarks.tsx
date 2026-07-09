@@ -184,6 +184,10 @@ interface BookmarksContextValue {
     bookmarkId: string,
     source?: 'auto' | 'manual',
   ) => Promise<string | null>;
+  /** Re-fetch generated page preview metadata for a URL bookmark. */
+  refreshBookmarkPreview: (bookmarkId: string) => Promise<string | null>;
+  /** True while a user-initiated preview refresh is in flight for this bookmark. */
+  isRefreshingPreview: (bookmarkId: string) => boolean;
   /** True while ANY AI request (auto or manual) is in flight for this bookmark —
    *  drives the ambient "filling in" placeholder. */
   isEnriching: (bookmarkId: string) => boolean;
@@ -536,6 +540,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // give direct button feedback for a manual tap while keeping the auto-trigger
   // silent (it should just fill suggestions in, not look like a blocking wait).
   const [manualEnrichingIds, setManualEnrichingIds] = useState<ReadonlySet<string>>(new Set());
+  const [previewRefreshingIds, setPreviewRefreshingIds] = useState<ReadonlySet<string>>(new Set());
   // Tombstones for deleted local bookmarks. The sync loop iterates over a
   // snapshot, so a delete that lands mid-run must be visible to it — both
   // before uploading an entry and before applying an upload's result.
@@ -1573,6 +1578,83 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [applyBookmarkUpdate, markEnrichmentStale],
   );
 
+  const refreshBookmarkPreview = useCallback(
+    async (id: string): Promise<string | null> => {
+      const bookmark = bookmarksRef.current?.find((item) => item.id === id);
+      if (!bookmark?.url) {
+        return 'Preview refresh needs a URL bookmark.';
+      }
+      if (previewRefreshingIds.has(id)) {
+        return null;
+      }
+      setPreviewRefreshingIds((prev) => new Set(prev).add(id));
+      try {
+        const userTitle = bookmark.title_is_derived === false;
+        const refreshTarget: Bookmark = {
+          ...bookmark,
+          title: userTitle ? bookmark.title : null,
+          site_name: null,
+          favicon_url: null,
+          preview_image_url: null,
+        };
+        const { patch, metadata_status } = await enrichBookmark(refreshTarget);
+        const nextPatch: Partial<Bookmark> = { metadata_status };
+        if (!userTitle && patch.title !== undefined) {
+          nextPatch.title = patch.title;
+          nextPatch.title_is_derived = patch.title_is_derived;
+        }
+        if (patch.site_name !== undefined) {
+          nextPatch.site_name = patch.site_name;
+        }
+        if (patch.favicon_url !== undefined) {
+          nextPatch.favicon_url = patch.favicon_url;
+        }
+        if (patch.preview_image_url !== undefined) {
+          nextPatch.preview_image_url = patch.preview_image_url;
+        }
+        const latest = bookmarksRef.current?.find((item) => item.id === id) ?? bookmark;
+        const syncsRemotely = hasRemoteIdentity(id);
+        const updated: Bookmark = {
+          ...latest,
+          ...nextPatch,
+          sync_status: syncsRemotely ? 'pending' : latest.sync_status,
+          updated_at: new Date().toISOString(),
+        };
+        setBookmarks((current) =>
+          current === null
+            ? current
+            : current.map((item) => (item.id === id ? updated : item)),
+        );
+        try {
+          await ensureRepositoryReady();
+          await repository.updateBookmark(updated);
+        } catch (error) {
+          logStorageError('preview refresh', error);
+        }
+        if (syncsRemotely) {
+          enqueueMutation(id, 'update');
+        }
+        return null;
+      } catch (error) {
+        recordLog(
+          isTransientNetworkError(error) ? 'warn' : 'error',
+          `preview refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return 'Could not refresh the preview.';
+      } finally {
+        setPreviewRefreshingIds((prev) => {
+          if (!prev.has(id)) {
+            return prev;
+          }
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [enqueueMutation, previewRefreshingIds],
+  );
+
   const deleteBookmark = useCallback(
     (id: string) => {
       deletedIds.current.add(id);
@@ -1841,6 +1923,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const isManuallyEnriching = useCallback(
     (bookmarkId: string): boolean => manualEnrichingIds.has(bookmarkId),
     [manualEnrichingIds],
+  );
+
+  const isRefreshingPreview = useCallback(
+    (bookmarkId: string): boolean => previewRefreshingIds.has(bookmarkId),
+    [previewRefreshingIds],
   );
 
   // Accept AI-suggested tags: ensure + link them with `source: 'ai'` so their
@@ -2636,6 +2723,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       addTagsToBookmark,
       removeTagFromBookmark,
       requestAiEnrichment,
+      refreshBookmarkPreview,
+      isRefreshingPreview,
       isEnriching,
       isManuallyEnriching,
       acceptSuggestedTags,
@@ -2678,6 +2767,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       addTagsToBookmark,
       removeTagFromBookmark,
       requestAiEnrichment,
+      refreshBookmarkPreview,
+      isRefreshingPreview,
       isEnriching,
       isManuallyEnriching,
       acceptSuggestedTags,
