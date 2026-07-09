@@ -173,6 +173,7 @@ test('drops generic media tags and collections from model output', async () => {
       { name: 'prompt engineering', confidence: 0.82 },
       { name: 'WatchLater', confidence: 0.77 },
       { name: '나중에보기', confidence: 0.76 },
+      { name: 'Watch List', confidence: 0.75 },
     ],
     suggested_collection: 'WatchLater',
     confidence: null,

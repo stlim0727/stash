@@ -70,6 +70,7 @@ const GENERIC_MEDIA_LABELS = new Set([
   'towatch',
   'watch later',
   'watchlater',
+  'watch list',
   'watchlist',
   '나중에 보기',
   '나중에보기',
