@@ -11,6 +11,7 @@ import { useBookmarks } from '@/store/bookmarks';
 import type { SuggestedTag } from '@/domain/types';
 import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
 import { useCaptureToast } from '@/ui/capture-toast';
+import { Button } from '@/ui/Button';
 import {
   acceptSuggestionBundle,
   dismissSuggestionBundle,
@@ -251,7 +252,11 @@ export default function ReviewScreen() {
         {t('review.pendingHeader', { count: items.length })}
       </Text>
       {items.map((item) => (
-        <View key={item.id} style={[styles.card, { backgroundColor: palette.card }]}>
+        <View
+          key={item.id}
+          testID={`review-card-${item.id}`}
+          style={[styles.card, { backgroundColor: palette.card }]}
+        >
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t('review.goToA11y', { title: item.title })}
@@ -263,7 +268,46 @@ export default function ReviewScreen() {
             </Text>
             <Text style={[styles.titleChevron, { color: palette.textSecondary }]}>›</Text>
           </Pressable>
-          <View style={styles.chipRow}>
+          {(() => {
+            // Keep bulk actions anchored near the title; suggestion chips below
+            // can wrap without moving the "all" controls around.
+            const hasTags = item.suggestions.length > 0;
+            const acceptLabel = hasTags ? t('review.acceptAll') : t('review.acceptOne');
+            const acceptA11y = hasTags
+              ? t('review.acceptAllA11y', { title: item.title })
+              : t('review.acceptOneA11y', { title: item.title });
+            const dismissLabel = hasTags ? t('review.dismissAll') : t('review.dismissOne');
+            const dismissA11y = hasTags
+              ? t('review.dismissAllA11y', { title: item.title })
+              : t('review.dismissOneA11y', { title: item.title });
+            return (
+              <View testID={`review-action-row-${item.id}`} style={styles.actionRow}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon="checkmark-circle-outline"
+                  accessibilityLabel={acceptA11y}
+                  disabled={busy}
+                  style={styles.actionButton}
+                  onPress={() => acceptAll(item)}
+                >
+                  {acceptLabel}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="close-circle-outline"
+                  accessibilityLabel={dismissA11y}
+                  disabled={busy}
+                  style={styles.actionButton}
+                  onPress={() => dismissAll(item)}
+                >
+                  {dismissLabel}
+                </Button>
+              </View>
+            );
+          })()}
+          <View testID={`review-chip-row-${item.id}`} style={styles.chipRow}>
             {/* Folder recommendation leads the row, rendered as an add (📁 → X)
                 or a move (📁 ~~from~~ → X) with a ✕ dismiss; tags follow. */}
             {item.folder ? (
@@ -318,44 +362,6 @@ export default function ReviewScreen() {
               </Pressable>
             ))}
           </View>
-          {(() => {
-            // The bulk row acts on tags + folder and is shown whenever a card has
-            // either. "Accept all"/"Dismiss all" when there are tags (those act on
-            // tags AND the folder, both kinds); a folder-only card collapses to
-            // the singular "Accept"/"Dismiss". Every item in the list qualifies,
-            // so this row effectively always renders.
-            const hasTags = item.suggestions.length > 0;
-            const acceptLabel = hasTags ? t('review.acceptAll') : t('review.acceptOne');
-            const acceptA11y = hasTags
-              ? t('review.acceptAllA11y', { title: item.title })
-              : t('review.acceptOneA11y', { title: item.title });
-            const dismissLabel = hasTags ? t('review.dismissAll') : t('review.dismissOne');
-            const dismissA11y = hasTags
-              ? t('review.dismissAllA11y', { title: item.title })
-              : t('review.dismissOneA11y', { title: item.title });
-            return (
-              <View style={styles.actionRow}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={acceptA11y}
-                  disabled={busy}
-                  hitSlop={6}
-                  onPress={() => acceptAll(item)}
-                >
-                  <Text style={[styles.link, { color: palette.accent }]}>{acceptLabel}</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={dismissA11y}
-                  disabled={busy}
-                  hitSlop={6}
-                  onPress={() => dismissAll(item)}
-                >
-                  <Text style={[styles.link, { color: palette.textSecondary }]}>{dismissLabel}</Text>
-                </Pressable>
-              </View>
-            );
-          })()}
         </View>
       ))}
     </ScrollView>
@@ -441,10 +447,10 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 20,
+    gap: 8,
   },
-  link: {
-    fontSize: 14,
-    fontWeight: '600',
+  actionButton: {
+    flex: 1,
+    minWidth: 0,
   },
 });
