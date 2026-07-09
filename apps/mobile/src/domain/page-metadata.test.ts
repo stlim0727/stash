@@ -58,6 +58,24 @@ test('parsePageMetadata resolves relative image and favicon URLs', () => {
   assert.equal(meta.favicon_url, 'https://www.inkandswitch.com/static/favicon.ico');
 });
 
+test('parsePageMetadata keeps GeekNews social preview metadata', () => {
+  const html = `
+    <head>
+      <title>Claude와 몇 달간 씨름한 뒤 Codex는 바이브 코더의 꿈처럼 느껴짐 | GeekNews</title>
+      <meta property="og:title" content="Claude와 몇 달간 씨름한 뒤 Codex는 바이브 코더의 꿈처럼 느껴짐 | GeekNews">
+      <meta property="og:site_name" content="GeekNews">
+      <meta property="og:image" content="https://social.news.hada.io/topic/29576">
+      <link rel="shortcut icon" href="/favicon.ico">
+    </head>`;
+
+  const meta = parsePageMetadata(html, 'https://news.hada.io/topic?id=29576');
+
+  assert.equal(meta.title, 'Claude와 몇 달간 씨름한 뒤 Codex는 바이브 코더의 꿈처럼 느껴짐 | GeekNews');
+  assert.equal(meta.site_name, 'GeekNews');
+  assert.equal(meta.preview_image_url, 'https://social.news.hada.io/topic/29576');
+  assert.equal(meta.favicon_url, 'https://news.hada.io/favicon.ico');
+});
+
 test('parsePageMetadata falls back to twitter then <title>', () => {
   const twitterOnly = '<head><meta name="twitter:title" content="T"/><title>Doc</title></head>';
   assert.equal(parsePageMetadata(twitterOnly, 'https://x.com/').title, 'T');
