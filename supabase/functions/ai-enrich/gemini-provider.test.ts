@@ -171,9 +171,10 @@ test('drops generic media tags and collections from model output', async () => {
     suggested_tags: [
       { name: '비디오', confidence: 0.91 },
       { name: 'prompt engineering', confidence: 0.82 },
-      { name: 'watch later', confidence: 0.77 },
+      { name: 'WatchLater', confidence: 0.77 },
+      { name: '나중에보기', confidence: 0.76 },
     ],
-    suggested_collection: 'Watch later',
+    suggested_collection: 'WatchLater',
     confidence: null,
   });
   const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
