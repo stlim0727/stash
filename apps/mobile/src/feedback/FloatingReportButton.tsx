@@ -5,7 +5,11 @@ import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } fro
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { captureFeedbackScreenshot } from '@/feedback/screenshot';
-import { setPendingFeedbackScreenshot } from '@/feedback/screenshot-session';
+import {
+  setPendingFeedbackScreenshot,
+  setPendingFeedbackSource,
+  type FeedbackSourceContext,
+} from '@/feedback/screenshot-session';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { overlayLayer } from '@/ui/layering';
@@ -18,11 +22,26 @@ const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1200;
 const DEFAULT_BOTTOM_OFFSET = 88;
 const INBOX_BOTTOM_OFFSET = 92;
 
-function surfaceFromPath(pathname: string | null): string {
+export function feedbackSourceFromPath(pathname: string | null): FeedbackSourceContext {
   if (!pathname || pathname === '/') {
-    return 'inbox';
+    return { route: '/', surface: 'inbox' };
   }
-  return pathname.replace(/^\//, '').replace(/\//g, '_') || 'unknown';
+
+  const segments = pathname
+    .replace(/\/+/g, '/')
+    .split('/')
+    .filter(Boolean);
+  const sanitizedSegments = segments.map((segment, index) => {
+    if (index > 0 && (/^\d+$/.test(segment) || /^[0-9a-f]{8,}(-[0-9a-f]{4,}){2,}$/i.test(segment))) {
+      return 'detail';
+    }
+    return segment.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  });
+  const route = `/${sanitizedSegments.join('/')}`;
+  return {
+    route,
+    surface: sanitizedSegments.join('_') || 'unknown',
+  };
 }
 
 function isInbox(pathname: string | null): boolean {
@@ -65,9 +84,11 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     }
     setCapturing(true);
     try {
+      const source = feedbackSourceFromPath(pathname);
+      setPendingFeedbackSource(source);
       setPendingFeedbackScreenshot(
         await withTimeout(
-          captureFeedbackScreenshot(captureRef, surfaceFromPath(pathname)),
+          captureFeedbackScreenshot(captureRef, source.surface),
           SCREENSHOT_CAPTURE_TIMEOUT_MS,
         ),
       );

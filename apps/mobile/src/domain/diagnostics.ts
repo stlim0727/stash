@@ -31,6 +31,8 @@ export interface DiagnosticsInput {
   osVersion?: string | null;
   /** The route the user was on when reporting (path only, no query content). */
   route?: string | null;
+  /** Coarse screen surface the report was opened from. */
+  sourceSurface?: string | null;
   /** Coarse Supabase auth status — never the token or user content. */
   authStatus?: DiagnosticsAuthStatus | null;
   /** Number of items waiting in the offline sync queue. */
@@ -62,6 +64,7 @@ export interface DiagnosticsContext {
   platform: string;
   osVersion?: string;
   route: string;
+  sourceSurface?: string;
   authStatus: DiagnosticsAuthStatus;
   queueDepth: number;
   isSyncing: boolean;
@@ -138,6 +141,11 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
   const build = cleanString(input.build);
   if (build) {
     context.build = build;
+  }
+
+  const sourceSurface = cleanString(input.sourceSurface);
+  if (sourceSurface) {
+    context.sourceSurface = sourceSurface;
   }
 
   if (input.logs && input.logs.length > 0) {

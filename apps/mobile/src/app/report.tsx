@@ -23,6 +23,7 @@ import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { getLogEntries } from '@/observability/log-buffer';
 import {
   clearPendingFeedbackScreenshot,
+  getPendingFeedbackSource,
   getPendingFeedbackScreenshot,
 } from '@/feedback/screenshot-session';
 import { useT } from '@/i18n';
@@ -88,6 +89,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const [message, setMessage] = useState('');
   const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
   const [screenshot, setScreenshot] = useState(getPendingFeedbackScreenshot);
+  const [sourceContext] = useState(getPendingFeedbackSource);
   const [includeScreenshot, setIncludeScreenshot] = useState(false);
 
   useEffect(
@@ -116,7 +118,8 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         appVersion,
         platform,
         osVersion: `Expo SDK ${Constants.expoConfig?.sdkVersion ?? '56'}`,
-        route: pathname,
+        route: sourceContext?.route ?? pathname,
+        sourceSurface: sourceContext?.surface,
         authStatus: auth.status,
         queueDepth,
         isSyncing,
@@ -130,6 +133,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       appVersion,
       platform,
       pathname,
+      sourceContext,
       auth.status,
       queueDepth,
       isSyncing,

@@ -61,8 +61,10 @@ jest.mock('expo-router', () => ({
 import ReportScreen from '@/app/report';
 import {
   clearPendingFeedbackScreenshot,
+  setPendingFeedbackSource,
   setPendingFeedbackScreenshot,
 } from '@/feedback/screenshot-session';
+import { feedbackSourceFromPath } from '@/feedback/FloatingReportButton';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 
@@ -185,6 +187,7 @@ test('shows a pending screenshot but keeps it excluded until the user opts in', 
 });
 
 test('excludes the screenshot when the user turns the screenshot toggle off', async () => {
+  setPendingFeedbackSource({ route: '/settings', surface: 'settings' });
   setPendingFeedbackScreenshot({
     dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn',
     mimeType: 'image/jpeg',
@@ -206,9 +209,18 @@ test('excludes the screenshot when the user turns the screenshot toggle off', as
   });
 
   const arg = submitReport.mock.calls[0]![0] as {
-    context: { screenshot?: unknown };
+    context: { route?: string; screenshot?: unknown; sourceSurface?: string };
   };
+  expect(arg.context.route).toBe('/settings');
+  expect(arg.context.sourceSurface).toBe('settings');
   expect(arg.context.screenshot).toBeUndefined();
+});
+
+test('coarsens dynamic report source routes before tagging screenshots', () => {
+  expect(feedbackSourceFromPath('/bookmark/7e64cf1e-0000-4000-8000-0000000000f1')).toEqual({
+    route: '/bookmark/detail',
+    surface: 'bookmark_detail',
+  });
 });
 
 test('editing the message after a successful submit clears the thank-you and re-enables Submit', async () => {
