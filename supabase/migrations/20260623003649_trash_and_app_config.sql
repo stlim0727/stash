@@ -13,6 +13,8 @@ create table if not exists public.app_config (
 
 alter table public.app_config enable row level security;
 
+drop policy if exists "anyone can read app_config" on public.app_config;
+
 create policy "anyone can read app_config"
   on public.app_config for select
   using (true);

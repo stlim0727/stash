@@ -18,6 +18,9 @@ create index if not exists feedback_reports_user_created_at_idx
 
 alter table public.feedback_reports enable row level security;
 
+drop policy if exists "Users can read their feedback reports" on public.feedback_reports;
+drop policy if exists "Users can insert their feedback reports" on public.feedback_reports;
+
 create policy "Users can read their feedback reports"
   on public.feedback_reports for select
   using (auth.uid() = user_id);

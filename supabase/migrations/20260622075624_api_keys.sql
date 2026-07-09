@@ -10,6 +10,8 @@ create table if not exists public.api_keys (
 
 alter table public.api_keys enable row level security;
 
+drop policy if exists "Users can manage their own API keys" on public.api_keys;
+
 create policy "Users can manage their own API keys"
   on public.api_keys
   for all

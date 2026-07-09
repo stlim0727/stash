@@ -10,5 +10,16 @@ delete from public.ai_enrichments a
    and (a.created_at < b.created_at
         or (a.created_at = b.created_at and a.id < b.id));
 
-alter table public.ai_enrichments
-  add constraint ai_enrichments_bookmark_id_key unique (bookmark_id);
+do $$
+begin
+  if not exists (
+    select 1
+      from pg_constraint
+     where conname = 'ai_enrichments_bookmark_id_key'
+       and conrelid = 'public.ai_enrichments'::regclass
+  ) then
+    alter table public.ai_enrichments
+      add constraint ai_enrichments_bookmark_id_key unique (bookmark_id);
+  end if;
+end;
+$$;
