@@ -154,9 +154,15 @@ export function ShareIntentHandler() {
       behavior.current = behaviorPref;
 
       if (behaviorPref === 'inbox') {
-        // Jump to the Inbox so the freshly stashed item is immediately visible.
-        show(message);
-        router.replace('/');
+        // Jump to the Inbox only after a brand-new capture has durably landed.
+        // Duplicate refreshes are best-effort bookkeeping for an already-saved
+        // row, so they must not block the duplicate toast or Inbox navigation.
+        const newCaptureFailed =
+          result.status === 'created' && (await persisted) === false;
+        show(newCaptureFailed ? t('toast.saveFailed') : message);
+        if (!newCaptureFailed) {
+          router.replace('/');
+        }
         return;
       }
 

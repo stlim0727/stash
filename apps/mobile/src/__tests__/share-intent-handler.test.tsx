@@ -159,6 +159,32 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('inbox mode opens the Inbox without waiting for a duplicate refresh write', async () => {
+    fakeRepo.__reset([makeStoredBookmark({ url: 'https://example.com/stored' })]);
+    await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');
+    const originalUpdate = fakeRepo.repository.updateBookmark;
+    fakeRepo.repository.updateBookmark = jest.fn(() => {
+      return new Promise(() => {});
+    });
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/stored', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    try {
+      const { findByText, unmount } = await renderHandler();
+
+      await findByText('Already in Keepory');
+      await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+      expect(fakeRepo.repository.updateBookmark).toHaveBeenCalledTimes(1);
+      expect(fakeRepo.__queue()).toHaveLength(0);
+      unmount();
+    } finally {
+      fakeRepo.repository.updateBookmark = originalUpdate;
+    }
+  });
+
   it('saves and enqueues a genuinely new shared URL', async () => {
     fakeRepo.__reset([makeStoredBookmark({ url: 'https://example.com/stored' })]);
     mockShareIntent = {
@@ -516,5 +542,30 @@ describe('ShareIntentHandler', () => {
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
     expect(mockDismiss).not.toHaveBeenCalled();
     unmount();
+  });
+
+  it('inbox mode does not navigate as a successful save when the durable write fails', async () => {
+    fakeRepo.__reset([]);
+    await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');
+    const originalInsert = fakeRepo.repository.insertBookmark;
+    fakeRepo.repository.insertBookmark = jest.fn(async () => {
+      throw new Error('simulated storage failure');
+    });
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/inbox-fail', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    try {
+      const { findByText, unmount } = await renderHandler();
+
+      await findByText('Could not save to Keepory');
+      expect(mockRouter.replace).not.toHaveBeenCalled();
+      expect(mockDismiss).not.toHaveBeenCalled();
+      unmount();
+    } finally {
+      fakeRepo.repository.insertBookmark = originalInsert;
+    }
   });
 });
