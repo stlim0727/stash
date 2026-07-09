@@ -142,7 +142,9 @@ export interface LayoutOptions {
    * Force-simulation tick budget. Bounds cost: the layout is O(ticks * n²)
    * (naive all-pairs repulsion), so for n ≈ 450 nodes at the default 300 ticks
    * this is a one-time ~tens-of-ms synchronous settle. Lower it to trade
-   * quality for speed.
+   * quality for speed. Pass 0 to skip the force simulation and use the cheap
+   * deterministic fallback placement for graphs too large for even one all-pairs
+   * tick.
    */
   ticks?: number;
   /** Layout canvas size; also seeds the ideal edge length. */
@@ -169,32 +171,34 @@ const DEFAULT_SEED = 0x9e3779b9;
  */
 const MASS_K = 0.5;
 
-/** Lower bound on ticks: even huge graphs get a minimum-quality settle. */
-const MIN_TICKS = 60;
 /**
- * Work ceiling for the settle, expressed as ticks·n² pairs. Set to
- * DEFAULT_TICKS·50² so a small graph (n ≤ 50) still runs the full 300 ticks;
- * see {@link layoutTickBudget}.
+ * Work ceiling for the settle, expressed as ticks·n² repulsion pairs. Keep
+ * full-quality layout through a few hundred nodes, then spend a fixed work
+ * budget instead of carrying a tick floor that turns 1k+ libraries into long
+ * synchronous stalls.
  */
-const LAYOUT_TICK_BUDGET = DEFAULT_TICKS * 50 * 50; // 750_000
+const FULL_QUALITY_NODE_COUNT = 200;
+const LAYOUT_PAIR_BUDGET = DEFAULT_TICKS * FULL_QUALITY_NODE_COUNT * FULL_QUALITY_NODE_COUNT; // 12_000_000
 
 /**
  * Tick budget for {@link layoutGraph}, scaled DOWN as the node count grows so
- * the O(ticks·n²) settle can never cost DEFAULT_TICKS·n² on a large stash.
+ * the O(ticks·n²) settle cannot explode on a large stash.
  *
- * Small graphs (n ≤ 50) get the full-quality DEFAULT_TICKS. Past that we spend
- * a fixed work budget: ticks·n² is capped at LAYOUT_TICK_BUDGET (~750k) until
- * the MIN_TICKS floor takes over (around n > 112), beyond which every graph
- * settles at 60 ticks — 60·n², still 5× cheaper than a naive 300·n² run.
+ * Small graphs (n ≤ 200) get the full-quality DEFAULT_TICKS. Past that we spend
+ * a fixed pair-work budget: at 400 nodes this still allows 75 ticks, at 1k nodes
+ * 12 ticks, and at 2k nodes 3 ticks. Once even one O(n²) tick would exceed the
+ * cap, return 0 so callers skip the force simulation instead of blocking the JS
+ * thread anyway.
  *
- * This is the SINGLE SOURCE OF TRUTH for the budget: the /graph screen calls
- * `buildSettledGraph(input, { ticks: layoutTickBudget(n) })`, so tests and prod
- * settle with the same tick count. Safe (no divide-by-zero) at n = 0/1.
+ * This is the SINGLE SOURCE OF TRUTH for the budget: the /graph screen derives
+ * the visible graph, then calls `layoutGraph(graph, { ticks:
+ * layoutTickBudget(graph.nodes.length) })`, so tests and prod settle with the
+ * same tick count. Safe (no divide-by-zero) at n = 0/1.
  */
 export function layoutTickBudget(nodeCount: number): number {
   if (nodeCount <= 1) return DEFAULT_TICKS;
-  const scaled = Math.floor(LAYOUT_TICK_BUDGET / (nodeCount * nodeCount));
-  return Math.min(DEFAULT_TICKS, Math.max(MIN_TICKS, scaled));
+  const scaled = Math.floor(LAYOUT_PAIR_BUDGET / (nodeCount * nodeCount));
+  return Math.min(DEFAULT_TICKS, Math.max(0, scaled));
 }
 
 function bookmarkNodeId(id: string): string {
@@ -309,6 +313,21 @@ const EMPTY_BOUNDS: GraphBounds = {
   height: 0,
 };
 
+function fallbackPosition(index: number, total: number, width: number, height: number): {
+  x: number;
+  y: number;
+} {
+  if (total === 1) {
+    return { x: 0, y: 0 };
+  }
+  // Phyllotaxis spiral: deterministic, O(n), and less overlapped than placing
+  // every node on one ring when huge graphs skip the force simulation.
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const radius = (Math.sqrt((index + 0.5) / total) * Math.min(width, height)) / 2;
+  const angle = index * goldenAngle;
+  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+}
+
 /**
  * Run a seeded Fruchterman-Reingold simulation to completion and return static
  * positions. Deterministic: same graph + options ⇒ identical output.
@@ -332,9 +351,15 @@ export function layoutGraph(graph: Graph, options: LayoutOptions = {}): SettledG
 
   graph.nodes.forEach((node, i) => {
     index.set(node.id, i);
-    // Seeded initial placement inside the frame (centered on origin).
-    xs[i] = (rand() - 0.5) * width;
-    ys[i] = (rand() - 0.5) * height;
+    if (ticks <= 0) {
+      const fallback = fallbackPosition(i, n, width, height);
+      xs[i] = fallback.x;
+      ys[i] = fallback.y;
+    } else {
+      // Seeded initial placement inside the frame (centered on origin).
+      xs[i] = (rand() - 0.5) * width;
+      ys[i] = (rand() - 0.5) * height;
+    }
   });
 
   // Resolve edges to index pairs once (skip any dangling endpoints).
