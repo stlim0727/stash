@@ -1591,7 +1591,7 @@ export default function InboxScreen() {
               { backgroundColor: palette.card, opacity: pressed ? 0.7 : 1 },
             ]}
           >
-            <Text style={{ color: '#d93636', fontSize: 13, textAlign: 'center' }}>
+            <Text style={{ color: palette.danger, fontSize: 13, textAlign: 'center' }}>
               {t('inbox.storageError')}
             </Text>
           </Pressable>
@@ -1743,7 +1743,7 @@ export default function InboxScreen() {
                   <Ionicons
                     name={VIEW_MODE_ICON[mode]}
                     size={18}
-                    color={active ? palette.accent : palette.textSecondary}
+                    color={active ? palette.accentText : palette.textSecondary}
                   />
                 </Pressable>
               );
@@ -2138,7 +2138,7 @@ export default function InboxScreen() {
                     accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
                     style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
                   >
-                    <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
+                    <Text style={[styles.suggestBadgeLabel, { color: palette.accentText }]}>
                       ✨ {suggestionCount}
                     </Text>
                   </View>
@@ -2163,7 +2163,7 @@ export default function InboxScreen() {
                     style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
                     onPress={openLink}
                   >
-                    <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                    <Text style={[styles.cardOpenLabel, { color: palette.accentText }]}>↗</Text>
                   </Pressable>
                 ) : null}
               </Pressable>
@@ -2267,7 +2267,7 @@ export default function InboxScreen() {
                     accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
                     style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
                   >
-                    <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
+                    <Text style={[styles.suggestBadgeLabel, { color: palette.accentText }]}>
                       ✨ {suggestionCount}
                     </Text>
                   </View>
@@ -2289,7 +2289,7 @@ export default function InboxScreen() {
                     style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
                     onPress={openLink}
                   >
-                    <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                    <Text style={[styles.cardOpenLabel, { color: palette.accentText }]}>↗</Text>
                   </Pressable>
                 ) : null}
               </Pressable>
@@ -2350,7 +2350,7 @@ export default function InboxScreen() {
                       accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
                       style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
                     >
-                      <Text style={[styles.suggestBadgeLabel, { color: palette.accent }]}>
+                      <Text style={[styles.suggestBadgeLabel, { color: palette.accentText }]}>
                         ✨ {suggestionCount}
                       </Text>
                     </View>
@@ -2391,7 +2391,7 @@ export default function InboxScreen() {
                       {Platform.OS === 'web' ? (
                         <Ionicons name="open-outline" size={13} color={palette.textSecondary} />
                       ) : (
-                        <Text style={[styles.cardOpenLabel, { color: palette.accent }]}>↗</Text>
+                        <Text style={[styles.cardOpenLabel, { color: palette.accentText }]}>↗</Text>
                       )}
                     </Pressable>
                   </View>

@@ -764,7 +764,7 @@ export default function GraphScreen() {
                 <Text
                   style={[
                     styles.modeToggleText,
-                    { color: active ? palette.accent : palette.textSecondary },
+                    { color: active ? palette.accentText : palette.textSecondary },
                   ]}
                 >
                   {t(GRAPH_MODE_LABEL_KEY[m])}

@@ -112,7 +112,7 @@ export default function AddBookmarkScreen() {
           }}
           onSubmitEditing={handleSave}
         />
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
         <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.noteLabel')}</Text>
         <TextInput
           style={[
@@ -172,7 +172,6 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   error: {
-    color: '#d93636',
     fontSize: 13,
   },
   hint: {

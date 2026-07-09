@@ -352,7 +352,9 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       {submit.status === 'success' ? (
         <Text style={[styles.success, { color: palette.accent }]}>{t('report.success')}</Text>
       ) : null}
-      {submit.status === 'error' ? <Text style={styles.error}>{submit.message}</Text> : null}
+      {submit.status === 'error' ? (
+        <Text style={[styles.error, { color: palette.danger }]}>{submit.message}</Text>
+      ) : null}
 
       <Pressable
         accessibilityRole="button"
@@ -458,7 +460,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   error: {
-    color: '#d93636',
     fontSize: 13,
     textAlign: 'center',
   },

@@ -1136,7 +1136,7 @@ export default function BookmarkDetailScreen({
         ) : null}
       </View>
 
-      {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
+      {organizeError ? <Text style={[styles.error, { color: palette.danger }]}>{organizeError}</Text> : null}
     </>
   );
 
@@ -1492,7 +1492,6 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   error: {
-    color: '#d93636',
     fontSize: 13,
     textAlign: 'center',
   },
