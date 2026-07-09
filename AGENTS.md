@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-08.
+Last updated: 2026-07-09.
 
 ## Project Snapshot
 
@@ -243,6 +243,12 @@ only, debug-signed, standalone, and includes build provenance in Settings.
 - AI enrichment upserts require the live unique constraint on
   `ai_enrichments(bookmark_id)`. Missing migrations produce opaque 400s unless
   diagnostics are checked.
+- `ai-enrich` reuses the user's existing tags to curb tag fragmentation. When
+  ranking tags by usage, count links on **active** bookmarks only (`deleted_at
+  is null and is_archived = false`): trash is a soft delete so `bookmark_tags`
+  links persist, and `removeTags` leaves an orphan `tags` row — a naive
+  `bookmark_tags(count)` resurfaces tags the user already cleared. See
+  `docs/design/library-organizing.md`.
 - `setBookmarks(updater)` may run asynchronously. Do not compute a work list
   inside the reducer and read it immediately after calling `setBookmarks`.
 - Full-row storage writes should re-read the freshest row immediately before
@@ -268,5 +274,10 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   `docs/architecture/local-data-encryption.md`.
 - Add image bookmark cloud upload with Supabase Storage.
 - Add sync-queue health escalation when retry counts cross a threshold.
+- Library-level AI organizing ("Tidy Up" / consolidate tags) is deferred; the
+  spec and productization direction live in `docs/design/library-organizing.md`.
+  Grade any candidate model with `scripts/tag-merge-eval` before shipping.
+  Phase-1 tag cleanup is done for `totohero` (296→232) and pending for the other
+  two libraries.
 - Consider a hard server-side version gate through an Edge Function proxy; the
   current `app_config.min_app_version` gate is client-side only.
