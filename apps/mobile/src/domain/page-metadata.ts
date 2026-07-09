@@ -285,24 +285,12 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // their oEmbed endpoint, which returns the real title + thumbnail; fall back
   // to HTML scraping when there's no oEmbed provider or it fails.
   let oembedOutcome: string | null = null;
-  const oembed = oembedEndpoint(url);
-  if (oembed) {
-    const fromOembed = await fetchOembed(oembed);
-    if (fromOembed?.title) {
-      const videoId = youtubeVideoId(url);
-      if (videoId && fromOembed.preview_image_url) {
-        fromOembed.preview_image_url = await preferHiResYoutubeThumbnail(
-          videoId,
-          fromOembed.preview_image_url,
-        );
-      }
-      return fromOembed;
-    }
-    // Record why oEmbed didn't provide a title so the failure breadcrumb below
-    // can pinpoint the provider (e.g. YouTube) rather than only the HTML shell:
-    // `failed` = the endpoint errored/was non-OK, `no_title` = it answered but
-    // carried no usable title.
-    oembedOutcome = fromOembed ? 'no_title' : 'failed';
+  const directOembed = await fetchKnownOembedMetadata(url);
+  if (directOembed.metadata?.title) {
+    return directOembed.metadata;
+  }
+  if (directOembed.outcome) {
+    oembedOutcome = directOembed.outcome;
   }
 
   const bot = await fetchHtmlMetadata(url, BOT_USER_AGENT);
@@ -314,12 +302,29 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // partial metadata (e.g. a favicon) the browser retry can't improve on.
   const browser = await fetchHtmlMetadata(url, BROWSER_USER_AGENT);
   let result = browser.metadata ?? bot.metadata;
+  const landedOn = browser.finalUrl ?? bot.finalUrl;
+
+  // Short links such as share.google can redirect to a known oEmbed provider
+  // (notably YouTube Shorts). The original URL has no oEmbed endpoint, and the
+  // redirected HTML can still be a title-less shell, so try the final URL before
+  // conceding to URL-derived fallback metadata.
+  if (!result?.title && landedOn && landedOn !== url) {
+    const redirectedOembed = await fetchKnownOembedMetadata(landedOn);
+    if (redirectedOembed.metadata?.title) {
+      recordLog('info', `preview: recovered via oEmbed for ${landedOn} from ${url}`);
+      return redirectedOembed.metadata;
+    }
+    if (redirectedOembed.outcome) {
+      oembedOutcome = oembedOutcome
+        ? `${oembedOutcome};redirect=${redirectedOembed.outcome}`
+        : `redirect=${redirectedOembed.outcome}`;
+    }
+  }
 
   // SPA shell with no title: if we landed on a page that has a server-rendered
   // sibling (e.g. a Naver Map place entry), fetch that for the real metadata.
   let spa: HtmlFetchResult | null = null;
   if (!result?.title) {
-    const landedOn = browser.finalUrl ?? bot.finalUrl;
     const altUrl = landedOn ? previewSourceUrl(landedOn) : null;
     if (altUrl) {
       spa = await fetchHtmlMetadata(altUrl, BROWSER_USER_AGENT);
@@ -494,6 +499,31 @@ export function parseOembed(json: OembedResponse): FetchedMetadata {
     preview_image_url: str(json.thumbnail_url),
     // favicon is left to URL-derived metadata (origin/favicon.ico).
   };
+}
+
+async function fetchKnownOembedMetadata(
+  rawUrl: string,
+): Promise<{ metadata: FetchedMetadata | null; outcome: string | null }> {
+  const oembed = oembedEndpoint(rawUrl);
+  if (!oembed) {
+    return { metadata: null, outcome: null };
+  }
+  const fromOembed = await fetchOembed(oembed);
+  if (fromOembed?.title) {
+    const videoId = youtubeVideoId(rawUrl);
+    if (videoId && fromOembed.preview_image_url) {
+      fromOembed.preview_image_url = await preferHiResYoutubeThumbnail(
+        videoId,
+        fromOembed.preview_image_url,
+      );
+    }
+    return { metadata: fromOembed, outcome: 'ok' };
+  }
+  // Record why oEmbed didn't provide a title so the failure breadcrumb below
+  // can pinpoint the provider (e.g. YouTube) rather than only the HTML shell:
+  // `failed` = the endpoint errored/was non-OK, `no_title` = it answered but
+  // carried no usable title.
+  return { metadata: null, outcome: fromOembed ? 'no_title' : 'failed' };
 }
 
 async function fetchOembed(endpoint: string): Promise<FetchedMetadata | null> {
