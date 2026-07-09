@@ -101,6 +101,8 @@ test('renders the form and shows the privacy note', async () => {
   expect(screen.getByText(/not your bookmark list/)).toBeTruthy();
   expect(screen.getByLabelText('Diagnostic context preview')).toBeTruthy();
   expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+  expect(screen.getByTestId('share-diagnostics-icon')).toBeTruthy();
+  expect(screen.getByTestId('submit-report-icon')).toBeTruthy();
 });
 
 test('Submit is disabled until a description is entered', async () => {
