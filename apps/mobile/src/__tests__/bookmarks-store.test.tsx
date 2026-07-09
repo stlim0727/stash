@@ -1,5 +1,12 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
+import type { Bookmark, MetadataStatus } from '@/domain/types';
+
+const mockEnrichBookmark = jest.fn<
+  Promise<{ patch: Partial<Bookmark>; metadata_status: MetadataStatus }>,
+  [Bookmark, unknown?]
+>(async () => ({ patch: {}, metadata_status: 'complete' }));
+const SYNCED_ID = '7e64cf1e-0000-4000-8000-000000000001';
 
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
@@ -15,7 +22,7 @@ jest.mock('@/supabase/auth-provider', () => ({
   SupabaseAuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 jest.mock('@/domain/enrichment', () => ({
-  enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
+  enrichBookmark: (bookmark: Bookmark, fetcher?: unknown) => mockEnrichBookmark(bookmark, fetcher),
 }));
 
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
@@ -35,6 +42,8 @@ async function renderStore() {
 
 beforeEach(() => {
   fakeRepo.__reset();
+  mockEnrichBookmark.mockReset();
+  mockEnrichBookmark.mockResolvedValue({ patch: {}, metadata_status: 'complete' });
 });
 
 test('addBookmark shows the bookmark immediately and queues a create', async () => {
@@ -234,6 +243,94 @@ test('editing title/notes marks a complete enrichment stale (locally + persisted
     expect(fakeRepo.repository.listEnrichments()).resolves.toEqual([
       expect.objectContaining({ bookmark_id: SYNCED_ID, status: 'stale' }),
     ]),
+  );
+});
+
+test('refreshBookmarkPreview replaces generated preview metadata and queues sync', async () => {
+  const id = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      title: 'YouTube video',
+      title_is_derived: true,
+      site_name: 'youtu.be',
+      favicon_url: 'https://youtu.be/favicon.ico',
+      preview_image_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+    }),
+  ]);
+  mockEnrichBookmark.mockResolvedValueOnce({
+    patch: {
+      title: 'Rick Astley - Never Gonna Give You Up',
+      title_is_derived: false,
+      site_name: 'YouTube',
+      favicon_url: 'https://www.youtube.com/favicon.ico',
+      preview_image_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/sddefault.jpg',
+    },
+    metadata_status: 'complete',
+  });
+  const { result } = await renderStore();
+
+  await act(async () => {
+    await result.current.refreshBookmarkPreview(id);
+  });
+
+  await waitFor(() =>
+    expect(result.current.getBookmark(id)).toMatchObject({
+      title: 'Rick Astley - Never Gonna Give You Up',
+      title_is_derived: false,
+      site_name: 'YouTube',
+      favicon_url: 'https://www.youtube.com/favicon.ico',
+      preview_image_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/sddefault.jpg',
+      sync_status: 'pending',
+    }),
+  );
+  expect(mockEnrichBookmark).toHaveBeenCalledWith(
+    expect.objectContaining({
+      id,
+      title: null,
+      site_name: null,
+      favicon_url: null,
+      preview_image_url: null,
+    }),
+    undefined,
+  );
+  await waitFor(() => expect(fakeRepo.__queue()).toEqual([expect.objectContaining({ local_id: id, operation: 'update' })]));
+});
+
+test('refreshBookmarkPreview keeps a user-authored title while refreshing generated fields', async () => {
+  const id = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      title: 'My title',
+      title_is_derived: false,
+      preview_image_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+    }),
+  ]);
+  mockEnrichBookmark.mockResolvedValueOnce({
+    patch: {
+      title: 'Fetched title should not win',
+      title_is_derived: false,
+      site_name: 'YouTube',
+      preview_image_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/sddefault.jpg',
+    },
+    metadata_status: 'complete',
+  });
+  const { result } = await renderStore();
+
+  await act(async () => {
+    await result.current.refreshBookmarkPreview(id);
+  });
+
+  await waitFor(() =>
+    expect(result.current.getBookmark(id)).toMatchObject({
+      title: 'My title',
+      title_is_derived: false,
+      site_name: 'YouTube',
+      preview_image_url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/sddefault.jpg',
+    }),
   );
 });
 
