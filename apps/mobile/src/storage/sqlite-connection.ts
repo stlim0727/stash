@@ -118,6 +118,10 @@ export class SqliteConnection<DB> {
   // The churn error is one-per-session; latch it so a sustained thrash doesn't
   // re-fire on every reopen past the threshold.
   private reopenAlerted = false;
+  // Set when closeCurrent proactively released a healthy handle on background.
+  // The next open is expected lifecycle recovery and should stay a breadcrumb,
+  // not count toward the churn alert that is meant for stale/wedged handles.
+  private nextReopenIsLifecycle = false;
   // Count of successful opens this session. The first is the initial open; every
   // one after it is a reopen (a handle died or was proactively closed), which we
   // track as a freeze-risk signal (see noteReopen).
@@ -194,6 +198,7 @@ export class SqliteConnection<DB> {
       const db = this.db;
       if (db) {
         this.db = null;
+        this.nextReopenIsLifecycle = true;
         await this.closeQuietly(db);
       }
     });
@@ -291,16 +296,25 @@ export class SqliteConnection<DB> {
    *  breadcrumb in the local diagnostics buffer; once they cross the alert
    *  threshold in a session the churn is escalated to a single tracked `error`
    *  (the leading indicator of the Android background-handle wedge). */
-  private noteReopen(timings: { probeMs: number; closeMs: number; openMs: number }): void {
+  private noteReopen(timings: {
+    probeMs: number;
+    closeMs: number;
+    openMs: number;
+    lifecycle: boolean;
+  }): void {
     const reopens = this.opens - 1;
     const at = this.now();
     const cadence = this.lastReopenAt === null ? '' : ` ${at - this.lastReopenAt}ms after the last`;
     this.lastReopenAt = at;
+    const reason = timings.lifecycle ? '; expected after background close' : '';
     recordLog(
       'info',
       `sqlite connection reopened (reopen #${reopens} this session${cadence}; ` +
-        `probe ${timings.probeMs}ms, close ${timings.closeMs}ms, open ${timings.openMs}ms)`,
+        `probe ${timings.probeMs}ms, close ${timings.closeMs}ms, open ${timings.openMs}ms${reason})`,
     );
+    if (timings.lifecycle) {
+      return;
+    }
     // Escalate on cadence, not lifetime count: keep only reopens inside the
     // rolling window, and alert when *those* cross the threshold. This is the
     // thrash/wedge signature; benign lifecycle reopens spread across a session
@@ -359,7 +373,9 @@ export class SqliteConnection<DB> {
       this.db = db;
       this.opens += 1;
       if (this.opens > 1) {
-        this.noteReopen({ probeMs, closeMs, openMs });
+        const lifecycle = this.nextReopenIsLifecycle;
+        this.nextReopenIsLifecycle = false;
+        this.noteReopen({ probeMs, closeMs, openMs, lifecycle });
       }
       return db;
     } catch (error) {

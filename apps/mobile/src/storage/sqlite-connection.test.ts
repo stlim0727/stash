@@ -504,6 +504,36 @@ test('reopens spread beyond the window do NOT escalate (benign lifecycle, STASH-
   assert.equal(escalations.length, 0); // spread out → never escalates
 });
 
+test('reopens after proactive background close stay breadcrumbs even when clustered', async () => {
+  clearLogEntries();
+  // Opening external links can background/foreground the app several times in a
+  // minute. Those reopens are expected because AppState called closeCurrent().
+  let clock = 0;
+  const { connection, opensCount } = makeConnection({
+    reopenAlertThreshold: 3,
+    reopenAlertWindowMs: 1000,
+    now: () => (clock += 100),
+  });
+
+  await connection.run(async (db) => db.id); // initial open
+  for (let i = 0; i < 5; i += 1) {
+    await connection.closeCurrent();
+    await connection.run(async (db) => db.id);
+  }
+  assert.equal(opensCount(), 6); // initial open + 5 lifecycle reopens
+
+  const reopenBreadcrumbs = getLogEntries().filter((e) => e.message.includes('connection reopened (reopen #'));
+  assert.equal(reopenBreadcrumbs.length, 5);
+  assert.ok(
+    reopenBreadcrumbs.every((e) => e.message.includes('expected after background close')),
+  );
+
+  const escalations = getLogEntries().filter(
+    (e) => e.level === 'error' && e.message.includes('excessive handle churn'),
+  );
+  assert.equal(escalations.length, 0);
+});
+
 test('a probe that hangs is treated as stale and reopened', async () => {
   let opens = 0;
   let hang = false;
