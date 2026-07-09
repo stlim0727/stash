@@ -90,7 +90,9 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
   const [screenshot, setScreenshot] = useState(getPendingFeedbackScreenshot);
   const [sourceContext] = useState(getPendingFeedbackSource);
-  const [includeScreenshot, setIncludeScreenshot] = useState(false);
+  const [includeScreenshot, setIncludeScreenshot] = useState(
+    () => getPendingFeedbackScreenshot() !== null,
+  );
 
   useEffect(
     () => () => {

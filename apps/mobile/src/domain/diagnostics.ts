@@ -9,8 +9,9 @@
  * Redaction by default: the context never includes user-authored content
  * (bookmark URLs, titles, notes, search terms). Only coarse, non-identifying
  * operational signals are recorded so a report stays safe to store and share.
- * Screenshots are the exception: callers must pass one only after explicit
- * user opt-in because it can show the current screen.
+ * Screenshots are the exception: callers may pass a captured report screenshot
+ * when the report UI presents a visible include/exclude control, because it can
+ * show the current screen.
  */
 
 export type DiagnosticsAuthStatus =
@@ -47,7 +48,7 @@ export interface DiagnosticsInput {
   build?: string | null;
   /** Recent technical log lines to aid debugging (already formatted). */
   logs?: string[] | null;
-  /** Optional user-approved screen capture from where feedback was opened. */
+  /** Optional screen capture from where feedback was opened. */
   screenshot?: DiagnosticsScreenshot | null;
 }
 
@@ -73,7 +74,7 @@ export interface DiagnosticsContext {
   build?: string;
   /** Recent technical log lines (capped). Present only when captured. */
   logs?: string[];
-  /** User-approved screenshot. May contain visible bookmark or account details. */
+  /** Included screenshot. May contain visible bookmark or account details. */
   screenshot?: DiagnosticsScreenshot;
   capturedAt: string;
 }
