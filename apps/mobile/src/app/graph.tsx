@@ -19,8 +19,9 @@ import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import {
-  buildSettledCoOccurrenceGraph,
-  buildSettledGraph,
+  deriveCoOccurrenceGraph,
+  deriveGraph,
+  layoutGraph,
   layoutTickBudget,
   UNTAGGED_HUB_ID,
   type DeriveGraphInput,
@@ -278,20 +279,14 @@ export default function GraphScreen() {
       if (cancelled) {
         return;
       }
-      // Node count for the active mode: co-occurrence derives only tag nodes,
-      // while bipartite adds a node per bookmark plus the possible single
-      // untagged hub. Size the tick budget by the actual node count so each mode
-      // gets the right budget.
-      const n =
-        mode === 'cooccurrence'
-          ? input.tags.length
-          : input.bookmarks.length + input.tags.length + 1;
-      const options = { ticks: layoutTickBudget(n) };
+      // Derive first, then size the tick budget from the graph the user will
+      // actually see. Co-occurrence can drop most historical tags as isolates,
+      // so budgeting from raw input.tags would starve a small visible graph.
+      const graph =
+        mode === 'cooccurrence' ? deriveCoOccurrenceGraph(input) : deriveGraph(input);
+      const options = { ticks: layoutTickBudget(graph.nodes.length) };
       // Same off-render-path settle for both views — only the derive differs.
-      const result =
-        mode === 'cooccurrence'
-          ? buildSettledCoOccurrenceGraph(input, options)
-          : buildSettledGraph(input, options);
+      const result = layoutGraph(graph, options);
       if (!cancelled) {
         setSettled(result);
       }
