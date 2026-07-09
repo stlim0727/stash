@@ -7,6 +7,52 @@ history into docs or PR notes when possible. When editing this file, follow
 
 Last updated: 2026-07-09.
 
+## Successor Agent Orientation
+
+Read this first if you are a new agent taking over Stash from a previous one.
+None of the prior agent's conversational context survives; only committed files
+do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
+`.codex/skills`, and `.claude/agents` are your inherited memory. Start here:
+
+- **Read order, not authority:** start with this file, then `CLAUDE.md`, then
+  `docs/`, then the code, but prose can lag the tree, so **the source wins
+  wherever they disagree.** Verify facts against their sources: commands from
+  `package.json`, schema from migrations, deploy behavior from workflow config,
+  and branch/PR/tag/CI state from git and GitHub. `CLAUDE.md` "Working
+  principles" governs how to reason; the rest of this file governs what is true
+  about the app.
+- **Your toolbelt is already built; use it, don't reinvent it.** Operational
+  procedures are encoded as skills in `.claude/skills` and mirrored under
+  `.codex/skills`: `versioning`/`rc-build` for builds,
+  `web-deploy`/`web-preview` for Cloudflare, `supabase-migration` for schema,
+  `circleci-logs` for CI failures, `review-pr`/`pr-ready-check` for PR gates,
+  `update-agents-md`/`retro` to keep this memory fresh, `screenshot`/`ui-preview`
+  for visuals, and `user-bookmark-summary` for live DB status. The release
+  procedure itself lives in `docs/development/releasing.md`. Change both skill
+  mirrors together or the toolbelts drift. Prefer these over ad-hoc steps.
+- **What is verified vs assumed vs stale** (do not trust silence as proof):
+  - Native SQLite + share-intent have **never been verified on a real device**;
+    this is the highest-risk unknown. `rc-build` builds the APK and QA checklist,
+    but it does not install or exercise the APK. Proving the native path still
+    needs a human to install it and run the device smoke checklist in
+    `docs/development/releasing.md`.
+  - Supabase smoke last passed **2026-06-12**. `pnpm verify:supabase` (needs
+    creds) covers schema, REST/bookmark API, and RLS only; it never calls
+    `/functions/v1/*`, so it can go green while an edge function is undeployed
+    or stale. After any `supabase/functions` change, deploy it and smoke the
+    function separately.
+  - Milestone status in `docs/development/milestones.md` is **historical**; the
+    app is well past it. Do not infer current state from the milestone list.
+- **In-flight when this was last edited (2026-07-09):** open PRs were #415
+  (Codex theme refresh) and #427 (this handoff docs update). #417, #424, #425,
+  and #426 had merged. Reconcile against the live open-PR list; some may have
+  merged or closed.
+- **The invariants below are load-bearing, not FYI.** "Capture is sacred,"
+  user-authored vs generated fields, and "a local cosmetic repair must never bump
+  `updated_at` or enqueue sync" have each been re-broken by agents who skimmed
+  them. Read "Behavioral Invariants" and "Known Traps" before touching sync,
+  enrichment, or storage.
+
 ## Project Snapshot
 
 Stash is an Expo SDK 56 bookmark app in `apps/mobile`, using TypeScript,
