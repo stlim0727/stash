@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
@@ -447,6 +448,19 @@ export default function BookmarkDetailScreen({
     });
   };
 
+  const handleCopyLink = () => {
+    if (!bookmark.url) {
+      return;
+    }
+    void Clipboard.setStringAsync(bookmark.url)
+      .then(() => {
+        showToast(t('toast.linkCopied'));
+      })
+      .catch(() => {
+        setOrganizeError(t('detail.errorCopyLink'));
+      });
+  };
+
   const handleRefreshPreview = () => {
     void runOrganizeAction(async () => {
       const error = await refreshBookmarkPreview(bookmark.id);
@@ -853,6 +867,9 @@ export default function BookmarkDetailScreen({
       <View style={styles.actionBar}>
         {bookmark.url ? (
           <ActionButton icon="open-outline" label={t('common.open')} tint={palette.accent} onPress={handleOpenLink} />
+        ) : null}
+        {bookmark.url ? (
+          <ActionButton icon="copy-outline" label={t('common.copy')} tint={palette.text} onPress={handleCopyLink} />
         ) : null}
         {bookmark.url ? (
           <ActionButton icon="share-social" label={t('common.share')} tint={palette.text} onPress={handleShare} />
@@ -1357,10 +1374,12 @@ const styles = StyleSheet.create({
   },
   actionBar: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   action: {
     flex: 1,
+    minWidth: 76,
     alignItems: 'center',
     gap: 4,
     paddingVertical: 12,

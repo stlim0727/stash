@@ -15,6 +15,7 @@ export const ko: Catalog = {
   'common.cancel': '취소',
   'common.delete': '삭제',
   'common.share': '공유',
+  'common.copy': '복사',
   'common.open': '열기',
   'common.openLink': '링크 열기',
   'common.view': '보기',
@@ -175,6 +176,7 @@ export const ko: Catalog = {
   'toast.duplicate': '이미 Keepory에 있음',
   'toast.trashed': '휴지통으로 이동됨',
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
+  'toast.linkCopied': '링크가 복사됨',
 
   'settings.section.account': '계정',
   'settings.section.library': '라이브러리',
@@ -326,6 +328,7 @@ export const ko: Catalog = {
   'detail.rowFrom': '출처',
   'detail.errorShare': '공유 시트를 열 수 없습니다.',
   'detail.errorOpen': '이 링크를 열 수 없습니다.',
+  'detail.errorCopyLink': '이 링크를 복사할 수 없습니다.',
   'detail.errorRefreshPreview': '프리뷰를 새로고침할 수 없습니다.',
   'detail.errorCreateCollection': '컬렉션을 만들 수 없습니다.',
   'detail.deleteConfirmWeb': '이 북마크를 영구적으로 삭제하시겠습니까?',

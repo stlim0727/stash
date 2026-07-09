@@ -31,6 +31,7 @@ export const en = {
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.share': 'Share',
+  'common.copy': 'Copy',
   'common.open': 'Open',
   'common.openLink': 'Open link',
   'common.view': 'View',
@@ -265,6 +266,7 @@ export const en = {
   'toast.trashed': 'Moved to Trash',
   'toast.noLink': 'No link found to save',
   'toast.saveFailed': 'Could not save to Keepory',
+  'toast.linkCopied': 'Link copied',
 
   // Settings.
   'settings.section.account': 'Account',
@@ -436,6 +438,7 @@ export const en = {
   'detail.rowFrom': 'From',
   'detail.errorShare': 'Could not open the share sheet.',
   'detail.errorOpen': 'Could not open this link.',
+  'detail.errorCopyLink': 'Could not copy this link.',
   'detail.errorRefreshPreview': 'Could not refresh the preview.',
   'detail.errorCreateCollection': 'Could not create the collection.',
   'detail.deleteConfirmWeb': 'Delete this bookmark permanently?',
