@@ -56,6 +56,13 @@ jest.mock('@/api/bookmarks', () => {
 
 jest.mock('expo-router', () => ({
   usePathname: () => '/report',
+  useRouter: () => ({ back: jest.fn() }),
+}));
+
+const mockWindowSize = { width: 390, height: 844, scale: 2, fontScale: 1 };
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => mockWindowSize,
 }));
 
 import ReportScreen from '@/app/report';
@@ -81,6 +88,8 @@ function renderReport(createApi?: Parameters<typeof ReportScreen>[0]) {
 beforeEach(() => {
   fakeRepo.__reset([]);
   clearPendingFeedbackScreenshot();
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
   mockAuth = {
     status: 'anonymous',
     session: mockSession,
@@ -103,6 +112,28 @@ test('renders the form and shows the privacy note', async () => {
   expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
   expect(screen.getByTestId('share-diagnostics-icon')).toBeTruthy();
   expect(screen.getByTestId('submit-report-icon')).toBeTruthy();
+});
+
+test('wide viewport presents the report form as a side sheet', async () => {
+  mockWindowSize.width = 1280;
+  const screen = await renderReport();
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  expect(screen.getByTestId('report-sheet-backdrop')).toBeTruthy();
+});
+
+test('phone viewport presents the report form full-screen', async () => {
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
+  const screen = await renderReport();
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  expect(screen.queryByTestId('report-sheet-backdrop')).toBeNull();
+  const root = screen.getByTestId('report-fullscreen');
+  const flat = Array.isArray(root.props.style)
+    ? Object.assign({}, ...root.props.style.flat())
+    : root.props.style;
+  expect(flat.height).toBe(844);
 });
 
 test('Submit is disabled until a description is entered', async () => {
