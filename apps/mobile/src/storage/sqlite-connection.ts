@@ -198,8 +198,7 @@ export class SqliteConnection<DB> {
       const db = this.db;
       if (db) {
         this.db = null;
-        this.nextReopenIsLifecycle = true;
-        await this.closeQuietly(db);
+        this.nextReopenIsLifecycle = await this.closeQuietly(db);
       }
     });
   }
@@ -399,12 +398,14 @@ export class SqliteConnection<DB> {
     }
   }
 
-  private async closeQuietly(db: DB): Promise<void> {
+  private async closeQuietly(db: DB): Promise<boolean> {
     try {
       await this.withTimeout(this.close(db), this.closeTimeoutMs, 'close');
+      return true;
     } catch {
       // The handle may already be wedged or slow to close; a bounded wait keeps
       // that from hanging the connection. We reopen regardless.
+      return false;
     }
   }
 

@@ -534,6 +534,44 @@ test('reopens after proactive background close stay breadcrumbs even when cluste
   assert.equal(escalations.length, 0);
 });
 
+test('reopens after failed proactive close still count as churn', async () => {
+  clearLogEntries();
+  let clock = 0;
+  let opens = 0;
+  const connection = new SqliteConnection<FakeDb>(
+    async () => {
+      opens += 1;
+      return new FakeDb(opens);
+    },
+    (db) => db.probe(),
+    () => new Promise<void>(() => {}), // close times out; not a clean lifecycle release
+    {
+      closeTimeoutMs: 1,
+      reopenAlertThreshold: 3,
+      reopenAlertWindowMs: 1000,
+      now: () => (clock += 100),
+    },
+  );
+
+  await connection.run(async (db) => db.id); // initial open
+  for (let i = 0; i < 3; i += 1) {
+    await connection.closeCurrent();
+    await connection.run(async (db) => db.id);
+  }
+  assert.equal(opens, 4); // initial open + 3 reopens after failed closes
+
+  const reopenBreadcrumbs = getLogEntries().filter((e) => e.message.includes('connection reopened (reopen #'));
+  assert.equal(reopenBreadcrumbs.length, 3);
+  assert.ok(
+    reopenBreadcrumbs.every((e) => !e.message.includes('expected after background close')),
+  );
+
+  const escalations = getLogEntries().filter(
+    (e) => e.level === 'error' && e.message.includes('excessive handle churn'),
+  );
+  assert.equal(escalations.length, 1);
+});
+
 test('a probe that hangs is treated as stale and reopened', async () => {
   let opens = 0;
   let hang = false;
