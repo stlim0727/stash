@@ -11,7 +11,7 @@ Behavioral guidelines to reduce common LLM coding mistakes (adapted from [andrej
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
 
 - State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them — don't pick silently.
+- If multiple interpretations exist, present them — don't pick silently. (A "wrap up the project" / "you're leaving" request is ambiguous in a way that changes the *entire* deliverable, so confirm the **direction of the handoff** before planning: is the *human* stepping away — wanting a project-for-a-stranger doc with ops/credentials/external-accounts/strategy — or is the *agent* being swapped while the human continues with a new one? The latter wants tacit agent-context flushed into repo-resident memory (`AGENTS.md`/`CLAUDE.md`/`.claude/skills`), because **none of the outgoing agent's conversational context survives** — only committed files cross the boundary; device/Supabase verification and credential ownership drop in priority since the successor agent or the human can do/hold those.)
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop. Name what's confusing. Ask.
 
