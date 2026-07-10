@@ -106,6 +106,26 @@ from rows
 order by user_id, canonical_name, loser_name;
 ```
 
+## Merge Map Report
+
+Use this with the same `plan` values from the dry run/apply. Include the result in the final user report.
+
+```sql
+with plan(user_id, canonical_id, loser_id, reason) as (
+  values
+    (<user_id>::uuid, <canonical_id>::uuid, <loser_id>::uuid, <reason>)
+)
+select
+  p.user_id,
+  lt.name as removed_tag,
+  ct.name as merged_into,
+  p.reason
+from plan p
+join public.tags ct on ct.id = p.canonical_id and ct.user_id = p.user_id
+join public.tags lt on lt.id = p.loser_id and lt.user_id = p.user_id
+order by p.user_id, ct.name, lt.name;
+```
+
 ## Apply Skeleton
 
 Use a transaction. Replace `backup_batch` and the `values` list. Keep the `distinct on` loser-link pre-aggregation.
