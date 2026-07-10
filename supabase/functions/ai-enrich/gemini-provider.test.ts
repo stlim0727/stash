@@ -146,6 +146,58 @@ test('tells the model to derive tags from non-title metadata too', async () => {
   assert.match(body, /description, user notes, site name, content type, and meaningful URL path terms are as important as the title/);
 });
 
+test('tells the model not to reuse generic media buckets as real suggestions', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await provider.enrich(input({ collections: ['Watch later'], existing_tags: ['비디오'] }));
+  const body = calls[0].init?.body ?? '';
+
+  assert.match(body, /Do not suggest labels that only describe the storage action or media format/);
+  assert.match(body, /watch later/);
+  assert.match(body, /비디오/);
+});
+
+test('drops generic media tags and collections from model output', async () => {
+  const { fetchImpl } = stubFetch({
+    summary: 'A video about prompt engineering workflows.',
+    topics: ['video', 'prompt engineering'],
+    suggested_tags: [
+      { name: '비디오', confidence: 0.91 },
+      { name: 'prompt engineering', confidence: 0.82 },
+      { name: 'WatchLater', confidence: 0.77 },
+      { name: '나중에보기', confidence: 0.76 },
+      { name: 'Watch List', confidence: 0.75 },
+      { name: 'Watch: Later', confidence: 0.74 },
+      { name: 'Watch + Later', confidence: 0.73 },
+      { name: '\u{1F4FA} Watch Later', confidence: 0.72 },
+    ],
+    suggested_collection: 'Watch + Later',
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  const out = await provider.enrich(
+    input({
+      url: 'https://www.youtube.com/watch?v=abc',
+      title: 'Prompt engineering patterns',
+      content_type: 'video',
+      collections: ['Watch later'],
+      existing_tags: ['비디오'],
+    }),
+  );
+
+  assert.deepEqual(out.suggested_tags, [{ name: 'prompt engineering', confidence: 0.82 }]);
+  assert.equal(out.suggested_collection, null);
+  assert.equal(out.confidence, 0.82);
+});
+
 test('omits the existing-tags line when the user has no tags yet', async () => {
   const { fetchImpl, calls } = stubFetch({
     summary: null,

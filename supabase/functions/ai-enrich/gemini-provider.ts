@@ -49,6 +49,40 @@ const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 const DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TAGS = 5;
+const GENERIC_MEDIA_LABELS = new Set([
+  'article',
+  'articles',
+  'blog',
+  'bookmark',
+  'bookmarks',
+  'link',
+  'links',
+  'media',
+  'read later',
+  'reading',
+  'saved',
+  'to read',
+  'to watch',
+  'video',
+  'videos',
+  'readlater',
+  'toread',
+  'towatch',
+  'watch later',
+  'watchlater',
+  'watch list',
+  'watchlist',
+  '나중에 보기',
+  '나중에보기',
+  '동영상',
+  '미디어',
+  '북마크',
+  '비디오',
+  '아티클',
+  '읽을거리',
+  '저장',
+  '콘텐츠',
+]);
 
 /** Human-readable language names for the locales the app ships, so the model is
  *  told plainly what language to write in. Unknown/absent locales fall through
@@ -84,6 +118,7 @@ function buildSystemInstruction(language: string): string {
     '- suggested_collection: a single best-fit collection NAME for filing this bookmark. If one of the provided existing collections fits, copy its NAME verbatim (do NOT translate it). If none fit, propose a concise, reusable new collection name in Title Case (a broad theme, not a one-off). Use null only when the content is too sparse to categorize at all.',
     '- confidence: your overall confidence from 0 to 1.',
     'For topics and suggested_tags, use all supplied evidence: description, user notes, site name, content type, and meaningful URL path terms are as important as the title. When the title is generic, short, or brand-only, do not let it dominate; prefer the more specific non-title metadata.',
+    'Do not suggest labels that only describe the storage action or media format, such as "watch later", "read later", "video", "article", "link", "비디오", or "나중에 보기". A generic existing tag or collection is not a fit by itself; return null/omit it unless you also have a more specific content-based label.',
     'Base every field only on the supplied metadata. Do not fabricate specifics you were not given.',
   ].join('\n');
 }
@@ -121,6 +156,18 @@ function clamp01(value: unknown): number {
 
 function nonEmpty(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function labelKey(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function isGenericMediaLabel(value: string): boolean {
+  return GENERIC_MEDIA_LABELS.has(labelKey(value));
 }
 
 /** Build the user-facing prompt from the bookmark fields we have. Omitting
@@ -194,6 +241,7 @@ function normalize(parsed: unknown): EnrichmentOutput {
           return name ? { name, confidence: clamp01(tag.confidence) } : null;
         })
         .filter((t): t is SuggestedTag => t !== null)
+        .filter((t) => !isGenericMediaLabel(t.name))
         .slice(0, MAX_TAGS)
     : [];
 
@@ -211,7 +259,10 @@ function normalize(parsed: unknown): EnrichmentOutput {
     summary: nonEmpty(obj.summary),
     topics,
     suggested_tags,
-    suggested_collection: nonEmpty(obj.suggested_collection),
+    suggested_collection: (() => {
+      const collection = nonEmpty(obj.suggested_collection);
+      return collection && !isGenericMediaLabel(collection) ? collection : null;
+    })(),
     confidence,
   };
 }
