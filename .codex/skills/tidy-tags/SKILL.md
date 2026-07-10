@@ -29,18 +29,23 @@ Run a conservative, operator-reviewed Stash tag cleanup against Supabase. The go
    - Avoid broad rollups such as recipe -> cooking, butterfly stroke -> swimming, or city -> travel unless the user explicitly approves that taxonomy loss.
    - Keep generic filler deletion separate from merge cleanup.
 5. Dry-run the plan with link counts, collision counts, and a `loser_is_user_authored` check.
-6. Apply in one transaction only after the dry run is clean:
+6. Before applying, handle pending device-local tag ops:
+   - Cloud SQL cannot see another device's local pending tag queue.
+   - If affected users may still have unsynced tag edits, stop and ask for all devices to sync/settle first, or get explicit acceptance that a queued loser-slug op could recreate a loser tag later.
+7. Apply in one transaction only after the dry run is clean:
    - Create rollback snapshot tables for affected tags and bookmark-tag links.
    - Enable RLS on snapshot tables and revoke `anon`/`authenticated` access.
+   - Reject duplicate loser IDs and any canonical tag that also appears as a loser.
    - Pre-aggregate loser links by `(bookmark_id, canonical_id)` before inserting canonical links, or Postgres can hit `bookmark_tags_pkey` when multiple loser tags on one bookmark merge into the same canonical tag.
+   - On canonical-link collisions, upgrade existing canonical links to `source = 'user'` before deleting loser links when any colliding loser link is user-sourced.
    - Insert missing canonical links, delete loser links, then delete loser tags.
    - Do not update `bookmarks.updated_at`; this is an organizing repair, not a bookmark edit.
-7. Run post-checks:
+8. Run post-checks:
    - Remaining loser tags = 0.
    - Remaining loser links = 0.
    - Backup row counts match the affected tag/link snapshot.
    - Backup tables have RLS enabled.
-8. Run the after-fragmentation report and summarize before/after by user.
+9. Run the after-fragmentation report and summarize before/after by user.
 
 ## Reporting
 
