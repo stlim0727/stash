@@ -22,7 +22,7 @@ Official references:
 ## Current Repo State
 
 - App display name: `Keepory` (`apps/mobile/app.json`).
-- Android package: `com.stash.app`.
+- Android package: `com.keepory.app`.
 - App version: `1.1.0`.
 - EAS production profile exists and should produce the store build:
   `eas build --profile production --platform android`.
@@ -31,9 +31,11 @@ Official references:
   upload that APK to Google Play.
 - App icon and adaptive icon assets exist under
   `apps/mobile/assets/images/`.
-- The current `docs/privacy.html` is for the Stash Library Assistant GPT and
-  Public API. It is not suitable as the mobile app privacy policy without
-  rewriting.
+- `docs/privacy.html` is the mobile app privacy policy draft, mirrored to
+  `apps/mobile/public/privacy.html` so the web export serves it.
+- `docs/account-deletion.html` is the account/data deletion request page draft,
+  mirrored to `apps/mobile/public/account-deletion.html` so the web export serves
+  it.
 - Local `pnpm` must be run through Corepack or downgraded to the repo range:
   the globally installed `pnpm` was 11.7.0, while the repo requires
   `>=10 <11`. `corepack pnpm -v` returned 10.28.1.
@@ -46,20 +48,19 @@ Official references:
 
 Resolve these before submitting a production or open-testing release:
 
-1. Decide the permanent Android package name.
-   `com.stash.app` is already in `app.json`, but the public brand is Keepory.
-   Google Play package names are effectively permanent after publication. If the
-   public package should be `com.keepory.app` or another identifier, change it
-   before the first Play upload.
+1. Confirm the Play Console app uses the permanent Android package name.
+   The repo is configured as `com.keepory.app`. Google Play package names are
+   effectively permanent after publication, so create the Play Console app with
+   this identifier.
 
-2. Create a mobile-app privacy policy.
-   It must cover the Android app, not only the GPT/API integration. Host it at a
-   stable public URL, preferably under `https://keepory.app/`.
+2. Publish the mobile-app privacy policy.
+   Host `apps/mobile/public/privacy.html` at
+   `https://keepory.app/privacy.html`.
 
-3. Provide an account/data deletion path.
-   Play Console data safety/account deletion declarations need a clear user path
-   and usually a web URL for account deletion requests. The app currently has
-   sign-out behavior, but sign-out is not account deletion.
+3. Publish the account/data deletion path.
+   Host `apps/mobile/public/account-deletion.html` at
+   `https://keepory.app/account-deletion.html`. In-app account deletion can still
+   be added later.
 
 4. Verify a store-ready Android App Bundle.
    Build with the production profile and confirm target SDK, versionCode,
@@ -108,7 +109,7 @@ bundletool dump manifest --bundle app-release.aab
 
 Confirm:
 
-- `package="com.stash.app"` or the final chosen package.
+- `package="com.keepory.app"`.
 - `versionName="1.1.0"` or the intended release version.
 - `versionCode` is greater than every previous Play upload.
 - `targetSdkVersion` is at least 35.
@@ -198,7 +199,8 @@ Likely not collected:
 Security practices to claim only after verification:
 
 - Data encrypted in transit: yes if all backend calls are HTTPS.
-- Users can request data deletion: only after the deletion path and URL exist.
+- Users can request data deletion: yes after `docs/account-deletion.html` is
+  deployed to a public URL and listed in Play Console.
 - Data encrypted at rest on device: do not claim this yet. Local bookmark
   encryption is still listed as future work.
 
@@ -244,10 +246,9 @@ Run native smoke on a real Android device:
 
 ## First Submission Sequence
 
-1. Decide package name and make any needed `app.json` changes before Play app
-   creation.
-2. Write and publish the mobile privacy policy.
-3. Add or publish an account/data deletion request path.
+1. Create the Play Console app with package name `com.keepory.app`.
+2. Publish the mobile privacy policy.
+3. Publish the account/data deletion request path.
 4. Configure EAS production environment and Sentry source-map secrets if needed.
 5. Build production Android `.aab` with EAS.
 6. Inspect manifest and permissions.

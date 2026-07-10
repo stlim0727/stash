@@ -24,10 +24,11 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
 - **Your toolbelt is already built; use it, don't reinvent it.** Operational
   procedures are encoded as skills in `.claude/skills` and mirrored under
   `.codex/skills`: `versioning`/`rc-build` for builds,
-  `web-deploy`/`web-preview` for Cloudflare, `supabase-migration` for schema,
-  `circleci-logs` for CI failures, `review-pr`/`pr-ready-check` for PR gates,
-  `update-agents-md`/`retro` to keep this memory fresh, `screenshot`/`ui-preview`
-  for visuals, and `user-bookmark-summary` for live DB status. The release
+  `play-store-release` for Google Play submission, `web-deploy`/`web-preview`
+  for Cloudflare, `supabase-migration` for schema, `circleci-logs` for CI
+  failures, `review-pr`/`pr-ready-check` for PR gates, `update-agents-md`/`retro`
+  to keep this memory fresh, `screenshot`/`ui-preview` for visuals, and
+  `user-bookmark-summary` for live DB status. The release
   procedure itself lives in `docs/development/releasing.md`. Change both skill
   mirrors together or the toolbelts drift. Prefer these over ad-hoc steps.
 - **What is verified vs assumed vs stale** (do not trust silence as proof):

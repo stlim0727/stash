@@ -1,0 +1,4 @@
+interface:
+  display_name: "Play Store Release"
+  short_description: "Prepare and submit Keepory to Google Play."
+  default_prompt: "Use $play-store-release to prepare or submit the Keepory Play Store release."
