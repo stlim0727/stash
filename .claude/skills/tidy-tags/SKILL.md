@@ -29,6 +29,7 @@ Run a conservative, operator-reviewed Stash tag cleanup against Supabase. The go
    - Avoid broad rollups such as recipe -> cooking, butterfly stroke -> swimming, or city -> travel unless the user explicitly approves that taxonomy loss.
    - Keep generic filler deletion separate from merge cleanup.
 5. Dry-run the plan with link counts, collision counts, and a `loser_is_user_authored` check.
+   - Preserve the dry-run rows or run the merge-map report query; the final answer must list every removed tag and its canonical destination.
 6. Before applying, handle pending device-local tag ops:
    - Cloud SQL cannot see another device's local pending tag queue.
    - If affected users may still have unsynced tag edits, stop and ask for all devices to sync/settle first, or get explicit acceptance that a queued loser-slug op could recreate a loser tag later.
@@ -46,6 +47,7 @@ Run a conservative, operator-reviewed Stash tag cleanup against Supabase. The go
    - Backup row counts match the affected tag/link snapshot.
    - Backup tables have RLS enabled.
 9. Run the after-fragmentation report and summarize before/after by user.
+10. Report the exact merge map grouped by user.
 
 ## Reporting
 
@@ -53,6 +55,7 @@ Report:
 
 - Merge scope: number of loser tags, affected users, inserted canonical links, removed loser links.
 - Backup location and batch id.
+- Exact merge map grouped by user, with a two-column table: `Removed tag` and `Merged into`. Include every loser tag, not only examples.
 - Before/after table for active bookmark count, tag vocab, active taggings, inactive tags, singleton active tags, AI/user tag counts, and vocab per active tagging.
 - Any skipped candidate groups and why.
 
