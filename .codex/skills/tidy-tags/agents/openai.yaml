@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tidy Tags"
+  short_description: "Clean fragmented Stash tags safely"
+  default_prompt: "Use $tidy-tags to report Stash tag fragmentation, apply conservative tag merges, and show before/after metrics."
