@@ -168,6 +168,23 @@ begin
   ) then
     raise exception 'tidy plan would delete user-authored loser tag';
   end if;
+
+  if exists (
+    select 1
+    from _tidy_plan
+    group by loser_id
+    having count(*) > 1
+  ) then
+    raise exception 'tidy plan repeats a loser tag';
+  end if;
+
+  if exists (
+    select 1
+    from _tidy_plan c
+    join _tidy_plan l on l.loser_id = c.canonical_id
+  ) then
+    raise exception 'tidy plan uses a canonical tag as a loser';
+  end if;
 end $$;
 
 insert into public.tidy_backup_YYYYMMDD_tags(backup_batch, backed_up_at, id, user_id, name, slug, source, created_at)
@@ -198,6 +215,17 @@ with loser_links as (
   from _tidy_plan p
   join public.bookmark_tags bt on bt.tag_id = p.loser_id
   order by bt.bookmark_id, p.canonical_id, (bt.source = 'user') desc, bt.confidence desc nulls last, bt.created_at asc
+), collision_upgrades as (
+  update public.bookmark_tags existing
+  set
+    source = 'user',
+    confidence = coalesce(existing.confidence, ll.confidence)
+  from loser_links ll
+  where existing.bookmark_id = ll.bookmark_id
+    and existing.tag_id = ll.canonical_id
+    and existing.source <> 'user'
+    and ll.source = 'user'
+  returning 1
 ), inserted as (
   insert into public.bookmark_tags(bookmark_id, tag_id, source, confidence, created_at)
   select ll.bookmark_id, ll.canonical_id, ll.source, ll.confidence, ll.created_at
@@ -220,6 +248,7 @@ with loser_links as (
   returning 1
 )
 select
+  (select count(*) from collision_upgrades) as upgraded_collision_links,
   (select count(*) from inserted) as inserted_canonical_links,
   (select count(*) from deleted_links) as deleted_loser_links,
   (select count(*) from deleted_tags) as deleted_loser_tags;
