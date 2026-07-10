@@ -8,7 +8,7 @@
     "scheme": "stash",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.stash.app"
+      "bundleIdentifier": "com.keepory.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +18,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.stash.app"
+      "package": "com.keepory.app"
     },
     "web": {
       "output": "single",
