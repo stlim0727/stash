@@ -1,0 +1,33 @@
+diff --git a/build/useShareIntent.js b/build/useShareIntent.js
+index 1ab12c4..9257fd8 100644
+--- a/build/useShareIntent.js
++++ b/build/useShareIntent.js
+@@ -36,6 +36,10 @@ export default function useShareIntent(options = SHAREINTENT_OPTIONS_DEFAULT) {
+      * Call native module on universal linking url change
+      */
+     const refreshShareIntent = () => {
++        if (!isReady) {
++            options.debug && console.debug("useShareIntent[refresh] skip until listeners are ready");
++            return;
++        }
+         options.debug && console.debug("useShareIntent[refresh]", url);
+         if (url?.includes(`${getScheme(options)}://dataUrl=`)) {
+             // iOS only
+@@ -55,7 +59,7 @@ export default function useShareIntent(options = SHAREINTENT_OPTIONS_DEFAULT) {
+         options.debug &&
+             console.debug("useShareIntent[mount]", getScheme(options), options);
+         refreshShareIntent();
+-    }, [url, options.disabled]);
++    }, [url, options.disabled, isReady]);
+     /**
+      * Handle application state (active, background, inactive)
+      */
+@@ -79,7 +83,7 @@ export default function useShareIntent(options = SHAREINTENT_OPTIONS_DEFAULT) {
+         return () => {
+             subscription.remove();
+         };
+-    }, [url, shareIntent, options.disabled]);
++    }, [url, shareIntent, options.disabled, isReady]);
+     /**
+      * Detect Native Module response
+      */

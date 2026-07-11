@@ -3,4 +3,5 @@ packages:
   - packages/*
 
 patchedDependencies:
+  expo-share-intent@7.0.0: patches/expo-share-intent@7.0.0.patch
   react-native-web@0.21.2: patches/react-native-web@0.21.2.patch
