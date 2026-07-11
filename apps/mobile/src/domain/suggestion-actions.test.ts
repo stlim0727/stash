@@ -44,8 +44,11 @@ test('acceptSuggestionBundle applies tags before filing into an existing folder'
       createCollection: async () => {
         throw new Error('should not create');
       },
-      dismissFolderSuggestion: (bookmarkId, token) => {
-        calls.push(`dismiss-folder:${bookmarkId}:${token}`);
+      dismissFolderSuggestion: (bookmarkId, tokens) => {
+        const list = Array.isArray(tokens) ? tokens : [tokens];
+        for (const token of list) {
+          calls.push(`dismiss-folder:${bookmarkId}:${token}`);
+        }
       },
     },
     {
@@ -116,8 +119,11 @@ test('acceptSuggestionBundle creates a proposed folder before assigning it', asy
         calls.push(`create:${name}`);
         return { collection: createdCollection };
       },
-      dismissFolderSuggestion: (bookmarkId, token) => {
-        calls.push(`dismiss-folder:${bookmarkId}:${token}`);
+      dismissFolderSuggestion: (bookmarkId, tokens) => {
+        const list = Array.isArray(tokens) ? tokens : [tokens];
+        for (const token of list) {
+          calls.push(`dismiss-folder:${bookmarkId}:${token}`);
+        }
       },
     },
     {
