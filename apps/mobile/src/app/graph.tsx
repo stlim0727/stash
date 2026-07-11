@@ -143,6 +143,17 @@ export function anchoredPanForScale(input: {
   };
 }
 
+export function panWithPinchFocalDelta(input: {
+  anchoredPan: { x: number; y: number };
+  startFocal: { x: number; y: number };
+  currentFocal: { x: number; y: number };
+}): { x: number; y: number } {
+  return {
+    x: input.anchoredPan.x + input.currentFocal.x - input.startFocal.x,
+    y: input.anchoredPan.y + input.currentFocal.y - input.startFocal.y,
+  };
+}
+
 function touchDistance(a: { pageX: number; pageY: number }, b: { pageX: number; pageY: number }): number {
   return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
 }
@@ -500,9 +511,14 @@ export default function GraphScreen() {
               startScale: pinch.current.startScale,
               nextScale: next,
             });
+            const nextPan = panWithPinchFocalDelta({
+              anchoredPan,
+              startFocal: pinch.current.startFocal,
+              currentFocal: touchCenterInViewport(touches[0], touches[1], containerOriginRef.current),
+            });
             const { x: maxX, y: maxY } = axisBounds();
-            const nextX = clampToRange(anchoredPan.x, -maxX, maxX);
-            const nextY = clampToRange(anchoredPan.y, -maxY, maxY);
+            const nextX = clampToRange(nextPan.x, -maxX, maxX);
+            const nextY = clampToRange(nextPan.y, -maxY, maxY);
             translateX.setValue(nextX - panStart.current.x);
             translateY.setValue(nextY - panStart.current.y);
             panOffset.current = { x: nextX, y: nextY };
