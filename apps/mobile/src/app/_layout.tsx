@@ -14,7 +14,7 @@ import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
-import { useMinAppVersion } from '@/supabase/use-min-app-version';
+import { useAppConfig } from '@/supabase/use-min-app-version';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { FloatingReportButton } from '@/feedback/FloatingReportButton';
 import { UpdateRequired } from '@/ui/UpdateRequired';
@@ -38,11 +38,11 @@ installPwaHead();
 // provider) and translate the Stack header titles.
 function RootStack() {
   const t = useT();
-  const minVersion = useMinAppVersion();
+  const appConfig = useAppConfig();
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
 
-  if (minVersion !== null && compareSemver(appVersion, minVersion) < 0) {
-    return <UpdateRequired />;
+  if (appConfig.minAppVersion !== null && compareSemver(appVersion, appConfig.minAppVersion) < 0) {
+    return <UpdateRequired message={appConfig.updateMessage} updateUrl={appConfig.updateUrl} />;
   }
 
   return (
