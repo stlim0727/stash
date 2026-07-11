@@ -83,7 +83,9 @@ Give a plain verdict: **merge** / **rebase first** / **changes needed** /
   name the commits/PR that replaced it, then `update_pull_request state=closed`.
   Never close silently.
 - **Rebase**: rebase onto base, resolve conflicts, push, report.
-- **Merge / changes-needed**: report the verdict and let the user decide; only
+- **Merge / changes-needed / general review**: ALWAYS post a comment on the PR
+  containing your review findings and final verdict (using `add_issue_comment` or
+  `gh pr comment`), then report the verdict to the user and let them decide; only
   merge when explicitly told to.
 
 Never push or change PR state beyond what the user requested. When the right
