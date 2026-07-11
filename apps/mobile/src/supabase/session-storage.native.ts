@@ -7,6 +7,7 @@ import {
   type SecureKvBackend,
 } from '@/supabase/secure-session-core';
 import type { SupabaseAuthSession } from '@/supabase/types';
+import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
 
@@ -53,6 +54,7 @@ const secureBackend: SecureKvBackend = {
 // new sessions are ever written here.
 const legacyConnection = new SqliteConnection<SQLite.SQLiteDatabase>(
   async () => {
+    ensureNativeSqliteDirectory();
     const db = await SQLite.openDatabaseAsync('stash-auth.db');
     await db.execAsync(`
       CREATE TABLE IF NOT EXISTS meta (
