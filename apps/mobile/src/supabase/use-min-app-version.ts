@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 
+import { APP_CONFIG_KEYS, parseRemoteAppConfig, type RemoteAppConfig } from '@/domain/app-config';
 import { getSupabaseConfigState } from '@/supabase/config';
 
-/** Fetches the min_app_version from the app_config table. Returns null while loading or when Supabase is not configured. */
-export function useMinAppVersion(): string | null {
-  const [minVersion, setMinVersion] = useState<string | null>(null);
+/** Fetches public release-gate config. Missing config or network failure never blocks capture. */
+export function useAppConfig(): RemoteAppConfig {
+  const [appConfig, setAppConfig] = useState<RemoteAppConfig>(() => parseRemoteAppConfig([]));
 
   useEffect(() => {
     const configState = getSupabaseConfigState();
@@ -12,22 +13,24 @@ export function useMinAppVersion(): string | null {
       return;
     }
     const { url, anonKey } = configState.config;
-    fetch(`${url}/rest/v1/app_config?key=eq.min_app_version&select=value`, {
+    const keys = APP_CONFIG_KEYS.join(',');
+    fetch(`${url}/rest/v1/app_config?key=in.(${keys})&select=key,value`, {
       headers: {
         apikey: anonKey,
         Authorization: `Bearer ${anonKey}`,
       },
     })
       .then((res) => res.json())
-      .then((rows: { value: string }[]) => {
-        if (rows[0]?.value) {
-          setMinVersion(rows[0].value);
-        }
-      })
+      .then((rows: { key: string; value: string | null }[]) => setAppConfig(parseRemoteAppConfig(rows)))
       .catch(() => {
-        // Network unavailable — don't block the user.
+        // Network unavailable: don't block capture or offline use.
       });
   }, []);
 
-  return minVersion;
+  return appConfig;
+}
+
+/** Backward-compatible helper for callers that only need the minimum version. */
+export function useMinAppVersion(): string | null {
+  return useAppConfig().minAppVersion;
 }
