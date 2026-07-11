@@ -98,9 +98,10 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const [category, setCategory] = useState<FeedbackCategory>('bug');
   const [message, setMessage] = useState('');
   const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
-  const [screenshot, setScreenshot] = useState(getPendingFeedbackScreenshot);
+  const [screenshot] = useState(getPendingFeedbackScreenshot);
   const [sourceContext] = useState(getPendingFeedbackSource);
   const [includeScreenshot, setIncludeScreenshot] = useState(false);
+  const [showContextPreview, setShowContextPreview] = useState(false);
 
   useEffect(
     () => () => {
@@ -208,9 +209,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       });
       setSubmit({ status: 'success' });
       setMessage('');
-      setScreenshot(null);
       setIncludeScreenshot(false);
-      clearPendingFeedbackScreenshot();
     } catch (error) {
       setSubmit({
         status: 'error',
@@ -349,12 +348,32 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
             ) : null}
           </View>
         ) : null}
-        <Text
-          accessibilityLabel={t('report.contextPreviewA11y')}
-          style={[styles.code, { color: palette.text, borderColor: palette.border }]}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('report.contextPreviewToggleA11y')}
+          accessibilityState={{ expanded: showContextPreview }}
+          style={[styles.contextToggle, { borderColor: palette.border }]}
+          onPress={() => setShowContextPreview((value) => !value)}
         >
-          {contextPreview}
-        </Text>
+          <View style={styles.buttonRow}>
+            <Ionicons
+              name={showContextPreview ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color={palette.text}
+            />
+            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+              {showContextPreview ? t('report.hideDiagnostics') : t('report.showDiagnostics')}
+            </Text>
+          </View>
+        </Pressable>
+        {showContextPreview ? (
+          <Text
+            accessibilityLabel={t('report.contextPreviewA11y')}
+            style={[styles.code, { color: palette.text, borderColor: palette.border }]}
+          >
+            {contextPreview}
+          </Text>
+        ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t('report.shareDiagnosticsA11y')}
@@ -537,6 +556,12 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 12,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  contextToggle: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
   },
   screenshotBox: {
     gap: 10,
