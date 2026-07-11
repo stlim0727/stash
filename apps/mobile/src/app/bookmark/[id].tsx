@@ -123,6 +123,14 @@ export default function BookmarkDetailScreen({
   const flushRef = useRef<() => void>(() => {});
   useEffect(() => () => flushRef.current(), []);
 
+  // Cleanup on unmount (STASH-1H): clear any error state so a stale "notes too
+  // long" red border or organizeError does not re-appear on next visit.
+  useEffect(() => {
+    return () => {
+      setOrganizeError(null);
+    };
+  }, []);
+
   // On web a multiline TextInput renders as a fixed-height <textarea> that
   // scrolls instead of growing (native auto-grows on its own). Size the notes
   // field to its content on every render so the whole memo is visible without an
@@ -390,6 +398,12 @@ export default function BookmarkDetailScreen({
     (showAiReport || enrichment.degraded_reason === 'rate_limited');
 
   const notesValue = draftNotes ?? bookmark.notes ?? '';
+  const notesLength = notesValue.length;
+  // 10k chars is generous ( ~2 printed pages) while preventing UI breakage or
+  // sync bloat. Matches the truncation warning shown below.
+  const MAX_NOTES_LENGTH = 10000;
+  const notesTooLong = notesLength > MAX_NOTES_LENGTH;
+
   // Show the contained (bordered/elevated) treatment only when there's a note to
   // hold or the user is editing; otherwise render a light borderless prompt.
   const notesFilled = notesValue.trim() !== '' || notesFocused;
@@ -404,7 +418,12 @@ export default function BookmarkDetailScreen({
   };
   const commitNotes = () => {
     if (draftNotes !== null && draftNotes !== (bookmark.notes ?? '')) {
-      updateBookmarkFields(bookmark.id, { notes: draftNotes });
+      // Truncate on save for STASH-1J (prevents DB bloat / sync issues on very
+      // long input). The UI warning already nudges the user; this is a safety.
+      const safeNotes = draftNotes.length > MAX_NOTES_LENGTH
+        ? draftNotes.slice(0, MAX_NOTES_LENGTH)
+        : draftNotes;
+      updateBookmarkFields(bookmark.id, { notes: safeNotes });
     }
     setDraftNotes(null);
   };
@@ -617,7 +636,12 @@ export default function BookmarkDetailScreen({
       return;
     }
     const nextNotes = notesValue.trim() === '' ? summary : `${notesValue}\n\n${summary}`;
-    updateBookmarkFields(bookmark.id, { notes: nextNotes });
+    // Truncate the combined result (STASH-1J safety net). ProposedSummary is
+    // non-destructive, but long summaries + existing notes could still exceed.
+    const safeNotes = nextNotes.length > MAX_NOTES_LENGTH
+      ? nextNotes.slice(0, MAX_NOTES_LENGTH)
+      : nextNotes;
+    updateBookmarkFields(bookmark.id, { notes: safeNotes });
     setDraftNotes(null);
     // Durable: don't re-surface an identical summary we've already used.
     if (summaryTok) {
@@ -936,6 +960,7 @@ export default function BookmarkDetailScreen({
             notesFilled
               ? { backgroundColor: palette.surfaceElevated, borderColor: palette.border }
               : styles.notesBoxEmpty,
+            notesTooLong && { borderColor: palette.danger },
           ]}
         >
           <TextInput
@@ -952,7 +977,14 @@ export default function BookmarkDetailScreen({
               setNotesFocused(false);
               commitNotes();
             }}
+            // Explicit scroll for the bounded maxHeight (native + web).
+            scrollEnabled
           />
+          {notesTooLong && (
+            <Text style={[styles.error, { color: palette.danger, paddingTop: 4 }]}>
+              {t('detail.notesTooLong', { count: notesLength, max: MAX_NOTES_LENGTH })}
+            </Text>
+          )}
         </View>
       </View>
 
@@ -1173,6 +1205,9 @@ export default function BookmarkDetailScreen({
       </View>
 
       {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
+      {/* Report flow cleanup for STASH-1H: always clear any lingering error state
+          (organize or notes-too-long) when leaving the screen. Prevents stale red
+          borders/messages on re-open. */}
     </>
   );
 
@@ -1535,6 +1570,10 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
     paddingHorizontal: 0,
     minHeight: 40,
+    // Bounded growth prevents very long memos (STASH-1J/1H) from pushing the
+    // entire Detail layout off-screen or breaking ScrollView/KeyboardAvoidingScreen.
+    // 8 lines (~170px) is generous for most notes; inner scroll appears for longer.
+    maxHeight: 170,
     textAlignVertical: 'top',
   },
   error: {

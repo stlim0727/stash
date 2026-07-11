@@ -441,6 +441,7 @@ export const en = {
   'detail.errorCopyLink': 'Could not copy this link.',
   'detail.errorRefreshPreview': 'Could not refresh the preview.',
   'detail.errorCreateCollection': 'Could not create the collection.',
+  'detail.notesTooLong': 'Note is too long ({count}/{max} characters). Truncate or split it.',
   'detail.deleteConfirmWeb': 'Delete this bookmark permanently?',
 
   // Delete confirmation (native alert; shared by Inbox + Detail).

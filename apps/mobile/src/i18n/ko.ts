@@ -331,6 +331,7 @@ export const ko: Catalog = {
   'detail.errorCopyLink': '이 링크를 복사할 수 없습니다.',
   'detail.errorRefreshPreview': '프리뷰를 새로고침할 수 없습니다.',
   'detail.errorCreateCollection': '컬렉션을 만들 수 없습니다.',
+  'detail.notesTooLong': '메모가 너무 깁니다 ({count}/{max}자). 줄이거나 분리하세요.',
   'detail.deleteConfirmWeb': '이 북마크를 영구적으로 삭제하시겠습니까?',
 
   'bookmark.deleteTitle': '북마크 삭제',
