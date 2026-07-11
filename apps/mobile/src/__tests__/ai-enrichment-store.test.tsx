@@ -432,7 +432,7 @@ test('accepting a suggestion records it as reviewed and persists it durably', as
 
   expect(store.current!.getReviewedSuggestions(SYNCED_ID).has('design')).toBe(true);
   // Persisted so the decision survives a relaunch.
-  expect(fakeRepo.__meta('reviewed_ai_suggestions')).toContain('design');
+  expect(fakeRepo.__bookmarks().find((b) => b.id === SYNCED_ID)?.dismissed_suggested_tags).toContain('design');
 });
 
 test('the badge stays gone after accepting then removing a suggested tag', async () => {
@@ -475,7 +475,7 @@ test('markSuggestionsReviewed (dismiss path) persists across a remount', async (
   await act(async () => {
     store.current!.markSuggestionsReviewed(SYNCED_ID, ['Video']);
   });
-  expect(fakeRepo.__meta('reviewed_ai_suggestions')).toContain('video');
+  expect(fakeRepo.__bookmarks().find((b) => b.id === SYNCED_ID)?.dismissed_suggested_tags).toContain('video');
 
   // Re-mount over the same persisted meta (simulating an app relaunch): the
   // reviewed names re-hydrate, so a dismissed suggestion never re-surfaces.
@@ -499,7 +499,7 @@ test('clearReviewedSuggestions forgets dismissals so a manual re-run can reconsi
 
   expect(store.current!.getReviewedSuggestions(SYNCED_ID).size).toBe(0);
   // Persisted, so the cleared state survives a relaunch too.
-  await waitFor(() => expect(fakeRepo.__meta('reviewed_ai_suggestions')).toBe('{}'));
+  await waitFor(() => expect(fakeRepo.__bookmarks().find((b) => b.id === SYNCED_ID)?.dismissed_suggested_tags?.length).toBe(0));
 });
 
 test('a background auto enrichment flags the bookmark as an unseen suggestion', async () => {

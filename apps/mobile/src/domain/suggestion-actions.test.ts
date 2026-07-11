@@ -146,8 +146,11 @@ test('dismissSuggestionBundle marks tag names reviewed and records all folder to
     markSuggestionsReviewed: (bookmarkId, names) => {
       calls.push(`reviewed:${bookmarkId}:${names.join(',')}`);
     },
-    dismissFolderSuggestion: (bookmarkId, token) => {
-      calls.push(`dismiss-folder:${bookmarkId}:${token}`);
+    dismissFolderSuggestion: (bookmarkId, tokens) => {
+      const list = Array.isArray(tokens) ? tokens : [tokens];
+      for (const token of list) {
+        calls.push(`dismiss-folder:${bookmarkId}:${token}`);
+      }
     },
   });
 
@@ -160,8 +163,11 @@ test('dismissSuggestionBundle marks tag names reviewed and records all folder to
 
 test('recordFolderSuggestionActedOn records each stable folder token', () => {
   const calls: string[] = [];
-  recordFolderSuggestionActedOn('bookmark-1', ['a', 'b'], (bookmarkId, token) => {
-    calls.push(`${bookmarkId}:${token}`);
+  recordFolderSuggestionActedOn('bookmark-1', ['a', 'b'], (bookmarkId, tokens) => {
+    const list = Array.isArray(tokens) ? tokens : [tokens];
+    for (const token of list) {
+      calls.push(`${bookmarkId}:${token}`);
+    }
   });
 
   assert.deepEqual(calls, ['bookmark-1:a', 'bookmark-1:b']);
