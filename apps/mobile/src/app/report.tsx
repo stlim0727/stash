@@ -110,6 +110,15 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     [],
   );
 
+  useEffect(() => {
+    if (submit.status === 'success') {
+      const timer = setTimeout(() => {
+        router.back();
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [submit.status, router]);
+
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
   const platform = Platform.OS;
 

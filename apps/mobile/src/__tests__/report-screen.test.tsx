@@ -54,9 +54,10 @@ jest.mock('@/api/bookmarks', () => {
   };
 });
 
+const mockBack = jest.fn();
 jest.mock('expo-router', () => ({
   usePathname: () => '/report',
-  useRouter: () => ({ back: jest.fn() }),
+  useRouter: () => ({ back: mockBack }),
 }));
 
 const mockWindowSize = { width: 390, height: 844, scale: 2, fontScale: 1 };
@@ -88,6 +89,7 @@ function renderReport(createApi?: Parameters<typeof ReportScreen>[0]) {
 beforeEach(() => {
   fakeRepo.__reset([]);
   clearPendingFeedbackScreenshot();
+  mockBack.mockClear();
   mockWindowSize.width = 390;
   mockWindowSize.height = 844;
   mockAuth = {
@@ -366,4 +368,30 @@ test('shows a friendly message when Supabase is not configured', async () => {
   expect(screen.queryByLabelText('Submit report')).toBeNull();
   // Even without the cloud, diagnostics can still be shared.
   expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+});
+
+test('navigates back after a successful submission after the timeout', async () => {
+  jest.useFakeTimers();
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Going back');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
+  expect(mockBack).not.toHaveBeenCalled();
+
+  // Fast-forward time by 1.5 seconds
+  await act(async () => {
+    jest.advanceTimersByTime(1500);
+  });
+
+  expect(mockBack).toHaveBeenCalledTimes(1);
+  jest.useRealTimers();
 });

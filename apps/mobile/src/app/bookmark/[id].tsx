@@ -970,6 +970,7 @@ export default function BookmarkDetailScreen({
             placeholder={t('detail.notesPlaceholder')}
             placeholderTextColor={palette.textSecondary}
             multiline
+            maxLength={MAX_NOTES_LENGTH}
             value={notesValue}
             onChangeText={setDraftNotes}
             onFocus={() => setNotesFocused(true)}
