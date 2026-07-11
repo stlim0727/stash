@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { InteractionManager } from 'react-native';
+import { InteractionManager, processColor } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -47,6 +47,7 @@ import GraphScreen, {
 } from '@/app/graph';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { Tag } from '@/domain/types';
+import { palettes } from '@/theme';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeStoredBookmark } from './helpers/fake-repository';
 
@@ -63,6 +64,33 @@ function renderScreen() {
       <GraphScreen />
     </BookmarksProvider>,
   );
+}
+
+function collectNodesWithProp(
+  node: unknown,
+  propName: string,
+  found: Array<{ props: Record<string, unknown> }> = [],
+) {
+  if (!node || typeof node !== 'object') {
+    return found;
+  }
+  if (Array.isArray(node)) {
+    node.forEach((child) => collectNodesWithProp(child, propName, found));
+    return found;
+  }
+  const current = node as { props?: Record<string, unknown>; children?: unknown };
+  if (current.props && propName in current.props) {
+    found.push({ props: current.props });
+  }
+  collectNodesWithProp(current.children, propName, found);
+  return found;
+}
+
+function nativeColorPayload(value: unknown) {
+  if (value && typeof value === 'object' && 'payload' in value) {
+    return (value as { payload: unknown }).payload;
+  }
+  return value;
 }
 
 // The screen settles the layout OFF the render path, inside
@@ -148,6 +176,23 @@ test('renders the shared-tag backbone and omits untagged bookmarks', async () =>
   expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a1')).toBeTruthy();
   expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a2')).toBeTruthy();
   expect(screen.queryByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a3')).toBeNull();
+});
+
+test('renders graph edges with readable contrast', async () => {
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+
+  await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+  const edges = collectNodesWithProp(screen.toJSON(), 'strokeOpacity');
+  expect(edges.length).toBeGreaterThan(0);
+  const expectedStroke = nativeColorPayload(processColor(palettes.light.textSecondary));
+  for (const edge of edges) {
+    expect(nativeColorPayload(edge.props.stroke)).toEqual(expectedStroke);
+    expect(edge.props.strokeOpacity).toBeGreaterThanOrEqual(0.7);
+  }
 });
 
 test('shows the empty state when there are no bookmarks', async () => {

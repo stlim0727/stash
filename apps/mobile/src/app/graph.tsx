@@ -60,6 +60,7 @@ const HUB_MIN_R = 18;
 const HUB_MAX_R = 54;
 const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
+const EDGE_OPACITY = 0.72;
 const LABEL_SIZE = 24;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
 // the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
@@ -591,9 +592,9 @@ export default function GraphScreen() {
               y1={source.y}
               x2={target.x}
               y2={target.y}
-              stroke={palette.border}
+              stroke={palette.textSecondary}
               strokeWidth={EDGE_WIDTH}
-              strokeOpacity={0.55}
+              strokeOpacity={EDGE_OPACITY}
             />
           );
         })}
