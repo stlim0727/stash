@@ -968,18 +968,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             const legacyReviewedTags = parseStringSetMap(storedReviewedRaw);
             const legacyDismissedFolders = parseStringSetMap(storedDismissedFoldersRaw);
             const legacyReviewedSummaries = parseStringSetMap(storedReviewedSummariesRaw);
-            
+
             let migratedBookmarks = storedBookmarks;
-            
-            if (Object.keys(legacyReviewedTags).length > 0 || 
-                Object.keys(legacyDismissedFolders).length > 0 || 
+
+            if (Object.keys(legacyReviewedTags).length > 0 ||
+                Object.keys(legacyDismissedFolders).length > 0 ||
                 Object.keys(legacyReviewedSummaries).length > 0) {
-              
+
               migratedBookmarks = storedBookmarks.map((bookmark) => {
                 const tags = legacyReviewedTags[bookmark.id] ?? [];
                 const folders = legacyDismissedFolders[bookmark.id] ?? [];
                 const summaries = legacyReviewedSummaries[bookmark.id] ?? [];
-                
+
                 if (tags.length > 0 || folders.length > 0 || summaries.length > 0) {
                   const updated: Bookmark = {
                     ...bookmark,
@@ -1004,7 +1004,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 }
                 return bookmark;
               });
-              
+
               // Clear legacy meta values
               ensureRepositoryReady().then(async () => {
                 await repository.setMeta(REVIEWED_SUGGESTIONS_KEY, '{}');
