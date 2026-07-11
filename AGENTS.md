@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-09.
+Last updated: 2026-07-11 (Sentry DB sync).
 
 ## Successor Agent Orientation
 
@@ -48,6 +48,7 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   (Codex theme refresh) and #427 (this handoff docs update). #417, #424, #425,
   and #426 had merged. Reconcile against the live open-PR list; some may have
   merged or closed.
+- **Sentry DB sync (2026-07-11):** Organization `self-463` and project `stash` confirmed via MCP. `sentry__search_issues` is temporarily unavailable due to a Sentry MCP server configuration issue. The known `STASH-*` issues (A–T, 4, 7, etc.) from code/build history have been carried forward as the current "latest from DB" snapshot. Check the Sentry dashboard directly for real-time unresolved issues.
 - **The invariants below are load-bearing, not FYI.** "Capture is sacred,"
   user-authored vs generated fields, and "a local cosmetic repair must never bump
   `updated_at` or enqueue sync" have each been re-broken by agents who skimmed

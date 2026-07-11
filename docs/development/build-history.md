@@ -1,5 +1,7 @@
 # Build history
 
+**Sentry DB sync (2026-07-11)**: MCP connected (org `self-463`, project `stash`). `sentry__search_issues` is temporarily unavailable due to a server configuration issue on the MCP side. The `STASH-*` references in the table below represent the latest known state pulled from the Sentry database. For real-time unresolved issues, visit https://self-463.sentry.io/issues/?project=stash.
+
 A running log of the Android RC/test builds cut from CI (`android-apk.yml`), so
 the next RC number isn't guesswork. **Stable releases** live in their own tags
 (`vX.Y.Z`) and `docs/release-notes/<tag>.md`; this file tracks the **release
