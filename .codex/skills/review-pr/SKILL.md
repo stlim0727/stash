@@ -92,8 +92,12 @@ Give a plain verdict: **merge** / **rebase first** / **changes needed** /
   PR update tool. If Codex does not expose comment/close tools, report the exact
   comment and close action for the user. Never close silently.
 - **Rebase**: rebase onto base, resolve conflicts, push, report.
-- **Merge / changes-needed**: report the verdict and let the user decide; only
-  merge when explicitly told to.
+- **Merge / changes-needed / general review**: ALWAYS post a comment on the PR
+  containing your review findings and final verdict (using Codex tools like
+  `_add_review_to_pr` or the `gh pr comment` CLI when available). If no GitHub-write
+  tools are exposed in the current session, report the exact comment text to the
+  user and ask them to post it. Report the verdict to the user and let them decide;
+  only merge when explicitly told to.
 
 Never push or change PR state beyond what the user requested. When the right
 action is ambiguous (a reviewer comment reads two ways, or the change is
