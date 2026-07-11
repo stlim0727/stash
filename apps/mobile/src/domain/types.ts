@@ -88,6 +88,9 @@ export interface Bookmark {
    * Optional so existing rows and remote-mapped rows need no migration.
    */
   local_image_uri?: string | null;
+  dismissed_suggested_tags?: string[];
+  dismissed_suggested_folders?: string[];
+  reviewed_summary_tokens?: string[];
 }
 
 export interface Tag {

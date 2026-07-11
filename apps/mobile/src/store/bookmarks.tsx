@@ -216,7 +216,7 @@ interface BookmarksContextValue {
   getDismissedFolderSuggestions: (bookmarkId: string) => Set<string>;
   /** Record a folder suggestion (by `suggestedFolderToken`) as dismissed for a
    *  bookmark (durable). */
-  dismissFolderSuggestion: (bookmarkId: string, token: string) => void;
+  dismissFolderSuggestion: (bookmarkId: string, tokens: string | string[]) => void;
   /** Forget a bookmark's dismissed folder suggestions so a manual AI re-run can
    *  re-surface one. Background sync never clears them. */
   clearDismissedFolderSuggestions: (bookmarkId: string) => void;
@@ -472,35 +472,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // tagData is the server snapshot with these layered on top.
   const [pendingTagOps, setPendingTagOps] = useState<PendingTagOp[]>([]);
   const pendingTagOpsRef = useRef<PendingTagOp[]>([]);
-  // Suggestion names the user has reviewed (accepted or dismissed) per bookmark,
-  // and the folder suggestions they've dismissed (by stable token) — two
-  // instances of the same persisted-per-bookmark-string-set store. Each mirrors
-  // state into a ref so the optimistic/arrival paths can merge synchronously.
-  const {
-    map: reviewedSuggestions,
-    ref: reviewedSuggestionsRef,
-    apply: applyReviewedSuggestions,
-    hydrate: hydrateReviewedSuggestions,
-    removeKey: clearReviewedSuggestions,
-  } = usePersistedStringSetMap(REVIEWED_SUGGESTIONS_KEY);
-  const {
-    map: dismissedFolders,
-    ref: dismissedFoldersRef,
-    apply: applyDismissedFolders,
-    hydrate: hydrateDismissedFolders,
-    removeKey: clearDismissedFolderSuggestions,
-  } = usePersistedStringSetMap(DISMISSED_FOLDERS_KEY);
-  // AI summaries the user has reviewed (used as a note or dismissed) per
-  // bookmark, keyed by a stable token — a third instance of the same persisted
-  // string-set store, mirrored into a ref so the review path can read-modify-
-  // write synchronously.
-  const {
-    map: reviewedSummaries,
-    ref: reviewedSummariesRef,
-    apply: applyReviewedSummaries,
-    hydrate: hydrateReviewedSummaries,
-    removeKey: clearReviewedSummary,
-  } = usePersistedStringSetMap(REVIEWED_SUMMARIES_KEY);
   // Bookmark ids whose AI suggestions arrived unwitnessed (drives the Inbox
   // banner). The ref mirrors state so the arrival paths (auto enrichment, pull)
   // can read-modify-write synchronously across back-to-back updates.
@@ -597,55 +568,130 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .catch((error) => logStorageError('tag ops', error));
   }, []);
 
-  // The reviewed-suggestions and dismissed-folder stores share the
-  // persist/hydrate/clear machinery (usePersistedStringSetMap, above); only the
-  // merge rule differs, which lives in these thin wrappers.
+  // Queue a remote mutation for a bookmark that already exists on the server.
+  // One entry per bookmark: a newer mutation supersedes an older one.
+  const enqueueMutation = useCallback((bookmarkId: string, operation: 'update' | 'delete') => {
+    const entry = makeMutationEntry(bookmarkId, operation);
+    setQueue((current) => [...current.filter((queued) => queued.local_id !== bookmarkId), entry]);
+    ensureRepositoryReady()
+      .then(() => repository.enqueue(entry))
+      .catch((error) => logStorageError(`${operation} mutation enqueue`, error));
+  }, []);
+
+  // Local-first edit of user-editable fields: apply + persist immediately,
+  // show as sync-pending, and queue an update mutation for synced bookmarks.
+  const applyBookmarkUpdate = useCallback(
+    (id: string, patch: Partial<Bookmark>) => {
+      const syncsRemotely = hasRemoteIdentity(id);
+      setBookmarks((current) => {
+        if (current === null) {
+          return current;
+        }
+        return current.map((bookmark) => {
+          if (bookmark.id !== id) {
+            return bookmark;
+          }
+          return {
+            ...bookmark,
+            ...patch,
+            sync_status: syncsRemotely ? 'pending' : bookmark.sync_status,
+            updated_at: new Date().toISOString(),
+          };
+        });
+      });
+
+      const existing = bookmarksRef.current?.find((b) => b.id === id);
+      if (existing) {
+        const next: Bookmark = {
+          ...existing,
+          ...patch,
+          sync_status: syncsRemotely ? 'pending' : existing.sync_status,
+          updated_at: new Date().toISOString(),
+        };
+        ensureRepositoryReady()
+          .then(() => repository.updateBookmark(next))
+          .catch((error) => logStorageError('bookmark update', error));
+        if (syncsRemotely) {
+          enqueueMutation(id, 'update');
+        }
+      }
+    },
+    [enqueueMutation],
+  );
+
+  // Suggestion review/dismissal helpers
+  const getReviewedSuggestions = useCallback(
+    (bookmarkId: string) => {
+      const bookmark = bookmarks?.find((b) => b.id === bookmarkId);
+      return new Set((bookmark?.dismissed_suggested_tags ?? []).map((name) => name.toLowerCase()));
+    },
+    [bookmarks],
+  );
+
   const markSuggestionsReviewed = useCallback(
     (bookmarkId: string, names: string[]) => {
-      const next = addReviewedNames(reviewedSuggestionsRef.current, bookmarkId, names);
-      // addReviewedNames returns the same reference when nothing new was added.
-      if (next !== reviewedSuggestionsRef.current) {
-        applyReviewedSuggestions(next);
-      }
+      const bookmark = bookmarksRef.current?.find((b) => b.id === bookmarkId);
+      const trimmedNames = names.map((n) => n.trim().toLowerCase());
+      const updatedTags = [...new Set([...(bookmark?.dismissed_suggested_tags ?? []), ...trimmedNames])];
+      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_tags: updatedTags });
     },
-    [applyReviewedSuggestions, reviewedSuggestionsRef],
+    [applyBookmarkUpdate],
   );
 
-  const getReviewedSuggestions = useCallback(
-    (bookmarkId: string) => reviewedNamesFor(reviewedSuggestions, bookmarkId),
-    [reviewedSuggestions],
-  );
-
-  const dismissFolderSuggestion = useCallback(
-    (bookmarkId: string, token: string) => {
-      const next = addDismissedFolderToken(dismissedFoldersRef.current, bookmarkId, token);
-      // addDismissedFolderToken returns the same reference when already dismissed.
-      if (next !== dismissedFoldersRef.current) {
-        applyDismissedFolders(next);
-      }
+  const clearReviewedSuggestions = useCallback(
+    (bookmarkId: string) => {
+      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_tags: [] });
     },
-    [applyDismissedFolders, dismissedFoldersRef],
+    [applyBookmarkUpdate],
   );
 
   const getDismissedFolderSuggestions = useCallback(
-    (bookmarkId: string) => dismissedFolderTokensFor(dismissedFolders, bookmarkId),
-    [dismissedFolders],
+    (bookmarkId: string) => {
+      const bookmark = bookmarks?.find((b) => b.id === bookmarkId);
+      return new Set(bookmark?.dismissed_suggested_folders ?? []);
+    },
+    [bookmarks],
+  );
+
+  const dismissFolderSuggestion = useCallback(
+    (bookmarkId: string, tokens: string | string[]) => {
+      const bookmark = bookmarksRef.current?.find((b) => b.id === bookmarkId);
+      const tokenList = Array.isArray(tokens) ? tokens : [tokens];
+      const updatedFolders = [...new Set([...(bookmark?.dismissed_suggested_folders ?? []), ...tokenList])];
+      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_folders: updatedFolders });
+    },
+    [applyBookmarkUpdate],
+  );
+
+  const clearDismissedFolderSuggestions = useCallback(
+    (bookmarkId: string) => {
+      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_folders: [] });
+    },
+    [applyBookmarkUpdate],
+  );
+
+  const getReviewedSummary = useCallback(
+    (bookmarkId: string) => {
+      const bookmark = bookmarks?.find((b) => b.id === bookmarkId);
+      return new Set(bookmark?.reviewed_summary_tokens ?? []);
+    },
+    [bookmarks],
   );
 
   const markSummaryReviewed = useCallback(
     (bookmarkId: string, token: string) => {
-      const next = addReviewedSummaryToken(reviewedSummariesRef.current, bookmarkId, token);
-      // addReviewedSummaryToken returns the same reference when already recorded.
-      if (next !== reviewedSummariesRef.current) {
-        applyReviewedSummaries(next);
-      }
+      const bookmark = bookmarksRef.current?.find((b) => b.id === bookmarkId);
+      const updatedSummaries = [...new Set([...(bookmark?.reviewed_summary_tokens ?? []), token])];
+      applyBookmarkUpdate(bookmarkId, { reviewed_summary_tokens: updatedSummaries });
     },
-    [applyReviewedSummaries, reviewedSummariesRef],
+    [applyBookmarkUpdate],
   );
 
-  const getReviewedSummary = useCallback(
-    (bookmarkId: string) => reviewedSummaryTokensFor(reviewedSummaries, bookmarkId),
-    [reviewedSummaries],
+  const clearReviewedSummary = useCallback(
+    (bookmarkId: string) => {
+      applyBookmarkUpdate(bookmarkId, { reviewed_summary_tokens: [] });
+    },
+    [applyBookmarkUpdate],
   );
 
   // Apply + persist the "unseen AI suggestions" id set (ref updated
@@ -682,9 +728,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (unseenSuggestionIdsRef.current.has(id)) {
         return;
       }
-      const applied = appliedTagNamesRef(id);
-      const reviewed = reviewedNamesFor(reviewedSuggestionsRef.current, id);
       const bookmark = bookmarksRef.current?.find((item) => item.id === id);
+      const applied = appliedTagNamesRef(id);
+      const reviewed = new Set((bookmark?.dismissed_suggested_tags ?? []).map((name) => name.toLowerCase()));
+      const dismissedFolderTokens = new Set(bookmark?.dismissed_suggested_folders ?? []);
       // Honor durable folder dismissals so a folder the user already waved off
       // (on any screen) doesn't re-raise the "new AI suggestions" banner when its
       // enrichment is re-pulled or re-run.
@@ -693,7 +740,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           enrichment,
           tagDataRef.current.collections,
           bookmark?.collection_id ?? null,
-          dismissedFolderTokensFor(dismissedFoldersRef.current, id),
+          dismissedFolderTokens,
         ) !== null;
       if (pendingSuggestions(enrichment, applied, reviewed).length === 0 && !hasFolder) {
         return;
@@ -747,15 +794,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [persistPendingAiTrigger],
   );
 
-  // Queue a remote mutation for a bookmark that already exists on the server.
-  // One entry per bookmark: a newer mutation supersedes an older one.
-  const enqueueMutation = useCallback((bookmarkId: string, operation: 'update' | 'delete') => {
-    const entry = makeMutationEntry(bookmarkId, operation);
-    setQueue((current) => [...current.filter((queued) => queued.local_id !== bookmarkId), entry]);
-    ensureRepositoryReady()
-      .then(() => repository.enqueue(entry))
-      .catch((error) => logStorageError(`${operation} mutation enqueue`, error));
-  }, []);
+
 
   // Fire-and-forget metadata enrichment. Runs off the save path so capture is
   // never blocked, only fills generated fields, and a failure just records a
@@ -918,27 +957,66 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             for (const id of parseIdSet(storedAiTriggerRaw)) {
               pendingAiTrigger.current.add(id);
             }
-            // Re-hydrate the per-bookmark reviewed-suggestions map so the "✨"
-            // badge stays hidden for suggestions the user already acted on.
-            hydrateReviewedSuggestions(storedReviewedRaw);
             // Re-hydrate the "unseen AI suggestions" set so a suggestion that
             // landed in a session the user never returned to still drives the
             // Inbox banner on this launch.
             const storedUnseen = parseIdSet(storedUnseenRaw);
             unseenSuggestionIdsRef.current = storedUnseen;
             setUnseenSuggestionIds(storedUnseen);
-            // Re-hydrate the per-bookmark dismissed-folder map so a folder chip
-            // the user waved off stays gone across remounts and relaunches.
-            hydrateDismissedFolders(storedDismissedFoldersRaw);
-            // Re-hydrate the per-bookmark reviewed-summary map so a summary the
-            // user used-as-note or dismissed stays gone across remounts and
-            // relaunches.
-            hydrateReviewedSummaries(storedReviewedSummariesRaw);
+
+            // One-time migration: migrate legacy local-only metadata to bookmark fields
+            const legacyReviewedTags = parseStringSetMap(storedReviewedRaw);
+            const legacyDismissedFolders = parseStringSetMap(storedDismissedFoldersRaw);
+            const legacyReviewedSummaries = parseStringSetMap(storedReviewedSummariesRaw);
+
+            let migratedBookmarks = storedBookmarks;
+
+            if (Object.keys(legacyReviewedTags).length > 0 ||
+                Object.keys(legacyDismissedFolders).length > 0 ||
+                Object.keys(legacyReviewedSummaries).length > 0) {
+
+              migratedBookmarks = storedBookmarks.map((bookmark) => {
+                const tags = legacyReviewedTags[bookmark.id] ?? [];
+                const folders = legacyDismissedFolders[bookmark.id] ?? [];
+                const summaries = legacyReviewedSummaries[bookmark.id] ?? [];
+
+                if (tags.length > 0 || folders.length > 0 || summaries.length > 0) {
+                  const updated: Bookmark = {
+                    ...bookmark,
+                    dismissed_suggested_tags: [
+                      ...new Set([...(bookmark.dismissed_suggested_tags ?? []), ...tags])
+                    ],
+                    dismissed_suggested_folders: [
+                      ...new Set([...(bookmark.dismissed_suggested_folders ?? []), ...folders])
+                    ],
+                    reviewed_summary_tokens: [
+                      ...new Set([...(bookmark.reviewed_summary_tokens ?? []), ...summaries])
+                    ],
+                    // Queue for sync to remote DB
+                    sync_status: 'pending',
+                    updated_at: new Date().toISOString(),
+                  };
+                  ensureRepositoryReady()
+                    .then(() => repository.updateBookmark(updated))
+                    .catch((error) => logStorageError('migrate legacy suggestion metadata', error));
+                  enqueueMutation(updated.id, 'update');
+                  return updated;
+                }
+                return bookmark;
+              });
+
+              // Clear legacy meta values
+              ensureRepositoryReady().then(async () => {
+                await repository.setMeta(REVIEWED_SUGGESTIONS_KEY, '{}');
+                await repository.setMeta(DISMISSED_FOLDERS_KEY, '{}');
+                await repository.setMeta(REVIEWED_SUMMARIES_KEY, '{}');
+              }).catch((e) => logStorageError('clear legacy suggestion keys', e));
+            }
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
-                ? storedBookmarks
-                : mergeById(current, storedBookmarks, (bookmark) => bookmark.id),
+                ? migratedBookmarks
+                : mergeById(current, migratedBookmarks, (bookmark) => bookmark.id),
             );
             setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
             // Self-heal stranded bookmarks: a non-synced row whose queue entry
@@ -946,7 +1024,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // writes) has nothing to drive its sync and would show "sync
             // pending" forever. Re-enqueue an upload so the background loop
             // finishes it. Idempotent on the server, so it's safe to repeat.
-            const orphanEntries = reconcileOrphanedQueueEntries(storedBookmarks, storedQueue);
+            const orphanEntries = reconcileOrphanedQueueEntries(migratedBookmarks, storedQueue);
             if (orphanEntries.length > 0) {
               const orphanIds = new Set(orphanEntries.map((entry) => entry.local_id));
               setQueue((current) => [
@@ -1467,40 +1545,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [loadedBookmarks, enrichInBackground],
   );
 
-  // Local-first edit of user-editable fields: apply + persist immediately,
-  // show as sync-pending, and queue an update mutation for synced bookmarks.
-  const applyBookmarkUpdate = useCallback(
-    (id: string, patch: Partial<Bookmark>) => {
-      const syncsRemotely = hasRemoteIdentity(id);
-      let updated: Bookmark | null = null;
-      setBookmarks((current) => {
-        if (current === null) {
-          return current;
-        }
-        return current.map((bookmark) => {
-          if (bookmark.id !== id) {
-            return bookmark;
-          }
-          updated = {
-            ...bookmark,
-            ...patch,
-            sync_status: syncsRemotely ? 'pending' : bookmark.sync_status,
-            updated_at: new Date().toISOString(),
-          };
-          return updated;
-        });
-      });
-      if (updated) {
-        ensureRepositoryReady()
-          .then(() => repository.updateBookmark(updated as Bookmark))
-          .catch((error) => logStorageError('bookmark update', error));
-        if (syncsRemotely) {
-          enqueueMutation(id, 'update');
-        }
-      }
-    },
-    [enqueueMutation],
-  );
+
 
   // Record that the user just opened a bookmark (viewed its Detail or opened its
   // link), powering the "Recently opened" Inbox sort. Deliberately NOT routed
