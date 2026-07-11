@@ -10,7 +10,7 @@ test('ensureSqliteDirectory returns when the directory can be created idempotent
     createDirectory: () => {
       calls.push('create');
     },
-    fileExists: () => {
+    pathIsNonDirectory: () => {
       calls.push('exists');
       return false;
     },
@@ -26,7 +26,7 @@ test('ensureSqliteDirectory deletes a file blocking the SQLite directory then re
   const calls: string[] = [];
   const logs: string[] = [];
   let firstCreate = true;
-  let fileExists = true;
+  let pathIsNonDirectory = true;
 
   ensureSqliteDirectory({
     createDirectory: () => {
@@ -36,13 +36,13 @@ test('ensureSqliteDirectory deletes a file blocking the SQLite directory then re
         throw new Error('Path already points to a non-normal file');
       }
     },
-    fileExists: () => {
+    pathIsNonDirectory: () => {
       calls.push('exists');
-      return fileExists;
+      return pathIsNonDirectory;
     },
     deleteFile: () => {
       calls.push('delete');
-      fileExists = false;
+      pathIsNonDirectory = false;
     },
     log: (level, message) => {
       logs.push(`${level}:${message}`);
@@ -64,7 +64,7 @@ test('ensureSqliteDirectory rethrows unrelated create failures without deleting'
           calls.push('create');
           throw new Error('permission denied');
         },
-        fileExists: () => {
+        pathIsNonDirectory: () => {
           calls.push('exists');
           return false;
         },

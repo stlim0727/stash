@@ -1,6 +1,6 @@
 export interface SqliteDirectoryAdapter {
   createDirectory: () => void;
-  fileExists: () => boolean;
+  pathIsNonDirectory: () => boolean;
   deleteFile: () => void;
   log?: (level: 'warn' | 'error', message: string) => void;
 }
@@ -15,7 +15,7 @@ export function ensureSqliteDirectory(adapter: SqliteDirectoryAdapter): void {
     adapter.createDirectory();
     return;
   } catch (createError) {
-    if (!adapter.fileExists()) {
+    if (!adapter.pathIsNonDirectory()) {
       throw createError;
     }
     adapter.log?.(
