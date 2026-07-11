@@ -95,6 +95,7 @@ import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
+import { shouldShowWordmarkFallback } from '@/domain/wordmark';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
   const parts: string[] = [];
@@ -415,6 +416,17 @@ export default function InboxScreen() {
   // Brave private window after sign-in) — fall back to plain text so the
   // top-left brand mark is never blank.
   const [wordmarkFailed, setWordmarkFailed] = useState(false);
+  const [wordmarkLoaded, setWordmarkLoaded] = useState(Platform.OS !== 'web');
+  const wordmarkWidth = Math.round(WORDMARK_HEIGHT * wordmark.ratio);
+  const showWordmarkFallback = shouldShowWordmarkFallback({
+    platform: Platform.OS,
+    wordmarkFailed,
+    wordmarkLoaded,
+  });
+  useEffect(() => {
+    setWordmarkFailed(false);
+    setWordmarkLoaded(Platform.OS !== 'web');
+  }, [wordmark.source]);
   const {
     inbox,
     isLoading,
@@ -1505,24 +1517,26 @@ export default function InboxScreen() {
                 lockup) rather than bundled fonts — a few KB of PNG instead of
                 multi-MB font files. Every locale uses the same lockup; a
                 light/dark variant matches the theme. */}
-            {wordmarkFailed ? (
-              <Text
-                accessibilityRole="header"
-                accessibilityLabel={wordmarkLabel}
-                style={[styles.heroWordmarkFallback, { color: palette.text }]}
-                numberOfLines={1}
-              >
-                {t('app.name')}
-              </Text>
-            ) : (
+            <View
+              style={[
+                styles.heroWordmarkBox,
+                { width: wordmarkWidth, height: WORDMARK_HEIGHT },
+              ]}
+            >
               <Image
-                accessibilityRole="header"
-                accessibilityLabel={wordmarkLabel}
+                accessible={!showWordmarkFallback}
+                accessibilityRole={showWordmarkFallback ? undefined : 'header'}
+                accessibilityLabel={showWordmarkFallback ? undefined : wordmarkLabel}
+                testID="inbox-wordmark-image"
                 source={wordmark.source}
                 resizeMode="contain"
-                // If the asset can't be loaded, show the text wordmark instead of
-                // a blank space (see wordmarkFailed above).
-                onError={() => setWordmarkFailed(true)}
+                onLoad={() => setWordmarkLoaded(true)}
+                // If the asset can't be loaded, keep the text wordmark visible
+                // instead of leaving a blank space (see showWordmarkFallback).
+                onError={() => {
+                  setWordmarkFailed(true);
+                  setWordmarkLoaded(false);
+                }}
                 // Size with an EXPLICIT width+height (derived from the asset ratio),
                 // not height+aspectRatio. In this flex row, height+aspectRatio let
                 // Yoga fall back toward the PNG's huge intrinsic size and the
@@ -1531,10 +1545,22 @@ export default function InboxScreen() {
                 // explicit box removes that ambiguity.
                 style={[
                   styles.heroWordmark,
-                  { width: Math.round(WORDMARK_HEIGHT * wordmark.ratio), height: WORDMARK_HEIGHT },
+                  { width: wordmarkWidth, height: WORDMARK_HEIGHT },
+                  showWordmarkFallback ? styles.heroWordmarkHidden : null,
                 ]}
               />
-            )}
+              {showWordmarkFallback ? (
+                <Text
+                  accessibilityRole="header"
+                  accessibilityLabel={wordmarkLabel}
+                  testID="inbox-wordmark-fallback"
+                  style={[styles.heroWordmarkFallback, { color: palette.text }]}
+                  numberOfLines={1}
+                >
+                  {t('app.name')}
+                </Text>
+              ) : null}
+            </View>
             <Text
               style={[styles.heroCountText, { color: palette.textSecondary }]}
               numberOfLines={1}
@@ -2524,10 +2550,20 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: 10,
   },
-  heroWordmark: {
+  heroWordmarkBox: {
     // Concrete width+height are set inline from WORDMARK_HEIGHT × the asset
-    // ratio (see the Image above). flexShrink:0 so the row never squeezes it.
+    // ratio. flexShrink:0 so the row never squeezes it.
     flexShrink: 0,
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  heroWordmark: {
+    left: 0,
+    position: 'absolute',
+    top: 0,
+  },
+  heroWordmarkHidden: {
+    opacity: 0,
   },
   // Text stand-in when the wordmark PNG fails to load, sized to sit on the same
   // baseline as the saved-count beside it.
