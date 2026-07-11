@@ -108,7 +108,8 @@ test('renders the form and shows the privacy note', async () => {
 
   await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
   expect(screen.getByText(/not your bookmark list/)).toBeTruthy();
-  expect(screen.getByLabelText('Diagnostic context preview')).toBeTruthy();
+  expect(screen.getByLabelText('Toggle diagnostic context preview')).toBeTruthy();
+  expect(screen.queryByLabelText('Diagnostic context preview')).toBeNull();
   expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
   expect(screen.getByTestId('share-diagnostics-icon')).toBeTruthy();
   expect(screen.getByTestId('submit-report-icon')).toBeTruthy();
@@ -191,6 +192,7 @@ test('shows a pending screenshot but keeps it excluded until the user opts in', 
 
   await waitFor(() => expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy());
   expect(screen.queryByLabelText('Screenshot preview')).toBeNull();
+  await fireEvent.press(screen.getByLabelText('Toggle diagnostic context preview'));
   expect(screen.getByLabelText('Diagnostic context preview').props.children).not.toContain(
     'screenshot',
   );
@@ -217,6 +219,48 @@ test('shows a pending screenshot but keeps it excluded until the user opts in', 
   };
   expect(arg.context.screenshot?.dataUrl).toBe('data:image/jpeg;base64,ZmFrZS1qcGVn');
   expect(arg.context.screenshot?.surface).toBe('settings');
+  expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy();
+  expect(screen.queryByLabelText('Screenshot preview')).toBeNull();
+});
+
+test('keeps the captured screenshot available for a follow-up report on the same screen', async () => {
+  setPendingFeedbackSource({ route: '/settings', surface: 'settings' });
+  setPendingFeedbackScreenshot({
+    dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn',
+    mimeType: 'image/jpeg',
+    capturedAt: '2026-07-08T10:00:00.000Z',
+    platform: 'android',
+    surface: 'settings',
+  });
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy());
+  await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', true);
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'First issue');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  expect(screen.getByText(/Thanks/)).toBeTruthy();
+  expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy();
+  expect(screen.queryByLabelText('Screenshot preview')).toBeNull();
+
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Second issue');
+  await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', true);
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  const second = submitReport.mock.calls[1]![0] as {
+    context: { screenshot?: { dataUrl?: string; surface?: string } };
+  };
+  expect(second.context.screenshot?.dataUrl).toBe('data:image/jpeg;base64,ZmFrZS1qcGVn');
+  expect(second.context.screenshot?.surface).toBe('settings');
 });
 
 test('excludes the screenshot when the user turns the screenshot toggle off', async () => {
