@@ -42,6 +42,7 @@ import GraphScreen, {
   maxPanOffset,
   MIN_SCALE,
   MAX_SCALE,
+  panWithPinchFocalDelta,
   pinchStartSnapshot,
   touchCenterInViewport,
 } from '@/app/graph';
@@ -373,6 +374,24 @@ describe('pinch anchoring', () => {
         nextScale: 2,
       }),
     ).toEqual({ x: -100, y: 100 });
+  });
+
+  test('adds two-finger focal movement so pinching can pan sideways', () => {
+    const anchored = anchoredPanForScale({
+      pan: { x: 0, y: 0 },
+      focal: { x: 200, y: 200 },
+      viewport: { w: 400, h: 400 },
+      startScale: 1,
+      nextScale: 2,
+    });
+
+    expect(
+      panWithPinchFocalDelta({
+        anchoredPan: anchored,
+        startFocal: { x: 200, y: 200 },
+        currentFocal: { x: 250, y: 180 },
+      }),
+    ).toEqual({ x: 50, y: -20 });
   });
 
   test('starts a pinch from the live pan after a one-finger drag', () => {
