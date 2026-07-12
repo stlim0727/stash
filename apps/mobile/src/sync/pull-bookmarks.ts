@@ -70,8 +70,16 @@ export async function pullRemoteChanges(
   const previousUserId = currentUser ? await repository.getMeta(SYNCED_USER_ID_KEY) : null;
   const userChanged =
     currentUser != null && previousUserId != null && previousUserId !== currentUser.id;
+  const locals = getLocalBookmarks();
+  const hasLocalCloudRows = locals.some((bookmark) => hasRemoteIdentity(bookmark.id));
+  // STASH-22: stale sync metadata can survive an upgrade/session-recovery path
+  // even when the local cache is empty. A same-user incremental pull would then
+  // omit older cloud rows and leave the signed-in Inbox empty.
+  const emptyRealCacheWithSameUser =
+    currentUser?.isAnonymous === false && previousUserId === currentUser.id && !hasLocalCloudRows;
+  const needsFullRefresh = userChanged || emptyRealCacheWithSameUser;
 
-  const watermark = userChanged ? null : await repository.getMeta(LAST_PULLED_AT_KEY);
+  const watermark = needsFullRefresh ? null : await repository.getMeta(LAST_PULLED_AT_KEY);
   const since = watermark
     ? new Date(Date.parse(watermark) - WATERMARK_OVERLAP_MS).toISOString()
     : null;
@@ -96,7 +104,6 @@ export async function pullRemoteChanges(
   // still hold so they never re-enter local state as empty Browse chips.
   const { tagData } = sanitizeTagData({ tags, bookmarkTags, collections });
 
-  const locals = getLocalBookmarks();
   const localById = new Map(locals.map((bookmark) => [bookmark.id, bookmark]));
 
   const upserts: Bookmark[] = [];
