@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 import type { Bookmark } from '@/domain/types';
+import { LAST_PULLED_AT_KEY, SYNCED_USER_ID_KEY } from '@/sync/pull-bookmarks';
 
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
@@ -65,14 +66,17 @@ jest.mock('@/api/bookmarks', () => {
       gate = promise;
     },
     createBookmarkApi: () => ({
-      listBookmarksUpdatedSince: async () => {
+      listBookmarksUpdatedSince: async (since: string | null) => {
         if (gate) {
           const pending = gate;
           gate = null;
           await pending;
           return [];
         }
-        return [...remote];
+        if (!since) {
+          return [...remote];
+        }
+        return remote.filter((row) => row.updated_at > since);
       },
       listBookmarkIds: async () => remote.map((row) => row.id),
       listEnrichmentsUpdatedSince: empty,
@@ -128,6 +132,65 @@ test('signing in pulls the account’s cloud bookmarks without a cold start', as
 
   // The sign-in alone must trigger a pull that restores the bookmark — no
   // app restart required.
+  await waitFor(() => expect(result.current.inbox.map((b) => b.id)).toContain(REMOTE_ID));
+});
+
+test('signing in with an empty local cache ignores a stale watermark and restores cloud rows', async () => {
+  // STASH-22: an upgrade/session-recovery path can leave sync metadata behind
+  // while the local bookmark cache is empty. If the post-login pull trusts the
+  // old watermark, old cloud rows are omitted from listBookmarksUpdatedSince()
+  // and the Inbox stays empty even though the user is signed in.
+  fakeRepo.__reset([]);
+  fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
+  fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-07-12T11:20:00.000Z');
+  authMock.__setAuth({ status: 'session_expired', session: null, userId: null });
+  apiMock.__setRemote([
+    makeStoredBookmark({
+      id: REMOTE_ID,
+      url: 'https://example.com/restored',
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    }),
+  ]);
+
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  expect(result.current.inbox).toHaveLength(0);
+
+  authMock.__setAuth({ status: 'authenticated', session: realSession, userId: 'real-user' });
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  await waitFor(() => expect(result.current.inbox.map((b) => b.id)).toContain(REMOTE_ID));
+});
+
+test('signing in with an empty local cache ignores a stale watermark even when synced user meta is missing', async () => {
+  // Some upgrade/recovery paths can preserve last_pulled_at but lose the
+  // synced-user marker. That still must full-refresh for a real signed-in user
+  // whose local cache has no cloud rows.
+  fakeRepo.__reset([]);
+  fakeRepo.__setMeta(SYNCED_USER_ID_KEY, '');
+  fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-07-12T11:20:00.000Z');
+  authMock.__setAuth({ status: 'session_expired', session: null, userId: null });
+  apiMock.__setRemote([
+    makeStoredBookmark({
+      id: REMOTE_ID,
+      url: 'https://example.com/restored',
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    }),
+  ]);
+
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  expect(result.current.inbox).toHaveLength(0);
+
+  authMock.__setAuth({ status: 'authenticated', session: realSession, userId: 'real-user' });
+  await act(async () => {
+    rerender(undefined);
+  });
+
   await waitFor(() => expect(result.current.inbox.map((b) => b.id)).toContain(REMOTE_ID));
 });
 

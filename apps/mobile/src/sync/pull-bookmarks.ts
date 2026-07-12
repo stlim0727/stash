@@ -70,8 +70,26 @@ export async function pullRemoteChanges(
   const previousUserId = currentUser ? await repository.getMeta(SYNCED_USER_ID_KEY) : null;
   const userChanged =
     currentUser != null && previousUserId != null && previousUserId !== currentUser.id;
+  const initialLocals = getLocalBookmarks();
+  const initialLocalCloudRowCount = initialLocals.filter((bookmark) =>
+    hasRemoteIdentity(bookmark.id),
+  ).length;
+  const hasLocalCloudRows = initialLocalCloudRowCount > 0;
+  // STASH-22: stale sync metadata can survive an upgrade/session-recovery path
+  // even when the local cache is empty. A same-user incremental pull would then
+  // omit older cloud rows and leave the signed-in Inbox empty.
+  const emptyRealCacheWithSameUser =
+    currentUser?.isAnonymous === false &&
+    !hasLocalCloudRows &&
+    (previousUserId === null || previousUserId === currentUser.id);
+  const needsFullRefresh = userChanged || emptyRealCacheWithSameUser;
+  const fullRefreshReason = userChanged
+    ? 'user_changed'
+    : emptyRealCacheWithSameUser
+      ? 'empty_real_cache_same_user'
+      : null;
 
-  const watermark = userChanged ? null : await repository.getMeta(LAST_PULLED_AT_KEY);
+  const watermark = needsFullRefresh ? null : await repository.getMeta(LAST_PULLED_AT_KEY);
   const since = watermark
     ? new Date(Date.parse(watermark) - WATERMARK_OVERLAP_MS).toISOString()
     : null;
@@ -92,6 +110,10 @@ export async function pullRemoteChanges(
     api.listBookmarkTags(),
     api.listCollections(),
   ]);
+  recordLog(
+    fullRefreshReason ? 'warn' : 'info',
+    `pull: result initialLocal=${initialLocals.length} initialLocalCloud=${initialLocalCloudRowCount} remoteRows=${remoteRows.length} remoteIds=${remoteIds.length} since=${since ? 'set' : 'null'} fullRefresh=${fullRefreshReason ?? 'none'} userChanged=${userChanged}`,
+  );
   // Drop blank-named tags/collections (and their orphaned links) the server may
   // still hold so they never re-enter local state as empty Browse chips.
   const { tagData } = sanitizeTagData({ tags, bookmarkTags, collections });
