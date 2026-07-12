@@ -31,3 +31,16 @@ index 1ab12c4..9257fd8 100644
      /**
       * Detect Native Module response
       */
+diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
+index 6f68da5..71ad26b 100644
+--- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
++++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
+@@ -122,7 +122,7 @@ class ExpoShareIntentModule : Module() {
+                 return
+             }
+             if (intent.type == null) return
+-            if (intent.type!!.startsWith("text/plain")) {
++            if (intent.type!!.startsWith("text/")) {
+                 // text / urls
+                 if (intent.action == Intent.ACTION_SEND) {
+                     notifyShareIntent(mapOf(
