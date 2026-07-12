@@ -70,14 +70,18 @@ export async function pullRemoteChanges(
   const previousUserId = currentUser ? await repository.getMeta(SYNCED_USER_ID_KEY) : null;
   const userChanged =
     currentUser != null && previousUserId != null && previousUserId !== currentUser.id;
-  const locals = getLocalBookmarks();
-  const localCloudRowCount = locals.filter((bookmark) => hasRemoteIdentity(bookmark.id)).length;
-  const hasLocalCloudRows = localCloudRowCount > 0;
+  const initialLocals = getLocalBookmarks();
+  const initialLocalCloudRowCount = initialLocals.filter((bookmark) =>
+    hasRemoteIdentity(bookmark.id),
+  ).length;
+  const hasLocalCloudRows = initialLocalCloudRowCount > 0;
   // STASH-22: stale sync metadata can survive an upgrade/session-recovery path
   // even when the local cache is empty. A same-user incremental pull would then
   // omit older cloud rows and leave the signed-in Inbox empty.
   const emptyRealCacheWithSameUser =
-    currentUser?.isAnonymous === false && previousUserId === currentUser.id && !hasLocalCloudRows;
+    currentUser?.isAnonymous === false &&
+    !hasLocalCloudRows &&
+    (previousUserId === null || previousUserId === currentUser.id);
   const needsFullRefresh = userChanged || emptyRealCacheWithSameUser;
   const fullRefreshReason = userChanged
     ? 'user_changed'
@@ -108,12 +112,13 @@ export async function pullRemoteChanges(
   ]);
   recordLog(
     fullRefreshReason ? 'warn' : 'info',
-    `pull: result local=${locals.length} localCloud=${localCloudRowCount} remoteRows=${remoteRows.length} remoteIds=${remoteIds.length} since=${since ? 'set' : 'null'} fullRefresh=${fullRefreshReason ?? 'none'} userChanged=${userChanged}`,
+    `pull: result initialLocal=${initialLocals.length} initialLocalCloud=${initialLocalCloudRowCount} remoteRows=${remoteRows.length} remoteIds=${remoteIds.length} since=${since ? 'set' : 'null'} fullRefresh=${fullRefreshReason ?? 'none'} userChanged=${userChanged}`,
   );
   // Drop blank-named tags/collections (and their orphaned links) the server may
   // still hold so they never re-enter local state as empty Browse chips.
   const { tagData } = sanitizeTagData({ tags, bookmarkTags, collections });
 
+  const locals = getLocalBookmarks();
   const localById = new Map(locals.map((bookmark) => [bookmark.id, bookmark]));
 
   const upserts: Bookmark[] = [];

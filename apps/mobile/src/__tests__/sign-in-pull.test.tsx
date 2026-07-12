@@ -165,6 +165,35 @@ test('signing in with an empty local cache ignores a stale watermark and restore
   await waitFor(() => expect(result.current.inbox.map((b) => b.id)).toContain(REMOTE_ID));
 });
 
+test('signing in with an empty local cache ignores a stale watermark even when synced user meta is missing', async () => {
+  // Some upgrade/recovery paths can preserve last_pulled_at but lose the
+  // synced-user marker. That still must full-refresh for a real signed-in user
+  // whose local cache has no cloud rows.
+  fakeRepo.__reset([]);
+  fakeRepo.__setMeta(SYNCED_USER_ID_KEY, '');
+  fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-07-12T11:20:00.000Z');
+  authMock.__setAuth({ status: 'session_expired', session: null, userId: null });
+  apiMock.__setRemote([
+    makeStoredBookmark({
+      id: REMOTE_ID,
+      url: 'https://example.com/restored',
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    }),
+  ]);
+
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  expect(result.current.inbox).toHaveLength(0);
+
+  authMock.__setAuth({ status: 'authenticated', session: realSession, userId: 'real-user' });
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  await waitFor(() => expect(result.current.inbox.map((b) => b.id)).toContain(REMOTE_ID));
+});
+
 test('signing in mid-flight still pulls once the in-flight anonymous sync settles', async () => {
   // Hold the startup anonymous pull open so the sign-in lands while it runs.
   let releaseAnonPull!: () => void;
