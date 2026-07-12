@@ -50,6 +50,70 @@ async function expectRejects(name, promise) {
   }
 }
 
+async function testRealtimeChannel(session, userId, expectSuccess) {
+  const configState = getSupabaseConfigState();
+  if (configState.status !== 'configured') {
+    throw new Error('Supabase is not configured');
+  }
+
+  const { RealtimeClient } = await import('@supabase/realtime-js');
+  const rtUrl = configState.config.url.replace(/^http/, 'ws') + '/realtime/v1';
+
+  return new Promise((resolve, reject) => {
+    const rt = new RealtimeClient(rtUrl, {
+      params: {
+        apikey: configState.config.anonKey,
+      },
+    });
+
+    rt.setAuth(session.access_token);
+    rt.connect();
+
+    const channel = rt.channel(`sync:private:${userId}`, {
+      config: {
+        private: true,
+        broadcast: { self: false },
+      },
+    });
+
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        rt.disconnect();
+        if (expectSuccess) {
+          reject(new Error('realtime connection timed out (expected success)'));
+        } else {
+          resolve();
+        }
+      }
+    }, 5000);
+
+    channel.subscribe((status, err) => {
+      if (settled) return;
+      if (status === 'SUBSCRIBED') {
+        settled = true;
+        clearTimeout(timeout);
+        rt.disconnect();
+        if (expectSuccess) {
+          resolve();
+        } else {
+          reject(new Error('anonymous user successfully joined private channel (expected rejection)'));
+        }
+      } else if (status === 'CHANNEL_ERROR') {
+        settled = true;
+        clearTimeout(timeout);
+        rt.disconnect();
+        if (!expectSuccess) {
+          resolve();
+        } else {
+          reject(new Error(`authenticated user failed to join private channel (status: ${status}, error: ${err})`));
+        }
+      }
+    });
+  });
+}
+
 try {
   console.log('Supabase end-to-end verification\n');
 
@@ -262,6 +326,63 @@ try {
     'RLS: write isolation (cross-user update rejected)',
     apiB.updateBookmark(created.bookmark_id, { title: 'hijacked' }),
   );
+
+  // --- realtime broadcast policy verification ---
+  console.log('\nVerifying realtime broadcast policies...');
+
+  // Test 1: Anonymous user (User A) is denied subscription
+  try {
+    await testRealtimeChannel(session, session.user.id, false);
+    ok('Realtime RLS: anonymous subscription rejected');
+  } catch (error) {
+    fail('Realtime RLS: anonymous subscription check failed', error);
+  }
+
+  // Test 2: Real authenticated user is allowed subscription
+  const testEmail = `real-user-${Date.now()}@example.com`;
+  const testPass = 'super-secure-pass-1234';
+  let realSession;
+  try {
+    const signupResponse = await client.request('/auth/v1/signup', {
+      method: 'POST',
+      body: { email: testEmail, password: testPass },
+    });
+    if (signupResponse && signupResponse.access_token) {
+      realSession = toSession(signupResponse);
+    } else {
+      console.log('  ⚠ Realtime RLS: signup did not return session (email confirmation enabled?); skipping authenticated tests');
+    }
+  } catch (error) {
+    console.log(`  ⚠ Realtime RLS: signup failed (${error instanceof Error ? error.message : String(error)}); skipping authenticated tests`);
+  }
+
+  if (realSession) {
+    try {
+      await testRealtimeChannel(realSession, realSession.user.id, true);
+      ok('Realtime RLS: authenticated subscription approved');
+    } catch (error) {
+      fail('Realtime RLS: authenticated subscription check failed', error);
+    }
+
+    // Test 3: Authenticated User A cannot subscribe to User B's channel
+    try {
+      await testRealtimeChannel(realSession, session.user.id, false);
+      ok("Realtime RLS: User A rejected from subscribing to User B's channel");
+    } catch (error) {
+      fail("Realtime RLS: User A cross-subscription security check failed", error);
+    }
+
+    cleanups.push(async () => {
+      try {
+        await client.request('/auth/v1/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${realSession.access_token}` },
+        });
+      } catch {
+        // ignore logout failure on cleanup
+      }
+    });
+  }
 
   console.log(`\nAll ${passed} checks passed.`);
 } catch (error) {
