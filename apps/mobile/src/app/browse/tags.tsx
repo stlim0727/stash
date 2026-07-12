@@ -350,7 +350,7 @@ export default function BrowseTagsScreen() {
               <Text
                 style={[
                   styles.segmentLabel,
-                  { color: active ? palette.accent : palette.textSecondary },
+                  { color: active ? palette.accentText : palette.textSecondary },
                 ]}
               >
                 {mode === 'cloud' ? t('inbox.tagViewCloud') : t('inbox.tagViewAll')}

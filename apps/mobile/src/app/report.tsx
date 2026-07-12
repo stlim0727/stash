@@ -292,7 +292,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
                     clearStaleBanner();
                   }}
                 >
-                  <Text style={[styles.chipLabel, { color: selected ? '#ffffff' : palette.text }]}>
+                  <Text style={[styles.chipLabel, { color: selected ? palette.accentForeground : palette.text }]}>
                     {t(item.labelKey)}
                   </Text>
                 </Pressable>
@@ -406,7 +406,9 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       {submit.status === 'success' ? (
         <Text style={[styles.success, { color: palette.accent }]}>{t('report.success')}</Text>
       ) : null}
-      {submit.status === 'error' ? <Text style={styles.error}>{submit.message}</Text> : null}
+      {submit.status === 'error' ? (
+        <Text style={[styles.error, { color: palette.danger }]}>{submit.message}</Text>
+      ) : null}
 
       <Pressable
         accessibilityRole="button"
@@ -421,8 +423,8 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         onPress={() => void handleSubmit()}
       >
         <View style={styles.buttonRow}>
-          <Ionicons testID="submit-report-icon" name="send" size={18} color="#ffffff" />
-          <Text style={styles.submitButtonLabel}>
+          <Ionicons testID="submit-report-icon" name="send" size={18} color={palette.accentForeground} />
+          <Text style={[styles.submitButtonLabel, { color: palette.accentForeground }]}>
             {submit.status === 'submitting' ? t('report.submitting') : t('report.submit')}
           </Text>
         </View>
@@ -600,7 +602,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   error: {
-    color: '#d93636',
     fontSize: 13,
     textAlign: 'center',
   },
@@ -619,7 +620,6 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   submitButtonLabel: {
-    color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
   },

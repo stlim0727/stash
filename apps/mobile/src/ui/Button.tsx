@@ -24,7 +24,7 @@ export const Button = forwardRef<ElementRef<typeof Pressable>, ButtonProps>(func
 ) {
   const palette = usePalette();
   const colors = {
-    primary: { backgroundColor: palette.accent, borderColor: palette.accent, color: '#ffffff' },
+    primary: { backgroundColor: palette.accent, borderColor: palette.accent, color: palette.accentForeground },
     secondary: { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft, color: palette.accentText },
     ghost: { backgroundColor: 'transparent', borderColor: palette.border, color: palette.text },
     danger: { backgroundColor: palette.dangerSoft, borderColor: palette.dangerSoft, color: palette.danger },

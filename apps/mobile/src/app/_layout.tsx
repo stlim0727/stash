@@ -1,8 +1,7 @@
 import Constants from 'expo-constants';
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ShareIntentProvider } from 'expo-share-intent';
-import { useColorScheme } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { I18nProvider, useT } from '@/i18n';
@@ -68,12 +67,10 @@ function RootStack() {
 }
 
 function RootLayout() {
-  const colorScheme = useColorScheme();
-
   return (
     <SafeAreaProvider>
       <ShareIntentProvider options={{ debug: false, resetOnBackground: true }}>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <ThemeProvider value={DarkTheme}>
           <I18nProvider>
             <SupabaseAuthProvider>
               <BookmarksProvider>
@@ -83,7 +80,7 @@ function RootLayout() {
                   <FloatingReportButton>
                     <RootStack />
                   </FloatingReportButton>
-                  <StatusBar style="auto" />
+                  <StatusBar style="light" />
                 </CaptureToastProvider>
               </BookmarksProvider>
             </SupabaseAuthProvider>

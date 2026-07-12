@@ -1229,7 +1229,7 @@ export default function BookmarkDetailScreen({
         ) : null}
       </View>
 
-      {organizeError ? <Text style={styles.error}>{organizeError}</Text> : null}
+      {organizeError ? <Text style={[styles.error, { color: palette.danger }]}>{organizeError}</Text> : null}
       {/* Report flow cleanup for STASH-1H: always clear any lingering error state
           (organize or notes-too-long) when leaving the screen. Prevents stale red
           borders/messages on re-open. */}
@@ -1602,7 +1602,6 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   error: {
-    color: '#d93636',
     fontSize: 13,
     textAlign: 'center',
   },
