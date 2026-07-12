@@ -19,22 +19,17 @@ test('ensureSqliteDirectory returns when the directory can be created idempotent
     },
   });
 
-  assert.deepEqual(calls, ['create']);
+  assert.deepEqual(calls, ['exists', 'create']);
 });
 
 test('ensureSqliteDirectory deletes a file blocking the SQLite directory then retries', () => {
   const calls: string[] = [];
   const logs: string[] = [];
-  let firstCreate = true;
   let pathIsNonDirectory = true;
 
   ensureSqliteDirectory({
     createDirectory: () => {
       calls.push('create');
-      if (firstCreate) {
-        firstCreate = false;
-        throw new Error('Path already points to a non-normal file');
-      }
     },
     pathIsNonDirectory: () => {
       calls.push('exists');
@@ -49,7 +44,7 @@ test('ensureSqliteDirectory deletes a file blocking the SQLite directory then re
     },
   });
 
-  assert.deepEqual(calls, ['create', 'exists', 'delete', 'create']);
+  assert.deepEqual(calls, ['exists', 'delete', 'create']);
   assert.equal(logs.length, 1);
   assert.match(logs[0]!, /^warn:sqlite directory path was a file/);
 });
@@ -75,5 +70,5 @@ test('ensureSqliteDirectory rethrows unrelated create failures without deleting'
     /permission denied/,
   );
 
-  assert.deepEqual(calls, ['create', 'exists']);
+  assert.deepEqual(calls, ['exists', 'create']);
 });
