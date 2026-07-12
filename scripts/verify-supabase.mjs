@@ -99,12 +99,35 @@ async function testRealtimeChannel(session, userId, expectSuccess) {
     channel.subscribe((status, err) => {
       if (settled) return;
       if (status === 'SUBSCRIBED') {
-        settled = true;
-        clearTimeout(timeout);
-        rt.disconnect();
         if (expectSuccess) {
-          resolve();
+          channel
+            .send({
+              type: 'broadcast',
+              event: 'sync',
+              payload: { test: true },
+            })
+            .then((sendStatus) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timeout);
+              rt.disconnect();
+              if (sendStatus === 'ok') {
+                resolve();
+              } else {
+                reject(new Error(`realtime broadcast send failed (status: ${sendStatus})`));
+              }
+            })
+            .catch((sendErr) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timeout);
+              rt.disconnect();
+              reject(new Error(`realtime broadcast send threw error: ${sendErr}`));
+            });
         } else {
+          settled = true;
+          clearTimeout(timeout);
+          rt.disconnect();
           reject(new Error('anonymous user successfully joined private channel (expected rejection)'));
         }
       } else if (status === 'CHANNEL_ERROR') {
