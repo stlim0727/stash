@@ -65,6 +65,7 @@ import { copyImageToLibrary } from '@/storage/image-store';
 import type { EnrichmentMetadataHint } from '@/api/bookmarks';
 import type { TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
+import { useRealtimeSync } from '@/supabase/realtime';
 import { SupabaseRequestError } from '@/supabase/client';
 import {
   applyAccountTransition,
@@ -167,7 +168,7 @@ interface BookmarksContextValue {
   /** True while the background sync service is uploading queue entries. */
   isSyncing: boolean;
   /** Upload pending/failed queue entries to Supabase. No-op without auth. */
-  syncNow: () => Promise<void>;
+  syncNow: () => Promise<boolean>;
   /** When the last successful pull from Supabase completed, if ever. */
   lastPulledAt: string | null;
   /** The user's cloud collections (assignable; refreshed by pull sync). */
@@ -460,6 +461,7 @@ function mergeById<T>(current: T[], loaded: T[], key: (item: T) => string): T[] 
 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
+  const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
   // The active language, sent with AI enrichment requests so the model answers
   // in the user's locale (M12). Read through a ref so requestAiEnrichment stays
   // stable as the locale changes — it just picks up the latest value when fired.
@@ -1732,14 +1734,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Push queued tag ops to the server when online: ensure tags exist, reconcile
   // the optimistic local tag id to the server one, and drop the op on success.
   // Failures stay queued for the next sync.
-  const syncTagOps = useCallback(async () => {
+  const syncTagOps = useCallback(async (): Promise<boolean> => {
     if (!auth.session) {
-      return;
+      return false;
     }
     const ops = pendingTagOpsRef.current;
     if (ops.length === 0) {
-      return;
+      return false;
     }
+    let mutationsPushed = false;
     const api = createSyncApi(auth.session);
     for (const op of ops) {
       // The bookmark must exist remotely before its tags can be linked.
@@ -1763,11 +1766,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           await api.removeTags({ bookmark_id: op.bookmark_id, tags: [op.tag_name] });
         }
         applyTagOps(dequeueTagOp(pendingTagOpsRef.current, op.bookmark_id, op.tag_name));
+        mutationsPushed = true;
       } catch (error) {
         // Keep the op queued; the next sync retries it.
         recordLog('warn', `tag sync failed (${op.op} ${op.tag_name}): ${String(error)}`);
       }
     }
+    return mutationsPushed;
   }, [auth.session, applyTagData, applyTagOps]);
 
   // Local-first: apply the tag immediately and queue the upload. Works offline
@@ -2046,18 +2051,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [auth, applyTagData],
   );
 
-  const syncNow = useCallback(async () => {
+  const syncNow = useCallback(async (): Promise<boolean> => {
     if (syncInFlight.current) {
-      return;
+      return false;
     }
     if (!auth.session) {
-      return;
+      return false;
     }
     // Upload-then-pull: even with nothing to upload, the pull still runs.
     const syncable = queue.filter(isSyncable);
 
     syncInFlight.current = true;
     setIsSyncing(true);
+    let mutationsPushed = false;
     try {
       await ensureRepositoryReady();
       // Drain terminal 'synced' leftovers a prior run persisted but never
@@ -2249,6 +2255,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               if (createUploaded) {
                 markPendingAiTrigger(persisted.id);
               }
+              mutationsPushed = true;
             }
           }
         } catch (error) {
@@ -2329,7 +2336,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
       // Upload any queued local-first tag ops before pulling, so the pull's
       // server snapshot already reflects them.
-      await syncTagOps();
+      const tagsSynced = await syncTagOps();
+      if (tagsSynced) {
+        mutationsPushed = true;
+      }
 
       // Pull phase: bring down remote changes (other devices, cloud AI
       // enrichment). Local rows with queued work are never overwritten.
@@ -2400,7 +2410,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncInFlight.current = false;
       setIsSyncing(false);
     }
+    if (mutationsPushed) {
+      broadcastSyncNudgeRef.current?.();
+    }
+    return mutationsPushed;
   }, [auth, queue, enqueueMutation, requestAiEnrichment, syncTagOps, noteUnseenSuggestions]);
+
+  // Realtime Sync initialization
+  const { broadcastSyncNudge } = useRealtimeSync({
+    session: auth.session,
+    status: auth.status,
+    userId: auth.userId,
+    syncNow,
+  });
+  broadcastSyncNudgeRef.current = broadcastSyncNudge;
 
   // URL-title backfill: repair bookmarks already saved with a poor URL-derived
   // title (a bare host like "youtu.be", or an opaque id slug like "Dabls52E90n")
