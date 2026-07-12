@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
@@ -76,6 +77,8 @@ export default function BookmarkDetailScreen({
     addTagsToBookmark,
     removeTagFromBookmark,
     requestAiEnrichment,
+    refreshBookmarkPreview,
+    isRefreshingPreview,
     isEnriching,
     isManuallyEnriching,
     acceptSuggestedTags,
@@ -119,6 +122,14 @@ export default function BookmarkDetailScreen({
   draftNotesRef.current = draftNotes;
   const flushRef = useRef<() => void>(() => {});
   useEffect(() => () => flushRef.current(), []);
+
+  // Cleanup on unmount (STASH-1H): clear any error state so a stale "notes too
+  // long" red border or organizeError does not re-appear on next visit.
+  useEffect(() => {
+    return () => {
+      setOrganizeError(null);
+    };
+  }, []);
 
   // On web a multiline TextInput renders as a fixed-height <textarea> that
   // scrolls instead of growing (native auto-grows on its own). Size the notes
@@ -246,6 +257,7 @@ export default function BookmarkDetailScreen({
   // wait the user has to sit through.
   const aiWorking = isEnriching(bookmark.id);
   const aiManual = isManuallyEnriching(bookmark.id);
+  const previewRefreshing = isRefreshingPreview(bookmark.id);
 
   // AI suggestions: surface only high-confidence tags not already applied
   // (centralized in @/domain/ai-suggestions) and not dismissed this session,
@@ -315,7 +327,9 @@ export default function BookmarkDetailScreen({
     !suggestedCollection && !!suggestedByName && !folderSuggestionDismissed;
   // A folder chip (file-into or create) is currently on screen — so the tag
   // field's "Add all"/"Dismiss all" should sweep it too, like the Review screen.
-  const folderSuggestionVisible = showCollectionSuggestion || showCreateCollectionSuggestion;
+  const isPreviewFailed = bookmark.metadata_status === 'failed';
+
+  const folderSuggestionVisible = !isPreviewFailed && (showCollectionSuggestion || showCreateCollectionSuggestion);
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
@@ -323,7 +337,7 @@ export default function BookmarkDetailScreen({
   // Only when the bookmark can actually be tagged, so we never surface a chip
   // whose accept would just error.
   const aiSuggestionNames = new Set(pending.map((suggestion) => suggestion.name.toLowerCase()));
-  const hashtagTags = canOrganizeRemotely
+  const hashtagTags = canOrganizeRemotely && !isPreviewFailed
     ? hashtagSuggestions([bookmark.title, bookmark.description], appliedTagNames).filter(
         (name) =>
           !dismissed.has(name.toLowerCase()) && !aiSuggestionNames.has(name.toLowerCase()),
@@ -332,10 +346,12 @@ export default function BookmarkDetailScreen({
 
   // AI suggestions carry a real confidence; hashtag chips render the same way
   // but are added straight as user tags when accepted.
-  const tagSuggestions = [
-    ...pending.map((suggestion) => ({ name: suggestion.name, confidence: suggestion.confidence })),
-    ...hashtagTags.map((name) => ({ name, confidence: 1 })),
-  ];
+  const tagSuggestions = isPreviewFailed
+    ? []
+    : [
+        ...pending.map((suggestion) => ({ name: suggestion.name, confidence: suggestion.confidence })),
+        ...hashtagTags.map((name) => ({ name, confidence: 1 })),
+      ];
 
   // AI card visibility. The dummy-v0 heuristic fallback (see
   // supabase/functions/ai-enrich/dummy-provider.ts) still emits a generic
@@ -362,6 +378,7 @@ export default function BookmarkDetailScreen({
   const summaryTok = summaryToken(enrichment?.summary);
   const summaryReviewed = summaryTok !== null && getReviewedSummary(bookmark.id).has(summaryTok);
   const showAiSummary =
+    !isPreviewFailed &&
     Boolean(enrichment?.summary?.trim()) &&
     !summaryReviewed &&
     enrichment?.model !== 'dummy-v0';
@@ -386,6 +403,12 @@ export default function BookmarkDetailScreen({
     (showAiReport || enrichment.degraded_reason === 'rate_limited');
 
   const notesValue = draftNotes ?? bookmark.notes ?? '';
+  const notesLength = notesValue.length;
+  // 10k chars is generous ( ~2 printed pages) while preventing UI breakage or
+  // sync bloat. Matches the truncation warning shown below.
+  const MAX_NOTES_LENGTH = 10000;
+  const notesTooLong = notesLength > MAX_NOTES_LENGTH;
+
   // Show the contained (bordered/elevated) treatment only when there's a note to
   // hold or the user is editing; otherwise render a light borderless prompt.
   const notesFilled = notesValue.trim() !== '' || notesFocused;
@@ -400,7 +423,12 @@ export default function BookmarkDetailScreen({
   };
   const commitNotes = () => {
     if (draftNotes !== null && draftNotes !== (bookmark.notes ?? '')) {
-      updateBookmarkFields(bookmark.id, { notes: draftNotes });
+      // Truncate on save for STASH-1J (prevents DB bloat / sync issues on very
+      // long input). The UI warning already nudges the user; this is a safety.
+      const safeNotes = draftNotes.length > MAX_NOTES_LENGTH
+        ? draftNotes.slice(0, MAX_NOTES_LENGTH)
+        : draftNotes;
+      updateBookmarkFields(bookmark.id, { notes: safeNotes });
     }
     setDraftNotes(null);
   };
@@ -441,6 +469,26 @@ export default function BookmarkDetailScreen({
       title: bookmark.title ?? undefined,
     }).catch(() => {
       setOrganizeError(t('detail.errorShare'));
+    });
+  };
+
+  const handleCopyLink = () => {
+    if (!bookmark.url) {
+      return;
+    }
+    void Clipboard.setStringAsync(bookmark.url)
+      .then(() => {
+        showToast(t('toast.linkCopied'));
+      })
+      .catch(() => {
+        setOrganizeError(t('detail.errorCopyLink'));
+      });
+  };
+
+  const handleRefreshPreview = () => {
+    void runOrganizeAction(async () => {
+      const error = await refreshBookmarkPreview(bookmark.id);
+      return error ? t('detail.errorRefreshPreview') : null;
     });
   };
 
@@ -593,7 +641,12 @@ export default function BookmarkDetailScreen({
       return;
     }
     const nextNotes = notesValue.trim() === '' ? summary : `${notesValue}\n\n${summary}`;
-    updateBookmarkFields(bookmark.id, { notes: nextNotes });
+    // Truncate the combined result (STASH-1J safety net). ProposedSummary is
+    // non-destructive, but long summaries + existing notes could still exceed.
+    const safeNotes = nextNotes.length > MAX_NOTES_LENGTH
+      ? nextNotes.slice(0, MAX_NOTES_LENGTH)
+      : nextNotes;
+    updateBookmarkFields(bookmark.id, { notes: safeNotes });
     setDraftNotes(null);
     // Durable: don't re-surface an identical summary we've already used.
     if (summaryTok) {
@@ -738,6 +791,21 @@ export default function BookmarkDetailScreen({
       {/* Prefer a captured image's local URI (image bookmarks) over a fetched
           preview; either renders the same hero. */}
       {(() => {
+        if (isPreviewFailed) {
+          return (
+            <View
+              style={[
+                styles.previewFailedBanner,
+                { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
+              ]}
+            >
+              <Ionicons name="warning-outline" size={24} color={palette.danger} />
+              <Text style={[styles.previewFailedText, { color: palette.text }]}>
+                {t('detail.previewFailedNote')}
+              </Text>
+            </View>
+          );
+        }
         const previewUri = bookmark.local_image_uri ?? bookmark.preview_image_url;
         if (!previewUri) {
           return null;
@@ -845,7 +913,19 @@ export default function BookmarkDetailScreen({
           <ActionButton icon="open-outline" label={t('common.open')} tint={palette.accent} onPress={handleOpenLink} />
         ) : null}
         {bookmark.url ? (
+          <ActionButton icon="copy-outline" label={t('common.copy')} tint={palette.text} onPress={handleCopyLink} />
+        ) : null}
+        {bookmark.url ? (
           <ActionButton icon="share-social" label={t('common.share')} tint={palette.text} onPress={handleShare} />
+        ) : null}
+        {bookmark.url ? (
+          <ActionButton
+            icon="refresh"
+            label={previewRefreshing ? t('detail.previewRefreshing') : t('detail.previewRefresh')}
+            tint={palette.text}
+            disabled={busy || previewRefreshing}
+            onPress={handleRefreshPreview}
+          />
         ) : null}
         {bookmark.deleted_at ? (
           <ActionButton
@@ -900,6 +980,7 @@ export default function BookmarkDetailScreen({
             notesFilled
               ? { backgroundColor: palette.surfaceElevated, borderColor: palette.border }
               : styles.notesBoxEmpty,
+            notesTooLong && { borderColor: palette.danger },
           ]}
         >
           <TextInput
@@ -909,6 +990,7 @@ export default function BookmarkDetailScreen({
             placeholder={t('detail.notesPlaceholder')}
             placeholderTextColor={palette.textSecondary}
             multiline
+            maxLength={MAX_NOTES_LENGTH}
             value={notesValue}
             onChangeText={setDraftNotes}
             onFocus={() => setNotesFocused(true)}
@@ -916,7 +998,14 @@ export default function BookmarkDetailScreen({
               setNotesFocused(false);
               commitNotes();
             }}
+            // Explicit scroll for the bounded maxHeight (native + web).
+            scrollEnabled
           />
+          {notesTooLong && (
+            <Text style={[styles.error, { color: palette.danger, paddingTop: 4 }]}>
+              {t('detail.notesTooLong', { count: notesLength, max: MAX_NOTES_LENGTH })}
+            </Text>
+          )}
         </View>
       </View>
 
@@ -1061,7 +1150,11 @@ export default function BookmarkDetailScreen({
           </Text>
         ) : null}
 
-        {canOrganizeRemotely ? (
+        {isPreviewFailed ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            {t('detail.aiPreviewFailed')}
+          </Text>
+        ) : canOrganizeRemotely ? (
           <Pressable
             accessibilityRole="button"
             // Gate only on a manual request — an auto-trigger must leave the
@@ -1137,6 +1230,9 @@ export default function BookmarkDetailScreen({
       </View>
 
       {organizeError ? <Text style={[styles.error, { color: palette.danger }]}>{organizeError}</Text> : null}
+      {/* Report flow cleanup for STASH-1H: always clear any lingering error state
+          (organize or notes-too-long) when leaving the screen. Prevents stale red
+          borders/messages on re-open. */}
     </>
   );
 
@@ -1177,11 +1273,13 @@ function ActionButton({
   icon,
   label,
   tint,
+  disabled = false,
   onPress,
 }: {
   icon: ComponentProps<typeof Ionicons>['name'];
   label: string;
   tint: string;
+  disabled?: boolean;
   onPress: () => void;
 }) {
   const palette = usePalette();
@@ -1189,10 +1287,16 @@ function ActionButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.action,
-        { backgroundColor: palette.card, borderColor: palette.border, opacity: pressed ? 0.7 : 1 },
+        {
+          backgroundColor: palette.card,
+          borderColor: palette.border,
+          opacity: disabled ? 0.5 : pressed ? 0.7 : 1,
+        },
       ]}
     >
       <Ionicons name={icon} size={22} color={tint} />
@@ -1330,10 +1434,12 @@ const styles = StyleSheet.create({
   },
   actionBar: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   action: {
     flex: 1,
+    minWidth: 76,
     alignItems: 'center',
     gap: 4,
     paddingVertical: 12,
@@ -1489,6 +1595,10 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
     paddingHorizontal: 0,
     minHeight: 40,
+    // Bounded growth prevents very long memos (STASH-1J/1H) from pushing the
+    // entire Detail layout off-screen or breaking ScrollView/KeyboardAvoidingScreen.
+    // 8 lines (~170px) is generous for most notes; inner scroll appears for longer.
+    maxHeight: 170,
     textAlignVertical: 'top',
   },
   error: {
@@ -1498,5 +1608,21 @@ const styles = StyleSheet.create({
   actionLabel: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  previewFailedBanner: {
+    width: '100%',
+    height: 220,
+    borderRadius: 28,
+    borderWidth: 1,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    gap: 8,
+  },
+  previewFailedText: {
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'center',
   },
 });

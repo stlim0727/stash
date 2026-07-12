@@ -173,6 +173,15 @@ export async function syncQueueEntry(
         favicon_url: bookmark.favicon_url,
         preview_image_url: bookmark.preview_image_url,
         metadata_status: bookmark.metadata_status,
+        ...(bookmark.dismissed_suggested_tags !== undefined
+          ? { dismissed_suggested_tags: bookmark.dismissed_suggested_tags }
+          : {}),
+        ...(bookmark.dismissed_suggested_folders !== undefined
+          ? { dismissed_suggested_folders: bookmark.dismissed_suggested_folders }
+          : {}),
+        ...(bookmark.reviewed_summary_tokens !== undefined
+          ? { reviewed_summary_tokens: bookmark.reviewed_summary_tokens }
+          : {}),
       });
       await removeQueueEntryIfNotSuperseded(repository, entry);
       if (bookmark.sync_status !== 'synced') {

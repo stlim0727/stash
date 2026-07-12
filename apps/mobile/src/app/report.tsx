@@ -1,5 +1,6 @@
+import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import { usePathname } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Image,
@@ -11,7 +12,10 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -45,6 +49,9 @@ const CATEGORIES: Array<{ value: FeedbackCategory; labelKey: MessageKey }> = [
   { value: 'idea', labelKey: 'report.categoryIdea' },
   { value: 'other', labelKey: 'report.categoryOther' },
 ];
+
+const webOverscrollContain: StyleProp<ViewStyle> =
+  Platform.OS === 'web' ? ({ overscrollBehavior: 'contain' } as ViewStyle) : undefined;
 
 function previewContext(context: DiagnosticsContext): string {
   if (!context.screenshot) {
@@ -80,7 +87,10 @@ export interface ReportScreenProps {
 export default function ReportScreen({ createApi = createFeedbackApi }: ReportScreenProps = {}) {
   const palette = usePalette();
   const t = useT();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { width, height } = useWindowDimensions();
+  const asSheet = width >= 760;
   const auth = useSupabaseAuth();
   const pathname = usePathname();
   const { queue, isSyncing, lastPulledAt } = useBookmarks();
@@ -88,9 +98,10 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const [category, setCategory] = useState<FeedbackCategory>('bug');
   const [message, setMessage] = useState('');
   const [submit, setSubmit] = useState<SubmitState>({ status: 'idle' });
-  const [screenshot, setScreenshot] = useState(getPendingFeedbackScreenshot);
+  const [screenshot] = useState(getPendingFeedbackScreenshot);
   const [sourceContext] = useState(getPendingFeedbackSource);
   const [includeScreenshot, setIncludeScreenshot] = useState(false);
+  const [showContextPreview, setShowContextPreview] = useState(false);
 
   useEffect(
     () => () => {
@@ -98,6 +109,15 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     },
     [],
   );
+
+  useEffect(() => {
+    if (submit.status === 'success') {
+      const timer = setTimeout(() => {
+        router.back();
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [submit.status, router]);
 
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
   const platform = Platform.OS;
@@ -198,9 +218,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       });
       setSubmit({ status: 'success' });
       setMessage('');
-      setScreenshot(null);
       setIncludeScreenshot(false);
-      clearPendingFeedbackScreenshot();
     } catch (error) {
       setSubmit({
         status: 'error',
@@ -209,9 +227,12 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     }
   };
 
-  if (auth.status === 'not_configured') {
-    return (
-      <ScrollView contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}>
+  const content =
+    auth.status === 'not_configured' ? (
+      <ScrollView
+        style={webOverscrollContain}
+        contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
+      >
         <View style={[styles.field, { backgroundColor: palette.card }]}>
           <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
             {t('report.cloudUnavailableTitle')}
@@ -226,9 +247,17 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           style={[styles.secondaryButton, { borderColor: palette.border }]}
           onPress={() => void handleShare()}
         >
-          <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-            {t('report.shareWithCount', { count: logCount })}
-          </Text>
+          <View style={styles.buttonRow}>
+            <Ionicons
+              testID="share-diagnostics-icon"
+              name="share-social-outline"
+              size={18}
+              color={palette.text}
+            />
+            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+              {t('report.shareWithCount', { count: logCount })}
+            </Text>
+          </View>
         </Pressable>
         <Text
           accessibilityLabel={t('report.contextPreviewA11y')}
@@ -237,60 +266,57 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           {contextPreview}
         </Text>
       </ScrollView>
-    );
-  }
-
-  return (
-    <KeyboardAvoidingScreen>
-    <ScrollView
-      contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
-      keyboardShouldPersistTaps="handled"
-    >
-      <View style={[styles.field, { backgroundColor: palette.card }]}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{t('report.categoryLabel')}</Text>
-        <View style={styles.chipRow}>
-          {CATEGORIES.map((item) => {
-            const selected = item.value === category;
-            return (
-              <Pressable
-                key={item.value}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                style={[
-                  styles.chip,
-                  { borderColor: palette.border },
-                  selected && { backgroundColor: palette.accent, borderColor: palette.accent },
-                ]}
-                onPress={() => {
-                  setCategory(item.value);
-                  clearStaleBanner();
-                }}
-              >
-                <Text style={[styles.chipLabel, { color: selected ? palette.accentForeground : palette.text }]}>
-                  {t(item.labelKey)}
-                </Text>
-              </Pressable>
-            );
-          })}
+    ) : (
+      <ScrollView
+        style={webOverscrollContain}
+        contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={[styles.field, { backgroundColor: palette.card }]}>
+          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{t('report.categoryLabel')}</Text>
+          <View style={styles.chipRow}>
+            {CATEGORIES.map((item) => {
+              const selected = item.value === category;
+              return (
+                <Pressable
+                  key={item.value}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  style={[
+                    styles.chip,
+                    { borderColor: palette.border },
+                    selected && { backgroundColor: palette.accent, borderColor: palette.accent },
+                  ]}
+                  onPress={() => {
+                    setCategory(item.value);
+                    clearStaleBanner();
+                  }}
+                >
+                  <Text style={[styles.chipLabel, { color: selected ? palette.accentForeground : palette.text }]}>
+                    {t(item.labelKey)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
-      </View>
 
-      <View style={[styles.field, { backgroundColor: palette.card }]}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{t('report.whatHappened')}</Text>
-        <TextInput
-          accessibilityLabel={t('report.descriptionA11y')}
-          style={[
-            styles.input,
-            styles.multiline,
-            { color: palette.text, borderColor: palette.border },
-          ]}
-          placeholder={t('report.descriptionPlaceholder')}
-          placeholderTextColor={palette.textSecondary}
-          multiline
-          value={message}
-          onChangeText={handleMessageChange}
-        />
-      </View>
+        <View style={[styles.field, { backgroundColor: palette.card }]}>
+          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>{t('report.whatHappened')}</Text>
+          <TextInput
+            accessibilityLabel={t('report.descriptionA11y')}
+            style={[
+              styles.input,
+              styles.multiline,
+              { color: palette.text, borderColor: palette.border },
+            ]}
+            placeholder={t('report.descriptionPlaceholder')}
+            placeholderTextColor={palette.textSecondary}
+            multiline
+            value={message}
+            onChangeText={handleMessageChange}
+          />
+        </View>
 
       <View style={[styles.field, { backgroundColor: palette.card }]}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
@@ -331,21 +357,49 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
             ) : null}
           </View>
         ) : null}
-        <Text
-          accessibilityLabel={t('report.contextPreviewA11y')}
-          style={[styles.code, { color: palette.text, borderColor: palette.border }]}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('report.contextPreviewToggleA11y')}
+          accessibilityState={{ expanded: showContextPreview }}
+          style={[styles.contextToggle, { borderColor: palette.border }]}
+          onPress={() => setShowContextPreview((value) => !value)}
         >
-          {contextPreview}
-        </Text>
+          <View style={styles.buttonRow}>
+            <Ionicons
+              name={showContextPreview ? 'chevron-up' : 'chevron-down'}
+              size={18}
+              color={palette.text}
+            />
+            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+              {showContextPreview ? t('report.hideDiagnostics') : t('report.showDiagnostics')}
+            </Text>
+          </View>
+        </Pressable>
+        {showContextPreview ? (
+          <Text
+            accessibilityLabel={t('report.contextPreviewA11y')}
+            style={[styles.code, { color: palette.text, borderColor: palette.border }]}
+          >
+            {contextPreview}
+          </Text>
+        ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t('report.shareDiagnosticsA11y')}
           style={[styles.secondaryButton, { borderColor: palette.border }]}
           onPress={() => void handleShare()}
         >
-          <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
-            {t('report.share')}
-          </Text>
+          <View style={styles.buttonRow}>
+            <Ionicons
+              testID="share-diagnostics-icon"
+              name="share-social-outline"
+              size={18}
+              color={palette.text}
+            />
+            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+              {t('report.share')}
+            </Text>
+          </View>
         </Pressable>
       </View>
 
@@ -368,16 +422,98 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         ]}
         onPress={() => void handleSubmit()}
       >
-        <Text style={[styles.submitButtonLabel, { color: palette.accentForeground }]}>
-          {submit.status === 'submitting' ? t('report.submitting') : t('report.submit')}
-        </Text>
+        <View style={styles.buttonRow}>
+          <Ionicons testID="submit-report-icon" name="send" size={18} color={palette.accentForeground} />
+          <Text style={[styles.submitButtonLabel, { color: palette.accentForeground }]}>
+            {submit.status === 'submitting' ? t('report.submitting') : t('report.submit')}
+          </Text>
+        </View>
       </Pressable>
-    </ScrollView>
+      </ScrollView>
+    );
+
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+      <Text style={[styles.headerTitle, { color: palette.text }]}>{t('nav.report')}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+        hitSlop={8}
+        style={({ pressed }) => [styles.headerClose, pressed && { opacity: 0.6 }]}
+      >
+        <Ionicons name="close" size={24} color={palette.text} />
+      </Pressable>
+    </View>
+  );
+
+  return (
+    <KeyboardAvoidingScreen>
+      {asSheet ? (
+        <View style={[styles.sheetOverlay, { height }]}>
+          <Pressable
+            testID="report-sheet-backdrop"
+            style={styles.sheetBackdrop}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.close')}
+            onPress={() => router.back()}
+          />
+          <View style={[styles.sheetPanel, { backgroundColor: palette.background }]}>
+            {header}
+            {content}
+          </View>
+        </View>
+      ) : (
+        <View testID="report-fullscreen" style={[styles.fullScreen, { backgroundColor: palette.background, height }]}>
+          {header}
+          {content}
+        </View>
+      )}
     </KeyboardAvoidingScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  fullScreen: {
+    flex: 1,
+  },
+  sheetOverlay: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.24)',
+  },
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFill,
+  },
+  sheetPanel: {
+    width: '100%',
+    maxWidth: 520,
+    height: '100%',
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: -4, height: 0 },
+  },
+  header: {
+    minHeight: 64,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  headerClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   container: {
     padding: 16,
     gap: 12,
@@ -432,6 +568,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
   },
+  contextToggle: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
   screenshotBox: {
     gap: 10,
   },
@@ -462,6 +604,12 @@ const styles = StyleSheet.create({
   error: {
     fontSize: 13,
     textAlign: 'center',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
   submitButton: {
     borderRadius: 12,

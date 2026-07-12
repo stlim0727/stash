@@ -197,7 +197,7 @@ test('"Dismiss all" for visible tags does not persist a hidden folder dismissal'
   await fireEvent.press(screen.getByLabelText('Dismiss all suggestions for Already filed'));
 
   await waitFor(() => expect(screen.queryByText('Already filed')).toBeNull());
-  expect(fakeRepo.__meta('dismissed_folder_suggestions')).toBeNull();
+  expect(fakeRepo.__bookmarks().find((b) => b.id === '7e64cf1e-0000-4000-8000-0000000000b4')?.dismissed_suggested_folders?.length ?? 0).toBe(0);
 });
 
 test('surfaces a folder recommendation (📁 ＋) alongside tags (#) and files in on tap', async () => {
@@ -253,7 +253,7 @@ test('accepting a folder recommendation records it so undoing the move does not 
   // not just "the bookmark now lives there".
   await fireEvent.press(screen.getByLabelText('Move Move me from Watch Later to Recipes'));
   await waitFor(() =>
-    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('id:col-recipes'),
+    expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.dismissed_suggested_folders).toContain('id:col-recipes'),
   );
 
   // Undo moves the bookmark back to Watch Later, but the recommendation stays
@@ -305,19 +305,18 @@ test('dismissing a folder in Review persists durably (shared with Detail)', asyn
   // Written to the durable, cross-screen store — not a session-only Set — so the
   // dismissal sticks on re-entry and is honored by Detail/Inbox/Settings too.
   await waitFor(() =>
-    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('name:travel'),
+    expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.dismissed_suggested_folders).toContain('name:travel'),
   );
 });
 
 test('a durably-dismissed folder is hidden on Review entry', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000c4';
+  // A prior dismissal (from any screen) already in the durable store.
   fakeRepo.__reset(
-    [makeStoredBookmark({ id, title: 'Lone link', collection_id: null })],
+    [makeStoredBookmark({ id, title: 'Lone link', collection_id: null, dismissed_suggested_folders: ['name:travel'] })],
     undefined,
     [makeEnrichment({ bookmark_id: id, suggested_collection_name: 'Travel' })],
   );
-  // A prior dismissal (from any screen) already in the durable store.
-  fakeRepo.__setMeta('dismissed_folder_suggestions', JSON.stringify({ [id]: ['name:travel'] }));
 
   const screen = await renderReview();
 
@@ -480,6 +479,6 @@ test('bulk "Dismiss all" dismisses the folder durably alongside the tags', async
   // folder dismissal is written to the cross-screen durable store.
   await waitFor(() => expect(screen.queryByText('Dismiss everything')).toBeNull());
   await waitFor(() =>
-    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('id:col-recipes'),
+    expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.dismissed_suggested_folders).toContain('id:col-recipes'),
   );
 });

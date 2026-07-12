@@ -74,6 +74,9 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
       const ids = new Set(rows.map((row) => row.id));
       enrichments = [...enrichments.filter((row) => !ids.has(row.id)), ...rows];
     },
+    deleteEnrichment: async (bookmarkId) => {
+      enrichments = enrichments.filter((row) => row.bookmark_id !== bookmarkId);
+    },
     listTagData: async () => tagData,
     replaceTagData: async (data) => {
       tagData = data;

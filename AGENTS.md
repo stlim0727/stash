@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-09.
+Last updated: 2026-07-12 (GitHub Codex identity).
 
 ## Successor Agent Orientation
 
@@ -24,10 +24,11 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
 - **Your toolbelt is already built; use it, don't reinvent it.** Operational
   procedures are encoded as skills in `.claude/skills` and mirrored under
   `.codex/skills`: `versioning`/`rc-build` for builds,
-  `web-deploy`/`web-preview` for Cloudflare, `supabase-migration` for schema,
-  `circleci-logs` for CI failures, `review-pr`/`pr-ready-check` for PR gates,
-  `update-agents-md`/`retro` to keep this memory fresh, `screenshot`/`ui-preview`
-  for visuals, and `user-bookmark-summary` for live DB status. The release
+  `play-store-release` for Google Play submission, `web-deploy`/`web-preview`
+  for Cloudflare, `supabase-migration` for schema, `circleci-logs` for CI
+  failures, `review-pr`/`pr-ready-check` for PR gates, `update-agents-md`/`retro`
+  to keep this memory fresh, `screenshot`/`ui-preview` for visuals, and
+  `user-bookmark-summary` for live DB status. The release
   procedure itself lives in `docs/development/releasing.md`. Change both skill
   mirrors together or the toolbelts drift. Prefer these over ad-hoc steps.
 - **What is verified vs assumed vs stale** (do not trust silence as proof):
@@ -47,6 +48,7 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   (Codex theme refresh) and #427 (this handoff docs update). #417, #424, #425,
   and #426 had merged. Reconcile against the live open-PR list; some may have
   merged or closed.
+- **Sentry DB sync (2026-07-11):** Organization `self-463` and project `stash` confirmed via MCP. `sentry__search_issues` is temporarily unavailable due to a Sentry MCP server configuration issue. Check the Sentry dashboard directly for real-time unresolved issues. Do NOT rely on local docs (like AGENTS.md or build-history.md) to look up open/active Sentry issues as they only record historically resolved issues. Active feedback issues must be checked on Sentry directly or provided by the user.
 - **The invariants below are load-bearing, not FYI.** "Capture is sacred,"
   user-authored vs generated fields, and "a local cosmetic repair must never bump
   `updated_at` or enqueue sync" have each been re-broken by agents who skimmed
@@ -232,6 +234,11 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
 - After opening or updating a PR, keep watching while active for CI failures and
   human review activity. Ignore routine bot/status comments such as deploy
   preview success messages.
+- When posting manual GitHub comments, PR bodies, or review replies through a
+  user's GitHub credentials, explicitly identify the note as Codex-authored so
+  it is not mistaken for the human account owner. Do not duplicate that label
+  on platform-generated or automatically-triggered Codex comments that already
+  identify their source.
 - If CI is green and no human review activity appears for 5 minutes, either ask
   the user to merge or merge directly for small, well-tested, low-risk changes.
 - Do not auto-merge PRs that change Supabase migrations/functions,

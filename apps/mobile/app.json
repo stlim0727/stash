@@ -2,13 +2,13 @@
   "expo": {
     "name": "Keepory",
     "slug": "stash",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "stash",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.stash.app"
+      "bundleIdentifier": "com.keepory.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +18,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.stash.app"
+      "package": "com.keepory.app"
     },
     "web": {
       "output": "single",

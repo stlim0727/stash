@@ -23,6 +23,11 @@ jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
 
+const mockSetStringAsync = jest.fn();
+jest.mock('expo-clipboard', () => ({
+  setStringAsync: (value: string) => mockSetStringAsync(value),
+}));
+
 const mockNavigate = jest.fn();
 const mockDismissTo = jest.fn();
 // The detail screen reads the bookmark id from the route; tests set it.
@@ -122,6 +127,28 @@ test('tapping the preview image opens the bookmark link', async () => {
 
   expect(openURL).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
   openURL.mockRestore();
+});
+
+test('copy link action copies the bookmark URL and confirms with a toast', async () => {
+  mockRouteId = SYNCED_ID;
+  mockSetStringAsync.mockReset();
+  mockSetStringAsync.mockResolvedValueOnce(undefined);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Copy'));
+
+  expect(mockSetStringAsync).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
+  expect(await waitFor(() => screen.getByText('Link copied'))).toBeTruthy();
 });
 
 test('a very long title collapses behind a Show more toggle', async () => {
@@ -451,15 +478,21 @@ test('dismissing the summary hides it durably and never touches the note', async
   expect(screen.queryByText('A summary to dismiss.')).toBeNull();
   expect(screen.getByLabelText('Notes').props.value).toBe('Untouched.');
   await waitFor(() => {
-    const raw = fakeRepo.__meta('reviewed_ai_summaries');
-    expect(raw).toContain(SYNCED_ID);
+    const bookmark = fakeRepo.__bookmarks().find((b) => b.id === SYNCED_ID);
+    expect(bookmark?.reviewed_summary_tokens).toContain(summaryToken('A summary to dismiss.')!);
   });
 });
 
 test('a durably-reviewed summary is hidden on first render', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
-    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })],
+    [
+      makeStoredBookmark({
+        id: SYNCED_ID,
+        title: 'A synced bookmark',
+        reviewed_summary_tokens: [summaryToken('Already-reviewed summary.')!],
+      }),
+    ],
     undefined,
     [
       makeEnrichment({
@@ -469,11 +502,6 @@ test('a durably-reviewed summary is hidden on first render', async () => {
         suggested_tags: [],
       }),
     ],
-  );
-  // Seed the durable reviewed-summary token for this exact summary text.
-  fakeRepo.__setMeta(
-    'reviewed_ai_summaries',
-    JSON.stringify({ [SYNCED_ID]: [summaryToken('Already-reviewed summary.')] }),
   );
 
   const screen = await renderDetail();
@@ -732,7 +760,7 @@ test('shows the suggested folder as a chip beside the picker and files into it',
   // recommendation can't re-surface if the bookmark later moves out of the folder
   // — the regression was that accept relied solely on "already lives there".
   await waitFor(() =>
-    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('id:col-recipes'),
+    expect(fakeRepo.__bookmarks().find((b) => b.id === SYNCED_ID)?.dismissed_suggested_folders).toContain('id:col-recipes'),
   );
 });
 
@@ -768,19 +796,24 @@ test('dismissing a folder suggestion persists it durably (gone on re-entry)', as
   // later re-entry re-hydrates it and the chip stays gone — the regression was
   // that it lived only in session state and re-appeared on re-open.
   await waitFor(() =>
-    expect(fakeRepo.__meta('dismissed_folder_suggestions')).toContain('id:col-recipes'),
+    expect(fakeRepo.__bookmarks().find((b) => b.id === SYNCED_ID)?.dismissed_suggested_folders).toContain('id:col-recipes'),
   );
 });
 
 test('a durably-dismissed folder suggestion is hidden on first render', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(
-    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    [
+      makeStoredBookmark({
+        id: SYNCED_ID,
+        title: 'A synced bookmark',
+        collection_id: null,
+        dismissed_suggested_folders: ['id:col-recipes'],
+      }),
+    ],
     collectionTagData(),
     [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_id: 'col-recipes' })],
   );
-  // Simulate a prior session's dismissal already in the durable store.
-  fakeRepo.__setMeta('dismissed_folder_suggestions', JSON.stringify({ [SYNCED_ID]: ['id:col-recipes'] }));
 
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
@@ -793,11 +826,17 @@ test('a dismissed "create" suggestion stays gone once a matching folder appears'
   // A matching "Recipes" collection now exists, so the suggestion would resolve
   // to a "file into" chip — but the name-keyed dismissal must still suppress it.
   fakeRepo.__reset(
-    [makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', collection_id: null })],
+    [
+      makeStoredBookmark({
+        id: SYNCED_ID,
+        title: 'A synced bookmark',
+        collection_id: null,
+        dismissed_suggested_folders: ['name:recipes'],
+      }),
+    ],
     collectionTagData(),
     [makeEnrichment({ bookmark_id: SYNCED_ID, suggested_collection_name: 'Recipes' })],
   );
-  fakeRepo.__setMeta('dismissed_folder_suggestions', JSON.stringify({ [SYNCED_ID]: ['name:recipes'] }));
 
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
@@ -823,9 +862,9 @@ test('dismissing a name-matched folder chip records both id and name tokens', as
   await fireEvent.press(screen.getByLabelText('Dismiss suggested collection Recipes'));
 
   await waitFor(() => {
-    const raw = fakeRepo.__meta('dismissed_folder_suggestions');
-    expect(raw).toContain('id:col-recipes');
-    expect(raw).toContain('name:recipes');
+    const bookmark = fakeRepo.__bookmarks().find((b) => b.id === SYNCED_ID);
+    expect(bookmark?.dismissed_suggested_folders).toContain('id:col-recipes');
+    expect(bookmark?.dismissed_suggested_folders).toContain('name:recipes');
   });
 });
 

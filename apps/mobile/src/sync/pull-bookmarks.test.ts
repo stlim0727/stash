@@ -89,6 +89,7 @@ function fakeRepository(meta: Record<string, string> = {}) {
     upsertEnrichments: async (enrichments) => {
       calls.push(`upsertEnrichments:${enrichments.length}`);
     },
+    deleteEnrichment: async () => {},
     listTagData: async () => ({ tags: [], bookmarkTags: [], collections: [] }),
     replaceTagData: async (data) => {
       calls.push(`replaceTagData:${data.tags.length}:${data.collections.length}`);

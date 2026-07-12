@@ -28,6 +28,7 @@
     "test:apptesting": "firebase apptesting:execute --app \"$FIREBASE_APP_ID\" --test-dir apps/mobile/apptesting --test-devices \"${FIREBASE_TEST_DEVICES:-model=shiba,version=34,locale=en,orientation=portrait}\""
   },
   "devDependencies": {
+    "@supabase/realtime-js": "^2.110.2",
     "pixelmatch": "^7.2.0",
     "pngjs": "^7.0.0"
   }

@@ -19,8 +19,9 @@ import Svg, { Circle, Line, Text as SvgText } from 'react-native-svg';
 
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import {
-  buildSettledCoOccurrenceGraph,
-  buildSettledGraph,
+  deriveCoOccurrenceGraph,
+  deriveGraph,
+  layoutGraph,
   layoutTickBudget,
   UNTAGGED_HUB_ID,
   type DeriveGraphInput,
@@ -59,6 +60,7 @@ const HUB_MIN_R = 18;
 const HUB_MAX_R = 54;
 const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
+const EDGE_OPACITY = 0.72;
 const LABEL_SIZE = 24;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
 // the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
@@ -138,6 +140,17 @@ export function anchoredPanForScale(input: {
   return {
     x: input.pan.x + (1 - ratio) * (focalFromCenter.x - input.pan.x),
     y: input.pan.y + (1 - ratio) * (focalFromCenter.y - input.pan.y),
+  };
+}
+
+export function panWithPinchFocalDelta(input: {
+  anchoredPan: { x: number; y: number };
+  startFocal: { x: number; y: number };
+  currentFocal: { x: number; y: number };
+}): { x: number; y: number } {
+  return {
+    x: input.anchoredPan.x + input.currentFocal.x - input.startFocal.x,
+    y: input.anchoredPan.y + input.currentFocal.y - input.startFocal.y,
   };
 }
 
@@ -278,20 +291,14 @@ export default function GraphScreen() {
       if (cancelled) {
         return;
       }
-      // Node count for the active mode: co-occurrence derives only tag nodes,
-      // while bipartite adds a node per bookmark plus the possible single
-      // untagged hub. Size the tick budget by the actual node count so each mode
-      // gets the right budget.
-      const n =
-        mode === 'cooccurrence'
-          ? input.tags.length
-          : input.bookmarks.length + input.tags.length + 1;
-      const options = { ticks: layoutTickBudget(n) };
+      // Derive first, then size the tick budget from the graph the user will
+      // actually see. Co-occurrence can drop most historical tags as isolates,
+      // so budgeting from raw input.tags would starve a small visible graph.
+      const graph =
+        mode === 'cooccurrence' ? deriveCoOccurrenceGraph(input) : deriveGraph(input);
+      const options = { ticks: layoutTickBudget(graph.nodes.length) };
       // Same off-render-path settle for both views — only the derive differs.
-      const result =
-        mode === 'cooccurrence'
-          ? buildSettledCoOccurrenceGraph(input, options)
-          : buildSettledGraph(input, options);
+      const result = layoutGraph(graph, options);
       if (!cancelled) {
         setSettled(result);
       }
@@ -504,9 +511,14 @@ export default function GraphScreen() {
               startScale: pinch.current.startScale,
               nextScale: next,
             });
+            const nextPan = panWithPinchFocalDelta({
+              anchoredPan,
+              startFocal: pinch.current.startFocal,
+              currentFocal: touchCenterInViewport(touches[0], touches[1], containerOriginRef.current),
+            });
             const { x: maxX, y: maxY } = axisBounds();
-            const nextX = clampToRange(anchoredPan.x, -maxX, maxX);
-            const nextY = clampToRange(anchoredPan.y, -maxY, maxY);
+            const nextX = clampToRange(nextPan.x, -maxX, maxX);
+            const nextY = clampToRange(nextPan.y, -maxY, maxY);
             translateX.setValue(nextX - panStart.current.x);
             translateY.setValue(nextY - panStart.current.y);
             panOffset.current = { x: nextX, y: nextY };
@@ -596,9 +608,9 @@ export default function GraphScreen() {
               y1={source.y}
               x2={target.x}
               y2={target.y}
-              stroke={palette.border}
+              stroke={palette.textSecondary}
               strokeWidth={EDGE_WIDTH}
-              strokeOpacity={0.55}
+              strokeOpacity={EDGE_OPACITY}
             />
           );
         })}

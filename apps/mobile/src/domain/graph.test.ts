@@ -591,12 +591,14 @@ test('co-occurrence: settles to finite, tag-only positioned nodes', () => {
 test('layoutTickBudget: full budget for small graphs, scaled down for large ones', () => {
   // Tiny graphs get the full-quality settle.
   assert.equal(layoutTickBudget(12), 300);
-  assert.equal(layoutTickBudget(50), 300);
-  // Large graphs strictly fewer, never below the floor.
+  assert.equal(layoutTickBudget(200), 300);
+  // Large graphs strictly fewer and scaled by a hard pair-work budget.
   const large = layoutTickBudget(400);
   assert.ok(large < 300, 'a 400-node graph must run fewer ticks');
-  assert.ok(large >= 60, 'never below the min floor');
-  assert.equal(layoutTickBudget(1000), 60);
+  assert.equal(large, 75);
+  assert.equal(layoutTickBudget(1000), 12);
+  assert.equal(layoutTickBudget(2000), 3);
+  assert.equal(layoutTickBudget(5000), 0);
   // Monotonic: more nodes never means more ticks.
   assert.ok(layoutTickBudget(1000) <= layoutTickBudget(400));
   // Deterministic: same input -> same number.
@@ -604,4 +606,15 @@ test('layoutTickBudget: full budget for small graphs, scaled down for large ones
   // Safe at degenerate node counts (no divide-by-zero).
   assert.equal(layoutTickBudget(0), 300);
   assert.equal(layoutTickBudget(1), 300);
+});
+
+test('layoutGraph: zero ticks uses deterministic finite fallback positions', () => {
+  const graph = deriveGraph(smallFixture());
+  const a = layoutGraph(graph, { ticks: 0 });
+  const b = layoutGraph(graph, { ticks: 0, seed: 123 });
+  assert.ok(a.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y)));
+  assert.deepEqual(
+    a.nodes.map((node) => [node.id, node.x, node.y]),
+    b.nodes.map((node) => [node.id, node.x, node.y]),
+  );
 });

@@ -50,6 +50,121 @@ async function expectRejects(name, promise) {
   }
 }
 
+async function testRealtimeChannel(session, userId, expectSuccess) {
+  const configState = getSupabaseConfigState();
+  if (configState.status !== 'configured') {
+    throw new Error('Supabase is not configured');
+  }
+
+  const { RealtimeClient } = await import('@supabase/realtime-js');
+  const rtUrl = configState.config.url.replace(/^http/, 'ws') + '/realtime/v1';
+
+  return new Promise((resolve, reject) => {
+    const rt = new RealtimeClient(rtUrl, {
+      params: {
+        apikey: configState.config.anonKey,
+      },
+    });
+
+    rt.setAuth(session.access_token);
+    rt.connect();
+
+    const channel = rt.channel(`sync:private:${userId}`, {
+      config: {
+        private: true,
+        broadcast: { self: false },
+      },
+    });
+
+    let socketOpened = false;
+    rt.onOpen(() => {
+      socketOpened = true;
+    });
+
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        rt.disconnect();
+        if (!socketOpened) {
+          reject(new Error('WebSocket connection could not be opened (network offline or Realtime disabled)'));
+        } else if (expectSuccess) {
+          reject(new Error('realtime connection timed out (expected success)'));
+        } else {
+          reject(new Error('realtime connection timed out without receiving CHANNEL_ERROR (expected rejection)'));
+        }
+      }
+    }, 5000);
+
+    channel.subscribe((status, err) => {
+      if (settled) return;
+      if (status === 'SUBSCRIBED') {
+        if (expectSuccess) {
+          channel
+            .send({
+              type: 'broadcast',
+              event: 'sync',
+              payload: { test: true },
+            })
+            .then((sendStatus) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timeout);
+              rt.disconnect();
+              if (sendStatus === 'ok') {
+                resolve();
+              } else {
+                reject(new Error(`realtime broadcast send failed (status: ${sendStatus})`));
+              }
+            })
+            .catch((sendErr) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timeout);
+              rt.disconnect();
+              reject(new Error(`realtime broadcast send threw error: ${sendErr}`));
+            });
+        } else {
+          settled = true;
+          clearTimeout(timeout);
+          rt.disconnect();
+          reject(new Error('anonymous user successfully joined private channel (expected rejection)'));
+        }
+      } else if (status === 'CHANNEL_ERROR') {
+        settled = true;
+        clearTimeout(timeout);
+        rt.disconnect();
+        if (!expectSuccess) {
+          resolve();
+        } else {
+          reject(new Error(`authenticated user failed to join private channel (status: ${status}, error: ${err})`));
+        }
+      }
+    });
+  });
+}
+
+function toSession(response) {
+  if (
+    !response.access_token ||
+    !response.refresh_token ||
+    !response.token_type ||
+    !response.expires_in ||
+    !response.user
+  ) {
+    throw new Error('Supabase auth response did not include a complete session.');
+  }
+
+  return {
+    access_token: response.access_token,
+    refresh_token: response.refresh_token,
+    token_type: response.token_type,
+    expires_in: response.expires_in,
+    expires_at: response.expires_at ?? Math.floor(Date.now() / 1000) + response.expires_in,
+    user: response.user,
+  };
+}
+
 try {
   console.log('Supabase end-to-end verification\n');
 
@@ -262,6 +377,75 @@ try {
     'RLS: write isolation (cross-user update rejected)',
     apiB.updateBookmark(created.bookmark_id, { title: 'hijacked' }),
   );
+
+  // --- realtime broadcast policy verification ---
+  console.log('\nVerifying realtime broadcast policies...');
+
+  // Test 1: Anonymous user (User A) is denied subscription
+  try {
+    await testRealtimeChannel(session, session.user.id, false);
+    ok('Realtime RLS: anonymous subscription rejected');
+  } catch (error) {
+    fail('Realtime RLS: anonymous subscription check failed', error);
+  }
+
+  // Test 2: Real authenticated user is allowed subscription
+  const testEmail = 'realtime-policy-verifier@keepory.app';
+  const testPass = 'verifier-password-91823';
+  let realSession;
+  try {
+    const signupResponse = await client.request('/auth/v1/signup', {
+      method: 'POST',
+      body: { email: testEmail, password: testPass },
+    });
+    if (signupResponse && signupResponse.access_token) {
+      realSession = toSession(signupResponse);
+    }
+  } catch (error) {
+    // If signup fails (most likely user already exists), attempt login
+    try {
+      const loginResponse = await client.request('/auth/v1/token?grant_type=password', {
+        method: 'POST',
+        body: { email: testEmail, password: testPass },
+      });
+      realSession = toSession(loginResponse);
+    } catch (loginError) {
+      fail(
+        'Realtime RLS: real user authentication failed. If testing locally, ensure email confirmation is disabled on your Supabase project (Authentication -> Provider Settings).',
+        loginError
+      );
+    }
+  }
+
+  if (!realSession) {
+    fail('Realtime RLS: signup succeeded but did not return a session access token (email confirmation is likely enabled).');
+  }
+
+  try {
+    await testRealtimeChannel(realSession, realSession.user.id, true);
+    ok('Realtime RLS: authenticated subscription approved');
+  } catch (error) {
+    fail('Realtime RLS: authenticated subscription check failed', error);
+  }
+
+  // Test 3: Authenticated User A cannot subscribe to User B's channel
+  try {
+    await testRealtimeChannel(realSession, session.user.id, false);
+    ok("Realtime RLS: User A rejected from subscribing to User B's channel");
+  } catch (error) {
+    fail("Realtime RLS: User A cross-subscription security check failed", error);
+  }
+
+  cleanups.push(async () => {
+    try {
+      await client.request('/auth/v1/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${realSession.access_token}` },
+      });
+    } catch {
+      // ignore logout failure on cleanup
+    }
+  });
 
   console.log(`\nAll ${passed} checks passed.`);
 } catch (error) {

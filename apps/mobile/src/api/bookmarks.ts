@@ -62,6 +62,9 @@ export interface UpdateBookmarkInput {
   favicon_url?: string | null;
   preview_image_url?: string | null;
   metadata_status?: MetadataStatus;
+  dismissed_suggested_tags?: string[] | null;
+  dismissed_suggested_folders?: string[] | null;
+  reviewed_summary_tokens?: string[] | null;
 }
 
 export interface AddTagsInput {

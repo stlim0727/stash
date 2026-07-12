@@ -6,7 +6,7 @@ export interface SuggestionActionDeps {
   addTagsToBookmark: (bookmarkId: string, names: string[]) => Promise<string | null>;
   assignCollection: (bookmarkId: string, collectionId: string | null) => void;
   createCollection: (name: string) => Promise<{ collection?: Collection; error?: string }>;
-  dismissFolderSuggestion: (bookmarkId: string, token: string) => void;
+  dismissFolderSuggestion: (bookmarkId: string, tokens: string | string[]) => void;
 }
 
 export interface AcceptSuggestionBundleInput {
@@ -24,16 +24,16 @@ export interface DismissSuggestionBundleInput {
   aiSuggestionNames: string[];
   folderTokens: string[];
   markSuggestionsReviewed: (bookmarkId: string, names: string[]) => void;
-  dismissFolderSuggestion: (bookmarkId: string, token: string) => void;
+  dismissFolderSuggestion: (bookmarkId: string, tokens: string | string[]) => void;
 }
 
 export function recordFolderSuggestionActedOn(
   bookmarkId: string,
   folderTokens: string[],
-  dismissFolderSuggestion: (bookmarkId: string, token: string) => void,
+  dismissFolderSuggestion: (bookmarkId: string, tokens: string | string[]) => void,
 ): void {
-  for (const token of folderTokens) {
-    dismissFolderSuggestion(bookmarkId, token);
+  if (folderTokens.length > 0) {
+    dismissFolderSuggestion(bookmarkId, folderTokens);
   }
 }
 

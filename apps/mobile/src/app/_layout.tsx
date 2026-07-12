@@ -13,7 +13,7 @@ import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
-import { useMinAppVersion } from '@/supabase/use-min-app-version';
+import { useAppConfig } from '@/supabase/use-min-app-version';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { FloatingReportButton } from '@/feedback/FloatingReportButton';
 import { UpdateRequired } from '@/ui/UpdateRequired';
@@ -37,11 +37,11 @@ installPwaHead();
 // provider) and translate the Stack header titles.
 function RootStack() {
   const t = useT();
-  const minVersion = useMinAppVersion();
+  const appConfig = useAppConfig();
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
 
-  if (minVersion !== null && compareSemver(appVersion, minVersion) < 0) {
-    return <UpdateRequired />;
+  if (appConfig.minAppVersion !== null && compareSemver(appVersion, appConfig.minAppVersion) < 0) {
+    return <UpdateRequired message={appConfig.updateMessage} updateUrl={appConfig.updateUrl} />;
   }
 
   return (
@@ -54,7 +54,10 @@ function RootStack() {
         options={{ presentation: 'transparentModal', animation: 'fade', headerShown: false }}
       />
       <Stack.Screen name="review" options={{ title: t('nav.review') }} />
-      <Stack.Screen name="report" options={{ title: t('nav.report') }} />
+      <Stack.Screen
+        name="report"
+        options={{ presentation: 'transparentModal', animation: 'fade', headerShown: false }}
+      />
       <Stack.Screen name="trash" options={{ title: t('nav.trash') }} />
       <Stack.Screen name="browse/tags" options={{ title: t('nav.browseTags') }} />
       <Stack.Screen name="graph" options={{ title: t('nav.graph') }} />

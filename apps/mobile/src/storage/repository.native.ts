@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
 import type { BookmarkRepository, TagData } from '@/storage/types';
@@ -117,6 +118,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   // wedges persistence with "NativeDatabase.prepareAsync ... NullPointerException".
   private readonly connection = new SqliteConnection<SQLite.SQLiteDatabase>(
     async () => {
+      ensureNativeSqliteDirectory();
       const db = await SQLite.openDatabaseAsync('stash.db');
       await db.execAsync(SCHEMA_SQL);
       return db;
@@ -287,6 +289,12 @@ class SqliteBookmarkRepository implements BookmarkRepository {
 
   async upsertEnrichments(enrichments: AIEnrichment[]): Promise<void> {
     await this.connection.run((db) => writeEnrichments(db, enrichments));
+  }
+
+  async deleteEnrichment(bookmarkId: string): Promise<void> {
+    await this.connection.run((db) =>
+      db.runAsync('DELETE FROM enrichments WHERE bookmark_id = ?', [bookmarkId]),
+    );
   }
 
   async listTagData(): Promise<TagData> {

@@ -54,8 +54,16 @@ jest.mock('@/api/bookmarks', () => {
   };
 });
 
+const mockBack = jest.fn();
 jest.mock('expo-router', () => ({
   usePathname: () => '/report',
+  useRouter: () => ({ back: mockBack }),
+}));
+
+const mockWindowSize = { width: 390, height: 844, scale: 2, fontScale: 1 };
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => mockWindowSize,
 }));
 
 import ReportScreen from '@/app/report';
@@ -81,6 +89,9 @@ function renderReport(createApi?: Parameters<typeof ReportScreen>[0]) {
 beforeEach(() => {
   fakeRepo.__reset([]);
   clearPendingFeedbackScreenshot();
+  mockBack.mockClear();
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
   mockAuth = {
     status: 'anonymous',
     session: mockSession,
@@ -99,8 +110,33 @@ test('renders the form and shows the privacy note', async () => {
 
   await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
   expect(screen.getByText(/not your bookmark list/)).toBeTruthy();
-  expect(screen.getByLabelText('Diagnostic context preview')).toBeTruthy();
+  expect(screen.getByLabelText('Toggle diagnostic context preview')).toBeTruthy();
+  expect(screen.queryByLabelText('Diagnostic context preview')).toBeNull();
   expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+  expect(screen.getByTestId('share-diagnostics-icon')).toBeTruthy();
+  expect(screen.getByTestId('submit-report-icon')).toBeTruthy();
+});
+
+test('wide viewport presents the report form as a side sheet', async () => {
+  mockWindowSize.width = 1280;
+  const screen = await renderReport();
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  expect(screen.getByTestId('report-sheet-backdrop')).toBeTruthy();
+});
+
+test('phone viewport presents the report form full-screen', async () => {
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
+  const screen = await renderReport();
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  expect(screen.queryByTestId('report-sheet-backdrop')).toBeNull();
+  const root = screen.getByTestId('report-fullscreen');
+  const flat = Array.isArray(root.props.style)
+    ? Object.assign({}, ...root.props.style.flat())
+    : root.props.style;
+  expect(flat.height).toBe(844);
 });
 
 test('Submit is disabled until a description is entered', async () => {
@@ -158,6 +194,7 @@ test('shows a pending screenshot but keeps it excluded until the user opts in', 
 
   await waitFor(() => expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy());
   expect(screen.queryByLabelText('Screenshot preview')).toBeNull();
+  await fireEvent.press(screen.getByLabelText('Toggle diagnostic context preview'));
   expect(screen.getByLabelText('Diagnostic context preview').props.children).not.toContain(
     'screenshot',
   );
@@ -184,6 +221,48 @@ test('shows a pending screenshot but keeps it excluded until the user opts in', 
   };
   expect(arg.context.screenshot?.dataUrl).toBe('data:image/jpeg;base64,ZmFrZS1qcGVn');
   expect(arg.context.screenshot?.surface).toBe('settings');
+  expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy();
+  expect(screen.queryByLabelText('Screenshot preview')).toBeNull();
+});
+
+test('keeps the captured screenshot available for a follow-up report on the same screen', async () => {
+  setPendingFeedbackSource({ route: '/settings', surface: 'settings' });
+  setPendingFeedbackScreenshot({
+    dataUrl: 'data:image/jpeg;base64,ZmFrZS1qcGVn',
+    mimeType: 'image/jpeg',
+    capturedAt: '2026-07-08T10:00:00.000Z',
+    platform: 'android',
+    surface: 'settings',
+  });
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy());
+  await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', true);
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'First issue');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  expect(screen.getByText(/Thanks/)).toBeTruthy();
+  expect(screen.getByLabelText('Include screenshot in report')).toBeTruthy();
+  expect(screen.queryByLabelText('Screenshot preview')).toBeNull();
+
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Second issue');
+  await fireEvent(screen.getByLabelText('Include screenshot in report'), 'valueChange', true);
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  const second = submitReport.mock.calls[1]![0] as {
+    context: { screenshot?: { dataUrl?: string; surface?: string } };
+  };
+  expect(second.context.screenshot?.dataUrl).toBe('data:image/jpeg;base64,ZmFrZS1qcGVn');
+  expect(second.context.screenshot?.surface).toBe('settings');
 });
 
 test('excludes the screenshot when the user turns the screenshot toggle off', async () => {
@@ -289,4 +368,30 @@ test('shows a friendly message when Supabase is not configured', async () => {
   expect(screen.queryByLabelText('Submit report')).toBeNull();
   // Even without the cloud, diagnostics can still be shared.
   expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+});
+
+test('navigates back after a successful submission after the timeout', async () => {
+  jest.useFakeTimers();
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Going back');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
+  expect(mockBack).not.toHaveBeenCalled();
+
+  // Fast-forward time by 1.5 seconds
+  await act(async () => {
+    jest.advanceTimersByTime(1500);
+  });
+
+  expect(mockBack).toHaveBeenCalledTimes(1);
+  jest.useRealTimers();
 });

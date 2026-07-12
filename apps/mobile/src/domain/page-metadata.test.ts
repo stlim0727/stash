@@ -58,6 +58,24 @@ test('parsePageMetadata resolves relative image and favicon URLs', () => {
   assert.equal(meta.favicon_url, 'https://www.inkandswitch.com/static/favicon.ico');
 });
 
+test('parsePageMetadata keeps GeekNews social preview metadata', () => {
+  const html = `
+    <head>
+      <title>Claude와 몇 달간 씨름한 뒤 Codex는 바이브 코더의 꿈처럼 느껴짐 | GeekNews</title>
+      <meta property="og:title" content="Claude와 몇 달간 씨름한 뒤 Codex는 바이브 코더의 꿈처럼 느껴짐 | GeekNews">
+      <meta property="og:site_name" content="GeekNews">
+      <meta property="og:image" content="https://social.news.hada.io/topic/29576">
+      <link rel="shortcut icon" href="/favicon.ico">
+    </head>`;
+
+  const meta = parsePageMetadata(html, 'https://news.hada.io/topic?id=29576');
+
+  assert.equal(meta.title, 'Claude와 몇 달간 씨름한 뒤 Codex는 바이브 코더의 꿈처럼 느껴짐 | GeekNews');
+  assert.equal(meta.site_name, 'GeekNews');
+  assert.equal(meta.preview_image_url, 'https://social.news.hada.io/topic/29576');
+  assert.equal(meta.favicon_url, 'https://news.hada.io/favicon.ico');
+});
+
 test('parsePageMetadata falls back to twitter then <title>', () => {
   const twitterOnly = '<head><meta name="twitter:title" content="T"/><title>Doc</title></head>';
   assert.equal(parsePageMetadata(twitterOnly, 'https://x.com/').title, 'T');
@@ -165,6 +183,38 @@ test('fetchPageMetadata keeps hqdefault when sddefault is missing (404)', async 
   try {
     const meta = await fetchPageMetadata('https://youtu.be/jNQXAC9IVRw');
     assert.equal(meta?.preview_image_url, 'https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata recovers YouTube oEmbed metadata after a share.google redirect', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method?: string }> = [];
+  const finalUrl = 'https://www.youtube.com/shorts/MufIgnqP1vk';
+  globalThis.fetch = (async (target: string, init?: RequestInit) => {
+    calls.push({ url: target, method: init?.method });
+    if (target.startsWith('https://www.youtube.com/oembed')) {
+      return {
+        ok: true,
+        json: async () => ({
+          title: 'A specific Shorts title',
+          provider_name: 'YouTube',
+          thumbnail_url: 'https://i.ytimg.com/vi/MufIgnqP1vk/hqdefault.jpg',
+        }),
+      } as unknown as Response;
+    }
+    if (init?.method === 'HEAD') {
+      return { ok: false } as unknown as Response;
+    }
+    return htmlResponse('<html><head></head><body>shell</body></html>', { url: finalUrl });
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://share.google/bb3vpuiCbbyVhrpTp');
+    assert.equal(meta?.title, 'A specific Shorts title');
+    assert.equal(meta?.site_name, 'YouTube');
+    assert.equal(meta?.preview_image_url, 'https://i.ytimg.com/vi/MufIgnqP1vk/hqdefault.jpg');
+    assert.ok(calls.some((c) => c.url.includes('youtube.com%2Fwatch%3Fv%3DMufIgnqP1vk')));
   } finally {
     globalThis.fetch = originalFetch;
   }

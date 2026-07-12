@@ -64,6 +64,15 @@ jest.mock('@/share/dismiss', () => ({
   canDismissAfterShare: () => mockCanDismiss(),
 }));
 
+const mockRecordLog = jest.fn();
+jest.mock('@/observability/log-buffer', () => {
+  const actual = jest.requireActual('@/observability/log-buffer');
+  return {
+    ...actual,
+    recordLog: (...args: unknown[]) => mockRecordLog(...args),
+  };
+});
+
 // Controllable share-intent context: a cold-start share has hasShareIntent
 // true from the very first render, before the durable store has loaded.
 let mockShareIntent: {
@@ -75,6 +84,7 @@ let mockShareIntent: {
     files?: Array<{ path: string; mimeType: string; fileName: string }> | null;
   };
   resetShareIntent: jest.Mock;
+  error?: string | null;
 };
 jest.mock('expo-share-intent', () => ({
   useShareIntentContext: () => mockShareIntent,
@@ -118,6 +128,7 @@ beforeEach(async () => {
   mockCanDismiss.mockReset();
   mockCanDismiss.mockReturnValue(false);
   mockCopyImage.mockClear();
+  mockRecordLog.mockClear();
   // Reset the persisted share-behavior preference to the default between tests
   // (the fake repo's meta store outlives a single test).
   await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'toast');
@@ -127,6 +138,7 @@ beforeEach(async () => {
     hasShareIntent: false,
     shareIntent: { webUrl: null, text: null },
     resetShareIntent: jest.fn(),
+    error: null,
   };
 });
 
@@ -147,6 +159,7 @@ describe('ShareIntentHandler', () => {
       hasShareIntent: true,
       shareIntent: { webUrl: 'https://example.com/stored', text: null },
       resetShareIntent: jest.fn(),
+      error: null,
     };
 
     const { findByText, unmount } = await renderHandler();
@@ -486,6 +499,38 @@ describe('ShareIntentHandler', () => {
     await waitFor(() => expect(mockShareIntent.resetShareIntent).toHaveBeenCalled());
     expect(fakeRepo.__queue()).toHaveLength(0);
     expect(await fakeRepo.repository.listBookmarks()).toHaveLength(0);
+    unmount();
+  });
+
+  it('surfaces and logs a native share-intent error when no payload is available', async () => {
+    // Some Android senders can match our share target but still fail inside the
+    // native parser before JS receives text/files. The user must see a failure
+    // instead of a silent Inbox open, and monitoring needs a coarse native error
+    // without any shared content.
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: false,
+      shareIntent: { webUrl: null, text: null },
+      resetShareIntent: jest.fn(),
+      error: 'empty uri for file sharing: android.intent.action.SEND',
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('No link found to save');
+    expect(mockRouter.replace).toHaveBeenCalledWith('/');
+    expect(mockShareIntent.resetShareIntent).toHaveBeenCalled();
+    expect(fakeRepo.__queue()).toHaveLength(0);
+    expect(await fakeRepo.repository.listBookmarks()).toHaveLength(0);
+    expect(mockRecordLog).toHaveBeenCalledWith(
+      'error',
+      '[share] native share intent error',
+      [expect.any(Error)],
+    );
+    const loggedError = mockRecordLog.mock.calls.find(
+      ([level, message]) => level === 'error' && message === '[share] native share intent error',
+    )?.[2]?.[0];
+    expect(loggedError.message).toBe('empty uri for file sharing: android.intent.action.SEND');
     unmount();
   });
 

@@ -1,5 +1,7 @@
 # Build history
 
+**Sentry DB sync (2026-07-11)**: MCP connected (org `self-463`, project `stash`). `sentry__search_issues` is temporarily unavailable due to a server configuration issue on the MCP side. The `STASH-*` references in the table below represent the latest known state pulled from the Sentry database. For real-time unresolved issues, visit https://self-463.sentry.io/issues/?project=stash.
+
 A running log of the Android RC/test builds cut from CI (`android-apk.yml`), so
 the next RC number isn't guesswork. **Stable releases** live in their own tags
 (`vX.Y.Z`) and `docs/release-notes/<tag>.md`; this file tracks the **release
@@ -38,7 +40,16 @@ candidates** (`vX.Y.Z-rcN`) that lead up to each stable cut.
   "what's new since the last RC." Skipping this is exactly how `v1.0.0-rc4` went
   unlogged and the next build's number became a guess.
 
-## 1.1.0 cycle (current trunk)
+## 1.2.0 cycle (current trunk)
+
+`apps/mobile/app.json` `version` = `1.2.0` (bumped `1.1.0 → 1.2.0` to align with the release candidate cycle). These are the release candidates leading to the first `v1.2.0` stable cut. The stable target is **`v1.2.0`**.
+
+| Build | Date (UTC) | `main` SHA | What's new since last RC |
+| ----- | ---------- | ---------- | ------------------------ |
+| `v1.2.0-rc5` | 2026-07-12 | `16a6f77` | Includes SQLite directory repair robust fix using `file.exists` (#480) and bookmark detail screen preview refresh/AI regeneration logic (#479). Build = `android-apk.yml` run #_(TBD)_. |
+| `v1.2.0-rc1`–`rc4` | 2026-07-09 – 07-11 | _(various)_ | Not individually logged here — each build's `-rcN` is self-recorded on the rolling `dev` prerelease (name/body carry the label since #302). |
+
+## 1.1.0 cycle (superseded — 16 RCs, no stable `v1.1.0` cut)
 
 `apps/mobile/app.json` `version` = `1.1.0` (bumped `1.0.0 → 1.1.0` to open the
 1.1 line, ahead of the first 1.1 release candidate; the `version` input passed to

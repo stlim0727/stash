@@ -31,6 +31,7 @@ export const en = {
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.share': 'Share',
+  'common.copy': 'Copy',
   'common.open': 'Open',
   'common.openLink': 'Open link',
   'common.view': 'View',
@@ -265,6 +266,7 @@ export const en = {
   'toast.trashed': 'Moved to Trash',
   'toast.noLink': 'No link found to save',
   'toast.saveFailed': 'Could not save to Keepory',
+  'toast.linkCopied': 'Link copied',
 
   // Settings.
   'settings.section.account': 'Account',
@@ -414,7 +416,11 @@ export const en = {
   'detail.aiGenerating': 'Generating suggestions…',
   'detail.aiRefresh': 'Refresh AI suggestions',
   'detail.aiSuggest': 'Suggest with AI',
+  'detail.previewRefresh': 'Preview',
+  'detail.previewRefreshing': 'Refreshing…',
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
+  'detail.aiPreviewFailed': 'AI suggestions are unavailable because the preview could not be loaded.',
+  'detail.previewFailedNote': 'Failed to load preview and metadata.',
   'detail.aiRateLimited': 'AI suggestions have hit their limit for now — try again a little later.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
   // Shown as a calm, non-error note so the cause is never hidden (M12); the
@@ -434,7 +440,10 @@ export const en = {
   'detail.rowFrom': 'From',
   'detail.errorShare': 'Could not open the share sheet.',
   'detail.errorOpen': 'Could not open this link.',
+  'detail.errorCopyLink': 'Could not copy this link.',
+  'detail.errorRefreshPreview': 'Could not refresh the preview.',
   'detail.errorCreateCollection': 'Could not create the collection.',
+  'detail.notesTooLong': 'Note is too long ({count}/{max} characters). Truncate or split it.',
   'detail.deleteConfirmWeb': 'Delete this bookmark permanently?',
 
   // Delete confirmation (native alert; shared by Inbox + Detail).
@@ -507,6 +516,9 @@ export const en = {
   'report.screenshotToggleA11y': 'Include screenshot in report',
   'report.screenshotPreviewA11y': 'Screenshot preview',
   'report.contextPreviewA11y': 'Diagnostic context preview',
+  'report.contextPreviewToggleA11y': 'Toggle diagnostic context preview',
+  'report.showDiagnostics': 'Show diagnostic context',
+  'report.hideDiagnostics': 'Hide diagnostic context',
   'report.shareDiagnosticsA11y': 'Share diagnostics',
   'report.shareWithCount': 'Share diagnostics & logs ({count})',
   'report.share': 'Share diagnostics & logs',
