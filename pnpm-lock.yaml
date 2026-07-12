@@ -16,6 +16,9 @@ importers:
 
   .:
     devDependencies:
+      '@supabase/realtime-js':
+        specifier: ^2.110.2
+        version: 2.110.2
       pixelmatch:
         specifier: ^7.2.0
         version: 7.2.0
