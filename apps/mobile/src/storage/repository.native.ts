@@ -291,6 +291,12 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     await this.connection.run((db) => writeEnrichments(db, enrichments));
   }
 
+  async deleteEnrichment(bookmarkId: string): Promise<void> {
+    await this.connection.run((db) =>
+      db.runAsync('DELETE FROM enrichments WHERE bookmark_id = ?', [bookmarkId]),
+    );
+  }
+
   async listTagData(): Promise<TagData> {
     return this.connection.run(async (db) => {
       const rows = await db.getAllAsync<{ kind: string; data: string }>('SELECT * FROM tag_data');

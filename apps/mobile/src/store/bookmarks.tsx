@@ -1677,11 +1677,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         try {
           await ensureRepositoryReady();
           await repository.updateBookmark(updated);
+          if (metadata_status === 'failed') {
+            await repository.deleteEnrichment(id);
+            setEnrichments((current) => current.filter((item) => item.bookmark_id !== id));
+          }
         } catch (error) {
           logStorageError('preview refresh', error);
         }
         if (syncsRemotely) {
           enqueueMutation(id, 'update');
+        }
+        if (metadata_status !== 'failed') {
+          void requestAiEnrichment(id, 'auto').catch(() => {});
         }
         return null;
       } catch (error) {
