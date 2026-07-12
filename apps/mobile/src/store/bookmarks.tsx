@@ -463,6 +463,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
   const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
   const syncPendingRef = useRef(false);
+  const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
   // The active language, sent with AI enrichment requests so the model answers
   // in the user's locale (M12). Read through a ref so requestAiEnrichment stays
   // stable as the locale changes — it just picks up the latest value when fired.
@@ -2420,7 +2421,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (syncPendingRef.current) {
         syncPendingRef.current = false;
         setTimeout(() => {
-          void syncNow().catch(() => {});
+          void syncNowRef.current?.().catch(() => {});
         }, 50);
       }
     }
@@ -2438,6 +2439,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     syncNow,
   });
   broadcastSyncNudgeRef.current = broadcastSyncNudge;
+  syncNowRef.current = syncNow;
 
   // URL-title backfill: repair bookmarks already saved with a poor URL-derived
   // title (a bare host like "youtu.be", or an opaque id slug like "Dabls52E90n")
