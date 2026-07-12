@@ -11,6 +11,7 @@ to authenticated
 using (
   realtime.topic() = 'sync:private:' || auth.uid()::text
   and realtime.messages.extension = 'broadcast'
+  and coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false) = false
 );
 
 create policy "authenticated can send own sync broadcast"
@@ -20,4 +21,5 @@ to authenticated
 with check (
   realtime.topic() = 'sync:private:' || auth.uid()::text
   and realtime.messages.extension = 'broadcast'
+  and coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false) = false
 );
