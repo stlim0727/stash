@@ -14,8 +14,7 @@ export function ensureNativeSqliteDirectory(): void {
       directory.create({ intermediates: true, idempotent: true });
     },
     pathIsNonDirectory: () => {
-      const info = Paths.info(directory.uri);
-      return info.exists && info.isDirectory !== true;
+      return file.exists;
     },
     deleteFile: () => {
       file.delete();
