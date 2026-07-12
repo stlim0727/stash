@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-11 (Sentry DB sync).
+Last updated: 2026-07-12 (GitHub Codex identity).
 
 ## Successor Agent Orientation
 
@@ -234,6 +234,11 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
 - After opening or updating a PR, keep watching while active for CI failures and
   human review activity. Ignore routine bot/status comments such as deploy
   preview success messages.
+- When posting manual GitHub comments, PR bodies, or review replies through a
+  user's GitHub credentials, explicitly identify the note as Codex-authored so
+  it is not mistaken for the human account owner. Do not duplicate that label
+  on platform-generated or automatically-triggered Codex comments that already
+  identify their source.
 - If CI is green and no human review activity appears for 5 minutes, either ask
   the user to merge or merge directly for small, well-tested, low-risk changes.
 - Do not auto-merge PRs that change Supabase migrations/functions,
