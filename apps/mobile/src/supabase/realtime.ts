@@ -119,6 +119,10 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
         void syncNow().catch(() => {});
       } else {
         disconnectSocket();
+        if (debounceTimeoutRef.current) {
+          clearTimeout(debounceTimeoutRef.current);
+          debounceTimeoutRef.current = null;
+        }
       }
     };
 

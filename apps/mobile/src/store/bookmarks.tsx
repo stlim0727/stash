@@ -462,6 +462,7 @@ function mergeById<T>(current: T[], loaded: T[], key: (item: T) => string): T[] 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
   const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
+  const syncPendingRef = useRef(false);
   // The active language, sent with AI enrichment requests so the model answers
   // in the user's locale (M12). Read through a ref so requestAiEnrichment stays
   // stable as the locale changes — it just picks up the latest value when fired.
@@ -1772,6 +1773,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         recordLog('warn', `tag sync failed (${op.op} ${op.tag_name}): ${String(error)}`);
       }
     }
+    if (mutationsPushed) {
+      broadcastSyncNudgeRef.current?.();
+    }
     return mutationsPushed;
   }, [auth.session, applyTagData, applyTagOps]);
 
@@ -2053,6 +2057,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const syncNow = useCallback(async (): Promise<boolean> => {
     if (syncInFlight.current) {
+      syncPendingRef.current = true;
       return false;
     }
     if (!auth.session) {
@@ -2175,6 +2180,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   queued.local_id === entry.local_id ? result.entry : queued,
                 ),
           );
+          if (result.removeEntry) {
+            mutationsPushed = true;
+          }
           if (result.bookmarkReplacement) {
             const { previousId, bookmark: replacement } = result.bookmarkReplacement;
             // The replacement was built from a snapshot taken before the upload.
@@ -2409,6 +2417,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     } finally {
       syncInFlight.current = false;
       setIsSyncing(false);
+      if (syncPendingRef.current) {
+        syncPendingRef.current = false;
+        setTimeout(() => {
+          void syncNow().catch(() => {});
+        }, 50);
+      }
     }
     if (mutationsPushed) {
       broadcastSyncNudgeRef.current?.();
