@@ -47,6 +47,7 @@ export interface BookmarkRepository {
   /** Local cache of cloud AI enrichments, refreshed by pull sync. */
   listEnrichments(): Promise<AIEnrichment[]>;
   upsertEnrichments(enrichments: AIEnrichment[]): Promise<void>;
+  deleteEnrichment(bookmarkId: string): Promise<void>;
   /** Local cache of tags/links/collections; replaced wholesale by pull sync. */
   listTagData(): Promise<TagData>;
   replaceTagData(data: TagData): Promise<void>;

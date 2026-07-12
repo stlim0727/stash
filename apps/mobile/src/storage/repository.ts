@@ -157,6 +157,11 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(ENRICHMENTS_KEY, this.enrichments);
   }
 
+  async deleteEnrichment(bookmarkId: string): Promise<void> {
+    this.enrichments = this.enrichments.filter((item) => item.bookmark_id !== bookmarkId);
+    this.write(ENRICHMENTS_KEY, this.enrichments);
+  }
+
   async listTagData(): Promise<TagData> {
     return this.tagData;
   }

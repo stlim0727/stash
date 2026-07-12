@@ -552,6 +552,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     localeRef.current = locale;
   }, [locale]);
+  const requestAiEnrichmentRef = useRef<
+    | ((
+        bookmarkId: string,
+        source?: 'auto' | 'manual',
+        overrideMetadata?: EnrichmentMetadataHint,
+      ) => Promise<string | null>)
+    | null
+  >(null);
 
   // Apply + persist a new tag-data snapshot in one step. The ref is updated
   // synchronously so a follow-up tag op in the same tick reads the latest.
@@ -1677,11 +1685,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         try {
           await ensureRepositoryReady();
           await repository.updateBookmark(updated);
+          if (metadata_status === 'failed') {
+            await repository.deleteEnrichment(id);
+            setEnrichments((current) => current.filter((item) => item.bookmark_id !== id));
+          }
         } catch (error) {
           logStorageError('preview refresh', error);
         }
         if (syncsRemotely) {
           enqueueMutation(id, 'update');
+        }
+        if (metadata_status !== 'failed') {
+          void requestAiEnrichmentRef.current?.(id, 'auto', {
+            title: updated.title,
+            description: updated.description,
+            notes: updated.notes,
+            site_name: updated.site_name,
+            content_type: updated.content_type,
+          }).catch(() => {});
         }
         return null;
       } catch (error) {
@@ -1843,7 +1864,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // immediately rather than waiting for the next pull. Fire-and-forget safe:
   // failures (e.g. the function isn't deployed yet) just return a message.
   const requestAiEnrichment = useCallback(
-    async (bookmarkId: string, source: 'auto' | 'manual' = 'manual'): Promise<string | null> => {
+    async (
+      bookmarkId: string,
+      source: 'auto' | 'manual' = 'manual',
+      overrideMetadata?: EnrichmentMetadataHint,
+    ): Promise<string | null> => {
       if (!auth.session) {
         return 'AI suggestions need the cloud — Supabase is not available right now.';
       }
@@ -1871,15 +1896,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // URL (on-device OpenGraph enrichment may not have synced yet), and the
         // model would otherwise have nothing to reason about.
         const latest = bookmarksRef.current?.find((item) => item.id === bookmarkId);
-        const metadata: EnrichmentMetadataHint | undefined = latest
-          ? {
-              title: latest.title,
-              description: latest.description,
-              notes: latest.notes,
-              site_name: latest.site_name,
-              content_type: latest.content_type,
-            }
-          : undefined;
+        const metadata: EnrichmentMetadataHint | undefined =
+          overrideMetadata ??
+          (latest
+            ? {
+                title: latest.title,
+                description: latest.description,
+                notes: latest.notes,
+                site_name: latest.site_name,
+                content_type: latest.content_type,
+              }
+            : undefined);
         const activeLocale = localeRef.current;
         let enrichment: AIEnrichment;
         try {
@@ -1965,6 +1992,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [auth, noteUnseenSuggestions],
   );
+  useEffect(() => {
+    requestAiEnrichmentRef.current = requestAiEnrichment;
+  }, [requestAiEnrichment]);
 
   // True while an AI enrichment request for this bookmark is in flight (whether
   // auto-triggered after sync or started by a manual "Suggest with AI" tap).

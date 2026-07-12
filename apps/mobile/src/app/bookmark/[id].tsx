@@ -327,7 +327,9 @@ export default function BookmarkDetailScreen({
     !suggestedCollection && !!suggestedByName && !folderSuggestionDismissed;
   // A folder chip (file-into or create) is currently on screen — so the tag
   // field's "Add all"/"Dismiss all" should sweep it too, like the Review screen.
-  const folderSuggestionVisible = showCollectionSuggestion || showCreateCollectionSuggestion;
+  const isPreviewFailed = bookmark.metadata_status === 'failed';
+
+  const folderSuggestionVisible = !isPreviewFailed && (showCollectionSuggestion || showCreateCollectionSuggestion);
 
   // Hashtags already written into the captured content (e.g. an Instagram
   // caption's "#목살 #덮밥") make good tags — offer them as one-tap chips, minus
@@ -335,7 +337,7 @@ export default function BookmarkDetailScreen({
   // Only when the bookmark can actually be tagged, so we never surface a chip
   // whose accept would just error.
   const aiSuggestionNames = new Set(pending.map((suggestion) => suggestion.name.toLowerCase()));
-  const hashtagTags = canOrganizeRemotely
+  const hashtagTags = canOrganizeRemotely && !isPreviewFailed
     ? hashtagSuggestions([bookmark.title, bookmark.description], appliedTagNames).filter(
         (name) =>
           !dismissed.has(name.toLowerCase()) && !aiSuggestionNames.has(name.toLowerCase()),
@@ -344,10 +346,12 @@ export default function BookmarkDetailScreen({
 
   // AI suggestions carry a real confidence; hashtag chips render the same way
   // but are added straight as user tags when accepted.
-  const tagSuggestions = [
-    ...pending.map((suggestion) => ({ name: suggestion.name, confidence: suggestion.confidence })),
-    ...hashtagTags.map((name) => ({ name, confidence: 1 })),
-  ];
+  const tagSuggestions = isPreviewFailed
+    ? []
+    : [
+        ...pending.map((suggestion) => ({ name: suggestion.name, confidence: suggestion.confidence })),
+        ...hashtagTags.map((name) => ({ name, confidence: 1 })),
+      ];
 
   // AI card visibility. The dummy-v0 heuristic fallback (see
   // supabase/functions/ai-enrich/dummy-provider.ts) still emits a generic
@@ -374,6 +378,7 @@ export default function BookmarkDetailScreen({
   const summaryTok = summaryToken(enrichment?.summary);
   const summaryReviewed = summaryTok !== null && getReviewedSummary(bookmark.id).has(summaryTok);
   const showAiSummary =
+    !isPreviewFailed &&
     Boolean(enrichment?.summary?.trim()) &&
     !summaryReviewed &&
     enrichment?.model !== 'dummy-v0';
@@ -786,6 +791,21 @@ export default function BookmarkDetailScreen({
       {/* Prefer a captured image's local URI (image bookmarks) over a fetched
           preview; either renders the same hero. */}
       {(() => {
+        if (isPreviewFailed) {
+          return (
+            <View
+              style={[
+                styles.previewFailedBanner,
+                { backgroundColor: palette.dangerSoft, borderColor: palette.danger },
+              ]}
+            >
+              <Ionicons name="warning-outline" size={24} color={palette.danger} />
+              <Text style={[styles.previewFailedText, { color: palette.text }]}>
+                {t('detail.previewFailedNote')}
+              </Text>
+            </View>
+          );
+        }
         const previewUri = bookmark.local_image_uri ?? bookmark.preview_image_url;
         if (!previewUri) {
           return null;
@@ -1130,7 +1150,11 @@ export default function BookmarkDetailScreen({
           </Text>
         ) : null}
 
-        {canOrganizeRemotely ? (
+        {isPreviewFailed ? (
+          <Text style={[styles.hint, { color: palette.textSecondary }]}>
+            {t('detail.aiPreviewFailed')}
+          </Text>
+        ) : canOrganizeRemotely ? (
           <Pressable
             accessibilityRole="button"
             // Gate only on a manual request — an auto-trigger must leave the
@@ -1585,5 +1609,21 @@ const styles = StyleSheet.create({
   actionLabel: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  previewFailedBanner: {
+    width: '100%',
+    height: 220,
+    borderRadius: 28,
+    borderWidth: 1,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    gap: 8,
+  },
+  previewFailedText: {
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'center',
   },
 });
