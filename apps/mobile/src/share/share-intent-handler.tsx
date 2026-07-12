@@ -11,6 +11,7 @@ import {
 import { pickSharedImage, type SharedImage } from '@/domain/image-share';
 import { extractFirstUrl } from '@/domain/urls';
 import { useT } from '@/i18n';
+import { recordLog } from '@/observability/log-buffer';
 import { trackBreadcrumb } from '@/observability/sentry';
 import { canDismissAfterShare, dismissAfterShare } from '@/share/dismiss';
 import { recordPendingShareConfirm } from '@/share/pending-confirm';
@@ -37,7 +38,7 @@ import { useCaptureToast } from '@/ui/capture-toast';
  * native share module is a no-op on web.
  */
 export function ShareIntentHandler() {
-  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
+  const { hasShareIntent, shareIntent, resetShareIntent, error } = useShareIntentContext();
   const { addBookmark, isLoading } = useBookmarks();
   const router = useRouter();
   const { show } = useCaptureToast();
@@ -57,9 +58,27 @@ export function ShareIntentHandler() {
   // Guards against re-copying the same intent across renders before the reset
   // propagates; cleared once the intent goes away so a later share is captured.
   const capturedRef = useRef(false);
+  // The native module can report an error without a usable share payload. Keep
+  // that visible to monitoring, but suppress duplicate reports across renders.
+  const reportedErrorRef = useRef<string | null>(null);
   // Cached post-share preference; refreshed whenever a share is handled so a
   // Settings change takes effect on the next share without blocking on storage.
   const behavior = useRef<ShareBehavior>(DEFAULT_SHARE_BEHAVIOR);
+
+  useEffect(() => {
+    if (!error) {
+      reportedErrorRef.current = null;
+      return;
+    }
+    if (reportedErrorRef.current === error) {
+      return;
+    }
+    reportedErrorRef.current = error;
+    recordLog('error', '[share] native share intent error', [new Error(error)]);
+    show(t('toast.noLink'));
+    router.replace('/');
+    resetShareIntent();
+  }, [error, resetShareIntent, router, show, t]);
 
   // Copy the incoming share into local state right away, then release the OS
   // intent so nothing else can clear it while we wait for the store to load.
