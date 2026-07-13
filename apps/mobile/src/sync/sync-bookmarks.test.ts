@@ -229,7 +229,8 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
 });
 
 test('update: retries without optional AI dismissal fields when the schema is behind', async () => {
-  const { calls, repository } = fakeRepository();
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
+  const { calls, repository } = fakeRepository([entry]);
   const sent: unknown[] = [];
   const api = fakeApi({
     updateBookmark: async (id: string, input: Record<string, unknown>) => {
@@ -251,7 +252,6 @@ test('update: retries without optional AI dismissal fields when the schema is be
     reviewed_summary_tokens: ['summary-token'],
   });
 
-  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
   const result = await syncQueueEntry(api, repository, entry, () => latest);
 
   assert.equal(result.removeEntry, undefined);
@@ -296,6 +296,39 @@ test('update: retries without optional AI dismissal fields when the schema is be
   ]);
   assert.ok(calls.includes('updateQueueEntry:00000000-0000-4000-8000-000000000001:failed'));
   assert.ok(!calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
+});
+
+test('update: failure does not overwrite a queue entry if a newer operation has superseded it', async () => {
+  const latest = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    sync_status: 'pending',
+  });
+
+  const originalEntry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
+
+  // The database queue now has a newer enqueued delete mutation that superseded our update while it was running
+  const supersedingDelete = {
+    ...originalEntry,
+    operation: 'delete' as const,
+    updated_at: '2026-06-12T00:05:00.000Z', // newer
+  };
+
+  const { calls, repository } = fakeRepository([supersedingDelete]);
+  const api = fakeApi({
+    updateBookmark: async () => {
+      throw new Error('API update failed');
+    },
+  });
+
+  const result = await syncQueueEntry(api, repository, originalEntry, () => latest);
+
+  assert.equal(result.removeEntry, undefined);
+  // It must return the superseding delete entry, preserving it for in-memory queue integration
+  assert.equal(result.entry.sync_status, 'pending');
+  assert.equal(result.entry.operation, 'delete');
+  assert.equal(result.entry.updated_at, '2026-06-12T00:05:00.000Z');
+  // Since the delete mutation is in the queue, we must NOT write 'failed' back to the queue
+  assert.ok(!calls.includes('updateQueueEntry:00000000-0000-4000-8000-000000000001:failed'));
 });
 
 test('update: a locally deleted bookmark just clears the entry', async () => {
@@ -490,6 +523,31 @@ test('update: an ORPHANED local-id target (no pending create) is PROMOTED to a c
   assert.ok(
     calls.includes('replaceBookmark:local-mquc351g-wzpsqbby->00000000-0000-4000-8000-000000000099'),
   );
+});
+
+test('update: an ORPHANED local-id target promoted to a create that fails writes its failure to the queue', async () => {
+  const localId = 'local-mquc351g-wzpsqbby';
+  const entry = makeMutationEntry(localId, 'update');
+  const { calls, repository } = fakeRepository([entry]);
+
+  const api = fakeApi({
+    createBookmark: async () => {
+      throw new Error('API create failed');
+    },
+  });
+
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: localId, url: 'https://example.com/a' }),
+  );
+
+  assert.equal(result.removeEntry, undefined);
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(result.entry.operation, 'create');
+  assert.equal(result.entry.retry_count, 1);
+  assert.equal(result.entry.last_error, 'API create failed');
+
+  // It must successfully save it back to the database queue
+  assert.ok(calls.includes(`updateQueueEntry:${localId}:failed`));
 });
 
 test('update: an ORPHANED local-id target with no URL or text SETTLES failed (cannot become a create)', async () => {

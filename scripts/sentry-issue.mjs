@@ -105,6 +105,7 @@ async function searchIssues(config, query, limit = 10) {
     url.searchParams.set('sort', 'date');
     url.searchParams.set('limit', String(limit));
     url.searchParams.set('query', query);
+    url.searchParams.set('shortIdLookup', '1');
     if (config.project) url.searchParams.set('project', config.project);
     const found = await getJson(url.toString(), config.token);
     for (const issue of found) issues.push({ org: org.slug, ...issue });
@@ -118,7 +119,7 @@ async function latestEvent(config, issue) {
 }
 
 async function resolveIssue(config, issue) {
-  return getJson(`${API_BASE}/issues/${issue.id}/`, config.token, {
+  return getJson(`${API_BASE}/organizations/${issue.org}/issues/${issue.id}/`, config.token, {
     method: 'PUT',
     body: JSON.stringify({ status: 'resolved' }),
   });

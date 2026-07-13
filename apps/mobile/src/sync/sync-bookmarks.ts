@@ -33,7 +33,11 @@ export async function removeQueueEntryIfNotSuperseded(
   const stored = (await repository.listQueue()).find(
     (queued) => queued.local_id === entry.local_id,
   );
-  if (!stored || stored.operation === entry.operation) {
+  if (
+    !stored ||
+    stored.operation === entry.operation ||
+    (stored.operation === 'update' && entry.operation === 'create')
+  ) {
     await repository.removeQueueEntry(entry.local_id);
   }
 }
@@ -51,8 +55,19 @@ async function failEntry(
     last_error: errorMessage(error),
     updated_at: now,
   };
-  await repository.updateQueueEntry(failedEntry);
-  return failedEntry;
+  const stored = (await repository.listQueue()).find(
+    (queued) => queued.local_id === entry.local_id,
+  );
+  if (
+    stored &&
+    (stored.operation === entry.operation ||
+      (stored.operation === 'update' && entry.operation === 'create')) &&
+    stored.updated_at === entry.updated_at
+  ) {
+    await repository.updateQueueEntry(failedEntry);
+    return failedEntry;
+  }
+  return stored ?? failedEntry;
 }
 
 const OPTIONAL_BOOKMARK_UPDATE_COLUMNS = [
