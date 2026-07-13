@@ -2,7 +2,9 @@ import { createBookmarkApi } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
 import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
+import { recordLog } from '@/observability/log-buffer';
 import type { BookmarkRepository } from '@/storage/types';
+import { SupabaseRequestError } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
 export interface EntrySyncResult {
@@ -51,6 +53,40 @@ async function failEntry(
   };
   await repository.updateQueueEntry(failedEntry);
   return failedEntry;
+}
+
+const OPTIONAL_BOOKMARK_UPDATE_COLUMNS = [
+  'dismissed_suggested_tags',
+  'dismissed_suggested_folders',
+  'reviewed_summary_tokens',
+] as const;
+
+type BookmarkUpdatePayload = Parameters<BookmarkApi['updateBookmark']>[1];
+
+function isMissingOptionalBookmarkColumnError(
+  error: unknown,
+  payload: BookmarkUpdatePayload,
+): boolean {
+  if (!(error instanceof SupabaseRequestError) || error.status < 400 || error.status >= 500) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return OPTIONAL_BOOKMARK_UPDATE_COLUMNS.some(
+    (column) =>
+      Object.prototype.hasOwnProperty.call(payload, column) &&
+      message.includes(column.toLowerCase()) &&
+      message.includes('schema cache'),
+  );
+}
+
+function withoutOptionalBookmarkUpdateColumns(
+  payload: BookmarkUpdatePayload,
+): BookmarkUpdatePayload {
+  const next = { ...payload };
+  for (const column of OPTIONAL_BOOKMARK_UPDATE_COLUMNS) {
+    delete next[column];
+  }
+  return next;
 }
 
 /**
@@ -159,30 +195,42 @@ export async function syncQueueEntry(
       await removeQueueEntryIfNotSuperseded(repository, entry);
       return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
     }
+    const updatePayload: BookmarkUpdatePayload = {
+      title: bookmark.title,
+      description: bookmark.description,
+      notes: bookmark.notes,
+      collection_id: bookmark.collection_id,
+      is_archived: bookmark.is_archived,
+      deleted_at: bookmark.deleted_at,
+      // Push generated metadata so enrichment done on this device reaches
+      // the cloud (and, via pull, other devices).
+      site_name: bookmark.site_name,
+      favicon_url: bookmark.favicon_url,
+      preview_image_url: bookmark.preview_image_url,
+      metadata_status: bookmark.metadata_status,
+      ...(bookmark.dismissed_suggested_tags !== undefined
+        ? { dismissed_suggested_tags: bookmark.dismissed_suggested_tags }
+        : {}),
+      ...(bookmark.dismissed_suggested_folders !== undefined
+        ? { dismissed_suggested_folders: bookmark.dismissed_suggested_folders }
+        : {}),
+      ...(bookmark.reviewed_summary_tokens !== undefined
+        ? { reviewed_summary_tokens: bookmark.reviewed_summary_tokens }
+        : {}),
+    };
     try {
-      await api.updateBookmark(entry.local_id, {
-        title: bookmark.title,
-        description: bookmark.description,
-        notes: bookmark.notes,
-        collection_id: bookmark.collection_id,
-        is_archived: bookmark.is_archived,
-        deleted_at: bookmark.deleted_at,
-        // Push generated metadata so enrichment done on this device reaches
-        // the cloud (and, via pull, other devices).
-        site_name: bookmark.site_name,
-        favicon_url: bookmark.favicon_url,
-        preview_image_url: bookmark.preview_image_url,
-        metadata_status: bookmark.metadata_status,
-        ...(bookmark.dismissed_suggested_tags !== undefined
-          ? { dismissed_suggested_tags: bookmark.dismissed_suggested_tags }
-          : {}),
-        ...(bookmark.dismissed_suggested_folders !== undefined
-          ? { dismissed_suggested_folders: bookmark.dismissed_suggested_folders }
-          : {}),
-        ...(bookmark.reviewed_summary_tokens !== undefined
-          ? { reviewed_summary_tokens: bookmark.reviewed_summary_tokens }
-          : {}),
-      });
+      try {
+        await api.updateBookmark(entry.local_id, updatePayload);
+      } catch (error) {
+        if (!isMissingOptionalBookmarkColumnError(error, updatePayload)) {
+          throw error;
+        }
+        recordLog(
+          'warn',
+          `sync update: optional bookmark dismissal column missing; retrying without AI dismissal fields (${error instanceof Error ? error.message : String(error)})`,
+        );
+        await api.updateBookmark(entry.local_id, withoutOptionalBookmarkUpdateColumns(updatePayload));
+      }
       await removeQueueEntryIfNotSuperseded(repository, entry);
       if (bookmark.sync_status !== 'synced') {
         const syncedBookmark: Bookmark = { ...bookmark, sync_status: 'synced', updated_at: now };
