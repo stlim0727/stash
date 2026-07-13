@@ -254,7 +254,12 @@ test('update: retries without optional AI dismissal fields when the schema is be
   const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
   const result = await syncQueueEntry(api, repository, entry, () => latest);
 
-  assert.equal(result.removeEntry, true);
+  assert.equal(result.removeEntry, undefined);
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(
+    result.entry.last_error,
+    'Optional AI dismissal fields are waiting for the Supabase schema to update.',
+  );
   assert.equal(sent.length, 2);
   assert.deepEqual(sent[0], [
     '00000000-0000-4000-8000-000000000001',
@@ -289,7 +294,8 @@ test('update: retries without optional AI dismissal fields when the schema is be
       metadata_status: 'pending',
     },
   ]);
-  assert.ok(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
+  assert.ok(calls.includes('updateQueueEntry:00000000-0000-4000-8000-000000000001:failed'));
+  assert.ok(!calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
 });
 
 test('update: a locally deleted bookmark just clears the entry', async () => {

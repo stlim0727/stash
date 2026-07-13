@@ -230,6 +230,9 @@ export async function syncQueueEntry(
           `sync update: optional bookmark dismissal column missing; retrying without AI dismissal fields (${error instanceof Error ? error.message : String(error)})`,
         );
         await api.updateBookmark(entry.local_id, withoutOptionalBookmarkUpdateColumns(updatePayload));
+        throw new Error(
+          'Optional AI dismissal fields are waiting for the Supabase schema to update.',
+        );
       }
       await removeQueueEntryIfNotSuperseded(repository, entry);
       if (bookmark.sync_status !== 'synced') {
