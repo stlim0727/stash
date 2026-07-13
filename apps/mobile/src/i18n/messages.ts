@@ -526,6 +526,7 @@ export const en = {
   'report.submitA11y': 'Submit report',
   'report.submit': 'Submit report',
   'report.submitting': 'Sending…',
+  'report.signInRequired': 'Sign in to submit a cloud report. You can still share diagnostics.',
   'report.errorNoSession': 'You need an active session to submit a report.',
   'report.errorSubmit': 'Could not submit your report.',
 

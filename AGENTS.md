@@ -49,6 +49,14 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   and #426 had merged. Reconcile against the live open-PR list; some may have
   merged or closed.
 - **Sentry DB sync (2026-07-13):** Organization `self-463` and project `stash` confirmed. Sentry MCP tools are not configured in this environment, but you can query or resolve issues directly via the local helper `pnpm sentry:issue <id>` (e.g. `pnpm sentry:issue STASH-23`), which loads the auth token from `.env.local`. Check Sentry directly for real-time unresolved issues, and do not rely on local docs to look up active Sentry issues.
+- **Report/session handoff (2026-07-13):** web `/report` with
+  `authStatus: session_expired` should not silently mint an anonymous session
+  just to submit feedback. Cloud report submit should require a usable session,
+  show a clear sign-in-required message, and keep diagnostics sharing available.
+  The related "logged out but 100+ bookmarks visible" state is the preserved
+  local cache for an expired real account session; the inbox keeps those rows
+  visible with sync paused, but its banner copy may need to say more explicitly
+  that these are account bookmarks awaiting re-sign-in, not anonymous bookmarks.
 - **The invariants below are load-bearing, not FYI.** "Capture is sacred,"
   user-authored vs generated fields, and "a local cosmetic repair must never bump
   `updated_at` or enqueue sync" have each been re-broken by agents who skimmed

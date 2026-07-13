@@ -19,7 +19,12 @@ const mockSession = {
 };
 
 let mockAuth = {
-  status: 'anonymous' as 'anonymous' | 'not_configured',
+  status: 'anonymous' as
+    | 'anonymous'
+    | 'authenticated'
+    | 'session_expired'
+    | 'signed_out'
+    | 'not_configured',
   session: mockSession as typeof mockSession | null,
   userId: 'user-test' as string | null,
   email: null as string | null,
@@ -347,6 +352,33 @@ test('refreshes the session before submitting so an expired token is renewed', a
   expect(createApi).toHaveBeenCalledWith(refreshedSession);
   expect(submitReport).toHaveBeenCalledTimes(1);
   expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
+});
+
+test('session_expired explains sign-in is required and keeps diagnostics shareable', async () => {
+  mockAuth = {
+    ...mockAuth,
+    status: 'session_expired',
+    session: null,
+    isSignedIn: false,
+  };
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(
+    screen.getByLabelText('Problem description'),
+    'I cannot submit from an expired session',
+  );
+
+  expect(
+    screen.getByText('Sign in to submit a cloud report. You can still share diagnostics.'),
+  ).toBeTruthy();
+  expect(screen.getByLabelText('Submit report').props.accessibilityState?.disabled).toBe(true);
+  expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+  expect(createApi).not.toHaveBeenCalled();
+  expect(submitReport).not.toHaveBeenCalled();
 });
 
 test('shows a friendly message when Supabase is not configured', async () => {

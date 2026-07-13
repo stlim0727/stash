@@ -395,6 +395,7 @@ export const ko: Catalog = {
   'report.submitA11y': '신고 제출',
   'report.submit': '신고 제출',
   'report.submitting': '전송 중…',
+  'report.signInRequired': '클라우드 신고를 제출하려면 로그인하세요. 진단 정보 공유는 계속 사용할 수 있습니다.',
   'report.errorNoSession': '신고를 제출하려면 활성 세션이 필요합니다.',
   'report.errorSubmit': '신고를 제출할 수 없습니다.',
 

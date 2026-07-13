@@ -180,7 +180,9 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   };
 
   const trimmed = message.trim();
-  const canSubmit = trimmed.length > 0 && auth.isSignedIn && submit.status !== 'submitting';
+  const needsSignInForSubmit = !auth.isSignedIn && auth.status !== 'not_configured';
+  const canSubmit =
+    trimmed.length > 0 && auth.isSignedIn && submit.status !== 'submitting';
 
   // Once the user starts composing a follow-up report, a prior success/error
   // banner is stale: leaving the "thanks" message up over the form (with the
@@ -411,6 +413,11 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       {submit.status === 'error' ? (
         <Text style={[styles.error, { color: palette.danger }]}>{submit.message}</Text>
       ) : null}
+      {needsSignInForSubmit ? (
+        <Text style={[styles.signInRequired, { color: palette.textSecondary }]}>
+          {t('report.signInRequired')}
+        </Text>
+      ) : null}
 
       <Pressable
         accessibilityRole="button"
@@ -605,6 +612,11 @@ const styles = StyleSheet.create({
   },
   error: {
     fontSize: 13,
+    textAlign: 'center',
+  },
+  signInRequired: {
+    fontSize: 13,
+    lineHeight: 18,
     textAlign: 'center',
   },
   buttonRow: {
