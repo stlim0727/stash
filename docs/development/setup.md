@@ -101,6 +101,18 @@ EXPO_PUBLIC_SENTRY_DSN=<your-dsn> pnpm verify:sentry
 Resolve/ignore the resulting `verify` event in Sentry so it stays out of real
 issues.
 
+For in-app feedback issues (`STASH-N` short IDs), use the repo helper instead of
+hand-rolling Sentry API calls:
+
+```bash
+pnpm sentry:issue STASH-22
+pnpm sentry:issue STASH-22 --release 1.2.0-rc5
+pnpm sentry:issue STASH-22 --resolve
+```
+
+It reads `SENTRY_AUTH_TOKEN` plus optional `SENTRY_ORG` / `SENTRY_PROJECT` from
+the shell, `.env.local`, or the file pointed to by `SENTRY_ENV_FILE`.
+
 ### OAuth sign-in (Apple / Google)
 
 Settings offers "Sign in with Apple / Google", which upgrades the anonymous account to a permanent one. The client uses a browser-based PKCE flow against GoTrue (`/auth/v1/authorize` → `grant_type=pkce`), so no `supabase-js` dependency or custom backend is needed. To enable it on a project:
