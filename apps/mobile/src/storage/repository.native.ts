@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { noteSqliteOpenFailure } from '@/storage/diagnostics';
 import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
@@ -118,10 +119,18 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   // wedges persistence with "NativeDatabase.prepareAsync ... NullPointerException".
   private readonly connection = new SqliteConnection<SQLite.SQLiteDatabase>(
     async () => {
-      ensureNativeSqliteDirectory();
-      const db = await SQLite.openDatabaseAsync('stash.db');
-      await db.execAsync(SCHEMA_SQL);
-      return db;
+      let phase = 'preflight';
+      try {
+        ensureNativeSqliteDirectory();
+        phase = 'openDatabaseAsync';
+        const db = await SQLite.openDatabaseAsync('stash.db');
+        phase = 'execSchema';
+        await db.execAsync(SCHEMA_SQL);
+        return db;
+      } catch (error) {
+        noteSqliteOpenFailure(phase, error);
+        throw error;
+      }
     },
     (db) => db.getFirstAsync('SELECT 1'),
     (db) => db.closeAsync(),
