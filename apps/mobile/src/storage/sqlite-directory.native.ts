@@ -1,24 +1,17 @@
-import { Directory, File, Paths } from 'expo-file-system';
+import * as FileSystem from 'expo-file-system';
 
 import { recordLog } from '@/observability/log-buffer';
 import { ensureSqliteDirectory } from '@/storage/sqlite-directory';
+import { createExpoSqliteDirectoryAdapter } from '@/storage/sqlite-directory-expo';
 
 const SQLITE_DIR = 'SQLite';
 
 export function ensureNativeSqliteDirectory(): void {
-  const directory = new Directory(Paths.document, SQLITE_DIR);
-  const file = new File(Paths.document, SQLITE_DIR);
+  const adapter = createExpoSqliteDirectoryAdapter(FileSystem, SQLITE_DIR, recordLog);
 
-  ensureSqliteDirectory({
-    createDirectory: () => {
-      directory.create({ intermediates: true, idempotent: true });
-    },
-    pathIsNonDirectory: () => {
-      return file.exists;
-    },
-    deleteFile: () => {
-      file.delete();
-    },
-    log: recordLog,
-  });
+  if (!adapter) {
+    return;
+  }
+
+  ensureSqliteDirectory(adapter);
 }
