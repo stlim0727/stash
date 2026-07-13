@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-13 (Sentry issue helper, SQLite preflight fix).
+Last updated: 2026-07-13 (Sentry issue helper, SQLite preflight fix, background share intent fix).
 
 ## Successor Agent Orientation
 
@@ -154,6 +154,7 @@ These are "do not break" rules, not just implementation notes.
 
 - Share intake uses `expo-share-intent@7`; the config plugin is registered in
   `app.json`.
+- On Android, incoming intents received while in the background (`OnNewIntent`) are saved to `ExpoShareIntentSingleton` to prevent them from being lost during resume race conditions if the JS thread is suspended.
 - Toast-mode share capture awaits durable persistence before dismissing.
 - Android toast-mode dismisses Stash via `dismissAfterShare` after recording a
   pending confirmation when a new bookmark was actually saved.
