@@ -305,7 +305,7 @@ test('update: failure does not overwrite a queue entry if a newer operation has 
   });
 
   const originalEntry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
-  
+
   // The database queue now has a newer enqueued delete mutation that superseded our update while it was running
   const supersedingDelete = {
     ...originalEntry,
