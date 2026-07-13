@@ -31,7 +31,7 @@ This document provides a human-tester checklist to verify all major features, bu
 1. **Simultaneous Real-time Sync:** Log in to the same user account on two isolated clients: two physical devices, two different browsers, two separate browser profiles, or one client with site storage cleared/isolated. Do not use two normal windows in the same browser profile; they share the same web `install_device_id` and will ignore each other's realtime nudges.
 2. **Modifications:** Create, edit, or delete a bookmark in Client A. Client B must update its UI and display the modified state after the realtime nudge/sync settles, without requiring manual refresh.
 3. **Background Resume:** Minimize Client B, add a bookmark in Client A, and then bring Client B back to the foreground. Verify the new bookmark appears after the foreground catch-up sync.
-4. **Log out:** Log out of your account. Verify it stays on the login screen and does not mint a fresh anonymous user in the background.
+4. **Log out:** Log out of your account from Settings. Verify the Settings account card shows the signed-out state with inline sign-in options, and that the app does not mint a fresh anonymous user in the background until a later save explicitly needs one.
 
 ---
 
@@ -59,8 +59,8 @@ This document provides a human-tester checklist to verify all major features, bu
 - Added error logging for unsaveable share intents.
 
 ### How to Verify (Human Tester)
-1. **YouTube Shorts Share:** Go to the YouTube mobile app, open a YouTube Short, and share it into Stash. Verify it creates a bookmark, resolves the redirect, and fetches its preview successfully.
-2. **Cold Start Share:** Force-terminate the Stash app. Share a webpage link from your mobile browser. The app should launch and display a confirmation toast indicating the bookmark was saved, rather than launching into a blank inbox.
+1. **YouTube Shorts Share:** On a real Android build, go to the YouTube mobile app, open a YouTube Short, and share it into Stash through the Android share sheet. Verify the shared text intent creates a bookmark, resolves the redirect, and fetches its preview successfully.
+2. **Cold Start Share:** Force-terminate the Stash app. Share a webpage link from your mobile browser. On Android toast-mode capture, verify Stash durably saves the bookmark, dismisses back to the source app, and shows the saved confirmation on the next app open. On iOS/web, verify the app stays open and shows the in-app saved confirmation rather than launching into a blank inbox.
 
 ---
 
