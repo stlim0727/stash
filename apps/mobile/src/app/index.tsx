@@ -563,6 +563,8 @@ export default function InboxScreen() {
     ? Math.min(3, Math.max(1, Math.floor(winWidth / 380)))
     : 1;
   const contentMaxWidth = columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
+  const marginX = Math.max(0, (winWidth - contentMaxWidth) / 2);
+  const webRight = Platform.OS === 'web' ? marginX + 20 : 20;
   // The suggest/session banners are cards carrying a 16px horizontal margin
   // (styles.suggestBanner), so capping them with `width: '100%'` would lay out
   // as full width PLUS 32px of margin and overflow the row on phones. Give them
@@ -2484,7 +2486,7 @@ export default function InboxScreen() {
         onPress={() => router.push('/add')}
         style={({ pressed }) => [
           styles.fab,
-          { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
+          { backgroundColor: palette.accent, bottom: insets.bottom + 20, right: webRight, opacity: pressed ? 0.9 : 1 },
         ]}
       >
         <Ionicons name="add" size={34} color="#ffffff" />

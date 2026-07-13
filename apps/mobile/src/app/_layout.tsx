@@ -48,7 +48,10 @@ function RootStack() {
     <Stack>
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="auth/callback" options={{ headerShown: false }} />
-      <Stack.Screen name="add" options={{ title: t('nav.addBookmark'), presentation: 'modal' }} />
+      <Stack.Screen
+        name="add"
+        options={{ presentation: 'transparentModal', animation: 'fade', headerShown: false }}
+      />
       <Stack.Screen
         name="settings"
         options={{ presentation: 'transparentModal', animation: 'fade', headerShown: false }}

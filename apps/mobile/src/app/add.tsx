@@ -1,6 +1,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 
 import { parseCaptureParams } from '@/domain/web-capture';
 import { useT } from '@/i18n';
@@ -20,6 +22,10 @@ export default function AddBookmarkScreen() {
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const asSheet = width >= 760;
 
   // A capture intent passed via query params — the web counterpart of the
   // native share handler. The desktop bookmarklet, the PWA Web Share Target,
@@ -90,8 +96,22 @@ export default function AddBookmarkScreen() {
     router.back();
   }
 
-  return (
-    <KeyboardAvoidingScreen style={{ backgroundColor: palette.background }}>
+  const header = (
+    <View style={[styles.header, { paddingTop: asSheet ? 12 : insets.top + 12 }]}>
+      <Text style={[styles.headerTitle, { color: palette.text }]}>{t('nav.addBookmark')}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+        hitSlop={8}
+        style={({ pressed }) => [styles.headerClose, pressed && { opacity: 0.6 }]}
+      >
+        <Ionicons name="close" size={24} color={palette.text} />
+      </Pressable>
+    </View>
+  );
+
+  const content = (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
       <Card elevated={false} style={styles.captureCard}>
         <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
@@ -130,6 +150,30 @@ export default function AddBookmarkScreen() {
       <Button size="lg" onPress={handleSave}>{t('add.save')}</Button>
       <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('add.hint')}</Text>
     </View>
+  );
+
+  return (
+    <KeyboardAvoidingScreen>
+      {asSheet ? (
+        <View style={[styles.sheetOverlay, { height }]}>
+          <Pressable
+            testID="add-sheet-backdrop"
+            style={styles.sheetBackdrop}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.close')}
+            onPress={() => router.back()}
+          />
+          <View style={[styles.sheetPanel, { backgroundColor: palette.background }]}>
+            {header}
+            {content}
+          </View>
+        </View>
+      ) : (
+        <View testID="add-fullscreen" style={[styles.fullScreen, { backgroundColor: palette.background, height }]}>
+          {header}
+          {content}
+        </View>
+      )}
     </KeyboardAvoidingScreen>
   );
 }
@@ -178,5 +222,45 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     marginTop: 8,
+  },
+  fullScreen: {
+    flex: 1,
+  },
+  sheetOverlay: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.24)',
+  },
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFill,
+  },
+  sheetPanel: {
+    width: '100%',
+    maxWidth: 460,
+    height: '100%',
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: -4, height: 0 },
+  },
+  header: {
+    minHeight: 64,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  headerClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

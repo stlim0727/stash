@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { captureFeedbackScreenshot } from '@/feedback/screenshot';
@@ -78,6 +78,10 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
   const [capturing, setCapturing] = useState(false);
   const hidden = shouldHide(pathname);
 
+  const { width: winWidth } = useWindowDimensions();
+  const marginX = Math.max(0, (winWidth - 720) / 2);
+  const webRight = Platform.OS === 'web' ? marginX + 16 : 16;
+
   const openReport = async () => {
     if (capturing) {
       return;
@@ -109,6 +113,7 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
         insets.bottom + (isInbox(pathname) ? INBOX_BOTTOM_OFFSET : DEFAULT_BOTTOM_OFFSET),
         DEFAULT_BOTTOM_OFFSET,
       ),
+      right: webRight,
       opacity: capturing ? 0.7 : 1,
     },
   ];
