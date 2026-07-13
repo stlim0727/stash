@@ -12,6 +12,7 @@ import { rekeyPendingTagOps, type PendingTagOp } from '@/domain/pending-tags';
 import type { BookmarkApi } from '@/api/bookmarks';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
+import { SupabaseRequestError } from '@/supabase/client';
 
 function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
   const now = '2026-06-12T00:00:00.000Z';
@@ -225,6 +226,76 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
   ]);
   assert.equal(result.bookmarkReplacement?.bookmark.sync_status, 'synced');
   assert.ok(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
+});
+
+test('update: retries without optional AI dismissal fields when the schema is behind', async () => {
+  const { calls, repository } = fakeRepository();
+  const sent: unknown[] = [];
+  const api = fakeApi({
+    updateBookmark: async (id: string, input: Record<string, unknown>) => {
+      sent.push([id, input]);
+      if (sent.length === 1) {
+        throw new SupabaseRequestError(
+          "Could not find the 'reviewed_summary_tokens' column of 'bookmarks' in the schema cache",
+          400,
+        );
+      }
+      return makeBookmark({ id, sync_status: 'synced' });
+    },
+  });
+  const latest = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    sync_status: 'pending',
+    dismissed_suggested_tags: ['tag-token'],
+    dismissed_suggested_folders: ['folder-token'],
+    reviewed_summary_tokens: ['summary-token'],
+  });
+
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
+  const result = await syncQueueEntry(api, repository, entry, () => latest);
+
+  assert.equal(result.removeEntry, undefined);
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(
+    result.entry.last_error,
+    'Optional AI dismissal fields are waiting for the Supabase schema to update.',
+  );
+  assert.equal(sent.length, 2);
+  assert.deepEqual(sent[0], [
+    '00000000-0000-4000-8000-000000000001',
+    {
+      title: null,
+      description: null,
+      notes: null,
+      collection_id: null,
+      is_archived: false,
+      deleted_at: null,
+      site_name: null,
+      favicon_url: null,
+      preview_image_url: null,
+      metadata_status: 'pending',
+      dismissed_suggested_tags: ['tag-token'],
+      dismissed_suggested_folders: ['folder-token'],
+      reviewed_summary_tokens: ['summary-token'],
+    },
+  ]);
+  assert.deepEqual(sent[1], [
+    '00000000-0000-4000-8000-000000000001',
+    {
+      title: null,
+      description: null,
+      notes: null,
+      collection_id: null,
+      is_archived: false,
+      deleted_at: null,
+      site_name: null,
+      favicon_url: null,
+      preview_image_url: null,
+      metadata_status: 'pending',
+    },
+  ]);
+  assert.ok(calls.includes('updateQueueEntry:00000000-0000-4000-8000-000000000001:failed'));
+  assert.ok(!calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
 });
 
 test('update: a locally deleted bookmark just clears the entry', async () => {
