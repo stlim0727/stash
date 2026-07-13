@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { captureFeedbackScreenshot } from '@/feedback/screenshot';
@@ -18,7 +18,7 @@ interface FloatingReportButtonProps {
   children: React.ReactNode;
 }
 
-const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1200;
+const SCREENSHOT_CAPTURE_TIMEOUT_MS = Platform.OS === 'web' ? 4000 : 1200;
 const DEFAULT_BOTTOM_OFFSET = 88;
 const INBOX_BOTTOM_OFFSET = 92;
 

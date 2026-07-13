@@ -30,7 +30,8 @@ export async function captureFeedbackScreenshot(
 
   let dataUrl: string;
   if (Platform.OS === 'web') {
-    const { default: html2canvas } = await import('html2canvas');
+    const html2canvasModule = await import('html2canvas');
+    const html2canvas = html2canvasModule.default ?? html2canvasModule;
     const canvas = await html2canvas(ref.current as never, {
       backgroundColor: null,
       logging: false,
