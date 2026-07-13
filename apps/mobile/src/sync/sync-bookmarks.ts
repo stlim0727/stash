@@ -60,8 +60,9 @@ async function failEntry(
     stored.updated_at === entry.updated_at
   ) {
     await repository.updateQueueEntry(failedEntry);
+    return failedEntry;
   }
-  return failedEntry;
+  return stored ?? failedEntry;
 }
 
 const OPTIONAL_BOOKMARK_UPDATE_COLUMNS = [

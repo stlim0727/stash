@@ -323,7 +323,10 @@ test('update: failure does not overwrite a queue entry if a newer operation has 
   const result = await syncQueueEntry(api, repository, originalEntry, () => latest);
 
   assert.equal(result.removeEntry, undefined);
-  assert.equal(result.entry.sync_status, 'failed');
+  // It must return the superseding delete entry, preserving it for in-memory queue integration
+  assert.equal(result.entry.sync_status, 'pending');
+  assert.equal(result.entry.operation, 'delete');
+  assert.equal(result.entry.updated_at, '2026-06-12T00:05:00.000Z');
   // Since the delete mutation is in the queue, we must NOT write 'failed' back to the queue
   assert.ok(!calls.includes('updateQueueEntry:00000000-0000-4000-8000-000000000001:failed'));
 });
