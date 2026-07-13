@@ -1,0 +1,78 @@
+# QA Testing Guide: Last 7 Days (July 6 – July 13, 2026)
+
+This document provides a human-tester checklist to verify all major features, bug fixes, and performance improvements merged over the last 7 days.
+
+---
+
+## Category 1: SQLite Storage & Cold Boot Resilience (Native Mobile)
+
+### Changes
+- Added a non-blocking directory preflight check that repairs/creates the SQLite directory on boot.
+- Resolved native database opening crashes due to directory permission/existence errors.
+- Handled trailing slash path resolution and directory check logic (`file.exists` vs `Paths.info`) to bypass Android URI conversion false-negatives.
+- Cadence-gated SQLite reopen churn alerts to keep Sentry reporting clean.
+
+### How to Verify (Human Tester)
+1. **Clean Install Boot:** Delete the app from a real Android/iOS device (or completely clear the app's storage and cache).
+2. **Launch:** Open the app. Verify it successfully boots to the empty Inbox state without freezing, looping, or crashing.
+3. **Re-launch:** Force-close and reopen the app multiple times to ensure the database opens smoothly without triggering churn alerts.
+
+---
+
+## Category 2: Real-time Multi-Device Sync (Supabase WebSockets)
+
+### Changes
+- Plumbed real-time WebSocket client broadcast nudges. Creates, updates, and deletes on one device now trigger instant pulls on other active devices.
+- Handled background/foreground lifecycles (clearing sync debounce on backgrounding, catch-up pull queuing on foregrounding).
+- Routed queued sync operations through a reference to prevent stale React hook closures (resolving a bug where logging out would mistakenly mint a temporary anonymous account and wipe data).
+- Added a sync-watermark recovery mechanism to ensure all cloud rows are correctly pulled after a user logs in.
+
+### How to Verify (Human Tester)
+1. **Simultaneous Real-time Sync:** Log in to the same user account on two different devices (or separate browser windows A and B).
+2. **Modifications:** Create, edit, or delete a bookmark in Window A. Window B must update its UI and display the modified state immediately without requiring manual refresh.
+3. **Background Resume:** Minimize Window B, add a bookmark in Window A, and then bring Window B back to the foreground. Verify the new bookmark appears instantly.
+4. **Log out:** Log out of your account. Verify it stays on the login screen and does not mint a fresh anonymous user in the background.
+
+---
+
+## Category 3: Cross-Device AI Suggestion Sync
+
+### Changes
+- Migrated the AI suggestion review state (ignored tags/folders) from local-only device storage to cloud-synced text array columns on the database.
+- Dismissals are now preserved across all of a user's devices.
+- Suppressed generic recommended folder/tag suggestions (like "web" or "bookmark").
+- Handled preview/metadata fetching failures gracefully and added manual refresh controls for AI suggestions.
+
+### How to Verify (Human Tester)
+1. **Dismiss Sync:** Open a bookmark's detail page in Window A and click **X** to dismiss (ignore) a suggested tag.
+2. **Verification:** Open the same bookmark in Window B. Verify that the dismissed tag suggestion is immediately gone.
+3. **Tag Relevance:** Add a new bookmark. Ensure the AI-suggested tags are specific to the content rather than generic labels.
+4. **Manual Refresh:** If a bookmark fails to extract metadata initially, use the **Refresh** button on the detail page to force regeneration of suggestions.
+
+---
+
+## Category 4: Share Sheet Intake Hardening
+
+### Changes
+- Handled YouTube Shorts shared via text format, ensuring they are resolved as URLs rather than failing or falling back to raw notes.
+- Preserved share intents received during a cold start (when the app process was completely terminated).
+- Added error logging for unsaveable share intents.
+
+### How to Verify (Human Tester)
+1. **YouTube Shorts Share:** Go to the YouTube mobile app, open a YouTube Short, and share it into Stash. Verify it creates a bookmark, resolves the redirect, and fetches its preview successfully.
+2. **Cold Start Share:** Force-terminate the Stash app. Share a webpage link from your mobile browser. The app should launch and display a confirmation toast indicating the bookmark was saved, rather than launching into a blank inbox.
+
+---
+
+## Category 5: UI/UX & Web Visual Polish
+
+### Changes
+- Upgraded the overall theme: dark-first palettes, smooth layout shadows, and web ambient backdrop animation.
+- Added **inline details** for desktop web, allowing bookmarks to expand directly within the grid/list layout instead of forcing a modal.
+- Enhanced the library Graph view: anchored pinch-zoom to gesture center, enabled pinch-to-pan, and hid untagged nodes to declutter the layout.
+- Integrated a feedback screenshot tool.
+
+### How to Verify (Human Tester)
+1. **Desktop Inline Detail:** On desktop web, click a bookmark card in the grid. It should slide open inline inside the grid cleanly, adjusting column flow without layout glitches.
+2. **Interactive Graph:** Go to the Graph View. Verify that pinch-to-zoom focuses on the center of your fingers, dragging pans the canvas, and untagged bookmarks are hidden from the graph.
+3. **Report Screenshot:** Open the Feedback/Report page. Click the screenshot button to attach a capture of your active screen, verify the thumbnail preview, and submit.
