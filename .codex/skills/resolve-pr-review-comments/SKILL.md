@@ -25,14 +25,15 @@ node .claude/skills/resolve-pr-review-comments/scripts/fetch-unresolved-comments
 
 This script will query the GitHub GraphQL API to find:
 - Unresolved review threads (`isResolved: false`).
-- The GraphQL `threadId`, REST comment `id`, comment author, path, line, and body.
+- The GraphQL `threadId`, REST reply `Comment ID` (`fullDatabaseId`), comment author, path, line, and body.
 
 ### Step 2 — Fix and Commit
 1. Implement fixes for each unresolved comment.
 2. Validate changes locally:
-   * Run format: `npx pnpm format` (discard changes on untouched files so the diff is clean)
-   * Run typecheck: `npx pnpm typecheck`
-   * Run tests: `npx pnpm test`
+   * Run `git diff --check` for scoped whitespace checks.
+   * Run `corepack pnpm --filter mobile typecheck` for app TypeScript changes.
+   * Run the narrowest relevant test command first, then broaden only when the change warrants it.
+   * Use `corepack pnpm lint` only when the branch should absorb whole-repo formatting checks; do not run write-formatters on unrelated files.
 3. Commit the changes and push.
 
 ### Step 3 — Post Reply and Resolve on GitHub
@@ -40,7 +41,7 @@ For each addressed thread:
 1. **Post a reply**: Post a review comment reply referencing the fixing commit and clarifying the fix. Identify as Codex-authored by adding `(Codex-authored)` to the body:
    ```bash
    gh api repos/stlim0727/stash/pulls/<pr_number>/comments \
-     -F in_reply_to=<comment_id> \
+     -F in_reply_to=<comment_id_from_Comment_ID> \
      -F body="Addressed in <commit_sha>: <explanation> (Codex-authored)"
    ```
 2. **Resolve the thread**: Mark the thread as resolved on GitHub using the GraphQL API:
