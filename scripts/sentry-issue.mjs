@@ -60,7 +60,7 @@ function parseArgs(argv) {
   }
 
   if (!args.shortId) throw new Error('Missing Sentry short id, for example STASH-22.');
-  if (!/^[A-Z][A-Z0-9_-]*-\d+$/.test(args.shortId)) {
+  if (!/^[A-Z][A-Z0-9_-]*-[A-Z0-9]+$/i.test(args.shortId)) {
     throw new Error(`Invalid Sentry short id: ${args.shortId}`);
   }
   return args;

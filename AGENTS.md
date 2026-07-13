@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-12 (GitHub Codex identity).
+Last updated: 2026-07-13 (Sentry issue helper, SQLite preflight fix).
 
 ## Successor Agent Orientation
 
@@ -48,7 +48,7 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   (Codex theme refresh) and #427 (this handoff docs update). #417, #424, #425,
   and #426 had merged. Reconcile against the live open-PR list; some may have
   merged or closed.
-- **Sentry DB sync (2026-07-11):** Organization `self-463` and project `stash` confirmed via MCP. `sentry__search_issues` is temporarily unavailable due to a Sentry MCP server configuration issue. Check the Sentry dashboard directly for real-time unresolved issues. Do NOT rely on local docs (like AGENTS.md or build-history.md) to look up open/active Sentry issues as they only record historically resolved issues. Active feedback issues must be checked on Sentry directly or provided by the user.
+- **Sentry DB sync (2026-07-13):** Organization `self-463` and project `stash` confirmed. Sentry MCP tools are not configured in this environment, but you can query or resolve issues directly via the local helper `pnpm sentry:issue <id>` (e.g. `pnpm sentry:issue STASH-23`), which loads the auth token from `.env.local`. Check Sentry directly for real-time unresolved issues, and do not rely on local docs to look up active Sentry issues.
 - **The invariants below are load-bearing, not FYI.** "Capture is sacred,"
   user-authored vs generated fields, and "a local cosmetic repair must never bump
   `updated_at` or enqueue sync" have each been re-broken by agents who skimmed
