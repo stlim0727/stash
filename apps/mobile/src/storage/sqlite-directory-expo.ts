@@ -53,11 +53,34 @@ export function createExpoSqliteDirectoryAdapter(
   let file: ExpoFileLike;
 
   try {
-    directory = new (Directory as ExpoDirectoryConstructor)(documentRoot, directoryName);
     file = new (File as ExpoFileConstructor)(documentRoot, directoryName);
   } catch (error) {
-    log?.('warn', `sqlite directory preflight unavailable: ${String(error)}`);
+    log?.('warn', `sqlite file preflight unavailable: ${String(error)}`);
     return null;
+  }
+
+  try {
+    directory = new (Directory as ExpoDirectoryConstructor)(documentRoot, directoryName);
+  } catch (error) {
+    // If constructing Directory failed because a file blocks the path,
+    // try to delete the file first, then construct the Directory.
+    try {
+      if (file.exists) {
+        log?.(
+          'warn',
+          'sqlite directory path was a file blocking constructor; deleting it',
+        );
+        if (typeof file.delete === 'function') {
+          file.delete();
+        }
+        directory = new (Directory as ExpoDirectoryConstructor)(documentRoot, directoryName);
+      } else {
+        throw error;
+      }
+    } catch (innerError) {
+      log?.('warn', `sqlite directory preflight unavailable: ${String(innerError)}`);
+      return null;
+    }
   }
 
   return {
@@ -107,13 +130,19 @@ export function ensureExpoSqliteDirectory(
   directoryName: string,
   log?: Log,
 ): void {
-  const baseDiagnostics = {
-    directoryApi: capability(fileSystem.Directory),
-    fileApi: capability(fileSystem.File),
-    documentRoot: capability(fileSystem.Paths?.document),
+  let baseDiagnostics = {
+    directoryApi: 'unknown',
+    fileApi: 'unknown',
+    documentRoot: 'unknown',
   };
-  noteSqlitePreflight({ ...baseDiagnostics, lastStep: 'adapter' });
   try {
+    baseDiagnostics = {
+      directoryApi: capability(fileSystem.Directory),
+      fileApi: capability(fileSystem.File),
+      documentRoot: capability(fileSystem.Paths?.document),
+    };
+    noteSqlitePreflight({ ...baseDiagnostics, lastStep: 'adapter' });
+
     const adapter = createExpoSqliteDirectoryAdapter(fileSystem, directoryName, log);
 
     if (!adapter) {

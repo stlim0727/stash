@@ -51,7 +51,16 @@ async function failEntry(
     last_error: errorMessage(error),
     updated_at: now,
   };
-  await repository.updateQueueEntry(failedEntry);
+  const stored = (await repository.listQueue()).find(
+    (queued) => queued.local_id === entry.local_id,
+  );
+  if (
+    stored &&
+    stored.operation === entry.operation &&
+    stored.updated_at === entry.updated_at
+  ) {
+    await repository.updateQueueEntry(failedEntry);
+  }
   return failedEntry;
 }
 
