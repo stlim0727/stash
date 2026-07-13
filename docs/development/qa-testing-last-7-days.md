@@ -14,8 +14,9 @@ This document provides a human-tester checklist to verify all major features, bu
 
 ### How to Verify (Human Tester)
 1. **Clean Install Boot:** Delete the app from a real Android/iOS device (or completely clear the app's storage and cache).
-2. **Launch:** Open the app. Verify it successfully boots to the empty Inbox state without freezing, looping, or crashing.
-3. **Re-launch:** Force-close and reopen the app multiple times to ensure the database opens smoothly without triggering churn alerts.
+2. **Launch:** Open the app. Verify it successfully boots to the empty Inbox state without freezing, looping, crashing, or showing the local-storage error banner.
+3. **Persistence:** Save a test bookmark, force-close the app, and reopen it. Verify the bookmark is still present and editable.
+4. **Re-launch:** Force-close and reopen the app multiple times to ensure the database opens smoothly without triggering churn alerts.
 
 ---
 
@@ -31,7 +32,8 @@ This document provides a human-tester checklist to verify all major features, bu
 1. **Simultaneous Real-time Sync:** Log in to the same user account on two isolated clients: two physical devices, two different browsers, two separate browser profiles, or one client with site storage cleared/isolated. Do not use two normal windows in the same browser profile; they share the same web `install_device_id` and will ignore each other's realtime nudges.
 2. **Modifications:** Create, edit, or delete a bookmark in Client A. Client B must update its UI and display the modified state after the realtime nudge/sync settles, without requiring manual refresh.
 3. **Background Resume:** Minimize Client B, add a bookmark in Client A, and then bring Client B back to the foreground. Verify the new bookmark appears after the foreground catch-up sync.
-4. **Log out:** Log out of your account from Settings. Verify the Settings account card shows the signed-out state with inline sign-in options, and that the app does not mint a fresh anonymous user in the background until a later save explicitly needs one.
+4. **Login Restore:** With at least one older bookmark already present in the cloud account, sign in from a fresh or storage-cleared isolated client. Verify the older cloud bookmark is restored on login even if it predates the client's previous sync watermark.
+5. **Log out:** Log out of your account from Settings. Verify the Settings account card shows the signed-out state with inline sign-in options, and that the app does not mint a fresh anonymous user in the background until a later save explicitly needs one.
 
 ---
 
@@ -44,10 +46,13 @@ This document provides a human-tester checklist to verify all major features, bu
 - Handled preview/metadata fetching failures gracefully and added manual refresh controls for AI suggestions.
 
 ### How to Verify (Human Tester)
-1. **Dismiss Sync:** Open a bookmark's detail page in Client A and click **X** to dismiss (ignore) a suggested tag.
-2. **Verification:** Open the same bookmark in Client B. Wait for the sync/nudge to settle, then verify that the dismissed tag suggestion is gone.
-3. **Tag Relevance:** Add a new bookmark. Ensure the AI-suggested tags are specific to the content rather than generic labels.
-4. **Manual Refresh:** If a bookmark fails to extract metadata initially, use the **Preview** action in the detail page action bar to retry metadata extraction. Verify AI suggestions regenerate only after the preview/metadata refresh succeeds.
+1. **Account Setup:** Sign Client A and Client B back into the same account after the logout check above, and open the same synced bookmark on both clients.
+2. **Suggestion Setup:** Wait for AI suggestions or use a bookmark that already has a visible AI tag suggestion chip on both clients. Do not start the dismissal check until a dismissible tag suggestion is visible.
+3. **Dismiss Sync:** In Client A, click **X** to dismiss (ignore) the suggested tag.
+4. **Verification:** Open or refresh the same bookmark in Client B. Wait for the sync/nudge to settle, then verify that the dismissed tag suggestion is gone.
+5. **Schema-Behind Fallback:** In a staging or developer-assisted stale-schema environment where PostgREST has not yet exposed the optional dismissal columns, dismiss a suggestion and confirm the local dismissal is preserved while sync queues a retry. After the schema cache/columns are available, sync again and verify the dismissal reaches Client B.
+6. **Tag Relevance:** Add a new bookmark. Ensure the AI-suggested tags are specific to the content rather than generic labels.
+7. **Manual Refresh:** If a bookmark fails to extract metadata initially, use the **Preview** action in the detail page action bar to retry metadata extraction. Verify AI suggestions regenerate only after the preview/metadata refresh succeeds.
 
 ---
 
@@ -74,5 +79,6 @@ This document provides a human-tester checklist to verify all major features, bu
 
 ### How to Verify (Human Tester)
 1. **Desktop Inline Detail:** On desktop web, click a bookmark card in the grid. It should slide open inline inside the grid cleanly, adjusting column flow without layout glitches.
-2. **Interactive Graph:** Go to the Graph View. Verify that pinch-to-zoom focuses on the center of your fingers, dragging pans the canvas, and untagged bookmarks are hidden from the graph.
-3. **Report Screenshot:** From the screen you want captured, click the floating **Report a problem** button. On the Report page, turn on **Include screenshot**, verify the thumbnail preview appears, and submit.
+2. **Graph Fixture:** Before opening Graph View, create or import at least two active bookmarks that share the same tag, plus one active untagged bookmark.
+3. **Interactive Graph:** Go to the Graph View. Verify that the shared-tag bookmarks appear, pinch-to-zoom focuses on the center of your fingers, dragging pans the canvas, and the untagged bookmark is hidden from the graph.
+4. **Report Screenshot:** From the screen you want captured, click the floating **Report a problem** button. On the Report page, turn on **Include screenshot**, verify the thumbnail preview appears, and submit.
