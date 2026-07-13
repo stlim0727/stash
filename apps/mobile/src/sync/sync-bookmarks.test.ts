@@ -525,6 +525,31 @@ test('update: an ORPHANED local-id target (no pending create) is PROMOTED to a c
   );
 });
 
+test('update: an ORPHANED local-id target promoted to a create that fails writes its failure to the queue', async () => {
+  const localId = 'local-mquc351g-wzpsqbby';
+  const entry = makeMutationEntry(localId, 'update');
+  const { calls, repository } = fakeRepository([entry]);
+
+  const api = fakeApi({
+    createBookmark: async () => {
+      throw new Error('API create failed');
+    },
+  });
+
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: localId, url: 'https://example.com/a' }),
+  );
+
+  assert.equal(result.removeEntry, undefined);
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(result.entry.operation, 'create');
+  assert.equal(result.entry.retry_count, 1);
+  assert.equal(result.entry.last_error, 'API create failed');
+
+  // It must successfully save it back to the database queue
+  assert.ok(calls.includes(`updateQueueEntry:${localId}:failed`));
+});
+
 test('update: an ORPHANED local-id target with no URL or text SETTLES failed (cannot become a create)', async () => {
   // A row a create can't carry (no URL, no body) can never reach the server, so
   // promotion is impossible. Settle `failed` (does NOT re-fire the auto-sync

@@ -37,13 +37,13 @@ This script will query the GitHub GraphQL API to find:
 
 ### Step 3 — Post Reply and Resolve on GitHub
 For each addressed thread:
-1. **Post a reply**: Post a review comment reply referencing the fixing commit and clarifying the fix. Identify as Antigravity by adding `(Antigravity-authored)` to the body:
+1. **Post a reply**: Post a review comment reply referencing the fixing commit and clarifying the fix. Identify as Codex-authored by adding `(Codex-authored)` to the body:
    ```bash
    gh api repos/stlim0727/stash/pulls/<pr_number>/comments \
      -F in_reply_to=<comment_id> \
-     -F body="Addressed in <commit_sha>: <explanation> (Antigravity-authored)"
+     -F body="Addressed in <commit_sha>: <explanation> (Codex-authored)"
    ```
 2. **Resolve the thread**: Mark the thread as resolved on GitHub using the GraphQL API:
    ```bash
-   gh api graphql -f query='mutation { resolveReviewThread(input: { threadId: \"<thread_id>\" }) { thread { isResolved } } }'
+   gh api graphql -f query='mutation { resolveReviewThread(input: { threadId: "<thread_id>" }) { thread { isResolved } } }'
    ```

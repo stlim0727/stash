@@ -21,7 +21,7 @@ function printPrThreads(pr) {
   for (const thread of unresolvedThreads) {
     console.log(`Thread ID: ${thread.id} (Outdated: ${thread.isOutdated})`);
     for (const comment of thread.comments.nodes) {
-      console.log(`  [${comment.author?.login || 'ghost'} at ${comment.createdAt} on ${comment.path}:${comment.line}]:`);
+      console.log(`  [Comment ID: ${comment.databaseId}] [${comment.author?.login || 'ghost'} at ${comment.createdAt} on ${comment.path}:${comment.line}]:`);
       console.log(`    ${comment.body.replace(/\n/g, '\n    ')}`);
     }
   }
@@ -49,6 +49,7 @@ function main() {
                 comments(first: 50) {
                   nodes {
                     id
+                    databaseId
                     path
                     line
                     body
@@ -99,6 +100,7 @@ function main() {
                 comments(first: 50) {
                   nodes {
                     id
+                    databaseId
                     path
                     line
                     body
@@ -126,6 +128,7 @@ function main() {
                 comments(first: 50) {
                   nodes {
                     id
+                    databaseId
                     path
                     line
                     body

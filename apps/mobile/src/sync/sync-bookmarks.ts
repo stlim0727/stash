@@ -33,7 +33,11 @@ export async function removeQueueEntryIfNotSuperseded(
   const stored = (await repository.listQueue()).find(
     (queued) => queued.local_id === entry.local_id,
   );
-  if (!stored || stored.operation === entry.operation) {
+  if (
+    !stored ||
+    stored.operation === entry.operation ||
+    (stored.operation === 'update' && entry.operation === 'create')
+  ) {
     await repository.removeQueueEntry(entry.local_id);
   }
 }
@@ -56,7 +60,8 @@ async function failEntry(
   );
   if (
     stored &&
-    stored.operation === entry.operation &&
+    (stored.operation === entry.operation ||
+      (stored.operation === 'update' && entry.operation === 'create')) &&
     stored.updated_at === entry.updated_at
   ) {
     await repository.updateQueueEntry(failedEntry);
