@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Stash Issue"
+  short_description: "Classify Stash issues before fixing"
+  default_prompt: "Use $analyze-stash-issue to classify this Stash issue and choose the right next action."
