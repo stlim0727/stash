@@ -47,6 +47,8 @@ export interface DiagnosticsInput {
   build?: string | null;
   /** Recent technical log lines to aid debugging (already formatted). */
   logs?: string[] | null;
+  /** Structured storage diagnostics captured near the failure site. */
+  storage?: DiagnosticsStorage | null;
   /** Optional user-approved screen capture from where feedback was opened. */
   screenshot?: DiagnosticsScreenshot | null;
 }
@@ -57,6 +59,22 @@ export interface DiagnosticsScreenshot {
   capturedAt: string;
   platform: string;
   surface: string;
+}
+
+export interface DiagnosticsStorage {
+  sqlitePreflight?: {
+    directoryApi: string;
+    fileApi: string;
+    documentRoot: string;
+    lastStep: string;
+    lastError?: string;
+    updatedAt: string;
+  };
+  sqliteOpen?: {
+    phase: string;
+    error: string;
+    updatedAt: string;
+  };
 }
 
 export interface DiagnosticsContext {
@@ -73,6 +91,8 @@ export interface DiagnosticsContext {
   build?: string;
   /** Recent technical log lines (capped). Present only when captured. */
   logs?: string[];
+  /** Structured storage diagnostics. Present only after storage code records it. */
+  storage?: DiagnosticsStorage;
   /** User-approved screenshot. May contain visible bookmark or account details. */
   screenshot?: DiagnosticsScreenshot;
   capturedAt: string;
@@ -150,6 +170,10 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.logs && input.logs.length > 0) {
     context.logs = input.logs.filter((line) => typeof line === 'string' && line.length > 0);
+  }
+
+  if (input.storage && typeof input.storage === 'object') {
+    context.storage = input.storage;
   }
 
   if (

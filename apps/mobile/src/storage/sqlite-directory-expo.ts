@@ -1,4 +1,6 @@
 import type { SqliteDirectoryAdapter } from '@/storage/sqlite-directory';
+import { ensureSqliteDirectory } from '@/storage/sqlite-directory';
+import { noteSqlitePreflight } from '@/storage/diagnostics';
 
 type Log = NonNullable<SqliteDirectoryAdapter['log']>;
 
@@ -91,4 +93,46 @@ export function createExpoSqliteDirectoryAdapter(
     },
     log,
   };
+}
+
+function capability(value: unknown): string {
+  if (value == null) {
+    return 'missing';
+  }
+  return typeof value;
+}
+
+export function ensureExpoSqliteDirectory(
+  fileSystem: ExpoFileSystemLike,
+  directoryName: string,
+  log?: Log,
+): void {
+  const baseDiagnostics = {
+    directoryApi: capability(fileSystem.Directory),
+    fileApi: capability(fileSystem.File),
+    documentRoot: capability(fileSystem.Paths?.document),
+  };
+  noteSqlitePreflight({ ...baseDiagnostics, lastStep: 'adapter' });
+  try {
+    const adapter = createExpoSqliteDirectoryAdapter(fileSystem, directoryName, log);
+
+    if (!adapter) {
+      noteSqlitePreflight({ ...baseDiagnostics, lastStep: 'adapter-unavailable' });
+      return;
+    }
+
+    noteSqlitePreflight({ ...baseDiagnostics, lastStep: 'ensure' });
+    ensureSqliteDirectory(adapter, { failureLevel: 'warn' });
+    noteSqlitePreflight({ ...baseDiagnostics, lastStep: 'complete' });
+  } catch (error) {
+    noteSqlitePreflight({
+      ...baseDiagnostics,
+      lastStep: 'fallback',
+      lastError: String(error),
+    });
+    log?.(
+      'warn',
+      `sqlite directory preflight failed; falling back to sqlite open: ${String(error)}`,
+    );
+  }
 }

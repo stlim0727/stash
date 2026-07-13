@@ -30,6 +30,7 @@ import {
   getPendingFeedbackSource,
   getPendingFeedbackScreenshot,
 } from '@/feedback/screenshot-session';
+import { getStorageDiagnostics } from '@/storage/diagnostics';
 import { useT } from '@/i18n';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
 import type { MessageKey } from '@/i18n/messages';
@@ -147,6 +148,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         lastError,
         build: buildLabel,
         logs: recentLogLines(),
+        storage: getStorageDiagnostics(),
         screenshot: includeScreenshot ? screenshot : null,
       }),
     [

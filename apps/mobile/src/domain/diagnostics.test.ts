@@ -74,11 +74,39 @@ test('buildDiagnosticsContext excludes user content — it only keeps known keys
     'lastError',
     'build',
     'logs',
+    'storage',
     'capturedAt',
   ];
   for (const key of Object.keys(context)) {
     assert.ok(allowedKeys.includes(key), `unexpected key in context: ${key}`);
   }
+});
+
+test('buildDiagnosticsContext includes structured storage diagnostics when provided', () => {
+  const context = buildDiagnosticsContext({
+    storage: {
+      sqlitePreflight: {
+        directoryApi: 'function',
+        fileApi: 'function',
+        documentRoot: 'string',
+        lastStep: 'fallback',
+        lastError: 'TypeError: undefined is not a function',
+        updatedAt: '2026-07-13T02:30:56.063Z',
+      },
+      sqliteOpen: {
+        phase: 'preflight',
+        error: 'TypeError: undefined is not a function',
+        updatedAt: '2026-07-13T02:30:56.064Z',
+      },
+    },
+  });
+
+  assert.equal(context.storage?.sqlitePreflight?.lastStep, 'fallback');
+  assert.equal(context.storage?.sqliteOpen?.phase, 'preflight');
+
+  const report = formatDiagnosticsReport(context);
+  assert.match(report, /"storage"/);
+  assert.match(report, /"sqliteOpen"/);
 });
 
 test('build and logs are included when provided and formatted for sharing', () => {
