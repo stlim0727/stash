@@ -28,9 +28,9 @@ This document provides a human-tester checklist to verify all major features, bu
 - Added a sync-watermark recovery mechanism to ensure all cloud rows are correctly pulled after a user logs in.
 
 ### How to Verify (Human Tester)
-1. **Simultaneous Real-time Sync:** Log in to the same user account on two different devices (or separate browser windows A and B).
-2. **Modifications:** Create, edit, or delete a bookmark in Window A. Window B must update its UI and display the modified state immediately without requiring manual refresh.
-3. **Background Resume:** Minimize Window B, add a bookmark in Window A, and then bring Window B back to the foreground. Verify the new bookmark appears instantly.
+1. **Simultaneous Real-time Sync:** Log in to the same user account on two isolated clients: two physical devices, two different browsers, two separate browser profiles, or one client with site storage cleared/isolated. Do not use two normal windows in the same browser profile; they share the same web `install_device_id` and will ignore each other's realtime nudges.
+2. **Modifications:** Create, edit, or delete a bookmark in Client A. Client B must update its UI and display the modified state after the realtime nudge/sync settles, without requiring manual refresh.
+3. **Background Resume:** Minimize Client B, add a bookmark in Client A, and then bring Client B back to the foreground. Verify the new bookmark appears after the foreground catch-up sync.
 4. **Log out:** Log out of your account. Verify it stays on the login screen and does not mint a fresh anonymous user in the background.
 
 ---
@@ -44,10 +44,10 @@ This document provides a human-tester checklist to verify all major features, bu
 - Handled preview/metadata fetching failures gracefully and added manual refresh controls for AI suggestions.
 
 ### How to Verify (Human Tester)
-1. **Dismiss Sync:** Open a bookmark's detail page in Window A and click **X** to dismiss (ignore) a suggested tag.
-2. **Verification:** Open the same bookmark in Window B. Verify that the dismissed tag suggestion is immediately gone.
+1. **Dismiss Sync:** Open a bookmark's detail page in Client A and click **X** to dismiss (ignore) a suggested tag.
+2. **Verification:** Open the same bookmark in Client B. Wait for the sync/nudge to settle, then verify that the dismissed tag suggestion is gone.
 3. **Tag Relevance:** Add a new bookmark. Ensure the AI-suggested tags are specific to the content rather than generic labels.
-4. **Manual Refresh:** If a bookmark fails to extract metadata initially, use the **Refresh** button on the detail page to force regeneration of suggestions.
+4. **Manual Refresh:** If a bookmark fails to extract metadata initially, use the **Preview** action in the detail page action bar to retry metadata extraction. Verify AI suggestions regenerate only after the preview/metadata refresh succeeds.
 
 ---
 
@@ -75,4 +75,4 @@ This document provides a human-tester checklist to verify all major features, bu
 ### How to Verify (Human Tester)
 1. **Desktop Inline Detail:** On desktop web, click a bookmark card in the grid. It should slide open inline inside the grid cleanly, adjusting column flow without layout glitches.
 2. **Interactive Graph:** Go to the Graph View. Verify that pinch-to-zoom focuses on the center of your fingers, dragging pans the canvas, and untagged bookmarks are hidden from the graph.
-3. **Report Screenshot:** Open the Feedback/Report page. Click the screenshot button to attach a capture of your active screen, verify the thumbnail preview, and submit.
+3. **Report Screenshot:** From the screen you want captured, click the floating **Report a problem** button. On the Report page, turn on **Include screenshot**, verify the thumbnail preview appears, and submit.
