@@ -1,5 +1,27 @@
+diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..1da55fbd323ba417df363749ac08940c74d9c064 100644
+--- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
++++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
+@@ -122,7 +122,7 @@ class ExpoShareIntentModule : Module() {
+                 return
+             }
+             if (intent.type == null) return
+-            if (intent.type!!.startsWith("text/plain")) {
++            if (intent.type!!.startsWith("text/")) {
+                 // text / urls
+                 if (intent.action == Intent.ACTION_SEND) {
+                     notifyShareIntent(mapOf(
+@@ -197,6 +197,8 @@ class ExpoShareIntentModule : Module() {
+         }
+ 
+         OnNewIntent {
++            ExpoShareIntentSingleton.intent = it
++            ExpoShareIntentSingleton.isPending = true
+             handleShareIntent(it)
+         }
+ 
 diff --git a/build/useShareIntent.js b/build/useShareIntent.js
-index 1ab12c4..9257fd8 100644
+index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..e775e752fb460127603ac7e5c8491d87af59f43a 100644
 --- a/build/useShareIntent.js
 +++ b/build/useShareIntent.js
 @@ -36,6 +36,10 @@ export default function useShareIntent(options = SHAREINTENT_OPTIONS_DEFAULT) {
@@ -31,16 +53,3 @@ index 1ab12c4..9257fd8 100644
      /**
       * Detect Native Module response
       */
-diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 6f68da5..71ad26b 100644
---- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-+++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -122,7 +122,7 @@ class ExpoShareIntentModule : Module() {
-                 return
-             }
-             if (intent.type == null) return
--            if (intent.type!!.startsWith("text/plain")) {
-+            if (intent.type!!.startsWith("text/")) {
-                 // text / urls
-                 if (intent.action == Intent.ACTION_SEND) {
-                     notifyShareIntent(mapOf(
