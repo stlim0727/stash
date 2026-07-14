@@ -163,9 +163,8 @@ test('folds the search/sort/view controls away on an empty library', async () =>
   // the first screen is all about the first save — an onboarding card that
   // teaches the share-sheet capture, with the chrome folded away.
   await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
-  expect(
-    screen.getByText('Share a link from any app and pick Keepory to save it in a tap.'),
-  ).toBeTruthy();
+  expect(screen.getByText('Open any app, tap Share')).toBeTruthy();
+  expect(screen.getByText('Choose Keepory — saved instantly')).toBeTruthy();
   expect(screen.queryByPlaceholderText('Search your stash')).toBeNull();
   expect(screen.queryByTestId('inbox-view-card')).toBeNull();
 });

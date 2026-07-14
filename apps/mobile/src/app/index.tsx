@@ -36,6 +36,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { AnonymousNudgeBanner } from '@/ui/AnonymousNudgeBanner';
+import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
 import { SearchSuggestionShelf } from '@/ui/SearchSuggestionShelf';
@@ -1939,18 +1941,28 @@ export default function InboxScreen() {
           { paddingTop: listPaddingTop, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
-          // The section label only earns its vertical space while searching,
-          // where the match COUNT is real information. In the default/faceted
-          // state it's redundant chrome: a newest-first list obviously leads
-          // with the newest item, and a narrowed view is already named by the
-          // pinned filter bar — so drop it to lift the first card up the screen.
-          // (Still hidden on a zero-result search, where the recovery card
-          // already says "no matches", to avoid a double-negative.)
-          searching && visible.length > 0 ? (
-            <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-              {sectionLabel}
-            </Text>
-          ) : null
+          <>
+            {/* Anonymous-account nudge: inline, above the list content, below the
+                search/filter shelf (which lives outside the list). Renders nothing
+                until the user is anonymous with a real (2+) library and hasn't
+                dismissed it durably. */}
+            <AnonymousNudgeBanner
+              isAnonymous={auth.status === 'anonymous'}
+              bookmarkCount={inbox.length}
+            />
+            {/* The section label only earns its vertical space while searching,
+                where the match COUNT is real information. In the default/faceted
+                state it's redundant chrome: a newest-first list obviously leads
+                with the newest item, and a narrowed view is already named by the
+                pinned filter bar — so drop it to lift the first card up the screen.
+                (Still hidden on a zero-result search, where the recovery card
+                already says "no matches", to avoid a double-negative.) */}
+            {searching && visible.length > 0 ? (
+              <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
+                {sectionLabel}
+              </Text>
+            ) : null}
+          </>
         }
         ListEmptyComponent={
           isLoading ? (
@@ -2004,8 +2016,10 @@ export default function InboxScreen() {
               </Text>
             </View>
           ) : (
-            // First run: teach the share-sheet capture (the app's whole point),
-            // not just "add below" — otherwise Stash reads as a manual URL box.
+            // First run: teach the real capture path for THIS platform. Native's
+            // whole point is the share sheet; web has no share intent
+            // (expo-share-intent is a no-op there — see share/), so it must not
+            // promise a "Share a link from any app" flow that doesn't exist here.
             <View style={styles.emptyState} testID="inbox-empty-onboarding">
               <Ionicons
                 name="bookmarks-outline"
@@ -2016,28 +2030,69 @@ export default function InboxScreen() {
               <Text style={[styles.emptyTitle, { color: palette.text }]}>
                 {t('inbox.emptyTitle')}
               </Text>
-              <View style={styles.emptyHintRow}>
-                <Ionicons
-                  name="share-outline"
-                  size={18}
-                  color={palette.accent}
-                  style={styles.emptyHintIcon}
-                />
-                <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
-                  {t('inbox.emptyHintShare')}
-                </Text>
-              </View>
-              <View style={styles.emptyHintRow}>
-                <Ionicons
-                  name="add-circle-outline"
-                  size={18}
-                  color={palette.accent}
-                  style={styles.emptyHintIcon}
-                />
-                <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
-                  {t('inbox.emptyHintAdd')}
-                </Text>
-              </View>
+              {isWeb ? (
+                <>
+                  <View style={styles.emptyHintRow} testID="inbox-empty-web-step">
+                    <Ionicons
+                      name="add-circle-outline"
+                      size={18}
+                      color={palette.accent}
+                      style={styles.emptyHintIcon}
+                    />
+                    <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                      {t('inbox.emptyHintWebStep')}
+                    </Text>
+                  </View>
+                  <View style={[styles.emptyDivider, { backgroundColor: palette.border }]} />
+                  <Text style={[styles.emptyHintFallback, { color: palette.textSecondary }]}>
+                    {t('inbox.emptyHintWebNote')}
+                  </Text>
+                  {/* No live Play Store listing yet (see docs/development/play-store.md),
+                      so this is a soft, disabled pill rather than a link to nowhere. */}
+                  <Button variant="ghost" size="sm" disabled style={styles.emptyPlatformPill}>
+                    {t('inbox.emptyHintWebGetAndroid')}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <View style={styles.emptyHintRow} testID="inbox-empty-step-1">
+                    <Text style={[styles.emptyStepNumber, { color: palette.accent }]}>1</Text>
+                    <Ionicons
+                      name="share-outline"
+                      size={18}
+                      color={palette.accent}
+                      style={styles.emptyHintIcon}
+                    />
+                    <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                      {t('inbox.emptyHintStep1')}
+                    </Text>
+                  </View>
+                  <View style={styles.emptyHintRow} testID="inbox-empty-step-2">
+                    <Text style={[styles.emptyStepNumber, { color: palette.accent }]}>2</Text>
+                    <Ionicons
+                      name="bookmark-outline"
+                      size={18}
+                      color={palette.accent}
+                      style={styles.emptyHintIcon}
+                    />
+                    <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                      {t('inbox.emptyHintStep2')}
+                    </Text>
+                  </View>
+                  <View style={[styles.emptyDivider, { backgroundColor: palette.border }]} />
+                  <Text style={[styles.emptyHintFallback, { color: palette.textSecondary }]}>
+                    {t('inbox.emptyHintFallback')}
+                  </Text>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    style={styles.emptyPlatformPill}
+                    onPress={() => void Linking.openURL('https://keepory.app').catch(() => {})}
+                  >
+                    {t('inbox.emptyHintGetWeb')}
+                  </Button>
+                </>
+              )}
             </View>
           )
         }
@@ -2670,6 +2725,28 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     lineHeight: 20,
+  },
+  // Leading "1"/"2" marker on each teach row, making the 2-step order explicit
+  // rather than implied by top-to-bottom position alone.
+  emptyStepNumber: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginRight: 8,
+    marginTop: 1,
+    width: 14,
+  },
+  emptyDivider: {
+    width: 160,
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 14,
+  },
+  emptyHintFallback: {
+    fontSize: 12,
+    textAlign: 'center',
+    maxWidth: 280,
+  },
+  emptyPlatformPill: {
+    marginTop: 14,
   },
   errorBanner: {
     fontSize: 13,
