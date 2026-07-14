@@ -380,6 +380,9 @@ export const ko: Catalog = {
   'report.cloudUnavailableTitle': '클라우드 신고 사용 불가',
   'report.cloudUnavailableBody':
     '이 빌드에서는 클라우드 제출이 구성되어 있지 않지만, 진단 보고서(최근 로그 포함)를 공유하여 직접 보낼 수 있습니다.',
+  'report.signInRequiredTitle': '신고를 제출하려면 로그인하세요',
+  'report.signInRequiredBody':
+    '후속 조치를 위해 로그인한 계정이 필요합니다. 진단 보고서는 로그인 없이도 직접 공유할 수 있습니다.',
   'report.categoryLabel': '카테고리',
   'report.whatHappened': '무슨 일이 있었나요?',
   'report.descriptionA11y': '문제 설명',

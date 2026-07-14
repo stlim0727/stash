@@ -19,7 +19,7 @@ const mockSession = {
 };
 
 let mockAuth = {
-  status: 'anonymous' as 'anonymous' | 'not_configured',
+  status: 'authenticated' as 'anonymous' | 'authenticated' | 'not_configured',
   session: mockSession as typeof mockSession | null,
   userId: 'user-test' as string | null,
   email: null as string | null,
@@ -55,9 +55,10 @@ jest.mock('@/api/bookmarks', () => {
 });
 
 const mockBack = jest.fn();
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   usePathname: () => '/report',
-  useRouter: () => ({ back: mockBack }),
+  useRouter: () => ({ back: mockBack, push: mockPush }),
 }));
 
 const mockWindowSize = { width: 390, height: 844, scale: 2, fontScale: 1 };
@@ -90,10 +91,11 @@ beforeEach(() => {
   fakeRepo.__reset([]);
   clearPendingFeedbackScreenshot();
   mockBack.mockClear();
+  mockPush.mockClear();
   mockWindowSize.width = 390;
   mockWindowSize.height = 844;
   mockAuth = {
-    status: 'anonymous',
+    status: 'authenticated',
     session: mockSession,
     userId: 'user-test',
     email: null,
@@ -368,6 +370,24 @@ test('shows a friendly message when Supabase is not configured', async () => {
   expect(screen.queryByLabelText('Submit report')).toBeNull();
   // Even without the cloud, diagnostics can still be shared.
   expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+});
+
+test('prompts an anonymous session to sign in instead of showing the form', async () => {
+  mockAuth = {
+    ...mockAuth,
+    status: 'anonymous',
+  };
+
+  const screen = await renderReport();
+
+  await waitFor(() => expect(screen.getByText('Sign in to submit a report')).toBeTruthy());
+  expect(screen.queryByLabelText('Submit report')).toBeNull();
+  expect(screen.queryByLabelText('Problem description')).toBeNull();
+  // Diagnostics can still be shared without an account.
+  expect(screen.getByLabelText('Share diagnostics')).toBeTruthy();
+
+  await fireEvent.press(screen.getByText('Sign In'));
+  expect(mockPush).toHaveBeenCalledWith('/settings');
 });
 
 test('navigates back after a successful submission after the timeout', async () => {
