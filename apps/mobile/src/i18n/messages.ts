@@ -519,6 +519,9 @@ export const en = {
   'report.cloudUnavailableTitle': 'Cloud reporting unavailable',
   'report.cloudUnavailableBody':
     'Submitting to the cloud isn’t configured on this build, but you can still share a diagnostics report (including recent logs) to send manually.',
+  'report.signInRequiredTitle': 'Sign in to submit a report',
+  'report.signInRequiredBody':
+    'Reports need a signed-in account so we can follow up. You can still share a diagnostics report to send manually.',
   'report.categoryLabel': 'Category',
   'report.whatHappened': 'What happened?',
   'report.descriptionA11y': 'Problem description',

@@ -33,6 +33,7 @@ import {
 import { getShareDiagnostics } from '@/share/share-diagnostics';
 import { getStorageDiagnostics } from '@/storage/diagnostics';
 import { useT } from '@/i18n';
+import { Button } from '@/ui/Button';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
 import type { MessageKey } from '@/i18n/messages';
 import { useBookmarks } from '@/store/bookmarks';
@@ -182,7 +183,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   };
 
   const trimmed = message.trim();
-  const canSubmit = trimmed.length > 0 && auth.isSignedIn && submit.status !== 'submitting';
+  const canSubmit = trimmed.length > 0 && auth.status === 'authenticated' && submit.status !== 'submitting';
 
   // Once the user starts composing a follow-up report, a prior success/error
   // banner is stale: leaving the "thanks" message up over the form (with the
@@ -244,6 +245,52 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           <Text style={[styles.fieldValue, { color: palette.text }]}>
             {t('report.cloudUnavailableBody')}
           </Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('report.shareDiagnosticsA11y')}
+          style={[styles.secondaryButton, { borderColor: palette.border }]}
+          onPress={() => void handleShare()}
+        >
+          <View style={styles.buttonRow}>
+            <Ionicons
+              testID="share-diagnostics-icon"
+              name="share-social-outline"
+              size={18}
+              color={palette.text}
+            />
+            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+              {t('report.shareWithCount', { count: logCount })}
+            </Text>
+          </View>
+        </Pressable>
+        <Text
+          accessibilityLabel={t('report.contextPreviewA11y')}
+          style={[styles.code, { color: palette.text, borderColor: palette.border }]}
+        >
+          {contextPreview}
+        </Text>
+      </ScrollView>
+    ) : auth.status === 'anonymous' ? (
+      <ScrollView
+        style={webOverscrollContain}
+        contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
+      >
+        <View style={[styles.field, { backgroundColor: palette.card }]}>
+          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+            {t('report.signInRequiredTitle')}
+          </Text>
+          <Text style={[styles.fieldValue, { color: palette.text }]}>
+            {t('report.signInRequiredBody')}
+          </Text>
+          <Button
+            variant="secondary"
+            size="sm"
+            style={styles.signInButton}
+            onPress={() => router.push('/settings')}
+          >
+            {t('settings.account.signIn')}
+          </Button>
         </View>
         <Pressable
           accessibilityRole="button"
@@ -535,6 +582,9 @@ const styles = StyleSheet.create({
   },
   fieldValue: {
     fontSize: 15,
+  },
+  signInButton: {
+    alignSelf: 'flex-start',
   },
   privacyNote: {
     fontSize: 13,
