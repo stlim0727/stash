@@ -1,4 +1,4 @@
-import { createBookmarkApi } from '@/api/bookmarks';
+import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE, createBookmarkApi } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
 import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
@@ -15,6 +15,19 @@ export interface EntrySyncResult {
   removeEntry?: boolean;
   /** For creates: what was actually sent, so callers can reconcile later edits. */
   uploadedPayload?: CreateBookmarkInput;
+  /** Present when the local bookmark row was removed (deleted on another
+   *  device while this device had a queued edit for it — see below). */
+  removedBookmarkId?: string;
+}
+
+/**
+ * True when an `update` failed because the row is confirmed gone remotely —
+ * deleted on this account (any device) or never owned by this user — as
+ * opposed to a transient network/server error. Unambiguous because the
+ * request that threw it was already scoped to the current user's own id.
+ */
+function isBookmarkGoneRemotely(error: unknown): boolean {
+  return error instanceof Error && error.message === BOOKMARK_NOT_FOUND_ERROR_MESSAGE;
 }
 
 function errorMessage(error: unknown): string {
@@ -261,6 +274,28 @@ export async function syncQueueEntry(
       }
       return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
     } catch (error) {
+      if (isBookmarkGoneRemotely(error)) {
+        // Deleted on another device while this device still had a queued
+        // edit for it. Pull-side reconciliation deliberately never deletes a
+        // local row that has queued work (see pull-bookmarks.ts), so without
+        // this the edit would retry forever against a row that can never
+        // come back — a climbing retry_count visible in Settings' Sync Queue
+        // (Sentry STASH-2F: "Lots of retrial"). Finish what pull would have
+        // done: remove the local row, then the queue entry (in that order so
+        // a crash in between still self-heals via the "bookmark gone
+        // locally" branch above on the next pass).
+        recordLog(
+          'info',
+          `sync: removing local row ${entry.local_id} — deleted on another device (queued update could not land)`,
+        );
+        await repository.deleteBookmark(entry.local_id);
+        await removeQueueEntryIfNotSuperseded(repository, entry);
+        return {
+          entry: { ...entry, sync_status: 'synced', updated_at: now },
+          removeEntry: true,
+          removedBookmarkId: entry.local_id,
+        };
+      }
       return { entry: await failEntry(repository, entry, error, now) };
     }
   }

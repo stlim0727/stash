@@ -25,6 +25,13 @@ export type RemoteBookmark = Omit<
   'sync_status' | 'local_image_uri' | 'last_accessed_at' | 'title_is_derived'
 >;
 
+// Thrown by `updateBookmark` when the PATCH (scoped to `id` + the current
+// user's `user_id`) matches zero rows — the bookmark was deleted (on this
+// device or another) or never belonged to this user. Exported so sync can
+// recognize this exact, unambiguous case and reconcile instead of retrying
+// an edit that can never land (see `sync/sync-bookmarks.ts`).
+export const BOOKMARK_NOT_FOUND_ERROR_MESSAGE = 'Bookmark not found or not owned by the current user.';
+
 export interface CreateBookmarkOutput {
   bookmark_id: string;
   status: 'created' | 'duplicate' | 'queued';
@@ -483,7 +490,7 @@ export class BookmarkApi {
 
     const updated = rows[0];
     if (!updated) {
-      throw new Error('Bookmark not found or not owned by the current user.');
+      throw new Error(BOOKMARK_NOT_FOUND_ERROR_MESSAGE);
     }
 
     return remoteToBookmark(updated);
