@@ -9,6 +9,7 @@ import { initSentry, wrapWithSentry } from '@/observability/sentry';
 import { installConsoleCapture } from '@/observability/log-buffer';
 import { installPwaHead } from '@/share/pwa-head';
 import { compareSemver } from '@/domain/version';
+import { hydrateShareDiagnostics } from '@/share/share-diagnostics';
 import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
@@ -31,6 +32,12 @@ initSentry();
 // on web because output:"single" (SPA) doesn't use the +html.tsx template. A
 // no-op on native.
 installPwaHead();
+
+// Load the durable "last share attempt" record (if any) so a "Report a
+// problem" filed this session can show what the most recent share contained,
+// even when that share happened in a prior process instance. Best-effort — a
+// report screen without it is still useful.
+void hydrateShareDiagnostics();
 
 // The navigator lives in its own component so it can read the active locale
 // from `I18nProvider` (a hook can't run in the same component that mounts the
