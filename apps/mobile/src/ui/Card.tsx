@@ -7,12 +7,14 @@ interface CardProps {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   elevated?: boolean;
+  testID?: string;
 }
 
-export function Card({ children, style, elevated = true }: CardProps) {
+export function Card({ children, style, elevated = true, testID }: CardProps) {
   const palette = usePalette();
   return (
     <View
+      testID={testID}
       style={[
         styles.card,
         { backgroundColor: palette.surfaceElevated, borderColor: palette.border },

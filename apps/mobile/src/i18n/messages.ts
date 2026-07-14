@@ -148,8 +148,23 @@ export const en = {
   'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': 'Nothing in this view yet.',
   'inbox.emptyTitle': 'Nothing saved yet',
-  'inbox.emptyHintShare': 'Share a link from any app and pick Keepory to save it in a tap.',
-  'inbox.emptyHintAdd': 'Or tap ＋ below to add one by hand.',
+  // Native first-run teach: a numbered 2-step share-capture walkthrough, plus a
+  // smaller fallback line for the manual add path. Web has no share sheet
+  // (expo-share-intent is a no-op there), so it gets a distinct single-step
+  // variant below instead of this pair.
+  'inbox.emptyHintStep1': 'Open any app, tap Share',
+  'inbox.emptyHintStep2': 'Choose Keepory — saved instantly',
+  'inbox.emptyHintFallback': 'Prefer to paste a link? Tap the + below.',
+  // Web empty-state: no share sheet to teach, so lead with the paste-a-link
+  // flow and explain the platform gap rather than implying share works here.
+  'inbox.emptyHintWebStep': 'Tap + to paste a link and save.',
+  'inbox.emptyHintWebNote': 'Sharing from other apps works in the Keepory Android app, not on the web yet.',
+  'inbox.emptyHintWebGetAndroid': 'Get the Android app',
+  // Anonymous-account nudge banner (shown after the 2nd save, dismissible
+  // forever) — see AnonymousNudgeBanner.
+  'inbox.anonymousNudgeBody':
+    'Your bookmarks are saved on this device. Sign in to back them up and access them elsewhere.',
+  'inbox.anonymousNudgeDismissA11y': 'Dismiss',
   'inbox.moreActions': 'More actions',
   'inbox.moveToCollectionAction': 'Move to collection…',
   'inbox.moveToCollectionTitle': 'Move to collection',
