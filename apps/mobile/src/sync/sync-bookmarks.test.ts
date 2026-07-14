@@ -9,6 +9,7 @@ import {
   syncQueueEntry,
 } from './sync-bookmarks.ts';
 import { rekeyPendingTagOps, type PendingTagOp } from '@/domain/pending-tags';
+import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
@@ -365,6 +366,51 @@ test('update: failure stays retryable', async () => {
   assert.equal(result.removeEntry, undefined);
   assert.equal(result.entry.sync_status, 'failed');
   assert.equal(result.entry.retry_count, 1);
+});
+
+test('update: reconciles (removes local row + queue entry) when the remote row is confirmed gone (Sentry STASH-2F)', async () => {
+  // Deleted on another device while this device still had a queued edit —
+  // the exact, unambiguous error updateBookmark throws for a zero-row PATCH
+  // already scoped to the current user. Retrying can never succeed.
+  const { calls, repository } = fakeRepository();
+  const api = fakeApi({
+    updateBookmark: async () => {
+      throw new Error(BOOKMARK_NOT_FOUND_ERROR_MESSAGE);
+    },
+  });
+
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: '00000000-0000-4000-8000-000000000001' }),
+  );
+
+  assert.equal(result.removeEntry, true);
+  assert.equal(result.removedBookmarkId, '00000000-0000-4000-8000-000000000001');
+  assert.equal(result.entry.sync_status, 'synced');
+  assert.ok(calls.includes('deleteBookmark:00000000-0000-4000-8000-000000000001'));
+  assert.ok(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
+});
+
+test('update: a generic failure still stays retryable, not reconciled as gone', async () => {
+  // Guards against over-matching: only the exact BOOKMARK_NOT_FOUND_ERROR_MESSAGE
+  // triggers reconciliation. Anything else (network blip, 500, etc.) must keep
+  // retrying normally.
+  const { calls, repository } = fakeRepository();
+  const api = fakeApi({
+    updateBookmark: async () => {
+      throw new Error('Bookmark not found or not owned by the current user, maybe');
+    },
+  });
+
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: '00000000-0000-4000-8000-000000000001' }),
+  );
+
+  assert.equal(result.removeEntry, undefined);
+  assert.equal(result.removedBookmarkId, undefined);
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.ok(!calls.includes('deleteBookmark:00000000-0000-4000-8000-000000000001'));
 });
 
 test('delete: permanently removes the remote row and leaves the queue', async () => {

@@ -2214,6 +2214,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (result.removeEntry) {
             mutationsPushed = true;
           }
+          if (result.removedBookmarkId) {
+            // The row was deleted on another device while this device's
+            // queued edit could never land (see sync-bookmarks.ts). Drop it
+            // from in-memory state too — the repository row is already gone.
+            const removedId = result.removedBookmarkId;
+            setBookmarks((current) => (current ?? []).filter((bookmark) => bookmark.id !== removedId));
+          }
           if (result.bookmarkReplacement) {
             const { previousId, bookmark: replacement } = result.bookmarkReplacement;
             // The replacement was built from a snapshot taken before the upload.
