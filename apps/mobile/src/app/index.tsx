@@ -20,6 +20,8 @@ import {
   Keyboard,
   LayoutAnimation,
   Linking,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
@@ -706,6 +708,11 @@ export default function InboxScreen() {
   // scroll movement (clamped to the header's height), so an upward flick reveals
   // the header immediately wherever you are in the list, not only at the top.
   const scrollY = useRef(new Animated.Value(0)).current;
+  // Plain (non-Animated) mirror of the list's scroll offset, updated by the
+  // same onScroll below. Cheap to read synchronously — used only to decide
+  // whether the remount reset effect below actually mattered, for the
+  // STASH-2B confirmation breadcrumb.
+  const lastScrollYRef = useRef(0);
   const [headerHeight, setHeaderHeight] = useState(0);
   // The pinned active-filter bar is measured separately (it lives in its own
   // non-translating layer below the header). When it's showing, both scroll
@@ -742,6 +749,25 @@ export default function InboxScreen() {
       extrapolate: 'clamp',
     });
   }, [headerClamp, headerHeight, insets.top]);
+  // The FlatList remounts on a fresh `key` whenever `viewMode`/`columns`
+  // changes (numColumns can't mutate on an existing instance), which resets
+  // its native scroll position to the top — but nothing fires a fresh
+  // onScroll(0) from a remount alone, so `scrollY` (driving the collapsing
+  // header above) is left stale at whatever offset it held before the
+  // switch. If the header was collapsed at that point, it stays collapsed —
+  // the entire hero cluster invisible over a freshly top-scrolled list, with
+  // no further scroll needed to trigger it. Resetting `scrollY` here keeps it
+  // in sync with the list's actual (reset) position. (Sentry STASH-2B:
+  // "Keepory 히어로가 안보임" — the hero not showing after a view-mode switch.)
+  useEffect(() => {
+    if (lastScrollYRef.current > 0) {
+      trackBreadcrumb('header', 'reset scrollY on view-mode remount', {
+        previousScrollY: Math.round(lastScrollYRef.current),
+      });
+    }
+    scrollY.setValue(0);
+    lastScrollYRef.current = 0;
+  }, [viewMode, columns, scrollY]);
 
   // Load the saved sort + view mode once, then persist any change. The guards
   // stop the initial defaults from clobbering the stored values before they
@@ -1923,6 +1949,9 @@ export default function InboxScreen() {
         style={isWeb ? styles.webListNoTransform : undefined}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: !isWeb,
+          listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+            lastScrollYRef.current = event.nativeEvent.contentOffset.y;
+          },
         })}
         scrollEventThrottle={16}
         // Dragging the results dismisses the keyboard (→ keyboardDidHide drops the
