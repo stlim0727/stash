@@ -47,7 +47,8 @@
           },
           "androidIntentFilters": [
             "text/*",
-            "image/*"
+            "image/*",
+            "video/*"
           ]
         }
       ],
