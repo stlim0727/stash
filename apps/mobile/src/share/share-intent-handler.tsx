@@ -15,6 +15,7 @@ import { recordLog } from '@/observability/log-buffer';
 import { trackBreadcrumb } from '@/observability/sentry';
 import { canDismissAfterShare, dismissAfterShare } from '@/share/dismiss';
 import { recordPendingShareConfirm } from '@/share/pending-confirm';
+import { recordShareAttempt } from '@/share/share-diagnostics';
 import { getPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -54,6 +55,8 @@ export function ShareIntentHandler() {
     title?: string;
     text?: string;
     image: SharedImage | null;
+    fileCount: number;
+    fileMimeTypes: string[];
   } | null>(null);
   // Guards against re-copying the same intent across renders before the reset
   // propagates; cleared once the intent goes away so a later share is captured.
@@ -107,7 +110,20 @@ export function ShareIntentHandler() {
     const text = shareIntent.text ?? undefined;
     // A shared image (e.g. a screenshot) — captured when there is no link.
     const image = pickSharedImage(shareIntent.files);
-    setPendingShare({ url, title: shareIntent.meta?.title ?? undefined, text, image });
+    // Shape-only file info (count + MIME types, never content) for the durable
+    // share-attempt diagnostics recorded below once the outcome is known.
+    const fileCount = shareIntent.files?.length ?? 0;
+    const fileMimeTypes = (shareIntent.files ?? [])
+      .map((file) => file?.mimeType)
+      .filter((mime): mime is string => typeof mime === 'string' && mime.length > 0);
+    setPendingShare({
+      url,
+      title: shareIntent.meta?.title ?? undefined,
+      text,
+      image,
+      fileCount,
+      fileMimeTypes,
+    });
     // Coarse capture breadcrumb (kind of share only — never URL/title/text) so a
     // freeze right after a share (Sentry STASH-H) shows the share on the event
     // timeline that attaches to the loop-stall report.
@@ -145,6 +161,18 @@ export function ShareIntentHandler() {
     // Only a genuinely new save is worth confirming on the next open; a
     // duplicate already lived in the library and a no-link share saved nothing.
     const isNewSave = result.status === 'created';
+    // Durable record of this attempt's shape + outcome — survives an app
+    // restart, unlike the in-memory log buffer, so a "Report a problem" filed
+    // in a later session (after a silently failed share) still carries real
+    // evidence instead of just that session's own unrelated startup logs.
+    recordShareAttempt({
+      hasUrl: share.url !== null,
+      hasText: Boolean(share.text?.trim()),
+      hasImage: share.image !== null,
+      fileCount: share.fileCount,
+      fileMimeTypes: share.fileMimeTypes,
+      result: result.status,
+    });
     if (saved) {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
       persisted = result.persisted;

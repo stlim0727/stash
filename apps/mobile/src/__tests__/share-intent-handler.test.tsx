@@ -92,6 +92,7 @@ jest.mock('expo-share-intent', () => ({
 
 import { SHARE_BEHAVIOR_PREF_KEY } from '@/domain/share-behavior';
 import { parsePendingShareConfirm, SHARE_CONFIRM_PREF_KEY } from '@/domain/share-confirm';
+import { parseShareAttemptDiagnostics, SHARE_DIAGNOSTICS_PREF_KEY } from '@/domain/share-diagnostics';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
@@ -499,6 +500,34 @@ describe('ShareIntentHandler', () => {
     await waitFor(() => expect(mockShareIntent.resetShareIntent).toHaveBeenCalled());
     expect(fakeRepo.__queue()).toHaveLength(0);
     expect(await fakeRepo.repository.listBookmarks()).toHaveLength(0);
+    // Regression coverage for Sentry STASH-27/STASH-2A: this exact "nothing
+    // extracted" shape is what those reports almost certainly hit, but the
+    // in-memory log buffer reset before the user filed feedback, so nothing
+    // proved it. The durable record now survives that restart.
+    const record = parseShareAttemptDiagnostics(
+      await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
+    );
+    expect(record).toMatchObject({ hasUrl: false, hasText: false, hasImage: false, result: 'invalid' });
+    unmount();
+  });
+
+  it('durably records a successful URL share for the next diagnostics report', async () => {
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/durable', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Keepory');
+    await waitFor(async () => {
+      const record = parseShareAttemptDiagnostics(
+        await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
+      );
+      expect(record).toMatchObject({ hasUrl: true, hasText: false, hasImage: false, result: 'created' });
+    });
     unmount();
   });
 

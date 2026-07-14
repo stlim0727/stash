@@ -13,6 +13,8 @@
  * user opt-in because it can show the current screen.
  */
 
+import type { ShareAttemptDiagnostics } from './share-diagnostics';
+
 export type DiagnosticsAuthStatus =
   | 'not_configured'
   | 'loading'
@@ -49,6 +51,8 @@ export interface DiagnosticsInput {
   logs?: string[] | null;
   /** Structured storage diagnostics captured near the failure site. */
   storage?: DiagnosticsStorage | null;
+  /** Durable record of the last share-intent attempt, if any (survives restarts). */
+  shareAttempt?: ShareAttemptDiagnostics | null;
   /** Optional user-approved screen capture from where feedback was opened. */
   screenshot?: DiagnosticsScreenshot | null;
 }
@@ -93,6 +97,8 @@ export interface DiagnosticsContext {
   logs?: string[];
   /** Structured storage diagnostics. Present only after storage code records it. */
   storage?: DiagnosticsStorage;
+  /** Durable record of the last share-intent attempt. Present only after a share runs. */
+  shareAttempt?: ShareAttemptDiagnostics;
   /** User-approved screenshot. May contain visible bookmark or account details. */
   screenshot?: DiagnosticsScreenshot;
   capturedAt: string;
@@ -174,6 +180,10 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.storage && typeof input.storage === 'object') {
     context.storage = input.storage;
+  }
+
+  if (input.shareAttempt && typeof input.shareAttempt === 'object') {
+    context.shareAttempt = input.shareAttempt;
   }
 
   if (
