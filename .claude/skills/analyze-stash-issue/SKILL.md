@@ -39,7 +39,9 @@ Finally answer: `similar-surface-check: yes/no`, and list the sibling surfaces t
 - Treat screenshots as evidence of symptoms, not root cause, unless the UI state itself is the bug.
 - Compare event release against PR/build history. If a suspected fix is not in the reported release, do not treat recurrence as proof the fix failed.
 - If Sentry context/logs are available, inspect them before relying on title/message text.
+- For a `logger: feedback-bridge` / `source: in-app-feedback` report (a user-typed "Report a problem" submission, not a captured exception), don't spend a round-trip on `get_sentry_resource(resourceType: breadcrumbs)` — these events carry none. The only evidence is the attached `context` (`logs`/`storage`/`shareAttempt`/etc.), and `logs`/`storage` are in-memory only: if the report was filed in a later app session than the failure (a real possibility — nothing forces immediate filing), those fields show only that later session's own startup noise, not the failure. Check the field's own timestamp/plausibility against the report time before treating it as evidence.
 - If diagnostics are missing or too sparse, include a concrete instrumentation target: field name, phase label, log location, and where it should appear in future reports.
+- A recurring symptom with several prior "fixes" (check `git log --grep`) and no stack trace each time is a strong `instrument-first` signal, not a cue to guess a variant of the same fix again — confirm first whether the diagnostics on the new report actually differ from the old ones.
 
 ## Output Shape
 
