@@ -153,6 +153,19 @@ These are "do not break" rules, not just implementation notes.
 - Pending confirmation is drained by `share-confirm-handler.tsx` on cold start
   or background-to-active resume and must never navigate unless the user taps
   "View".
+- A durable "last share attempt" record (`domain/share-diagnostics.ts` +
+  `share/share-diagnostics.ts`, meta-store backed, hydrated at startup) is
+  recorded after every share resolves — shape only (`hasUrl`/`hasText`/
+  `hasImage`, file MIME types, save result), never content. It exists because
+  the in-app log ring buffer and storage diagnostics are in-memory only: a
+  "Report a problem" filed in a later app session (after a silently-failed
+  share's own process already ended) used to show only that session's own
+  unrelated startup noise, never the share itself (Sentry STASH-2A/STASH-27).
+  Check `getShareDiagnostics()` / the report's `shareAttempt` field before
+  assuming a recurring share complaint needs another blind native-intent
+  patch — STASH-1Z/STASH-25 (sqlite preflight) and STASH-21 (Shorts text
+  intents) were each guessed from user description alone with no way to
+  confirm the fix actually addressed what failed.
 
 ### Trash And Delete
 
@@ -317,6 +330,15 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   open thread against the current code before deciding it is addressed.
 - If a compound git command is denied, earlier parts did not run either. Re-fetch
   and verify SHAs before building or deploying from `main`.
+- In-app feedback reports (Sentry tag `logger: feedback-bridge`, `source:
+  in-app-feedback`) carry **no Sentry breadcrumbs** — `trackBreadcrumb` writes
+  are attached to a captured exception's session, not to a user-typed feedback
+  submission. Don't spend a round-trip checking `get_sentry_resource`
+  (`resourceType: breadcrumbs`) for one of these; it 404s. The `context.logs`/
+  `context.storage`/`context.shareAttempt` fields in the report body are the
+  only evidence, and the first two are in-memory-only (reset on app restart),
+  so verify they actually date from the failure before trusting them as proof
+  of what happened.
 
 ## Future Work
 
