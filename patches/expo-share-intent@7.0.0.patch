@@ -1,15 +1,22 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..52b116095333470df1b69a44019a639c05d8c7a2 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..f8354598f0a85b7f4011031fbde674ee4e27fbf1 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -121,8 +121,11 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +121,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
 -            if (intent.type == null) return
 -            if (intent.type!!.startsWith("text/plain")) {
 +            if (intent.type == null) {
-+                notifyError("null intent.type for action: " + intent.action)
++                // OnNewIntent fires for every intent the activity receives, including
++                // the plain launcher relaunch (ACTION_MAIN, no type) on every normal
++                // app open — only a genuine share action carrying no type is worth
++                // surfacing (STASH-2E: the previous unconditional notifyError here
++                // fired on ordinary app opens, not failed shares).
++                if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
++                    notifyError("null intent.type for action: " + intent.action)
++                }
 +                return
 +            }
 +            if (intent.type!!.startsWith("text/")) {
