@@ -155,6 +155,7 @@ export const en = {
   'inbox.emptyHintStep1': 'Open any app, tap Share',
   'inbox.emptyHintStep2': 'Choose Keepory — saved instantly',
   'inbox.emptyHintFallback': 'Prefer to paste a link? Tap the + below.',
+  'inbox.emptyHintGetWeb': 'Also on the web at keepory.app',
   // Web empty-state: no share sheet to teach, so lead with the paste-a-link
   // flow and explain the platform gap rather than implying share works here.
   'inbox.emptyHintWebStep': 'Tap + to paste a link and save.',

@@ -106,6 +106,7 @@ export const ko: Catalog = {
   'inbox.emptyHintStep1': '어떤 앱에서든 공유 버튼을 누르세요',
   'inbox.emptyHintStep2': 'Keepory를 선택하면 바로 저장돼요',
   'inbox.emptyHintFallback': '링크를 붙여넣고 싶다면? 아래 ＋ 를 누르세요.',
+  'inbox.emptyHintGetWeb': 'keepory.app 에서도 이용할 수 있어요',
   'inbox.emptyHintWebStep': '＋ 를 눌러 링크를 붙여넣고 저장하세요.',
   'inbox.emptyHintWebNote': '다른 앱에서 공유하기는 Keepory 안드로이드 앱에서 지원돼요. 웹에서는 아직 지원하지 않아요.',
   'inbox.emptyHintWebGetAndroid': '안드로이드 앱 받기',

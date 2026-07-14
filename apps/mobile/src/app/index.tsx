@@ -2049,7 +2049,7 @@ export default function InboxScreen() {
                   </Text>
                   {/* No live Play Store listing yet (see docs/development/play-store.md),
                       so this is a soft, disabled pill rather than a link to nowhere. */}
-                  <Button variant="ghost" size="sm" disabled style={styles.emptyAndroidPill}>
+                  <Button variant="ghost" size="sm" disabled style={styles.emptyPlatformPill}>
                     {t('inbox.emptyHintWebGetAndroid')}
                   </Button>
                 </>
@@ -2083,6 +2083,14 @@ export default function InboxScreen() {
                   <Text style={[styles.emptyHintFallback, { color: palette.textSecondary }]}>
                     {t('inbox.emptyHintFallback')}
                   </Text>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    style={styles.emptyPlatformPill}
+                    onPress={() => void Linking.openURL('https://keepory.app').catch(() => {})}
+                  >
+                    {t('inbox.emptyHintGetWeb')}
+                  </Button>
                 </>
               )}
             </View>
@@ -2737,7 +2745,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     maxWidth: 280,
   },
-  emptyAndroidPill: {
+  emptyPlatformPill: {
     marginTop: 14,
   },
   errorBanner: {

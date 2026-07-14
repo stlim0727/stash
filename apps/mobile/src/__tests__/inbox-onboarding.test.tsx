@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 
 // The Inbox first-run empty state and the anonymous-account nudge banner.
 // - Native teaches the share-sheet capture (a 2-step walkthrough); web has no
@@ -92,6 +92,11 @@ test('native empty state teaches the share-capture flow as a numbered 2-step wal
   expect(screen.getByText('Choose Keepory — saved instantly')).toBeTruthy();
   // The secondary fallback line for the manual paste path.
   expect(screen.getByText('Prefer to paste a link? Tap the + below.')).toBeTruthy();
+  // Reciprocal pointer to the web version — unlike the web pill, this one is a
+  // real link since keepory.app already exists (no Play Store URL to wait on).
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(true);
+  await fireEvent.press(screen.getByText('Also on the web at keepory.app'));
+  expect(openURL).toHaveBeenCalledWith('https://keepory.app');
   // Never promises the (native-only) share flow's web-broken copy or the web variant.
   expect(screen.queryByText('Tap + to paste a link and save.')).toBeNull();
   expect(
@@ -110,9 +115,10 @@ test('web empty state points at paste-a-link instead of the (unavailable) share 
     screen.getByText('Sharing from other apps works in the Keepory Android app, not on the web yet.'),
   ).toBeTruthy();
   expect(screen.getByText('Get the Android app')).toBeTruthy();
-  // The native-only teach never renders on web.
+  // The native-only teach — including its reciprocal web-link pill — never renders on web.
   expect(screen.queryByText('Open any app, tap Share')).toBeNull();
   expect(screen.queryByText('Choose Keepory — saved instantly')).toBeNull();
+  expect(screen.queryByText('Also on the web at keepory.app')).toBeNull();
 });
 
 test('the anonymous nudge does not show for a signed-in (authenticated) user, even with 2+ bookmarks', async () => {
