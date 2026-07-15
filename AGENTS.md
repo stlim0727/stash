@@ -339,6 +339,26 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   only evidence, and the first two are in-memory-only (reset on app restart),
   so verify they actually date from the failure before trusting them as proof
   of what happened.
+- On web (RN-web/CSS stacking rules), a sibling with **any** explicit
+  `position` + positive `zIndex` paints above **all** `zIndex:auto`/unset
+  siblings in the same stacking context, regardless of DOM/mount order — so
+  giving only the *moving* layer a `zIndex` (to control its own paint order
+  relative to content behind it) does not guarantee a *different*, unpositioned
+  sibling (e.g. a "pinned" element with no explicit stacking) stays visually on
+  top of it. To keep A above B, both need competing explicit values (via
+  `overlayLayer(z)` — see `ui/layering.ts`), not just B. Caught on the web-only
+  pinned-hero layer in `app/index.tsx` (STASH-2G, PR #504): the collapsible
+  content got `zIndex: 1` for its own reasons, which then unexpectedly painted
+  over the pinned hero mid-transition until the hero was also given
+  `position: relative` + a higher `zIndex`.
+- `domain/header-collapse.ts` (the web-only collapsing-header state that
+  replaced `Animated.diffClamp`, STASH-2G/PR #504) took **three** Codex review
+  rounds to get right, each one only fixing the exact scroll sequence the
+  previous comment described. See the "Replace a stateful animation/hysteresis
+  primitive" bullet in `CLAUDE.md`'s Working principles before touching this
+  file again — the durable fix was modeling the anchor as `diffClamp`'s actual
+  invariant (track the running min/max since the last flip), not "the offset
+  where the current state began."
 
 ## Future Work
 
