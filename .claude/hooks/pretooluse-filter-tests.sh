@@ -10,7 +10,19 @@
 set -euo pipefail
 
 input="$(cat)"
-command="$(printf '%s' "$input" | jq -r '.tool_input.command // empty')"
+# Parse JSON with node rather than jq: node is a hard project prerequisite
+# (Node 22, see CLAUDE.md) while jq is not declared anywhere in this repo —
+# on a checkout without jq this hook fires for every Bash call and, under
+# `set -e`, would error out before it could even decide not to match,
+# breaking ALL Bash tool calls rather than just the four targeted lanes.
+command="$(printf '%s' "$input" | node -e '
+  let d = "";
+  process.stdin.on("data", (c) => { d += c; });
+  process.stdin.on("end", () => {
+    const obj = JSON.parse(d);
+    process.stdout.write((obj.tool_input && obj.tool_input.command) || "");
+  });
+')"
 trimmed="$(printf '%s' "$command" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
 # Match against the command with any trailing `2>&1` stripped, but keep
 # $trimmed (with the redirect, if present) for the rewritten command — a
@@ -27,8 +39,22 @@ case "$normalized" in
     # would silently vanish otherwise, risking a spurious timeout kill on the
     # rewritten command that the original call would not have hit (caught in
     # PR review). Preserve every original field; only override `command`.
-    printf '%s' "$input" | jq --arg cmd "$filter_script $trimmed" \
-      '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: (.tool_input + {command: $cmd})}}'
+    export FILTER_CMD="$filter_script $trimmed"
+    printf '%s' "$input" | node -e '
+      let d = "";
+      process.stdin.on("data", (c) => { d += c; });
+      process.stdin.on("end", () => {
+        const obj = JSON.parse(d);
+        const updatedInput = Object.assign({}, obj.tool_input, { command: process.env.FILTER_CMD });
+        process.stdout.write(JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "allow",
+            updatedInput,
+          },
+        }));
+      });
+    '
     ;;
   *)
     ;;
