@@ -628,6 +628,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           sync_status: syncsRemotely ? 'pending' : existing.sync_status,
           updated_at: new Date().toISOString(),
         };
+        // Keep the ref itself current immediately, not just via the `useEffect`
+        // that mirrors it from `bookmarks` after the next render — otherwise two
+        // calls back to back in the same handler (e.g. Detail/Review's "Use as
+        // note" followed by markSummaryReviewed) both read this same stale
+        // snapshot, and the second persisted write clobbers the repository row
+        // with a `next` that's missing the first call's patch, silently losing
+        // it on disk even though the rendered state looks correct.
+        bookmarksRef.current = bookmarksRef.current!.map((b) => (b.id === id ? next : b));
         ensureRepositoryReady()
           .then(() => repository.updateBookmark(next))
           .catch((error) => logStorageError('bookmark update', error));

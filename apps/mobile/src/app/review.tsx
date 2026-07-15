@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
-import { pendingSuggestedFolder, pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
+import { pendingSuggestedFolder, pendingSuggestions, suggestedFolderTokens, summaryToken } from '@/domain/ai-suggestions';
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { displayTitle } from '@/domain/item-display';
 import { useBookmarks } from '@/store/bookmarks';
@@ -12,10 +12,14 @@ import type { SuggestedTag } from '@/domain/types';
 import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
 import { useCaptureToast } from '@/ui/capture-toast';
 import { Button } from '@/ui/Button';
+import { ProposedSummary } from '@/ui/ProposedSummary';
 import {
   acceptSuggestionBundle,
   dismissSuggestionBundle,
 } from '@/domain/suggestion-actions';
+
+// Matches the truncation safety net on the Detail screen (see bookmark/[id].tsx).
+const MAX_NOTES_LENGTH = 10000;
 
 interface ReviewItem {
   id: string;
@@ -24,6 +28,11 @@ interface ReviewItem {
   folder: SuggestedFolder | null;
   // Every token identifying `folder`, so dismissing records them all (durable).
   folderTokens: string[];
+  // Proposed-summary widget (mirrors Detail's ProposedSummary) — null when there's
+  // no un-reviewed AI summary to offer as a note.
+  summary: string | null;
+  summaryTok: string | null;
+  notes: string | null;
 }
 
 export default function ReviewScreen() {
@@ -46,6 +55,9 @@ export default function ReviewScreen() {
     dismissFolderSuggestion,
     unseenSuggestionIds,
     clearUnseenSuggestions,
+    getReviewedSummary,
+    markSummaryReviewed,
+    updateBookmarkFields,
   } = useBookmarks();
   const [busy, setBusy] = useState(false);
 
@@ -81,7 +93,19 @@ export default function ReviewScreen() {
         bookmark.collection_id,
         getDismissedFolderSuggestions(bookmark.id),
       );
-      if (suggestions.length > 0 || folder) {
+      // Same eligibility rule as the Detail screen's ProposedSummary: a failed
+      // preview, an already-reviewed token, or the dummy-v0 heuristic fallback
+      // (whose boilerplate text would just leak the internal model name) never
+      // surface a summary here either.
+      const isPreviewFailed = bookmark.metadata_status === 'failed';
+      const summaryTok = summaryToken(enrichment?.summary);
+      const summaryReviewed = summaryTok !== null && getReviewedSummary(bookmark.id).has(summaryTok);
+      const showAiSummary =
+        !isPreviewFailed &&
+        Boolean(enrichment?.summary?.trim()) &&
+        !summaryReviewed &&
+        enrichment?.model !== 'dummy-v0';
+      if (suggestions.length > 0 || folder || showAiSummary) {
         result.push({
           id: bookmark.id,
           title: displayTitle(bookmark) ?? t('common.untitled'),
@@ -90,6 +114,9 @@ export default function ReviewScreen() {
           folderTokens: folder
             ? suggestedFolderTokens(folder, enrichment?.suggested_collection_name)
             : [],
+          summary: showAiSummary ? (enrichment?.summary ?? null) : null,
+          summaryTok: showAiSummary ? summaryTok : null,
+          notes: bookmark.notes,
         });
       }
     }
@@ -101,6 +128,7 @@ export default function ReviewScreen() {
     getTagsForBookmark,
     getEnrichment,
     getReviewedSuggestions,
+    getReviewedSummary,
     t,
   ]);
 
@@ -200,6 +228,27 @@ export default function ReviewScreen() {
     });
   };
 
+  // Accept the proposed summary into the note — mirrors Detail's handleUseSummary
+  // (sacred-fields rule: fills an empty note, appends to a non-empty one, never
+  // overwrites). Durable: marking it reviewed keeps an identical re-pull quiet.
+  const useSummaryAsNote = (item: ReviewItem) => {
+    if (!item.summary || !item.summaryTok) {
+      return;
+    }
+    const currentNotes = item.notes ?? '';
+    const nextNotes = currentNotes.trim() === '' ? item.summary : `${currentNotes}\n\n${item.summary}`;
+    const safeNotes = nextNotes.length > MAX_NOTES_LENGTH ? nextNotes.slice(0, MAX_NOTES_LENGTH) : nextNotes;
+    updateBookmarkFields(item.id, { notes: safeNotes });
+    markSummaryReviewed(item.id, item.summaryTok);
+  };
+
+  // Dismiss the proposed summary — durable, mirroring Detail's handleDismissSummary.
+  const dismissSummary = (item: ReviewItem) => {
+    if (item.summaryTok) {
+      markSummaryReviewed(item.id, item.summaryTok);
+    }
+  };
+
   // Bulk "Accept" for a card: apply pending tags AND act on the folder for BOTH
   // kinds — file into an existing one, or create the proposed name then file in.
   // A move (folder carries `from`) offers an Undo toast rather than confirming.
@@ -270,7 +319,13 @@ export default function ReviewScreen() {
           </Pressable>
           {(() => {
             // Keep bulk actions anchored near the title; suggestion chips below
-            // can wrap without moving the "all" controls around.
+            // can wrap without moving the "all" controls around. A card can now
+            // be summary-only (no tags, no folder) — the bulk row has nothing to
+            // act on then, so skip it entirely rather than show a no-op button;
+            // the ProposedSummary widget below carries its own Use/Dismiss.
+            if (item.suggestions.length === 0 && !item.folder) {
+              return null;
+            }
             const hasTags = item.suggestions.length > 0;
             const acceptLabel = hasTags ? t('review.acceptAll') : t('review.acceptOne');
             const acceptA11y = hasTags
@@ -362,6 +417,15 @@ export default function ReviewScreen() {
               </Pressable>
             ))}
           </View>
+          {item.summary ? (
+            <ProposedSummary
+              summary={item.summary}
+              noteEmpty={(item.notes ?? '').trim() === ''}
+              busy={busy}
+              onUse={() => useSummaryAsNote(item)}
+              onDismiss={() => dismissSummary(item)}
+            />
+          ) : null}
         </View>
       ))}
     </ScrollView>

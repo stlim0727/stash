@@ -33,6 +33,7 @@ jest.mock('expo-router', () => ({
 }));
 
 import ReviewScreen from '@/app/review';
+import { summaryToken } from '@/domain/ai-suggestions';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -481,4 +482,180 @@ test('bulk "Dismiss all" dismisses the folder durably alongside the tags', async
   await waitFor(() =>
     expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.dismissed_suggested_folders).toContain('id:col-recipes'),
   );
+});
+
+test('surfaces an AI summary as a proposed note alongside tag chips', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e1';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Summarized page' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A concise overview of the article.',
+        model: 'gemini-2.0',
+        suggested_tags: [{ name: 'design', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Summarized page')).toBeTruthy());
+  expect(screen.getByText('A concise overview of the article.')).toBeTruthy();
+  expect(screen.getByText('#design')).toBeTruthy();
+});
+
+test('a summary-only card (no tags, no folder) skips the bulk Accept/Dismiss row', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e2';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Summary only' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A url from example.com.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('A url from example.com.')).toBeTruthy());
+  expect(screen.queryByTestId(`review-action-row-${id}`)).toBeNull();
+  expect(screen.getByLabelText('Use the suggested summary as your note')).toBeTruthy();
+});
+
+test('"Use as note" fills an empty note and marks the summary durably reviewed', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e3';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Fill my note', notes: null })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A concise overview of the article.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByLabelText('Use the suggested summary as your note')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Use the suggested summary as your note'));
+
+  await waitFor(() => {
+    const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
+    expect(bookmark?.notes).toBe('A concise overview of the article.');
+    expect(bookmark?.reviewed_summary_tokens).toContain(summaryToken('A concise overview of the article.')!);
+  });
+  // Nothing else was pending, so the card drops out once the summary is used.
+  await waitFor(() => expect(screen.queryByText('Fill my note')).toBeNull());
+});
+
+test('"Add to note" appends the summary without overwriting existing text', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e4';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Append to note', notes: 'My own thoughts.' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'An AI overview.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() =>
+    expect(screen.getByLabelText('Append the suggested summary to your note')).toBeTruthy(),
+  );
+
+  await fireEvent.press(screen.getByLabelText('Append the suggested summary to your note'));
+
+  await waitFor(() => {
+    const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
+    expect(bookmark?.notes).toBe('My own thoughts.\n\nAn AI overview.');
+  });
+});
+
+test('dismissing the summary hides it durably and never touches the note', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e5';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Dismiss my summary', notes: 'Untouched.' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A summary to dismiss.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByLabelText('Dismiss the suggested summary')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Dismiss the suggested summary'));
+
+  await waitFor(() => expect(screen.queryByText('Dismiss my summary')).toBeNull());
+  const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
+  expect(bookmark?.notes).toBe('Untouched.');
+  expect(bookmark?.reviewed_summary_tokens).toContain(summaryToken('A summary to dismiss.')!);
+});
+
+test('a dummy-v0 summary never surfaces on Review (would leak the internal model name)', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e6';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Dummy summary' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'Url from example.com — “○○”. Auto-categorized by dummy-v0.',
+        model: 'dummy-v0',
+        suggested_tags: [{ name: 'design', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Dummy summary')).toBeTruthy());
+  expect(screen.queryByText('Url from example.com — “○○”. Auto-categorized by dummy-v0.')).toBeNull();
+  expect(screen.queryByLabelText('Use the suggested summary as your note')).toBeNull();
+});
+
+test('a durably-reviewed summary is hidden on Review entry', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e7';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id,
+        title: 'Already reviewed',
+        reviewed_summary_tokens: [summaryToken('Already-reviewed summary.')!],
+      }),
+    ],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'Already-reviewed summary.',
+        model: 'gemini-2.0',
+        suggested_tags: [{ name: 'design', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Already reviewed')).toBeTruthy());
+  expect(screen.queryByText('Already-reviewed summary.')).toBeNull();
 });
