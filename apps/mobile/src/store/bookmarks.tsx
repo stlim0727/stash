@@ -82,7 +82,6 @@ import {
   createNeedsReconcileUpdate,
   createSyncApi,
   hasRemoteIdentity,
-  isPermanentlyUnsyncableUrl,
   isSyncable,
   makeMutationEntry,
   planLeftoverReconciliation,
@@ -2120,25 +2119,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (syncInFlight.current) {
       syncPendingRef.current = true;
       return false;
-    }
-    // Drain a permanently-too-long URL (Sentry STASH-2J) from the visible
-    // queue. isSyncable already stops it from being retried, but merely
-    // skipping it would leave the row sitting as sync_status:'failed' in the
-    // queue forever — every "waiting to sync" count (e.g. Settings) treats
-    // any non-'synced' row as pending work, so it would look permanently
-    // stuck even though it can never actually sync (caught in PR review). Runs
-    // even without a session — it's pure local cleanup, no network involved.
-    const permanentlyUnsyncable = queue.filter(isPermanentlyUnsyncableUrl);
-    if (permanentlyUnsyncable.length > 0) {
-      const unsyncableIds = new Set(permanentlyUnsyncable.map((entry) => entry.local_id));
-      setQueue((current) => current.filter((entry) => !unsyncableIds.has(entry.local_id)));
-      void ensureRepositoryReady()
-        .then(() =>
-          Promise.all(
-            permanentlyUnsyncable.map((entry) => repository.removeQueueEntry(entry.local_id)),
-          ),
-        )
-        .catch((error) => logStorageError('permanently-unsyncable cleanup', error));
     }
     if (!auth.session) {
       return false;

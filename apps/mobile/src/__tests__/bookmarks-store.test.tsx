@@ -153,17 +153,23 @@ test('a URL too long to save is rejected up front instead of queuing a create th
   expect(result.current.queue).toHaveLength(0);
 });
 
-test('syncNow drains an already-stuck too-long-URL entry from the queue instead of leaving it permanently "waiting" (Sentry STASH-2J)', async () => {
+test('a permanently-too-long-URL entry stays in the queue (not removed) so startup orphan reconciliation never rebuilds a fresh doomed create (Sentry STASH-2J)', async () => {
   // Reproduces an entry queued on a pre-fix build: last_error already carries
-  // the exact Postgres message from its last failed attempt. isSyncable
-  // excludes it from retries, but leaving the row in the queue would make
-  // every "waiting to sync" count (e.g. Settings) treat it as pending forever
-  // (caught in PR review) — syncNow must actually remove the row.
+  // the exact Postgres message from its last failed attempt, and the bookmark
+  // itself is still sync_status:'failed' (syncQueueEntry marks both). isSyncable
+  // excludes the entry from retries, but if it were REMOVED from the queue
+  // entirely, reconcileOrphanedQueueEntries would treat the still-failed
+  // bookmark as a stranded orphan on the next cold start and rebuild a fresh
+  // create for the same doomed URL (caught in PR review) — so the entry must
+  // stay in the queue (its mere presence is what suppresses re-creation),
+  // just excluded from being retried and from any "waiting" count.
+  const stuckUrl = 'https://login.oracle.com/verify?token=x';
+  fakeRepo.__reset([makeStoredBookmark({ id: 'local-stuck', url: stuckUrl, sync_status: 'failed' })]);
   await fakeRepo.repository.enqueue({
     local_id: 'local-stuck',
     remote_id: null,
     operation: 'create',
-    payload: { url: 'https://login.oracle.com/verify?token=x' },
+    payload: { url: stuckUrl },
     sync_status: 'failed',
     retry_count: 3,
     last_error:
@@ -173,14 +179,15 @@ test('syncNow drains an already-stuck too-long-URL entry from the queue instead 
   });
 
   const { result } = await renderStore();
+
+  // Still exactly one queue entry, still failed with its original error — not
+  // duplicated, not reset to a fresh 'pending' create by orphan reconciliation.
   expect(result.current.queue).toHaveLength(1);
-
-  await act(async () => {
-    await result.current.syncNow();
+  expect(result.current.queue[0]).toMatchObject({
+    local_id: 'local-stuck',
+    sync_status: 'failed',
+    last_error: expect.stringContaining('exceeds btree version'),
   });
-
-  expect(result.current.queue).toHaveLength(0);
-  expect(fakeRepo.__queue()).toHaveLength(0);
 });
 
 test('trashing moves a bookmark from inbox to trash and back', async () => {
