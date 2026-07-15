@@ -895,20 +895,46 @@ test('web opens bookmark detail inline instead of pushing the detail route', asy
       title: 'Inline web detail',
       url: 'https://example.com/inline',
       url_hash: 'https://example.com/inline',
+      preview_image_url: 'https://example.com/inline-preview.png',
     }),
   ]);
 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Inline web detail')).toBeTruthy());
+  expect(screen.getByTestId('inbox-card-preview')).toBeTruthy();
 
   await fireEvent.press(screen.getByRole('button', { name: 'Inline web detail' }));
 
   await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  expect(screen.queryByTestId('bookmark-detail-preview')).toBeNull();
   expect(mockPush).not.toHaveBeenCalledWith({
     pathname: '/bookmark/[id]',
     params: { id: '7e64cf1e-0000-4000-8000-000000000042' },
   });
   expect((await fakeRepo.repository.listBookmarks())[0].last_accessed_at).toBeUndefined();
+});
+
+test('web list inline detail keeps the detail preview hero', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000043',
+      title: 'List web detail',
+      url: 'https://example.com/list-inline',
+      url_hash: 'https://example.com/list-inline',
+      preview_image_url: 'https://example.com/list-preview.png',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('List web detail')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
+
+  await fireEvent.press(screen.getByRole('button', { name: 'List web detail' }));
+
+  await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  expect(screen.getByTestId('bookmark-detail-preview')).toBeTruthy();
 });
 
 test('web inline detail keeps the wide card grid stable', async () => {

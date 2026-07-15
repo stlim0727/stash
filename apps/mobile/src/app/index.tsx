@@ -2263,6 +2263,7 @@ export default function InboxScreen() {
                 inlineId={item.bookmarkId}
                 onInlineClose={() => setInlineDetailId(null)}
                 markAccessOnMount={false}
+                hidePreviewHero={viewMode === 'card'}
               />
             );
             const detailWidth =
