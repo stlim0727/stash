@@ -341,6 +341,31 @@ export default function GraphScreen() {
     return map;
   }, [settled]);
 
+  // Live "bookmark id → current title" lookup for the visible bookmark label.
+  // `settled.nodes[i].label` is a snapshot from the last TOPOLOGY settle (see
+  // `signature` above) — a title edit or enrichment result doesn't change tag
+  // links, so it wouldn't trigger a resettle and the label would render stale
+  // until an unrelated tag change or remount. Keyed on a title/url signature
+  // (not the churning `inbox` reference) for the same reason `input` is keyed
+  // on `signature`: a background sync/enrich that changed no title text must
+  // not rebuild the whole (hundreds-of-node) SVG tree.
+  const titleSignature = useMemo(() => {
+    const parts: string[] = [];
+    for (const bookmark of inbox) {
+      parts.push(`${bookmark.id}:${bookmark.title ?? ''}|${bookmark.url ?? ''}`);
+    }
+    parts.sort();
+    return parts.join('\n');
+  }, [inbox]);
+  const bookmarkTitleById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const bookmark of inbox) {
+      map.set(bookmark.id, bookmark.title ?? bookmark.url ?? 'Untitled');
+    }
+    return map;
+    // Intentionally keyed on `titleSignature`, not the churning `inbox` reference.
+  }, [titleSignature]);
+
   // Resolve hub-label positions ONCE per settled graph (the mass-weighting can
   // pull two popular hubs close enough that their default below-labels collide).
   // Keyed on `settled` (content-stable) + `t` (only churns on locale change), so
@@ -765,8 +790,16 @@ export default function GraphScreen() {
                 fill={palette.textSecondary}
                 fontSize={BOOKMARK_LABEL_SIZE}
                 textAnchor="middle"
+                // Labels sit close to (and can overlap) neighboring bookmark/tag
+                // circles in a dense graph; without this, an overlapping label —
+                // rendered after the circles, with no onPress of its own — would
+                // steal the tap and make the circle beneath it unreachable.
+                pointerEvents="none"
               >
-                {truncateGraphLabel(node.label, BOOKMARK_LABEL_MAX_CHARS)}
+                {truncateGraphLabel(
+                  bookmarkTitleById.get(node.bookmark_id) ?? node.label,
+                  BOOKMARK_LABEL_MAX_CHARS,
+                )}
               </SvgText>
             );
           }
@@ -792,7 +825,7 @@ export default function GraphScreen() {
         })}
       </>
     );
-  }, [settled, nodeById, labelById, palette, t, openBookmark, applyTagFacet]);
+  }, [settled, nodeById, labelById, bookmarkTitleById, palette, t, openBookmark, applyTagFacet]);
 
   // No active bookmarks → a calm, intentional empty state (never a blank canvas).
   // This short-circuits BEFORE the loading state: an empty stash shows the empty

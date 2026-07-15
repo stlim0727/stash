@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { InteractionManager, processColor } from 'react-native';
+import { InteractionManager, Pressable, Text, processColor } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -48,7 +48,7 @@ import GraphScreen, {
   truncateGraphLabel,
   wheelZoomScale,
 } from '@/app/graph';
-import { BookmarksProvider } from '@/store/bookmarks';
+import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import type { Tag } from '@/domain/types';
 import { palettes } from '@/theme';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -65,6 +65,27 @@ function renderScreen() {
   return render(
     <BookmarksProvider>
       <GraphScreen />
+    </BookmarksProvider>,
+  );
+}
+
+// Fires a title-only edit through the same store the screen reads from, so a
+// test can exercise "the bookmark's title changed without any tag change" —
+// the case where the settled graph's cached `label` goes stale.
+function EditTitleTrigger({ id, title }: { id: string; title: string }) {
+  const { updateBookmarkFields } = useBookmarks();
+  return (
+    <Pressable testID="edit-title-trigger" onPress={() => updateBookmarkFields(id, { title })}>
+      <Text>edit</Text>
+    </Pressable>
+  );
+}
+
+function renderScreenWithEditTrigger(id: string, newTitle: string) {
+  return render(
+    <BookmarksProvider>
+      <GraphScreen />
+      <EditTitleTrigger id={id} title={newTitle} />
     </BookmarksProvider>,
   );
 }
@@ -86,6 +107,39 @@ function collectNodesWithProp(
     found.push({ props: current.props });
   }
   collectNodesWithProp(current.children, propName, found);
+  return found;
+}
+
+// react-native-svg splits a <Text> with a string child across two native
+// nodes: the outer RNSVGText carries `pointerEvents`, while the actual
+// rendered string lands on a nested RNSVGTSpan's `content` prop (see
+// collectNodesWithProp usage elsewhere in this file). This walks the tree and
+// pairs each RNSVGText's pointerEvents with its descendant TSpan's content.
+function collectSvgTextNodes(
+  node: unknown,
+): Array<{ pointerEvents: unknown; content: string | null }> {
+  const found: Array<{ pointerEvents: unknown; content: string | null }> = [];
+  const visit = (n: unknown) => {
+    if (!n || typeof n !== 'object') {
+      return;
+    }
+    if (Array.isArray(n)) {
+      n.forEach(visit);
+      return;
+    }
+    const current = n as { type?: string; props?: Record<string, unknown>; children?: unknown };
+    if (current.type === 'RNSVGText') {
+      const tspanContents = collectNodesWithProp(current.children, 'content')
+        .map((tspan) => tspan.props.content)
+        .filter((content): content is string => typeof content === 'string');
+      found.push({
+        pointerEvents: current.props?.pointerEvents,
+        content: tspanContents[0] ?? null,
+      });
+    }
+    visit(current.children);
+  };
+  visit(node);
   return found;
 }
 
@@ -280,6 +334,89 @@ test('bookmark nodes render a length-capped title label', async () => {
   );
   // A short title renders untouched.
   expect(labelContents).toContain('Short one');
+});
+
+test('bookmark labels ignore pointer events so an overlapping label never blocks a tap', async () => {
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+  await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+
+  const textNodes = collectSvgTextNodes(screen.toJSON());
+  // seedLibrary's two tagged bookmarks ("Kimchi jjigae", "Local-first
+  // software") get pointer-transparent labels so an overlapping label can
+  // never steal a tap meant for the circle beneath it. "Local-first software"
+  // is over the 18-char cap, so match its truncated form (same helper the
+  // screen itself renders through).
+  const bookmarkLabelNodes = textNodes.filter((node) =>
+    [truncateGraphLabel('Kimchi jjigae', 18), truncateGraphLabel('Local-first software', 18)].includes(
+      node.content ?? '',
+    ),
+  );
+  expect(bookmarkLabelNodes).toHaveLength(2);
+  for (const node of bookmarkLabelNodes) {
+    expect(node.pointerEvents).toBe('none');
+  }
+  // The tag hub label is unrelated to this fix and keeps its default (it
+  // isn't the tap target either way — the hub circle sits under it).
+  const hubLabelNode = textNodes.find((node) => node.content === 'cooking');
+  expect(hubLabelNode?.pointerEvents).not.toBe('none');
+});
+
+test('a title-only edit updates the bookmark label without a tag-topology change', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e1';
+  const other = '7e64cf1e-0000-4000-8000-0000000000e2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id, title: 'Original title' }),
+      makeStoredBookmark({ id: other, title: 'Other bookmark' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking')],
+      bookmarkTags: [
+        {
+          bookmark_id: id,
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+        {
+          bookmark_id: other,
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderScreenWithEditTrigger(id, 'Renamed title');
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+  await waitFor(() => expect(screen.getByTestId(`graph-bookmark-${id}`)).toBeTruthy());
+
+  const labelContentsBefore = collectNodesWithProp(screen.toJSON(), 'content')
+    .map((node) => node.props.content)
+    .filter((content): content is string => typeof content === 'string');
+  expect(labelContentsBefore).toContain('Original title');
+
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('edit-title-trigger'));
+  });
+
+  // The tag topology is unchanged, so this must NOT re-enter the loading
+  // state (no resettle) — the label updates in place.
+  expect(screen.queryByTestId('graph-loading')).toBeNull();
+  const labelContentsAfter = collectNodesWithProp(screen.toJSON(), 'content')
+    .map((node) => node.props.content)
+    .filter((content): content is string => typeof content === 'string');
+  expect(labelContentsAfter).toContain('Renamed title');
+  expect(labelContentsAfter).not.toContain('Original title');
 });
 
 test('tapping a bookmark node routes to its detail', async () => {
