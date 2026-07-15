@@ -1,8 +1,28 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..f8354598f0a85b7f4011031fbde674ee4e27fbf1 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..48313ba196fea715d73421ee35662e5c6cf17f71 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -121,8 +121,18 @@ class ExpoShareIntentModule : Module() {
+@@ -114,6 +114,19 @@ class ExpoShareIntentModule : Module() {
+         fun handleShareIntent(intent: Intent) {
+             val activity = instance?.currentActivity
+             if (activity != null && !activity.isTaskRoot) {
++                // Instrumentation only (Sentry STASH-2K): a Shorts share via the
++                // native Sharesheet reported "just inbox appeared" with ZERO
++                // share-related evidence anywhere downstream — no notifyError, no
++                // notifyShareIntent, no JS "share received" breadcrumb. Every other
++                // branch in this function calls one or the other; this
++                // relaunch-and-finish hand-off is the one that calls neither, so
++                // it's the leading suspect for where the share silently vanishes.
++                // Scoped to SEND/SEND_MULTIPLE only (STASH-2E: an unconditional log
++                // here would also fire on an ordinary non-task-root relaunch, e.g.
++                // multi-window/recents, not just a failed share).
++                if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
++                    notifyError("relaunching non-task-root activity for action: " + intent.action)
++                }
+                 val newIntent = Intent(intent).apply {
+                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                 }
+@@ -121,8 +134,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
