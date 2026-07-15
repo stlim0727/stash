@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-13 (Sentry issue helper, SQLite preflight fix).
+Last updated: 2026-07-15 (RN-web zIndex-stacking trap; header-collapse review-cycle pointer).
 
 ## Successor Agent Orientation
 
