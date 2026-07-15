@@ -9,5 +9,18 @@
   },
   "enabledPlugins": {
     "claude-image-generation@hex-plugins": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/user/stash/.claude/hooks/pretooluse-filter-tests.sh"
+          }
+        ]
+      }
+    ]
   }
 }
