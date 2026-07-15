@@ -281,6 +281,7 @@ export const en = {
   'toast.duplicate': 'Already in Keepory',
   'toast.trashed': 'Moved to Trash',
   'toast.noLink': 'No link found to save',
+  'toast.urlTooLong': 'This link is too long to save',
   'toast.saveFailed': 'Could not save to Keepory',
   'toast.linkCopied': 'Link copied',
 

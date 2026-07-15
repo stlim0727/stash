@@ -176,6 +176,10 @@ export function ShareIntentHandler() {
     if (saved) {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');
       persisted = result.persisted;
+    } else if (result.status === 'invalid' && result.reason === 'too_long') {
+      // Distinguish from the generic "nothing to save" toast (Sentry
+      // STASH-2J): there WAS a link, it was just too long to save.
+      message = t('toast.urlTooLong');
     }
     // Bracket the save so a post-share freeze can be tied to how long the durable
     // write took. Coarse only — status/duration/durability, never content.

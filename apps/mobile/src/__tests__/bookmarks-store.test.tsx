@@ -136,6 +136,23 @@ test('invalid input is rejected with a message and saves nothing', async () => {
   expect(result.current.inbox).toHaveLength(0);
 });
 
+test('a URL too long to save is rejected up front instead of queuing a create that can never succeed', async () => {
+  // Sentry STASH-2J: an Oracle email-verification link's huge embedded token
+  // blew Postgres's index row-size limit on every retry, forever. Reject
+  // before it ever reaches the queue.
+  const { result } = await renderStore();
+  const huge = `https://login.oracle.com/verify?token=${'x'.repeat(2800)}`;
+
+  let outcome: ReturnType<typeof result.current.addBookmark> | null = null;
+  await act(async () => {
+    outcome = result.current.addBookmark({ url: huge });
+  });
+
+  expect(outcome).toMatchObject({ status: 'invalid', reason: 'too_long' });
+  expect(result.current.inbox).toHaveLength(0);
+  expect(result.current.queue).toHaveLength(0);
+});
+
 test('trashing moves a bookmark from inbox to trash and back', async () => {
   const { result } = await renderStore();
   await act(async () => {
