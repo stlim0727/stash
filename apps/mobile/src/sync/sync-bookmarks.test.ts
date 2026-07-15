@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   createNeedsReconcileUpdate,
   hasRemoteIdentity,
+  isSyncable,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
   syncQueueEntry,
@@ -939,4 +940,38 @@ test('makeMutationEntry targets the bookmark with a pending status', () => {
   assert.equal(entry.remote_id, '00000000-0000-4000-8000-000000000001');
   assert.equal(entry.operation, 'delete');
   assert.equal(entry.sync_status, 'pending');
+});
+
+test('isSyncable excludes a create that already failed with the permanent url_hash btree error (Sentry STASH-2J)', () => {
+  // Reproduces an entry stuck from BEFORE the client-side length guard shipped
+  // (a pre-fix build could still queue a too-long URL): last_error already
+  // carries this exact Postgres message from its last failed attempt, so it
+  // must stop being retried without needing a fresh failure to relabel it.
+  const stuck = makeCreateEntry({
+    sync_status: 'failed',
+    last_error:
+      'index row size 2888 exceeds btree version 4 maximum 2704 for index "bookmarks_user_url_hash_active_idx"',
+  });
+  assert.equal(isSyncable(stuck), false);
+});
+
+test('isSyncable still retries an ordinary failure (e.g. a network blip)', () => {
+  const transient = makeCreateEntry({ sync_status: 'failed', last_error: 'network down' });
+  assert.equal(isSyncable(transient), true);
+});
+
+test('isSyncable still retries a pending/syncing entry regardless of a stale last_error', () => {
+  assert.equal(
+    isSyncable(
+      makeCreateEntry({
+        sync_status: 'pending',
+        last_error: 'index row size 2888 exceeds btree version 4 maximum 2704 for index "x"',
+      }),
+    ),
+    true,
+  );
+});
+
+test('isSyncable excludes a synced entry as before', () => {
+  assert.equal(isSyncable(makeCreateEntry({ sync_status: 'synced' })), false);
 });
