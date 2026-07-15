@@ -98,6 +98,7 @@ import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
+import { nextHeaderCollapseState } from '@/domain/header-collapse';
 import { shouldShowWordmarkFallback } from '@/domain/wordmark';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
@@ -714,6 +715,28 @@ export default function InboxScreen() {
   // STASH-2B confirmation breadcrumb.
   const lastScrollYRef = useRef(0);
   const [headerHeight, setHeaderHeight] = useState(0);
+  // Web only (see the render below): the hero row (wordmark/count/search/
+  // settings) never moves at all on web — it isn't coupled to the collapse
+  // mechanism in any way, so it structurally cannot be hidden by a stuck/stale
+  // animation value the way the whole cluster could (Sentry STASH-2B,
+  // STASH-2G). Only the content below it (sort/filter pills + browse/
+  // suggestion shelf, measured separately as `collapsibleHeight`) collapses,
+  // driven by a plain boolean recomputed fresh from the current scroll offset
+  // every tick (see domain/header-collapse.ts) instead of an accumulated
+  // Animated value, and animated with a real CSS transition rather than
+  // JS-driven Animated. Native is untouched: the whole cluster still collapses
+  // together via `headerTranslate` below, exactly as before.
+  //
+  // The collapsible wrapper sits in normal flow immediately after the hero
+  // (not absolutely positioned on its own), so its untransformed on-screen
+  // position already starts at y = heroHeight. Translating it up by only its
+  // OWN height brings its bottom edge back to y = heroHeight — still fully
+  // overlapping the hero's [0, heroHeight] rectangle, just rendered on top of
+  // it (later sibling = higher paint order), not hidden. It has to move up by
+  // heroHeight + collapsibleHeight so its bottom edge reaches y = 0.
+  const [heroHeight, setHeroHeight] = useState(0);
+  const [collapsibleHeight, setCollapsibleHeight] = useState(0);
+  const [webCollapsed, setWebCollapsed] = useState(false);
   // The pinned active-filter bar is measured separately (it lives in its own
   // non-translating layer below the header). When it's showing, both scroll
   // containers reserve extra top padding for it so the first rows aren't hidden.
@@ -767,6 +790,9 @@ export default function InboxScreen() {
     }
     scrollY.setValue(0);
     lastScrollYRef.current = 0;
+    // Same reasoning for the web-only collapsed boolean: a remount resets the
+    // list to the top, so the collapsible row must not stay stuck collapsed.
+    setWebCollapsed(false);
   }, [viewMode, columns, scrollY]);
 
   // Load the saved sort + view mode once, then persist any change. The guards
@@ -1538,9 +1564,17 @@ export default function InboxScreen() {
         pointerEvents="box-none"
         onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
         baseStyle={[styles.header, { backgroundColor: palette.background }]}
-        animatedStyle={{ transform: [{ translateY: headerTranslate }] }}
+        // On web this outer surface never translates — the hero (its first
+        // child, immediately below) stays fixed in place unconditionally; only
+        // the inner wrapper further down (the collapsible content) moves. On
+        // native the whole cluster still collapses together as one unit,
+        // unchanged.
+        animatedStyle={{ transform: [{ translateY: isWeb ? 0 : headerTranslate }] }}
       >
-        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 6 }]}>
+        <View
+          onLayout={(event) => setHeroHeight(event.nativeEvent.layout.height)}
+          style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 6 }]}
+        >
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -1634,6 +1668,30 @@ export default function InboxScreen() {
             </Pressable>
           </View>
         </View>
+        {/* Everything below the hero — error/session banners, search, sort/
+            filter pills, browse shelf — is what actually collapses. On web
+            it's driven by a plain boolean (webCollapsed) recomputed fresh
+            from scroll position every tick and animated with a CSS
+            transition; the transform is always 0 on native (that platform's
+            collapse still happens one level up, on the whole cluster, via
+            `headerTranslate`, unchanged). This wrapper sits in normal flow
+            right after the hero, so it must move up by heroHeight PLUS its
+            own height to clear the screen entirely — moving by only its own
+            height would just bring it back to rest against the hero's bottom
+            edge, still overlapping (and painting over, as the later sibling)
+            the pinned hero instead of getting out of the way. */}
+        <View
+          onLayout={(event) => setCollapsibleHeight(event.nativeEvent.layout.height)}
+          pointerEvents="box-none"
+          style={[
+            {
+              transform: [
+                { translateY: isWeb && webCollapsed ? -(heroHeight + collapsibleHeight) : 0 },
+              ],
+            },
+            isWeb ? ({ transition: 'transform 200ms ease-out' } as ViewStyle) : null,
+          ]}
+        >
         {loadError ? (
           <Pressable
             accessibilityRole="button"
@@ -1889,6 +1947,7 @@ export default function InboxScreen() {
             ) : null}
           </ShelfContainer>
         ) : null}
+        </View>
       </WebCrispAnimatedSurface>
       {showFilterBar && scope ? (
         // Pinned active-filter bar: its OWN non-translating layer between the
@@ -1950,7 +2009,11 @@ export default function InboxScreen() {
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: !isWeb,
           listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-            lastScrollYRef.current = event.nativeEvent.contentOffset.y;
+            const y = event.nativeEvent.contentOffset.y;
+            lastScrollYRef.current = y;
+            if (isWeb) {
+              setWebCollapsed((prev) => nextHeaderCollapseState(prev, y, collapsibleHeight));
+            }
           },
         })}
         scrollEventThrottle={16}
