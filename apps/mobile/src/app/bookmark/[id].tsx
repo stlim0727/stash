@@ -51,12 +51,14 @@ interface BookmarkDetailScreenProps {
   inlineId?: string;
   onInlineClose?: () => void;
   markAccessOnMount?: boolean;
+  hidePreviewHero?: boolean;
 }
 
 export default function BookmarkDetailScreen({
   inlineId,
   onInlineClose,
   markAccessOnMount = true,
+  hidePreviewHero = false,
 }: BookmarkDetailScreenProps = {}) {
   const palette = usePalette();
   const { t, formatDate } = useI18n();
@@ -806,6 +808,9 @@ export default function BookmarkDetailScreen({
             </View>
           );
         }
+        if (hidePreviewHero) {
+          return null;
+        }
         const previewUri = bookmark.local_image_uri ?? bookmark.preview_image_url;
         if (!previewUri) {
           return null;
@@ -816,10 +821,20 @@ export default function BookmarkDetailScreen({
             accessibilityLabel={t('common.openLink')}
             onPress={handleOpenLink}
           >
-            <Image source={{ uri: previewUri }} style={styles.preview} resizeMode="cover" />
+            <Image
+              testID="bookmark-detail-preview"
+              source={{ uri: previewUri }}
+              style={styles.preview}
+              resizeMode="cover"
+            />
           </Pressable>
         ) : (
-          <Image source={{ uri: previewUri }} style={styles.preview} resizeMode="cover" />
+          <Image
+            testID="bookmark-detail-preview"
+            source={{ uri: previewUri }}
+            style={styles.preview}
+            resizeMode="cover"
+          />
         );
       })()}
       {/* Compact byline: favicon · host · status, instead of a header card. */}
