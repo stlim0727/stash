@@ -1570,6 +1570,11 @@ export default function InboxScreen() {
     router.push(scopeParam ? `/browse/tags?scope=${scopeParam}` : '/browse/tags');
   }, [router, filter]);
 
+  // Wide-web-only: the Tags/Graph pills gain a visible label (like Sort already
+  // has) once there's room, reusing the same breakpoint the wide-screen Settings
+  // sheet gates on rather than inventing a new one.
+  const showPillLabels = isWeb && winWidth >= SETTINGS_SHEET_MIN_WIDTH;
+
   return (
     <InboxRootSurface
       backgroundColor={palette.background}
@@ -1877,6 +1882,11 @@ export default function InboxScreen() {
               ]}
             >
               <Ionicons name="pricetags-outline" size={15} color={palette.textSecondary} />
+              {showPillLabels ? (
+                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
+                  {t('nav.browseTags')}
+                </Text>
+              ) : null}
             </Pressable>
           ) : null}
           {inbox.length > 0 ? (
@@ -1891,6 +1901,11 @@ export default function InboxScreen() {
               ]}
             >
               <Ionicons name="git-network-outline" size={15} color={palette.textSecondary} />
+              {showPillLabels ? (
+                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
+                  {t('nav.graph')}
+                </Text>
+              ) : null}
             </Pressable>
           ) : null}
           <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
