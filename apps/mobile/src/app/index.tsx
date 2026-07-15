@@ -496,6 +496,12 @@ export default function InboxScreen() {
   const openSearch = useCallback(() => {
     // The focus-on-open effect below moves focus into the field once it mounts.
     setSearchOpen(true);
+    // The search field itself mounts inside the web collapsible wrapper — if
+    // that's currently collapsed, the field would mount off-screen: the hero
+    // icon flips to "close" but there's nothing visible to type into (caught
+    // in PR review). Force it expanded whenever search opens; harmless to
+    // call on native, which doesn't read this state for anything visual.
+    setWebCollapsed(false);
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
   // (Telegram-faithful — opening search always starts fresh). Every close path
@@ -734,9 +740,28 @@ export default function InboxScreen() {
   // overlapping the hero's [0, heroHeight] rectangle, just rendered on top of
   // it (later sibling = higher paint order), not hidden. It has to move up by
   // heroHeight + collapsibleHeight so its bottom edge reaches y = 0.
+  //
+  // The collapsible wrapper is `position: absolute` on web (see render below)
+  // rather than a normal-flow sibling, so it does NOT contribute to the outer
+  // surface's own layout height — a normal-flow sibling would, even once
+  // translated away (transforms never affect layout), leaving the outer's
+  // still-opaque, still-full-height background painted over list rows that
+  // had supposedly been "reclaimed" (caught in PR review, not left for a
+  // third Sentry report).
   const [heroHeight, setHeroHeight] = useState(0);
   const [collapsibleHeight, setCollapsibleHeight] = useState(0);
   const [webCollapsed, setWebCollapsed] = useState(false);
+  const isWebPlatform = Platform.OS === 'web';
+  // `headerHeight` means "total expanded height" (used below for the list's
+  // top padding/scroll inset and the filter bar's resting position) — native
+  // still measures it directly off the one surface (unchanged); web derives
+  // it as the sum of the two independently-measured pieces, since the outer
+  // surface's own layout no longer includes the collapsible piece there.
+  useEffect(() => {
+    if (isWebPlatform) {
+      setHeaderHeight(heroHeight + collapsibleHeight);
+    }
+  }, [isWebPlatform, heroHeight, collapsibleHeight]);
   // The pinned active-filter bar is measured separately (it lives in its own
   // non-translating layer below the header). When it's showing, both scroll
   // containers reserve extra top padding for it so the first rows aren't hidden.
@@ -1562,7 +1587,13 @@ export default function InboxScreen() {
         // children (chips, sort pill, cloud toggle, banner) stay tappable, so
         // taps in empty space fall through to the cloud/list (STASH-7/STASH-8).
         pointerEvents="box-none"
-        onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
+        // On web, headerHeight is derived above from heroHeight+collapsibleHeight
+        // instead (the collapsible piece is `position: absolute` there, so this
+        // surface's own layout no longer includes it) — skip so the two don't
+        // fight each other.
+        onLayout={
+          isWeb ? undefined : (event) => setHeaderHeight(event.nativeEvent.layout.height)
+        }
         baseStyle={[styles.header, { backgroundColor: palette.background }]}
         // On web this outer surface never translates — the hero (its first
         // child, immediately below) stays fixed in place unconditionally; only
@@ -1672,25 +1703,41 @@ export default function InboxScreen() {
             filter pills, browse shelf — is what actually collapses. On web
             it's driven by a plain boolean (webCollapsed) recomputed fresh
             from scroll position every tick and animated with a CSS
-            transition; the transform is always 0 on native (that platform's
-            collapse still happens one level up, on the whole cluster, via
-            `headerTranslate`, unchanged). This wrapper sits in normal flow
-            right after the hero, so it must move up by heroHeight PLUS its
-            own height to clear the screen entirely — moving by only its own
-            height would just bring it back to rest against the hero's bottom
-            edge, still overlapping (and painting over, as the later sibling)
-            the pinned hero instead of getting out of the way. */}
+            transition; on native it's a plain in-flow sibling with no style
+            override at all (untouched — that platform's collapse still
+            happens one level up, on the whole cluster, via `headerTranslate`).
+            On web this is `position: absolute` (own opaque background, own
+            top offset) rather than a normal-flow sibling: a normal-flow
+            sibling would keep contributing to the outer surface's own layout
+            height even once translated away (transforms never affect layout),
+            leaving the outer's still-opaque, still-full-height background
+            painted over list rows in the "reclaimed" space instead of
+            genuinely getting out of the way (caught in PR review). It must
+            move up by heroHeight PLUS its own height to clear the screen
+            entirely — moving by only its own height would just bring it back
+            to rest against the hero's bottom edge, still overlapping (and
+            painting over, as the later sibling) the pinned hero instead of
+            getting out of the way. */}
         <View
           onLayout={(event) => setCollapsibleHeight(event.nativeEvent.layout.height)}
           pointerEvents="box-none"
-          style={[
-            {
-              transform: [
-                { translateY: isWeb && webCollapsed ? -(heroHeight + collapsibleHeight) : 0 },
-              ],
-            },
-            isWeb ? ({ transition: 'transform 200ms ease-out' } as ViewStyle) : null,
-          ]}
+          style={
+            isWeb
+              ? ([
+                  {
+                    position: 'absolute',
+                    top: heroHeight,
+                    left: 0,
+                    right: 0,
+                    backgroundColor: palette.background,
+                    transform: [
+                      { translateY: webCollapsed ? -(heroHeight + collapsibleHeight) : 0 },
+                    ],
+                    transition: 'transform 200ms ease-out',
+                  },
+                ] as unknown as StyleProp<ViewStyle>)
+              : undefined
+          }
         >
         {loadError ? (
           <Pressable
@@ -2010,9 +2057,12 @@ export default function InboxScreen() {
           useNativeDriver: !isWeb,
           listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
             const y = event.nativeEvent.contentOffset.y;
+            const previousY = lastScrollYRef.current;
             lastScrollYRef.current = y;
             if (isWeb) {
-              setWebCollapsed((prev) => nextHeaderCollapseState(prev, y, collapsibleHeight));
+              setWebCollapsed((prev) =>
+                nextHeaderCollapseState(prev, y, previousY, collapsibleHeight),
+              );
             }
           },
         })}
