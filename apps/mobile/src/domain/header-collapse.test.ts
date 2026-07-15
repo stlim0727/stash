@@ -37,11 +37,32 @@ test('re-anchors on every state change, so a continued gesture in the same direc
   assert.equal(state.collapsed, true);
   state = nextHeaderCollapseState(state, 5000, 80); // deep in a long list
   assert.equal(state.collapsed, true);
+  // The anchor must have followed the descent to 5000, not stayed pinned at
+  // 90 — a fixed collapse-time anchor is exactly what left the next test's
+  // reveal unreachable (PR review catch).
+  assert.equal(state.anchorScrollY, 5000);
+});
+
+test('a stale collapse-time anchor cannot survive a long continued downward scroll — reveals from wherever collapsed actually bottomed out', () => {
+  // The exact repro PR review gave: 0 -> 90 -> 5000 -> 4970 through the real
+  // public transition (not a hand-set starting state). A version that only
+  // re-anchors on the collapse/expand flip itself (and never again while
+  // already collapsed) parks anchorScrollY at 90 forever, so this upward
+  // flick from deep in the list computes `90 - 4970` (deeply negative) and
+  // never reveals.
+  let state = INITIAL_HEADER_COLLAPSE_STATE;
+  state = nextHeaderCollapseState(state, 90, 80); // collapses, anchor -> 90
+  state = nextHeaderCollapseState(state, 5000, 80); // keeps scrolling down
+  assert.equal(state.collapsed, true);
+  state = nextHeaderCollapseState(state, 4970, 80); // 30px up from the real bottom
+  assert.equal(state.collapsed, false, 'must reveal from the deepest point actually reached, not the original collapse point');
 });
 
 test('reveals on a sustained upward flick and STAYS revealed as it continues, wherever the user is', () => {
   // The exact scenario PR review flagged: deep in a list (scrollY=5000),
   // scrolling up in several ticks must not re-collapse itself after one tick.
+  // This starting state is itself reachable through the real transition (see
+  // the previous test) — not just a hand-set fixture.
   let state: HeaderCollapseState = { collapsed: true, anchorScrollY: 5000 };
   state = nextHeaderCollapseState(state, 4970, 80); // 30px up -> reveals, anchor -> 4970
   assert.equal(state.collapsed, false);

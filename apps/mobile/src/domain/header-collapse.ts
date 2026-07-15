@@ -5,27 +5,27 @@
  * the header stuck at a stale collapsed value (Sentry STASH-2B, STASH-2G) —
  * with state derived fresh from the current scroll offset on every tick.
  *
- * Collapse/expand decisions are relative to `anchorScrollY` — the scroll
- * offset at which the *current* state began, not an ever-growing total. Every
- * time the state actually flips, the anchor re-stamps to the current offset.
- * This is what lets a continued upward (or downward) scroll gesture keep the
- * header revealed (or collapsed) for as long as the gesture continues, rather
- * than reverting on the very next tick because the absolute position is still
- * far from any fixed threshold (caught in PR review: an earlier version only
- * compared the two most recent readings, so a multi-tick upward flick
- * re-collapsed itself after a single tick of being revealed). It still can't
- * reintroduce the original staleness bug: even if an update is missed, the
- * next call simply compares the current offset against whatever anchor was
- * last recorded — there is no long-lived total that requires a separate,
- * easy-to-forget reset step, only this one small piece of state, which the
- * caller already resets alongside `collapsed` on every FlatList remount.
+ * `anchorScrollY` is not "the offset where the current state began" — an
+ * earlier version tried that and it goes stale the moment the user keeps
+ * scrolling in the same direction without the state flipping: collapsing at
+ * 90 and continuing on down to 5000 left the anchor pinned at 90, so an
+ * upward flick back from 5000 measured against 90 (`90 - 4970`, deeply
+ * negative) and never revealed (caught in PR review with a concrete `0 -> 90
+ * -> 5000 -> 4970` repro). Instead the anchor tracks the *extreme* point
+ * reached in the current state — the highest scrollY seen while collapsed,
+ * the lowest while expanded — updated on every tick, even ones that don't
+ * flip `collapsed`. That extreme is what "how far back has the user come"
+ * needs to be measured against, and it can't go stale the way a fixed
+ * flip-time snapshot can: it is recomputed from the live scroll offset on
+ * every single call, in the same state-flip branch, with no separate reset
+ * path to forget.
  *
  * Pure — no React, no Animated — so the Node test lane can exercise it
  * directly.
  */
 
-/** How far (px) the user must scroll up from the collapse anchor to reveal
- *  the header again. */
+/** How far (px) the user must scroll up from the deepest collapsed point to
+ *  reveal the header again. */
 const REVEAL_DELTA = 24;
 
 export interface HeaderCollapseState {
@@ -51,11 +51,19 @@ export function nextHeaderCollapseState(
   if (collapsibleHeight <= 0) {
     return state.collapsed ? { collapsed: false, anchorScrollY: scrollY } : state;
   }
-  if (!state.collapsed && scrollY - state.anchorScrollY > collapsibleHeight) {
+  if (state.collapsed) {
+    if (state.anchorScrollY - scrollY > REVEAL_DELTA) {
+      return { collapsed: false, anchorScrollY: scrollY };
+    }
+    // Still collapsed: keep the anchor at the deepest point reached so far,
+    // so a later reveal is measured from there, not from wherever it first
+    // collapsed.
+    return scrollY > state.anchorScrollY ? { collapsed: true, anchorScrollY: scrollY } : state;
+  }
+  if (scrollY - state.anchorScrollY > collapsibleHeight) {
     return { collapsed: true, anchorScrollY: scrollY };
   }
-  if (state.collapsed && state.anchorScrollY - scrollY > REVEAL_DELTA) {
-    return { collapsed: false, anchorScrollY: scrollY };
-  }
-  return state;
+  // Still expanded: symmetrically track the highest point (lowest scrollY)
+  // reached so far, so a later collapse is measured from there.
+  return scrollY < state.anchorScrollY ? { collapsed: false, anchorScrollY: scrollY } : state;
 }
