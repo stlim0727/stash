@@ -1,8 +1,8 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..78264d2ad2c965246c396901421e03d601a59e82 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..96dd517fab0bfffbd6d661d435ec6bf781c6227e 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -54,6 +54,17 @@ class ExpoShareIntentModule : Module() {
+@@ -54,6 +54,31 @@ class ExpoShareIntentModule : Module() {
          private fun notifyError(message: String) {
              instance!!.sendEvent("onError", mapOf("value" to message))
          }
@@ -17,12 +17,39 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..78264d2ad2c965246c396901421e03d6
 +        private fun notifyDebug(message: String) {
 +            instance!!.sendEvent("onDebugLog", mapOf("value" to message))
 +        }
++
++        // Generalized source-app capture (Sentry STASH-2M: a Brave-originated share
++        // failed with zero evidence, on a build that already carries the STASH-2K
++        // relaunch-branch log). Android's Sharesheet/Chooser sets
++        // Activity#getReferrer() to `android-app://<sending package>` for the app
++        // that started this activity via ACTION_SEND[_MULTIPLE] — for ANY source
++        // app, not just Brave — so this needs no per-app special-casing. This is
++        // durably logged (onDebugLog feeds the report log buffer), so only the
++        // package name is ever recorded — an http(s) referrer could carry a
++        // page/query URL, so that case is redacted to just its scheme.
++        private fun referrerPackage(activity: Activity?): String? {
++            val referrer = activity?.referrer ?: return null
++            return if (referrer.scheme == "android-app") referrer.host else "non-app:" + (referrer.scheme ?: "unknown")
++        }
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -114,6 +125,19 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +138,32 @@ class ExpoShareIntentModule : Module() {
+ 
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
++            // Instrumentation only (Sentry STASH-2M): log the sending app before any
++            // branching below, so a report filed right after a silently-failed share
++            // shows which app originated it even if a downstream path (including one
++            // not yet covered by the branch-specific logs below) drops it with no
++            // other evidence.
++            if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
++                notifyDebug(
++                    "share intent received: action=" + intent.action +
++                        " type=" + intent.type +
++                        " referrer=" + referrerPackage(activity)
++                )
++            }
              if (activity != null && !activity.isTaskRoot) {
 +                // Instrumentation only (Sentry STASH-2K): a Shorts share via the
 +                // native Sharesheet reported "just inbox appeared" with ZERO
@@ -40,7 +67,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..78264d2ad2c965246c396901421e03d6
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,8 +145,18 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +171,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -61,7 +88,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..78264d2ad2c965246c396901421e03d6
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
-@@ -177,7 +211,7 @@ class ExpoShareIntentModule : Module() {
+@@ -177,7 +237,7 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
