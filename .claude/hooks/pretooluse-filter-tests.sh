@@ -21,8 +21,14 @@ normalized="$(printf '%s' "$trimmed" | sed -E 's/[[:space:]]*2>&1[[:space:]]*$//
 case "$normalized" in
   "pnpm test"|"pnpm test:components"|"pnpm lint"|"pnpm typecheck")
     filter_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/filter-verbose-test-output.sh"
-    jq -n --arg cmd "$filter_script $trimmed" \
-      '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: {command: $cmd}}}'
+    # updatedInput REPLACES the whole Bash tool_input, not just `command` — a
+    # caller-set `timeout` (these lanes can run long enough to need one above
+    # Claude Code's 2-minute default), `description`, or `run_in_background`
+    # would silently vanish otherwise, risking a spurious timeout kill on the
+    # rewritten command that the original call would not have hit (caught in
+    # PR review). Preserve every original field; only override `command`.
+    printf '%s' "$input" | jq --arg cmd "$filter_script $trimmed" \
+      '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: (.tool_input + {command: $cmd})}}'
     ;;
   *)
     ;;

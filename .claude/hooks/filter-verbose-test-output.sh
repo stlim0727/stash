@@ -45,13 +45,26 @@ filtered=$(printf '%s\n' "$output" | awk '
   { print }
 ')
 
-# On a passing `node --test` run, the per-test TAP body ("# Subtest: ...",
-# "ok N - ...") is legitimate but adds nothing once the run is known to have
-# passed overall — collapse to just the final numeric summary block. Matches
-# only the specific "# <keyword> <n>" summary lines, NOT "# Subtest: ..."
-# (which also starts with "# " but is per-test chatter, not the summary).
+# On a passing `node --test` run, drop ONLY the per-test TAP chatter: the
+# "# Subtest: <name>" description line, the "ok N - "/"not ok N - " result
+# line, and the fixed 4-line YAML metadata block each result carries
+# ("  ---" ... "  duration_ms: N" / "  type: 'test'" ... "  ..."). A
+# deny-list, not an allow-list — an earlier version kept only recognized
+# summary lines, which also silently swallowed anything unexpected on an
+# otherwise-green run (a Node deprecation warning, a custom console.warn
+# from a test helper) — exactly the signal that a passing run is newly
+# noisy or relying on deprecated behavior (caught in PR review). Everything
+# that isn't per-test chatter — including the final numeric summary block
+# and any such warning — survives untouched.
 if printf '%s\n' "$filtered" | grep -qE '^# tests [0-9]+$'; then
-  filtered=$(printf '%s\n' "$filtered" | grep -E '^(> |# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) )')
+  filtered=$(printf '%s\n' "$filtered" | awk '
+    /^# Subtest: / { next }
+    /^(ok|not ok) [0-9]+ - / { next }
+    /^  ---$/ { skip_yaml=1; next }
+    skip_yaml && /^  \.\.\.$/ { skip_yaml=0; next }
+    skip_yaml { next }
+    { print }
+  ')
 fi
 
 printf '%s\n' "$filtered"

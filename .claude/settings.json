@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/user/stash/.claude/hooks/pretooluse-filter-tests.sh"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pretooluse-filter-tests.sh"
           }
         ]
       }
