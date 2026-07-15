@@ -136,6 +136,60 @@ test('invalid input is rejected with a message and saves nothing', async () => {
   expect(result.current.inbox).toHaveLength(0);
 });
 
+test('a URL too long to save is rejected up front instead of queuing a create that can never succeed', async () => {
+  // Sentry STASH-2J: an Oracle email-verification link's huge embedded token
+  // blew Postgres's index row-size limit on every retry, forever. Reject
+  // before it ever reaches the queue.
+  const { result } = await renderStore();
+  const huge = `https://login.oracle.com/verify?token=${'x'.repeat(2800)}`;
+
+  let outcome: ReturnType<typeof result.current.addBookmark> | null = null;
+  await act(async () => {
+    outcome = result.current.addBookmark({ url: huge });
+  });
+
+  expect(outcome).toMatchObject({ status: 'invalid', reason: 'too_long' });
+  expect(result.current.inbox).toHaveLength(0);
+  expect(result.current.queue).toHaveLength(0);
+});
+
+test('a permanently-too-long-URL entry stays in the queue (not removed) so startup orphan reconciliation never rebuilds a fresh doomed create (Sentry STASH-2J)', async () => {
+  // Reproduces an entry queued on a pre-fix build: last_error already carries
+  // the exact Postgres message from its last failed attempt, and the bookmark
+  // itself is still sync_status:'failed' (syncQueueEntry marks both). isSyncable
+  // excludes the entry from retries, but if it were REMOVED from the queue
+  // entirely, reconcileOrphanedQueueEntries would treat the still-failed
+  // bookmark as a stranded orphan on the next cold start and rebuild a fresh
+  // create for the same doomed URL (caught in PR review) — so the entry must
+  // stay in the queue (its mere presence is what suppresses re-creation),
+  // just excluded from being retried and from any "waiting" count.
+  const stuckUrl = 'https://login.oracle.com/verify?token=x';
+  fakeRepo.__reset([makeStoredBookmark({ id: 'local-stuck', url: stuckUrl, sync_status: 'failed' })]);
+  await fakeRepo.repository.enqueue({
+    local_id: 'local-stuck',
+    remote_id: null,
+    operation: 'create',
+    payload: { url: stuckUrl },
+    sync_status: 'failed',
+    retry_count: 3,
+    last_error:
+      'index row size 2888 exceeds btree version 4 maximum 2704 for index "bookmarks_user_url_hash_active_idx"',
+    created_at: '2026-07-15T00:00:00.000Z',
+    updated_at: '2026-07-15T00:00:00.000Z',
+  });
+
+  const { result } = await renderStore();
+
+  // Still exactly one queue entry, still failed with its original error — not
+  // duplicated, not reset to a fresh 'pending' create by orphan reconciliation.
+  expect(result.current.queue).toHaveLength(1);
+  expect(result.current.queue[0]).toMatchObject({
+    local_id: 'local-stuck',
+    sync_status: 'failed',
+    last_error: expect.stringContaining('exceeds btree version'),
+  });
+});
+
 test('trashing moves a bookmark from inbox to trash and back', async () => {
   const { result } = await renderStore();
   await act(async () => {

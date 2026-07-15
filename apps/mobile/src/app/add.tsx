@@ -54,7 +54,9 @@ export default function AddBookmarkScreen() {
       : addBookmark({ shared_text: capture.text, title: capture.title });
     const message =
       result.status === 'invalid'
-        ? t('toast.noLink')
+        ? result.reason === 'too_long'
+          ? t('toast.urlTooLong')
+          : t('toast.noLink')
         : result.status === 'duplicate'
           ? t('toast.duplicate')
           : t('toast.saved');

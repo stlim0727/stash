@@ -51,6 +51,7 @@ import { getPreference, setPreference } from '@/storage/preferences';
 import { deliverExport } from '@/share/export-data';
 import { pickImportFile } from '@/share/import-data';
 import { useBookmarks } from '@/store/bookmarks';
+import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import type { OAuthProvider } from '@/supabase/types';
 
@@ -380,7 +381,14 @@ export default function SettingsScreen() {
   //  - no cloud session (anonymous works, only "not configured" lacks one) →
   //    "local only", no glyph. Pulls still happen automatically (on sign-in /
   //    account switch / when work is queued), so there is no manual-pull button.
-  const waiting = queue.filter((entry) => entry.sync_status !== 'synced').length;
+  // A permanently-too-long URL (Sentry STASH-2J) stays in the queue forever
+  // (removing it would make startup orphan reconciliation rebuild a fresh,
+  // equally doomed create for the same bookmark) but can never actually
+  // sync, so it must not count as "waiting" — that would show a stuck
+  // syncing/refresh state that can never clear.
+  const waiting = queue.filter(
+    (entry) => entry.sync_status !== 'synced' && !isPermanentlyUnsyncableUrl(entry),
+  ).length;
   const cloudAvailable = auth.isSignedIn; // anonymous OR authenticated session
   const hasPending = waiting > 0;
   const canSync = cloudAvailable && hasPending && !isSyncing;

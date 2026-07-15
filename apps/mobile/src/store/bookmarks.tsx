@@ -11,7 +11,7 @@ import type { ReactNode } from 'react';
 
 import { resolveAliasedId, swapBookmarkId } from '@/domain/bookmark-id-swap';
 import { mockUserId } from '@/domain/mock-data';
-import { canonicalizeUrl, normalizeUrl } from '@/domain/urls';
+import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from '@/domain/urls';
 import { enrichBookmark } from '@/domain/enrichment';
 import { isTransientNetworkError } from '@/domain/network-errors';
 import { planTitleBackfill } from '@/domain/title-backfill';
@@ -105,7 +105,15 @@ export type AddBookmarkResult =
        */
       persisted: Promise<boolean>;
     }
-  | { status: 'invalid'; error: string };
+  | {
+      status: 'invalid';
+      error: string;
+      /** Coarse, i18n-free reason code for the UI layer to pick a localized
+       *  message when the raw `error` string (English-only, matching this
+       *  store's existing i18n-free convention) isn't specific enough — e.g.
+       *  a toast-only caller that doesn't display `error` directly. */
+      reason?: 'too_long';
+    };
 
 /** Outcome counts from re-ingesting an imported file. */
 export interface ImportSummary {
@@ -1373,6 +1381,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Idempotent saves: reuse the existing bookmark for the same URL. Dedupe
       // on the canonical form so tracking params / fragments don't create dupes.
       const dedupeKey = canonicalizeUrl(normalized);
+
+      // Reject up front rather than queuing a save that can never succeed: the
+      // dedupe index this becomes `url_hash` for has a Postgres row-size limit
+      // that a sufficiently long URL blows on every retry, forever (Sentry
+      // STASH-2J — an Oracle email-verification link's huge embedded token).
+      if (isUrlTooLong(dedupeKey)) {
+        return {
+          status: 'invalid',
+          error: 'This web address is too long to save.',
+          reason: 'too_long',
+        };
+      }
+
       const existing = loadedBookmarks.find(
         (bookmark) => isActiveBookmark(bookmark) && currentDedupeKey(bookmark) === dedupeKey,
       );
@@ -1488,6 +1509,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           continue;
         }
         const dedupeKey = canonicalizeUrl(normalized);
+        // Same permanent-failure guard as addBookmark (Sentry STASH-2J): a URL
+        // long enough to blow the url_hash index's row-size limit would queue
+        // a create that can never succeed. Skip it rather than import a dead
+        // entry — matches the existing "no usable URL" skip semantics.
+        if (isUrlTooLong(dedupeKey)) {
+          skipped += 1;
+          continue;
+        }
         if (seen.has(dedupeKey)) {
           duplicates += 1;
           continue;

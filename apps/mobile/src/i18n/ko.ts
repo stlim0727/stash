@@ -184,6 +184,7 @@ export const ko: Catalog = {
   'toast.duplicate': '이미 Keepory에 있음',
   'toast.trashed': '휴지통으로 이동됨',
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
+  'toast.urlTooLong': '이 링크는 너무 길어서 저장할 수 없습니다',
   'toast.linkCopied': '링크가 복사됨',
 
   'settings.section.account': '계정',
