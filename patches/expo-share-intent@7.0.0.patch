@@ -1,8 +1,8 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5ffdc2880b0d4c56475776fa386e43eee09571c0 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..96dd517fab0bfffbd6d661d435ec6bf781c6227e 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -54,6 +54,28 @@ class ExpoShareIntentModule : Module() {
+@@ -54,6 +54,31 @@ class ExpoShareIntentModule : Module() {
          private fun notifyError(message: String) {
              instance!!.sendEvent("onError", mapOf("value" to message))
          }
@@ -23,15 +23,18 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5ffdc2880b0d4c56475776fa386e43ee
 +        // relaunch-branch log). Android's Sharesheet/Chooser sets
 +        // Activity#getReferrer() to `android-app://<sending package>` for the app
 +        // that started this activity via ACTION_SEND[_MULTIPLE] — for ANY source
-+        // app, not just Brave — so this needs no per-app special-casing.
++        // app, not just Brave — so this needs no per-app special-casing. This is
++        // durably logged (onDebugLog feeds the report log buffer), so only the
++        // package name is ever recorded — an http(s) referrer could carry a
++        // page/query URL, so that case is redacted to just its scheme.
 +        private fun referrerPackage(activity: Activity?): String? {
 +            val referrer = activity?.referrer ?: return null
-+            return if (referrer.scheme == "android-app") referrer.host else referrer.toString()
++            return if (referrer.scheme == "android-app") referrer.host else "non-app:" + (referrer.scheme ?: "unknown")
 +        }
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +135,32 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +138,32 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
@@ -64,7 +67,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5ffdc2880b0d4c56475776fa386e43ee
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,8 +168,18 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +171,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -85,7 +88,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5ffdc2880b0d4c56475776fa386e43ee
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
-@@ -177,7 +234,7 @@ class ExpoShareIntentModule : Module() {
+@@ -177,7 +237,7 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
