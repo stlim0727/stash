@@ -39,7 +39,10 @@ case "$normalized" in
     # would silently vanish otherwise, risking a spurious timeout kill on the
     # rewritten command that the original call would not have hit (caught in
     # PR review). Preserve every original field; only override `command`.
-    export FILTER_CMD="$filter_script $trimmed"
+    # Quote $filter_script: this string becomes the shell-form Bash command
+    # Claude Code executes next, so an unquoted path containing spaces would
+    # get word-split by the shell before the filter script ever runs.
+    export FILTER_CMD="\"$filter_script\" $trimmed"
     printf '%s' "$input" | node -e '
       let d = "";
       process.stdin.on("data", (c) => { d += c; });

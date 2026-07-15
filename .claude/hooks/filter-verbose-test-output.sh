@@ -23,26 +23,40 @@ if [ "$is_failure" -eq 1 ]; then
   exit "$exit_code"
 fi
 
-# PASS: strip known-noisy-but-harmless blocks — everything else survives.
+# PASS: collapse known-noisy-but-harmless blocks — everything else survives.
 # The dominant one in practice is jest's "  ● Console" section per test file:
 # every console.error/warn a test intentionally triggers (simulated storage
 # errors, React dev warnings, etc.) prints its full message + stack trace
-# there. On a passing run these are expected test artifacts, not signal, and
-# in this repo's suite they account for >99% of the output (532KB -> 1.8KB
-# measured on a real run). Stop skipping at the next PASS/FAIL line or the
-# final summary block, whichever comes first, so real content always
-# resumes correctly. Also strips the standalone worker-teardown warning +
-# its react-reconciler stack trace, which isn't always inside a Console
-# block.
+# there, and in this repo's suite these account for >99% of the output
+# (532KB -> 1.8KB measured on a real run). Rather than discarding the block
+# outright — which would also hide a genuinely new/unexpected warning from a
+# just-changed component on an otherwise-green run (caught in PR review) —
+# keep the "  ● Console" header and replace only the body with a one-line
+# count, so the signal that something was logged (and roughly how much)
+# always survives; an unusual count is a cue to rerun without the hook to
+# inspect the real content. Stop at the next PASS/FAIL line or the final
+# summary block, whichever comes first, so real content always resumes
+# correctly. Also strips the standalone worker-teardown warning + its
+# react-reconciler stack trace, which isn't always inside a Console block.
 filtered=$(printf '%s\n' "$output" | awk '
-  /^  ● Console$/ { skip_console=1; next }
-  skip_console && /^(PASS |FAIL |Test Suites:|Tests:|Snapshots:|Time:|Ran all test suites)/ { skip_console=0 }
-  skip_console { next }
+  /^  ● Console$/ { print; in_console=1; console_lines=0; next }
+  in_console && /^(PASS |FAIL |Test Suites:|Tests:|Snapshots:|Time:|Ran all test suites)/ {
+    if (console_lines > 0) {
+      printf("    (%d line(s) of console output suppressed on this passing run)\n", console_lines)
+    }
+    in_console=0
+  }
+  in_console { console_lines++; next }
   /^A worker process has failed to exit gracefully/ { skipping=1; next }
   skipping && /^[[:space:]]*$/ { skipping=0; next }
   skipping && /^[[:space:]]+at /  { next }
   skipping { skipping=0 }
   { print }
+  END {
+    if (in_console && console_lines > 0) {
+      printf("    (%d line(s) of console output suppressed on this passing run)\n", console_lines)
+    }
+  }
 ')
 
 # On a passing `node --test` run, drop ONLY the per-test TAP chatter: the
