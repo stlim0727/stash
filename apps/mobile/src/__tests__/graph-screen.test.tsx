@@ -45,6 +45,7 @@ import GraphScreen, {
   panWithPinchFocalDelta,
   pinchStartSnapshot,
   touchCenterInViewport,
+  truncateGraphLabel,
   wheelZoomScale,
 } from '@/app/graph';
 import { BookmarksProvider } from '@/store/bookmarks';
@@ -207,6 +208,78 @@ test('shows the empty state when there are no bookmarks', async () => {
   expect(screen.queryByTestId('graph-screen')).toBeNull();
   // An empty stash short-circuits to the empty state — never the spinner.
   expect(screen.queryByTestId('graph-loading')).toBeNull();
+});
+
+describe('truncateGraphLabel', () => {
+  test('leaves short text untouched', () => {
+    expect(truncateGraphLabel('Kimchi jjigae', 18)).toBe('Kimchi jjigae');
+  });
+
+  test('trims trailing/leading whitespace even when under the cap', () => {
+    expect(truncateGraphLabel('  Local-first  ', 18)).toBe('Local-first');
+  });
+
+  test('caps long text with an ellipsis, at or under the cap length', () => {
+    const truncated = truncateGraphLabel('A genuinely very long bookmark title indeed', 18);
+    expect(truncated).toBe('A genuinely very…');
+    expect(truncated.length).toBeLessThanOrEqual(18);
+    expect(truncated.endsWith('…')).toBe(true);
+  });
+});
+
+test('bookmark nodes render a length-capped title label', async () => {
+  // Two bookmarks share `cooking` so it survives the shared-tag backbone
+  // (minSharedDegree: 2) and both bookmark nodes render.
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000d1',
+        title: 'A genuinely very long bookmark title that should be truncated',
+      }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d2', title: 'Short one' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking')],
+      bookmarkTags: [
+        {
+          bookmark_id: '7e64cf1e-0000-4000-8000-0000000000d1',
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+        {
+          bookmark_id: '7e64cf1e-0000-4000-8000-0000000000d2',
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+
+  await waitFor(() =>
+    expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000d1')).toBeTruthy(),
+  );
+  // react-native-svg's Text renders its string child into a nested TSpan's
+  // `content` prop, not an RN-visible text node, so RNTL's getByText can't see
+  // it — read the rendered label content directly off the tree instead.
+  const labelContents = collectNodesWithProp(screen.toJSON(), 'content')
+    .map((node) => node.props.content)
+    .filter((content): content is string => typeof content === 'string');
+  // The full title is truncated to the cap with an ellipsis, not shown in full.
+  expect(labelContents).toContain('A genuinely very…');
+  expect(labelContents).not.toContain(
+    'A genuinely very long bookmark title that should be truncated',
+  );
+  // A short title renders untouched.
+  expect(labelContents).toContain('Short one');
 });
 
 test('tapping a bookmark node routes to its detail', async () => {
