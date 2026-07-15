@@ -153,6 +153,36 @@ test('a URL too long to save is rejected up front instead of queuing a create th
   expect(result.current.queue).toHaveLength(0);
 });
 
+test('syncNow drains an already-stuck too-long-URL entry from the queue instead of leaving it permanently "waiting" (Sentry STASH-2J)', async () => {
+  // Reproduces an entry queued on a pre-fix build: last_error already carries
+  // the exact Postgres message from its last failed attempt. isSyncable
+  // excludes it from retries, but leaving the row in the queue would make
+  // every "waiting to sync" count (e.g. Settings) treat it as pending forever
+  // (caught in PR review) — syncNow must actually remove the row.
+  await fakeRepo.repository.enqueue({
+    local_id: 'local-stuck',
+    remote_id: null,
+    operation: 'create',
+    payload: { url: 'https://login.oracle.com/verify?token=x' },
+    sync_status: 'failed',
+    retry_count: 3,
+    last_error:
+      'index row size 2888 exceeds btree version 4 maximum 2704 for index "bookmarks_user_url_hash_active_idx"',
+    created_at: '2026-07-15T00:00:00.000Z',
+    updated_at: '2026-07-15T00:00:00.000Z',
+  });
+
+  const { result } = await renderStore();
+  expect(result.current.queue).toHaveLength(1);
+
+  await act(async () => {
+    await result.current.syncNow();
+  });
+
+  expect(result.current.queue).toHaveLength(0);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
 test('trashing moves a bookmark from inbox to trash and back', async () => {
   const { result } = await renderStore();
   await act(async () => {

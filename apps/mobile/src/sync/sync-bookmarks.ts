@@ -446,7 +446,13 @@ export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
 // retried the moment the app updates, with no further doomed request needed.
 const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
 
-function isPermanentlyUnsyncableUrl(entry: LocalPendingBookmark): boolean {
+/** Exported so the caller can DRAIN these from the visible queue (see
+ *  `syncNow`'s "permanently unsyncable" cleanup) — merely excluding them from
+ *  `isSyncable` stops the doomed retries but leaves the row sitting as
+ *  `sync_status: 'failed'` in the queue forever, which every "waiting to
+ *  sync" count (e.g. Settings) still counts as pending work that can never
+ *  drain (caught in PR review). */
+export function isPermanentlyUnsyncableUrl(entry: LocalPendingBookmark): boolean {
   return (
     entry.sync_status === 'failed' &&
     typeof entry.last_error === 'string' &&
