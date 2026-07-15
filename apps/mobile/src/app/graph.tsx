@@ -98,6 +98,22 @@ const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 // each frame. `willChange` isn't in RN's ViewStyle, so it lives behind this cast
 // and is only ever applied under Platform.OS === 'web'.
 const WEB_COMPOSITE_LAYER = { willChange: 'transform' } as unknown as ViewStyle;
+// Web-only: the SVG <text> labels (tag hubs + bookmark titles) are natively
+// selectable by the browser. react-native-web's PanResponder implementation
+// (ResponderSystem.js) treats a native `selectionchange` with a non-collapsed
+// selection as a TERMINATE signal for whatever gesture it's tracking — so if a
+// drag starts on/over a label and the browser starts selecting text, our pan
+// gets forcibly cut. A fast drag makes this worse (more screen distance covered
+// before our own move-threshold claims the gesture, giving the browser's native
+// selection more of a head start) and so does dragging near the settled
+// content's edge (that's where labels cluster most densely — hub labels can
+// nudge right up to the padding boundary). Disabling selection removes the only
+// way a selection can START inside the canvas, so this must be applied to the
+// whole draggable canvas unconditionally — not gated on `interacting`, since
+// selection can anchor on the very first mousedown, before any gesture is even
+// recognized. `userSelect` is a TextStyle field in RN's types, not ViewStyle,
+// hence the cast (same pattern as WEB_COMPOSITE_LAYER above).
+const WEB_NO_TEXT_SELECT = { userSelect: 'none' } as unknown as ViewStyle;
 
 export function graphCanvasSize(
   measured: { w: number; h: number },
@@ -878,7 +894,11 @@ export default function GraphScreen() {
       style={[styles.container, { backgroundColor: palette.background }]}
       onLayout={onLayout}
     >
-      <View testID="graph-canvas" style={StyleSheet.absoluteFill} {...panResponder.panHandlers}>
+      <View
+        testID="graph-canvas"
+        style={[StyleSheet.absoluteFill, Platform.OS === 'web' ? WEB_NO_TEXT_SELECT : null]}
+        {...panResponder.panHandlers}
+      >
         <Animated.View
           // Promote this layer to its own GPU/composited texture ONLY while a gesture
           // is active, so a pan/zoom composites the cached layer instead of repainting
