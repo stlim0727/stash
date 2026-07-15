@@ -1,8 +1,46 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..f8354598f0a85b7f4011031fbde674ee4e27fbf1 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..78264d2ad2c965246c396901421e03d601a59e82 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -121,8 +121,18 @@ class ExpoShareIntentModule : Module() {
+@@ -54,6 +54,17 @@ class ExpoShareIntentModule : Module() {
+         private fun notifyError(message: String) {
+             instance!!.sendEvent("onError", mapOf("value" to message))
+         }
++        // Purely observational — unlike notifyError, this must NEVER drive the
++        // JS-side error/reset flow (ShareIntentHandler treats `onError` as a
++        // real failure: it shows a toast, navigates to Inbox, and calls
++        // resetShareIntent(), which would misfire on a normal internal relaunch
++        // hand-off and could race with the very intent this is trying to
++        // observe — caught in PR review on STASH-2K's first attempt, which
++        // reused notifyError for this same call site). A dedicated event with
++        // no listener wired to any behavior keeps this call inert.
++        private fun notifyDebug(message: String) {
++            instance!!.sendEvent("onDebugLog", mapOf("value" to message))
++        }
+ 
+         @SuppressLint("Range")
+         private fun getFileInfo(uri: Uri): Map<String, String?> {
+@@ -114,6 +125,19 @@ class ExpoShareIntentModule : Module() {
+         fun handleShareIntent(intent: Intent) {
+             val activity = instance?.currentActivity
+             if (activity != null && !activity.isTaskRoot) {
++                // Instrumentation only (Sentry STASH-2K): a Shorts share via the
++                // native Sharesheet reported "just inbox appeared" with ZERO
++                // share-related evidence anywhere downstream — no notifyError, no
++                // notifyShareIntent, no JS "share received" breadcrumb. Every other
++                // branch in this function calls one or the other; this
++                // relaunch-and-finish hand-off is the one that calls neither, so
++                // it's the leading suspect for where the share silently vanishes.
++                // Scoped to SEND/SEND_MULTIPLE only (STASH-2E: an unconditional log
++                // here would also fire on an ordinary non-task-root relaunch, e.g.
++                // multi-window/recents, not just a failed share).
++                if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
++                    notifyDebug("relaunching non-task-root activity for action: " + intent.action)
++                }
+                 val newIntent = Intent(intent).apply {
+                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                 }
+@@ -121,8 +145,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -23,6 +61,29 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..f8354598f0a85b7f4011031fbde674ee
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
+@@ -177,7 +211,7 @@ class ExpoShareIntentModule : Module() {
+     override fun definition() = ModuleDefinition {
+         Name("ExpoShareIntentModule")
+ 
+-        Events("onChange", "onStateChange", "onError")
++        Events("onChange", "onStateChange", "onError", "onDebugLog")
+ 
+         AsyncFunction("getShareIntent") { _: String ->
+             // get the Intent from onCreate activity (app not running in background)
+diff --git a/build/ExpoShareIntentModule.d.ts b/build/ExpoShareIntentModule.d.ts
+index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..118eba8cc51640a8242725a379cae913c906a9c2 100644
+--- a/build/ExpoShareIntentModule.d.ts
++++ b/build/ExpoShareIntentModule.d.ts
+@@ -4,6 +4,9 @@ type ExpoShareIntentModuleEvents = {
+     onError: (event: ErrorEventPayload) => void;
+     onChange: (event: ChangeEventPayload) => void;
+     onStateChange: (event: StateEventPayload) => void;
++    // Purely observational (Sentry STASH-2K) — never wired to any behavior,
++    // unlike onError. Same payload shape as onError.
++    onDebugLog: (event: ErrorEventPayload) => void;
+ };
+ declare class ExpoShareIntentModuleType extends NativeModule<ExpoShareIntentModuleEvents> {
+     getShareIntent(url: string): string;
 diff --git a/build/useShareIntent.js b/build/useShareIntent.js
 index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..9257fd881d90f62cc05bd3280d9de574d9086dcd 100644
 --- a/build/useShareIntent.js

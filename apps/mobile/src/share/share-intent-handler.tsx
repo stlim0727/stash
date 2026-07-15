@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useShareIntentContext } from 'expo-share-intent';
+import { ShareIntentModule, useShareIntentContext } from 'expo-share-intent';
 import { useEffect, useRef, useState } from 'react';
 
 import {
@@ -82,6 +82,18 @@ export function ShareIntentHandler() {
     router.replace('/');
     resetShareIntent();
   }, [error, resetShareIntent, router, show, t]);
+
+  // Purely observational native-side debug logging (Sentry STASH-2K), kept
+  // deliberately separate from the `onError`-driven `error` handling above:
+  // `onError` drives the toast/reset/navigate flow, but this event must never
+  // trigger any behavior — only get durably logged so a later "Report a
+  // problem" can show whether a suspected native code path actually ran.
+  useEffect(() => {
+    const subscription = ShareIntentModule?.addListener('onDebugLog', (event) => {
+      recordLog('info', `[share] native debug: ${event.value}`);
+    });
+    return () => subscription?.remove();
+  }, []);
 
   // Copy the incoming share into local state right away, then release the OS
   // intent so nothing else can clear it while we wait for the store to load.
