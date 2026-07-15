@@ -1,51 +1,72 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { nextHeaderCollapseState } from '@/domain/header-collapse';
+import {
+  INITIAL_HEADER_COLLAPSE_STATE,
+  nextHeaderCollapseState,
+  type HeaderCollapseState,
+} from '@/domain/header-collapse';
 
 test('never collapses when the collapsible height is unknown or zero', () => {
-  assert.equal(nextHeaderCollapseState(false, 500, 500, 0), false);
-  assert.equal(nextHeaderCollapseState(true, 500, 500, 0), false);
-  assert.equal(nextHeaderCollapseState(false, 500, 500, -10), false);
+  assert.deepEqual(
+    nextHeaderCollapseState({ collapsed: false, anchorScrollY: 0 }, 500, 0),
+    { collapsed: false, anchorScrollY: 0 },
+  );
+  assert.deepEqual(
+    nextHeaderCollapseState({ collapsed: true, anchorScrollY: 100 }, 500, 0),
+    { collapsed: false, anchorScrollY: 500 },
+  );
 });
 
-test('collapses once scrolled past the collapsible height', () => {
-  assert.equal(nextHeaderCollapseState(false, 50, 50, 80), false);
-  assert.equal(nextHeaderCollapseState(false, 81, 81, 80), true);
+test('collapses once scrolled past the collapsible height from the current anchor', () => {
+  const start = INITIAL_HEADER_COLLAPSE_STATE;
+  assert.deepEqual(nextHeaderCollapseState(start, 50, 80), start);
+  assert.deepEqual(nextHeaderCollapseState(start, 81, 80), { collapsed: true, anchorScrollY: 81 });
 });
 
-test('expands once scrolled back below the hysteresis band (absolute-position fallback)', () => {
-  assert.equal(nextHeaderCollapseState(true, 60, 60, 80), true); // still within the 24px band
-  assert.equal(nextHeaderCollapseState(true, 55, 55, 80), false); // 80 - 24 = 56, below it
+test('re-anchors on every state change, so a continued gesture in the same direction holds steady', () => {
+  // A multi-tick downward scroll: collapses on the first tick past the
+  // threshold, then STAYS collapsed on every subsequent tick — this is
+  // exactly the case a naive single-tick-delta check got wrong (PR review
+  // catch): re-anchoring means the next call measures from where it just
+  // collapsed, not from a fixed absolute threshold.
+  let state = INITIAL_HEADER_COLLAPSE_STATE;
+  state = nextHeaderCollapseState(state, 90, 80); // collapses, anchor -> 90
+  assert.equal(state.collapsed, true);
+  state = nextHeaderCollapseState(state, 200, 80); // still scrolling down
+  assert.equal(state.collapsed, true);
+  state = nextHeaderCollapseState(state, 5000, 80); // deep in a long list
+  assert.equal(state.collapsed, true);
 });
 
-test('holds steady inside the hysteresis band (no flicker at the boundary)', () => {
-  // Between expandAt (56) and collapseAt (80): whichever state it was already
-  // in, it stays there — this is the whole point of the band.
-  assert.equal(nextHeaderCollapseState(false, 70, 70, 80), false);
-  assert.equal(nextHeaderCollapseState(true, 70, 70, 80), true);
-});
-
-test('never lets a stale accumulated value linger: recomputes fresh from the current offset every call', () => {
-  // Simulates a remount resetting the list to scrollY=0 while collapsed was
-  // last `true` — the very next tick (or an explicit call with the fresh
-  // offset) must reflect reality immediately, no separate reset step needed.
-  assert.equal(nextHeaderCollapseState(true, 0, 0, 80), false);
-});
-
-test('reveals on any meaningful upward flick, wherever the user is in the list', () => {
-  // Deep in a long list (scrollY=5000, far from the "near top" absolute
-  // threshold) — a small upward flick still reveals the controls immediately,
-  // matching the previous diffClamp behavior (PR review catch: an
-  // absolute-position-only threshold regressed this for long libraries).
-  assert.equal(nextHeaderCollapseState(true, 4970, 5000, 80), false);
+test('reveals on a sustained upward flick and STAYS revealed as it continues, wherever the user is', () => {
+  // The exact scenario PR review flagged: deep in a list (scrollY=5000),
+  // scrolling up in several ticks must not re-collapse itself after one tick.
+  let state: HeaderCollapseState = { collapsed: true, anchorScrollY: 5000 };
+  state = nextHeaderCollapseState(state, 4970, 80); // 30px up -> reveals, anchor -> 4970
+  assert.equal(state.collapsed, false);
+  state = nextHeaderCollapseState(state, 4940, 80); // continues up
+  assert.equal(state.collapsed, false, 'must not re-collapse mid-gesture');
+  state = nextHeaderCollapseState(state, 4900, 80); // continues up again
+  assert.equal(state.collapsed, false, 'must not re-collapse mid-gesture');
 });
 
 test('a small upward jitter under the reveal delta does not expand', () => {
-  assert.equal(nextHeaderCollapseState(true, 4990, 5000, 80), true);
+  const state: HeaderCollapseState = { collapsed: true, anchorScrollY: 5000 };
+  assert.deepEqual(nextHeaderCollapseState(state, 4990, 80), state);
 });
 
-test('a downward or flat read never triggers the upward-reveal path', () => {
-  assert.equal(nextHeaderCollapseState(true, 5000, 4970, 80), true);
-  assert.equal(nextHeaderCollapseState(true, 5000, 5000, 80), true);
+test('re-collapses if the user resumes scrolling down past the height from where it last expanded', () => {
+  let state: HeaderCollapseState = { collapsed: false, anchorScrollY: 4970 };
+  assert.deepEqual(nextHeaderCollapseState(state, 5000, 80), state); // only 30px down, not yet
+  state = nextHeaderCollapseState(state, 5060, 80); // 90px down from the anchor
+  assert.equal(state.collapsed, true);
+});
+
+test('never lets a stale value linger: a remount resetting scrollY to 0 while collapsed corrects immediately', () => {
+  // The caller resets `collapsed`/`anchorScrollY` explicitly on a FlatList
+  // remount (see app/index.tsx) — this just confirms the fresh state behaves
+  // correctly from that point, with no separate reset logic needed here.
+  const freshState = INITIAL_HEADER_COLLAPSE_STATE;
+  assert.deepEqual(nextHeaderCollapseState(freshState, 0, 80), freshState);
 });

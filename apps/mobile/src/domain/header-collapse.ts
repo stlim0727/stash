@@ -3,56 +3,59 @@
  * accumulated `Animated.diffClamp` value — which requires an explicit reset on
  * every discontinuity (a FlatList remount, a missed frame) and has twice left
  * the header stuck at a stale collapsed value (Sentry STASH-2B, STASH-2G) —
- * with a plain boolean derived fresh from the current scroll offset on every
- * tick. There is no running state to go stale: even if an update is missed,
- * the next scroll event (or the very next render) recomputes correctly from
- * wherever the list actually is.
+ * with state derived fresh from the current scroll offset on every tick.
  *
- * Two thresholds (not one) give a hysteresis band so the boundary doesn't
- * flicker between collapsed/expanded on small scroll jitter right at the
- * threshold. A third condition — comparing only the two most recent scroll
- * readings, never an accumulated running value — restores the previous
- * diffClamp behavior of revealing on any meaningful upward flick, wherever the
- * user is in the list (caught in PR review: an absolute-position-only
- * threshold regressed that for anyone scrolled deep into a long library).
- * Comparing just the latest two readings can't reintroduce the original
- * staleness bug: even if an update is missed, the next call simply compares
- * against whatever the last-seen reading was, with no persistent accumulator
- * that requires an explicit reset across a discontinuity.
+ * Collapse/expand decisions are relative to `anchorScrollY` — the scroll
+ * offset at which the *current* state began, not an ever-growing total. Every
+ * time the state actually flips, the anchor re-stamps to the current offset.
+ * This is what lets a continued upward (or downward) scroll gesture keep the
+ * header revealed (or collapsed) for as long as the gesture continues, rather
+ * than reverting on the very next tick because the absolute position is still
+ * far from any fixed threshold (caught in PR review: an earlier version only
+ * compared the two most recent readings, so a multi-tick upward flick
+ * re-collapsed itself after a single tick of being revealed). It still can't
+ * reintroduce the original staleness bug: even if an update is missed, the
+ * next call simply compares the current offset against whatever anchor was
+ * last recorded — there is no long-lived total that requires a separate,
+ * easy-to-forget reset step, only this one small piece of state, which the
+ * caller already resets alongside `collapsed` on every FlatList remount.
  *
  * Pure — no React, no Animated — so the Node test lane can exercise it
  * directly.
  */
 
-const HYSTERESIS_BAND = 24;
-const UPWARD_REVEAL_DELTA = 24;
+/** How far (px) the user must scroll up from the collapse anchor to reveal
+ *  the header again. */
+const REVEAL_DELTA = 24;
+
+export interface HeaderCollapseState {
+  collapsed: boolean;
+  anchorScrollY: number;
+}
+
+export const INITIAL_HEADER_COLLAPSE_STATE: HeaderCollapseState = {
+  collapsed: false,
+  anchorScrollY: 0,
+};
 
 /**
- * Given the current collapsed state and the list's live scroll offset,
- * decide the next collapsed state. `collapsibleHeight` is the height of the
- * content that collapses away (never the hero, which stays pinned and isn't
- * part of this calculation at all). `previousScrollY` is only the immediately
- * preceding reading — not an accumulated total.
+ * Given the current state and the list's live scroll offset, decide the next
+ * state. `collapsibleHeight` is the height of the content that collapses away
+ * (never the hero, which stays pinned and isn't part of this calculation).
  */
 export function nextHeaderCollapseState(
-  collapsed: boolean,
+  state: HeaderCollapseState,
   scrollY: number,
-  previousScrollY: number,
   collapsibleHeight: number,
-): boolean {
+): HeaderCollapseState {
   if (collapsibleHeight <= 0) {
-    return false;
+    return state.collapsed ? { collapsed: false, anchorScrollY: scrollY } : state;
   }
-  if (collapsed && previousScrollY - scrollY > UPWARD_REVEAL_DELTA) {
-    return false;
+  if (!state.collapsed && scrollY - state.anchorScrollY > collapsibleHeight) {
+    return { collapsed: true, anchorScrollY: scrollY };
   }
-  const collapseAt = collapsibleHeight;
-  const expandAt = Math.max(0, collapsibleHeight - HYSTERESIS_BAND);
-  if (!collapsed && scrollY > collapseAt) {
-    return true;
+  if (state.collapsed && state.anchorScrollY - scrollY > REVEAL_DELTA) {
+    return { collapsed: false, anchorScrollY: scrollY };
   }
-  if (collapsed && scrollY < expandAt) {
-    return false;
-  }
-  return collapsed;
+  return state;
 }
