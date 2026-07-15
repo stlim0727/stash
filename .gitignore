@@ -1,6 +1,7 @@
 # Dependencies
 node_modules/
 .pnpm-store/
+package-lock.json
 
 # Environment files
 .env
@@ -34,6 +35,12 @@ pnpm-debug.log*
 # Downloaded fonts for scripts/generate-wordmark.mjs
 scripts/.wordmark-cache/
 .claude/worktrees/
+.claude/settings.local.json
+
+# Local agent/runtime artifacts
+.codex-remote-attachments/
+scratch/
+tmp/
 
 # ui-preview skill output (local scratch images, not source)
 scratchpad/
