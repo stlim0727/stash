@@ -83,6 +83,11 @@ const MIN_VISIBLE_CAP = 80;
 // moved this far since the last applied scale, so we re-rasterize the SVG far less
 // often per pinch. The exact final scale is always committed on gesture end.
 const SCALE_APPLY_STEP = 0.02;
+// Wheel/trackpad zoom: exponential so repeated small trackpad deltas compound
+// smoothly, and a single physical mouse-wheel notch (deltaY ~100) reads as a
+// ~15% zoom step — close enough to the pinch gesture's feel to not need its own
+// tuning UI.
+const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 // Web-only: promote the transformed layer to its own compositor layer so a
 // translate/scale composites cheaply instead of repainting the whole vector SVG
 // each frame. `willChange` isn't in RN's ViewStyle, so it lives behind this cast
@@ -105,6 +110,10 @@ function hubRadius(degree: number): number {
 
 export function clampToRange(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+export function wheelZoomScale(startScale: number, deltaY: number): number {
+  return clampToRange(startScale * Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY), MIN_SCALE, MAX_SCALE);
 }
 
 // Max translate (in screen px) per axis: allow panning until only a minimum
@@ -428,33 +437,41 @@ export default function GraphScreen() {
     startPan: { x: number; y: number };
     startFocal: { x: number; y: number };
   } | null>(null);
+  // True for the duration of a touch pan/pinch (grant → release/terminate). The
+  // wheel handler checks this so a trackpad's momentum wheel events can't fight
+  // an in-progress touch gesture over the same Animated offset.
+  const gestureActiveRef = useRef(false);
+
+  // Per-axis pan bound at a given scale. `fit` maps the PADDED viewBox into the
+  // viewport (that's the preserveAspectRatio="…meet" basis), but the sliver
+  // guarantee is measured against REAL NODE content, not the symmetric padding:
+  // the node bbox is centered in the padded viewBox, so its on-screen extent is
+  // `fit * unpadded-node-span` (unpadded span = padded span − VIEWBOX_PAD*2).
+  // Feeding maxPanOffset the node extent (not the padded span) stops a hard
+  // fling from parking the viewport over pure padding. Reads viewport + viewBox
+  // from refs so this stays stable across renders yet never closes over stale
+  // sizes. Shared by the pinch responder and the wheel-zoom handler below.
+  const axisBoundsAt = useCallback((liveScaleValue: number) => {
+    const { w: vw, h: vh } = viewportRef.current;
+    const { w: vbW, h: vbH } = vbSizeRef.current;
+    const fit = Math.min(vw / vbW, vh / vbH);
+    const nodeW = vbW - VIEWBOX_PAD * 2;
+    const nodeH = vbH - VIEWBOX_PAD * 2;
+    return {
+      x: maxPanOffset(liveScaleValue, vw, fit * nodeW),
+      y: maxPanOffset(liveScaleValue, vh, fit * nodeH),
+    };
+  }, []);
 
   const panResponder = useMemo(
     () => {
-      // Per-axis pan bound at the live scale. `fit` maps the PADDED viewBox into
-      // the viewport (that's the preserveAspectRatio="…meet" basis), but the sliver
-      // guarantee is measured against REAL NODE content, not the symmetric padding:
-      // the node bbox is centered in the padded viewBox, so its on-screen extent is
-      // `fit * unpadded-node-span` (unpadded span = padded span − VIEWBOX_PAD*2).
-      // Feeding maxPanOffset the node extent (not the padded span) stops a hard
-      // fling from parking the viewport over pure padding. Reads viewport + viewBox
-      // from refs so the memoized responder never closes over stale sizes.
-      const axisBounds = () => {
-        const { w: vw, h: vh } = viewportRef.current;
-        const { w: vbW, h: vbH } = vbSizeRef.current;
-        const fit = Math.min(vw / vbW, vh / vbH);
-        const nodeW = vbW - VIEWBOX_PAD * 2;
-        const nodeH = vbH - VIEWBOX_PAD * 2;
-        return {
-          x: maxPanOffset(liveScale.current, vw, fit * nodeW),
-          y: maxPanOffset(liveScale.current, vh, fit * nodeH),
-        };
-      };
+      const axisBounds = () => axisBoundsAt(liveScale.current);
       // Flatten the offset and re-clamp the pan against the (possibly just-changed)
       // scale — a pinch-out shrinks the allowed range, so an out-of-bounds pan must
       // be pulled back in — then commit the exact final pinch scale. Also drops the
       // transient raster hint so the settled view re-renders as crisp vector SVG.
       const settle = () => {
+        gestureActiveRef.current = false;
         setInteracting(false);
         translateX.flattenOffset();
         translateY.flattenOffset();
@@ -481,6 +498,7 @@ export default function GraphScreen() {
           Math.abs(gesture.dx) > 4 ||
           Math.abs(gesture.dy) > 4,
         onPanResponderGrant: () => {
+          gestureActiveRef.current = true;
           setInteracting(true);
           translateX.extractOffset();
           translateY.extractOffset();
@@ -542,8 +560,70 @@ export default function GraphScreen() {
         onPanResponderTerminate: settle,
       });
     },
-    [translateX, translateY, scale],
+    [translateX, translateY, scale, axisBoundsAt],
   );
+
+  // Wheel/trackpad zoom (web only): mirrors the pinch-zoom math above but keyed
+  // off a single `deltaY` instead of two touch points, anchored on the cursor so
+  // the point under it stays put. Skips while a touch pan/pinch is mid-gesture
+  // (gestureActiveRef) since that path is managing the Animated offset itself.
+  const applyWheelZoom = useCallback(
+    (deltaY: number, focal: { x: number; y: number }) => {
+      if (gestureActiveRef.current) {
+        return;
+      }
+      const startScale = lastScale.current;
+      const nextScale = wheelZoomScale(startScale, deltaY);
+      if (nextScale === startScale) {
+        return;
+      }
+      const anchoredPan = anchoredPanForScale({
+        pan: panOffset.current,
+        focal,
+        viewport: viewportRef.current,
+        startScale,
+        nextScale,
+      });
+      const { x: maxX, y: maxY } = axisBoundsAt(nextScale);
+      const nextX = clampToRange(anchoredPan.x, -maxX, maxX);
+      const nextY = clampToRange(anchoredPan.y, -maxY, maxY);
+      panOffset.current = { x: nextX, y: nextY };
+      lastScale.current = nextScale;
+      liveScale.current = nextScale;
+      appliedScale.current = nextScale;
+      translateX.setValue(nextX);
+      translateY.setValue(nextY);
+      scale.setValue(nextScale);
+    },
+    [axisBoundsAt, translateX, translateY, scale],
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    // A plain `View`'s ref forwards to its underlying DOM node on web (unlike
+    // ScrollView, which needs getScrollableNode()) — same cast pattern as the
+    // other web-only DOM listeners in this codebase (see ShelfEdges). The ref
+    // only attaches once the settled (non-loading, non-empty) canvas JSX
+    // mounts, so this must re-run once `settled` flips from null so the retry
+    // finds a real node instead of permanently bailing on the mount-time null.
+    const node = containerRef.current as unknown as HTMLElement | null;
+    if (!node) {
+      return;
+    }
+    const onWheel = (event: WheelEvent) => {
+      // Always consumed: besides driving our own zoom, this stops Ctrl+wheel
+      // from triggering the browser's native page-zoom over the canvas.
+      event.preventDefault();
+      applyWheelZoom(event.deltaY, {
+        x: event.clientX - containerOriginRef.current.x,
+        y: event.clientY - containerOriginRef.current.y,
+      });
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, [applyWheelZoom, settled]);
 
   // Reset the pan/zoom transform to identity, which restores the initial
   // fit-to-bounds view: the fit itself lives in the SVG's viewBox +

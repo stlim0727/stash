@@ -45,6 +45,7 @@ import GraphScreen, {
   panWithPinchFocalDelta,
   pinchStartSnapshot,
   touchCenterInViewport,
+  wheelZoomScale,
 } from '@/app/graph';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { Tag } from '@/domain/types';
@@ -411,6 +412,35 @@ describe('pinch anchoring', () => {
       startPan: { x: 20, y: 10 },
       startFocal: { x: 200, y: 160 },
     });
+  });
+});
+
+// The web-only wheel listener drives an Animated transform through native DOM
+// APIs (see the effect in app/graph.tsx), which the jest-expo test renderer
+// doesn't provide — same reason the pinch gesture above is asserted through its
+// pure math rather than a simulated touch stream. wheelZoomScale is that math
+// for the wheel path: it decides the NEXT scale from a raw `deltaY`; the
+// resulting pan gets anchored on the cursor via the same anchoredPanForScale
+// tested above.
+describe('wheel zoom', () => {
+  test('scrolling up (negative deltaY) zooms in', () => {
+    expect(wheelZoomScale(1, -100)).toBeGreaterThan(1);
+  });
+
+  test('scrolling down (positive deltaY) zooms out', () => {
+    expect(wheelZoomScale(1, 100)).toBeLessThan(1);
+  });
+
+  test('a zero delta leaves the scale unchanged', () => {
+    expect(wheelZoomScale(2, 0)).toBe(2);
+  });
+
+  test('clamps zoom-in at MAX_SCALE instead of overshooting', () => {
+    expect(wheelZoomScale(MAX_SCALE, -100000)).toBe(MAX_SCALE);
+  });
+
+  test('clamps zoom-out at MIN_SCALE instead of overshooting', () => {
+    expect(wheelZoomScale(MIN_SCALE, 100000)).toBe(MIN_SCALE);
   });
 });
 
