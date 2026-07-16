@@ -104,6 +104,7 @@ import {
   type HeaderCollapseState,
 } from '@/domain/header-collapse';
 import { shouldShowWordmarkFallback } from '@/domain/wordmark';
+import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
   const parts: string[] = [];
@@ -783,6 +784,28 @@ export default function InboxScreen() {
       setHeaderHeight(heroHeight + collapsibleHeight);
     }
   }, [isWebPlatform, heroHeight, collapsibleHeight]);
+  // Keep a live snapshot of the hero's render state for `FloatingReportButton`
+  // to read if the user files a "Report a problem" — see
+  // `feedback/hero-diagnostics-session.ts` for why (recurring "hero not
+  // visible" reports with no way to tell what actually happened).
+  useEffect(() => {
+    setHeroDiagnosticsSnapshot({
+      collapsed: headerCollapse.collapsed,
+      heroHeight,
+      collapsibleHeight,
+      wordmarkLoaded,
+      wordmarkFailed,
+      showWordmarkFallback,
+    });
+  }, [
+    headerCollapse.collapsed,
+    heroHeight,
+    collapsibleHeight,
+    wordmarkLoaded,
+    wordmarkFailed,
+    showWordmarkFallback,
+  ]);
+  useEffect(() => () => setHeroDiagnosticsSnapshot(null), []);
   // The pinned active-filter bar is measured separately (it lives in its own
   // non-translating layer below the header). When it's showing, both scroll
   // containers reserve extra top padding for it so the first rows aren't hidden.

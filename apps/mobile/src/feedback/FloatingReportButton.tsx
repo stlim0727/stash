@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { getHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 import { captureFeedbackScreenshot } from '@/feedback/screenshot';
 import {
   setPendingFeedbackScreenshot,
@@ -18,7 +19,15 @@ interface FloatingReportButtonProps {
   children: React.ReactNode;
 }
 
-const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1200;
+// 1200ms used to race out under normal conditions too — every "hero not
+// visible" report on record (STASH-1X, STASH-2G, STASH-2P) came back with
+// `screenshot: absent`, and each also logged heavy competing JS-thread work
+// (sync full-refresh, repeated Realtime reconnects) right around the same
+// moment. A tighter budget is exactly the one most likely to lose the race
+// precisely when a screenshot would be most useful. The capture is opt-in and
+// already shows a disabled/dimmed button while it runs, so a longer bound is
+// an acceptable wait, not a silent hang.
+const SCREENSHOT_CAPTURE_TIMEOUT_MS = 3000;
 const DEFAULT_BOTTOM_OFFSET = 88;
 const INBOX_BOTTOM_OFFSET = 92;
 
@@ -86,6 +95,13 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     try {
       const source = feedbackSourceFromPath(pathname);
       setPendingFeedbackSource(source);
+      // Logged (not stored separately) so it rides the existing log-buffer ->
+      // diagnostics.logs pipeline into the report, independent of whether the
+      // screenshot capture below succeeds or times out.
+      const heroSnapshot = getHeroDiagnosticsSnapshot();
+      if (heroSnapshot) {
+        console.info('feedback: inbox hero snapshot', JSON.stringify(heroSnapshot));
+      }
       setPendingFeedbackScreenshot(
         await withTimeout(
           captureFeedbackScreenshot(captureRef, source.surface),
