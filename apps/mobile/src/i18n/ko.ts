@@ -413,6 +413,8 @@ export const ko: Catalog = {
   'report.submitting': '전송 중…',
   'report.errorNoSession': '신고를 제출하려면 활성 세션이 필요합니다.',
   'report.errorSubmit': '신고를 제출할 수 없습니다.',
+  'report.minimizeA11yHint': '길게 눌러서 최소화',
+  'report.expandA11y': '신고 버튼 표시',
 
   'account.signInApple': 'Apple로 로그인',
   'account.signInGoogle': 'Google로 로그인',

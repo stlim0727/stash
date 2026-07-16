@@ -4,6 +4,7 @@ import { Animated, Platform, Pressable, StyleSheet, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { overlayLayer } from '@/ui/layering';
 
 // A plain confirmation auto-dismisses quickly; one carrying a tap target stays
 // up longer so there's actually time to reach for it before it slides away.
@@ -22,6 +23,15 @@ interface CaptureToastContextValue {
    * `action` to add an inline button — used by the share flow's "View" shortcut.
    */
   show: (message: string, action?: CaptureToastAction) => void;
+  /**
+   * Whether a toast is currently up. The toast itself stays pass-through
+   * (`pointerEvents: 'none'`/`'box-none'`) so it never blocks the screen
+   * underneath — but that means anything absolutely positioned in its footprint
+   * still receives touches straight through it. Consumers whose own floating
+   * controls overlap the toast's resting corner (the report button) use this to
+   * go inert for the moment, instead of relying on the toast to intercept taps.
+   */
+  isVisible: boolean;
 }
 
 const CaptureToastContext = createContext<CaptureToastContextValue | null>(null);
@@ -100,7 +110,7 @@ export function CaptureToastProvider({ children }: { children: ReactNode }) {
   }, [action, dismiss]);
 
   return (
-    <CaptureToastContext.Provider value={{ show }}>
+    <CaptureToastContext.Provider value={{ show, isVisible: toast !== null }}>
       {children}
       {toast ? (
         <Animated.View
@@ -145,6 +155,11 @@ export function useCaptureToast(): CaptureToastContextValue {
 
 const styles = StyleSheet.create({
   toast: {
+    // Above the floating report button/nub: that button sits bottom-left at
+    // the same row as the "+" FAB, so its corner can fall under this toast's
+    // resting position — the ephemeral confirmation must win over the
+    // persistent button.
+    ...overlayLayer(60),
     position: 'absolute',
     left: 24,
     right: 24,
@@ -162,7 +177,11 @@ const styles = StyleSheet.create({
         shadowRadius: 12,
         shadowOffset: { width: 0, height: 4 },
       },
-      android: { elevation: 6 },
+      // No Android elevation here: overlayLayer(60) above already sets it for
+      // stacking (paint AND touch dispatch — see ui/layering.ts). Re-setting a
+      // lower value here after that spread would silently claw it back down
+      // and hand touch priority to anything with a higher elevation
+      // underneath, e.g. the report button/nub's overlayLayer(50).
       default: {},
     }),
   },

@@ -558,6 +558,8 @@ export const en = {
   'report.submitting': 'Sending…',
   'report.errorNoSession': 'You need an active session to submit a report.',
   'report.errorSubmit': 'Could not submit your report.',
+  'report.minimizeA11yHint': 'Long press to minimize',
+  'report.expandA11y': 'Show report button',
 
   // Account / auth controls (sign-in is inline in Settings).
   'account.signInApple': 'Sign in with Apple',
