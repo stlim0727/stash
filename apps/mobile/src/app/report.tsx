@@ -30,7 +30,7 @@ import {
   getPendingFeedbackSource,
   getPendingFeedbackScreenshot,
 } from '@/feedback/screenshot-session';
-import { getShareDiagnostics } from '@/share/share-diagnostics';
+import { getShareDiagnostics, hydrateNativeShareDebugLog } from '@/share/share-diagnostics';
 import { getStorageDiagnostics } from '@/storage/diagnostics';
 import { useT } from '@/i18n';
 import { Button } from '@/ui/Button';
@@ -122,6 +122,26 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     }
   }, [submit.status, router]);
 
+  // Re-read the native module's durable share-intent breadcrumb (Android,
+  // Sentry STASH-2Q) as soon as this screen mounts: the startup-only read in
+  // `_layout.tsx` misses a same-session report — the common case, since a
+  // user who hits a failed share typically taps "Report a problem" right
+  // away, well before any process restart. Bump a tick so the preview below
+  // reflects it too, even though handleSubmit/handleShare re-await the read
+  // themselves right before collecting, independent of this effect's timing.
+  const [nativeDebugTick, setNativeDebugTick] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    void hydrateNativeShareDebugLog().then(() => {
+      if (!cancelled) {
+        setNativeDebugTick((tick) => tick + 1);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
   const platform = Platform.OS;
 
@@ -170,12 +190,16 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     ],
   );
 
-  const context = useMemo(collectContext, [collectContext]);
+  const context = useMemo(collectContext, [collectContext, nativeDebugTick]);
   const contextPreview = useMemo(() => previewContext(context), [context]);
   const logCount = context.logs?.length ?? 0;
 
   const handleShare = async () => {
     try {
+      // Re-await the native breadcrumb read here too, independent of the mount
+      // effect's timing, so a share triggered right after a failed capture
+      // still carries it (Sentry STASH-2Q).
+      await hydrateNativeShareDebugLog();
       await Share.share({ message: formatDiagnosticsReport(collectContext()) });
     } catch {
       // User dismissed the share sheet, or it is unavailable — nothing to do.
@@ -206,6 +230,10 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
 
     setSubmit({ status: 'submitting' });
     try {
+      // Re-await the native breadcrumb read here too (Sentry STASH-2Q) —
+      // guarantees the submitted diagnostics carry it regardless of whether
+      // the mount effect above has resolved yet.
+      await hydrateNativeShareDebugLog();
       // Re-ensure the session so a token that expired while this screen stayed
       // open is refreshed before we post; otherwise the request is rejected
       // with "JWT expired".
