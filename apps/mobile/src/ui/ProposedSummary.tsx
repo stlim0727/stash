@@ -24,13 +24,31 @@ interface ProposedSummaryProps {
   busy: boolean;
   onUse: () => void;
   onDismiss: () => void;
+  /**
+   * Override the default accessibility labels below. Detail shows one
+   * bookmark per screen, so the default (title-less) labels are unambiguous;
+   * Review can show several summary cards at once and passes labels naming
+   * the bookmark instead.
+   */
+  useA11yLabel?: string;
+  dismissA11yLabel?: string;
 }
 
-export function ProposedSummary({ summary, noteEmpty, busy, onUse, onDismiss }: ProposedSummaryProps) {
+export function ProposedSummary({
+  summary,
+  noteEmpty,
+  busy,
+  onUse,
+  onDismiss,
+  useA11yLabel,
+  dismissA11yLabel,
+}: ProposedSummaryProps) {
   const palette = usePalette();
   const t = useT();
   const useLabel = noteEmpty ? t('detail.summaryUseAsNote') : t('detail.summaryAppendToNote');
-  const useA11y = noteEmpty ? t('detail.summaryUseAsNoteA11y') : t('detail.summaryAppendToNoteA11y');
+  const useA11y =
+    useA11yLabel ?? (noteEmpty ? t('detail.summaryUseAsNoteA11y') : t('detail.summaryAppendToNoteA11y'));
+  const dismissA11y = dismissA11yLabel ?? t('detail.summaryDismissA11y');
 
   return (
     <View
@@ -55,7 +73,7 @@ export function ProposedSummary({ summary, noteEmpty, busy, onUse, onDismiss }: 
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={t('detail.summaryDismissA11y')}
+          accessibilityLabel={dismissA11y}
           disabled={busy}
           hitSlop={6}
           style={styles.dismiss}

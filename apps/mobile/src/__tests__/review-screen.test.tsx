@@ -525,7 +525,7 @@ test('a summary-only card (no tags, no folder) skips the bulk Accept/Dismiss row
 
   await waitFor(() => expect(screen.getByText('A url from example.com.')).toBeTruthy());
   expect(screen.queryByTestId(`review-action-row-${id}`)).toBeNull();
-  expect(screen.getByLabelText('Use the suggested summary as your note')).toBeTruthy();
+  expect(screen.getByLabelText('Use the suggested summary as your note for Summary only')).toBeTruthy();
 });
 
 test('"Use as note" fills an empty note and marks the summary durably reviewed', async () => {
@@ -544,9 +544,11 @@ test('"Use as note" fills an empty note and marks the summary durably reviewed',
   );
 
   const screen = await renderReview();
-  await waitFor(() => expect(screen.getByLabelText('Use the suggested summary as your note')).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByLabelText('Use the suggested summary as your note for Fill my note')).toBeTruthy(),
+  );
 
-  await fireEvent.press(screen.getByLabelText('Use the suggested summary as your note'));
+  await fireEvent.press(screen.getByLabelText('Use the suggested summary as your note for Fill my note'));
 
   await waitFor(() => {
     const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
@@ -574,10 +576,12 @@ test('"Add to note" appends the summary without overwriting existing text', asyn
 
   const screen = await renderReview();
   await waitFor(() =>
-    expect(screen.getByLabelText('Append the suggested summary to your note')).toBeTruthy(),
+    expect(
+      screen.getByLabelText('Add the suggested summary to your note for Append to note'),
+    ).toBeTruthy(),
   );
 
-  await fireEvent.press(screen.getByLabelText('Append the suggested summary to your note'));
+  await fireEvent.press(screen.getByLabelText('Add the suggested summary to your note for Append to note'));
 
   await waitFor(() => {
     const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
@@ -601,9 +605,11 @@ test('dismissing the summary hides it durably and never touches the note', async
   );
 
   const screen = await renderReview();
-  await waitFor(() => expect(screen.getByLabelText('Dismiss the suggested summary')).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByLabelText('Dismiss the suggested summary for Dismiss my summary')).toBeTruthy(),
+  );
 
-  await fireEvent.press(screen.getByLabelText('Dismiss the suggested summary'));
+  await fireEvent.press(screen.getByLabelText('Dismiss the suggested summary for Dismiss my summary'));
 
   await waitFor(() => expect(screen.queryByText('Dismiss my summary')).toBeNull());
   const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
@@ -630,7 +636,7 @@ test('a dummy-v0 summary never surfaces on Review (would leak the internal model
 
   await waitFor(() => expect(screen.getByText('Dummy summary')).toBeTruthy());
   expect(screen.queryByText('Url from example.com — “○○”. Auto-categorized by dummy-v0.')).toBeNull();
-  expect(screen.queryByLabelText('Use the suggested summary as your note')).toBeNull();
+  expect(screen.queryByLabelText('Use the suggested summary as your note for Dummy summary')).toBeNull();
 });
 
 test('a durably-reviewed summary is hidden on Review entry', async () => {
@@ -658,4 +664,55 @@ test('a durably-reviewed summary is hidden on Review entry', async () => {
 
   await waitFor(() => expect(screen.getByText('Already reviewed')).toBeTruthy());
   expect(screen.queryByText('Already-reviewed summary.')).toBeNull();
+});
+
+test('bulk "Dismiss all" on a mixed card (tags + summary) also dismisses the summary', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e8';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Mixed card', notes: 'Untouched.' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A mixed-card summary.',
+        model: 'gemini-2.0',
+        suggested_tags: [{ name: 'design', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('Mixed card')).toBeTruthy());
+  expect(screen.getByText('A mixed-card summary.')).toBeTruthy();
+
+  await fireEvent.press(screen.getByLabelText('Dismiss all suggestions for Mixed card'));
+
+  // "Dismiss all" sweeps the tag AND the summary — the card fully drops out,
+  // and the summary is durably reviewed (not just the tag).
+  await waitFor(() => expect(screen.queryByText('Mixed card')).toBeNull());
+  const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
+  expect(bookmark?.notes).toBe('Untouched.');
+  expect(bookmark?.reviewed_summary_tokens).toContain(summaryToken('A mixed-card summary.')!);
+});
+
+test('a stale enrichment shows the same hint as Detail', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e9';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Stale card' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A stale summary.',
+        model: 'gemini-2.0',
+        status: 'stale',
+        suggested_tags: [{ name: 'design', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByText('Stale card')).toBeTruthy());
+  expect(screen.getByText('Edited since these suggestions — refresh to update.')).toBeTruthy();
 });

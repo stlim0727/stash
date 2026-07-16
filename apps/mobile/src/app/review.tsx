@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
-import { pendingSuggestedFolder, pendingSuggestions, suggestedFolderTokens, summaryToken } from '@/domain/ai-suggestions';
+import { pendingSuggestedFolder, pendingSummary, pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { displayTitle } from '@/domain/item-display';
 import { useBookmarks } from '@/store/bookmarks';
@@ -33,6 +33,10 @@ interface ReviewItem {
   summary: string | null;
   summaryTok: string | null;
   notes: string | null;
+  // Mirrors Detail's "Edited since these suggestions" hint — true when the
+  // enrichment behind this card's suggestions is stale (a title/notes edit
+  // landed after the AI ran).
+  stale: boolean;
 }
 
 export default function ReviewScreen() {
@@ -93,19 +97,8 @@ export default function ReviewScreen() {
         bookmark.collection_id,
         getDismissedFolderSuggestions(bookmark.id),
       );
-      // Same eligibility rule as the Detail screen's ProposedSummary: a failed
-      // preview, an already-reviewed token, or the dummy-v0 heuristic fallback
-      // (whose boilerplate text would just leak the internal model name) never
-      // surface a summary here either.
-      const isPreviewFailed = bookmark.metadata_status === 'failed';
-      const summaryTok = summaryToken(enrichment?.summary);
-      const summaryReviewed = summaryTok !== null && getReviewedSummary(bookmark.id).has(summaryTok);
-      const showAiSummary =
-        !isPreviewFailed &&
-        Boolean(enrichment?.summary?.trim()) &&
-        !summaryReviewed &&
-        enrichment?.model !== 'dummy-v0';
-      if (suggestions.length > 0 || folder || showAiSummary) {
+      const summary = pendingSummary(bookmark.metadata_status, enrichment, getReviewedSummary(bookmark.id));
+      if (suggestions.length > 0 || folder || summary) {
         result.push({
           id: bookmark.id,
           title: displayTitle(bookmark) ?? t('common.untitled'),
@@ -114,9 +107,11 @@ export default function ReviewScreen() {
           folderTokens: folder
             ? suggestedFolderTokens(folder, enrichment?.suggested_collection_name)
             : [],
-          summary: showAiSummary ? (enrichment?.summary ?? null) : null,
-          summaryTok: showAiSummary ? summaryTok : null,
+          summary: summary?.text ?? null,
+          summaryTok: summary?.token ?? null,
           notes: bookmark.notes,
+          // Mirrors Detail's "Edited since these suggestions" hint.
+          stale: enrichment?.status === 'stale',
         });
       }
     }
@@ -275,8 +270,12 @@ export default function ReviewScreen() {
     ).finally(() => setBusy(false));
   };
 
-  // Bulk "Dismiss" for a card: mark pending tags reviewed AND durably dismiss the
-  // folder suggestion (both kinds, never confirms).
+  // Bulk "Dismiss" for a card: mark pending tags reviewed, durably dismiss the
+  // folder suggestion (both kinds), AND — for a mixed card that also has a
+  // pending summary — dismiss that too, so "Dismiss all" actually means all
+  // (mirrors Detail's screen-level handleDismissAllSuggestions). A
+  // summary-only card never reaches here — this row isn't rendered for one —
+  // so this only ever fires alongside a real tag/folder dismissal.
   const dismissAll = (item: ReviewItem) => {
     dismissSuggestionBundle({
       bookmarkId: item.id,
@@ -285,6 +284,7 @@ export default function ReviewScreen() {
       markSuggestionsReviewed,
       dismissFolderSuggestion,
     });
+    dismissSummary(item);
   };
 
   if (items.length === 0) {
@@ -317,6 +317,9 @@ export default function ReviewScreen() {
             </Text>
             <Text style={[styles.titleChevron, { color: palette.textSecondary }]}>›</Text>
           </Pressable>
+          {item.stale ? (
+            <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
+          ) : null}
           {(() => {
             // Keep bulk actions anchored near the title; suggestion chips below
             // can wrap without moving the "all" controls around. A card can now
@@ -417,15 +420,24 @@ export default function ReviewScreen() {
               </Pressable>
             ))}
           </View>
-          {item.summary ? (
-            <ProposedSummary
-              summary={item.summary}
-              noteEmpty={(item.notes ?? '').trim() === ''}
-              busy={busy}
-              onUse={() => useSummaryAsNote(item)}
-              onDismiss={() => dismissSummary(item)}
-            />
-          ) : null}
+          {item.summary
+            ? (() => {
+                const noteEmpty = (item.notes ?? '').trim() === '';
+                return (
+                  <ProposedSummary
+                    summary={item.summary}
+                    noteEmpty={noteEmpty}
+                    busy={busy}
+                    onUse={() => useSummaryAsNote(item)}
+                    onDismiss={() => dismissSummary(item)}
+                    useA11yLabel={t(noteEmpty ? 'review.summaryUseA11y' : 'review.summaryAppendA11y', {
+                      title: item.title,
+                    })}
+                    dismissA11yLabel={t('review.summaryDismissA11y', { title: item.title })}
+                  />
+                );
+              })()
+            : null}
         </View>
       ))}
     </ScrollView>
@@ -457,6 +469,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     gap: 12,
+  },
+  hint: {
+    fontSize: 13,
   },
   titleRow: {
     flexDirection: 'row',

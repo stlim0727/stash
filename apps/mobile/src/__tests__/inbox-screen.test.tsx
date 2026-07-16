@@ -275,6 +275,33 @@ test('the per-card ✨ badge counts a folder-only recommendation (no tags)', asy
   expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
 });
 
+test('the per-card ✨ badge and the review banner count a summary-only bookmark (no tags, no folder)', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000f3';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Summary only' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A concise overview.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Summary only')).toBeTruthy());
+  // A pending summary (Review's newest suggestion type) counts toward the
+  // per-card badge and the persistent review banner exactly like a folder-only
+  // recommendation does — otherwise it would be reviewable on /review but
+  // invisible from the Inbox.
+  expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
+  expect(screen.getByTestId('review-chip')).toBeTruthy();
+  expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
+});
+
 test('a durably-dismissed folder drops the per-card ✨ badge', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000f2';
   fakeRepo.__reset(

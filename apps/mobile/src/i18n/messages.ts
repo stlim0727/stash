@@ -512,6 +512,11 @@ export const en = {
   // A move overwrites a user-chosen collection_id; the chip already shows the
   // ~~from~~ → to, so instead of confirming we file it and offer an Undo toast.
   'review.movedToast': 'Moved to “{name}”',
+  // ProposedSummary a11y overrides: unlike Detail (one bookmark per screen),
+  // Review can show several summary cards at once, so these name the bookmark.
+  'review.summaryUseA11y': 'Use the suggested summary as your note for {title}',
+  'review.summaryAppendA11y': 'Add the suggested summary to your note for {title}',
+  'review.summaryDismissA11y': 'Dismiss the suggested summary for {title}',
 
   // Report a problem.
   'report.categoryBug': 'Bug',
