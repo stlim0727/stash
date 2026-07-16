@@ -31,9 +31,15 @@ interface FloatingReportButtonProps {
 // already shows a disabled/dimmed button while it runs, so a longer bound is
 // an acceptable wait, not a silent hang.
 const SCREENSHOT_CAPTURE_TIMEOUT_MS = 3000;
-// Same row as the inbox "+" FAB (bottom-right, `insets.bottom + 20`) — this
-// button now sits bottom-left at the same offset instead of stacked above it.
-const BOTTOM_OFFSET = 20;
+// Same row as the inbox "+" FAB (bottom-right, `insets.bottom + 20`) — on
+// Inbox this button now sits bottom-left at the same offset instead of
+// stacked above it.
+const INBOX_BOTTOM_OFFSET = 20;
+// Every other screen's scroll content only reserves a few px of bottom
+// padding (it never accounted for a floating control at all), so this button
+// still needs real clearance there — unrelated to the "+" FAB, which only
+// exists on Inbox.
+const DEFAULT_BOTTOM_OFFSET = 88;
 // Persisted (repository meta store) so a user who long-presses this into its
 // minimized nub doesn't have to redo that every app launch.
 const MINIMIZED_PREF_KEY = 'pref.feedback.reportButtonMinimized';
@@ -58,6 +64,10 @@ export function feedbackSourceFromPath(pathname: string | null): FeedbackSourceC
     route,
     surface: sanitizedSegments.join('_') || 'unknown',
   };
+}
+
+function isInbox(pathname: string | null): boolean {
+  return !pathname || pathname === '/';
 }
 
 function shouldHide(pathname: string | null): boolean {
@@ -163,7 +173,8 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     router.push('/report');
   };
 
-  const bottom = insets.bottom + BOTTOM_OFFSET;
+  const bottom =
+    insets.bottom + (isInbox(pathname) ? INBOX_BOTTOM_OFFSET : DEFAULT_BOTTOM_OFFSET);
 
   const buttonStyle: StyleProp<ViewStyle> = [
     styles.button,
