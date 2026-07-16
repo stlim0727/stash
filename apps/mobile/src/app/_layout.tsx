@@ -9,7 +9,7 @@ import { initSentry, wrapWithSentry } from '@/observability/sentry';
 import { installConsoleCapture } from '@/observability/log-buffer';
 import { installPwaHead } from '@/share/pwa-head';
 import { compareSemver } from '@/domain/version';
-import { hydrateNativeShareDebugLog, hydrateShareDiagnostics } from '@/share/share-diagnostics';
+import { hydrateShareDiagnostics } from '@/share/share-diagnostics';
 import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
@@ -39,10 +39,15 @@ installPwaHead();
 // report screen without it is still useful.
 void hydrateShareDiagnostics();
 
-// Recover the native module's own durable "last share intent seen" breadcrumb
-// (Android only) into the log buffer, in case its live event was lost to a
-// listener race in the prior process instance. See `hydrateNativeShareDebugLog`.
-void hydrateNativeShareDebugLog();
+// The native module's own durable "last share intent seen" breadcrumb
+// (Android, Sentry STASH-2Q — see `hydrateNativeShareDebugLog`) is
+// deliberately NOT read here: it uses read-and-clear semantics, and reading
+// it at every startup would consume it during an ordinary app open that
+// never leads to a report, losing it before a later report screen (in this
+// session or a subsequent one) gets a chance to recover it. It's read only
+// from the report screen itself, right when diagnostics are actually
+// collected — native SharedPreferences already persists it across restarts
+// on its own, so no startup-time hydration is needed.
 
 // The navigator lives in its own component so it can read the active locale
 // from `I18nProvider` (a hook can't run in the same component that mounts the

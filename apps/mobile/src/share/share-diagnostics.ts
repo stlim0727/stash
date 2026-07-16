@@ -63,9 +63,14 @@ export function getShareDiagnostics(): ShareAttemptDiagnostics | undefined {
  * lost whenever no JS listener happens to be subscribed at the exact instant
  * it fires — the leading theory for why prior sendEvent-only instrumentation
  * (Sentry STASH-2K, STASH-2M) kept showing zero evidence despite shipping.
- * Read-and-clear on the native side, so call this once at startup: it folds
- * straight into the in-memory log buffer, exactly like a live onDebugLog
- * event would have, just recovered a session late.
+ *
+ * Read-and-clear on the native side, so call this ONLY from the report
+ * screen, right when diagnostics are actually collected — never at app
+ * startup. Native `SharedPreferences` already persists the value across
+ * restarts on its own; consuming it at every startup would clear it during
+ * an ordinary app open that never leads to a report, losing it before a
+ * later report screen (this session or a subsequent one) gets a chance to
+ * recover it (caught in PR review on this same change).
  */
 export async function hydrateNativeShareDebugLog(): Promise<void> {
   if (Platform.OS !== 'android') {
