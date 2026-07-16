@@ -83,6 +83,8 @@ export default function BookmarkDetailScreen({
     isRefreshingPreview,
     isEnriching,
     isManuallyEnriching,
+    isAiSuggestionPostponed,
+    hadPriorEnrichmentAttempt,
     acceptSuggestedTags,
     getReviewedSuggestions,
     markSuggestionsReviewed,
@@ -259,6 +261,9 @@ export default function BookmarkDetailScreen({
   // wait the user has to sit through.
   const aiWorking = isEnriching(bookmark.id);
   const aiManual = isManuallyEnriching(bookmark.id);
+  // True only while waiting out backoff (goes false the instant a retry
+  // starts) — drives the calm "still working on it" note.
+  const aiPostponed = isAiSuggestionPostponed(bookmark.id);
   const previewRefreshing = isRefreshingPreview(bookmark.id);
 
   // AI suggestions: surface only high-confidence tags not already applied
@@ -599,8 +604,9 @@ export default function BookmarkDetailScreen({
     void runOrganizeAction(async () => {
       const error = await requestAiEnrichment(bookmark.id);
       // The store is i18n-free and signals rate-limiting with a sentinel; localize
-      // it here so the message respects the user's locale.
-      return error === AI_RATE_LIMITED ? t('detail.aiRateLimited') : error;
+      // it here — unified with the same calm "postponed" copy the automatic
+      // retry note uses, rather than a rate-limit-specific message.
+      return error === AI_RATE_LIMITED ? t('detail.aiPostponed') : error;
     });
   };
 
@@ -1130,10 +1136,13 @@ export default function BookmarkDetailScreen({
 
       {/* AI suggestions — no redundant header; the action button names itself. */}
       <Card elevated={false} style={styles.field}>
-        {aiWorking ? (
+        {aiWorking && !hadPriorEnrichmentAttempt(bookmark.id) ? (
           // Ambient placeholder: suggestions are filling in. Deliberately not a
           // centered spinner + "working…" label, which reads as a modal wait —
-          // the screen stays fully interactive while this pulses.
+          // the screen stays fully interactive while this pulses. Only for the
+          // very first attempt — on an automatic retry the postponed note
+          // below stays put instead, so it doesn't flash "any second now" and
+          // then go quiet again each time.
           <SuggestionSkeleton style={styles.suggestHeader} />
         ) : enrichment?.model && showAiReport ? (
           <View style={styles.suggestHeader}>
@@ -1154,14 +1163,23 @@ export default function BookmarkDetailScreen({
             accessibilityRole="text"
             style={[styles.hint, { color: palette.textSecondary }]}
           >
-            {/* When the card is collapsed (nothing actionable) we only keep this
-                note for a rate limit — and there are no "basic suggestions" on
-                screen to point at, so use the standalone retry copy rather than
-                the "showing basic suggestions" variant, which would describe
-                content that isn't there. */}
+            {/* When the card is collapsed (nothing actionable) there are no
+                "basic suggestions" on screen to point at, so fall back to the
+                same calm postponed copy used below rather than the "showing
+                basic suggestions" variant, which would describe content that
+                isn't there. */}
             {showAiReport
               ? enrichmentDegradedLabel(t, enrichment?.degraded_reason ?? null)
-              : t('detail.aiRateLimited')}
+              : t('detail.aiPostponed')}
+          </Text>
+        ) : aiPostponed ? (
+          // No ai_enrichments row at all yet (nothing to call "degraded") —
+          // a background retry is scheduled, so stay calm rather than silent.
+          <Text
+            accessibilityRole="text"
+            style={[styles.hint, { color: palette.textSecondary }]}
+          >
+            {t('detail.aiPostponed')}
           </Text>
         ) : null}
 

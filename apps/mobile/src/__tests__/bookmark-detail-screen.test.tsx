@@ -557,10 +557,32 @@ test('a rate-limited fallback with nothing to suggest shows a standalone retry n
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
 
-  expect(screen.getByText(/hit their limit for now/)).toBeTruthy();
+  expect(screen.getByText(/Still working on AI suggestions/)).toBeTruthy();
   expect(screen.queryByText(/showing basic suggestions/)).toBeNull();
   expect(screen.queryByText('dummy-v0')).toBeNull();
   expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
+});
+
+test('a bookmark with no enrichment yet but an armed retry marker shows the calm postponed note', async () => {
+  mockRouteId = SYNCED_ID;
+  // No ai_enrichments row at all (never degraded — there's nothing to call
+  // "degraded") — just a durable marker from a prior failed attempt that
+  // hasn't exhausted its retry cap. isAiSuggestionPostponed should be true and
+  // drive the same calm copy as the degraded-fallback case above.
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })]);
+  const now = new Date().toISOString();
+  fakeRepo.__setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({ [SYNCED_ID]: { firstAttemptAt: now, lastAttemptAt: now, attemptCount: 1 } }),
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  expect(screen.getByText(/Still working on AI suggestions/)).toBeTruthy();
+  // The button never disappears — capture/organizing stays reachable — and
+  // since no enrichment ever landed it still reads as the first-ask label.
+  expect(screen.getByText('Suggest with AI')).toBeTruthy();
 });
 
 test('dismissing a suggested tag removes it from the list', async () => {
