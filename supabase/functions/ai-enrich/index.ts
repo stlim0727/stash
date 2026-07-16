@@ -460,6 +460,9 @@ Deno.serve(async (req) => {
       confidence: output.confidence,
       degraded,
       degraded_reason: degradedReason,
+      prompt_tokens: output.usage?.prompt_tokens ?? null,
+      output_tokens: output.usage?.output_tokens ?? null,
+      total_tokens: output.usage?.total_tokens ?? null,
       updated_at: now,
     };
 

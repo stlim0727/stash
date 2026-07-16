@@ -18,7 +18,10 @@ function input(overrides: Partial<EnrichmentInput> = {}): EnrichmentInput {
 
 /** A fetch stub that returns one Gemini generateContent response and records
  *  the request it was called with. */
-function stubFetch(modelJson: unknown, opts: { ok?: boolean; status?: number } = {}) {
+function stubFetch(
+  modelJson: unknown,
+  opts: { ok?: boolean; status?: number; usageMetadata?: unknown } = {},
+) {
   const calls: Array<{ url: string; init?: Parameters<FetchLike>[1] }> = [];
   const fetchImpl: FetchLike = (url, init) => {
     calls.push({ url, init });
@@ -27,6 +30,7 @@ function stubFetch(modelJson: unknown, opts: { ok?: boolean; status?: number } =
         ? 'rate limit exceeded'
         : JSON.stringify({
             candidates: [{ content: { parts: [{ text: JSON.stringify(modelJson) }] } }],
+            ...(opts.usageMetadata ? { usageMetadata: opts.usageMetadata } : {}),
           });
     return Promise.resolve({
       ok: opts.ok ?? true,
@@ -261,6 +265,37 @@ test('throws on a non-ok response so the caller can fall back', async () => {
   const { fetchImpl } = stubFetch(null, { ok: false, status: 429 });
   const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
   await assert.rejects(() => provider.enrich(input()), /429/);
+});
+
+test('reports the real token usage from the response', async () => {
+  const { fetchImpl } = stubFetch(
+    {
+      summary: null,
+      topics: [],
+      suggested_tags: [],
+      suggested_collection: null,
+      confidence: null,
+    },
+    { usageMetadata: { promptTokenCount: 712, candidatesTokenCount: 238, totalTokenCount: 950 } },
+  );
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  const out = await provider.enrich(input());
+  assert.deepEqual(out.usage, { prompt_tokens: 712, output_tokens: 238, total_tokens: 950 });
+});
+
+test('reports null usage when the response has no usageMetadata', async () => {
+  const { fetchImpl } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  const out = await provider.enrich(input());
+  assert.equal(out.usage, null);
 });
 
 test('reports its model id with a gemini prefix', () => {

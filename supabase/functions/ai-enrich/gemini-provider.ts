@@ -208,6 +208,31 @@ function buildPrompt(input: EnrichmentInput): string {
   return `Assess this bookmark and return the structured fields.\n\n${lines.join('\n')}`;
 }
 
+/** Pull the real per-call token counts out of a generateContent response, for
+ *  cost/usage tracking. Gemini includes `usageMetadata` alongside `candidates`
+ *  on every successful response; absent or non-numeric fields become null
+ *  rather than 0, so "not reported" stays distinguishable from "zero". */
+function extractUsage(payload: unknown): EnrichmentOutput['usage'] {
+  const usage = (
+    payload as {
+      usageMetadata?: {
+        promptTokenCount?: unknown;
+        candidatesTokenCount?: unknown;
+        totalTokenCount?: unknown;
+      };
+    }
+  )?.usageMetadata;
+  if (!usage) {
+    return null;
+  }
+  const num = (value: unknown): number | null => (typeof value === 'number' ? value : null);
+  return {
+    prompt_tokens: num(usage.promptTokenCount),
+    output_tokens: num(usage.candidatesTokenCount),
+    total_tokens: num(usage.totalTokenCount),
+  };
+}
+
 /** Pull the model's JSON payload out of a generateContent response. */
 function extractJsonText(payload: unknown): string {
   const candidates = (payload as { candidates?: unknown[] })?.candidates;
@@ -358,6 +383,6 @@ export class GeminiProvider implements EnrichmentProvider {
       );
     }
 
-    return normalize(parsed);
+    return { ...normalize(parsed), usage: extractUsage(payload) };
   }
 }

@@ -49,6 +49,15 @@ export interface EnrichmentOutput {
   suggested_collection: string | null;
   /** 0..1 — overall confidence in the enrichment, or null when unknown. */
   confidence: number | null;
+  /** Token counts from the underlying model call, for cost/usage tracking.
+   *  Omitted by providers with no such notion (e.g. the heuristic fallback);
+   *  a model-backed provider that made a real call but got no usage data back
+   *  reports the individual fields as null rather than omitting the object. */
+  usage?: {
+    prompt_tokens: number | null;
+    output_tokens: number | null;
+    total_tokens: number | null;
+  } | null;
 }
 
 export interface EnrichmentProvider {
