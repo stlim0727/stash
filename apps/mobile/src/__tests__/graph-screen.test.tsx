@@ -761,6 +761,51 @@ describe('bake viewBox', () => {
     expect(viaTwoBakes.y).toBeCloseTo(direct.y, 6);
   });
 
+  // Regression for a review finding on #527: an earlier version of the
+  // production code re-based each bake on the PREVIOUS bake's own output
+  // (composing incrementally, like the "baking twice" test above exercises
+  // as a general property of the pure function) while resetting the pan
+  // clamp's reference point to the current baked window instead of the
+  // fixed original view. That let a chain of repeated max-pan gestures in
+  // the same direction each individually pass the clamp while drifting the
+  // real node content further off-screen every time. The fix: `panOffset`
+  // is cumulative and clamped to an ABSOLUTE range against the fixed
+  // `fitViewBoxRect` on every gesture, never reset — so this test asserts
+  // that invariant directly: clamping the same cumulative value twice in a
+  // row is idempotent at the boundary, not additive.
+  test('repeated max-pan gestures in the same direction stay clamped, not drift further', () => {
+    const fitViewBoxRect = { minX: -500, minY: -500, w: 1000, h: 1000 };
+    const viewport = { w: 400, h: 400 };
+    const scale = 1;
+    const fittedNodeExtent = 400; // arbitrary on-screen node span at scale 1
+    const maxX = maxPanOffset(scale, viewport.w, fittedNodeExtent);
+
+    // Gesture 1: a huge drag clamps the cumulative pan to +maxX.
+    let panOffset = clampToRange(999999, -maxX, maxX);
+    expect(panOffset).toBe(maxX);
+    const bakedAfterFirst = bakeViewBox({
+      base: fitViewBoxRect,
+      viewport,
+      pan: { x: panOffset, y: 0 },
+      scale,
+    });
+
+    // Gesture 2: cumulative pan is NOT reset after the first bake — it
+    // starts from `maxX`, and the same huge drag clamps right back to
+    // `maxX` rather than compounding past it.
+    panOffset = clampToRange(panOffset + 999999, -maxX, maxX);
+    expect(panOffset).toBe(maxX);
+    const bakedAfterSecond = bakeViewBox({
+      base: fitViewBoxRect,
+      viewport,
+      pan: { x: panOffset, y: 0 },
+      scale,
+    });
+
+    // Identical bake: the second gesture didn't move the view any further.
+    expect(bakedAfterSecond).toEqual(bakedAfterFirst);
+  });
+
   // Applies transform 1 then transform 2 directly against `base`, composing
   // them the way two successive gestures would on the real Animated
   // transform stack (each anchored on the viewport center in turn) — an
