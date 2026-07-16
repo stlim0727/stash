@@ -953,6 +953,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // updated_at, or the sync queue.
   const armAiRetry = useCallback(
     (bookmarkId: string) => {
+      // The request that just failed can have been in flight when the user
+      // trashed or permanently deleted this bookmark — trashBookmark/
+      // deleteBookmark already clear an EXISTING marker synchronously at that
+      // moment, but can't stop a failure that lands afterward from re-arming
+      // it. Re-arming here would let a later backoff-scheduled retry silently
+      // write fresh AI suggestions for content the user already discarded (or,
+      // for a hard delete, fire a doomed request against an id that no longer
+      // exists). Skip arming once there's positive evidence of either.
+      if (deletedIds.current.has(bookmarkId)) {
+        return;
+      }
+      const forBookmark = bookmarksRef.current?.find((item) => item.id === bookmarkId);
+      if (forBookmark?.deleted_at) {
+        return;
+      }
       const now = new Date().toISOString();
       const existing = aiRetryState.current[bookmarkId];
       const attemptCount = (existing?.attemptCount ?? 0) + 1;
@@ -2244,6 +2259,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // failed manual "Suggest with AI" tap is retried the same as a failed
         // auto-trigger (unifying what used to be auto-only bookkeeping).
         armAiRetry(bookmarkId);
+        // The crash-safety marker (PENDING_AI_TRIGGER_KEY) only needs to
+        // survive from launch until this first attempt's outcome is durably
+        // recorded — success clears it below in the settle handler; failure
+        // now has its durable trace in `ai_suggestion_retry` via armAiRetry
+        // above, so clear it here too. Otherwise a relaunch inside the
+        // backoff window rehydrates it and the deferred first-trigger effect
+        // fires `requestAiEnrichment` again immediately, bypassing the whole
+        // backoff schedule on every restart.
+        clearPendingAiTrigger(bookmarkId);
         // Rate limited (429): expected when many bookmarks are captured at once.
         // Return a sentinel the Detail screen (still) localizes into a calm
         // message pending its own follow-up UI change.
@@ -2288,7 +2312,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         syncAiRetryIds();
       }
     },
-    [auth, noteUnseenSuggestions, armAiRetry, clearAiRetry, syncAiRetryIds],
+    [auth, noteUnseenSuggestions, armAiRetry, clearAiRetry, syncAiRetryIds, clearPendingAiTrigger],
   );
   useEffect(() => {
     requestAiEnrichmentRef.current = requestAiEnrichment;
@@ -2589,6 +2613,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 applyTagData({ ...tagDataRef.current, bookmarkTags: links });
                 // The re-keyed op now targets a remote id; kick the uploader.
                 void syncTagOps();
+                // AI-suggestion retry bookkeeping is keyed by bookmark id too
+                // (mirrors the tag-state re-key above). Without this, a
+                // bookmark already re-keyed once by an anonymous→real rehome
+                // silently loses its retry eligibility the moment its create
+                // upload swaps it onto its final server id — the marker stays
+                // parked on the now-dead intermediate local id.
+                rehomeAiRetryBookkeeping(idMap);
               }
               // `uploadedPayload` is set IFF a create just uploaded — whether
               // the entry began as a `create` or was promoted from an orphaned
@@ -2745,11 +2776,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           const knownById = new Map(
             enrichmentsRef.current.map((enrichment) => [enrichment.id, enrichment] as const),
           );
+          let anyRetryCleared = false;
           for (const enrichment of result.enrichments) {
             const known = knownById.get(enrichment.id);
             if (!known || enrichment.updated_at > known.updated_at) {
               noteUnseenSuggestions(enrichment);
             }
+            // This bookmark now has an enrichment row through some path other
+            // than this device's own requestAiEnrichment call — a server-side
+            // trigger, or another device's request, pulled down by normal
+            // sync. Clear any armed retry marker so checkAiRetries doesn't
+            // keep firing a redundant ai-enrich request for a bookmark that's
+            // actually already enriched.
+            if (enrichment.bookmark_id in aiRetryState.current) {
+              clearAiRetry(enrichment.bookmark_id);
+              anyRetryCleared = true;
+            }
+          }
+          if (anyRetryCleared) {
+            syncAiRetryIds();
           }
           setEnrichments((current) =>
             mergeById(
@@ -2962,15 +3007,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       aiTriggerAttempted.current.add(id);
       // Do NOT clear the durable "awaiting first attempt" marker before the
       // request even starts: requestAiEnrichment only arms the backoff-
-      // scheduled retry marker (armAiRetry) from inside its own catch, once a
-      // failure is actually observed. Clearing this one eagerly leaves a
-      // crash window — an app kill mid-request, before that catch runs —
-      // where neither marker exists and this bookmark's first-ever
-      // enrichment attempt is lost with no durable trace. Instead, only clear
-      // it once the request has actually settled, and only on success; a
-      // failure leaves it armed (redundant with armAiRetry, but harmless —
-      // aiTriggerAttempted still blocks a same-session re-fire) so a relaunch
-      // always has at least one durable marker to act on.
+      // scheduled retry marker (armAiRetry) — and clears this one itself,
+      // see below — from inside its own catch, once a failure is actually
+      // observed. Clearing this one eagerly leaves a crash window — an app
+      // kill mid-request, before that catch runs — where neither marker
+      // exists and this bookmark's first-ever enrichment attempt is lost with
+      // no durable trace. Success clears it right here once settled; a
+      // failure is instead cleared by requestAiEnrichment itself (once
+      // armAiRetry has durably recorded the replacement bookkeeping) rather
+      // than here, so a relaunch inside the backoff window goes through
+      // checkAiRetries' backoff-respecting path instead of this effect
+      // re-firing the request immediately on every restart.
       void requestAiEnrichment(id, 'auto').then((error) => {
         if (!error) {
           clearPendingAiTrigger(id);

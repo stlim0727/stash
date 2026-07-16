@@ -1,4 +1,4 @@
-import { act, render, waitFor } from '@testing-library/react-native';
+import { act, render, renderHook, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('@/storage/repository', () =>
@@ -18,10 +18,16 @@ const mockSession = {
 let mockAuthSession: typeof mockSession | null = mockSession;
 
 jest.mock('@/supabase/auth-provider', () => ({
+  // `userId` is derived from `mockAuthSession` (rather than hardcoded) so a
+  // test can simulate an account switch (e.g. anonymous → real) by mutating
+  // the session and re-rendering — the store's sign-in/account-switch pull
+  // effect is keyed off `auth.userId` changing. Every other existing test's
+  // default (`mockAuthSession = mockSession`, user id 'user-test') is
+  // unaffected: this simply reads the same id off it instead of repeating it.
   useSupabaseAuth: () => ({
     status: 'anonymous',
     session: mockAuthSession,
-    userId: 'user-test',
+    userId: mockAuthSession?.user.id ?? null,
     message: null,
     ensureAnonymousSession: async () => mockAuthSession,
   }),
@@ -372,10 +378,13 @@ test('a deferred first attempt keeps a durable marker throughout the in-flight w
   // Once it settles, armAiRetry has recorded the backoff-scheduled retry
   // marker...
   await waitFor(() => expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true));
-  // ...and the pending-trigger marker was never cleared either (only success
-  // clears it) — a relaunch has at least one durable marker to act on either
-  // way, closing the crash window the old code left open.
-  expect(fakeRepo.__meta('pending_ai_trigger')).toBe(JSON.stringify([SYNCED_ID]));
+  // ...and the pending-trigger marker is now cleared too: its crash-safety
+  // job (surviving from launch until the outcome is durably recorded) is
+  // done, since the failure now has its own durable trace in
+  // `ai_suggestion_retry`. Leaving it present here would let a relaunch
+  // inside the backoff window rehydrate it and re-fire the request
+  // immediately via the deferred-trigger effect, bypassing backoff entirely.
+  expect(fakeRepo.__meta('pending_ai_trigger')).toBe('[]');
 });
 
 test('does not consume a deferred AI trigger before the auth session is ready', async () => {
@@ -933,6 +942,236 @@ test('the retry cap (6 attempts) clears bookkeeping and the bookmark reverts to 
     });
   }
 
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
+  expect(fakeRepo.__meta('ai_suggestion_retry')).toBe('{}');
+});
+
+test('trashing a bookmark while its AI request is in flight does not re-arm the retry marker once it fails', async () => {
+  // A request can already be in flight when the user trashes its bookmark.
+  // trashBookmark clears any EXISTING retry marker synchronously, but that
+  // can't stop the in-flight request's own failure handler from re-arming one
+  // afterward — which would resurrect retry eligibility for content the user
+  // just discarded.
+  const store = await renderReady();
+
+  let reject!: (error: unknown) => void;
+  const gate = new Promise((_resolve, r) => {
+    reject = r;
+  });
+  gate.catch(() => {}); // silence the unhandled-rejection warning from the gate itself
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    await gate;
+    throw new Error('network died after trash');
+  });
+
+  let pending!: Promise<string | null>;
+  await act(async () => {
+    pending = store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  expect(store.current!.isEnriching(SYNCED_ID)).toBe(true);
+
+  // The user trashes the bookmark while the request is still in flight.
+  await act(async () => {
+    store.current!.trashBookmark(SYNCED_ID);
+  });
+  expect(store.current!.getBookmark(SYNCED_ID)?.deleted_at).not.toBeNull();
+
+  // The in-flight request now settles as a failure.
+  await act(async () => {
+    reject(new Error('network died after trash'));
+    await pending;
+  });
+
+  // No retry marker was (re-)armed for a bookmark the user already discarded.
+  // (armAiRetry declined to write anything at all, so the meta key was never
+  // even persisted — distinct from an armed-then-cleared '{}'.)
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
+  expect(fakeRepo.__meta('ai_suggestion_retry')).toBeNull();
+});
+
+test('permanently deleting a bookmark while its AI request is in flight does not re-arm the retry marker once it fails', async () => {
+  const store = await renderReady();
+
+  let reject!: (error: unknown) => void;
+  const gate = new Promise((_resolve, r) => {
+    reject = r;
+  });
+  gate.catch(() => {});
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    await gate;
+    throw new Error('network died after delete');
+  });
+
+  let pending!: Promise<string | null>;
+  await act(async () => {
+    pending = store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+
+  await act(async () => {
+    store.current!.deleteBookmark(SYNCED_ID);
+  });
+  expect(store.current!.getBookmark(SYNCED_ID)).toBeUndefined();
+
+  await act(async () => {
+    reject(new Error('network died after delete'));
+    await pending;
+  });
+
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  expect(fakeRepo.__meta('ai_suggestion_retry')).toBeNull();
+});
+
+test('an anon→real carried-over bookmark keeps its retry marker through both id swaps (rehome, then its create upload)', async () => {
+  // The rehome swap (anon remote id → new local id) already re-keys the retry
+  // marker. That carried-over row then goes through the NORMAL create-upload
+  // flow once its re-issued create syncs — swapping its local id onto the
+  // account's server-assigned remote id a SECOND time. Both swaps must
+  // preserve the marker.
+  const ANON_REMOTE_ID = '2b2b2b2b-0000-4000-8000-000000000002';
+  fakeRepo.__reset([makeStoredBookmark({ id: ANON_REMOTE_ID, sync_status: 'synced' })]);
+  await fakeRepo.repository.setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({
+      [ANON_REMOTE_ID]: {
+        firstAttemptAt: '2026-06-01T00:00:00.000Z',
+        lastAttemptAt: '2026-06-01T00:00:00.000Z',
+        attemptCount: 1,
+      },
+    }),
+  );
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([ANON_REMOTE_ID]);
+
+  // Gate the rehomed row's re-issued create so the background-sync effect
+  // (which auto-fires as soon as the rehome enqueues a pending entry) stalls
+  // BEFORE the second swap, letting the test observe the intermediate
+  // rehomed-local-id state instead of both swaps completing back-to-back
+  // within the same act().
+  let releaseCreate!: () => void;
+  const createGate = new Promise<void>((resolve) => {
+    releaseCreate = resolve;
+  });
+  apiMock.__spies.createBookmark.mockImplementationOnce(async () => {
+    await createGate;
+    return { bookmark_id: REMOTE_ID };
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(result.current.lastPulledAt).not.toBeNull());
+  expect(result.current.isAiSuggestionPostponed(ANON_REMOTE_ID)).toBe(true);
+
+  // Sign in to a different (real) account: the anon bookmark carries over,
+  // re-homed onto a fresh local id (the FIRST swap).
+  const realUser: { id: string; is_anonymous?: boolean } = {
+    id: 'real-user',
+    is_anonymous: false,
+  };
+  mockAuthSession = { ...mockSession, user: realUser };
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  let rehomedLocalId = '';
+  await waitFor(() => {
+    const row = result.current.inbox.find((b) => b.id !== ANON_REMOTE_ID);
+    expect(row).toBeDefined();
+    rehomedLocalId = row!.id;
+  });
+  expect(rehomedLocalId).toMatch(/^local-/);
+
+  // The retry marker followed the rehome swap onto the new local id.
+  expect(result.current.isAiSuggestionPostponed(rehomedLocalId)).toBe(true);
+  expect(result.current.isAiSuggestionPostponed(ANON_REMOTE_ID)).toBe(false);
+
+  // Let the rehomed row's create upload complete: this swaps its id a SECOND
+  // time, from the intermediate local id onto the new account's
+  // server-assigned remote id.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([REMOTE_ID]);
+  await act(async () => {
+    releaseCreate();
+    await Promise.resolve();
+  });
+
+  await waitFor(() => expect(result.current.getBookmark(REMOTE_ID)?.id).toBe(REMOTE_ID));
+  // The retry marker must have followed this SECOND swap too — not stranded
+  // on the now-dead intermediate local id.
+  expect(result.current.isAiSuggestionPostponed(REMOTE_ID)).toBe(true);
+  expect(result.current.isAiSuggestionPostponed(rehomedLocalId)).toBe(false);
+});
+
+test('a relaunch inside the backoff window does not bypass backoff via the deferred first-trigger effect', async () => {
+  // Regression: the crash-safety fix kept `pending_ai_trigger` present until
+  // the request SUCCEEDED — so a failure left it present too. A relaunch
+  // before the backoff window elapsed would rehydrate it and the deferred
+  // first-trigger effect fired `requestAiEnrichment` again immediately, with
+  // no backoff check at all.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new Error('first attempt fails');
+  });
+
+  // First "launch": the deferred trigger fires the bookmark's first-ever
+  // attempt, which fails.
+  const first = renderStore();
+  await waitFor(() => expect(first.current?.isLoading).toBe(false));
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(first.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true));
+  // The crash-safety marker's job is done now that the failure is durably
+  // recorded — it must be cleared so a relaunch doesn't rehydrate it.
+  expect(fakeRepo.__meta('pending_ai_trigger')).toBe('[]');
+
+  // Simulate a relaunch (a fresh store instance reading the same durable
+  // storage) that happens well within the 2-minute backoff window.
+  const second = renderStore();
+  await waitFor(() => expect(second.current?.isLoading).toBe(false));
+  await waitFor(() => expect(second.current?.lastPulledAt).not.toBeNull());
+
+  // No immediate re-fire: the backoff-respecting cold-launch check is the
+  // only thing that could fire here, and the window hasn't elapsed.
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1);
+  expect(second.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+});
+
+test('a pull that brings down an enrichment from another path (server trigger / another device) clears the retry marker', async () => {
+  // An enrichment can arrive without this device's own requestAiEnrichment
+  // call ever succeeding — a server-side trigger, or another device. Once the
+  // bookmark actually has suggestions, an armed retry marker from an earlier
+  // failed attempt on THIS device is stale and must not keep firing redundant
+  // requests.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({
+      [SYNCED_ID]: {
+        firstAttemptAt: '2026-06-01T00:00:00.000Z',
+        lastAttemptAt: '2026-06-01T00:00:00.000Z',
+        attemptCount: 1,
+      },
+    }),
+  );
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+
+  // Another device's (or the server trigger's) enrichment arrives via pull.
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({ id: 'enrich-from-elsewhere', bookmark_id: SYNCED_ID }),
+  ]);
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  await waitFor(() => expect(store.current!.getEnrichment(SYNCED_ID)).toBeDefined());
   expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
   expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
   expect(fakeRepo.__meta('ai_suggestion_retry')).toBe('{}');
