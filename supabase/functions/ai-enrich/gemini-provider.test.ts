@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { GeminiProvider, type FetchLike } from './gemini-provider.ts';
+import { GeminiContentError, GeminiProvider, type FetchLike } from './gemini-provider.ts';
 import type { EnrichmentInput } from './provider.ts';
 
 function input(overrides: Partial<EnrichmentInput> = {}): EnrichmentInput {
@@ -282,6 +282,55 @@ test('reports the real token usage from the response', async () => {
 
   const out = await provider.enrich(input());
   assert.deepEqual(out.usage, { prompt_tokens: 712, output_tokens: 238, total_tokens: 950 });
+});
+
+test('folds thinking tokens into output_tokens', async () => {
+  const { fetchImpl } = stubFetch(
+    {
+      summary: null,
+      topics: [],
+      suggested_tags: [],
+      suggested_collection: null,
+      confidence: null,
+    },
+    {
+      usageMetadata: {
+        promptTokenCount: 700,
+        candidatesTokenCount: 100,
+        thoughtsTokenCount: 400,
+        totalTokenCount: 1200,
+      },
+    },
+  );
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  const out = await provider.enrich(input());
+  assert.deepEqual(out.usage, { prompt_tokens: 700, output_tokens: 500, total_tokens: 1200 });
+});
+
+test('preserves usage in a GeminiContentError when a 200 response has no usable candidate', async () => {
+  const fetchImpl: FetchLike = () =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      text: () =>
+        Promise.resolve(
+          JSON.stringify({
+            candidates: [],
+            usageMetadata: { promptTokenCount: 650, candidatesTokenCount: 0, totalTokenCount: 650 },
+          }),
+        ),
+    });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await assert.rejects(
+    () => provider.enrich(input()),
+    (err: unknown) => {
+      assert.ok(err instanceof GeminiContentError);
+      assert.deepEqual(err.usage, { prompt_tokens: 650, output_tokens: 0, total_tokens: 650 });
+      return true;
+    },
+  );
 });
 
 test('reports null usage when the response has no usageMetadata', async () => {

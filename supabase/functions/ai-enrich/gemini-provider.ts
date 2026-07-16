@@ -208,6 +208,18 @@ function buildPrompt(input: EnrichmentInput): string {
   return `Assess this bookmark and return the structured fields.\n\n${lines.join('\n')}`;
 }
 
+/** Thrown when Gemini responded (HTTP 200) but its content couldn't be turned
+ *  into a parseable EnrichmentOutput — a safety block, empty candidates, or
+ *  malformed structured output. Carries the usage extracted from that same
+ *  response so a caller falling back to the heuristics can still record the
+ *  token spend the call actually incurred, instead of losing it to a null. */
+export class GeminiContentError extends Error {
+  constructor(message: string, readonly usage: EnrichmentOutput['usage']) {
+    super(message);
+    this.name = 'GeminiContentError';
+  }
+}
+
 /** Pull the real per-call token counts out of a generateContent response, for
  *  cost/usage tracking. Gemini includes `usageMetadata` alongside `candidates`
  *  on every successful response; absent or non-numeric fields become null
@@ -218,6 +230,7 @@ function extractUsage(payload: unknown): EnrichmentOutput['usage'] {
       usageMetadata?: {
         promptTokenCount?: unknown;
         candidatesTokenCount?: unknown;
+        thoughtsTokenCount?: unknown;
         totalTokenCount?: unknown;
       };
     }
@@ -226,9 +239,16 @@ function extractUsage(payload: unknown): EnrichmentOutput['usage'] {
     return null;
   }
   const num = (value: unknown): number | null => (typeof value === 'number' ? value : null);
+  // Thinking models (2.5 series, thinking left on by default — see
+  // cost-estimates.md) report reasoning tokens separately as
+  // `thoughtsTokenCount`, billed at the same rate as `candidatesTokenCount`
+  // and folded into `totalTokenCount`. Fold it into output_tokens too, or a
+  // thinking-heavy call would look artificially cheap on the output side.
+  const candidates = num(usage.candidatesTokenCount);
+  const thoughts = num(usage.thoughtsTokenCount);
   return {
     prompt_tokens: num(usage.promptTokenCount),
-    output_tokens: num(usage.candidatesTokenCount),
+    output_tokens: candidates === null && thoughts === null ? null : (candidates ?? 0) + (thoughts ?? 0),
     total_tokens: num(usage.totalTokenCount),
   };
 }
@@ -373,16 +393,22 @@ export class GeminiProvider implements EnrichmentProvider {
     } catch {
       throw new Error('Gemini returned non-JSON response');
     }
+    // Extracted as soon as we have a payload, even though the call may still
+    // fail below (e.g. a safety block leaves no usable candidate) — a 200
+    // response already spent the tokens it reports, so that spend must not be
+    // lost just because the content couldn't be parsed.
+    const usage = extractUsage(payload);
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(extractJsonText(payload));
     } catch (err) {
-      throw new Error(
+      throw new GeminiContentError(
         `Gemini content was not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+        usage,
       );
     }
 
-    return { ...normalize(parsed), usage: extractUsage(payload) };
+    return { ...normalize(parsed), usage };
   }
 }

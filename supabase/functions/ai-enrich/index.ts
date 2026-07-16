@@ -23,7 +23,7 @@
 // the database, or the app needs to change.
 
 import { DummyProvider } from './dummy-provider.ts';
-import { GeminiProvider } from './gemini-provider.ts';
+import { GeminiContentError, GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
 import { matchSuggestedCollection } from './collection-match.ts';
 import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
@@ -419,8 +419,10 @@ Deno.serve(async (req) => {
     let usedModel = provider.model;
     let degraded = provider === fallbackProvider;
     let degradedReason: DegradedReason | null = degraded ? 'not_configured' : null;
+    let usage: EnrichmentOutput['usage'] = null;
     try {
       output = await provider.enrich(input);
+      usage = output.usage ?? null;
     } catch (err) {
       if (provider === fallbackProvider) {
         throw err;
@@ -430,6 +432,11 @@ Deno.serve(async (req) => {
       usedModel = fallbackProvider.model;
       degraded = true;
       degradedReason = classifyDegradedReason(err);
+      // A GeminiContentError means the call reached Gemini and may have
+      // consumed tokens even though the response had no usable candidate
+      // (safety block, malformed structured output) — preserve that spend
+      // instead of losing it to the fallback's null usage.
+      usage = err instanceof GeminiContentError ? err.usage ?? null : null;
     }
 
     // Resolve the collection NAME hint to one of the user's existing
@@ -460,9 +467,9 @@ Deno.serve(async (req) => {
       confidence: output.confidence,
       degraded,
       degraded_reason: degradedReason,
-      prompt_tokens: output.usage?.prompt_tokens ?? null,
-      output_tokens: output.usage?.output_tokens ?? null,
-      total_tokens: output.usage?.total_tokens ?? null,
+      prompt_tokens: usage?.prompt_tokens ?? null,
+      output_tokens: usage?.output_tokens ?? null,
+      total_tokens: usage?.total_tokens ?? null,
       updated_at: now,
     };
 
