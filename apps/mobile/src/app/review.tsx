@@ -1,6 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -27,6 +37,12 @@ const MAX_NOTES_LENGTH = 10000;
 // dimmed Inbox (mirrors Settings' right-docked sheet); this caps the panel
 // width. No effect on phones (their width is already below the breakpoint).
 const SHEET_PANEL_MAX_WIDTH = 720;
+
+// Contains scroll chaining to this modal's ScrollView on web (mirrors
+// Settings/Report) — without it, pulling past the top/bottom of the card list
+// can rubber-band the transparentModal and expose the Inbox behind it.
+const webOverscrollContain: StyleProp<ViewStyle> =
+  Platform.OS === 'web' ? ({ overscrollBehavior: 'contain' } as ViewStyle) : undefined;
 
 interface ReviewItem {
   id: string;
@@ -318,7 +334,7 @@ export default function ReviewScreen() {
         <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('review.empty')}</Text>
       </View>
     ) : (
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView style={webOverscrollContain} contentContainerStyle={styles.container}>
       <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
         {t('review.pendingHeader', { count: items.length })}
       </Text>

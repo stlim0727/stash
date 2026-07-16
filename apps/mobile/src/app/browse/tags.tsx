@@ -12,6 +12,8 @@ import {
   useWindowDimensions,
   View,
   type LayoutChangeEvent,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -431,6 +433,7 @@ export default function BrowseTagsScreen() {
       ) : (
         <FlatList
           testID="browse-tags-list"
+          style={webOverscrollContain}
           data={ranked}
           keyExtractor={(item) => item.id}
           // Fixed row height → getItemLayout, so hundreds of tags scroll without
@@ -530,6 +533,12 @@ const LIST_ROW_HEIGHT = 48;
 // the dimmed Inbox (mirrors Settings' right-docked sheet); this caps the panel
 // width. No effect on phones (their width is already below the breakpoint).
 const SHEET_PANEL_MAX_WIDTH = 720;
+
+// Contains scroll chaining to the tag list on web (mirrors Settings/Report) —
+// without it, pulling past the top/bottom of the list can rubber-band the
+// transparentModal and expose the Inbox behind it.
+const webOverscrollContain: StyleProp<ViewStyle> =
+  Platform.OS === 'web' ? ({ overscrollBehavior: 'contain' } as ViewStyle) : undefined;
 
 const styles = StyleSheet.create({
   fullScreen: {

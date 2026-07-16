@@ -86,10 +86,13 @@ export default function AddBookmarkScreen() {
   }, [capture, isLoading, addBookmark, router, show, t]);
 
   // Capture mode: a deep-linked save is in flight — show a calm placeholder
-  // instead of flashing the manual editor before the redirect.
+  // instead of flashing the manual editor before the redirect. Add is a
+  // `transparentModal`, so (as with the main layout below) the height is
+  // pinned explicitly — on web the modal container sizes to content, and a
+  // bare `flex: 1` here would collapse and let the Inbox bleed through.
   if (capture) {
     return (
-      <View style={[styles.capturing, { backgroundColor: palette.background }]}>
+      <View style={[styles.capturing, { backgroundColor: palette.background, height }]}>
         <ActivityIndicator color={palette.accent} />
         <Text style={[styles.capturingLabel, { color: palette.textSecondary }]}>
           {t('add.saving')}
@@ -170,29 +173,31 @@ export default function AddBookmarkScreen() {
     </View>
   );
 
-  return (
-    <KeyboardAvoidingScreen>
-      {asSheet ? (
-        <View style={[styles.sheetOverlay, { height }]}>
-          <Pressable
-            testID="add-sheet-backdrop"
-            style={styles.sheetBackdrop}
-            accessibilityRole="button"
-            accessibilityLabel={t('common.close')}
-            onPress={() => router.back()}
-          />
-          <View style={[styles.sheetPanel, { backgroundColor: palette.background }]}>
-            {header}
-            {content}
-          </View>
-        </View>
-      ) : (
-        <View testID="add-fullscreen" style={[styles.fullScreen, { backgroundColor: palette.background, height }]}>
-          {header}
-          {content}
-        </View>
-      )}
-    </KeyboardAvoidingScreen>
+  // KeyboardAvoidingScreen wraps only `content` (not the pinned-height root
+  // above): its `flex: 1` needs to sit *inside* the fixed-height box so its
+  // bottom padding actually shrinks the visible form when the keyboard opens.
+  // Wrapping the whole root would pin `flex: 1` and an explicit `height` on
+  // the same node, so the padding couldn't reduce anything — the note field
+  // would end up under the keyboard instead.
+  return asSheet ? (
+    <View style={[styles.sheetOverlay, { height }]}>
+      <Pressable
+        testID="add-sheet-backdrop"
+        style={styles.sheetBackdrop}
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+      />
+      <View style={[styles.sheetPanel, { backgroundColor: palette.background }]}>
+        {header}
+        <KeyboardAvoidingScreen>{content}</KeyboardAvoidingScreen>
+      </View>
+    </View>
+  ) : (
+    <View testID="add-fullscreen" style={[styles.fullScreen, { backgroundColor: palette.background, height }]}>
+      {header}
+      <KeyboardAvoidingScreen>{content}</KeyboardAvoidingScreen>
+    </View>
   );
 }
 
