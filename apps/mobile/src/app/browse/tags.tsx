@@ -474,7 +474,9 @@ export default function BrowseTagsScreen() {
   // row (title + close) for both layouts — matching Settings/Report/Review.
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + 12, borderBottomColor: palette.border, backgroundColor: palette.background }]}>
-      <Text style={[styles.headerTitle, { color: palette.text }]}>{headerTitle}</Text>
+      <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={1}>
+        {headerTitle}
+      </Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t('common.close')}
@@ -555,6 +557,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   headerTitle: {
+    flex: 1,
+    marginRight: 12,
     fontSize: 20,
     fontWeight: '700',
   },
