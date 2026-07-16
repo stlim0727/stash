@@ -29,6 +29,13 @@ jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
 }));
 
+// Drive the responsive sheet rule off a controllable viewport.
+const mockWindowSize = { width: 390, height: 844, scale: 2, fontScale: 1 };
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => mockWindowSize,
+}));
+
 import AddBookmarkScreen from '@/app/add';
 import { en } from '@/i18n/messages';
 import { BookmarksProvider } from '@/store/bookmarks';
@@ -52,6 +59,8 @@ beforeEach(() => {
   mockBack.mockClear();
   mockReplace.mockClear();
   mockParams = {};
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
 });
 
 describe('AddBookmarkScreen duplicate UX', () => {
@@ -142,6 +151,48 @@ describe('AddBookmarkScreen web capture endpoint', () => {
     await findByText('Saved to Keepory');
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/'));
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    unmount();
+  });
+});
+
+describe('AddBookmarkScreen sheet layout', () => {
+  it('wide viewport renders the side-sheet backdrop', async () => {
+    fakeRepo.__reset([]);
+    mockWindowSize.width = 1280;
+
+    const { findByTestId, unmount } = await renderAddScreen();
+
+    await findByTestId('add-sheet-backdrop');
+    unmount();
+  });
+
+  it('phone viewport renders full-screen with no backdrop', async () => {
+    fakeRepo.__reset([]);
+    mockWindowSize.width = 390;
+
+    const { findByTestId, queryByTestId, unmount } = await renderAddScreen();
+
+    await findByTestId('add-fullscreen');
+    expect(queryByTestId('add-sheet-backdrop')).toBeNull();
+    unmount();
+  });
+
+  // Add is a transparentModal with the Inbox mounted behind it. On web the
+  // modal container sizes to content, so a `flex: 1` root collapses and the
+  // Inbox bleeds through below Add. Pinning the root to the viewport height
+  // keeps the opaque background covering the full screen.
+  it('phone viewport pins the full-screen root to the viewport height', async () => {
+    fakeRepo.__reset([]);
+    mockWindowSize.width = 390;
+    mockWindowSize.height = 844;
+
+    const { findByTestId, unmount } = await renderAddScreen();
+
+    const root = await findByTestId('add-fullscreen');
+    const flat = Array.isArray(root.props.style)
+      ? Object.assign({}, ...root.props.style.flat())
+      : root.props.style;
+    expect(flat.height).toBe(844);
     unmount();
   });
 });

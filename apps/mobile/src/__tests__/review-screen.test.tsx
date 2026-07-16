@@ -26,10 +26,23 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+const mockRouterBack = jest.fn();
 jest.mock('expo-router', () => ({
   Link: ({ children }: { children: ReactNode }) => children,
-  useRouter: () => ({ push: mockRouterPush, navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+  useRouter: () => ({
+    push: mockRouterPush,
+    navigate: jest.fn(),
+    replace: jest.fn(),
+    back: mockRouterBack,
+  }),
   useLocalSearchParams: () => ({}),
+}));
+
+// Drive the responsive sheet rule off a controllable viewport.
+const mockWindowSize = { width: 390, height: 844, scale: 2, fontScale: 1 };
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => mockWindowSize,
 }));
 
 import ReviewScreen from '@/app/review';
@@ -53,6 +66,9 @@ function renderReview() {
 
 beforeEach(() => {
   mockRouterPush.mockClear();
+  mockRouterBack.mockClear();
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
 });
 
 test('lists bookmarks with pending high-confidence suggestions and their chips', async () => {
@@ -781,4 +797,41 @@ test('"Accept all" on a mixed card (tags + summary) also uses the summary as a n
   const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
   expect(bookmark?.notes).toBe('An accept-all summary.');
   expect(bookmark?.reviewed_summary_tokens).toContain(summaryToken('An accept-all summary.')!);
+});
+
+test('wide viewport renders the side-sheet backdrop', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Plain bookmark' })]);
+  mockWindowSize.width = 1280;
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByTestId('review-sheet-backdrop')).toBeTruthy());
+});
+
+test('phone viewport renders full-screen with no backdrop', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Plain bookmark' })]);
+  mockWindowSize.width = 390;
+
+  const screen = await renderReview();
+
+  await waitFor(() => expect(screen.getByTestId('review-fullscreen')).toBeTruthy());
+  expect(screen.queryByTestId('review-sheet-backdrop')).toBeNull();
+});
+
+// Review is a transparentModal with the Inbox mounted behind it. On web the
+// modal container sizes to content, so a `flex: 1` root collapses and the
+// Inbox bleeds through below Review. Pinning the root to the viewport height
+// keeps the opaque background covering the full screen.
+test('phone viewport pins the full-screen root to the viewport height', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Plain bookmark' })]);
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
+
+  const screen = await renderReview();
+
+  const root = await waitFor(() => screen.getByTestId('review-fullscreen'));
+  const flat = Array.isArray(root.props.style)
+    ? Object.assign({}, ...root.props.style.flat())
+    : root.props.style;
+  expect(flat.height).toBe(844);
 });

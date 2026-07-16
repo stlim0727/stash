@@ -9,8 +9,11 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
   type LayoutChangeEvent,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -82,6 +85,10 @@ export default function BrowseTagsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const navigation = useNavigation();
+  // Wide viewports present Browse Tags as a left-side sheet over a dimmed
+  // Inbox; phones keep the full-screen layout (mirrors Settings' sheet).
+  const { width, height } = useWindowDimensions();
+  const asSheet = width >= 760;
   const { inbox, isLoading, getTagsForBookmark, getCollection } = useBookmarks();
 
   const params = useLocalSearchParams<{ scope?: string | string[] }>();
@@ -230,8 +237,9 @@ export default function BrowseTagsScreen() {
   }, [isLoading, isTyping, facetScoped.length, navigation, router]);
 
   // Header title reflects the scope: "Tags" / "Tags in {name}" / "Tags · Inbox"
-  // (the no-collection bucket is labelled "Inbox" everywhere, #232). Set
-  // imperatively so the static native header tracks the facet.
+  // (the no-collection bucket is labelled "Inbox" everywhere, #232). The Stack
+  // header is hidden for this screen, so this drives the screen's own header
+  // row below instead of navigation.setOptions.
   const scopeName =
     scope.kind === 'collection' ? (getCollection(scope.id)?.name?.trim() ?? '') : '';
   const headerTitle = useMemo(() => {
@@ -243,9 +251,6 @@ export default function BrowseTagsScreen() {
     }
     return t('inbox.tagsTitle');
   }, [scope.kind, scopeName, t]);
-  useEffect(() => {
-    navigation.setOptions({ title: headerTitle });
-  }, [navigation, headerTitle]);
 
   const searching = debouncedQuery.trim().length > 0;
   // Empty-state classification for the rendered surface.
@@ -311,7 +316,7 @@ export default function BrowseTagsScreen() {
     );
   }
 
-  return (
+  const content = (
     <View
       testID="browse-tags-screen"
       style={[
@@ -428,6 +433,7 @@ export default function BrowseTagsScreen() {
       ) : (
         <FlatList
           testID="browse-tags-list"
+          style={webOverscrollContain}
           data={ranked}
           keyExtractor={(item) => item.id}
           // Fixed row height → getItemLayout, so hundreds of tags scroll without
@@ -466,12 +472,108 @@ export default function BrowseTagsScreen() {
       )}
     </View>
   );
+
+  // The Stack header is hidden for this screen, so it supplies its own header
+  // row (title + close) for both layouts — matching Settings/Report/Review.
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 12, borderBottomColor: palette.border, backgroundColor: palette.background }]}>
+      <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={1}>
+        {headerTitle}
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+        hitSlop={8}
+        style={({ pressed }) => [styles.headerClose, pressed && { opacity: 0.6 }]}
+      >
+        <Ionicons name="close" size={24} color={palette.text} />
+      </Pressable>
+    </View>
+  );
+
+  // This screen is a `transparentModal`, so the Inbox stays mounted behind it.
+  // On web the modal container sizes to its content instead of the viewport,
+  // which collapses a `flex: 1` root to content height and lets the Inbox
+  // bleed through. Pin both layouts to the real viewport height so the opaque
+  // background always covers the full screen (a no-op on native).
+  if (asSheet) {
+    // Left-docked sheet: panel first in the row (pushed to the left), then the
+    // flex:1 backdrop filling the remaining space on the right; tapping the
+    // backdrop closes.
+    return (
+      <View style={[styles.sheetOverlay, { height }]}>
+        <View style={[styles.sheetPanel, { backgroundColor: palette.background, borderColor: palette.border }]}>
+          {header}
+          {content}
+        </View>
+        <Pressable
+          testID="browse-tags-sheet-backdrop"
+          style={styles.sheetBackdrop}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.close')}
+          onPress={() => router.back()}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View testID="browse-tags-fullscreen" style={[styles.fullScreen, { backgroundColor: palette.background, height }]}>
+      {header}
+      {content}
+    </View>
+  );
 }
 
 // Fixed list-row height for getItemLayout (dot + name + count badge + padding).
 const LIST_ROW_HEIGHT = 48;
 
+// On wide (desktop-web) viewports, Browse Tags docks as a left-side sheet over
+// the dimmed Inbox (mirrors Settings' right-docked sheet); this caps the panel
+// width. No effect on phones (their width is already below the breakpoint).
+const SHEET_PANEL_MAX_WIDTH = 720;
+
+// Contains scroll chaining to the tag list on web (mirrors Settings/Report) —
+// without it, pulling past the top/bottom of the list can rubber-band the
+// transparentModal and expose the Inbox behind it.
+const webOverscrollContain: StyleProp<ViewStyle> =
+  Platform.OS === 'web' ? ({ overscrollBehavior: 'contain' } as ViewStyle) : undefined;
+
 const styles = StyleSheet.create({
+  fullScreen: {
+    flex: 1,
+  },
+  sheetOverlay: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  },
+  sheetPanel: {
+    width: '100%',
+    maxWidth: SHEET_PANEL_MAX_WIDTH,
+    borderRightWidth: StyleSheet.hairlineWidth,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  headerTitle: {
+    flex: 1,
+    marginRight: 12,
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  headerClose: {
+    padding: 4,
+  },
   container: {
     flex: 1,
   },

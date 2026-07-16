@@ -1,6 +1,18 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -20,6 +32,17 @@ import {
 
 // Matches the truncation safety net on the Detail screen (see bookmark/[id].tsx).
 const MAX_NOTES_LENGTH = 10000;
+
+// On wide (desktop-web) viewports, Review docks as a left-side sheet over the
+// dimmed Inbox (mirrors Settings' right-docked sheet); this caps the panel
+// width. No effect on phones (their width is already below the breakpoint).
+const SHEET_PANEL_MAX_WIDTH = 720;
+
+// Contains scroll chaining to this modal's ScrollView on web (mirrors
+// Settings/Report) — without it, pulling past the top/bottom of the card list
+// can rubber-band the transparentModal and expose the Inbox behind it.
+const webOverscrollContain: StyleProp<ViewStyle> =
+  Platform.OS === 'web' ? ({ overscrollBehavior: 'contain' } as ViewStyle) : undefined;
 
 interface ReviewItem {
   id: string;
@@ -43,6 +66,11 @@ export default function ReviewScreen() {
   const palette = usePalette();
   const t = useT();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  // Wide viewports present Review as a left-side sheet over a dimmed Inbox;
+  // phones keep the full-screen layout (mirrors Settings' right-docked sheet).
+  const { width, height } = useWindowDimensions();
+  const asSheet = width >= 760;
   const { show: showToast } = useCaptureToast();
   const {
     inbox,
@@ -300,16 +328,13 @@ export default function ReviewScreen() {
     }
   };
 
-  if (items.length === 0) {
-    return (
+  const content =
+    items.length === 0 ? (
       <View style={styles.emptyWrap}>
         <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('review.empty')}</Text>
       </View>
-    );
-  }
-
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
+    ) : (
+      <ScrollView style={webOverscrollContain} contentContainerStyle={styles.container}>
       <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
         {t('review.pendingHeader', { count: items.length })}
       </Text>
@@ -453,11 +478,92 @@ export default function ReviewScreen() {
             : null}
         </View>
       ))}
-    </ScrollView>
+      </ScrollView>
+    );
+
+  // The Stack header is hidden for this screen, so Review supplies its own
+  // header row (title + close) for both layouts — matching Settings/Report.
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 12, borderBottomColor: palette.border }]}>
+      <Text style={[styles.headerTitle, { color: palette.text }]}>{t('nav.review')}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+        hitSlop={8}
+        style={({ pressed }) => [styles.headerClose, pressed && { opacity: 0.6 }]}
+      >
+        <Ionicons name="close" size={24} color={palette.text} />
+      </Pressable>
+    </View>
+  );
+
+  // Review is a `transparentModal`, so the Inbox stays mounted behind it. On
+  // web the modal container sizes to its content instead of the viewport,
+  // which collapses a `flex: 1` root to content height and lets the Inbox
+  // bleed through. Pin both layouts to the real viewport height so the opaque
+  // background always covers the full screen (a no-op on native).
+  if (asSheet) {
+    // Left-docked sheet: panel first in the row (pushed to the left), then the
+    // flex:1 backdrop filling the remaining space on the right; tapping the
+    // backdrop closes.
+    return (
+      <View style={[styles.sheetOverlay, { height }]}>
+        <View style={[styles.sheetPanel, { backgroundColor: palette.background, borderColor: palette.border }]}>
+          {header}
+          {content}
+        </View>
+        <Pressable
+          testID="review-sheet-backdrop"
+          style={styles.sheetBackdrop}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.close')}
+          onPress={() => router.back()}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View testID="review-fullscreen" style={[styles.fullScreen, { backgroundColor: palette.background, height }]}>
+      {header}
+      {content}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  fullScreen: {
+    flex: 1,
+  },
+  sheetOverlay: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  },
+  sheetPanel: {
+    width: '100%',
+    maxWidth: SHEET_PANEL_MAX_WIDTH,
+    borderRightWidth: StyleSheet.hairlineWidth,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  headerClose: {
+    padding: 4,
+  },
   container: {
     padding: 16,
     gap: 12,
