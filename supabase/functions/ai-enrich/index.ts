@@ -479,11 +479,24 @@ Deno.serve(async (req) => {
     // would lose a prior call's spend on a manual "Refresh AI suggestions".
     // Skipped when the billable provider was never attempted (not
     // configured) — there's no spend to record. Best-effort: a failure here
-    // must never fail the user-facing enrichment.
-    if (provider !== fallbackProvider) {
+    // must never fail the user-facing enrichment, but IS logged (unlike a
+    // silently-ignored non-2xx) so a broken ledger doesn't go unnoticed.
+    //
+    // Always inserted with the service-role key, never the caller-forwarded
+    // auth `rest()` uses elsewhere: the table carries no client insert policy
+    // (see the ai_enrichment_calls_server_only migration) specifically so a
+    // client can't POST fabricated token counts straight to PostgREST with
+    // its own JWT and corrupt the spend ledger. Only this function — which
+    // computed `usage` from Gemini's real response — may write to it.
+    if (provider !== fallbackProvider && SERVICE_ROLE_KEY) {
       try {
-        await rest('/ai_enrichment_calls', {
+        const ledgerRes = await fetch(`${SUPABASE_URL}/rest/v1/ai_enrichment_calls`, {
           method: 'POST',
+          headers: {
+            apikey: SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify({
             bookmark_id: bookmark.id,
             user_id: bookmark.user_id,
@@ -495,6 +508,9 @@ Deno.serve(async (req) => {
             degraded_reason: degradedReason,
           }),
         });
+        if (!ledgerRes.ok) {
+          console.error('Failed to record ai_enrichment_calls row:', ledgerRes.status, await ledgerRes.text());
+        }
       } catch (err) {
         console.error('Failed to record ai_enrichment_calls row:', err);
       }
