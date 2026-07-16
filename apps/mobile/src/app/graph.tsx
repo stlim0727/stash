@@ -202,6 +202,45 @@ export function panWithPinchFocalDelta(input: {
   };
 }
 
+type ViewBoxRect = { minX: number; minY: number; w: number; h: number };
+
+// Re-renders the SVG at native resolution for a just-committed pan/zoom
+// instead of only ever stretching a fixed-resolution picture via the
+// Animated transform (STASH-2N/STASH-2R: bookmark-node label text read as
+// visibly blurred at high pinch-zoom). Once a gesture settles, its
+// transform is "baked" into a new `viewBox` covering exactly the same
+// on-screen content, and the Animated transform resets to identity against
+// that new baseline — so the next paint draws crisp vector content
+// (including SvgText glyphs) at the committed zoom. `pan`/`scale` are
+// relative to `base` (scale 1, pan {0,0} is a no-op returning `base`
+// unchanged). The result keeps `base`'s aspect ratio — and therefore its
+// preserveAspectRatio="meet" letterbox proportions — so the fit scale factor
+// changes by exactly `scale`. Pure + exported for testing: the production
+// call sites can't be exercised without a real gesture stream, but the
+// screen-mapping this produces can be checked directly (see the graph test
+// file's "bake viewBox" describe block, which verifies the OLD system's
+// base+pan+scale screen mapping and the NEW system's baked+identity mapping
+// agree for sample points).
+export function bakeViewBox(input: {
+  base: ViewBoxRect;
+  viewport: { w: number; h: number };
+  pan: { x: number; y: number };
+  scale: number;
+}): ViewBoxRect {
+  const { base, viewport, pan, scale } = input;
+  const fit = Math.min(viewport.w / base.w, viewport.h / base.h);
+  const offsetX = (viewport.w - base.w * fit) / 2;
+  const offsetY = (viewport.h - base.h * fit) / 2;
+  const halfVisibleX = viewport.w / 2 - offsetX;
+  const halfVisibleY = viewport.h / 2 - offsetY;
+  return {
+    minX: base.minX + ((scale - 1) * halfVisibleX - pan.x) / (scale * fit),
+    minY: base.minY + ((scale - 1) * halfVisibleY - pan.y) / (scale * fit),
+    w: base.w / scale,
+    h: base.h / scale,
+  };
+}
+
 function touchDistance(a: { pageX: number; pageY: number }, b: { pageX: number; pageY: number }): number {
   return Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
 }
@@ -420,28 +459,51 @@ export default function GraphScreen() {
     return map;
   }, [settled, t]);
 
-  // Padded viewBox dimensions over the settled bounds. The pan clamp derives the
-  // per-axis fitted content extent from these (fitScale * vbDim), so it's kept
-  // alongside the viewBox string. Guard zero-span (all-collapsed).
-  const vbSize = useMemo(() => {
+  // Fit-to-bounds: a padded viewBox over the settled bounds, centered by the
+  // Svg's preserveAspectRatio="xMidYMid meet". This is the ORIGINAL baseline
+  // the view resets to on a resettle or a recenter tap. Guard zero-span
+  // (all-collapsed).
+  const fitViewBoxRect = useMemo<ViewBoxRect>(() => {
     const b = settled?.bounds;
     if (!b) {
-      return { w: 1, h: 1 };
+      return { minX: 0, minY: 0, w: 1, h: 1 };
     }
     const spanX = b.width || 1;
     const spanY = b.height || 1;
-    return { w: spanX + VIEWBOX_PAD * 2, h: spanY + VIEWBOX_PAD * 2 };
+    return {
+      minX: b.min_x - VIEWBOX_PAD,
+      minY: b.min_y - VIEWBOX_PAD,
+      w: spanX + VIEWBOX_PAD * 2,
+      h: spanY + VIEWBOX_PAD * 2,
+    };
   }, [settled]);
 
-  // Fit-to-bounds: a padded viewBox over the settled bounds, centered by the
-  // Svg's preserveAspectRatio="xMidYMid meet".
-  const viewBox = useMemo(() => {
+  // The actual (unpadded) node bbox span — constant per settle, independent
+  // of zoom/pan. The pan clamp needs THIS, not a span derived from the
+  // current viewBox (which shrinks every time a gesture bakes a deeper
+  // zoom, see `bakeViewBox` above) — otherwise a deep zoom would lose track
+  // of where the real node content is.
+  const nodeExtentRef = useRef({ w: 1, h: 1 });
+  useEffect(() => {
     const b = settled?.bounds;
-    if (!b) {
-      return `0 0 1 1`;
-    }
-    return `${b.min_x - VIEWBOX_PAD} ${b.min_y - VIEWBOX_PAD} ${vbSize.w} ${vbSize.h}`;
-  }, [settled, vbSize]);
+    nodeExtentRef.current = { w: b?.width || 1, h: b?.height || 1 };
+  }, [settled]);
+
+  // The CURRENTLY RENDERED viewBox. Starts as `fitViewBoxRect` and gets
+  // replaced ("baked") once a pan/pinch/wheel gesture settles, so the SVG
+  // re-renders its vector content at native resolution for the committed
+  // zoom instead of only ever being magnified via the Animated transform
+  // (see `bakeViewBox` above). The live gesture itself still uses the cheap
+  // transform for smooth interaction — only the settled/resting view gets
+  // re-rendered. Mirrored into a ref for the memoized panResponder/wheel
+  // handler closures below, which can't see a fresh state value.
+  const [viewBoxRect, setViewBoxRect] = useState<ViewBoxRect>(fitViewBoxRect);
+  const viewBoxRectRef = useRef<ViewBoxRect>(fitViewBoxRect);
+  const commitViewBoxRect = (next: ViewBoxRect) => {
+    viewBoxRectRef.current = next;
+    setViewBoxRect(next);
+  };
+  const viewBox = `${viewBoxRect.minX} ${viewBoxRect.minY} ${viewBoxRect.w} ${viewBoxRect.h}`;
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const containerRef = useRef<View>(null);
@@ -464,11 +526,14 @@ export default function GraphScreen() {
     }
   }, [canvasSize]);
   // The memoized panResponder also needs the current viewBox size to derive the
-  // fitted content extent for the clamp; mirror it into a ref for the same reason.
+  // fitted content extent for the clamp; mirror it into a ref for the same
+  // reason (and because `commitViewBoxRect` already keeps `viewBoxRectRef`
+  // fresh synchronously, this only needs to track `viewBoxRect` for the
+  // React-driven resettle/recenter paths below).
   const vbSizeRef = useRef({ w: 1, h: 1 });
   useEffect(() => {
-    vbSizeRef.current = vbSize;
-  }, [vbSize]);
+    vbSizeRef.current = { w: viewBoxRect.w, h: viewBoxRect.h };
+  }, [viewBoxRect]);
 
   // Whether a pan/pinch gesture is currently active. Drives a TRANSIENT
   // raster/composite hint: promoting the layer to a cached texture keeps the
@@ -484,15 +549,27 @@ export default function GraphScreen() {
   const translateX = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(1)).current;
+  // Absolute, cumulative scale relative to the ORIGINAL fit-to-bounds view.
+  // Baking a settled gesture into a new viewBox (`bakeViewBox` above) resets
+  // the Animated `scale`/pan back to identity every time, but these three
+  // deliberately do NOT reset — they're what enforces [MIN_SCALE, MAX_SCALE]
+  // across any number of successive gestures/wheel ticks.
   const lastScale = useRef(1);
   const liveScale = useRef(1);
   // Last scale actually pushed to the Animated value — the pinch throttle applies
   // a new scale only when it drifts SCALE_APPLY_STEP from this.
   const appliedScale = useRef(1);
-  // Committed effective pan (screen px) and the value it held at gesture start.
-  // extractOffset/flattenOffset move the accumulated pan between the Animated
-  // value's offset and value, neither cheaply readable, so we track it ourselves
-  // to clamp the ABSOLUTE resulting position rather than just the frame delta.
+  // The absolute cumulative scale (see above) AT THE START of the current
+  // gesture/wheel-tick — i.e. what's already baked into the current
+  // `viewBoxRect`. The Animated `scale` transform and `bakeViewBox` both work
+  // relative to THIS baseline, not the absolute value.
+  const gestureStartScaleRef = useRef(1);
+  // Committed effective pan (screen px), relative to the current baked
+  // viewBoxRect baseline (zero right after a bake), and the value it held at
+  // gesture start. extractOffset/flattenOffset move the accumulated pan
+  // between the Animated value's offset and value, neither cheaply readable,
+  // so we track it ourselves to clamp the ABSOLUTE resulting position rather
+  // than just the frame delta.
   const panOffset = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
   const pinch = useRef<{
@@ -506,21 +583,42 @@ export default function GraphScreen() {
   // an in-progress touch gesture over the same Animated offset.
   const gestureActiveRef = useRef(false);
 
-  // Per-axis pan bound at a given scale. `fit` maps the PADDED viewBox into the
-  // viewport (that's the preserveAspectRatio="…meet" basis), but the sliver
-  // guarantee is measured against REAL NODE content, not the symmetric padding:
-  // the node bbox is centered in the padded viewBox, so its on-screen extent is
-  // `fit * unpadded-node-span` (unpadded span = padded span − VIEWBOX_PAD*2).
-  // Feeding maxPanOffset the node extent (not the padded span) stops a hard
-  // fling from parking the viewport over pure padding. Reads viewport + viewBox
-  // from refs so this stays stable across renders yet never closes over stale
-  // sizes. Shared by the pinch responder and the wheel-zoom handler below.
+  // A resettle (topology change) gets the ORIGINAL fit-to-bounds view,
+  // discarding any baked zoom/pan from the previous layout — node positions
+  // aren't stable across different topologies (a fresh force-layout run), so
+  // preserving a baked window over them wouldn't mean anything anyway. Also
+  // covers the initial settle (this just reconfirms the already-correct
+  // default, a no-op state update).
+  useEffect(() => {
+    commitViewBoxRect(fitViewBoxRect);
+    translateX.setOffset(0);
+    translateX.setValue(0);
+    translateY.setOffset(0);
+    translateY.setValue(0);
+    scale.setValue(1);
+    lastScale.current = 1;
+    liveScale.current = 1;
+    appliedScale.current = 1;
+    gestureStartScaleRef.current = 1;
+    panOffset.current = { x: 0, y: 0 };
+    panStart.current = { x: 0, y: 0 };
+    pinch.current = null;
+  }, [fitViewBoxRect]);
+
+  // Per-axis pan bound at a given scale, relative to the CURRENT baked
+  // viewBoxRect baseline. `fit` maps that (possibly already-zoomed) viewBox
+  // into the viewport (the preserveAspectRatio="…meet" basis), but the
+  // sliver guarantee is measured against the REAL NODE bbox — constant
+  // across any zoom (`nodeExtentRef` above) — not the current viewBox's own
+  // span, which shrinks every bake and would otherwise lose track of where
+  // the real content is. Reads viewport + viewBox + node extent from refs so
+  // this stays stable across renders yet never closes over stale sizes.
+  // Shared by the pinch responder and the wheel-zoom handler below.
   const axisBoundsAt = useCallback((liveScaleValue: number) => {
     const { w: vw, h: vh } = viewportRef.current;
     const { w: vbW, h: vbH } = vbSizeRef.current;
     const fit = Math.min(vw / vbW, vh / vbH);
-    const nodeW = vbW - VIEWBOX_PAD * 2;
-    const nodeH = vbH - VIEWBOX_PAD * 2;
+    const { w: nodeW, h: nodeH } = nodeExtentRef.current;
     return {
       x: maxPanOffset(liveScaleValue, vw, fit * nodeW),
       y: maxPanOffset(liveScaleValue, vh, fit * nodeH),
@@ -529,30 +627,41 @@ export default function GraphScreen() {
 
   const panResponder = useMemo(
     () => {
-      const axisBounds = () => axisBoundsAt(liveScale.current);
-      // Flatten the offset and re-clamp the pan against the (possibly just-changed)
-      // scale — a pinch-out shrinks the allowed range, so an out-of-bounds pan must
-      // be pulled back in — then commit the exact final pinch scale. Also drops the
-      // transient raster hint so the settled view re-renders as crisp vector SVG.
+      // The scale portion of the LIVE gesture, relative to what's already
+      // baked into the current viewBoxRect baseline (1 = no change yet).
+      const relativeScale = () => liveScale.current / gestureStartScaleRef.current;
+      const axisBounds = () => axisBoundsAt(relativeScale());
+      // Bake the just-settled transform into a new viewBox (`bakeViewBox`
+      // above) so the resting view re-renders as crisp vector SVG —
+      // including SvgText glyphs — at the committed zoom, instead of a
+      // magnified fixed-resolution picture (STASH-2N/STASH-2R). Also drops
+      // the transient raster hint now that the gesture is over.
       const settle = () => {
         gestureActiveRef.current = false;
         setInteracting(false);
         translateX.flattenOffset();
         translateY.flattenOffset();
         lastScale.current = liveScale.current;
-        if (appliedScale.current !== liveScale.current) {
-          appliedScale.current = liveScale.current;
-          scale.setValue(liveScale.current);
-        }
         const { x: maxX, y: maxY } = axisBounds();
-        const clampedX = clampToRange(panOffset.current.x, -maxX, maxX);
-        const clampedY = clampToRange(panOffset.current.y, -maxY, maxY);
-        if (clampedX !== panOffset.current.x || clampedY !== panOffset.current.y) {
-          panOffset.current = { x: clampedX, y: clampedY };
-          // flattenOffset zeroed the offset, so setValue is the absolute position.
-          translateX.setValue(clampedX);
-          translateY.setValue(clampedY);
-        }
+        panOffset.current = {
+          x: clampToRange(panOffset.current.x, -maxX, maxX),
+          y: clampToRange(panOffset.current.y, -maxY, maxY),
+        };
+        commitViewBoxRect(
+          bakeViewBox({
+            base: viewBoxRectRef.current,
+            viewport: viewportRef.current,
+            pan: panOffset.current,
+            scale: relativeScale(),
+          }),
+        );
+        translateX.setValue(0);
+        translateY.setValue(0);
+        scale.setValue(1);
+        appliedScale.current = liveScale.current;
+        gestureStartScaleRef.current = liveScale.current;
+        panOffset.current = { x: 0, y: 0 };
+        panStart.current = { x: 0, y: 0 };
         pinch.current = null;
       };
       return PanResponder.create({
@@ -564,6 +673,7 @@ export default function GraphScreen() {
         onPanResponderGrant: () => {
           gestureActiveRef.current = true;
           setInteracting(true);
+          gestureStartScaleRef.current = lastScale.current;
           translateX.extractOffset();
           translateY.extractOffset();
           panStart.current = { x: panOffset.current.x, y: panOffset.current.y };
@@ -607,7 +717,9 @@ export default function GraphScreen() {
             // Throttle: skip most per-frame scale writes to cut SVG re-rasters.
             if (Math.abs(next - appliedScale.current) >= SCALE_APPLY_STEP) {
               appliedScale.current = next;
-              scale.setValue(next);
+              // The Animated value is relative to the current viewBoxRect
+              // baseline (gestureStartScaleRef), not the absolute `next`.
+              scale.setValue(next / gestureStartScaleRef.current);
             }
           } else if (!pinch.current) {
             // Clamp the absolute pan into ±maxPanOffset so the content can't drift
@@ -631,6 +743,10 @@ export default function GraphScreen() {
   // off a single `deltaY` instead of two touch points, anchored on the cursor so
   // the point under it stays put. Skips while a touch pan/pinch is mid-gesture
   // (gestureActiveRef) since that path is managing the Animated offset itself.
+  // Each wheel tick is its own atomic "gesture": it starts and settles in the
+  // same call, so — like the touch settle() path above — it bakes straight
+  // into a new viewBox rather than only ever composing more transform on top
+  // of the fixed-resolution picture (STASH-2N/STASH-2R).
   const applyWheelZoom = useCallback(
     (deltaY: number, focal: { x: number; y: number }) => {
       if (gestureActiveRef.current) {
@@ -641,23 +757,36 @@ export default function GraphScreen() {
       if (nextScale === startScale) {
         return;
       }
+      // Between ticks panOffset is always reset to {0,0} and the Animated
+      // scale to 1 (the previous tick's bake already absorbed them), so this
+      // tick's relative change starts from that fresh baseline.
+      const relativeScale = nextScale / startScale;
       const anchoredPan = anchoredPanForScale({
-        pan: panOffset.current,
+        pan: { x: 0, y: 0 },
         focal,
         viewport: viewportRef.current,
-        startScale,
-        nextScale,
+        startScale: 1,
+        nextScale: relativeScale,
       });
-      const { x: maxX, y: maxY } = axisBoundsAt(nextScale);
+      const { x: maxX, y: maxY } = axisBoundsAt(relativeScale);
       const nextX = clampToRange(anchoredPan.x, -maxX, maxX);
       const nextY = clampToRange(anchoredPan.y, -maxY, maxY);
-      panOffset.current = { x: nextX, y: nextY };
+      commitViewBoxRect(
+        bakeViewBox({
+          base: viewBoxRectRef.current,
+          viewport: viewportRef.current,
+          pan: { x: nextX, y: nextY },
+          scale: relativeScale,
+        }),
+      );
+      panOffset.current = { x: 0, y: 0 };
       lastScale.current = nextScale;
       liveScale.current = nextScale;
       appliedScale.current = nextScale;
-      translateX.setValue(nextX);
-      translateY.setValue(nextY);
-      scale.setValue(nextScale);
+      gestureStartScaleRef.current = nextScale;
+      translateX.setValue(0);
+      translateY.setValue(0);
+      scale.setValue(1);
     },
     [axisBoundsAt, translateX, translateY, scale],
   );
@@ -689,11 +818,12 @@ export default function GraphScreen() {
     return () => node.removeEventListener('wheel', onWheel);
   }, [applyWheelZoom, settled]);
 
-  // Reset the pan/zoom transform to identity, which restores the initial
-  // fit-to-bounds view: the fit itself lives in the SVG's viewBox +
-  // preserveAspectRatio, so an untransformed canvas IS the fitted canvas. Lets a
-  // user who flung the graph off-screen get back without a way-out dead end.
+  // Reset the pan/zoom transform to identity AND the baked viewBoxRect back
+  // to `fitViewBoxRect`, which restores the initial fit-to-bounds view. Lets a
+  // user who flung the graph off-screen (or zoomed deep) get back without a
+  // way-out dead end.
   const recenter = () => {
+    commitViewBoxRect(fitViewBoxRect);
     translateX.setOffset(0);
     translateX.setValue(0);
     translateY.setOffset(0);
@@ -702,6 +832,7 @@ export default function GraphScreen() {
     lastScale.current = 1;
     liveScale.current = 1;
     appliedScale.current = 1;
+    gestureStartScaleRef.current = 1;
     panOffset.current = { x: 0, y: 0 };
     panStart.current = { x: 0, y: 0 };
     pinch.current = null;
