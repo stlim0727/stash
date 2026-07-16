@@ -65,7 +65,15 @@ const LABEL_SIZE = 24;
 // Bookmark-node labels: much smaller than hub labels (BOOKMARK_R dwarfs the hub
 // radius range) and length-capped so a long title can't sprawl across
 // neighboring nodes — truncateGraphLabel below adds the ellipsis.
-const BOOKMARK_LABEL_SIZE = 11;
+// Sized up from 11 and given a heavier weight (STASH-2N): pinch-zoom is a
+// transform-scale over a fixed-resolution SVG (see the `interacting` comment
+// below), so at high zoom the rendered glyphs get magnified rather than
+// re-rasterized — thin small text shows that as blur first. A larger,
+// semibold glyph stays legible through that softening; it doesn't make the
+// text pixel-crisp, since the underlying scale-transform rendering is
+// unchanged.
+const BOOKMARK_LABEL_SIZE = 13;
+const BOOKMARK_LABEL_WEIGHT = '600';
 const BOOKMARK_LABEL_MAX_CHARS = 18;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
 // the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
@@ -805,6 +813,7 @@ export default function GraphScreen() {
                 y={node.y + BOOKMARK_R + BOOKMARK_LABEL_SIZE}
                 fill={palette.textSecondary}
                 fontSize={BOOKMARK_LABEL_SIZE}
+                fontWeight={BOOKMARK_LABEL_WEIGHT}
                 textAnchor="middle"
                 // Labels sit close to (and can overlap) neighboring bookmark/tag
                 // circles in a dense graph; without this, an overlapping label —
