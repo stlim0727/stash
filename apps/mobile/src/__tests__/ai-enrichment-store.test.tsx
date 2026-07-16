@@ -325,6 +325,59 @@ test('re-hydrates a persisted deferred AI trigger and fires it after a restart',
   await waitFor(() => expect(fakeRepo.__meta('pending_ai_trigger')).toBe('[]'));
 });
 
+test('a deferred first attempt keeps a durable marker throughout the in-flight window and on failure', async () => {
+  // Regression: the deferred-trigger effect used to clear pending_ai_trigger
+  // synchronously, before requestAiEnrichment even started — relying entirely
+  // on armAiRetry (which only runs from requestAiEnrichment's own catch, after
+  // a failure is observed) to arm the replacement bookkeeping. An app kill
+  // mid-request (anywhere in the in-flight window below, before that catch
+  // ever runs) left NEITHER marker durably recorded: this bookmark's
+  // first-ever automatic enrichment attempt vanished with no trace for any
+  // future relaunch to retry. This test never resolves the mocked request
+  // until we explicitly fail it, so it can assert on the in-flight window
+  // itself, not just the settled outcome.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+
+  let reject!: (error: unknown) => void;
+  const gate = new Promise((_resolve, r) => {
+    reject = r;
+  });
+  gate.catch(() => {}); // silence the unhandled-rejection warning from the gate itself
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    await gate; // simulates the live network round trip an app kill could land in
+    throw new Error('unreachable');
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  // The deferred trigger fires...
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalled());
+  // ...but while the request is still in flight (the crash window), the
+  // durable pending-trigger marker must NOT have been cleared yet: if the
+  // process died right now, a relaunch still has a durable trace to retry.
+  expect(fakeRepo.__meta('pending_ai_trigger')).toBe(JSON.stringify([SYNCED_ID]));
+  // Nor is the retry marker armed yet — armAiRetry only runs once the
+  // failure is actually observed, further below.
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+
+  // Now let the in-flight request actually fail.
+  await act(async () => {
+    reject(new Error('network died mid-request'));
+    await Promise.resolve();
+  });
+
+  // Once it settles, armAiRetry has recorded the backoff-scheduled retry
+  // marker...
+  await waitFor(() => expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true));
+  // ...and the pending-trigger marker was never cleared either (only success
+  // clears it) — a relaunch has at least one durable marker to act on either
+  // way, closing the crash window the old code left open.
+  expect(fakeRepo.__meta('pending_ai_trigger')).toBe(JSON.stringify([SYNCED_ID]));
+});
+
 test('does not consume a deferred AI trigger before the auth session is ready', async () => {
   // Cold start: storage (and the persisted marker) loads before auth restores.
   mockAuthSession = null;
