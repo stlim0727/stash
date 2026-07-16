@@ -716,3 +716,69 @@ test('a stale enrichment shows the same hint as Detail', async () => {
   await waitFor(() => expect(screen.getByText('Stale card')).toBeTruthy());
   expect(screen.getByText('Edited since these suggestions — refresh to update.')).toBeTruthy();
 });
+
+test('the singular "Dismiss" on a folder-only card leaves an accompanying summary untouched', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000ea';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Folder plus summary', collection_id: null })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A folder-card summary.',
+        model: 'gemini-2.0',
+        suggested_collection_name: 'Travel',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('📁 ＋ Create “Travel”')).toBeTruthy());
+  expect(screen.getByText('A folder-card summary.')).toBeTruthy();
+  // Folder-only (no tags) -> the singular "Dismiss" a11y label, not "Dismiss all".
+  expect(screen.getByLabelText('Dismiss the suggestion for Folder plus summary')).toBeTruthy();
+  expect(screen.queryByLabelText('Dismiss all suggestions for Folder plus summary')).toBeNull();
+
+  // Press the bulk row's singular "Dismiss" (not the folder chip's own ✕) —
+  // this is the button dismissAll's tags/folder-plus-summary gating covers.
+  await fireEvent.press(screen.getByLabelText('Dismiss the suggestion for Folder plus summary'));
+
+  // Only the folder suggestion is gone — the summary widget (and its own
+  // "Use as note" control) is still there, untouched.
+  await waitFor(() => expect(screen.queryByText('📁 ＋ Create “Travel”')).toBeNull());
+  expect(screen.getByText('A folder-card summary.')).toBeTruthy();
+  expect(
+    screen.getByLabelText('Use the suggested summary as your note for Folder plus summary'),
+  ).toBeTruthy();
+  const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
+  expect(bookmark?.reviewed_summary_tokens ?? []).not.toContain(summaryToken('A folder-card summary.')!);
+});
+
+test('"Accept all" on a mixed card (tags + summary) also uses the summary as a note', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000eb';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Accept everything', notes: null })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'An accept-all summary.',
+        model: 'gemini-2.0',
+        suggested_tags: [{ name: 'design', confidence: 0.9 }],
+      }),
+    ],
+  );
+
+  const screen = await renderReview();
+  await waitFor(() => expect(screen.getByText('Accept everything')).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Accept all suggestions for Accept everything'));
+
+  // "Accept all" now genuinely means all: the tag is applied AND the summary
+  // is used as the note, so the card fully drops out.
+  await waitFor(() => expect(screen.queryByText('Accept everything')).toBeNull());
+  const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
+  expect(bookmark?.notes).toBe('An accept-all summary.');
+  expect(bookmark?.reviewed_summary_tokens).toContain(summaryToken('An accept-all summary.')!);
+});

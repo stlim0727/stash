@@ -249,6 +249,13 @@ export default function ReviewScreen() {
   // A move (folder carries `from`) offers an Undo toast rather than confirming.
   // The create path runs under `busy` (acceptFolder sets it) so a double-tap
   // can't mint a duplicate collection.
+  //
+  // The row is labeled "Accept all"/"Dismiss all" only when there are tags
+  // (see the render below); a folder-only card gets the singular "Accept"/
+  // "Dismiss", meaning that action is scoped to the folder alone. So the
+  // summary rides along here (and in dismissAll below) only when there ARE
+  // tags — otherwise a card with just a folder + a pending summary would have
+  // its singular "Dismiss" silently take the unrelated summary with it.
   const acceptAll = (item: ReviewItem) => {
     setBusy(true);
     void acceptSuggestionBundle(
@@ -268,14 +275,18 @@ export default function ReviewScreen() {
         onAcceptedFolder: (folder) => offerMoveUndo(item.id, folder),
       },
     ).finally(() => setBusy(false));
+    if (item.suggestions.length > 0) {
+      useSummaryAsNote(item);
+    }
   };
 
   // Bulk "Dismiss" for a card: mark pending tags reviewed, durably dismiss the
-  // folder suggestion (both kinds), AND — for a mixed card that also has a
-  // pending summary — dismiss that too, so "Dismiss all" actually means all
-  // (mirrors Detail's screen-level handleDismissAllSuggestions). A
-  // summary-only card never reaches here — this row isn't rendered for one —
-  // so this only ever fires alongside a real tag/folder dismissal.
+  // folder suggestion (both kinds), AND — only when the row is actually
+  // labeled "Dismiss all" (tags present) — dismiss a pending summary too, so
+  // the label stays honest (mirrors Detail's screen-level
+  // handleDismissAllSuggestions). The singular folder-only "Dismiss" leaves an
+  // accompanying summary alone; a summary-only card never reaches here at all
+  // (this row isn't rendered for one).
   const dismissAll = (item: ReviewItem) => {
     dismissSuggestionBundle({
       bookmarkId: item.id,
@@ -284,7 +295,9 @@ export default function ReviewScreen() {
       markSuggestionsReviewed,
       dismissFolderSuggestion,
     });
-    dismissSummary(item);
+    if (item.suggestions.length > 0) {
+      dismissSummary(item);
+    }
   };
 
   if (items.length === 0) {
