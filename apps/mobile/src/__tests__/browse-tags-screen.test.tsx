@@ -46,6 +46,13 @@ jest.mock('expo-router', () => ({
   useLocalSearchParams: () => mockParams,
 }));
 
+// Drive the responsive sheet rule off a controllable viewport.
+const mockWindowSize = { width: 390, height: 844, scale: 2, fontScale: 1 };
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => mockWindowSize,
+}));
+
 import BrowseTagsScreen from '@/app/browse/tags';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { Collection, Tag } from '@/domain/types';
@@ -80,6 +87,8 @@ beforeEach(() => {
   mockBack.mockClear();
   mockSetOptions.mockClear();
   mockCanGoBack = true;
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
 });
 
 // A small library: two bookmarks, three tags. "cooking" is on both (count 2),
@@ -414,9 +423,46 @@ test('the header title reflects the active facet scope', async () => {
     },
   );
 
-  await renderScreen();
+  const screen = await renderScreen();
 
-  await waitFor(() =>
-    expect(mockSetOptions).toHaveBeenCalledWith(expect.objectContaining({ title: 'Tags in Work' })),
-  );
+  // The screen now owns its header (the Stack header is hidden), so the title
+  // renders locally instead of going through navigation.setOptions.
+  await waitFor(() => expect(screen.getByText('Tags in Work')).toBeTruthy());
+});
+
+test('wide viewport renders the side-sheet backdrop', async () => {
+  seedLibrary();
+  mockWindowSize.width = 1280;
+
+  const screen = await renderScreen();
+
+  await waitFor(() => expect(screen.getByTestId('browse-tags-sheet-backdrop')).toBeTruthy());
+});
+
+test('phone viewport renders full-screen with no backdrop', async () => {
+  seedLibrary();
+  mockWindowSize.width = 390;
+
+  const screen = await renderScreen();
+
+  await waitFor(() => expect(screen.getByTestId('browse-tags-screen')).toBeTruthy());
+  expect(screen.queryByTestId('browse-tags-sheet-backdrop')).toBeNull();
+});
+
+// This screen is a transparentModal with the Inbox mounted behind it. On web
+// the modal container sizes to content, so a `flex: 1` root collapses and the
+// Inbox bleeds through below it. Pinning the root to the viewport height keeps
+// the opaque background covering the full screen.
+test('phone viewport pins the full-screen root to the viewport height', async () => {
+  seedLibrary();
+  mockWindowSize.width = 390;
+  mockWindowSize.height = 844;
+
+  const screen = await renderScreen();
+
+  const root = await waitFor(() => screen.getByTestId('browse-tags-fullscreen'));
+  const flat = Array.isArray(root.props.style)
+    ? Object.assign({}, ...root.props.style.flat())
+    : root.props.style;
+  expect(flat.height).toBe(844);
 });
