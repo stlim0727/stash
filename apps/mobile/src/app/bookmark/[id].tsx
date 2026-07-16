@@ -1158,28 +1158,31 @@ export default function BookmarkDetailScreen({
           <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
         ) : null}
 
-        {showDegradedNote ? (
-          <Text
-            accessibilityRole="text"
-            style={[styles.hint, { color: palette.textSecondary }]}
-          >
-            {/* When the card is collapsed (nothing actionable) there are no
-                "basic suggestions" on screen to point at, so fall back to the
-                same calm postponed copy used below rather than the "showing
-                basic suggestions" variant, which would describe content that
-                isn't there. */}
-            {showAiReport
-              ? enrichmentDegradedLabel(t, enrichment?.degraded_reason ?? null)
-              : t('detail.aiPostponed')}
-          </Text>
-        ) : aiPostponed ? (
-          // No ai_enrichments row at all yet (nothing to call "degraded") —
-          // a background retry is scheduled, so stay calm rather than silent.
+        {aiPostponed ? (
+          // A live, currently-armed retry marker (waiting out its backoff)
+          // always wins over showDegradedNote below: that note can describe a
+          // stale, already-completed attempt, while this reflects the
+          // bookmark's current, most relevant state — an actual background
+          // retry really is scheduled here.
           <Text
             accessibilityRole="text"
             style={[styles.hint, { color: palette.textSecondary }]}
           >
             {t('detail.aiPostponed')}
+          </Text>
+        ) : showDegradedNote ? (
+          <Text
+            accessibilityRole="text"
+            style={[styles.hint, { color: palette.textSecondary }]}
+          >
+            {/* When the card is collapsed (nothing actionable) there are no
+                "basic suggestions" on screen to point at, so fall back to a
+                standalone note — but never the "aiPostponed" copy: this is a
+                *completed* (if degraded) attempt with no armed retry marker,
+                so promising an automatic retry here would be false. */}
+            {showAiReport
+              ? enrichmentDegradedLabel(t, enrichment?.degraded_reason ?? null)
+              : t('detail.aiDegradedCollapsed')}
           </Text>
         ) : null}
 

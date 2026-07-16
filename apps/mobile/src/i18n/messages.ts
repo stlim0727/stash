@@ -447,6 +447,11 @@ export const en = {
   'detail.aiDegradedUnavailable':
     'Couldn’t reach AI — showing basic suggestions for now. Refresh to try again.',
   'detail.aiDegradedBasic': 'Showing basic suggestions.',
+  // The card collapsed to just the affordance (no actionable suggestions), and
+  // the last completed attempt came back rate-limited — there is no "basic
+  // suggestions" to point at, and no background retry is scheduled for a
+  // completed (if degraded) attempt, so this must not promise one.
+  'detail.aiDegradedCollapsed': 'AI suggestions hit their limit for now — try again a little later.',
   'detail.detailsShow': '▸  Details',
   'detail.detailsHide': '▾  Details',
   'detail.toggleDetailsA11y': 'Toggle details',

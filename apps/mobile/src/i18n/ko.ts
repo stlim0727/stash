@@ -329,6 +329,7 @@ export const ko: Catalog = {
   'detail.aiDegradedUnavailable':
     'AI에 연결할 수 없어 지금은 기본 제안을 표시합니다. 새로고침해 다시 시도해 주세요.',
   'detail.aiDegradedBasic': '기본 제안을 표시합니다.',
+  'detail.aiDegradedCollapsed': 'AI 제안이 지금은 한도에 도달했어요 — 잠시 후 다시 시도해 주세요.',
   'detail.detailsShow': '▸  상세 정보',
   'detail.detailsHide': '▾  상세 정보',
   'detail.toggleDetailsA11y': '상세 정보 토글',
