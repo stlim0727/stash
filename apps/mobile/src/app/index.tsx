@@ -506,7 +506,9 @@ export default function InboxScreen() {
     // icon flips to "close" but there's nothing visible to type into (caught
     // in PR review). Force it expanded whenever search opens; harmless to
     // call on native, which doesn't read this state for anything visual.
-    setHeaderCollapse({ collapsed: false, anchorScrollY: lastScrollYRef.current });
+    const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
+    headerCollapseRef.current = expanded;
+    setHeaderCollapse(expanded);
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
   // (Telegram-faithful — opening search always starts fresh). Every close path
@@ -759,6 +761,17 @@ export default function InboxScreen() {
   const [headerCollapse, setHeaderCollapse] = useState<HeaderCollapseState>(
     INITIAL_HEADER_COLLAPSE_STATE,
   );
+  // The web scroll listener below recomputes this on every scroll-event tick
+  // via `nextHeaderCollapseState`, whose `anchorScrollY` changes on nearly
+  // every tick while the user keeps scrolling in one direction (it tracks the
+  // running extreme point — see domain/header-collapse.ts) — but render only
+  // ever reads `.collapsed` (the translateY below). Promoting every tick
+  // straight into React state forced a full InboxScreen re-render, and with
+  // it every mounted card's heavy JSX in card view, at scroll-event frequency
+  // (~60/sec) on web. This ref carries the full state between ticks so
+  // anchor-tracking stays exact; `setHeaderCollapse` only fires when
+  // `.collapsed` actually flips, which is the only thing render cares about.
+  const headerCollapseRef = useRef<HeaderCollapseState>(INITIAL_HEADER_COLLAPSE_STATE);
   const isWebPlatform = Platform.OS === 'web';
   // `headerHeight` means "total expanded height" (used below for the list's
   // top padding/scroll inset and the filter bar's resting position) — native
@@ -831,6 +844,7 @@ export default function InboxScreen() {
     lastScrollYRef.current = 0;
     // Same reasoning for the web-only collapse state: a remount resets the
     // list to the top, so the collapsible row must not stay stuck collapsed.
+    headerCollapseRef.current = INITIAL_HEADER_COLLAPSE_STATE;
     setHeaderCollapse(INITIAL_HEADER_COLLAPSE_STATE);
   }, [viewMode, columns, scrollY]);
 
@@ -2091,7 +2105,12 @@ export default function InboxScreen() {
             const y = event.nativeEvent.contentOffset.y;
             lastScrollYRef.current = y;
             if (isWeb) {
-              setHeaderCollapse((prev) => nextHeaderCollapseState(prev, y, collapsibleHeight));
+              const next = nextHeaderCollapseState(headerCollapseRef.current, y, collapsibleHeight);
+              const flipped = next.collapsed !== headerCollapseRef.current.collapsed;
+              headerCollapseRef.current = next;
+              if (flipped) {
+                setHeaderCollapse(next);
+              }
             }
           },
         })}
