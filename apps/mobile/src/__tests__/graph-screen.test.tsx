@@ -37,6 +37,7 @@ jest.mock('expo-router', () => ({
 
 import GraphScreen, {
   anchoredPanForScale,
+  bakeViewBox,
   clampToRange,
   graphCanvasSize,
   maxPanOffset,
@@ -652,6 +653,134 @@ describe('wheel zoom', () => {
   test('clamps zoom-out at MIN_SCALE instead of overshooting', () => {
     expect(wheelZoomScale(MIN_SCALE, 100000)).toBe(MIN_SCALE);
   });
+});
+
+// STASH-2N/STASH-2R: pinch-zoom used to be ONLY a CSS-style transform over a
+// fixed-resolution SVG, which is why bookmark-label text stayed visibly
+// blurred at high zoom even after a gesture settled — the underlying picture
+// was never redrawn at the new resolution. `bakeViewBox` computes a new
+// viewBox that, rendered with an IDENTITY transform, reproduces the exact
+// same on-screen content as the OLD system's `base` viewBox + `pan`/`scale`
+// transform — so the graph screen can reset the transform to identity after
+// baking and get a freshly-rendered (crisp) picture at the committed zoom,
+// with no visible jump. This independently re-derives the OLD system's
+// screen mapping (transform: translate ∘ scale-around-viewport-center, same
+// model `anchoredPanForScale` above already relies on) and asserts it agrees
+// with the NEW system (baked viewBox, identity transform) for sample points.
+describe('bake viewBox', () => {
+  function oldSystemScreenPoint(
+    point: { x: number; y: number },
+    base: { minX: number; minY: number; w: number; h: number },
+    viewport: { w: number; h: number },
+    pan: { x: number; y: number },
+    scale: number,
+  ) {
+    const fit = Math.min(viewport.w / base.w, viewport.h / base.h);
+    const offsetX = (viewport.w - base.w * fit) / 2;
+    const offsetY = (viewport.h - base.h * fit) / 2;
+    const preTransformX = offsetX + (point.x - base.minX) * fit;
+    const preTransformY = offsetY + (point.y - base.minY) * fit;
+    return {
+      x: viewport.w / 2 + scale * (preTransformX - viewport.w / 2) + pan.x,
+      y: viewport.h / 2 + scale * (preTransformY - viewport.h / 2) + pan.y,
+    };
+  }
+
+  function newSystemScreenPoint(
+    point: { x: number; y: number },
+    baked: { minX: number; minY: number; w: number; h: number },
+    viewport: { w: number; h: number },
+  ) {
+    return oldSystemScreenPoint(point, baked, viewport, { x: 0, y: 0 }, 1);
+  }
+
+  test('a no-op bake (scale 1, pan {0,0}) returns the base unchanged', () => {
+    const base = { minX: -20, minY: -10, w: 400, h: 300 };
+    expect(
+      bakeViewBox({ base, viewport: { w: 800, h: 600 }, pan: { x: 0, y: 0 }, scale: 1 }),
+    ).toEqual(base);
+  });
+
+  test('the baked identity view reproduces the same screen mapping as the original transform (zoomed in, panned, letterboxed)', () => {
+    const base = { minX: 0, minY: 0, w: 1000, h: 500 }; // wider than the 800x600 viewport → letterboxed on Y
+    const viewport = { w: 800, h: 600 };
+    const pan = { x: 37, y: -52 };
+    const scale = 2.5;
+
+    const baked = bakeViewBox({ base, viewport, pan, scale });
+    const samplePoints = [
+      { x: 0, y: 0 },
+      { x: 1000, y: 500 },
+      { x: 500, y: 250 }, // center
+      { x: 120, y: 480 },
+      { x: 900, y: 30 },
+    ];
+    for (const point of samplePoints) {
+      const before = oldSystemScreenPoint(point, base, viewport, pan, scale);
+      const after = newSystemScreenPoint(point, baked, viewport);
+      expect(after.x).toBeCloseTo(before.x, 6);
+      expect(after.y).toBeCloseTo(before.y, 6);
+    }
+  });
+
+  test('reproduces the same mapping when zoomed OUT (scale < 1)', () => {
+    const base = { minX: -100, minY: -100, w: 600, h: 800 }; // taller → letterboxed on X
+    const viewport = { w: 500, h: 500 };
+    const pan = { x: -15, y: 8 };
+    const scale = 0.6;
+
+    const baked = bakeViewBox({ base, viewport, pan, scale });
+    const point = { x: 260, y: -40 };
+    const before = oldSystemScreenPoint(point, base, viewport, pan, scale);
+    const after = newSystemScreenPoint(point, baked, viewport);
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
+  });
+
+  test('baking twice in a row (successive gestures) composes correctly', () => {
+    const base = { minX: 0, minY: 0, w: 1200, h: 900 };
+    const viewport = { w: 900, h: 700 };
+    const firstPan = { x: 40, y: -10 };
+    const firstScale = 1.8;
+
+    const afterFirst = bakeViewBox({ base, viewport, pan: firstPan, scale: firstScale });
+
+    const secondPan = { x: -25, y: 30 };
+    const secondScale = 1.4;
+    const afterSecond = bakeViewBox({ base: afterFirst, viewport, pan: secondPan, scale: secondScale });
+
+    // The combined effect of both bakes must equal replaying the two
+    // transforms directly against the ORIGINAL base (each one anchored on
+    // the viewport center in turn, same as two real successive gestures on
+    // the Animated transform stack) — a chain of gestures shouldn't drift
+    // from that "ground truth" composed result.
+    const point = { x: 300, y: 600 };
+    const viaTwoBakes = newSystemScreenPoint(point, afterSecond, viewport);
+    const direct = composeTwoTransforms(point, base, viewport, firstPan, firstScale, secondPan, secondScale);
+    expect(viaTwoBakes.x).toBeCloseTo(direct.x, 6);
+    expect(viaTwoBakes.y).toBeCloseTo(direct.y, 6);
+  });
+
+  // Applies transform 1 then transform 2 directly against `base`, composing
+  // them the way two successive gestures would on the real Animated
+  // transform stack (each anchored on the viewport center in turn) — an
+  // independent route to the "two settled gestures" result that never goes
+  // through `bakeViewBox`, for the chained-bake test above to check against.
+  function composeTwoTransforms(
+    point: { x: number; y: number },
+    base: { minX: number; minY: number; w: number; h: number },
+    viewport: { w: number; h: number },
+    pan1: { x: number; y: number },
+    scale1: number,
+    pan2: { x: number; y: number },
+    scale2: number,
+  ) {
+    const afterFirstScreen = oldSystemScreenPoint(point, base, viewport, pan1, scale1);
+    return {
+      x: viewport.w / 2 + scale2 * (afterFirstScreen.x - viewport.w / 2) + pan2.x,
+      y: viewport.h / 2 + scale2 * (afterFirstScreen.y - viewport.h / 2) + pan2.y,
+    };
+  }
 });
 
 describe('graph canvas sizing', () => {
