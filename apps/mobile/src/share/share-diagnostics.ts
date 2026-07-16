@@ -1,3 +1,6 @@
+import { Platform } from 'react-native';
+import { ShareIntentModule } from 'expo-share-intent';
+
 import {
   buildShareAttemptDiagnostics,
   parseShareAttemptDiagnostics,
@@ -6,6 +9,7 @@ import {
   type ShareAttemptDiagnostics,
   type ShareAttemptInput,
 } from '@/domain/share-diagnostics';
+import { recordLog } from '@/observability/log-buffer';
 import { getPreference, setPreference } from '@/storage/preferences';
 
 /**
@@ -50,4 +54,29 @@ export async function hydrateShareDiagnostics(): Promise<void> {
 /** The last recorded share attempt, if any. */
 export function getShareDiagnostics(): ShareAttemptDiagnostics | undefined {
   return cached;
+}
+
+/**
+ * Recover the native module's own durable breadcrumb of the last share
+ * intent it saw (Android only — see `recordDurableDebug` in the patched
+ * `expo-share-intent` module). The equivalent live `onDebugLog` event is
+ * lost whenever no JS listener happens to be subscribed at the exact instant
+ * it fires — the leading theory for why prior sendEvent-only instrumentation
+ * (Sentry STASH-2K, STASH-2M) kept showing zero evidence despite shipping.
+ * Read-and-clear on the native side, so call this once at startup: it folds
+ * straight into the in-memory log buffer, exactly like a live onDebugLog
+ * event would have, just recovered a session late.
+ */
+export async function hydrateNativeShareDebugLog(): Promise<void> {
+  if (Platform.OS !== 'android') {
+    return;
+  }
+  try {
+    const value = await ShareIntentModule?.getLastNativeShareDebug('');
+    if (value) {
+      recordLog('info', `[share] native debug (durable): ${value}`);
+    }
+  } catch {
+    // Best-effort — a session without this recovered breadcrumb is still usable.
+  }
 }

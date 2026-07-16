@@ -1,8 +1,41 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..96dd517fab0bfffbd6d661d435ec6bf781c6227e 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef23d778542 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -54,6 +54,31 @@ class ExpoShareIntentModule : Module() {
+@@ -44,6 +44,32 @@ class ExpoShareIntentModule : Module() {
+     companion object {
+         private var instance: ExpoShareIntentModule? = null
+ 
++        // Durable native breadcrumb (Sentry STASH-2Q): `notifyDebug`/`notifyError`/
++        // `notifyShareIntent` all call `sendEvent`, which silently drops the event
++        // if no JS listener happens to be subscribed at that exact instant — e.g.
++        // during the background→foreground resume every recurrence's diagnostics
++        // show in flight (the "sqlite connection reopened ... expected after
++        // background close" line). Two rounds of sendEvent-only instrumentation
++        // (STASH-2K, STASH-2M) both still showed zero evidence, which is
++        // consistent with the event never reaching JS at all. Persist to
++        // SharedPreferences directly, independent of any listener, so the next
++        // app startup can recover what the native side actually saw even when
++        // the event itself never made it to JS.
++        private const val DEBUG_PREFS_NAME = "expo_share_intent_debug"
++        private const val DEBUG_PREFS_KEY = "last_intent"
++
++        private fun recordDurableDebug(activity: Activity?, message: String) {
++            try {
++                activity?.applicationContext
++                    ?.getSharedPreferences(DEBUG_PREFS_NAME, Context.MODE_PRIVATE)
++                    ?.edit()
++                    ?.putString(DEBUG_PREFS_KEY, message)
++                    ?.apply()
++            } catch (e: Exception) {
++                // Best-effort — diagnostics must never break the share path.
++            }
++        }
++
+         private fun notifyShareIntent(value: Any) {
+             notifyState("pending")
+             instance!!.sendEvent("onChange", mapOf("value" to value))
+@@ -54,6 +80,31 @@ class ExpoShareIntentModule : Module() {
          private fun notifyError(message: String) {
              instance!!.sendEvent("onError", mapOf("value" to message))
          }
@@ -34,21 +67,25 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..96dd517fab0bfffbd6d661d435ec6bf7
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +138,32 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +164,36 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
-+            // Instrumentation only (Sentry STASH-2M): log the sending app before any
-+            // branching below, so a report filed right after a silently-failed share
-+            // shows which app originated it even if a downstream path (including one
-+            // not yet covered by the branch-specific logs below) drops it with no
-+            // other evidence.
++            // Instrumentation only (Sentry STASH-2M/2Q): log the sending app before
++            // any branching below, so a report filed right after a silently-failed
++            // share shows which app originated it even if a downstream path
++            // (including one not yet covered by the branch-specific logs below)
++            // drops it with no other evidence. Written durably (recordDurableDebug)
++            // AND emitted live (notifyDebug) — the live event is lost if no JS
++            // listener is subscribed at this instant, so the durable copy is what
++            // actually survives to the next report when that happens.
 +            if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
-+                notifyDebug(
-+                    "share intent received: action=" + intent.action +
-+                        " type=" + intent.type +
-+                        " referrer=" + referrerPackage(activity)
-+                )
++                val debugMessage = "share intent received: action=" + intent.action +
++                    " type=" + intent.type +
++                    " referrer=" + referrerPackage(activity) +
++                    " isTaskRoot=" + (activity?.isTaskRoot?.toString() ?: "unknown")
++                recordDurableDebug(activity, debugMessage)
++                notifyDebug(debugMessage)
 +            }
              if (activity != null && !activity.isTaskRoot) {
 +                // Instrumentation only (Sentry STASH-2K): a Shorts share via the
@@ -67,7 +104,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..96dd517fab0bfffbd6d661d435ec6bf7
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,8 +171,18 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +201,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -88,7 +125,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..96dd517fab0bfffbd6d661d435ec6bf7
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
-@@ -177,7 +237,7 @@ class ExpoShareIntentModule : Module() {
+@@ -177,7 +267,7 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
@@ -97,11 +134,35 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..96dd517fab0bfffbd6d661d435ec6bf7
  
          AsyncFunction("getShareIntent") { _: String ->
              // get the Intent from onCreate activity (app not running in background)
+@@ -196,6 +286,23 @@ class ExpoShareIntentModule : Module() {
+             ExpoShareIntentSingleton.isPending
+         }
+ 
++        // Read-and-clear the durable native breadcrumb from recordDurableDebug
++        // (Sentry STASH-2Q). Consumed once at JS startup and folded into the
++        // in-memory log buffer, so it reaches the next report exactly once and
++        // never re-appears as stale evidence on a later, unrelated startup.
++        AsyncFunction("getLastNativeShareDebug") { _: String ->
++            try {
++                val prefs = context.getSharedPreferences(DEBUG_PREFS_NAME, Context.MODE_PRIVATE)
++                val value = prefs.getString(DEBUG_PREFS_KEY, null)
++                if (value != null) {
++                    prefs.edit().remove(DEBUG_PREFS_KEY).apply()
++                }
++                value
++            } catch (e: Exception) {
++                null
++            }
++        }
++
+         OnNewIntent {
+             handleShareIntent(it)
+         }
 diff --git a/build/ExpoShareIntentModule.d.ts b/build/ExpoShareIntentModule.d.ts
-index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..118eba8cc51640a8242725a379cae913c906a9c2 100644
+index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..4a3c5614b4ac163793d68588c6bab7f89ab677fe 100644
 --- a/build/ExpoShareIntentModule.d.ts
 +++ b/build/ExpoShareIntentModule.d.ts
-@@ -4,6 +4,9 @@ type ExpoShareIntentModuleEvents = {
+@@ -4,11 +4,18 @@ type ExpoShareIntentModuleEvents = {
      onError: (event: ErrorEventPayload) => void;
      onChange: (event: ChangeEventPayload) => void;
      onStateChange: (event: StateEventPayload) => void;
@@ -111,6 +172,15 @@ index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..118eba8cc51640a8242725a379cae913
  };
  declare class ExpoShareIntentModuleType extends NativeModule<ExpoShareIntentModuleEvents> {
      getShareIntent(url: string): string;
+     clearShareIntent(key: string): Promise<void>;
+     hasShareIntent(key: string): boolean;
++    // Read-and-clear the durable native breadcrumb (Sentry STASH-2Q) — recovers
++    // the last share intent the native side saw even if its live onDebugLog
++    // event never reached a JS listener. Android only.
++    getLastNativeShareDebug(key: string): Promise<string | null>;
+ }
+ declare const ExpoShareIntentModule: ExpoShareIntentModuleType | null;
+ export default ExpoShareIntentModule;
 diff --git a/build/useShareIntent.js b/build/useShareIntent.js
 index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..9257fd881d90f62cc05bd3280d9de574d9086dcd 100644
 --- a/build/useShareIntent.js

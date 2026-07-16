@@ -9,7 +9,7 @@ import { initSentry, wrapWithSentry } from '@/observability/sentry';
 import { installConsoleCapture } from '@/observability/log-buffer';
 import { installPwaHead } from '@/share/pwa-head';
 import { compareSemver } from '@/domain/version';
-import { hydrateShareDiagnostics } from '@/share/share-diagnostics';
+import { hydrateNativeShareDebugLog, hydrateShareDiagnostics } from '@/share/share-diagnostics';
 import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
@@ -38,6 +38,11 @@ installPwaHead();
 // even when that share happened in a prior process instance. Best-effort — a
 // report screen without it is still useful.
 void hydrateShareDiagnostics();
+
+// Recover the native module's own durable "last share intent seen" breadcrumb
+// (Android only) into the log buffer, in case its live event was lost to a
+// listener race in the prior process instance. See `hydrateNativeShareDebugLog`.
+void hydrateNativeShareDebugLog();
 
 // The navigator lives in its own component so it can read the active locale
 // from `I18nProvider` (a hook can't run in the same component that mounts the
