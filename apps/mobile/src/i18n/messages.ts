@@ -438,7 +438,7 @@ export const en = {
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
   'detail.aiPreviewFailed': 'AI suggestions are unavailable because the preview could not be loaded.',
   'detail.previewFailedNote': 'Failed to load preview and metadata.',
-  'detail.aiRateLimited': 'AI suggestions have hit their limit for now — try again a little later.',
+  'detail.aiPostponed': 'Still working on AI suggestions for this one — we’ll keep trying automatically.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
   // Shown as a calm, non-error note so the cause is never hidden (M12); the
   // precise cause is forwarded to monitoring rather than spelled out in full.
@@ -447,6 +447,11 @@ export const en = {
   'detail.aiDegradedUnavailable':
     'Couldn’t reach AI — showing basic suggestions for now. Refresh to try again.',
   'detail.aiDegradedBasic': 'Showing basic suggestions.',
+  // The card collapsed to just the affordance (no actionable suggestions), and
+  // the last completed attempt came back rate-limited — there is no "basic
+  // suggestions" to point at, and no background retry is scheduled for a
+  // completed (if degraded) attempt, so this must not promise one.
+  'detail.aiDegradedCollapsed': 'AI suggestions hit their limit for now — try again a little later.',
   'detail.detailsShow': '▸  Details',
   'detail.detailsHide': '▾  Details',
   'detail.toggleDetailsA11y': 'Toggle details',
