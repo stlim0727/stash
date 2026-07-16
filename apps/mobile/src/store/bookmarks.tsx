@@ -39,6 +39,7 @@ import {
   addReviewedSummaryToken,
   dismissedFolderTokensFor,
   pendingSuggestedFolder,
+  pendingSummary,
   pendingSuggestions,
   reviewedNamesFor,
   reviewedSummaryTokensFor,
@@ -628,6 +629,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           sync_status: syncsRemotely ? 'pending' : existing.sync_status,
           updated_at: new Date().toISOString(),
         };
+        // Keep the ref itself current immediately, not just via the `useEffect`
+        // that mirrors it from `bookmarks` after the next render — otherwise two
+        // calls back to back in the same handler (e.g. Detail/Review's "Use as
+        // note" followed by markSummaryReviewed) both read this same stale
+        // snapshot, and the second persisted write clobbers the repository row
+        // with a `next` that's missing the first call's patch, silently losing
+        // it on disk even though the rendered state looks correct.
+        bookmarksRef.current = bookmarksRef.current!.map((b) => (b.id === id ? next : b));
         ensureRepositoryReady()
           .then(() => repository.updateBookmark(next))
           .catch((error) => logStorageError('bookmark update', error));
@@ -739,9 +748,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   // Record that an enrichment arrived unwitnessed: flag its bookmark for the
   // Inbox banner, but only if it actually carries a recommendation the user
-  // hasn't already handled — a pending tag suggestion OR a folder suggestion
-  // (matching what makes a bookmark reviewable on the Review screen). An
-  // enrichment that's all summary / already-applied tags isn't worth announcing.
+  // hasn't already handled — a pending tag suggestion, a folder suggestion, OR
+  // a pending summary (matching what makes a bookmark reviewable on the Review
+  // screen). An enrichment that's all already-applied tags / already-reviewed
+  // summary isn't worth announcing.
   const noteUnseenSuggestions = useCallback(
     (enrichment: AIEnrichment) => {
       const id = enrichment.bookmark_id;
@@ -762,7 +772,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           bookmark?.collection_id ?? null,
           dismissedFolderTokens,
         ) !== null;
-      if (pendingSuggestions(enrichment, applied, reviewed).length === 0 && !hasFolder) {
+      const hasSummary =
+        pendingSummary(
+          bookmark?.metadata_status ?? 'complete',
+          enrichment,
+          new Set(bookmark?.reviewed_summary_tokens ?? []),
+        ) !== null;
+      if (pendingSuggestions(enrichment, applied, reviewed).length === 0 && !hasFolder && !hasSummary) {
         return;
       }
       const next = new Set(unseenSuggestionIdsRef.current);

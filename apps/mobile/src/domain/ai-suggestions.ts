@@ -9,7 +9,7 @@
 import { collectionMatchKey } from './collection-match.ts';
 import { addToStringSet, parseStringSetMap, stringSetFor } from './string-set-map.ts';
 import type { StringSetMap } from './string-set-map.ts';
-import type { AIEnrichment, SuggestedTag } from './types';
+import type { AIEnrichment, MetadataStatus, SuggestedTag } from './types';
 
 /**
  * Minimum confidence (0..1) a suggested tag must reach before we surface it.
@@ -298,4 +298,33 @@ export function addReviewedSummaryToken(
   token: string,
 ): ReviewedSummaryMap {
   return addToStringSet(map, bookmarkId, [token]);
+}
+
+/**
+ * The AI summary worth offering as a proposed note for a bookmark, honoring
+ * the same eligibility rule as the Detail screen's ProposedSummary widget: a
+ * failed preview, an already-reviewed token, or the dummy-v0 heuristic
+ * fallback (whose boilerplate text would leak the internal model name) never
+ * qualify. Centralized so Review and the Inbox badge/banner agree with Detail
+ * on when a summary still counts as "pending" — bundles the token alongside
+ * the text since callers that offer accept/dismiss need both. Returns `null`
+ * when there's nothing to surface.
+ */
+export function pendingSummary(
+  metadataStatus: MetadataStatus,
+  enrichment: AIEnrichment | undefined | null,
+  reviewedTokens: ReadonlySet<string>,
+): { text: string; token: string } | null {
+  if (metadataStatus === 'failed' || enrichment?.model === 'dummy-v0') {
+    return null;
+  }
+  const text = enrichment?.summary?.trim();
+  if (!text) {
+    return null;
+  }
+  const token = summaryToken(text);
+  if (!token || reviewedTokens.has(token)) {
+    return null;
+  }
+  return { text, token };
 }

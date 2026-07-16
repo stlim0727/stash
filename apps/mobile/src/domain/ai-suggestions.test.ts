@@ -10,6 +10,7 @@ import {
   parseReviewedMap,
   parseReviewedSummaryMap,
   pendingSuggestedFolder,
+  pendingSummary,
   pendingSuggestions,
   resolveSuggestedFolder,
   reviewedNamesFor,
@@ -333,4 +334,37 @@ test('addReviewedSummaryToken returns the same reference when already present', 
 test('parseReviewedSummaryMap tolerates malformed JSON', () => {
   assert.deepEqual(parseReviewedSummaryMap('not json'), {});
   assert.deepEqual(parseReviewedSummaryMap(null), {});
+});
+
+function makeSummaryEnrichment(overrides: Partial<AIEnrichment> = {}): AIEnrichment {
+  return { ...makeEnrichment([]), model: 'gemini-2.0', summary: 'A concise overview.', ...overrides };
+}
+
+test('pendingSummary returns the summary text and token when eligible', () => {
+  const enrichment = makeSummaryEnrichment();
+  const result = pendingSummary('complete', enrichment, new Set());
+  assert.deepEqual(result, { text: 'A concise overview.', token: summaryToken('A concise overview.') });
+});
+
+test('pendingSummary is null for a failed preview', () => {
+  assert.equal(pendingSummary('failed', makeSummaryEnrichment(), new Set()), null);
+});
+
+test('pendingSummary is null for the dummy-v0 heuristic fallback', () => {
+  assert.equal(pendingSummary('complete', makeSummaryEnrichment({ model: 'dummy-v0' }), new Set()), null);
+});
+
+test('pendingSummary is null once the token is already reviewed', () => {
+  const enrichment = makeSummaryEnrichment();
+  const token = summaryToken(enrichment.summary)!;
+  assert.equal(pendingSummary('complete', enrichment, new Set([token])), null);
+});
+
+test('pendingSummary is null for an empty/whitespace-only summary', () => {
+  assert.equal(pendingSummary('complete', makeSummaryEnrichment({ summary: '   ' }), new Set()), null);
+  assert.equal(pendingSummary('complete', makeSummaryEnrichment({ summary: null }), new Set()), null);
+});
+
+test('pendingSummary is null for a missing enrichment', () => {
+  assert.equal(pendingSummary('complete', null, new Set()), null);
 });

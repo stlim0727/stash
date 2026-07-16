@@ -374,6 +374,9 @@ export const ko: Catalog = {
   'review.moveCreateFolderA11y': '{title}을(를) {from}에서 새 컬렉션 {name}(으)로 이동',
   'review.dismissFolderA11y': '{title}의 제안된 컬렉션 {name} 무시',
   'review.movedToast': '‘{name}’(으)로 이동함',
+  'review.summaryUseA11y': '{title}의 제안된 요약을 메모로 사용',
+  'review.summaryAppendA11y': '{title}의 제안된 요약을 메모에 추가',
+  'review.summaryDismissA11y': '{title}의 제안된 요약 무시',
 
   'report.categoryBug': '버그',
   'report.categoryIdea': '아이디어',
