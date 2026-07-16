@@ -387,6 +387,66 @@ test('a deferred first attempt keeps a durable marker throughout the in-flight w
   expect(fakeRepo.__meta('pending_ai_trigger')).toBe('[]');
 });
 
+test('a failed deferred first attempt awaits the retry-marker write landing before clearing the pending-trigger marker', async () => {
+  // armAiRetry's retry-state write and clearPendingAiTrigger's pending-trigger
+  // write must be a true sequence — the retry marker's write settled BEFORE
+  // the pending-trigger write is even issued — not two unawaited
+  // fire-and-forget writes started back to back. Otherwise a process kill
+  // between them could still leave storage with the trigger cleared and the
+  // retry marker's replacement write never having landed, reopening the exact
+  // crash window this ordering exists to close.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+
+  const setMetaCalls: string[] = [];
+  let releaseRetryWrite!: () => void;
+  const retryWriteGate = new Promise<void>((resolve) => {
+    releaseRetryWrite = resolve;
+  });
+  const originalSetMeta = fakeRepo.repository.setMeta.bind(fakeRepo.repository);
+  const setMetaSpy = jest
+    .spyOn(fakeRepo.repository, 'setMeta')
+    .mockImplementation(async (key, value) => {
+      setMetaCalls.push(key);
+      if (key === 'ai_suggestion_retry') {
+        await retryWriteGate; // hold this write open until the test releases it
+      }
+      return originalSetMeta(key, value);
+    });
+
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new Error('network died mid-request');
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalled());
+
+  // The retry-state write has been issued (armAiRetry ran and is awaiting its
+  // own persistence) but is deliberately held open. If the two writes were
+  // sequenced correctly, the pending-trigger write must not have been issued
+  // yet at this point.
+  await waitFor(() => expect(setMetaCalls).toContain('ai_suggestion_retry'));
+  expect(setMetaCalls).not.toContain('pending_ai_trigger');
+  expect(fakeRepo.__meta('pending_ai_trigger')).toBe(JSON.stringify([SYNCED_ID]));
+
+  // Let the retry-state write land, and the rest of the catch block proceed.
+  await act(async () => {
+    releaseRetryWrite();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  await waitFor(() => expect(setMetaCalls).toContain('pending_ai_trigger'));
+  expect(setMetaCalls.indexOf('ai_suggestion_retry')).toBeLessThan(
+    setMetaCalls.indexOf('pending_ai_trigger'),
+  );
+  await waitFor(() => expect(fakeRepo.__meta('pending_ai_trigger')).toBe('[]'));
+
+  setMetaSpy.mockRestore();
+});
+
 test('does not consume a deferred AI trigger before the auth session is ready', async () => {
   // Cold start: storage (and the persisted marker) loads before auth restores.
   mockAuthSession = null;
@@ -1175,4 +1235,63 @@ test('a pull that brings down an enrichment from another path (server trigger / 
   expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
   expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
   expect(fakeRepo.__meta('ai_suggestion_retry')).toBe('{}');
+});
+
+test('a pull that re-delivers the same already-known enrichment (watermark overlap) does not clear a legitimately armed retry marker', async () => {
+  // A bookmark already has a known (possibly stale) enrichment. Separately, a
+  // *refresh* attempt on it fails and arms a retry marker. The pull's
+  // watermark has a ~5-minute overlap window, so an ordinary later pull can
+  // re-return that same unchanged enrichment row (same id, same updated_at) —
+  // not a genuinely new or newer one. That re-delivery must NOT clear the
+  // retry marker: nothing new actually arrived, and the scheduled retry is
+  // still legitimate.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID })],
+    undefined,
+    [
+      makeEnrichment({
+        id: 'enrich-1',
+        bookmark_id: SYNCED_ID,
+        updated_at: '2026-06-13T00:00:00.000Z',
+      }),
+    ],
+  );
+  // lastAttemptAt is "just now" (not some fixed past date) so the app's own
+  // backoff-scheduled retry checker (cold-launch checkAiRetries) sees the
+  // 2-minute backoff for attemptCount 1 as NOT yet elapsed and stays inert —
+  // isolating this test to the pull-merge behavior instead of also racing a
+  // second, legitimate auto-retry that would independently bump attemptCount.
+  await fakeRepo.repository.setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({
+      [SYNCED_ID]: {
+        firstAttemptAt: new Date().toISOString(),
+        lastAttemptAt: new Date().toISOString(),
+        attemptCount: 1,
+      },
+    }),
+  );
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+
+  // An ordinary pull re-delivers the exact same (unchanged) enrichment row —
+  // same id, same updated_at — inside the watermark's overlap window.
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({
+      id: 'enrich-1',
+      bookmark_id: SYNCED_ID,
+      updated_at: '2026-06-13T00:00:00.000Z',
+    }),
+  ]);
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+  const persisted = JSON.parse(fakeRepo.__meta('ai_suggestion_retry') ?? '{}');
+  expect(persisted[SYNCED_ID].attemptCount).toBe(1);
 });
