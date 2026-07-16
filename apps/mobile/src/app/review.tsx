@@ -21,6 +21,11 @@ import {
 // Matches the truncation safety net on the Detail screen (see bookmark/[id].tsx).
 const MAX_NOTES_LENGTH = 10000;
 
+// On wide (desktop-web) viewports, cap the content column and center it so
+// cards don't stretch edge-to-edge — mirrors CONTENT_MAX_WIDTH in
+// app/index.tsx. No effect on phones (their width is already below this).
+const CONTENT_MAX_WIDTH = 720;
+
 interface ReviewItem {
   id: string;
   title: string;
@@ -461,6 +466,9 @@ const styles = StyleSheet.create({
   container: {
     padding: 16,
     gap: 12,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
   },
   emptyWrap: {
     flex: 1,
