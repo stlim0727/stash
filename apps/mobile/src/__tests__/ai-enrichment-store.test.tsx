@@ -32,6 +32,35 @@ jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
 
+// Fake foreground-state registration so tests can simulate an app
+// background→foreground transition without depending on react-native's
+// AppState mock (which the real `.native.ts` implementation subscribes to only
+// once, module-wide — awkward to drive from a test). Mirrors the real
+// module's shape; `mockForegroundHandlers` must keep the `mock` prefix so
+// Jest's module-factory hoisting allows referencing it here.
+let mockForegroundHandlers: Array<{
+  onForeground?: () => void;
+  onBackground?: () => void;
+}> = [];
+jest.mock('@/storage/sqlite-app-lifecycle', () => ({
+  registerForForegroundState: (handler: { onForeground?: () => void; onBackground?: () => void }) => {
+    mockForegroundHandlers.push(handler);
+    return () => {
+      mockForegroundHandlers = mockForegroundHandlers.filter((h) => h !== handler);
+    };
+  },
+  registerForBackgroundClose: () => {},
+}));
+
+/** Simulate the app returning to the foreground: fires every registered
+ *  `onForeground` callback (the loop-stall watchdog's and the AI-retry
+ *  check's alike — both are inert/idempotent to call). */
+function fireForeground() {
+  for (const handler of [...mockForegroundHandlers]) {
+    handler.onForeground?.();
+  }
+}
+
 // Stub the network API: the enrichment "producer" and tag writes are spied,
 // while the pull-sync list calls return nothing so mounting stays inert.
 jest.mock('@/api/bookmarks', () => {
@@ -138,6 +167,7 @@ async function renderReady() {
 
 beforeEach(() => {
   mockAuthSession = mockSession;
+  mockForegroundHandlers = [];
   apiMock.__spies.requestEnrichment.mockClear();
   apiMock.__spies.addTags.mockClear();
   apiMock.__spies.listBookmarkIds.mockReset();
@@ -656,4 +686,201 @@ test('a pull that refreshes an existing enrichment (same id, newer timestamp) re
   });
 
   expect(store.current!.unseenSuggestionIds.has(SYNCED_ID)).toBe(true);
+});
+
+// --- AI-suggestion retry bookkeeping (postponed state + backoff) ---
+
+/** A minimal, valid AIEnrichment success response for retry tests. */
+function makeSuccessEnrichment(bookmarkId: string) {
+  return {
+    id: 'enrichment-retry-success',
+    bookmark_id: bookmarkId,
+    user_id: 'user-test',
+    summary: 'Generated summary',
+    topics: [],
+    suggested_tags: [],
+    suggested_collection_id: null,
+    suggested_collection_name: null,
+    model: 'dummy-v0',
+    status: 'complete',
+    confidence: null,
+    degraded: false,
+    degraded_reason: null,
+    created_at: '2026-06-13T00:00:00.000Z',
+    updated_at: '2026-06-13T00:00:00.000Z',
+  };
+}
+
+test('a failed auto attempt arms the AI-suggestion retry marker', async () => {
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new Error('network down');
+  });
+
+  let error: string | null = 'unset';
+  await act(async () => {
+    error = await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+
+  expect(error).not.toBeNull();
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(true);
+  const persisted = JSON.parse(fakeRepo.__meta('ai_suggestion_retry') ?? '{}');
+  expect(persisted[SYNCED_ID].attemptCount).toBe(1);
+});
+
+test('a failed manual attempt arms the same retry marker as an auto failure', async () => {
+  // Unifying failure handling: a manual "Suggest with AI" tap that fails must
+  // arm the same bookkeeping as a failed auto-trigger, not just log an error.
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new Error('server exploded');
+  });
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID); // default source: 'manual'
+  });
+
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+  const persisted = JSON.parse(fakeRepo.__meta('ai_suggestion_retry') ?? '{}');
+  expect(persisted[SYNCED_ID].attemptCount).toBe(1);
+});
+
+test('a successful attempt clears an armed retry marker', async () => {
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new Error('transient failure');
+  });
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
+  expect(fakeRepo.__meta('ai_suggestion_retry')).toBe('{}');
+});
+
+test('hadPriorEnrichmentAttempt stays true through a retry\'s in-flight window, unlike isAiSuggestionPostponed', async () => {
+  // Design intent: the Detail screen suppresses its first-attempt-only loading
+  // shimmer for every automatic retry. isAiSuggestionPostponed goes false the
+  // instant a retry starts (it's no longer "waiting"), but
+  // hadPriorEnrichmentAttempt must stay true across the whole in-flight
+  // window so the caller can compute `isEnriching && !hadPriorEnrichmentAttempt`
+  // and get false throughout a retry.
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new Error('first attempt fails');
+  });
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(true);
+
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) => {
+    await gate;
+    return makeSuccessEnrichment(bookmarkId);
+  });
+
+  let pending!: Promise<string | null>;
+  await act(async () => {
+    pending = store.current!.requestAiEnrichment(SYNCED_ID, 'auto');
+  });
+  expect(store.current!.isEnriching(SYNCED_ID)).toBe(true);
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(true);
+
+  await act(async () => {
+    release();
+    await pending;
+  });
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
+});
+
+test('a too-soon retry check does not fire before the backoff has elapsed', async () => {
+  // Seed a just-failed attempt (attempt 1 needs >= 2min before attempt 2).
+  const now = new Date().toISOString();
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({ [SYNCED_ID]: { firstAttemptAt: now, lastAttemptAt: now, attemptCount: 1 } }),
+  );
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  // The cold-launch check itself must not fire either (same backoff gate).
+  expect(apiMock.__spies.requestEnrichment).not.toHaveBeenCalled();
+
+  await act(async () => {
+    fireForeground();
+    await Promise.resolve();
+  });
+
+  expect(apiMock.__spies.requestEnrichment).not.toHaveBeenCalled();
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+});
+
+test('a foreground transition retries once the backoff has elapsed', async () => {
+  const now = new Date().toISOString();
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({ [SYNCED_ID]: { firstAttemptAt: now, lastAttemptAt: now, attemptCount: 1 } }),
+  );
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(apiMock.__spies.requestEnrichment).not.toHaveBeenCalled();
+
+  // Move the clock forward past the 2-minute backoff for attempt 2, without
+  // touching real timers (so waitFor/act keep working normally).
+  const dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3 * 60_000);
+  try {
+    await act(async () => {
+      fireForeground();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
+        SYNCED_ID,
+        expect.anything(),
+        'en',
+      ),
+    );
+    await waitFor(() => expect(store.current!.getEnrichment(SYNCED_ID)).toBeDefined());
+    expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  } finally {
+    dateNowSpy.mockRestore();
+  }
+});
+
+test('the retry cap (6 attempts) clears bookkeeping and the bookmark reverts to looking never-asked', async () => {
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementation(async () => {
+    throw new Error('always fails');
+  });
+
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    await act(async () => {
+      await store.current!.requestAiEnrichment(SYNCED_ID, attempt === 1 ? 'auto' : 'manual');
+    });
+  }
+
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
+  expect(fakeRepo.__meta('ai_suggestion_retry')).toBe('{}');
 });
