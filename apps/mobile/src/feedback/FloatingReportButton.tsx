@@ -15,6 +15,7 @@ import { useT } from '@/i18n';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
+import { useCaptureToast } from '@/ui/capture-toast';
 import { overlayLayer } from '@/ui/layering';
 
 interface FloatingReportButtonProps {
@@ -95,6 +96,11 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
   // runs before that ancestor's. Gate on `isLoading` so this reads only once the
   // real persisted value is available.
   const { isLoading } = useBookmarks();
+  // The capture toast is pass-through (`pointerEvents: 'none'`/`'box-none'`) so
+  // it never blocks the screen underneath — but its resting corner now overlaps
+  // this button, so a tap meant for the toast can land here instead. Go inert
+  // while one is up rather than relying on the toast to intercept the touch.
+  const { isVisible: toastVisible } = useCaptureToast();
 
   useEffect(() => {
     if (isLoading) {
@@ -114,6 +120,15 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
   }, [isLoading]);
 
   const setMinimizedPersisted = (value: boolean) => {
+    // Before the repository finishes loading on web, its in-memory meta is
+    // still empty; writing here would persist a meta blob containing only
+    // this key and clobber every other meta entry (sort/view prefs, sync
+    // watermarks, pending tag ops) once the real one is read back in. Bail
+    // out silently — the loading window is brief and this isn't reachable
+    // through the normal open-report tap, only the long-press/expand actions.
+    if (isLoading) {
+      return;
+    }
     setMinimized(value);
     void setPreference(MINIMIZED_PREF_KEY, value ? 'true' : 'false').catch(() => {});
   };
@@ -152,9 +167,12 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
 
   const buttonStyle: StyleProp<ViewStyle> = [
     styles.button,
-    { backgroundColor: palette.accent, bottom, opacity: capturing ? 0.7 : 1 },
+    { backgroundColor: palette.accent, bottom, opacity: capturing || toastVisible ? 0.7 : 1 },
   ];
-  const nubStyle: StyleProp<ViewStyle> = [styles.nub, { backgroundColor: palette.accent, bottom }];
+  const nubStyle: StyleProp<ViewStyle> = [
+    styles.nub,
+    { backgroundColor: palette.accent, bottom, opacity: toastVisible ? 0.3 : 0.55 },
+  ];
 
   return (
     <View style={styles.root}>
@@ -165,6 +183,7 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t('report.expandA11y')}
+          disabled={toastVisible}
           onPress={() => setMinimizedPersisted(false)}
           style={({ pressed }) => [nubStyle, pressed && styles.pressed]}
         >
@@ -175,7 +194,7 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
           accessibilityRole="button"
           accessibilityLabel={t('settings.report.label')}
           accessibilityHint={t('report.minimizeA11yHint')}
-          disabled={capturing}
+          disabled={capturing || toastVisible}
           onPress={() => void openReport()}
           onLongPress={() => setMinimizedPersisted(true)}
           style={({ pressed }) => [buttonStyle, pressed && styles.pressed]}
