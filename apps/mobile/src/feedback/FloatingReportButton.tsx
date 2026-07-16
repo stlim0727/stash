@@ -13,6 +13,7 @@ import {
 } from '@/feedback/screenshot-session';
 import { useT } from '@/i18n';
 import { getPreference, setPreference } from '@/storage/preferences';
+import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
 import { overlayLayer } from '@/ui/layering';
 
@@ -88,8 +89,17 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
   const [capturing, setCapturing] = useState(false);
   const [minimized, setMinimized] = useState(false);
   const hidden = shouldHide(pathname);
+  // On web the repository's meta store is only populated once BookmarksProvider's
+  // startup load resolves (`repository.init()`) — reading the preference before
+  // that finishes always sees an empty store, since a fresh mount's own effect
+  // runs before that ancestor's. Gate on `isLoading` so this reads only once the
+  // real persisted value is available.
+  const { isLoading } = useBookmarks();
 
   useEffect(() => {
+    if (isLoading) {
+      return;
+    }
     let active = true;
     getPreference(MINIMIZED_PREF_KEY)
       .then((raw) => {
@@ -101,7 +111,7 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [isLoading]);
 
   const setMinimizedPersisted = (value: boolean) => {
     setMinimized(value);

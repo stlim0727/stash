@@ -4,6 +4,7 @@ import { Animated, Platform, Pressable, StyleSheet, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { overlayLayer } from '@/ui/layering';
 
 // A plain confirmation auto-dismisses quickly; one carrying a tap target stays
 // up longer so there's actually time to reach for it before it slides away.
@@ -145,6 +146,11 @@ export function useCaptureToast(): CaptureToastContextValue {
 
 const styles = StyleSheet.create({
   toast: {
+    // Above the floating report button/nub: that button sits bottom-left at
+    // the same row as the "+" FAB, so its corner can fall under this toast's
+    // resting position — the ephemeral confirmation must win over the
+    // persistent button.
+    ...overlayLayer(60),
     position: 'absolute',
     left: 24,
     right: 24,
