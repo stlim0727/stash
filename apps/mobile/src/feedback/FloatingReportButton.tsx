@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
-import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { getHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
@@ -12,6 +12,7 @@ import {
   type FeedbackSourceContext,
 } from '@/feedback/screenshot-session';
 import { useT } from '@/i18n';
+import { getPreference, setPreference } from '@/storage/preferences';
 import { usePalette } from '@/theme';
 import { overlayLayer } from '@/ui/layering';
 
@@ -28,8 +29,12 @@ interface FloatingReportButtonProps {
 // already shows a disabled/dimmed button while it runs, so a longer bound is
 // an acceptable wait, not a silent hang.
 const SCREENSHOT_CAPTURE_TIMEOUT_MS = 3000;
-const DEFAULT_BOTTOM_OFFSET = 88;
-const INBOX_BOTTOM_OFFSET = 92;
+// Same row as the inbox "+" FAB (bottom-right, `insets.bottom + 20`) — this
+// button now sits bottom-left at the same offset instead of stacked above it.
+const BOTTOM_OFFSET = 20;
+// Persisted (repository meta store) so a user who long-presses this into its
+// minimized nub doesn't have to redo that every app launch.
+const MINIMIZED_PREF_KEY = 'pref.feedback.reportButtonMinimized';
 
 export function feedbackSourceFromPath(pathname: string | null): FeedbackSourceContext {
   if (!pathname || pathname === '/') {
@@ -51,10 +56,6 @@ export function feedbackSourceFromPath(pathname: string | null): FeedbackSourceC
     route,
     surface: sanitizedSegments.join('_') || 'unknown',
   };
-}
-
-function isInbox(pathname: string | null): boolean {
-  return !pathname || pathname === '/';
 }
 
 function shouldHide(pathname: string | null): boolean {
@@ -85,7 +86,27 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
   const insets = useSafeAreaInsets();
   const captureRef = useRef<View>(null);
   const [capturing, setCapturing] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const hidden = shouldHide(pathname);
+
+  useEffect(() => {
+    let active = true;
+    getPreference(MINIMIZED_PREF_KEY)
+      .then((raw) => {
+        if (active && raw === 'true') {
+          setMinimized(true);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const setMinimizedPersisted = (value: boolean) => {
+    setMinimized(value);
+    void setPreference(MINIMIZED_PREF_KEY, value ? 'true' : 'false').catch(() => {});
+  };
 
   const openReport = async () => {
     if (capturing) {
@@ -117,33 +138,39 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     router.push('/report');
   };
 
+  const bottom = insets.bottom + BOTTOM_OFFSET;
+
   const buttonStyle: StyleProp<ViewStyle> = [
     styles.button,
-    {
-      backgroundColor: palette.accent,
-      bottom: Math.max(
-        insets.bottom + (isInbox(pathname) ? INBOX_BOTTOM_OFFSET : DEFAULT_BOTTOM_OFFSET),
-        DEFAULT_BOTTOM_OFFSET,
-      ),
-      opacity: capturing ? 0.7 : 1,
-    },
+    { backgroundColor: palette.accent, bottom, opacity: capturing ? 0.7 : 1 },
   ];
+  const nubStyle: StyleProp<ViewStyle> = [styles.nub, { backgroundColor: palette.accent, bottom }];
 
   return (
     <View style={styles.root}>
       <View ref={captureRef} collapsable={false} style={styles.captureSurface}>
         {children}
       </View>
-      {hidden ? null : (
+      {hidden ? null : minimized ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('report.expandA11y')}
+          onPress={() => setMinimizedPersisted(false)}
+          style={({ pressed }) => [nubStyle, pressed && styles.pressed]}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={14} color="#ffffff" />
+        </Pressable>
+      ) : (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t('settings.report.label')}
+          accessibilityHint={t('report.minimizeA11yHint')}
           disabled={capturing}
           onPress={() => void openReport()}
+          onLongPress={() => setMinimizedPersisted(true)}
           style={({ pressed }) => [buttonStyle, pressed && styles.pressed]}
         >
-          <Ionicons name="chatbubble-ellipses-outline" size={18} color="#ffffff" />
-          <Text style={styles.label}>{t('settings.report.label')}</Text>
+          <Ionicons name="chatbubble-ellipses-outline" size={20} color="#ffffff" />
         </Pressable>
       )}
     </View>
@@ -160,25 +187,32 @@ const styles = StyleSheet.create({
   button: {
     ...overlayLayer(50),
     position: 'absolute',
-    right: 16,
-    minHeight: 44,
-    maxWidth: 188,
+    left: 16,
+    width: 44,
+    height: 44,
     borderRadius: 22,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.22,
     shadowRadius: 8,
   },
+  // Long-pressing the full button collapses it to this small, semi-transparent
+  // nub so it stops competing with the rest of the UI; tapping the nub only
+  // restores the full button (it never opens the report screen directly).
+  nub: {
+    ...overlayLayer(50),
+    position: 'absolute',
+    left: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.55,
+  },
   pressed: {
     transform: [{ scale: 0.98 }],
-  },
-  label: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
   },
 });
