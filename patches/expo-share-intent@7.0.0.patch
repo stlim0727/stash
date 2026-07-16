@@ -67,7 +67,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +164,36 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +164,30 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
@@ -87,24 +87,19 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
 +                recordDurableDebug(activity, debugMessage)
 +                notifyDebug(debugMessage)
 +            }
-             if (activity != null && !activity.isTaskRoot) {
-+                // Instrumentation only (Sentry STASH-2K): a Shorts share via the
-+                // native Sharesheet reported "just inbox appeared" with ZERO
-+                // share-related evidence anywhere downstream — no notifyError, no
-+                // notifyShareIntent, no JS "share received" breadcrumb. Every other
-+                // branch in this function calls one or the other; this
-+                // relaunch-and-finish hand-off is the one that calls neither, so
-+                // it's the leading suspect for where the share silently vanishes.
-+                // Scoped to SEND/SEND_MULTIPLE only (STASH-2E: an unconditional log
-+                // here would also fire on an ordinary non-task-root relaunch, e.g.
-+                // multi-window/recents, not just a failed share).
-+                if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
-+                    notifyDebug("relaunching non-task-root activity for action: " + intent.action)
-+                }
+-            if (activity != null && !activity.isTaskRoot) {
++            val isShareAction = intent.action == Intent.ACTION_SEND ||
++                intent.action == Intent.ACTION_SEND_MULTIPLE
++            // The upstream non-root relaunch was added for Google Files
++            // ACTION_VIEW. Applying it to ACTION_SEND drops text shares from
++            // apps such as Brave during the finish/relaunch hand-off (STASH-2S).
++            // Process real shares in the current activity; toast mode will
++            // finish it after the capture is durable, returning to the sender.
++            if (activity != null && !activity.isTaskRoot && !isShareAction) {
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,8 +201,18 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +195,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -125,7 +120,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
-@@ -177,7 +267,7 @@ class ExpoShareIntentModule : Module() {
+@@ -177,7 +261,7 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
@@ -134,7 +129,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
  
          AsyncFunction("getShareIntent") { _: String ->
              // get the Intent from onCreate activity (app not running in background)
-@@ -196,6 +286,23 @@ class ExpoShareIntentModule : Module() {
+@@ -196,6 +280,23 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.isPending
          }
  
