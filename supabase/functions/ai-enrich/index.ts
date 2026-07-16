@@ -473,6 +473,33 @@ Deno.serve(async (req) => {
       updated_at: now,
     };
 
+    // Append-only ledger of this individual call, independent of the row
+    // above: `ai_enrichments` is upserted on_conflict=bookmark_id (one row
+    // per bookmark, overwritten on every re-run), so its token columns alone
+    // would lose a prior call's spend on a manual "Refresh AI suggestions".
+    // Skipped when the billable provider was never attempted (not
+    // configured) — there's no spend to record. Best-effort: a failure here
+    // must never fail the user-facing enrichment.
+    if (provider !== fallbackProvider) {
+      try {
+        await rest('/ai_enrichment_calls', {
+          method: 'POST',
+          body: JSON.stringify({
+            bookmark_id: bookmark.id,
+            user_id: bookmark.user_id,
+            model: provider.model,
+            prompt_tokens: usage?.prompt_tokens ?? null,
+            output_tokens: usage?.output_tokens ?? null,
+            total_tokens: usage?.total_tokens ?? null,
+            degraded,
+            degraded_reason: degradedReason,
+          }),
+        });
+      } catch (err) {
+        console.error('Failed to record ai_enrichment_calls row:', err);
+      }
+    }
+
     // Atomic single-row upsert keyed by the unique ai_enrichments.bookmark_id.
     // The preflight skip above wins the common (sequential) case; this handles
     // the rare race where the app and server triggers both pass the check before
