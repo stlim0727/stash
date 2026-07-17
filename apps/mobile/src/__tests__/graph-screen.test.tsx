@@ -44,11 +44,14 @@ import GraphScreen, {
   MAX_SCALE,
   panWithPinchFocalDelta,
   pinchStartSnapshot,
+  selectNearbyBookmarkLabelIds,
+  selectPriorityBookmarkLabelIds,
   touchCenterInViewport,
   truncateGraphLabel,
   wheelZoomScale,
 } from '@/app/graph';
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
+import type { PositionedNode } from '@/domain/graph';
 import type { Tag } from '@/domain/types';
 import { palettes } from '@/theme';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -278,6 +281,74 @@ describe('truncateGraphLabel', () => {
     expect(truncated).toBe('A genuinely very…');
     expect(truncated.length).toBeLessThanOrEqual(18);
     expect(truncated.endsWith('…')).toBe(true);
+  });
+});
+
+describe('interaction bookmark label buckets', () => {
+  const bookmarkNode = (
+    id: string,
+    degree: number,
+    x: number,
+    y: number,
+  ): PositionedNode => ({
+    id: `b:${id}`,
+    kind: 'bookmark',
+    bookmark_id: id,
+    label: id,
+    degree,
+    x,
+    y,
+  });
+
+  test('keeps the highest-degree bookmark labels with deterministic ties', () => {
+    const selected = selectPriorityBookmarkLabelIds(
+      [
+        bookmarkNode('low', 1, 0, 0),
+        bookmarkNode('z-tie', 3, 0, 0),
+        bookmarkNode('high', 5, 0, 0),
+        bookmarkNode('a-tie', 3, 0, 0),
+      ],
+      3,
+    );
+
+    expect([...selected]).toEqual(['b:high', 'b:a-tie', 'b:z-tie']);
+  });
+
+  test('adds only the closest non-priority labels around the gesture focal point', () => {
+    const selected = selectNearbyBookmarkLabelIds({
+      nodes: [
+        bookmarkNode('priority', 5, 10, 10),
+        bookmarkNode('near', 1, 20, 20),
+        bookmarkNode('middle', 1, 50, 50),
+        bookmarkNode('far', 1, 90, 90),
+      ],
+      excludedIds: new Set(['b:priority']),
+      focal: { x: 18, y: 18 },
+      viewport: { w: 100, h: 100 },
+      viewBox: { minX: 0, minY: 0, w: 100, h: 100 },
+      scale: 1,
+      pan: { x: 0, y: 0 },
+      limit: 2,
+    });
+
+    expect([...selected]).toEqual(['b:near', 'b:middle']);
+  });
+
+  test('measures proximity after the live camera scale and pan', () => {
+    const selected = selectNearbyBookmarkLabelIds({
+      nodes: [bookmarkNode('left', 1, 25, 50), bookmarkNode('right', 1, 75, 50)],
+      excludedIds: new Set(),
+      focal: { x: 100, y: 50 },
+      viewport: { w: 100, h: 100 },
+      viewBox: { minX: 0, minY: 0, w: 100, h: 100 },
+      scale: 2,
+      pan: { x: 50, y: 0 },
+      limit: 1,
+    });
+
+    // At scale 2 with +50px pan, the left node projects to the focal x=100;
+    // selection must use that transformed position rather than raw graph x.
+    expect([...selected]).toEqual(['b:left']);
   });
 });
 
