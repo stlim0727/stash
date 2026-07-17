@@ -50,7 +50,7 @@ export const palettes = {
     accentSoft: '#e6f0fc',
     accentText: '#1a5ca8',
     highlight: '#c9941c',
-    highlightText: '#ffffff',
+    highlightText: '#151b26',
     danger: '#c0392b',
     dangerSoft: '#fce8e6',
     success: '#1e7a4e',
