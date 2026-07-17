@@ -1,47 +1,8 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..06584000243954d5ee80962844a47e96149346c0 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..df818aa988e73350ae1a0580cec693c350802f03 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -44,6 +44,38 @@ class ExpoShareIntentModule : Module() {
-     companion object {
-         private var instance: ExpoShareIntentModule? = null
- 
-+        // Durable native breadcrumb (Sentry STASH-2Q): `notifyDebug`/`notifyError`/
-+        // `notifyShareIntent` all call `sendEvent`, which silently drops the event
-+        // if no JS listener happens to be subscribed at that exact instant — e.g.
-+        // during the background→foreground resume every recurrence's diagnostics
-+        // show in flight (the "sqlite connection reopened ... expected after
-+        // background close" line). Two rounds of sendEvent-only instrumentation
-+        // (STASH-2K, STASH-2M) both still showed zero evidence, which is
-+        // consistent with the event never reaching JS at all. Persist to
-+        // SharedPreferences directly, independent of any listener, so the next
-+        // app startup can recover what the native side actually saw even when
-+        // the event itself never made it to JS.
-+        private const val DEBUG_PREFS_NAME = "expo_share_intent_debug"
-+        private const val DEBUG_PREFS_KEY = "last_intent"
-+
-+        // Sentry STASH-2T: a stale, previously-unconsumed breadcrumb (from an
-+        // earlier, unrelated share) was misread as evidence of a same-moment
-+        // failure, because the stored value carried no origination time of its
-+        // own — only the JS-side read-time got timestamped by the log buffer.
-+        // Prefix with the native capture time so a later read can tell "just
-+        // happened" from "leftover from who-knows-when" instead of guessing.
-+        private fun recordDurableDebug(activity: Activity?, message: String) {
-+            try {
-+                activity?.applicationContext
-+                    ?.getSharedPreferences(DEBUG_PREFS_NAME, Context.MODE_PRIVATE)
-+                    ?.edit()
-+                    ?.putString(DEBUG_PREFS_KEY, System.currentTimeMillis().toString() + "::" + message)
-+                    ?.apply()
-+            } catch (e: Exception) {
-+                // Best-effort — diagnostics must never break the share path.
-+            }
-+        }
-+
-         private fun notifyShareIntent(value: Any) {
-             notifyState("pending")
-             instance!!.sendEvent("onChange", mapOf("value" to value))
-@@ -54,6 +86,31 @@ class ExpoShareIntentModule : Module() {
+@@ -54,6 +54,17 @@ class ExpoShareIntentModule : Module() {
          private fun notifyError(message: String) {
              instance!!.sendEvent("onError", mapOf("value" to message))
          }
@@ -56,44 +17,21 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..06584000243954d5ee80962844a47e96
 +        private fun notifyDebug(message: String) {
 +            instance!!.sendEvent("onDebugLog", mapOf("value" to message))
 +        }
-+
-+        // Generalized source-app capture (Sentry STASH-2M: a Brave-originated share
-+        // failed with zero evidence, on a build that already carries the STASH-2K
-+        // relaunch-branch log). Android's Sharesheet/Chooser sets
-+        // Activity#getReferrer() to `android-app://<sending package>` for the app
-+        // that started this activity via ACTION_SEND[_MULTIPLE] — for ANY source
-+        // app, not just Brave — so this needs no per-app special-casing. This is
-+        // durably logged (onDebugLog feeds the report log buffer), so only the
-+        // package name is ever recorded — an http(s) referrer could carry a
-+        // page/query URL, so that case is redacted to just its scheme.
-+        private fun referrerPackage(activity: Activity?): String? {
-+            val referrer = activity?.referrer ?: return null
-+            return if (referrer.scheme == "android-app") referrer.host else "non-app:" + (referrer.scheme ?: "unknown")
-+        }
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +170,30 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +124,21 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
 -            if (activity != null && !activity.isTaskRoot) {
-+            // Instrumentation only (Sentry STASH-2M/2Q): log the sending app before
-+            // any branching below, so a report filed right after a silently-failed
-+            // share shows which app originated it even if a downstream path
-+            // (including one not yet covered by the branch-specific logs below)
-+            // drops it with no other evidence. Written durably (recordDurableDebug)
-+            // AND emitted live (notifyDebug) — the live event is lost if no JS
-+            // listener is subscribed at this instant, so the durable copy is what
-+            // actually survives to the next report when that happens.
-+            if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
-+                val debugMessage = "share intent received: action=" + intent.action +
-+                    " type=" + intent.type +
-+                    " referrer=" + referrerPackage(activity) +
-+                    " isTaskRoot=" + (activity?.isTaskRoot?.toString() ?: "unknown")
-+                recordDurableDebug(activity, debugMessage)
-+                notifyDebug(debugMessage)
-+            }
++            val attemptId = ShareIntentDebugJournal.record(
++                activity?.applicationContext ?: instance?.context,
++                activity,
++                intent,
++                "module_handle",
++            )
++            if (attemptId != null) notifyDebug("share lifecycle: attemptId=$attemptId phase=module_handle")
 +            val isShareAction = intent.action == Intent.ACTION_SEND ||
 +                intent.action == Intent.ACTION_SEND_MULTIPLE
 +            // The upstream non-root relaunch was added for Google Files
@@ -105,7 +43,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..06584000243954d5ee80962844a47e96
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,8 +201,18 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +146,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -126,7 +64,39 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..06584000243954d5ee80962844a47e96
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
-@@ -177,7 +267,7 @@ class ExpoShareIntentModule : Module() {
+@@ -130,6 +165,7 @@ class ExpoShareIntentModule : Module() {
+                         "type" to "text",
+                         "meta" to mapOf(
+                             "title" to intent.getCharSequenceExtra(Intent.EXTRA_TITLE),
++                            "attemptId" to attemptId,
+                         )
+                     ))
+                 } else if (intent.action == Intent.ACTION_VIEW) {
+@@ -142,14 +178,21 @@ class ExpoShareIntentModule : Module() {
+                 if (intent.action == Intent.ACTION_SEND) {
+                     val uri = intent.parcelable<Uri>(Intent.EXTRA_STREAM);
+                     if (uri != null) {
+-                        notifyShareIntent(mapOf( "files" to arrayOf(getFileInfo(uri), "type" to "file")))
++                        notifyShareIntent(mapOf(
++                            "files" to arrayOf(getFileInfo(uri), "type" to "file"),
++                            "meta" to mapOf("attemptId" to attemptId),
++                        ))
+                     } else {
+                         notifyError("empty uri for file sharing: " + intent.action)
+                     }
+                 } else if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
+                     val uris = intent.parcelableArrayList<Uri>(Intent.EXTRA_STREAM)
+                     if (uris != null) {
+-                        notifyShareIntent(mapOf( "files" to uris.map { getFileInfo(it) }, "type" to "file"))
++                        notifyShareIntent(mapOf(
++                            "files" to uris.map { getFileInfo(it) },
++                            "type" to "file",
++                            "meta" to mapOf("attemptId" to attemptId),
++                        ))
+                     } else {
+                         notifyError("empty uris array for file sharing: " + intent.action)
+                     }
+@@ -177,7 +220,7 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
@@ -135,57 +105,151 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..06584000243954d5ee80962844a47e96
  
          AsyncFunction("getShareIntent") { _: String ->
              // get the Intent from onCreate activity (app not running in background)
-@@ -196,6 +286,45 @@ class ExpoShareIntentModule : Module() {
+@@ -196,7 +239,18 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.isPending
          }
  
-+        // Read-and-clear the durable native breadcrumb from recordDurableDebug
-+        // (Sentry STASH-2Q). Consumed once at JS startup and folded into the
-+        // in-memory log buffer, so it reaches the next report exactly once and
-+        // never re-appears as stale evidence on a later, unrelated startup.
-+        AsyncFunction("getLastNativeShareDebug") { _: String ->
-+            try {
-+                val prefs = context.getSharedPreferences(DEBUG_PREFS_NAME, Context.MODE_PRIVATE)
-+                val stored = prefs.getString(DEBUG_PREFS_KEY, null)
-+                if (stored != null) {
-+                    prefs.edit().remove(DEBUG_PREFS_KEY).apply()
-+                }
-+                // Older-format values (written before this timestamp prefix
-+                // existed, then carried across an app update — SharedPreferences
-+                // survives those) have no "::" separator. Annotate them as
-+                // undated rather than returning them bare: JS folds this string
-+                // straight into the log buffer stamped with the CURRENT read
-+                // time, so an unannotated legacy value would look exactly like
-+                // fresh evidence — the same ambiguity this timestamp was added
-+                // to eliminate (caught in PR review).
-+                val separatorIndex = stored?.indexOf("::") ?: -1
-+                if (stored != null && separatorIndex > 0) {
-+                    val capturedAtMillis = stored.substring(0, separatorIndex).toLongOrNull()
-+                    val message = stored.substring(separatorIndex + 2)
-+                    if (capturedAtMillis != null) {
-+                        val ageSeconds = (System.currentTimeMillis() - capturedAtMillis) / 1000
-+                        "$message (captured ${ageSeconds}s before this read)"
-+                    } else {
-+                        "$message (capture time unknown)"
-+                    }
-+                } else if (stored != null) {
-+                    "$stored (capture time unknown — recovered from a build before timestamps were added)"
-+                } else {
-+                    null
-+                }
-+            } catch (e: Exception) {
-+                null
-+            }
++        // Read-and-clear the five most recent native share lifecycle attempts.
++        AsyncFunction("getNativeShareDebugJournal") { _: String ->
++            ShareIntentDebugJournal.readAndClear(context)
 +        }
 +
          OnNewIntent {
++            ShareIntentDebugJournal.record(
++                currentActivity?.applicationContext ?: context,
++                currentActivity,
++                it,
++                "module_on_new_intent",
++            )
              handleShareIntent(it)
          }
+ 
+diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
+index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..855e5f340bdeefbdf2f4c597ceda467e8268caf3 100644
+--- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
++++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
+@@ -13,6 +13,9 @@ import expo.modules.core.interfaces.ReactActivityLifecycleListener
+ class ExpoShareIntentReactActivityLifecycleListener(activityContext: Context) : ReactActivityLifecycleListener {
+ 
+     override fun onCreate(activity: Activity?, savedInstanceState: Bundle?) {
++        activity?.intent?.let {
++            ShareIntentDebugJournal.record(activity.applicationContext, activity, it, "activity_on_create")
++        }
+         // only store when the new intent is not empty
+         if (activity?.intent?.type != null) {
+             ExpoShareIntentSingleton.intent = activity?.intent
+diff --git a/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..b0b476c1c84a1fd8d61460d361fd38eae3a5ac97
+--- /dev/null
++++ b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
+@@ -0,0 +1,101 @@
++package expo.modules.shareintent
++
++import android.app.Activity
++import android.content.Context
++import android.content.Intent
++import org.json.JSONArray
++import org.json.JSONObject
++import java.text.SimpleDateFormat
++import java.util.Date
++import java.util.Locale
++import java.util.TimeZone
++import java.util.UUID
++
++/** Privacy-safe lifecycle evidence for the five most recent Android shares. */
++object ShareIntentDebugJournal {
++    private const val PREFS_NAME = "expo_share_intent_debug"
++    private const val JOURNAL_KEY = "attempt_journal"
++    private const val LEGACY_KEY = "last_intent"
++    private const val ATTEMPT_ID_EXTRA = "expo.modules.shareintent.DEBUG_ATTEMPT_ID"
++    private const val MAX_ATTEMPTS = 5
++
++    private fun isShare(intent: Intent): Boolean =
++        intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE
++
++    fun ensureAttemptId(intent: Intent): String? {
++        if (!isShare(intent)) return null
++        val existing = intent.getStringExtra(ATTEMPT_ID_EXTRA)
++        if (!existing.isNullOrBlank()) return existing
++        return UUID.randomUUID().toString().also { intent.putExtra(ATTEMPT_ID_EXTRA, it) }
++    }
++
++    @Synchronized
++    fun record(context: Context?, activity: Activity?, intent: Intent, phase: String): String? {
++        if (context == null || !isShare(intent)) return null
++        val attemptId = ensureAttemptId(intent) ?: return null
++        try {
++            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
++            val journal = try {
++                JSONArray(prefs.getString(JOURNAL_KEY, "[]") ?: "[]")
++            } catch (_: Exception) {
++                JSONArray()
++            }
++            var attempt: JSONObject? = null
++            for (index in 0 until journal.length()) {
++                val candidate = journal.optJSONObject(index)
++                if (candidate?.optString("attemptId") == attemptId) {
++                    attempt = candidate
++                    break
++                }
++            }
++            if (attempt == null) {
++                attempt = JSONObject().apply {
++                    put("attemptId", attemptId)
++                    put("capturedAt", now())
++                    put("action", intent.action ?: JSONObject.NULL)
++                    put("mimeType", intent.type ?: JSONObject.NULL)
++                    put("senderPackage", referrerPackage(activity) ?: JSONObject.NULL)
++                    put("isTaskRoot", activity?.isTaskRoot ?: JSONObject.NULL)
++                    put("hasText", intent.hasExtra(Intent.EXTRA_TEXT))
++                    put("hasStream", intent.hasExtra(Intent.EXTRA_STREAM))
++                    put("phases", JSONArray())
++                }
++                journal.put(attempt)
++            }
++            attempt.getJSONArray("phases").put(JSONObject().apply {
++                put("phase", phase)
++                put("at", now())
++            })
++            while (journal.length() > MAX_ATTEMPTS) journal.remove(0)
++            prefs.edit().putString(JOURNAL_KEY, journal.toString()).apply()
++            return attemptId
++        } catch (_: Exception) {
++            return attemptId
++        }
++    }
++
++    @Synchronized
++    fun readAndClear(context: Context): String? {
++        return try {
++            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
++            val value = prefs.getString(JOURNAL_KEY, null)
++            prefs.edit().remove(JOURNAL_KEY).remove(LEGACY_KEY).apply()
++            value
++        } catch (_: Exception) {
++            null
++        }
++    }
++
++    private fun referrerPackage(activity: Activity?): String? {
++        val referrer = activity?.referrer ?: return null
++        return if (referrer.scheme == "android-app") {
++            referrer.host
++        } else {
++            "non-app:" + (referrer.scheme ?: "unknown")
++        }
++    }
++
++    private fun now(): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
++        timeZone = TimeZone.getTimeZone("UTC")
++    }.format(Date())
++}
 diff --git a/build/ExpoShareIntentModule.d.ts b/build/ExpoShareIntentModule.d.ts
-index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..4a3c5614b4ac163793d68588c6bab7f89ab677fe 100644
+index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..a86d4e3ae7853d4de1342c2f84d7ac1c3b23e954 100644
 --- a/build/ExpoShareIntentModule.d.ts
 +++ b/build/ExpoShareIntentModule.d.ts
-@@ -4,11 +4,18 @@ type ExpoShareIntentModuleEvents = {
+@@ -4,11 +4,16 @@ type ExpoShareIntentModuleEvents = {
      onError: (event: ErrorEventPayload) => void;
      onChange: (event: ChangeEventPayload) => void;
      onStateChange: (event: StateEventPayload) => void;
@@ -197,15 +261,13 @@ index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..4a3c5614b4ac163793d68588c6bab7f8
      getShareIntent(url: string): string;
      clearShareIntent(key: string): Promise<void>;
      hasShareIntent(key: string): boolean;
-+    // Read-and-clear the durable native breadcrumb (Sentry STASH-2Q) — recovers
-+    // the last share intent the native side saw even if its live onDebugLog
-+    // event never reached a JS listener. Android only.
-+    getLastNativeShareDebug(key: string): Promise<string | null>;
++    // Read-and-clear the five most recent native share lifecycle attempts.
++    getNativeShareDebugJournal(key: string): Promise<string | null>;
  }
  declare const ExpoShareIntentModule: ExpoShareIntentModuleType | null;
  export default ExpoShareIntentModule;
 diff --git a/build/useShareIntent.js b/build/useShareIntent.js
-index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..9257fd881d90f62cc05bd3280d9de574d9086dcd 100644
+index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..e775e752fb460127603ac7e5c8491d87af59f43a 100644
 --- a/build/useShareIntent.js
 +++ b/build/useShareIntent.js
 @@ -36,6 +36,10 @@ export default function useShareIntent(options = SHAREINTENT_OPTIONS_DEFAULT) {
@@ -237,3 +299,23 @@ index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..9257fd881d90f62cc05bd3280d9de574
      /**
       * Detect Native Module response
       */
+diff --git a/build/utils.js b/build/utils.js
+index 3d343c633b4bb267a1ee994352516997f8e058b3..3728e3b458ceb110759ad4c4c3c4831ec3d54245 100644
+--- a/build/utils.js
++++ b/build/utils.js
+@@ -68,6 +68,7 @@ export const parseShareIntent = (value, options) => {
+             text: shareIntent.text,
+             webUrl,
+             meta: {
++                ...shareIntent.meta,
+                 title: shareIntent.meta?.title ?? undefined,
+             },
+         };
+@@ -90,6 +91,7 @@ export const parseShareIntent = (value, options) => {
+             file.mimeType.startsWith("video/"));
+         result = {
+             ...SHAREINTENT_DEFAULTVALUE,
++            meta: shareIntent?.meta ?? null,
+             files: shareIntent?.files
+                 ? shareIntent.files.reduce((acc, file) => {
+                     if (!file.path && !file.contentUri)

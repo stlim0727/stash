@@ -80,7 +80,7 @@ let mockShareIntent: {
   shareIntent: {
     webUrl: string | null;
     text: string | null;
-    meta?: { title?: string };
+    meta?: { title?: string; attemptId?: string };
     files?: Array<{ path: string; mimeType: string; fileName: string }> | null;
   };
   resetShareIntent: jest.Mock;
@@ -538,7 +538,11 @@ describe('ShareIntentHandler', () => {
     fakeRepo.__reset([]);
     mockShareIntent = {
       hasShareIntent: true,
-      shareIntent: { webUrl: 'https://example.com/durable', text: null },
+      shareIntent: {
+        webUrl: 'https://example.com/durable',
+        text: null,
+        meta: { attemptId: 'native-attempt-1' },
+      },
       resetShareIntent: jest.fn(),
     };
 
@@ -549,7 +553,16 @@ describe('ShareIntentHandler', () => {
       const record = parseShareAttemptDiagnostics(
         await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
       );
-      expect(record).toMatchObject({ hasUrl: true, hasText: false, hasImage: false, result: 'created' });
+      expect(record).toMatchObject({
+        attemptId: 'native-attempt-1',
+        hasUrl: true,
+        hasText: false,
+        hasImage: false,
+        result: 'created',
+        durable: true,
+      });
+      expect(record?.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(record?.persistedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     });
     unmount();
   });
