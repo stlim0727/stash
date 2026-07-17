@@ -45,7 +45,31 @@ export function extractFirstUrl(input: string | null | undefined): string | null
   }
 
   const match = input.match(/https?:\/\/[^\s]+/i);
-  return match ? normalizeUrl(match[0]) : null;
+  if (match) {
+    // Strip trailing punctuation commonly appended by sharing menus or browser URL bars
+    // (e.g. trailing periods, commas, semicolons, colons, exclamation marks, or quotes).
+    let cleaned = match[0].replace(/[.,;:!?"']$/, '');
+
+    // Handle trailing parentheses and brackets using balanced count checking to avoid
+    // truncating legitimate URL paths (e.g., Wikipedia disambiguation links like ".../Bird_(disambiguation)").
+    if (cleaned.endsWith(')')) {
+      const openCount = (cleaned.match(/\(/g) || []).length;
+      const closeCount = (cleaned.match(/\)/g) || []).length;
+      if (closeCount > openCount) {
+        cleaned = cleaned.slice(0, -1);
+      }
+    }
+    if (cleaned.endsWith(']')) {
+      const openCount = (cleaned.match(/\[/g) || []).length;
+      const closeCount = (cleaned.match(/\]/g) || []).length;
+      if (closeCount > openCount) {
+        cleaned = cleaned.slice(0, -1);
+      }
+    }
+
+    return normalizeUrl(cleaned);
+  }
+  return null;
 }
 
 /**

@@ -37,7 +37,7 @@ export function dismissAfterShare(message: string): boolean {
     return false;
   }
   // Fire the confirmation before we leave so it survives the activity finishing.
-  ToastAndroid.show(message, ToastAndroid.SHORT);
+  ToastAndroid.show(message, ToastAndroid.LONG);
   BackHandler.exitApp();
   return true;
 }
