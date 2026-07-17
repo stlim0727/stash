@@ -30,6 +30,7 @@ import {
   type StyleProp,
   Text,
   TextInput,
+  useColorScheme,
   useWindowDimensions,
   View,
   type ViewStyle,
@@ -424,8 +425,9 @@ export default function InboxScreen() {
   // bilingual lockup is used; today every locale shares the "Keepory" lockup.
   // The a11y label mirrors what sighted users see (e.g. "Keepory").
   const hasLocalName = t('app.nameLocal') !== t('app.name');
+  const colorScheme = useColorScheme();
   const wmSet = hasLocalName ? WORDMARK.local : WORDMARK.en;
-  const wordmark = { source: wmSet.dark, ratio: wmSet.ratio };
+  const wordmark = { source: colorScheme === 'dark' ? wmSet.dark : wmSet.light, ratio: wmSet.ratio };
   const wordmarkLabel = hasLocalName ? `${t('app.name')} ${t('app.nameLocal')}` : t('app.name');
   // The wordmark is a pre-rendered PNG. If it ever fails to load — a browser that
   // blocks the asset, or a request dropped across the OAuth redirect (seen in a
