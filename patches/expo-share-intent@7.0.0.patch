@@ -1,8 +1,8 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..9203984314000df821be371fa2bb5e2a9059b526 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d3c749f8b 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -44,6 +44,92 @@ class ExpoShareIntentModule : Module() {
+@@ -44,6 +44,107 @@ class ExpoShareIntentModule : Module() {
      companion object {
          private var instance: ExpoShareIntentModule? = null
  
@@ -54,7 +54,22 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..9203984314000df821be371fa2bb5e2a
 +        // a share" from "a share arrived and was processed." Kept in its own
 +        // SharedPreferences key so it never clobbers the more specific
 +        // share-only breadcrumb above.
++        private var lastAnyIntentRecordedAtMillis: Long = 0
++
 +        private fun recordDurableAnyIntent(activity: Activity?, intent: Intent?, source: String) {
++            val now = System.currentTimeMillis()
++            // PR review: OnNewIntent (warm-resume share) and useShareIntent's
++            // AppState "active" handler (which calls getShareIntent("") right
++            // after) fire in close succession, and the refresh call carries no
++            // new intent data of its own — writing it immediately after
++            // OnNewIntent's real capture would silently clobber the more
++            // informative entry with an empty one. Skip a write that lands
++            // right on the heels of another; the first capture in a burst is
++            // the one worth keeping.
++            if (now - lastAnyIntentRecordedAtMillis < 1500) {
++                return
++            }
++            lastAnyIntentRecordedAtMillis = now
 +            val message = "[$source] action=" + (intent?.action ?: "null") +
 +                " type=" + (intent?.type ?: "null") +
 +                " referrer=" + referrerPackage(activity) +
@@ -95,7 +110,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..9203984314000df821be371fa2bb5e2a
          private fun notifyShareIntent(value: Any) {
              notifyState("pending")
              instance!!.sendEvent("onChange", mapOf("value" to value))
-@@ -54,6 +140,31 @@ class ExpoShareIntentModule : Module() {
+@@ -54,6 +155,31 @@ class ExpoShareIntentModule : Module() {
          private fun notifyError(message: String) {
              instance!!.sendEvent("onError", mapOf("value" to message))
          }
@@ -127,7 +142,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..9203984314000df821be371fa2bb5e2a
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +224,30 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +239,30 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
@@ -159,7 +174,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..9203984314000df821be371fa2bb5e2a
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,8 +255,18 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +270,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -180,7 +195,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..9203984314000df821be371fa2bb5e2a
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
-@@ -177,10 +321,14 @@ class ExpoShareIntentModule : Module() {
+@@ -177,10 +336,19 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
@@ -189,14 +204,19 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..9203984314000df821be371fa2bb5e2a
  
          AsyncFunction("getShareIntent") { _: String ->
              // get the Intent from onCreate activity (app not running in background)
-+            // Unconditional (Sentry STASH-2T follow-up) — recorded BEFORE the
-+            // type != null gate below, so a cold-start delivery that gets
-+            // filtered out right here (e.g. a null type) still leaves a trace.
-+            recordDurableAnyIntent(currentActivity, ExpoShareIntentSingleton.intent, "getShareIntent")
++            // Unconditional (Sentry STASH-2T follow-up), read from the
++            // Activity's own raw intent — NOT ExpoShareIntentSingleton.intent,
++            // which ExpoShareIntentReactActivityLifecycleListener.onCreate only
++            // ever populates when `activity.intent.type != null` (PR review): a
++            // cold-start ACTION_SEND with a null type is filtered out before
++            // the singleton is even set, so reading the singleton here would
++            // make that exact malformed-share case indistinguishable from an
++            // ordinary launch — the opposite of what this breadcrumb is for.
++            recordDurableAnyIntent(currentActivity, currentActivity?.intent, "getShareIntent")
              ExpoShareIntentSingleton.isPending = false
              if (ExpoShareIntentSingleton.intent?.type != null) {
                  handleShareIntent(ExpoShareIntentSingleton.intent!!);
-@@ -196,7 +344,27 @@ class ExpoShareIntentModule : Module() {
+@@ -196,7 +364,27 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.isPending
          }
  
