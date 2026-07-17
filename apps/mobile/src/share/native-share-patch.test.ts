@@ -42,7 +42,7 @@ test('non-root Android shares bypass the lossy activity relaunch', () => {
   );
 });
 
-test('Android shares keep a privacy-safe five-attempt lifecycle journal', () => {
+test('Android intents keep a privacy-safe five-attempt lifecycle journal', () => {
   assert.match(lifecycleListener, /"activity_on_create"/);
   assert.match(nativeModule, /"module_on_new_intent"/);
   assert.match(nativeModule, /"module_handle"/);
@@ -50,6 +50,9 @@ test('Android shares keep a privacy-safe five-attempt lifecycle journal', () => 
   assert.match(debugJournal, /"capturedAt"/);
   assert.match(debugJournal, /"senderPackage"/);
   assert.match(debugJournal, /"hasText"/);
+  assert.match(debugJournal, /"isShareAction"/);
+  assert.match(debugJournal, /intent\.getParcelableExtra<android\.net\.Uri>\(Intent\.EXTRA_REFERRER\)/);
+  assert.doesNotMatch(debugJournal, /if \(!isShare\(intent\)\)/);
   assert.doesNotMatch(debugJournal, /getStringExtra\(Intent\.EXTRA_TEXT\)/);
 });
 
