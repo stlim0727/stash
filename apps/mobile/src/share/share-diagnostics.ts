@@ -57,12 +57,16 @@ export function getShareDiagnostics(): ShareAttemptDiagnostics | undefined {
 }
 
 /**
- * Recover the native module's own durable breadcrumb of the last share
- * intent it saw (Android only — see `recordDurableDebug` in the patched
- * `expo-share-intent` module). The equivalent live `onDebugLog` event is
- * lost whenever no JS listener happens to be subscribed at the exact instant
- * it fires — the leading theory for why prior sendEvent-only instrumentation
- * (Sentry STASH-2K, STASH-2M) kept showing zero evidence despite shipping.
+ * Recover the native module's own durable breadcrumbs of the last intent(s)
+ * it saw (Android only — see `recordDurableDebug` and `recordDurableAnyIntent`
+ * in the patched `expo-share-intent` module). The equivalent live `onDebugLog`
+ * event is lost whenever no JS listener happens to be subscribed at the exact
+ * instant it fires — the leading theory for why prior sendEvent-only
+ * instrumentation (Sentry STASH-2K, STASH-2M) kept showing zero evidence
+ * despite shipping. Recovers TWO breadcrumbs: one scoped to recognized share
+ * actions only, and one recorded unconditionally at every native entry point
+ * (Sentry STASH-2T follow-up) — the latter can distinguish "nothing reached
+ * the Activity" from "something arrived but wasn't recognized as a share."
  *
  * Read-and-clear on the native side, so call this ONLY from the report
  * screen, right when diagnostics are actually collected — never at app
@@ -83,5 +87,18 @@ export async function hydrateNativeShareDebugLog(): Promise<void> {
     }
   } catch {
     // Best-effort — a session without this recovered breadcrumb is still usable.
+  }
+  // Separate, UNCONDITIONAL breadcrumb (Sentry STASH-2T follow-up): the one
+  // above only exists if a share action reached handleShareIntent — this one
+  // is recorded at every native entry point regardless, so a report can tell
+  // "nothing reached the Activity" from "something arrived but wasn't
+  // recognized as a share" from "a share arrived and was processed."
+  try {
+    const anyValue = await ShareIntentModule?.getLastNativeAnyIntentDebug('');
+    if (anyValue) {
+      recordLog('info', `[share] native debug, any intent (durable): ${anyValue}`);
+    }
+  } catch {
+    // Best-effort — see above.
   }
 }
