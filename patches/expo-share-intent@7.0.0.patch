@@ -1,8 +1,8 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef23d778542 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..06584000243954d5ee80962844a47e96149346c0 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -44,6 +44,32 @@ class ExpoShareIntentModule : Module() {
+@@ -44,6 +44,38 @@ class ExpoShareIntentModule : Module() {
      companion object {
          private var instance: ExpoShareIntentModule? = null
  
@@ -20,12 +20,18 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
 +        private const val DEBUG_PREFS_NAME = "expo_share_intent_debug"
 +        private const val DEBUG_PREFS_KEY = "last_intent"
 +
++        // Sentry STASH-2T: a stale, previously-unconsumed breadcrumb (from an
++        // earlier, unrelated share) was misread as evidence of a same-moment
++        // failure, because the stored value carried no origination time of its
++        // own — only the JS-side read-time got timestamped by the log buffer.
++        // Prefix with the native capture time so a later read can tell "just
++        // happened" from "leftover from who-knows-when" instead of guessing.
 +        private fun recordDurableDebug(activity: Activity?, message: String) {
 +            try {
 +                activity?.applicationContext
 +                    ?.getSharedPreferences(DEBUG_PREFS_NAME, Context.MODE_PRIVATE)
 +                    ?.edit()
-+                    ?.putString(DEBUG_PREFS_KEY, message)
++                    ?.putString(DEBUG_PREFS_KEY, System.currentTimeMillis().toString() + "::" + message)
 +                    ?.apply()
 +            } catch (e: Exception) {
 +                // Best-effort — diagnostics must never break the share path.
@@ -35,7 +41,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
          private fun notifyShareIntent(value: Any) {
              notifyState("pending")
              instance!!.sendEvent("onChange", mapOf("value" to value))
-@@ -54,6 +80,31 @@ class ExpoShareIntentModule : Module() {
+@@ -54,6 +86,31 @@ class ExpoShareIntentModule : Module() {
          private fun notifyError(message: String) {
              instance!!.sendEvent("onError", mapOf("value" to message))
          }
@@ -67,10 +73,11 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +164,30 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +170,30 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
+-            if (activity != null && !activity.isTaskRoot) {
 +            // Instrumentation only (Sentry STASH-2M/2Q): log the sending app before
 +            // any branching below, so a report filed right after a silently-failed
 +            // share shows which app originated it even if a downstream path
@@ -87,7 +94,6 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
 +                recordDurableDebug(activity, debugMessage)
 +                notifyDebug(debugMessage)
 +            }
--            if (activity != null && !activity.isTaskRoot) {
 +            val isShareAction = intent.action == Intent.ACTION_SEND ||
 +                intent.action == Intent.ACTION_SEND_MULTIPLE
 +            // The upstream non-root relaunch was added for Google Files
@@ -99,7 +105,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,8 +195,18 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +201,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -120,7 +126,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
-@@ -177,7 +261,7 @@ class ExpoShareIntentModule : Module() {
+@@ -177,7 +267,7 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
@@ -129,7 +135,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
  
          AsyncFunction("getShareIntent") { _: String ->
              // get the Intent from onCreate activity (app not running in background)
-@@ -196,6 +280,23 @@ class ExpoShareIntentModule : Module() {
+@@ -196,6 +286,45 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.isPending
          }
  
@@ -140,11 +146,33 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..dcc09e57927893408605c0c20a0fcef2
 +        AsyncFunction("getLastNativeShareDebug") { _: String ->
 +            try {
 +                val prefs = context.getSharedPreferences(DEBUG_PREFS_NAME, Context.MODE_PRIVATE)
-+                val value = prefs.getString(DEBUG_PREFS_KEY, null)
-+                if (value != null) {
++                val stored = prefs.getString(DEBUG_PREFS_KEY, null)
++                if (stored != null) {
 +                    prefs.edit().remove(DEBUG_PREFS_KEY).apply()
 +                }
-+                value
++                // Older-format values (written before this timestamp prefix
++                // existed, then carried across an app update — SharedPreferences
++                // survives those) have no "::" separator. Annotate them as
++                // undated rather than returning them bare: JS folds this string
++                // straight into the log buffer stamped with the CURRENT read
++                // time, so an unannotated legacy value would look exactly like
++                // fresh evidence — the same ambiguity this timestamp was added
++                // to eliminate (caught in PR review).
++                val separatorIndex = stored?.indexOf("::") ?: -1
++                if (stored != null && separatorIndex > 0) {
++                    val capturedAtMillis = stored.substring(0, separatorIndex).toLongOrNull()
++                    val message = stored.substring(separatorIndex + 2)
++                    if (capturedAtMillis != null) {
++                        val ageSeconds = (System.currentTimeMillis() - capturedAtMillis) / 1000
++                        "$message (captured ${ageSeconds}s before this read)"
++                    } else {
++                        "$message (capture time unknown)"
++                    }
++                } else if (stored != null) {
++                    "$stored (capture time unknown — recovered from a build before timestamps were added)"
++                } else {
++                    null
++                }
 +            } catch (e: Exception) {
 +                null
 +            }
