@@ -3,6 +3,7 @@ import { ShareIntentModule } from 'expo-share-intent';
 
 import {
   buildShareAttemptDiagnostics,
+  markShareAttemptPersisted,
   parseShareAttemptDiagnostics,
   serializeShareAttemptDiagnostics,
   SHARE_DIAGNOSTICS_PREF_KEY,
@@ -24,15 +25,35 @@ import { getPreference, setPreference } from '@/storage/preferences';
  */
 
 let cached: ShareAttemptDiagnostics | undefined;
+let writeChain = Promise.resolve();
+
+function persist(record: ShareAttemptDiagnostics): void {
+  writeChain = writeChain
+    .then(() => setPreference(SHARE_DIAGNOSTICS_PREF_KEY, serializeShareAttemptDiagnostics(record)))
+    .catch(() => {
+      // Best-effort - never let diagnostics bookkeeping interfere with capture.
+    });
+}
 
 /** Record a just-finished share attempt. Fire-and-forget on purpose — the
  *  share path must not wait on this write. */
 export function recordShareAttempt(input: ShareAttemptInput): void {
   const record = buildShareAttemptDiagnostics(input);
   cached = record;
-  void setPreference(SHARE_DIAGNOSTICS_PREF_KEY, serializeShareAttemptDiagnostics(record)).catch(() => {
-    // Best-effort — never let diagnostics bookkeeping interfere with capture.
-  });
+  persist(record);
+}
+
+/** Correlate the repository write outcome with the native/JS share attempt. */
+export function recordSharePersistence(attemptId: string | undefined, durable: boolean): void {
+  if (!cached) {
+    return;
+  }
+  const record = markShareAttemptPersisted(cached, attemptId, durable);
+  if (!record) {
+    return;
+  }
+  cached = record;
+  persist(record);
 }
 
 /**
@@ -57,9 +78,10 @@ export function getShareDiagnostics(): ShareAttemptDiagnostics | undefined {
 }
 
 /**
- * Recover the native module's own durable breadcrumb of the last share
- * intent it saw (Android only — see `recordDurableDebug` in the patched
- * `expo-share-intent` module). The equivalent live `onDebugLog` event is
+ * Recover the native module's durable journal for its five most recent share
+ * attempts (Android only; see `ShareIntentDebugJournal` in the patched
+ * module). It records timestamps and lifecycle phases, never shared content.
+ * The equivalent live `onDebugLog` event is
  * lost whenever no JS listener happens to be subscribed at the exact instant
  * it fires — the leading theory for why prior sendEvent-only instrumentation
  * (Sentry STASH-2K, STASH-2M) kept showing zero evidence despite shipping.
@@ -77,9 +99,9 @@ export async function hydrateNativeShareDebugLog(): Promise<void> {
     return;
   }
   try {
-    const value = await ShareIntentModule?.getLastNativeShareDebug('');
+    const value = await ShareIntentModule?.getNativeShareDebugJournal('');
     if (value) {
-      recordLog('info', `[share] native debug (durable): ${value}`);
+      recordLog('info', `[share] native journal (durable): ${value}`);
     }
   } catch {
     // Best-effort — a session without this recovered breadcrumb is still usable.

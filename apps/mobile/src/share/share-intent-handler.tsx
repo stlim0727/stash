@@ -15,10 +15,17 @@ import { recordLog } from '@/observability/log-buffer';
 import { trackBreadcrumb } from '@/observability/sentry';
 import { canDismissAfterShare, dismissAfterShare } from '@/share/dismiss';
 import { recordPendingShareConfirm } from '@/share/pending-confirm';
-import { recordShareAttempt } from '@/share/share-diagnostics';
+import { recordShareAttempt, recordSharePersistence } from '@/share/share-diagnostics';
 import { getPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
 import { useCaptureToast } from '@/ui/capture-toast';
+
+let jsAttemptSequence = 0;
+
+function nextJsAttemptId(): string {
+  jsAttemptSequence += 1;
+  return `js-${Date.now()}-${jsAttemptSequence}`;
+}
 
 /**
  * Bridges the OS share sheet to local-first capture. When the app is opened
@@ -51,6 +58,8 @@ export function ShareIntentHandler() {
   // can never drop a capture; the save itself waits for the store so dedupe
   // sees the bookmarks already on the device. Capture is sacred.
   const [pendingShare, setPendingShare] = useState<{
+    attemptId: string;
+    receivedAt: string;
     url: string | null;
     title?: string;
     text?: string;
@@ -129,6 +138,8 @@ export function ShareIntentHandler() {
       .map((file) => file?.mimeType)
       .filter((mime): mime is string => typeof mime === 'string' && mime.length > 0);
     setPendingShare({
+      attemptId: shareIntent.meta?.attemptId ?? nextJsAttemptId(),
+      receivedAt: new Date().toISOString(),
       url,
       title: shareIntent.meta?.title ?? undefined,
       text,
@@ -178,6 +189,8 @@ export function ShareIntentHandler() {
     // in a later session (after a silently failed share) still carries real
     // evidence instead of just that session's own unrelated startup logs.
     recordShareAttempt({
+      attemptId: share.attemptId,
+      receivedAt: share.receivedAt,
       hasUrl: share.url !== null,
       hasText: Boolean(share.text?.trim()),
       hasImage: share.image !== null,
@@ -197,9 +210,11 @@ export function ShareIntentHandler() {
     // write took. Coarse only — status/duration/durability, never content.
     trackBreadcrumb('share', 'saving', { status: result.status });
     void persisted?.then(
-      (durable) =>
-        trackBreadcrumb('share', 'persisted', { ms: Date.now() - saveStartedAt, durable }),
-      () => {},
+      (durable) => {
+        recordSharePersistence(share.attemptId, durable);
+        trackBreadcrumb('share', 'persisted', { ms: Date.now() - saveStartedAt, durable });
+      },
+      () => recordSharePersistence(share.attemptId, false),
     );
 
     // Resolve the post-share behavior, then either jump to the Inbox (inbox

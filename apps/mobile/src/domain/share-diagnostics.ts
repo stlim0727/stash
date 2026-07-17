@@ -23,6 +23,8 @@ const VALID_RESULTS = new Set<ShareAttemptResult>(['created', 'duplicate', 'inva
 const MAX_MIME_TYPES = 5;
 
 export interface ShareAttemptInput {
+  attemptId?: string;
+  receivedAt?: string;
   hasUrl: boolean;
   hasText: boolean;
   hasImage: boolean;
@@ -33,11 +35,19 @@ export interface ShareAttemptInput {
 
 export interface ShareAttemptDiagnostics extends ShareAttemptInput {
   updatedAt: string;
+  durable?: boolean;
+  persistedAt?: string;
 }
 
 /** Build a record from a just-finished share attempt, capping/normalizing fields. */
 export function buildShareAttemptDiagnostics(input: ShareAttemptInput): ShareAttemptDiagnostics {
   return {
+    ...(typeof input.attemptId === 'string' && input.attemptId
+      ? { attemptId: input.attemptId }
+      : {}),
+    ...(typeof input.receivedAt === 'string' && input.receivedAt
+      ? { receivedAt: input.receivedAt }
+      : {}),
     hasUrl: input.hasUrl === true,
     hasText: input.hasText === true,
     hasImage: input.hasImage === true,
@@ -80,10 +90,36 @@ export function parseShareAttemptDiagnostics(
         : [],
       result: data.result as ShareAttemptResult,
       updatedAt: data.updatedAt,
+      ...(typeof data.attemptId === 'string' && data.attemptId
+        ? { attemptId: data.attemptId }
+        : {}),
+      ...(typeof data.receivedAt === 'string' && data.receivedAt
+        ? { receivedAt: data.receivedAt }
+        : {}),
+      ...(typeof data.durable === 'boolean' ? { durable: data.durable } : {}),
+      ...(typeof data.persistedAt === 'string' && data.persistedAt
+        ? { persistedAt: data.persistedAt }
+        : {}),
     };
   } catch {
     return null;
   }
+}
+
+/** Add the durable-write outcome only when it belongs to this attempt. */
+export function markShareAttemptPersisted(
+  current: ShareAttemptDiagnostics,
+  attemptId: string | undefined,
+  durable: boolean,
+): ShareAttemptDiagnostics | null {
+  if (current.attemptId !== attemptId) {
+    return null;
+  }
+  return {
+    ...current,
+    durable,
+    persistedAt: new Date().toISOString(),
+  };
 }
 
 export function serializeShareAttemptDiagnostics(value: ShareAttemptDiagnostics): string {

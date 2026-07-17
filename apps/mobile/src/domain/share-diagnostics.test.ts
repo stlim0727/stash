@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildShareAttemptDiagnostics,
+  markShareAttemptPersisted,
   parseShareAttemptDiagnostics,
   serializeShareAttemptDiagnostics,
 } from '@/domain/share-diagnostics';
@@ -54,6 +55,8 @@ test('parse returns null for malformed JSON or an unrecognized result', () => {
 
 test('serialize round-trips through parse', () => {
   const value = buildShareAttemptDiagnostics({
+    attemptId: 'native-attempt-1',
+    receivedAt: '2026-07-17T08:00:00.000Z',
     hasUrl: false,
     hasText: false,
     hasImage: true,
@@ -62,4 +65,22 @@ test('serialize round-trips through parse', () => {
     result: 'created',
   });
   assert.deepEqual(parseShareAttemptDiagnostics(serializeShareAttemptDiagnostics(value)), value);
+});
+
+test('persistence outcome only updates the matching attempt', () => {
+  const value = buildShareAttemptDiagnostics({
+    attemptId: 'native-attempt-1',
+    receivedAt: '2026-07-17T08:00:00.000Z',
+    hasUrl: true,
+    hasText: true,
+    hasImage: false,
+    fileCount: 0,
+    fileMimeTypes: [],
+    result: 'created',
+  });
+
+  assert.equal(markShareAttemptPersisted(value, 'other-attempt', true), null);
+  const persisted = markShareAttemptPersisted(value, 'native-attempt-1', true);
+  assert.equal(persisted?.durable, true);
+  assert.match(persisted?.persistedAt ?? '', /^\d{4}-\d{2}-\d{2}T/);
 });
