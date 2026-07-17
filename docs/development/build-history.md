@@ -46,6 +46,8 @@ candidates** (`vX.Y.Z-rcN`) that lead up to each stable cut.
 
 | Build | Date (UTC) | `main` SHA | What's new since last RC |
 | ----- | ---------- | ---------- | ------------------------ |
+| `v1.2.0-rc19` | 2026-07-17 | `51c59e0` | Strips trailing punctuation from share URLs (#534), implements warm cream light mode (#530), optimizes graph labels during gestures (#528), and instruments share lifecycle/observability. Build = `android-apk.yml` run #29567819951. |
+| `v1.2.0-rc6`–`rc18` | 2026-07-12 – 07-17 | _(various)_ | Not individually logged here — each build's `-rcN` is self-recorded on the rolling `dev` prerelease (name/body carry the label since #302). |
 | `v1.2.0-rc5` | 2026-07-12 | `884e31e` | Includes UI theme/layout refresh (#415), login sync pull fixes (#478), SQLite directory repair robust fix using `file.exists` (#480), and bookmark detail screen preview refresh/AI regeneration logic (#479). Build = `android-apk.yml` run #_(TBD)_. |
 | `v1.2.0-rc1`–`rc4` | 2026-07-09 – 07-11 | _(various)_ | Not individually logged here — each build's `-rcN` is self-recorded on the rolling `dev` prerelease (name/body carry the label since #302). |
 
