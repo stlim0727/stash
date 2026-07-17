@@ -45,7 +45,13 @@ export function extractFirstUrl(input: string | null | undefined): string | null
   }
 
   const match = input.match(/https?:\/\/[^\s]+/i);
-  return match ? normalizeUrl(match[0]) : null;
+  if (match) {
+    // Strip trailing punctuation commonly appended by sharing menus or browser URL bars
+    // (e.g. trailing periods, commas, closing parentheses, brackets, or quotes).
+    const cleaned = match[0].replace(/[.,;:)\]!?"']$/, '');
+    return normalizeUrl(cleaned);
+  }
+  return null;
 }
 
 /**

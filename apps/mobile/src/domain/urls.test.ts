@@ -30,6 +30,18 @@ test('extractFirstUrl finds a link inside shared text', () => {
     'https://example.com/article',
   );
   assert.equal(extractFirstUrl('example.com'), 'https://example.com/');
+  assert.equal(
+    extractFirstUrl('Check this out: https://example.com/article.'),
+    'https://example.com/article',
+  );
+  assert.equal(
+    extractFirstUrl('Go to (https://example.com/page)'),
+    'https://example.com/page',
+  );
+  assert.equal(
+    extractFirstUrl('Link: https://example.com/page, check it.'),
+    'https://example.com/page',
+  );
 });
 
 test('extractFirstUrl returns null when no link exists', () => {
