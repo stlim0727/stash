@@ -1,5 +1,5 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..df818aa988e73350ae1a0580cec693c350802f03 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..9f553935148ab41fbdc3d5a6a95f39c770820591 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 @@ -54,6 +54,17 @@ class ExpoShareIntentModule : Module() {
@@ -125,7 +125,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..df818aa988e73350ae1a0580cec693c3
          }
  
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
-index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..855e5f340bdeefbdf2f4c597ceda467e8268caf3 100644
+index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..92de040ed44ef503d87cfafd4ae845aa7561ff68 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
 @@ -13,6 +13,9 @@ import expo.modules.core.interfaces.ReactActivityLifecycleListener
@@ -140,10 +140,10 @@ index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..855e5f340bdeefbdf2f4c597ceda467e
              ExpoShareIntentSingleton.intent = activity?.intent
 diff --git a/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..b0b476c1c84a1fd8d61460d361fd38eae3a5ac97
+index 0000000000000000000000000000000000000000..241446f7c7f53aa6898aa8fcf689becbc10b3d3d
 --- /dev/null
 +++ b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,104 @@
 +package expo.modules.shareintent
 +
 +import android.app.Activity
@@ -165,11 +165,7 @@ index 0000000000000000000000000000000000000000..b0b476c1c84a1fd8d61460d361fd38ea
 +    private const val ATTEMPT_ID_EXTRA = "expo.modules.shareintent.DEBUG_ATTEMPT_ID"
 +    private const val MAX_ATTEMPTS = 5
 +
-+    private fun isShare(intent: Intent): Boolean =
-+        intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE
-+
 +    fun ensureAttemptId(intent: Intent): String? {
-+        if (!isShare(intent)) return null
 +        val existing = intent.getStringExtra(ATTEMPT_ID_EXTRA)
 +        if (!existing.isNullOrBlank()) return existing
 +        return UUID.randomUUID().toString().also { intent.putExtra(ATTEMPT_ID_EXTRA, it) }
@@ -177,7 +173,7 @@ index 0000000000000000000000000000000000000000..b0b476c1c84a1fd8d61460d361fd38ea
 +
 +    @Synchronized
 +    fun record(context: Context?, activity: Activity?, intent: Intent, phase: String): String? {
-+        if (context == null || !isShare(intent)) return null
++        if (context == null) return null
 +        val attemptId = ensureAttemptId(intent) ?: return null
 +        try {
 +            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -200,8 +196,12 @@ index 0000000000000000000000000000000000000000..b0b476c1c84a1fd8d61460d361fd38ea
 +                    put("capturedAt", now())
 +                    put("action", intent.action ?: JSONObject.NULL)
 +                    put("mimeType", intent.type ?: JSONObject.NULL)
-+                    put("senderPackage", referrerPackage(activity) ?: JSONObject.NULL)
++                    put("senderPackage", referrerPackage(activity, intent) ?: JSONObject.NULL)
 +                    put("isTaskRoot", activity?.isTaskRoot ?: JSONObject.NULL)
++                    put(
++                        "isShareAction",
++                        intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE,
++                    )
 +                    put("hasText", intent.hasExtra(Intent.EXTRA_TEXT))
 +                    put("hasStream", intent.hasExtra(Intent.EXTRA_STREAM))
 +                    put("phases", JSONArray())
@@ -232,8 +232,11 @@ index 0000000000000000000000000000000000000000..b0b476c1c84a1fd8d61460d361fd38ea
 +        }
 +    }
 +
-+    private fun referrerPackage(activity: Activity?): String? {
-+        val referrer = activity?.referrer ?: return null
++    @Suppress("DEPRECATION")
++    private fun referrerPackage(activity: Activity?, intent: Intent): String? {
++        val fromIntent = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_REFERRER)
++            ?: intent.getStringExtra(Intent.EXTRA_REFERRER_NAME)?.let { android.net.Uri.parse(it) }
++        val referrer = fromIntent ?: activity?.referrer ?: return null
 +        return if (referrer.scheme == "android-app") {
 +            referrer.host
 +        } else {
@@ -246,7 +249,7 @@ index 0000000000000000000000000000000000000000..b0b476c1c84a1fd8d61460d361fd38ea
 +    }.format(Date())
 +}
 diff --git a/build/ExpoShareIntentModule.d.ts b/build/ExpoShareIntentModule.d.ts
-index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..a86d4e3ae7853d4de1342c2f84d7ac1c3b23e954 100644
+index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..1311a42d01d79633da1d9ff5f9685bcab2ebfb9c 100644
 --- a/build/ExpoShareIntentModule.d.ts
 +++ b/build/ExpoShareIntentModule.d.ts
 @@ -4,11 +4,16 @@ type ExpoShareIntentModuleEvents = {
@@ -300,7 +303,7 @@ index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..e775e752fb460127603ac7e5c8491d87
       * Detect Native Module response
       */
 diff --git a/build/utils.js b/build/utils.js
-index 3d343c633b4bb267a1ee994352516997f8e058b3..3728e3b458ceb110759ad4c4c3c4831ec3d54245 100644
+index 3d343c633b4bb267a1ee994352516997f8e058b3..3228ffda5da2c854caa0c1c9c28a948ab6aa9486 100644
 --- a/build/utils.js
 +++ b/build/utils.js
 @@ -68,6 +68,7 @@ export const parseShareIntent = (value, options) => {
