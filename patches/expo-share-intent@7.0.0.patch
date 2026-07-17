@@ -1,5 +1,5 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..30d763a62c56d785c9924ee1a959dadc8c9983ac 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..06584000243954d5ee80962844a47e96149346c0 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 @@ -44,6 +44,38 @@ class ExpoShareIntentModule : Module() {
@@ -135,7 +135,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..30d763a62c56d785c9924ee1a959dadc
  
          AsyncFunction("getShareIntent") { _: String ->
              // get the Intent from onCreate activity (app not running in background)
-@@ -196,6 +286,38 @@ class ExpoShareIntentModule : Module() {
+@@ -196,6 +286,45 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.isPending
          }
  
@@ -151,8 +151,13 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..30d763a62c56d785c9924ee1a959dadc
 +                    prefs.edit().remove(DEBUG_PREFS_KEY).apply()
 +                }
 +                // Older-format values (written before this timestamp prefix
-+                // existed) have no "::" separator — fall back to returning them
-+                // as-is rather than mis-parsing.
++                // existed, then carried across an app update — SharedPreferences
++                // survives those) have no "::" separator. Annotate them as
++                // undated rather than returning them bare: JS folds this string
++                // straight into the log buffer stamped with the CURRENT read
++                // time, so an unannotated legacy value would look exactly like
++                // fresh evidence — the same ambiguity this timestamp was added
++                // to eliminate (caught in PR review).
 +                val separatorIndex = stored?.indexOf("::") ?: -1
 +                if (stored != null && separatorIndex > 0) {
 +                    val capturedAtMillis = stored.substring(0, separatorIndex).toLongOrNull()
@@ -161,10 +166,12 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..30d763a62c56d785c9924ee1a959dadc
 +                        val ageSeconds = (System.currentTimeMillis() - capturedAtMillis) / 1000
 +                        "$message (captured ${ageSeconds}s before this read)"
 +                    } else {
-+                        message
++                        "$message (capture time unknown)"
 +                    }
++                } else if (stored != null) {
++                    "$stored (capture time unknown — recovered from a build before timestamps were added)"
 +                } else {
-+                    stored
++                    null
 +                }
 +            } catch (e: Exception) {
 +                null
