@@ -1,5 +1,5 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d3c749f8b 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..388893c23879180733ba12a8f15eacfd769d2c63 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 @@ -44,6 +44,107 @@ class ExpoShareIntentModule : Module() {
@@ -54,25 +54,25 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d
 +        // a share" from "a share arrived and was processed." Kept in its own
 +        // SharedPreferences key so it never clobbers the more specific
 +        // share-only breadcrumb above.
-+        private var lastAnyIntentRecordedAtMillis: Long = 0
-+
 +        private fun recordDurableAnyIntent(activity: Activity?, intent: Intent?, source: String) {
-+            val now = System.currentTimeMillis()
-+            // PR review: OnNewIntent (warm-resume share) and useShareIntent's
-+            // AppState "active" handler (which calls getShareIntent("") right
-+            // after) fire in close succession, and the refresh call carries no
-+            // new intent data of its own — writing it immediately after
-+            // OnNewIntent's real capture would silently clobber the more
-+            // informative entry with an empty one. Skip a write that lands
-+            // right on the heels of another; the first capture in a burst is
-+            // the one worth keeping.
-+            if (now - lastAnyIntentRecordedAtMillis < 1500) {
++            // PR review: useShareIntent's AppState "active" handler calls
++            // getShareIntent("") on every foreground transition, including
++            // right after a warm-resume OnNewIntent already recorded the real
++            // intent — that refresh call carries no action of its own when
++            // there's nothing newly pending, so writing it would clobber a
++            // real capture with an empty one. Skip ONLY that specific no-op —
++            // source=getShareIntent with no action at all — rather than any
++            // write within a time window (an earlier version of this did that
++            // and could drop a second genuine intent arriving in quick
++            // succession from either source). A malformed cold-start SEND
++            // with a null MIME type still has a non-null action, so it's
++            // still recorded — this only skips the truly empty case.
++            if (source == "getShareIntent" && intent?.action == null) {
 +                return
 +            }
-+            lastAnyIntentRecordedAtMillis = now
 +            val message = "[$source] action=" + (intent?.action ?: "null") +
 +                " type=" + (intent?.type ?: "null") +
-+                " referrer=" + referrerPackage(activity) +
++                " referrer=" + referrerPackage(activity, intent) +
 +                " isTaskRoot=" + (activity?.isTaskRoot?.toString() ?: "unknown")
 +            writeDurableDebug(activity, DEBUG_PREFS_KEY_ANY, message)
 +        }
@@ -110,7 +110,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d
          private fun notifyShareIntent(value: Any) {
              notifyState("pending")
              instance!!.sendEvent("onChange", mapOf("value" to value))
-@@ -54,6 +155,31 @@ class ExpoShareIntentModule : Module() {
+@@ -54,6 +155,42 @@ class ExpoShareIntentModule : Module() {
          private fun notifyError(message: String) {
              instance!!.sendEvent("onError", mapOf("value" to message))
          }
@@ -135,14 +135,25 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d
 +        // durably logged (onDebugLog feeds the report log buffer), so only the
 +        // package name is ever recorded — an http(s) referrer could carry a
 +        // page/query URL, so that case is redacted to just its scheme.
-+        private fun referrerPackage(activity: Activity?): String? {
-+            val referrer = activity?.referrer ?: return null
++        // `intent` should be the intent actually being handled, not just
++        // `activity`'s own — Activity#getReferrer() reads EXTRA_REFERRER off
++        // getIntent(), which OnNewIntent never updates unless the app calls
++        // setIntent() (this one doesn't), so for a warm-resume share it would
++        // return the ORIGINAL launch's referrer, not the sender of the new
++        // intent (PR review). Read the referrer extras off the incoming
++        // intent directly when present; activity.referrer is still correct
++        // and used as the fallback for the cold-start path, where the
++        // "incoming" intent already IS the activity's own creating intent.
++        private fun referrerPackage(activity: Activity?, intent: Intent? = null): String? {
++            val fromIntent = intent?.parcelable<Uri>(Intent.EXTRA_REFERRER)
++                ?: intent?.getStringExtra(Intent.EXTRA_REFERRER_NAME)?.let { Uri.parse(it) }
++            val referrer = fromIntent ?: activity?.referrer ?: return null
 +            return if (referrer.scheme == "android-app") referrer.host else "non-app:" + (referrer.scheme ?: "unknown")
 +        }
  
          @SuppressLint("Range")
          private fun getFileInfo(uri: Uri): Map<String, String?> {
-@@ -113,7 +239,30 @@ class ExpoShareIntentModule : Module() {
+@@ -113,7 +250,30 @@ class ExpoShareIntentModule : Module() {
  
          fun handleShareIntent(intent: Intent) {
              val activity = instance?.currentActivity
@@ -158,7 +169,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d
 +            if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
 +                val debugMessage = "share intent received: action=" + intent.action +
 +                    " type=" + intent.type +
-+                    " referrer=" + referrerPackage(activity) +
++                    " referrer=" + referrerPackage(activity, intent) +
 +                    " isTaskRoot=" + (activity?.isTaskRoot?.toString() ?: "unknown")
 +                recordDurableDebug(activity, debugMessage)
 +                notifyDebug(debugMessage)
@@ -174,7 +185,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d
                  val newIntent = Intent(intent).apply {
                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                  }
-@@ -121,8 +270,18 @@ class ExpoShareIntentModule : Module() {
+@@ -121,8 +281,18 @@ class ExpoShareIntentModule : Module() {
                  activity.finish()
                  return
              }
@@ -195,7 +206,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d
                  // text / urls
                  if (intent.action == Intent.ACTION_SEND) {
                      notifyShareIntent(mapOf(
-@@ -177,10 +336,19 @@ class ExpoShareIntentModule : Module() {
+@@ -177,10 +347,19 @@ class ExpoShareIntentModule : Module() {
      override fun definition() = ModuleDefinition {
          Name("ExpoShareIntentModule")
  
@@ -216,7 +227,7 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..5e9dbdb5ba554cb247869c8d284e5b5d
              ExpoShareIntentSingleton.isPending = false
              if (ExpoShareIntentSingleton.intent?.type != null) {
                  handleShareIntent(ExpoShareIntentSingleton.intent!!);
-@@ -196,7 +364,27 @@ class ExpoShareIntentModule : Module() {
+@@ -196,7 +375,27 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.isPending
          }
  
