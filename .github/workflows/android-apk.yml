@@ -331,14 +331,20 @@ jobs:
       # Compose the release body. For a versioned release, lead with the
       # human-written notes at docs/release-notes/<tag>.md (if present) so the
       # Release reads as a real changelog; the install/QR section is always
-      # appended. The rolling `dev` build keeps just the install section.
+      # appended. The rolling `dev` build keeps just the install section, but
+      # also checks if a release note file for its specific version label
+      # (e.g. docs/release-notes/v1.2.0-rc1.md) exists and includes it.
       - name: Compose release notes
         run: |
           BODY=dist/RELEASE_BODY.md
           NOTES="docs/release-notes/${{ steps.meta.outputs.tag }}.md"
+          LABEL_NOTES="docs/release-notes/${{ steps.meta.outputs.label }}.md"
           : > "$BODY"
           if [ -f "$NOTES" ]; then
             cat "$NOTES" >> "$BODY"
+            printf '\n\n---\n\n' >> "$BODY"
+          elif [ -n "${{ steps.meta.outputs.label }}" ] && [ -f "$LABEL_NOTES" ]; then
+            cat "$LABEL_NOTES" >> "$BODY"
             printf '\n\n---\n\n' >> "$BODY"
           fi
           cat >> "$BODY" <<EOF
@@ -424,6 +430,23 @@ jobs:
             exit 1
           fi
           export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+          # Set default release notes
+          NOTES_CONTENT=""
+          NOTES_TAG="docs/release-notes/${{ steps.meta.outputs.tag }}.md"
+          NOTES_LABEL="docs/release-notes/${{ steps.meta.outputs.label }}.md"
+          if [ -f "$NOTES_TAG" ]; then
+            NOTES_CONTENT=$(cat "$NOTES_TAG")
+          elif [ -n "${{ steps.meta.outputs.label }}" ] && [ -f "$NOTES_LABEL" ]; then
+            NOTES_CONTENT=$(cat "$NOTES_LABEL")
+          fi
+
+          TITLE="${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})"
+          if [ -n "$NOTES_CONTENT" ]; then
+            FB_NOTES="$TITLE"$'\n\n'"$NOTES_CONTENT"
+          else
+            FB_NOTES="$TITLE"
+          fi
+
           # Upload + distribute via the App Distribution REST API directly. We
           # avoid `firebase-tools`, whose CLI service-account auth is broken in
           # CI — it ignores a valid GOOGLE_APPLICATION_CREDENTIALS and dies with
@@ -431,7 +454,7 @@ jobs:
           # (firebase/firebase-tools#10041). A token minted straight from the SA
           # key works (verified in CI), so the script does exactly that.
           APK_PATH="dist/${{ steps.meta.outputs.apk }}" \
-          RELEASE_NOTES="${{ steps.meta.outputs.rel_name }} · ${{ steps.meta.outputs.sha_short }} (${{ github.ref_name }})" \
+          RELEASE_NOTES="$FB_NOTES" \
             node scripts/firebase-app-distribution.mjs
           # The EXIT trap above removes the key; bash -e propagates any failure.
 
