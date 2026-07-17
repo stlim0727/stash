@@ -75,6 +75,11 @@ const LABEL_SIZE = 24;
 const BOOKMARK_LABEL_SIZE = 13;
 const BOOKMARK_LABEL_WEIGHT = '600';
 const BOOKMARK_LABEL_MAX_CHARS = 18;
+// Keep gesture-time SVG text work bounded independently of library size. The
+// stable bucket preserves labels for the most connected bookmarks; a small
+// gesture-local bucket adds context around the user's initial touch focal point.
+const INTERACTION_PRIORITY_LABEL_LIMIT = 16;
+const INTERACTION_NEARBY_LABEL_LIMIT = 8;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
 // the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
 // HUB_MAX_R, and its label sits below (or, after the render-side declutter,
@@ -162,6 +167,59 @@ export function truncateGraphLabel(text: string, maxChars: number): string {
     return trimmed;
   }
   return `${trimmed.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+export function selectPriorityBookmarkLabelIds(
+  nodes: readonly PositionedNode[],
+  limit = INTERACTION_PRIORITY_LABEL_LIMIT,
+): Set<string> {
+  return new Set(
+    nodes
+      .filter((node) => node.kind === 'bookmark')
+      .sort((a, b) => b.degree - a.degree || a.id.localeCompare(b.id))
+      .slice(0, Math.max(0, limit))
+      .map((node) => node.id),
+  );
+}
+
+export function selectNearbyBookmarkLabelIds(input: {
+  nodes: readonly PositionedNode[];
+  excludedIds: ReadonlySet<string>;
+  focal: { x: number; y: number };
+  viewport: { w: number; h: number };
+  viewBox: { minX: number; minY: number; w: number; h: number };
+  scale: number;
+  pan: { x: number; y: number };
+  limit?: number;
+}): Set<string> {
+  const { nodes, excludedIds, focal, viewport, viewBox, scale, pan } = input;
+  const limit = Math.max(0, input.limit ?? INTERACTION_NEARBY_LABEL_LIMIT);
+  if (limit === 0 || viewport.w <= 0 || viewport.h <= 0 || viewBox.w <= 0 || viewBox.h <= 0) {
+    return new Set();
+  }
+  const fit = Math.min(viewport.w / viewBox.w, viewport.h / viewBox.h);
+  const letterboxX = (viewport.w - viewBox.w * fit) / 2;
+  const letterboxY = (viewport.h - viewBox.h * fit) / 2;
+  const centerX = viewport.w / 2;
+  const centerY = viewport.h / 2;
+
+  return new Set(
+    nodes
+      .filter((node) => node.kind === 'bookmark' && !excludedIds.has(node.id))
+      .map((node) => {
+        const fittedX = letterboxX + (node.x - viewBox.minX) * fit;
+        const fittedY = letterboxY + (node.y - viewBox.minY) * fit;
+        const screenX = centerX + (fittedX - centerX) * scale + pan.x;
+        const screenY = centerY + (fittedY - centerY) * scale + pan.y;
+        return {
+          id: node.id,
+          distanceSquared: (screenX - focal.x) ** 2 + (screenY - focal.y) ** 2,
+        };
+      })
+      .sort((a, b) => a.distanceSquared - b.distanceSquared || a.id.localeCompare(b.id))
+      .slice(0, limit)
+      .map(({ id }) => id),
+  );
 }
 
 // Max translate (in screen px) per axis: allow panning until only a minimum
@@ -413,6 +471,23 @@ export default function GraphScreen() {
     return map;
   }, [settled]);
 
+  const bookmarkNodes = useMemo(
+    () => (settled?.nodes ?? []).filter((node) => node.kind === 'bookmark'),
+    [settled],
+  );
+  const priorityBookmarkLabelIds = useMemo(
+    () => selectPriorityBookmarkLabelIds(bookmarkNodes),
+    [bookmarkNodes],
+  );
+  const priorityBookmarkNodes = useMemo(
+    () => bookmarkNodes.filter((node) => priorityBookmarkLabelIds.has(node.id)),
+    [bookmarkNodes, priorityBookmarkLabelIds],
+  );
+  const bulkBookmarkNodes = useMemo(
+    () => bookmarkNodes.filter((node) => !priorityBookmarkLabelIds.has(node.id)),
+    [bookmarkNodes, priorityBookmarkLabelIds],
+  );
+
   // Live "bookmark id → current title" lookup for the visible bookmark label.
   // `settled.nodes[i].label` is a snapshot from the last TOPOLOGY settle (see
   // `signature` above) — a title edit or enrichment result doesn't change tag
@@ -559,6 +634,9 @@ export default function GraphScreen() {
   // on zoom-in. So it's on only while interacting and off at rest, letting the
   // static view re-render as crisp vector SVG at the settled zoom.
   const [interacting, setInteracting] = useState(false);
+  const [nearbyBookmarkLabelIds, setNearbyBookmarkLabelIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   // Pan/zoom over the static canvas — zero new deps: PanResponder drives an
   // Animated transform on the outer view. Taps fall through to the SVG nodes
@@ -697,6 +775,7 @@ export default function GraphScreen() {
       const settle = () => {
         gestureActiveRef.current = false;
         setInteracting(false);
+        setNearbyBookmarkLabelIds(new Set());
         translateX.flattenOffset();
         translateY.flattenOffset();
         lastScale.current = liveScale.current;
@@ -727,7 +806,7 @@ export default function GraphScreen() {
           event.nativeEvent.touches.length >= 2 ||
           Math.abs(gesture.dx) > 4 ||
           Math.abs(gesture.dy) > 4,
-        onPanResponderGrant: () => {
+        onPanResponderGrant: (event) => {
           // A touch gesture starting mid-wheel-burst takes over the shared
           // Animated offset — cancel the pending debounced wheel bake so it
           // can't fire mid-touch-gesture and stomp state settle() is about
@@ -740,6 +819,25 @@ export default function GraphScreen() {
           gestureActiveRef.current = true;
           setInteracting(true);
           gestureStartScaleRef.current = lastScale.current;
+          const touches = event.nativeEvent.touches;
+          const origin = containerOriginRef.current;
+          const focal =
+            touches.length >= 2
+              ? touchCenterInViewport(touches[0], touches[1], origin)
+              : touches[0]
+                ? { x: touches[0].pageX - origin.x, y: touches[0].pageY - origin.y }
+                : { x: viewportRef.current.w / 2, y: viewportRef.current.h / 2 };
+          setNearbyBookmarkLabelIds(
+            selectNearbyBookmarkLabelIds({
+              nodes: bulkBookmarkNodes,
+              excludedIds: priorityBookmarkLabelIds,
+              focal,
+              viewport: viewportRef.current,
+              viewBox: fitViewBoxRectRef.current,
+              scale: liveScale.current,
+              pan: panOffset.current,
+            }),
+          );
           translateX.extractOffset();
           translateY.extractOffset();
           panStart.current = { x: panOffset.current.x, y: panOffset.current.y };
@@ -808,7 +906,14 @@ export default function GraphScreen() {
         onPanResponderTerminate: settle,
       });
     },
-    [translateX, translateY, scale, axisBoundsAt],
+    [
+      translateX,
+      translateY,
+      scale,
+      axisBoundsAt,
+      bulkBookmarkNodes,
+      priorityBookmarkLabelIds,
+    ],
   );
 
   // Wheel/trackpad zoom (web only): mirrors the pinch-zoom math above but keyed
@@ -938,6 +1043,8 @@ export default function GraphScreen() {
     }
     wheelBurstStartRef.current = null;
     setViewBoxRect(fitViewBoxRect);
+    setInteracting(false);
+    setNearbyBookmarkLabelIds(new Set());
     translateX.setOffset(0);
     translateX.setValue(0);
     translateY.setOffset(0);
@@ -1047,31 +1154,7 @@ export default function GraphScreen() {
         })}
         {settled.nodes.map((node) => {
           if (node.kind === 'bookmark') {
-            // Fixed placement below the (small, non-decluttered) bookmark node —
-            // these are far more numerous than hubs, so running the hub
-            // declutter pass over them too would be O(n²) label collision
-            // checks on top of the O(n²) force layout. Length-capped instead.
-            return (
-              <SvgText
-                key={`l${node.id}`}
-                x={node.x}
-                y={node.y + BOOKMARK_R + BOOKMARK_LABEL_SIZE}
-                fill={palette.textSecondary}
-                fontSize={BOOKMARK_LABEL_SIZE}
-                fontWeight={BOOKMARK_LABEL_WEIGHT}
-                textAnchor="middle"
-                // Labels sit close to (and can overlap) neighboring bookmark/tag
-                // circles in a dense graph; without this, an overlapping label —
-                // rendered after the circles, with no onPress of its own — would
-                // steal the tap and make the circle beneath it unreachable.
-                pointerEvents="none"
-              >
-                {truncateGraphLabel(
-                  bookmarkTitleById.get(node.bookmark_id) ?? node.label,
-                  BOOKMARK_LABEL_MAX_CHARS,
-                )}
-              </SvgText>
-            );
+            return null;
           }
           // Decluttered placement (may sit above/nudged instead of the fixed
           // below position); the baseline is already resolved for either side.
@@ -1095,7 +1178,43 @@ export default function GraphScreen() {
         })}
       </>
     );
-  }, [settled, nodeById, labelById, bookmarkTitleById, palette, t, openBookmark, applyTagFacet]);
+  }, [settled, nodeById, labelById, palette, t, openBookmark, applyTagFacet]);
+
+  const renderBookmarkLabel = useCallback(
+    (node: (typeof bookmarkNodes)[number]) => (
+      <SvgText
+        key={`l${node.id}`}
+        x={node.x}
+        y={node.y + BOOKMARK_R + BOOKMARK_LABEL_SIZE}
+        fill={palette.textSecondary}
+        fontSize={BOOKMARK_LABEL_SIZE}
+        fontWeight={BOOKMARK_LABEL_WEIGHT}
+        textAnchor="middle"
+        pointerEvents="none"
+      >
+        {truncateGraphLabel(
+          bookmarkTitleById.get(node.bookmark_id) ?? node.label,
+          BOOKMARK_LABEL_MAX_CHARS,
+        )}
+      </SvgText>
+    ),
+    [bookmarkTitleById, palette.textSecondary],
+  );
+  const priorityBookmarkLabels = useMemo(
+    () => priorityBookmarkNodes.map(renderBookmarkLabel),
+    [priorityBookmarkNodes, renderBookmarkLabel],
+  );
+  const bulkBookmarkLabels = useMemo(
+    () => bulkBookmarkNodes.map(renderBookmarkLabel),
+    [bulkBookmarkNodes, renderBookmarkLabel],
+  );
+  const nearbyBookmarkLabels = useMemo(
+    () =>
+      bulkBookmarkNodes
+        .filter((node) => nearbyBookmarkLabelIds.has(node.id))
+        .map(renderBookmarkLabel),
+    [bulkBookmarkNodes, nearbyBookmarkLabelIds, renderBookmarkLabel],
+  );
 
   // No active bookmarks → a calm, intentional empty state (never a blank canvas).
   // This short-circuits BEFORE the loading state: an empty stash shows the empty
@@ -1169,7 +1288,26 @@ export default function GraphScreen() {
         >
           <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
             {svgChildren}
+            {priorityBookmarkLabels}
           </Svg>
+          <View
+            pointerEvents="none"
+            testID="graph-bookmark-labels-bulk"
+            style={[StyleSheet.absoluteFill, interacting ? styles.hiddenLabelLayer : null]}
+          >
+            <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
+              {bulkBookmarkLabels}
+            </Svg>
+          </View>
+          <View
+            pointerEvents="none"
+            testID="graph-bookmark-labels-nearby"
+            style={[StyleSheet.absoluteFill, interacting ? null : styles.hiddenLabelLayer]}
+          >
+            <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
+              {nearbyBookmarkLabels}
+            </Svg>
+          </View>
         </Animated.View>
       </View>
 
@@ -1246,6 +1384,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     overflow: 'hidden',
+  },
+  hiddenLabelLayer: {
+    display: 'none',
   },
   emptyContainer: {
     flex: 1,
