@@ -932,6 +932,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [persistPendingAiTrigger],
   );
 
+  // Write aiRetryState.current to durable storage, rejecting (rather than
+  // swallowing) on failure. Only armAiRetry uses this directly — its caller
+  // (requestAiEnrichment's catch) must know whether the write actually landed
+  // before it clears the pending-trigger marker (see armAiRetry below). Every
+  // other caller goes through persistAiRetryState, which keeps swallowing.
+  const writeAiRetryState = useCallback((): Promise<void> => {
+    return ensureRepositoryReady().then(() =>
+      repository.setMeta(AI_RETRY_STATE_KEY, JSON.stringify(aiRetryState.current)),
+    );
+  }, []);
+
   // Persist the AI-retry bookkeeping map after a ref mutation (mirrors
   // persistPendingAiTrigger). Does NOT touch React state — callers update the
   // reactive `aiRetryIds` mirror themselves via `syncAiRetryIds`, at the point
@@ -939,10 +950,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Returns the write's promise for the same reason persistPendingAiTrigger
   // does.
   const persistAiRetryState = useCallback((): Promise<void> => {
-    return ensureRepositoryReady()
-      .then(() => repository.setMeta(AI_RETRY_STATE_KEY, JSON.stringify(aiRetryState.current)))
-      .catch((error) => logStorageError('ai retry state', error));
-  }, []);
+    return writeAiRetryState().catch((error) => logStorageError('ai retry state', error));
+  }, [writeAiRetryState]);
 
   // Refresh the reactive mirror of aiRetryState's keys. Called once per
   // settled requestAiEnrichment call (from its `finally`) rather than
@@ -958,12 +967,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // distinct "gave up" state, so the bookmark reverts to looking exactly like
   // one that was never enriched. Local-only: never touches the bookmark row,
   // updated_at, or the sync queue.
-  // Returns the retry-state write's promise (see persistAiRetryState) so a
-  // caller that must not clear a different durable marker until this one has
-  // actually landed on disk — see requestAiEnrichment's catch below — can
-  // await it instead of firing-and-forgetting.
+  // Returns whether the retry-state write actually landed on disk (unlike
+  // persistAiRetryState, this one doesn't swallow failures) so a caller that
+  // must not clear a different durable marker until this write is confirmed
+  // — see requestAiEnrichment's catch below — can gate on it instead of
+  // assuming success.
   const armAiRetry = useCallback(
-    (bookmarkId: string): Promise<void> => {
+    (bookmarkId: string): Promise<boolean> => {
       // The request that just failed can have been in flight when the user
       // trashed or permanently deleted this bookmark — trashBookmark/
       // deleteBookmark already clear an EXISTING marker synchronously at that
@@ -973,11 +983,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // for a hard delete, fire a doomed request against an id that no longer
       // exists). Skip arming once there's positive evidence of either.
       if (deletedIds.current.has(bookmarkId)) {
-        return Promise.resolve();
+        return Promise.resolve(true);
       }
       const forBookmark = bookmarksRef.current?.find((item) => item.id === bookmarkId);
       if (forBookmark?.deleted_at) {
-        return Promise.resolve();
+        return Promise.resolve(true);
       }
       const now = new Date().toISOString();
       const existing = aiRetryState.current[bookmarkId];
@@ -993,9 +1003,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         };
       }
       aiRetryState.current = next;
-      return persistAiRetryState();
+      return writeAiRetryState().then(
+        () => true,
+        (error) => {
+          logStorageError('ai retry state', error);
+          return false;
+        },
+      );
     },
-    [persistAiRetryState],
+    [writeAiRetryState],
   );
 
   // Clear a bookmark's retry marker after a successful attempt.
@@ -1040,13 +1056,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [persistAiRetryState, syncAiRetryIds, persistPendingAiTrigger],
   );
 
-  // Re-key this account's AI-suggestion bookkeeping from a carried-over
-  // bookmark's old (anonymous) id onto its new id — mirrors
-  // rekeyPendingTagOps's purpose for tag state. Without this, the carried-
-  // over bookmark (now living under newId) silently loses retry eligibility,
-  // while the stale oldId entry becomes an orphan that fires against an id
-  // that no longer exists.
-  const rehomeAiRetryBookkeeping = useCallback(
+  // Re-key this account's AI-suggestion bookkeeping (aiRetryState,
+  // pendingAiTrigger, aiTriggerAttempted) from an old bookmark id onto its
+  // new one — mirrors rekeyPendingTagOps's purpose for tag state. This is the
+  // ONE place every bookmark-id swap in this file must call: the anon→real
+  // carry-over rehome, the create-upload local→remote swap (including a
+  // rehomed bookmark's SECOND swap, intermediate-local→new-account-remote,
+  // since that's the exact same code path), and the synced-leftover
+  // crash-recovery reconciliation. Without this, a re-keyed bookmark silently
+  // loses retry eligibility and its stale old-id entry becomes an orphan that
+  // fires against an id that no longer exists.
+  //
+  // aiTriggerAttempted is deliberately NOT carried onto newId — only removed
+  // from oldId. It's a session-only in-memory "already fired this launch"
+  // dedupe marker (see its declaration), so its only valid purpose is
+  // preventing a same-session re-fire of the SAME still-pending trigger for
+  // the SAME identity. Carrying it forward doesn't protect anything: an
+  // in-flight request still keyed to oldId targets a row/account that no
+  // longer exists under this identity and just fails benignly, while newId
+  // typically gets a brand-new `markPendingAiTrigger` call immediately after
+  // this swap (see the create-upload handling below) — carrying the "already
+  // attempted" flag onto that fresh identity made the deferred-trigger effect
+  // (`aiTriggerAttempted.current.has(id)`) skip it forever this session, so
+  // the re-keyed bookmark silently never got AI suggestions until an app
+  // restart cleared the in-memory set.
+  const remapAiRetryIdentity = useCallback(
     (idMap: ReadonlyMap<string, string>) => {
       let retryChanged = false;
       const nextRetry = { ...aiRetryState.current };
@@ -1068,9 +1102,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           pendingAiTrigger.current.add(newId);
           triggerChanged = true;
         }
-        if (aiTriggerAttempted.current.delete(oldId)) {
-          aiTriggerAttempted.current.add(newId);
-        }
+        aiTriggerAttempted.current.delete(oldId);
       }
       if (triggerChanged) {
         persistPendingAiTrigger();
@@ -2275,7 +2307,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // writes could still leave storage with the trigger cleared and the
         // retry marker never written, reopening the crash window this
         // ordering exists to close (see armAiRetry/persistAiRetryState).
-        await armAiRetry(bookmarkId);
+        const retryStateArmed = await armAiRetry(bookmarkId);
         // The crash-safety marker (PENDING_AI_TRIGGER_KEY) only needs to
         // survive from launch until this first attempt's outcome is durably
         // recorded — success clears it below in the settle handler; failure
@@ -2283,8 +2315,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // above, so clear it here too. Otherwise a relaunch inside the
         // backoff window rehydrates it and the deferred first-trigger effect
         // fires `requestAiEnrichment` again immediately, bypassing the whole
-        // backoff schedule on every restart.
-        await clearPendingAiTrigger(bookmarkId);
+        // backoff schedule on every restart. But only once armAiRetry's write
+        // is confirmed — if it didn't actually land, clearing this now would
+        // leave nothing durable recording the failed attempt at all, and a
+        // relaunch inside the backoff window would silently never retry.
+        if (retryStateArmed) {
+          await clearPendingAiTrigger(bookmarkId);
+        }
         // Rate limited (429): expected when many bookmarks are captured at once.
         // Return a sentinel the Detail screen (still) localizes into a calm
         // message pending its own follow-up UI change.
@@ -2474,6 +2511,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // getBookmark instead of flashing "not found".
           if (localId !== reconciled.id) {
             idAliases.current.set(localId, reconciled.id);
+            // This is a bookmark-id swap like any other (see
+            // remapAiRetryIdentity) — without it, a bookmark whose crash-safe
+            // reconciliation lands here silently loses its retry eligibility,
+            // parked on the now-dead local id.
+            remapAiRetryIdentity(new Map([[localId, reconciled.id]]));
           }
           // Collapse onto the remote id: if the pull already brought this
           // bookmark down under its UUID, a plain map would leave two entries
@@ -2636,7 +2678,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 // silently loses its retry eligibility the moment its create
                 // upload swaps it onto its final server id — the marker stays
                 // parked on the now-dead intermediate local id.
-                rehomeAiRetryBookkeeping(idMap);
+                remapAiRetryIdentity(idMap);
               }
               // `uploadedPayload` is set IFF a create just uploaded — whether
               // the entry began as a `create` or was promoted from an orphaned
@@ -2727,7 +2769,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // Re-key AI-suggestion bookkeeping the same way, so the carried-
               // over bookmark keeps its retry eligibility under its new id
               // instead of stranding it on the stale old one.
-              rehomeAiRetryBookkeeping(idMap);
+              remapAiRetryIdentity(idMap);
             },
             drop: (ids) => {
               // Real A→real B switch: purge A's pending tag ops + links so the
