@@ -351,6 +351,43 @@ test('refreshes the session before submitting so an expired token is renewed', a
   expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
 });
 
+test('excludes a permanently-too-long-URL queue entry from queueDepth/lastError (Sentry STASH-2T/2V)', async () => {
+  // A stuck create that failed with the permanent url_hash btree error stays
+  // in the queue forever by design (settings.tsx's `waiting` already excludes
+  // it). Without the same exclusion here, this old, unrelated failure
+  // resurfaces on every later report as if the CURRENT share just failed.
+  await fakeRepo.repository.enqueue({
+    local_id: 'local-stuck',
+    remote_id: null,
+    operation: 'create',
+    payload: { url: 'https://example.com/stuck' },
+    sync_status: 'failed',
+    retry_count: 3,
+    last_error:
+      'index row size 2888 exceeds btree version 4 maximum 2704 for index "bookmarks_user_url_hash_active_idx"',
+    created_at: '2026-07-17T00:00:00.000Z',
+    updated_at: '2026-07-17T00:00:00.000Z',
+  });
+
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Shared but failed to save');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  const arg = submitReport.mock.calls[0]![0] as {
+    context: { queueDepth?: number; lastError?: string };
+  };
+  expect(arg.context.queueDepth).toBe(0);
+  expect(arg.context.lastError).toBeUndefined();
+});
+
 test('shows a friendly message when Supabase is not configured', async () => {
   mockAuth = {
     status: 'not_configured',

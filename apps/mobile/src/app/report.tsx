@@ -32,6 +32,7 @@ import {
 } from '@/feedback/screenshot-session';
 import { getShareDiagnostics, hydrateNativeShareDebugLog } from '@/share/share-diagnostics';
 import { getStorageDiagnostics } from '@/storage/diagnostics';
+import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
 import { useT } from '@/i18n';
 import { Button } from '@/ui/Button';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
@@ -145,11 +146,19 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
   const platform = Platform.OS;
 
+  // A permanently-too-long URL (Sentry STASH-2J) stays 'failed' in the queue
+  // forever by design (see settings.tsx's `waiting`) — it must not count here
+  // either, or it resurfaces as this report's queueDepth/lastError on every
+  // later, unrelated share, making an old dead entry look like today's
+  // failure (Sentry STASH-2T/STASH-2V).
   const queueDepth = queue.filter(
-    (entry) => entry.sync_status === 'pending' || entry.sync_status === 'failed',
+    (entry) =>
+      (entry.sync_status === 'pending' || entry.sync_status === 'failed') &&
+      !isPermanentlyUnsyncableUrl(entry),
   ).length;
   const lastError =
-    queue.find((entry) => entry.last_error)?.last_error ?? undefined;
+    queue.find((entry) => entry.last_error && !isPermanentlyUnsyncableUrl(entry))?.last_error ??
+    undefined;
 
   const buildLabel = describeBuild(getBuildInfo(Constants.expoConfig?.extra));
 
