@@ -278,6 +278,38 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('records how long a share waited on a slow cold-start load (Sentry STASH-2T/STASH-2V)', async () => {
+    // Distinguishes "the share arrived but sat waiting on a slow cold start"
+    // from "the share never reached this code at all" — the two very
+    // different failure modes both prior reports' "shared but nothing saved,
+    // no toast" could describe, with no evidence to tell them apart.
+    fakeRepo.__reset([]);
+    mockLoadGate.hold = true;
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/cold', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+    await waitFor(() => expect(mockShareIntent.resetShareIntent).toHaveBeenCalled());
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await act(async () => {
+      mockLoadGate.release?.();
+    });
+
+    await findByText('Saved to Keepory');
+    await waitFor(async () => {
+      const record = parseShareAttemptDiagnostics(
+        await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
+      );
+      expect(typeof record?.loadWaitMs).toBe('number');
+      expect(record?.loadWaitMs).toBeGreaterThanOrEqual(40);
+    });
+    unmount();
+  });
+
   it('re-sharing a share.google link with a different si token dedupes to one bookmark', async () => {
     // issie's exact report: re-sharing the same content (share.google / YouTube)
     // appends a fresh ?si=… share token each time, so the two payloads differ.

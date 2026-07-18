@@ -197,6 +197,10 @@ export function ShareIntentHandler() {
       fileCount: share.fileCount,
       fileMimeTypes: share.fileMimeTypes,
       result: result.status,
+      // How long this share sat waiting on the cold-start store load before it
+      // could be processed (Sentry STASH-2T/STASH-2V: a "shared but nothing
+      // saved, no toast" report with no evidence of what actually happened).
+      loadWaitMs: saveStartedAt - new Date(share.receivedAt).getTime(),
     });
     if (saved) {
       message = result.status === 'duplicate' ? t('toast.duplicate') : t('toast.saved');

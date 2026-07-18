@@ -78,7 +78,7 @@ export function getShareDiagnostics(): ShareAttemptDiagnostics | undefined {
 }
 
 /**
- * Recover the native module's durable journal for its five most recent share
+ * Recover the native module's durable journal for its most recent share
  * attempts (Android only; see `ShareIntentDebugJournal` in the patched
  * module). It records timestamps and lifecycle phases, never shared content.
  * The equivalent live `onDebugLog` event is

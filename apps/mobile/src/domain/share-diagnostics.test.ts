@@ -53,6 +53,30 @@ test('parse returns null for malformed JSON or an unrecognized result', () => {
   assert.equal(parseShareAttemptDiagnostics(JSON.stringify({ hasUrl: true })), null);
 });
 
+test('build keeps a valid loadWaitMs and rounds it, but drops a negative one', () => {
+  const withWait = buildShareAttemptDiagnostics({
+    hasUrl: true,
+    hasText: false,
+    hasImage: false,
+    fileCount: 0,
+    fileMimeTypes: [],
+    result: 'created',
+    loadWaitMs: 1234.7,
+  });
+  assert.equal(withWait.loadWaitMs, 1235);
+
+  const negative = buildShareAttemptDiagnostics({
+    hasUrl: true,
+    hasText: false,
+    hasImage: false,
+    fileCount: 0,
+    fileMimeTypes: [],
+    result: 'created',
+    loadWaitMs: -5,
+  });
+  assert.equal(negative.loadWaitMs, undefined);
+});
+
 test('serialize round-trips through parse', () => {
   const value = buildShareAttemptDiagnostics({
     attemptId: 'native-attempt-1',
@@ -63,6 +87,7 @@ test('serialize round-trips through parse', () => {
     fileCount: 2,
     fileMimeTypes: ['image/jpeg', 'video/mp4'],
     result: 'created',
+    loadWaitMs: 4200,
   });
   assert.deepEqual(parseShareAttemptDiagnostics(serializeShareAttemptDiagnostics(value)), value);
 });
