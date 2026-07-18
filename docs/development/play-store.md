@@ -36,9 +36,7 @@ Official references:
 - `docs/account-deletion.html` is the account/data deletion request page draft,
   mirrored to `apps/mobile/public/account-deletion.html` so the web export serves
   it.
-- Local `pnpm` must be run through Corepack or downgraded to the repo range:
-  the globally installed `pnpm` was 11.7.0, while the repo requires
-  `>=10 <11`. `corepack pnpm -v` returned 10.28.1.
+- Local `pnpm` should fall within the repo range: `>=10 <12`. The globally installed `pnpm` 11.x is now officially supported, so running `pnpm` directly works without downgrading or using Corepack.
 - `corepack pnpm --filter mobile exec expo config --type public` currently
   fails locally because Expo cannot resolve the `expo-splash-screen` plugin from
   the current dependency layout. CI does a hoisted install before native builds,
