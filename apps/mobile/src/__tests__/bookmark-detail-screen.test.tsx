@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Linking, StyleSheet } from 'react-native';
 import type { ReactNode } from 'react';
 
@@ -9,19 +9,59 @@ jest.mock('react-native-safe-area-context', () => ({
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
 );
+
+// Every existing test in this file runs with no Supabase session at all — AI
+// enrichment is never actually requested over the network. One test (the
+// real in-flight retry one, below) needs a genuine session so the store's
+// requestAiEnrichment doesn't short-circuit before firing; `mock`-prefixed so
+// Jest's factory hoisting allows referencing it, reset after each test so the
+// override never leaks into an unrelated one.
+const mockAuthSessionValue = {
+  access_token: 'token',
+  refresh_token: 'refresh',
+  token_type: 'bearer',
+  expires_at: Math.floor(Date.now() / 1000) + 3600,
+  user: { id: 'user-test' },
+};
+let mockAuthSession: typeof mockAuthSessionValue | null = null;
+afterEach(() => {
+  mockAuthSession = null;
+});
 jest.mock('@/supabase/auth-provider', () => ({
   useSupabaseAuth: () => ({
-    status: 'not_configured',
-    session: null,
-    userId: null,
-    message: 'not configured',
-    ensureAnonymousSession: async () => null,
+    status: mockAuthSession ? 'anonymous' : 'not_configured',
+    session: mockAuthSession,
+    userId: mockAuthSession ? 'user-test' : null,
+    message: mockAuthSession ? null : 'not configured',
+    ensureAnonymousSession: async () => mockAuthSession,
   }),
   SupabaseAuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+
+// Stub the network API so a test that arms a real Supabase session (above)
+// doesn't hit a real backend for pull-sync's list calls; requestEnrichment is
+// spied so a test can gate its own promise to observe the in-flight window.
+jest.mock('@/api/bookmarks', () => {
+  const empty = async () => [];
+  const requestEnrichment = jest.fn();
+  return {
+    __spies: { requestEnrichment },
+    createBookmarkApi: () => ({
+      requestEnrichment,
+      addTags: async () => [],
+      createBookmark: async () => ({ bookmark_id: 'unused' }),
+      listBookmarksUpdatedSince: empty,
+      listBookmarkIds: empty,
+      listEnrichmentsUpdatedSince: empty,
+      listTags: empty,
+      listBookmarkTags: empty,
+      listCollections: empty,
+    }),
+  };
+});
 
 const mockSetStringAsync = jest.fn();
 jest.mock('expo-clipboard', () => ({
@@ -53,6 +93,9 @@ import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 const SYNCED_ID = '7e64cf1e-0000-4000-8000-000000000001';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
+const apiMock = jest.requireMock('@/api/bookmarks') as {
+  __spies: { requestEnrichment: jest.Mock };
+};
 
 function renderDetail() {
   return render(
@@ -533,7 +576,7 @@ test('a degraded enrichment WITH suggestions shows a non-error "basic suggestion
   expect(screen.getByText(/AI is over capacity right now — showing basic suggestions/)).toBeTruthy();
 });
 
-test('a rate-limited fallback with nothing to suggest shows a standalone retry note, no badge', async () => {
+test('a rate-limited fallback with nothing to suggest shows a standalone "try again later" note, no badge', async () => {
   mockRouteId = SYNCED_ID;
   // Rate limit is the one reason worth keeping when the card is otherwise empty
   // — but there are no basic suggestions to point at, so the copy must be the
@@ -557,10 +600,99 @@ test('a rate-limited fallback with nothing to suggest shows a standalone retry n
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
 
+  // This is a completed (if degraded) attempt with no armed retry marker, so
+  // the note must not claim a background retry is scheduled ("Still working
+  // on AI suggestions… we'll keep trying automatically" would be false here).
   expect(screen.getByText(/hit their limit for now/)).toBeTruthy();
+  expect(screen.queryByText(/Still working on AI suggestions/)).toBeNull();
   expect(screen.queryByText(/showing basic suggestions/)).toBeNull();
   expect(screen.queryByText('dummy-v0')).toBeNull();
   expect(screen.getByText('Refresh AI suggestions')).toBeTruthy();
+});
+
+test('a bookmark with no enrichment yet but an armed retry marker shows the calm postponed note', async () => {
+  mockRouteId = SYNCED_ID;
+  // No ai_enrichments row at all (never degraded — there's nothing to call
+  // "degraded") — just a durable marker from a prior failed attempt that
+  // hasn't exhausted its retry cap. isAiSuggestionPostponed should be true and
+  // drive the same calm copy as the degraded-fallback case above.
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })]);
+  const now = new Date().toISOString();
+  fakeRepo.__setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({ [SYNCED_ID]: { firstAttemptAt: now, lastAttemptAt: now, attemptCount: 1 } }),
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  expect(screen.getByText(/Still working on AI suggestions/)).toBeTruthy();
+  // The button never disappears — capture/organizing stays reachable — and
+  // since no enrichment ever landed it still reads as the first-ask label.
+  expect(screen.getByText('Suggest with AI')).toBeTruthy();
+});
+
+test('a genuine in-flight automatic retry through the real store keeps the skeleton suppressed', async () => {
+  // Unlike bookmark-detail-ai-retry-ui.test.tsx (which mocks useBookmarks
+  // wholesale) and the static "postponed, not in-flight" case above, this
+  // wires the real BookmarkDetailScreen to the real store with a genuinely
+  // unresolved requestAiEnrichment call, so isEnriching flips true through
+  // actual store bookkeeping — not a hand-fed constant. Mirrors the
+  // gate-a-promise/assert-mid-flight pattern from
+  // ai-enrichment-store.test.tsx's "a deferred first attempt keeps a durable
+  // marker throughout the in-flight window and on failure" (commit 6c77e59).
+  mockRouteId = SYNCED_ID;
+  mockAuthSession = mockAuthSessionValue;
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })]);
+  // A prior failed attempt is already on record (hadPriorEnrichmentAttempt is
+  // true) whose backoff (2 minutes, for attemptCount 1) has already elapsed,
+  // so the cold-launch retry check fires a real automatic retry on mount.
+  const past = new Date(Date.now() - 5 * 60_000).toISOString();
+  fakeRepo.__setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({ [SYNCED_ID]: { firstAttemptAt: past, lastAttemptAt: past, attemptCount: 1 } }),
+  );
+
+  let reject!: (error: unknown) => void;
+  const gate = new Promise((_resolve, r) => {
+    reject = r;
+  });
+  gate.catch(() => {}); // silence the unhandled-rejection warning from the gate itself
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    await gate; // simulates the live network round trip staying open
+    throw new Error('unreachable');
+  });
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  // The cold-launch retry check runs its backoff scan as soon as storage +
+  // auth are ready, so the retry actually fires for real through the store
+  // (not a mocked flag) essentially on mount.
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalled());
+
+  // Mid-flight: this is a retry, not the bookmark's very first attempt, so the
+  // ambient "filling in" skeleton must stay suppressed (the
+  // `aiWorking && !hadPriorEnrichmentAttempt` gate in [id].tsx) — no flash of
+  // an "any second now" placeholder that would then go quiet again next cycle.
+  expect(screen.queryByLabelText('Working…')).toBeNull();
+  // The affordance to ask for AI stays reachable throughout — the screen
+  // never reads as a blocking wait, auto-trigger or not.
+  expect(screen.getByText('Suggest with AI')).toBeTruthy();
+  // Nothing else leaks in either: no stray model badge/dummy-v0 tag, no
+  // degraded note — there's still no ai_enrichments row at all.
+  expect(screen.queryByText('dummy-v0')).toBeNull();
+
+  // Let the in-flight request actually fail, re-arming the retry marker.
+  await act(async () => {
+    reject(new Error('network died mid-request'));
+    await Promise.resolve();
+  });
+
+  // Once it settles, the calm note is back with its original, unchanged copy
+  // — no error banner, and the skeleton never rendered at any point.
+  await waitFor(() => expect(screen.getByText(/Still working on AI suggestions/)).toBeTruthy());
+  expect(screen.queryByLabelText('Working…')).toBeNull();
 });
 
 test('dismissing a suggested tag removes it from the list', async () => {

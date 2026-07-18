@@ -1,10 +1,22 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
-import { pendingSuggestedFolder, pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
+import { pendingSuggestedFolder, pendingSummary, pendingSuggestions, suggestedFolderTokens } from '@/domain/ai-suggestions';
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { displayTitle } from '@/domain/item-display';
 import { useBookmarks } from '@/store/bookmarks';
@@ -12,10 +24,25 @@ import type { SuggestedTag } from '@/domain/types';
 import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
 import { useCaptureToast } from '@/ui/capture-toast';
 import { Button } from '@/ui/Button';
+import { ProposedSummary } from '@/ui/ProposedSummary';
 import {
   acceptSuggestionBundle,
   dismissSuggestionBundle,
 } from '@/domain/suggestion-actions';
+
+// Matches the truncation safety net on the Detail screen (see bookmark/[id].tsx).
+const MAX_NOTES_LENGTH = 10000;
+
+// On wide (desktop-web) viewports, Review docks as a left-side sheet over the
+// dimmed Inbox (mirrors Settings' right-docked sheet); this caps the panel
+// width. No effect on phones (their width is already below the breakpoint).
+const SHEET_PANEL_MAX_WIDTH = 720;
+
+// Contains scroll chaining to this modal's ScrollView on web (mirrors
+// Settings/Report) — without it, pulling past the top/bottom of the card list
+// can rubber-band the transparentModal and expose the Inbox behind it.
+const webOverscrollContain: StyleProp<ViewStyle> =
+  Platform.OS === 'web' ? ({ overscrollBehavior: 'contain' } as ViewStyle) : undefined;
 
 interface ReviewItem {
   id: string;
@@ -24,12 +51,26 @@ interface ReviewItem {
   folder: SuggestedFolder | null;
   // Every token identifying `folder`, so dismissing records them all (durable).
   folderTokens: string[];
+  // Proposed-summary widget (mirrors Detail's ProposedSummary) — null when there's
+  // no un-reviewed AI summary to offer as a note.
+  summary: string | null;
+  summaryTok: string | null;
+  notes: string | null;
+  // Mirrors Detail's "Edited since these suggestions" hint — true when the
+  // enrichment behind this card's suggestions is stale (a title/notes edit
+  // landed after the AI ran).
+  stale: boolean;
 }
 
 export default function ReviewScreen() {
   const palette = usePalette();
   const t = useT();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+  // Wide viewports present Review as a left-side sheet over a dimmed Inbox;
+  // phones keep the full-screen layout (mirrors Settings' right-docked sheet).
+  const { width, height } = useWindowDimensions();
+  const asSheet = width >= 760;
   const { show: showToast } = useCaptureToast();
   const {
     inbox,
@@ -46,6 +87,9 @@ export default function ReviewScreen() {
     dismissFolderSuggestion,
     unseenSuggestionIds,
     clearUnseenSuggestions,
+    getReviewedSummary,
+    markSummaryReviewed,
+    updateBookmarkFields,
   } = useBookmarks();
   const [busy, setBusy] = useState(false);
 
@@ -81,7 +125,8 @@ export default function ReviewScreen() {
         bookmark.collection_id,
         getDismissedFolderSuggestions(bookmark.id),
       );
-      if (suggestions.length > 0 || folder) {
+      const summary = pendingSummary(bookmark.metadata_status, enrichment, getReviewedSummary(bookmark.id));
+      if (suggestions.length > 0 || folder || summary) {
         result.push({
           id: bookmark.id,
           title: displayTitle(bookmark) ?? t('common.untitled'),
@@ -90,6 +135,11 @@ export default function ReviewScreen() {
           folderTokens: folder
             ? suggestedFolderTokens(folder, enrichment?.suggested_collection_name)
             : [],
+          summary: summary?.text ?? null,
+          summaryTok: summary?.token ?? null,
+          notes: bookmark.notes,
+          // Mirrors Detail's "Edited since these suggestions" hint.
+          stale: enrichment?.status === 'stale',
         });
       }
     }
@@ -101,6 +151,7 @@ export default function ReviewScreen() {
     getTagsForBookmark,
     getEnrichment,
     getReviewedSuggestions,
+    getReviewedSummary,
     t,
   ]);
 
@@ -200,11 +251,39 @@ export default function ReviewScreen() {
     });
   };
 
+  // Accept the proposed summary into the note — mirrors Detail's handleUseSummary
+  // (sacred-fields rule: fills an empty note, appends to a non-empty one, never
+  // overwrites). Durable: marking it reviewed keeps an identical re-pull quiet.
+  const useSummaryAsNote = (item: ReviewItem) => {
+    if (!item.summary || !item.summaryTok) {
+      return;
+    }
+    const currentNotes = item.notes ?? '';
+    const nextNotes = currentNotes.trim() === '' ? item.summary : `${currentNotes}\n\n${item.summary}`;
+    const safeNotes = nextNotes.length > MAX_NOTES_LENGTH ? nextNotes.slice(0, MAX_NOTES_LENGTH) : nextNotes;
+    updateBookmarkFields(item.id, { notes: safeNotes });
+    markSummaryReviewed(item.id, item.summaryTok);
+  };
+
+  // Dismiss the proposed summary — durable, mirroring Detail's handleDismissSummary.
+  const dismissSummary = (item: ReviewItem) => {
+    if (item.summaryTok) {
+      markSummaryReviewed(item.id, item.summaryTok);
+    }
+  };
+
   // Bulk "Accept" for a card: apply pending tags AND act on the folder for BOTH
   // kinds — file into an existing one, or create the proposed name then file in.
   // A move (folder carries `from`) offers an Undo toast rather than confirming.
   // The create path runs under `busy` (acceptFolder sets it) so a double-tap
   // can't mint a duplicate collection.
+  //
+  // The row is labeled "Accept all"/"Dismiss all" only when there are tags
+  // (see the render below); a folder-only card gets the singular "Accept"/
+  // "Dismiss", meaning that action is scoped to the folder alone. So the
+  // summary rides along here (and in dismissAll below) only when there ARE
+  // tags — otherwise a card with just a folder + a pending summary would have
+  // its singular "Dismiss" silently take the unrelated summary with it.
   const acceptAll = (item: ReviewItem) => {
     setBusy(true);
     void acceptSuggestionBundle(
@@ -224,10 +303,18 @@ export default function ReviewScreen() {
         onAcceptedFolder: (folder) => offerMoveUndo(item.id, folder),
       },
     ).finally(() => setBusy(false));
+    if (item.suggestions.length > 0) {
+      useSummaryAsNote(item);
+    }
   };
 
-  // Bulk "Dismiss" for a card: mark pending tags reviewed AND durably dismiss the
-  // folder suggestion (both kinds, never confirms).
+  // Bulk "Dismiss" for a card: mark pending tags reviewed, durably dismiss the
+  // folder suggestion (both kinds), AND — only when the row is actually
+  // labeled "Dismiss all" (tags present) — dismiss a pending summary too, so
+  // the label stays honest (mirrors Detail's screen-level
+  // handleDismissAllSuggestions). The singular folder-only "Dismiss" leaves an
+  // accompanying summary alone; a summary-only card never reaches here at all
+  // (this row isn't rendered for one).
   const dismissAll = (item: ReviewItem) => {
     dismissSuggestionBundle({
       bookmarkId: item.id,
@@ -236,18 +323,18 @@ export default function ReviewScreen() {
       markSuggestionsReviewed,
       dismissFolderSuggestion,
     });
+    if (item.suggestions.length > 0) {
+      dismissSummary(item);
+    }
   };
 
-  if (items.length === 0) {
-    return (
+  const content =
+    items.length === 0 ? (
       <View style={styles.emptyWrap}>
         <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('review.empty')}</Text>
       </View>
-    );
-  }
-
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
+    ) : (
+      <ScrollView style={webOverscrollContain} contentContainerStyle={styles.container}>
       <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
         {t('review.pendingHeader', { count: items.length })}
       </Text>
@@ -268,9 +355,18 @@ export default function ReviewScreen() {
             </Text>
             <Text style={[styles.titleChevron, { color: palette.textSecondary }]}>›</Text>
           </Pressable>
+          {item.stale ? (
+            <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
+          ) : null}
           {(() => {
             // Keep bulk actions anchored near the title; suggestion chips below
-            // can wrap without moving the "all" controls around.
+            // can wrap without moving the "all" controls around. A card can now
+            // be summary-only (no tags, no folder) — the bulk row has nothing to
+            // act on then, so skip it entirely rather than show a no-op button;
+            // the ProposedSummary widget below carries its own Use/Dismiss.
+            if (item.suggestions.length === 0 && !item.folder) {
+              return null;
+            }
             const hasTags = item.suggestions.length > 0;
             const acceptLabel = hasTags ? t('review.acceptAll') : t('review.acceptOne');
             const acceptA11y = hasTags
@@ -362,13 +458,112 @@ export default function ReviewScreen() {
               </Pressable>
             ))}
           </View>
+          {item.summary
+            ? (() => {
+                const noteEmpty = (item.notes ?? '').trim() === '';
+                return (
+                  <ProposedSummary
+                    summary={item.summary}
+                    noteEmpty={noteEmpty}
+                    busy={busy}
+                    onUse={() => useSummaryAsNote(item)}
+                    onDismiss={() => dismissSummary(item)}
+                    useA11yLabel={t(noteEmpty ? 'review.summaryUseA11y' : 'review.summaryAppendA11y', {
+                      title: item.title,
+                    })}
+                    dismissA11yLabel={t('review.summaryDismissA11y', { title: item.title })}
+                  />
+                );
+              })()
+            : null}
         </View>
       ))}
-    </ScrollView>
+      </ScrollView>
+    );
+
+  // The Stack header is hidden for this screen, so Review supplies its own
+  // header row (title + close) for both layouts — matching Settings/Report.
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 12, borderBottomColor: palette.border }]}>
+      <Text style={[styles.headerTitle, { color: palette.text }]}>{t('nav.review')}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+        hitSlop={8}
+        style={({ pressed }) => [styles.headerClose, pressed && { opacity: 0.6 }]}
+      >
+        <Ionicons name="close" size={24} color={palette.text} />
+      </Pressable>
+    </View>
+  );
+
+  // Review is a `transparentModal`, so the Inbox stays mounted behind it. On
+  // web the modal container sizes to its content instead of the viewport,
+  // which collapses a `flex: 1` root to content height and lets the Inbox
+  // bleed through. Pin both layouts to the real viewport height so the opaque
+  // background always covers the full screen (a no-op on native).
+  if (asSheet) {
+    // Left-docked sheet: panel first in the row (pushed to the left), then the
+    // flex:1 backdrop filling the remaining space on the right; tapping the
+    // backdrop closes.
+    return (
+      <View style={[styles.sheetOverlay, { height }]}>
+        <View style={[styles.sheetPanel, { backgroundColor: palette.background, borderColor: palette.border }]}>
+          {header}
+          {content}
+        </View>
+        <Pressable
+          testID="review-sheet-backdrop"
+          style={styles.sheetBackdrop}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.close')}
+          onPress={() => router.back()}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View testID="review-fullscreen" style={[styles.fullScreen, { backgroundColor: palette.background, height }]}>
+      {header}
+      {content}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  fullScreen: {
+    flex: 1,
+  },
+  sheetOverlay: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  },
+  sheetPanel: {
+    width: '100%',
+    maxWidth: SHEET_PANEL_MAX_WIDTH,
+    borderRightWidth: StyleSheet.hairlineWidth,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  headerClose: {
+    padding: 4,
+  },
   container: {
     padding: 16,
     gap: 12,
@@ -393,6 +588,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     gap: 12,
+  },
+  hint: {
+    fontSize: 13,
   },
   titleRow: {
     flexDirection: 'row',

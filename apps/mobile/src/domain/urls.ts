@@ -45,7 +45,31 @@ export function extractFirstUrl(input: string | null | undefined): string | null
   }
 
   const match = input.match(/https?:\/\/[^\s]+/i);
-  return match ? normalizeUrl(match[0]) : null;
+  if (match) {
+    // Strip trailing punctuation commonly appended by sharing menus or browser URL bars
+    // (e.g. trailing periods, commas, semicolons, colons, exclamation marks, or quotes).
+    let cleaned = match[0].replace(/[.,;:!?"']$/, '');
+
+    // Handle trailing parentheses and brackets using balanced count checking to avoid
+    // truncating legitimate URL paths (e.g., Wikipedia disambiguation links like ".../Bird_(disambiguation)").
+    if (cleaned.endsWith(')')) {
+      const openCount = (cleaned.match(/\(/g) || []).length;
+      const closeCount = (cleaned.match(/\)/g) || []).length;
+      if (closeCount > openCount) {
+        cleaned = cleaned.slice(0, -1);
+      }
+    }
+    if (cleaned.endsWith(']')) {
+      const openCount = (cleaned.match(/\[/g) || []).length;
+      const closeCount = (cleaned.match(/\]/g) || []).length;
+      if (closeCount > openCount) {
+        cleaned = cleaned.slice(0, -1);
+      }
+    }
+
+    return normalizeUrl(cleaned);
+  }
+  return null;
 }
 
 /**
@@ -132,4 +156,29 @@ export function canonicalizeUrl(input: string): string {
   }
 
   return parsed.toString();
+}
+
+/**
+ * Postgres's default btree index page can't hold an index row over roughly
+ * 2.7KB, and the partial unique index that dedupes bookmarks is keyed on
+ * `(user_id, url_hash)` — where `url_hash` is this canonical URL string, not
+ * an actual hash. A sufficiently long URL (Sentry STASH-2J: an Oracle
+ * email-verification link with a huge embedded token) blows that limit on
+ * every single retry, forever, since the failure is permanent — the queued
+ * save can never succeed. Rejecting up front, with a clear message, is much
+ * better than a silent, un-fixable retry loop.
+ *
+ * 2000 is the long-standing "universally safe" URL length convention (the
+ * old Internet Explorer cap), comfortably under the actual Postgres limit.
+ * WHATWG `URL` percent-encodes non-ASCII bytes, so a canonicalized URL's JS
+ * string length already equals its UTF-8 byte length — safe to compare
+ * directly, no separate byte-counting needed.
+ */
+export const MAX_SAVEABLE_URL_LENGTH = 2000;
+
+/** Call with the CANONICALIZED url (`canonicalizeUrl`'s output) — canonical
+ *  form is what actually becomes `url_hash`, and canonicalization can only
+ *  shrink a URL (stripping tracking params/fragment), never grow it. */
+export function isUrlTooLong(canonicalUrl: string): boolean {
+  return canonicalUrl.length > MAX_SAVEABLE_URL_LENGTH;
 }

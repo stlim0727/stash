@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { canonicalizeUrl, extractFirstUrl, normalizeUrl } from './urls.ts';
+import { canonicalizeUrl, extractFirstUrl, isUrlTooLong, normalizeUrl } from './urls.ts';
 
 test('normalizeUrl accepts scheme-less domains', () => {
   assert.equal(normalizeUrl('example.com'), 'https://example.com/');
@@ -30,6 +30,34 @@ test('extractFirstUrl finds a link inside shared text', () => {
     'https://example.com/article',
   );
   assert.equal(extractFirstUrl('example.com'), 'https://example.com/');
+  assert.equal(
+    extractFirstUrl('Check this out: https://example.com/article.'),
+    'https://example.com/article',
+  );
+  assert.equal(
+    extractFirstUrl('Go to (https://example.com/page)'),
+    'https://example.com/page',
+  );
+  assert.equal(
+    extractFirstUrl('Link: https://example.com/page, check it.'),
+    'https://example.com/page',
+  );
+  assert.equal(
+    extractFirstUrl('Go to https://en.wikipedia.org/wiki/Bird_(disambiguation) for info.'),
+    'https://en.wikipedia.org/wiki/Bird_(disambiguation)',
+  );
+  assert.equal(
+    extractFirstUrl('Go to (https://en.wikipedia.org/wiki/Bird_(disambiguation)) for info.'),
+    'https://en.wikipedia.org/wiki/Bird_(disambiguation)',
+  );
+  assert.equal(
+    extractFirstUrl('See https://example.com/page_[1] for more.'),
+    'https://example.com/page_[1]',
+  );
+  assert.equal(
+    extractFirstUrl('Check (https://example.com/page_[1]) now.'),
+    'https://example.com/page_[1]',
+  );
 });
 
 test('extractFirstUrl returns null when no link exists', () => {
@@ -89,4 +117,20 @@ test('canonicalizeUrl keeps `si` on other hosts (not safe to strip globally)', (
 
 test('canonicalizeUrl returns unparsable input unchanged', () => {
   assert.equal(canonicalizeUrl('not a url'), 'not a url');
+});
+
+test('isUrlTooLong accepts ordinary URLs and rejects one past the safe limit', () => {
+  assert.equal(isUrlTooLong('https://example.com/a'), false);
+  const base = 'https://example.com/';
+  const atLimit = base + 'a'.repeat(2000 - base.length);
+  assert.equal(atLimit.length, 2000);
+  assert.equal(isUrlTooLong(atLimit), false);
+  const overLimit = atLimit + 'a';
+  assert.equal(isUrlTooLong(overLimit), true);
+});
+
+test('isUrlTooLong rejects a huge token URL like the Sentry STASH-2J repro', () => {
+  // Oracle-style email-verification links embed a long opaque token.
+  const huge = `https://login.oracle.com/verify?token=${'x'.repeat(2800)}`;
+  assert.equal(isUrlTooLong(canonicalizeUrl(huge)), true);
 });

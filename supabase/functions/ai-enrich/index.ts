@@ -23,7 +23,7 @@
 // the database, or the app needs to change.
 
 import { DummyProvider } from './dummy-provider.ts';
-import { GeminiProvider } from './gemini-provider.ts';
+import { GeminiContentError, GeminiProvider } from './gemini-provider.ts';
 import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
 import { matchSuggestedCollection } from './collection-match.ts';
 import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
@@ -419,8 +419,10 @@ Deno.serve(async (req) => {
     let usedModel = provider.model;
     let degraded = provider === fallbackProvider;
     let degradedReason: DegradedReason | null = degraded ? 'not_configured' : null;
+    let usage: EnrichmentOutput['usage'] = null;
     try {
       output = await provider.enrich(input);
+      usage = output.usage ?? null;
     } catch (err) {
       if (provider === fallbackProvider) {
         throw err;
@@ -430,6 +432,11 @@ Deno.serve(async (req) => {
       usedModel = fallbackProvider.model;
       degraded = true;
       degradedReason = classifyDegradedReason(err);
+      // A GeminiContentError means the call reached Gemini and may have
+      // consumed tokens even though the response had no usable candidate
+      // (safety block, malformed structured output) — preserve that spend
+      // instead of losing it to the fallback's null usage.
+      usage = err instanceof GeminiContentError ? err.usage ?? null : null;
     }
 
     // Resolve the collection NAME hint to one of the user's existing
@@ -460,8 +467,54 @@ Deno.serve(async (req) => {
       confidence: output.confidence,
       degraded,
       degraded_reason: degradedReason,
+      prompt_tokens: usage?.prompt_tokens ?? null,
+      output_tokens: usage?.output_tokens ?? null,
+      total_tokens: usage?.total_tokens ?? null,
       updated_at: now,
     };
+
+    // Append-only ledger of this individual call, independent of the row
+    // above: `ai_enrichments` is upserted on_conflict=bookmark_id (one row
+    // per bookmark, overwritten on every re-run), so its token columns alone
+    // would lose a prior call's spend on a manual "Refresh AI suggestions".
+    // Skipped when the billable provider was never attempted (not
+    // configured) — there's no spend to record. Best-effort: a failure here
+    // must never fail the user-facing enrichment, but IS logged (unlike a
+    // silently-ignored non-2xx) so a broken ledger doesn't go unnoticed.
+    //
+    // Always inserted with the service-role key, never the caller-forwarded
+    // auth `rest()` uses elsewhere: the table carries no client insert policy
+    // (see the ai_enrichment_calls_server_only migration) specifically so a
+    // client can't POST fabricated token counts straight to PostgREST with
+    // its own JWT and corrupt the spend ledger. Only this function — which
+    // computed `usage` from Gemini's real response — may write to it.
+    if (provider !== fallbackProvider && SERVICE_ROLE_KEY) {
+      try {
+        const ledgerRes = await fetch(`${SUPABASE_URL}/rest/v1/ai_enrichment_calls`, {
+          method: 'POST',
+          headers: {
+            apikey: SERVICE_ROLE_KEY,
+            Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            bookmark_id: bookmark.id,
+            user_id: bookmark.user_id,
+            model: provider.model,
+            prompt_tokens: usage?.prompt_tokens ?? null,
+            output_tokens: usage?.output_tokens ?? null,
+            total_tokens: usage?.total_tokens ?? null,
+            degraded,
+            degraded_reason: degradedReason,
+          }),
+        });
+        if (!ledgerRes.ok) {
+          console.error('Failed to record ai_enrichment_calls row:', ledgerRes.status, await ledgerRes.text());
+        }
+      } catch (err) {
+        console.error('Failed to record ai_enrichment_calls row:', err);
+      }
+    }
 
     // Atomic single-row upsert keyed by the unique ai_enrichments.bookmark_id.
     // The preflight skip above wins the common (sequential) case; this handles

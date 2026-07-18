@@ -103,8 +103,16 @@ export const ko: Catalog = {
   'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': '이 보기에는 아직 아무것도 없습니다.',
   'inbox.emptyTitle': '아직 비어 있습니다',
-  'inbox.emptyHintShare': '어떤 앱에서든 링크를 공유할 때 Keepory를 선택하면 한 번에 저장됩니다.',
-  'inbox.emptyHintAdd': '또는 아래 ＋ 를 눌러 직접 추가하세요.',
+  'inbox.emptyHintStep1': '어떤 앱에서든 공유 버튼을 누르세요',
+  'inbox.emptyHintStep2': 'Keepory를 선택하면 바로 저장돼요',
+  'inbox.emptyHintFallback': '링크를 붙여넣고 싶다면? 아래 ＋ 를 누르세요.',
+  'inbox.emptyHintGetWeb': 'keepory.app 에서도 이용할 수 있어요',
+  'inbox.emptyHintWebStep': '＋ 를 눌러 링크를 붙여넣고 저장하세요.',
+  'inbox.emptyHintWebNote': '다른 앱에서 공유하기는 Keepory 안드로이드 앱에서 지원돼요. 웹에서는 아직 지원하지 않아요.',
+  'inbox.emptyHintWebGetAndroid': '안드로이드 앱 받기',
+  'inbox.anonymousNudgeBody':
+    '북마크는 이 기기에만 저장되어 있어요. 로그인하면 백업하고 다른 기기에서도 볼 수 있어요.',
+  'inbox.anonymousNudgeDismissA11y': '닫기',
   'inbox.moreActions': '더보기',
   'inbox.moveToCollectionAction': '컬렉션으로 이동…',
   'inbox.moveToCollectionTitle': '컬렉션으로 이동',
@@ -176,6 +184,7 @@ export const ko: Catalog = {
   'toast.duplicate': '이미 Keepory에 있음',
   'toast.trashed': '휴지통으로 이동됨',
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
+  'toast.urlTooLong': '이 링크는 너무 길어서 저장할 수 없습니다',
   'toast.linkCopied': '링크가 복사됨',
 
   'settings.section.account': '계정',
@@ -314,12 +323,13 @@ export const ko: Catalog = {
   'detail.aiNeedsSync': '이 북마크가 동기화되면 AI 제안을 사용할 수 있습니다.',
   'detail.aiPreviewFailed': '프리뷰 가져오기에 실패하여 AI 제안을 생성할 수 없습니다.',
   'detail.previewFailedNote': '프리뷰와 메타데이터를 불러오지 못했습니다.',
-  'detail.aiRateLimited': 'AI 제안이 현재 한도에 도달했습니다 — 잠시 후 다시 시도해 주세요.',
+  'detail.aiPostponed': '아직 AI 제안을 준비 중이에요 — 자동으로 계속 다시 시도할게요.',
   'detail.aiDegradedRateLimited':
     'AI 사용량이 많아 지금은 기본 제안을 표시합니다 — 잠시 후 다시 시도하면 AI 제안을 받을 수 있습니다.',
   'detail.aiDegradedUnavailable':
     'AI에 연결할 수 없어 지금은 기본 제안을 표시합니다. 새로고침해 다시 시도해 주세요.',
   'detail.aiDegradedBasic': '기본 제안을 표시합니다.',
+  'detail.aiDegradedCollapsed': 'AI 제안이 지금은 한도에 도달했어요 — 잠시 후 다시 시도해 주세요.',
   'detail.detailsShow': '▸  상세 정보',
   'detail.detailsHide': '▾  상세 정보',
   'detail.toggleDetailsA11y': '상세 정보 토글',
@@ -365,6 +375,9 @@ export const ko: Catalog = {
   'review.moveCreateFolderA11y': '{title}을(를) {from}에서 새 컬렉션 {name}(으)로 이동',
   'review.dismissFolderA11y': '{title}의 제안된 컬렉션 {name} 무시',
   'review.movedToast': '‘{name}’(으)로 이동함',
+  'review.summaryUseA11y': '{title}의 제안된 요약을 메모로 사용',
+  'review.summaryAppendA11y': '{title}의 제안된 요약을 메모에 추가',
+  'review.summaryDismissA11y': '{title}의 제안된 요약 무시',
 
   'report.categoryBug': '버그',
   'report.categoryIdea': '아이디어',
@@ -372,6 +385,9 @@ export const ko: Catalog = {
   'report.cloudUnavailableTitle': '클라우드 신고 사용 불가',
   'report.cloudUnavailableBody':
     '이 빌드에서는 클라우드 제출이 구성되어 있지 않지만, 진단 보고서(최근 로그 포함)를 공유하여 직접 보낼 수 있습니다.',
+  'report.signInRequiredTitle': '신고를 제출하려면 로그인하세요',
+  'report.signInRequiredBody':
+    '후속 조치를 위해 로그인한 계정이 필요합니다. 진단 보고서는 로그인 없이도 직접 공유할 수 있습니다.',
   'report.categoryLabel': '카테고리',
   'report.whatHappened': '무슨 일이 있었나요?',
   'report.descriptionA11y': '문제 설명',
@@ -397,6 +413,8 @@ export const ko: Catalog = {
   'report.submitting': '전송 중…',
   'report.errorNoSession': '신고를 제출하려면 활성 세션이 필요합니다.',
   'report.errorSubmit': '신고를 제출할 수 없습니다.',
+  'report.minimizeA11yHint': '길게 눌러서 최소화',
+  'report.expandA11y': '신고 버튼 표시',
 
   'account.signInApple': 'Apple로 로그인',
   'account.signInGoogle': 'Google로 로그인',

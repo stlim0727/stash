@@ -1,6 +1,16 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { parseCaptureParams } from '@/domain/web-capture';
 import { useT } from '@/i18n';
@@ -11,10 +21,20 @@ import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
 import { useCaptureToast } from '@/ui/capture-toast';
 import { useBookmarks } from '@/store/bookmarks';
 
+// On wide (desktop-web) viewports, Add docks as a right-side sheet over the
+// dimmed Inbox (mirrors Report's right-docked sheet); this caps the panel
+// width. No effect on phones (their width is already below the breakpoint).
+const SHEET_PANEL_MAX_WIDTH = 480;
+
 export default function AddBookmarkScreen() {
   const palette = usePalette();
   const router = useRouter();
   const t = useT();
+  const insets = useSafeAreaInsets();
+  // Wide viewports present Add as a right-side sheet over a dimmed Inbox;
+  // phones keep the full-screen layout (mirrors Report's sheet).
+  const { width, height } = useWindowDimensions();
+  const asSheet = width >= 760;
   const { addBookmark, isLoading } = useBookmarks();
   const { show } = useCaptureToast();
   const [url, setUrl] = useState('');
@@ -54,7 +74,9 @@ export default function AddBookmarkScreen() {
       : addBookmark({ shared_text: capture.text, title: capture.title });
     const message =
       result.status === 'invalid'
-        ? t('toast.noLink')
+        ? result.reason === 'too_long'
+          ? t('toast.urlTooLong')
+          : t('toast.noLink')
         : result.status === 'duplicate'
           ? t('toast.duplicate')
           : t('toast.saved');
@@ -64,10 +86,13 @@ export default function AddBookmarkScreen() {
   }, [capture, isLoading, addBookmark, router, show, t]);
 
   // Capture mode: a deep-linked save is in flight — show a calm placeholder
-  // instead of flashing the manual editor before the redirect.
+  // instead of flashing the manual editor before the redirect. Add is a
+  // `transparentModal`, so (as with the main layout below) the height is
+  // pinned explicitly — on web the modal container sizes to content, and a
+  // bare `flex: 1` here would collapse and let the Inbox bleed through.
   if (capture) {
     return (
-      <View style={[styles.capturing, { backgroundColor: palette.background }]}>
+      <View style={[styles.capturing, { backgroundColor: palette.background, height }]}>
         <ActivityIndicator color={palette.accent} />
         <Text style={[styles.capturingLabel, { color: palette.textSecondary }]}>
           {t('add.saving')}
@@ -90,8 +115,7 @@ export default function AddBookmarkScreen() {
     router.back();
   }
 
-  return (
-    <KeyboardAvoidingScreen style={{ backgroundColor: palette.background }}>
+  const content = (
     <View style={[styles.container, { backgroundColor: palette.background }]}>
       <Card elevated={false} style={styles.captureCard}>
         <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
@@ -130,11 +154,90 @@ export default function AddBookmarkScreen() {
       <Button size="lg" onPress={handleSave}>{t('add.save')}</Button>
       <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('add.hint')}</Text>
     </View>
-    </KeyboardAvoidingScreen>
+  );
+
+  // The Stack header is hidden for this screen, so Add supplies its own header
+  // row (title + close) for both layouts — matching Settings/Report/Review.
+  const header = (
+    <View style={[styles.header, { paddingTop: insets.top + 12, borderBottomColor: palette.border }]}>
+      <Text style={[styles.headerTitle, { color: palette.text }]}>{t('nav.addBookmark')}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+        hitSlop={8}
+        style={({ pressed }) => [styles.headerClose, pressed && { opacity: 0.6 }]}
+      >
+        <Ionicons name="close" size={24} color={palette.text} />
+      </Pressable>
+    </View>
+  );
+
+  // KeyboardAvoidingScreen wraps only `content` (not the pinned-height root
+  // above): its `flex: 1` needs to sit *inside* the fixed-height box so its
+  // bottom padding actually shrinks the visible form when the keyboard opens.
+  // Wrapping the whole root would pin `flex: 1` and an explicit `height` on
+  // the same node, so the padding couldn't reduce anything — the note field
+  // would end up under the keyboard instead.
+  return asSheet ? (
+    <View style={[styles.sheetOverlay, { height }]}>
+      <Pressable
+        testID="add-sheet-backdrop"
+        style={styles.sheetBackdrop}
+        accessibilityRole="button"
+        accessibilityLabel={t('common.close')}
+        onPress={() => router.back()}
+      />
+      <View style={[styles.sheetPanel, { backgroundColor: palette.background }]}>
+        {header}
+        <KeyboardAvoidingScreen>{content}</KeyboardAvoidingScreen>
+      </View>
+    </View>
+  ) : (
+    <View testID="add-fullscreen" style={[styles.fullScreen, { backgroundColor: palette.background, height }]}>
+      {header}
+      <KeyboardAvoidingScreen>{content}</KeyboardAvoidingScreen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  fullScreen: {
+    flex: 1,
+  },
+  sheetOverlay: {
+    flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.24)',
+  },
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFill,
+  },
+  sheetPanel: {
+    width: '100%',
+    maxWidth: SHEET_PANEL_MAX_WIDTH,
+    height: '100%',
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: -4, height: 0 },
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  headerClose: {
+    padding: 4,
+  },
   container: {
     flex: 1,
     padding: 16,

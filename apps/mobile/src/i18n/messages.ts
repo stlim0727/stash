@@ -148,8 +148,24 @@ export const en = {
   'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': 'Nothing in this view yet.',
   'inbox.emptyTitle': 'Nothing saved yet',
-  'inbox.emptyHintShare': 'Share a link from any app and pick Keepory to save it in a tap.',
-  'inbox.emptyHintAdd': 'Or tap ＋ below to add one by hand.',
+  // Native first-run teach: a numbered 2-step share-capture walkthrough, plus a
+  // smaller fallback line for the manual add path. Web has no share sheet
+  // (expo-share-intent is a no-op there), so it gets a distinct single-step
+  // variant below instead of this pair.
+  'inbox.emptyHintStep1': 'Open any app, tap Share',
+  'inbox.emptyHintStep2': 'Choose Keepory — saved instantly',
+  'inbox.emptyHintFallback': 'Prefer to paste a link? Tap the + below.',
+  'inbox.emptyHintGetWeb': 'Also on the web at keepory.app',
+  // Web empty-state: no share sheet to teach, so lead with the paste-a-link
+  // flow and explain the platform gap rather than implying share works here.
+  'inbox.emptyHintWebStep': 'Tap + to paste a link and save.',
+  'inbox.emptyHintWebNote': 'Sharing from other apps works in the Keepory Android app, not on the web yet.',
+  'inbox.emptyHintWebGetAndroid': 'Get the Android app',
+  // Anonymous-account nudge banner (shown after the 2nd save, dismissible
+  // forever) — see AnonymousNudgeBanner.
+  'inbox.anonymousNudgeBody':
+    'Your bookmarks are saved on this device. Sign in to back them up and access them elsewhere.',
+  'inbox.anonymousNudgeDismissA11y': 'Dismiss',
   'inbox.moreActions': 'More actions',
   'inbox.moveToCollectionAction': 'Move to collection…',
   'inbox.moveToCollectionTitle': 'Move to collection',
@@ -265,6 +281,7 @@ export const en = {
   'toast.duplicate': 'Already in Keepory',
   'toast.trashed': 'Moved to Trash',
   'toast.noLink': 'No link found to save',
+  'toast.urlTooLong': 'This link is too long to save',
   'toast.saveFailed': 'Could not save to Keepory',
   'toast.linkCopied': 'Link copied',
 
@@ -421,7 +438,7 @@ export const en = {
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
   'detail.aiPreviewFailed': 'AI suggestions are unavailable because the preview could not be loaded.',
   'detail.previewFailedNote': 'Failed to load preview and metadata.',
-  'detail.aiRateLimited': 'AI suggestions have hit their limit for now — try again a little later.',
+  'detail.aiPostponed': 'Still working on AI suggestions for this one — we’ll keep trying automatically.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
   // Shown as a calm, non-error note so the cause is never hidden (M12); the
   // precise cause is forwarded to monitoring rather than spelled out in full.
@@ -430,6 +447,11 @@ export const en = {
   'detail.aiDegradedUnavailable':
     'Couldn’t reach AI — showing basic suggestions for now. Refresh to try again.',
   'detail.aiDegradedBasic': 'Showing basic suggestions.',
+  // The card collapsed to just the affordance (no actionable suggestions), and
+  // the last completed attempt came back rate-limited — there is no "basic
+  // suggestions" to point at, and no background retry is scheduled for a
+  // completed (if degraded) attempt, so this must not promise one.
+  'detail.aiDegradedCollapsed': 'AI suggestions hit their limit for now — try again a little later.',
   'detail.detailsShow': '▸  Details',
   'detail.detailsHide': '▾  Details',
   'detail.toggleDetailsA11y': 'Toggle details',
@@ -495,6 +517,11 @@ export const en = {
   // A move overwrites a user-chosen collection_id; the chip already shows the
   // ~~from~~ → to, so instead of confirming we file it and offer an Undo toast.
   'review.movedToast': 'Moved to “{name}”',
+  // ProposedSummary a11y overrides: unlike Detail (one bookmark per screen),
+  // Review can show several summary cards at once, so these name the bookmark.
+  'review.summaryUseA11y': 'Use the suggested summary as your note for {title}',
+  'review.summaryAppendA11y': 'Add the suggested summary to your note for {title}',
+  'review.summaryDismissA11y': 'Dismiss the suggested summary for {title}',
 
   // Report a problem.
   'report.categoryBug': 'Bug',
@@ -503,6 +530,9 @@ export const en = {
   'report.cloudUnavailableTitle': 'Cloud reporting unavailable',
   'report.cloudUnavailableBody':
     'Submitting to the cloud isn’t configured on this build, but you can still share a diagnostics report (including recent logs) to send manually.',
+  'report.signInRequiredTitle': 'Sign in to submit a report',
+  'report.signInRequiredBody':
+    'Reports need a signed-in account so we can follow up. You can still share a diagnostics report to send manually.',
   'report.categoryLabel': 'Category',
   'report.whatHappened': 'What happened?',
   'report.descriptionA11y': 'Problem description',
@@ -528,6 +558,8 @@ export const en = {
   'report.submitting': 'Sending…',
   'report.errorNoSession': 'You need an active session to submit a report.',
   'report.errorSubmit': 'Could not submit your report.',
+  'report.minimizeA11yHint': 'Long press to minimize',
+  'report.expandA11y': 'Show report button',
 
   // Account / auth controls (sign-in is inline in Settings).
   'account.signInApple': 'Sign in with Apple',

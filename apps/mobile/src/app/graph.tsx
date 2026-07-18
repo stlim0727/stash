@@ -62,6 +62,24 @@ const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
 const EDGE_OPACITY = 0.72;
 const LABEL_SIZE = 24;
+// Bookmark-node labels: much smaller than hub labels (BOOKMARK_R dwarfs the hub
+// radius range) and length-capped so a long title can't sprawl across
+// neighboring nodes — truncateGraphLabel below adds the ellipsis.
+// Sized up from 11 and given a heavier weight (STASH-2N): pinch-zoom is a
+// transform-scale over a fixed-resolution SVG (see the `interacting` comment
+// below), so at high zoom the rendered glyphs get magnified rather than
+// re-rasterized — thin small text shows that as blur first. A larger,
+// semibold glyph stays legible through that softening; it doesn't make the
+// text pixel-crisp, since the underlying scale-transform rendering is
+// unchanged.
+const BOOKMARK_LABEL_SIZE = 13;
+const BOOKMARK_LABEL_WEIGHT = '600';
+const BOOKMARK_LABEL_MAX_CHARS = 18;
+// Keep gesture-time SVG text work bounded independently of library size. The
+// stable bucket preserves labels for the most connected bookmarks; a small
+// gesture-local bucket adds context around the user's initial touch focal point.
+const INTERACTION_PRIORITY_LABEL_LIMIT = 16;
+const INTERACTION_NEARBY_LABEL_LIMIT = 8;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
 // the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
 // HUB_MAX_R, and its label sits below (or, after the render-side declutter,
@@ -83,11 +101,41 @@ const MIN_VISIBLE_CAP = 80;
 // moved this far since the last applied scale, so we re-rasterize the SVG far less
 // often per pinch. The exact final scale is always committed on gesture end.
 const SCALE_APPLY_STEP = 0.02;
+// Wheel/trackpad zoom: exponential so repeated small trackpad deltas compound
+// smoothly, and a single physical mouse-wheel notch (deltaY ~100) reads as a
+// ~15% zoom step — close enough to the pinch gesture's feel to not need its own
+// tuning UI.
+const WHEEL_ZOOM_SENSITIVITY = 0.0015;
+// A single trackpad/smooth-wheel gesture fires many `wheel` events in quick
+// succession — baking (a viewBox state update, forcing the whole SVG to
+// re-render) on every one of them would replace the cheap Animated-transform
+// interaction path with exactly the expensive work it exists to avoid,
+// stuttering on a large stash (review finding on #527). So each tick only
+// updates the cheap live transform; the bake is debounced until wheel input
+// goes idle for this long — comparable to common trackpad
+// gesture-end-detection debounces (~100-200ms).
+const WHEEL_SETTLE_DELAY_MS = 150;
 // Web-only: promote the transformed layer to its own compositor layer so a
 // translate/scale composites cheaply instead of repainting the whole vector SVG
 // each frame. `willChange` isn't in RN's ViewStyle, so it lives behind this cast
 // and is only ever applied under Platform.OS === 'web'.
 const WEB_COMPOSITE_LAYER = { willChange: 'transform' } as unknown as ViewStyle;
+// Web-only: the SVG <text> labels (tag hubs + bookmark titles) are natively
+// selectable by the browser. react-native-web's PanResponder implementation
+// (ResponderSystem.js) treats a native `selectionchange` with a non-collapsed
+// selection as a TERMINATE signal for whatever gesture it's tracking — so if a
+// drag starts on/over a label and the browser starts selecting text, our pan
+// gets forcibly cut. A fast drag makes this worse (more screen distance covered
+// before our own move-threshold claims the gesture, giving the browser's native
+// selection more of a head start) and so does dragging near the settled
+// content's edge (that's where labels cluster most densely — hub labels can
+// nudge right up to the padding boundary). Disabling selection removes the only
+// way a selection can START inside the canvas, so this must be applied to the
+// whole draggable canvas unconditionally — not gated on `interacting`, since
+// selection can anchor on the very first mousedown, before any gesture is even
+// recognized. `userSelect` is a TextStyle field in RN's types, not ViewStyle,
+// hence the cast (same pattern as WEB_COMPOSITE_LAYER above).
+const WEB_NO_TEXT_SELECT = { userSelect: 'none' } as unknown as ViewStyle;
 
 export function graphCanvasSize(
   measured: { w: number; h: number },
@@ -105,6 +153,73 @@ function hubRadius(degree: number): number {
 
 export function clampToRange(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+export function wheelZoomScale(startScale: number, deltaY: number): number {
+  return clampToRange(startScale * Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY), MIN_SCALE, MAX_SCALE);
+}
+
+// Caps a bookmark node's label so a long title can't sprawl across the
+// canvas; appends an ellipsis when it clips. Pure + exported for testing.
+export function truncateGraphLabel(text: string, maxChars: number): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxChars) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+export function selectPriorityBookmarkLabelIds(
+  nodes: readonly PositionedNode[],
+  limit = INTERACTION_PRIORITY_LABEL_LIMIT,
+): Set<string> {
+  return new Set(
+    nodes
+      .filter((node) => node.kind === 'bookmark')
+      .sort((a, b) => b.degree - a.degree || a.id.localeCompare(b.id))
+      .slice(0, Math.max(0, limit))
+      .map((node) => node.id),
+  );
+}
+
+export function selectNearbyBookmarkLabelIds(input: {
+  nodes: readonly PositionedNode[];
+  excludedIds: ReadonlySet<string>;
+  focal: { x: number; y: number };
+  viewport: { w: number; h: number };
+  viewBox: { minX: number; minY: number; w: number; h: number };
+  scale: number;
+  pan: { x: number; y: number };
+  limit?: number;
+}): Set<string> {
+  const { nodes, excludedIds, focal, viewport, viewBox, scale, pan } = input;
+  const limit = Math.max(0, input.limit ?? INTERACTION_NEARBY_LABEL_LIMIT);
+  if (limit === 0 || viewport.w <= 0 || viewport.h <= 0 || viewBox.w <= 0 || viewBox.h <= 0) {
+    return new Set();
+  }
+  const fit = Math.min(viewport.w / viewBox.w, viewport.h / viewBox.h);
+  const letterboxX = (viewport.w - viewBox.w * fit) / 2;
+  const letterboxY = (viewport.h - viewBox.h * fit) / 2;
+  const centerX = viewport.w / 2;
+  const centerY = viewport.h / 2;
+
+  return new Set(
+    nodes
+      .filter((node) => node.kind === 'bookmark' && !excludedIds.has(node.id))
+      .map((node) => {
+        const fittedX = letterboxX + (node.x - viewBox.minX) * fit;
+        const fittedY = letterboxY + (node.y - viewBox.minY) * fit;
+        const screenX = centerX + (fittedX - centerX) * scale + pan.x;
+        const screenY = centerY + (fittedY - centerY) * scale + pan.y;
+        return {
+          id: node.id,
+          distanceSquared: (screenX - focal.x) ** 2 + (screenY - focal.y) ** 2,
+        };
+      })
+      .sort((a, b) => a.distanceSquared - b.distanceSquared || a.id.localeCompare(b.id))
+      .slice(0, limit)
+      .map(({ id }) => id),
+  );
 }
 
 // Max translate (in screen px) per axis: allow panning until only a minimum
@@ -151,6 +266,45 @@ export function panWithPinchFocalDelta(input: {
   return {
     x: input.anchoredPan.x + input.currentFocal.x - input.startFocal.x,
     y: input.anchoredPan.y + input.currentFocal.y - input.startFocal.y,
+  };
+}
+
+type ViewBoxRect = { minX: number; minY: number; w: number; h: number };
+
+// Re-renders the SVG at native resolution for a just-committed pan/zoom
+// instead of only ever stretching a fixed-resolution picture via the
+// Animated transform (STASH-2N/STASH-2R: bookmark-node label text read as
+// visibly blurred at high pinch-zoom). Once a gesture settles, its
+// transform is "baked" into a new `viewBox` covering exactly the same
+// on-screen content, and the Animated transform resets to identity against
+// that new baseline — so the next paint draws crisp vector content
+// (including SvgText glyphs) at the committed zoom. `pan`/`scale` are
+// relative to `base` (scale 1, pan {0,0} is a no-op returning `base`
+// unchanged). The result keeps `base`'s aspect ratio — and therefore its
+// preserveAspectRatio="meet" letterbox proportions — so the fit scale factor
+// changes by exactly `scale`. Pure + exported for testing: the production
+// call sites can't be exercised without a real gesture stream, but the
+// screen-mapping this produces can be checked directly (see the graph test
+// file's "bake viewBox" describe block, which verifies the OLD system's
+// base+pan+scale screen mapping and the NEW system's baked+identity mapping
+// agree for sample points).
+export function bakeViewBox(input: {
+  base: ViewBoxRect;
+  viewport: { w: number; h: number };
+  pan: { x: number; y: number };
+  scale: number;
+}): ViewBoxRect {
+  const { base, viewport, pan, scale } = input;
+  const fit = Math.min(viewport.w / base.w, viewport.h / base.h);
+  const offsetX = (viewport.w - base.w * fit) / 2;
+  const offsetY = (viewport.h - base.h * fit) / 2;
+  const halfVisibleX = viewport.w / 2 - offsetX;
+  const halfVisibleY = viewport.h / 2 - offsetY;
+  return {
+    minX: base.minX + ((scale - 1) * halfVisibleX - pan.x) / (scale * fit),
+    minY: base.minY + ((scale - 1) * halfVisibleY - pan.y) / (scale * fit),
+    w: base.w / scale,
+    h: base.h / scale,
   };
 }
 
@@ -317,6 +471,48 @@ export default function GraphScreen() {
     return map;
   }, [settled]);
 
+  const bookmarkNodes = useMemo(
+    () => (settled?.nodes ?? []).filter((node) => node.kind === 'bookmark'),
+    [settled],
+  );
+  const priorityBookmarkLabelIds = useMemo(
+    () => selectPriorityBookmarkLabelIds(bookmarkNodes),
+    [bookmarkNodes],
+  );
+  const priorityBookmarkNodes = useMemo(
+    () => bookmarkNodes.filter((node) => priorityBookmarkLabelIds.has(node.id)),
+    [bookmarkNodes, priorityBookmarkLabelIds],
+  );
+  const bulkBookmarkNodes = useMemo(
+    () => bookmarkNodes.filter((node) => !priorityBookmarkLabelIds.has(node.id)),
+    [bookmarkNodes, priorityBookmarkLabelIds],
+  );
+
+  // Live "bookmark id → current title" lookup for the visible bookmark label.
+  // `settled.nodes[i].label` is a snapshot from the last TOPOLOGY settle (see
+  // `signature` above) — a title edit or enrichment result doesn't change tag
+  // links, so it wouldn't trigger a resettle and the label would render stale
+  // until an unrelated tag change or remount. Keyed on a title/url signature
+  // (not the churning `inbox` reference) for the same reason `input` is keyed
+  // on `signature`: a background sync/enrich that changed no title text must
+  // not rebuild the whole (hundreds-of-node) SVG tree.
+  const titleSignature = useMemo(() => {
+    const parts: string[] = [];
+    for (const bookmark of inbox) {
+      parts.push(`${bookmark.id}:${bookmark.title ?? ''}|${bookmark.url ?? ''}`);
+    }
+    parts.sort();
+    return parts.join('\n');
+  }, [inbox]);
+  const bookmarkTitleById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const bookmark of inbox) {
+      map.set(bookmark.id, bookmark.title ?? bookmark.url ?? 'Untitled');
+    }
+    return map;
+    // Intentionally keyed on `titleSignature`, not the churning `inbox` reference.
+  }, [titleSignature]);
+
   // Resolve hub-label positions ONCE per settled graph (the mass-weighting can
   // pull two popular hubs close enough that their default below-labels collide).
   // Keyed on `settled` (content-stable) + `t` (only churns on locale change), so
@@ -347,28 +543,60 @@ export default function GraphScreen() {
     return map;
   }, [settled, t]);
 
-  // Padded viewBox dimensions over the settled bounds. The pan clamp derives the
-  // per-axis fitted content extent from these (fitScale * vbDim), so it's kept
-  // alongside the viewBox string. Guard zero-span (all-collapsed).
-  const vbSize = useMemo(() => {
+  // Fit-to-bounds: a padded viewBox over the settled bounds, centered by the
+  // Svg's preserveAspectRatio="xMidYMid meet". This is the ORIGINAL baseline
+  // the view resets to on a resettle or a recenter tap. Guard zero-span
+  // (all-collapsed).
+  const fitViewBoxRect = useMemo<ViewBoxRect>(() => {
     const b = settled?.bounds;
     if (!b) {
-      return { w: 1, h: 1 };
+      return { minX: 0, minY: 0, w: 1, h: 1 };
     }
     const spanX = b.width || 1;
     const spanY = b.height || 1;
-    return { w: spanX + VIEWBOX_PAD * 2, h: spanY + VIEWBOX_PAD * 2 };
+    return {
+      minX: b.min_x - VIEWBOX_PAD,
+      minY: b.min_y - VIEWBOX_PAD,
+      w: spanX + VIEWBOX_PAD * 2,
+      h: spanY + VIEWBOX_PAD * 2,
+    };
   }, [settled]);
 
-  // Fit-to-bounds: a padded viewBox over the settled bounds, centered by the
-  // Svg's preserveAspectRatio="xMidYMid meet".
-  const viewBox = useMemo(() => {
+  // The actual (unpadded) node bbox span — constant per settle, independent
+  // of zoom/pan. The pan clamp needs THIS, not a span derived from the
+  // current viewBox (which shrinks every time a gesture bakes a deeper
+  // zoom, see `bakeViewBox` above) — otherwise a deep zoom would lose track
+  // of where the real node content is.
+  const nodeExtentRef = useRef({ w: 1, h: 1 });
+  useEffect(() => {
     const b = settled?.bounds;
-    if (!b) {
-      return `0 0 1 1`;
-    }
-    return `${b.min_x - VIEWBOX_PAD} ${b.min_y - VIEWBOX_PAD} ${vbSize.w} ${vbSize.h}`;
-  }, [settled, vbSize]);
+    nodeExtentRef.current = { w: b?.width || 1, h: b?.height || 1 };
+  }, [settled]);
+
+  // The CURRENTLY RENDERED viewBox. Starts as `fitViewBoxRect` and gets
+  // replaced ("baked") once a pan/pinch/wheel gesture settles, so the SVG
+  // re-renders its vector content at native resolution for the committed
+  // zoom instead of only ever being magnified via the Animated transform
+  // (see `bakeViewBox` above). The live gesture itself still uses the cheap
+  // transform for smooth interaction — only the settled/resting view gets
+  // re-rendered. Mirrored into a ref for the memoized panResponder/wheel
+  // handler closures below, which can't see a fresh state value.
+  const [viewBoxRect, setViewBoxRect] = useState<ViewBoxRect>(fitViewBoxRect);
+  const viewBox = `${viewBoxRect.minX} ${viewBoxRect.minY} ${viewBoxRect.w} ${viewBoxRect.h}`;
+  // `bakeViewBox`'s `base` is ALWAYS `fitViewBoxRect` — never the previous
+  // bake's output — mirrored into a ref for the memoized panResponder/wheel
+  // handler closures below, which can't see a fresh memo value. Baking from
+  // a FIXED base using the full CUMULATIVE pan/scale (panOffset/lastScale
+  // below, which mirror the pre-baking code's semantics exactly) means every
+  // bake is independent and exact, with no compounding drift from repeatedly
+  // re-basing on the previous bake's own output (review finding on #527:
+  // re-basing incrementally lost track of how far the node content had
+  // already drifted off-center, so a repeated max-pan in the same direction
+  // could keep pushing it further each gesture instead of clamping in place).
+  const fitViewBoxRectRef = useRef<ViewBoxRect>(fitViewBoxRect);
+  useEffect(() => {
+    fitViewBoxRectRef.current = fitViewBoxRect;
+  }, [fitViewBoxRect]);
 
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const containerRef = useRef<View>(null);
@@ -390,12 +618,15 @@ export default function GraphScreen() {
       viewportRef.current = canvasSize;
     }
   }, [canvasSize]);
-  // The memoized panResponder also needs the current viewBox size to derive the
-  // fitted content extent for the clamp; mirror it into a ref for the same reason.
+  // The memoized panResponder also needs the FIXED baseline's size to derive
+  // the fitted content extent for the clamp (the clamp is always evaluated
+  // against `fitViewBoxRect`, never the current baked `viewBoxRect` — see
+  // `fitViewBoxRectRef` above); mirror it into a ref for the same
+  // stable-closure reason.
   const vbSizeRef = useRef({ w: 1, h: 1 });
   useEffect(() => {
-    vbSizeRef.current = vbSize;
-  }, [vbSize]);
+    vbSizeRef.current = { w: fitViewBoxRect.w, h: fitViewBoxRect.h };
+  }, [fitViewBoxRect]);
 
   // Whether a pan/pinch gesture is currently active. Drives a TRANSIENT
   // raster/composite hint: promoting the layer to a cached texture keeps the
@@ -403,6 +634,9 @@ export default function GraphScreen() {
   // on zoom-in. So it's on only while interacting and off at rest, letting the
   // static view re-render as crisp vector SVG at the settled zoom.
   const [interacting, setInteracting] = useState(false);
+  const [nearbyBookmarkLabelIds, setNearbyBookmarkLabelIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   // Pan/zoom over the static canvas — zero new deps: PanResponder drives an
   // Animated transform on the outer view. Taps fall through to the SVG nodes
@@ -411,15 +645,39 @@ export default function GraphScreen() {
   const translateX = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(1)).current;
+  // Absolute, cumulative scale relative to the ORIGINAL fit-to-bounds view
+  // (`fitViewBoxRect`) — the SAME baseline `bakeViewBox` always bakes
+  // against (never the previous bake's output; see `fitViewBoxRectRef`
+  // above). Baking resets the Animated `scale`/pan transform back to
+  // identity every time, but this deliberately does NOT reset — together
+  // with `panOffset` below, it's the TRUE cumulative state the pan/zoom
+  // clamp is evaluated against, which is what enforces [MIN_SCALE,
+  // MAX_SCALE] AND the pan-clamp sliver guarantee across any number of
+  // successive gestures/wheel ticks (a review finding on #527: resetting
+  // this after each bake and clamping against a "relative to the last bake"
+  // quantity instead let repeated max-pan gestures in the same direction
+  // each individually pass the clamp while drifting the real node content
+  // further off-screen every time).
   const lastScale = useRef(1);
   const liveScale = useRef(1);
   // Last scale actually pushed to the Animated value — the pinch throttle applies
   // a new scale only when it drifts SCALE_APPLY_STEP from this.
   const appliedScale = useRef(1);
-  // Committed effective pan (screen px) and the value it held at gesture start.
-  // extractOffset/flattenOffset move the accumulated pan between the Animated
-  // value's offset and value, neither cheaply readable, so we track it ourselves
-  // to clamp the ABSOLUTE resulting position rather than just the frame delta.
+  // The absolute cumulative scale (see `lastScale` above) AT THE START of
+  // the current TOUCH gesture — i.e. what's already baked into the picture
+  // the live Animated transform renders on top of. Only the LIVE Animated
+  // `scale`/translate transform during a touch gesture works relative to
+  // this baseline (see the pinch move handler below); `bakeViewBox` itself
+  // always uses the absolute cumulative `lastScale`/`panOffset` directly
+  // against the fixed `fitViewBoxRect`, never this.
+  const gestureStartScaleRef = useRef(1);
+  // Cumulative pan (screen px) relative to the FIXED `fitViewBoxRect`
+  // baseline — the SAME baseline `lastScale` above is relative to, and
+  // deliberately does NOT reset after a bake, for the same reason.
+  // extractOffset/flattenOffset move the accumulated pan between the
+  // Animated value's offset and value, neither cheaply readable, so we
+  // track it ourselves to clamp the ABSOLUTE resulting position rather than
+  // just the frame delta.
   const panOffset = useRef({ x: 0, y: 0 });
   const panStart = useRef({ x: 0, y: 0 });
   const pinch = useRef<{
@@ -428,50 +686,118 @@ export default function GraphScreen() {
     startPan: { x: number; y: number };
     startFocal: { x: number; y: number };
   } | null>(null);
+  // True for the duration of a touch pan/pinch (grant → release/terminate). The
+  // wheel handler checks this so a trackpad's momentum wheel events can't fight
+  // an in-progress touch gesture over the same Animated offset.
+  const gestureActiveRef = useRef(false);
+  // Pending "bake once wheel input goes idle" timer (see WHEEL_SETTLE_DELAY_MS
+  // above), and the cumulative pan/scale the CURRENT wheel burst started
+  // from — null when no burst is in progress. Mirrors gestureStartScaleRef's
+  // role but for the wheel path, which has no discrete grant/release events
+  // to hang that bookkeeping off of.
+  const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wheelBurstStartRef = useRef<{ pan: { x: number; y: number }; scale: number } | null>(null);
+  useEffect(
+    () => () => {
+      if (wheelIdleTimerRef.current) {
+        clearTimeout(wheelIdleTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  // A resettle (topology change) gets the ORIGINAL fit-to-bounds view,
+  // discarding any baked zoom/pan from the previous layout — node positions
+  // aren't stable across different topologies (a fresh force-layout run), so
+  // preserving a baked window over them wouldn't mean anything anyway. Also
+  // covers the initial settle (this just reconfirms the already-correct
+  // default, a no-op state update).
+  useEffect(() => {
+    // A pending debounced wheel bake (see WHEEL_SETTLE_DELAY_MS above) would
+    // otherwise fire later against the NEW fitViewBoxRect using pan/scale
+    // state left over from the OLD topology.
+    if (wheelIdleTimerRef.current) {
+      clearTimeout(wheelIdleTimerRef.current);
+      wheelIdleTimerRef.current = null;
+    }
+    wheelBurstStartRef.current = null;
+    setViewBoxRect(fitViewBoxRect);
+    translateX.setOffset(0);
+    translateX.setValue(0);
+    translateY.setOffset(0);
+    translateY.setValue(0);
+    scale.setValue(1);
+    lastScale.current = 1;
+    liveScale.current = 1;
+    appliedScale.current = 1;
+    gestureStartScaleRef.current = 1;
+    panOffset.current = { x: 0, y: 0 };
+    panStart.current = { x: 0, y: 0 };
+    pinch.current = null;
+  }, [fitViewBoxRect]);
+
+  // Per-axis pan bound at a given scale, relative to the FIXED
+  // `fitViewBoxRect` baseline (never the current baked `viewBoxRect` — see
+  // `fitViewBoxRectRef` above). `fit` maps that fixed viewBox into the
+  // viewport (the preserveAspectRatio="…meet" basis), and the sliver
+  // guarantee is measured against the REAL NODE bbox — constant across any
+  // zoom (`nodeExtentRef` above). Reads viewport + viewBox + node extent from
+  // refs so this stays stable across renders yet never closes over stale
+  // sizes. Shared by the pinch responder and the wheel-zoom handler below.
+  // Always called with the TRUE cumulative scale (`liveScale.current`), not
+  // a "relative to the last bake" value — the clamp bounds the pan against
+  // the ORIGINAL centered baseline, so evaluating it against anything else
+  // loses track of how far a chain of gestures has already drifted.
+  const axisBoundsAt = useCallback((liveScaleValue: number) => {
+    const { w: vw, h: vh } = viewportRef.current;
+    const { w: vbW, h: vbH } = vbSizeRef.current;
+    const fit = Math.min(vw / vbW, vh / vbH);
+    const { w: nodeW, h: nodeH } = nodeExtentRef.current;
+    return {
+      x: maxPanOffset(liveScaleValue, vw, fit * nodeW),
+      y: maxPanOffset(liveScaleValue, vh, fit * nodeH),
+    };
+  }, []);
 
   const panResponder = useMemo(
     () => {
-      // Per-axis pan bound at the live scale. `fit` maps the PADDED viewBox into
-      // the viewport (that's the preserveAspectRatio="…meet" basis), but the sliver
-      // guarantee is measured against REAL NODE content, not the symmetric padding:
-      // the node bbox is centered in the padded viewBox, so its on-screen extent is
-      // `fit * unpadded-node-span` (unpadded span = padded span − VIEWBOX_PAD*2).
-      // Feeding maxPanOffset the node extent (not the padded span) stops a hard
-      // fling from parking the viewport over pure padding. Reads viewport + viewBox
-      // from refs so the memoized responder never closes over stale sizes.
-      const axisBounds = () => {
-        const { w: vw, h: vh } = viewportRef.current;
-        const { w: vbW, h: vbH } = vbSizeRef.current;
-        const fit = Math.min(vw / vbW, vh / vbH);
-        const nodeW = vbW - VIEWBOX_PAD * 2;
-        const nodeH = vbH - VIEWBOX_PAD * 2;
-        return {
-          x: maxPanOffset(liveScale.current, vw, fit * nodeW),
-          y: maxPanOffset(liveScale.current, vh, fit * nodeH),
-        };
-      };
-      // Flatten the offset and re-clamp the pan against the (possibly just-changed)
-      // scale — a pinch-out shrinks the allowed range, so an out-of-bounds pan must
-      // be pulled back in — then commit the exact final pinch scale. Also drops the
-      // transient raster hint so the settled view re-renders as crisp vector SVG.
+      // Always evaluated against the TRUE cumulative scale relative to the
+      // fixed `fitViewBoxRect` baseline (see the `panOffset`/`lastScale`
+      // comments above) — matches the pre-baking code's clamp exactly.
+      const axisBounds = () => axisBoundsAt(liveScale.current);
+      // Bake the just-settled transform into a new viewBox (`bakeViewBox`
+      // above), ALWAYS from the fixed `fitViewBoxRect` using the full
+      // cumulative pan/scale, so the resting view re-renders as crisp
+      // vector SVG — including SvgText glyphs — at the committed zoom,
+      // instead of a magnified fixed-resolution picture
+      // (STASH-2N/STASH-2R). Also drops the transient raster hint now that
+      // the gesture is over.
       const settle = () => {
+        gestureActiveRef.current = false;
         setInteracting(false);
+        setNearbyBookmarkLabelIds(new Set());
         translateX.flattenOffset();
         translateY.flattenOffset();
         lastScale.current = liveScale.current;
-        if (appliedScale.current !== liveScale.current) {
-          appliedScale.current = liveScale.current;
-          scale.setValue(liveScale.current);
-        }
         const { x: maxX, y: maxY } = axisBounds();
-        const clampedX = clampToRange(panOffset.current.x, -maxX, maxX);
-        const clampedY = clampToRange(panOffset.current.y, -maxY, maxY);
-        if (clampedX !== panOffset.current.x || clampedY !== panOffset.current.y) {
-          panOffset.current = { x: clampedX, y: clampedY };
-          // flattenOffset zeroed the offset, so setValue is the absolute position.
-          translateX.setValue(clampedX);
-          translateY.setValue(clampedY);
-        }
+        panOffset.current = {
+          x: clampToRange(panOffset.current.x, -maxX, maxX),
+          y: clampToRange(panOffset.current.y, -maxY, maxY),
+        };
+        setViewBoxRect(
+          bakeViewBox({
+            base: fitViewBoxRectRef.current,
+            viewport: viewportRef.current,
+            pan: panOffset.current,
+            scale: liveScale.current,
+          }),
+        );
+        translateX.setValue(0);
+        translateY.setValue(0);
+        scale.setValue(1);
+        appliedScale.current = liveScale.current;
+        gestureStartScaleRef.current = liveScale.current;
+        panStart.current = { x: 0, y: 0 };
         pinch.current = null;
       };
       return PanResponder.create({
@@ -480,8 +806,38 @@ export default function GraphScreen() {
           event.nativeEvent.touches.length >= 2 ||
           Math.abs(gesture.dx) > 4 ||
           Math.abs(gesture.dy) > 4,
-        onPanResponderGrant: () => {
+        onPanResponderGrant: (event) => {
+          // A touch gesture starting mid-wheel-burst takes over the shared
+          // Animated offset — cancel the pending debounced wheel bake so it
+          // can't fire mid-touch-gesture and stomp state settle() is about
+          // to own; this gesture's own settle() will bake when IT ends.
+          if (wheelIdleTimerRef.current) {
+            clearTimeout(wheelIdleTimerRef.current);
+            wheelIdleTimerRef.current = null;
+          }
+          wheelBurstStartRef.current = null;
+          gestureActiveRef.current = true;
           setInteracting(true);
+          gestureStartScaleRef.current = lastScale.current;
+          const touches = event.nativeEvent.touches;
+          const origin = containerOriginRef.current;
+          const focal =
+            touches.length >= 2
+              ? touchCenterInViewport(touches[0], touches[1], origin)
+              : touches[0]
+                ? { x: touches[0].pageX - origin.x, y: touches[0].pageY - origin.y }
+                : { x: viewportRef.current.w / 2, y: viewportRef.current.h / 2 };
+          setNearbyBookmarkLabelIds(
+            selectNearbyBookmarkLabelIds({
+              nodes: bulkBookmarkNodes,
+              excludedIds: priorityBookmarkLabelIds,
+              focal,
+              viewport: viewportRef.current,
+              viewBox: fitViewBoxRectRef.current,
+              scale: liveScale.current,
+              pan: panOffset.current,
+            }),
+          );
           translateX.extractOffset();
           translateY.extractOffset();
           panStart.current = { x: panOffset.current.x, y: panOffset.current.y };
@@ -519,13 +875,21 @@ export default function GraphScreen() {
             const { x: maxX, y: maxY } = axisBounds();
             const nextX = clampToRange(nextPan.x, -maxX, maxX);
             const nextY = clampToRange(nextPan.y, -maxY, maxY);
-            translateX.setValue(nextX - panStart.current.x);
-            translateY.setValue(nextY - panStart.current.y);
+            // The Animated transform renders on TOP of the already-baked
+            // picture (which itself encodes panStart/gestureStartScaleRef),
+            // so the LIVE delta can't just subtract panStart — a scale
+            // change re-reads that baked pan too. Derived the same way
+            // anchoredPanForScale keeps a focal point fixed across a scale
+            // change: translate2 = pan_live − (scale_live⁄scaleAtStart) ×
+            // panStart (see the "bake viewBox" tests for the algebra).
+            const liveRelativeScale = next / gestureStartScaleRef.current;
+            translateX.setValue(nextX - liveRelativeScale * panStart.current.x);
+            translateY.setValue(nextY - liveRelativeScale * panStart.current.y);
             panOffset.current = { x: nextX, y: nextY };
             // Throttle: skip most per-frame scale writes to cut SVG re-rasters.
             if (Math.abs(next - appliedScale.current) >= SCALE_APPLY_STEP) {
               appliedScale.current = next;
-              scale.setValue(next);
+              scale.setValue(liveRelativeScale);
             }
           } else if (!pinch.current) {
             // Clamp the absolute pan into ±maxPanOffset so the content can't drift
@@ -542,14 +906,145 @@ export default function GraphScreen() {
         onPanResponderTerminate: settle,
       });
     },
-    [translateX, translateY, scale],
+    [
+      translateX,
+      translateY,
+      scale,
+      axisBoundsAt,
+      bulkBookmarkNodes,
+      priorityBookmarkLabelIds,
+    ],
   );
 
-  // Reset the pan/zoom transform to identity, which restores the initial
-  // fit-to-bounds view: the fit itself lives in the SVG's viewBox +
-  // preserveAspectRatio, so an untransformed canvas IS the fitted canvas. Lets a
-  // user who flung the graph off-screen get back without a way-out dead end.
+  // Wheel/trackpad zoom (web only): mirrors the pinch-zoom math above but keyed
+  // off a single `deltaY` instead of two touch points, anchored on the cursor so
+  // the point under it stays put. Skips while a touch pan/pinch is mid-gesture
+  // (gestureActiveRef) since that path is managing the Animated offset itself.
+  // A single trackpad gesture fires many wheel events, so — unlike the touch
+  // path, which has explicit grant/release events — this treats the whole
+  // BURST of ticks as one logical gesture: each tick updates only the cheap
+  // Animated transform (relative to whatever the burst started from), and
+  // the expensive bake into a fresh viewBox (STASH-2N/STASH-2R) is debounced
+  // until wheel input goes idle (WHEEL_SETTLE_DELAY_MS above), matching how
+  // the touch path only bakes on settle() rather than every frame (a review
+  // finding on #527: baking every tick forced a full SVG re-render on every
+  // wheel event, stuttering trackpad zoom on a large stash).
+  const applyWheelZoom = useCallback(
+    (deltaY: number, focal: { x: number; y: number }) => {
+      if (gestureActiveRef.current) {
+        return;
+      }
+      const startScale = lastScale.current;
+      const nextScale = wheelZoomScale(startScale, deltaY);
+      if (nextScale === startScale) {
+        return;
+      }
+      // First tick of a new burst: capture the cumulative pan/scale it
+      // started from (whatever's currently baked) and raise the same
+      // transient raster hint the touch path uses for the duration.
+      if (!wheelBurstStartRef.current) {
+        wheelBurstStartRef.current = { pan: { ...panOffset.current }, scale: lastScale.current };
+        setInteracting(true);
+      }
+      const burstStart = wheelBurstStartRef.current;
+      // Cumulative pan/scale relative to the FIXED fitViewBoxRect (the same
+      // baseline the pan clamp and settle()'s bake use) — anchors the point
+      // under the cursor exactly as the pre-baking code did.
+      const anchoredPan = anchoredPanForScale({
+        pan: panOffset.current,
+        focal,
+        viewport: viewportRef.current,
+        startScale,
+        nextScale,
+      });
+      const { x: maxX, y: maxY } = axisBoundsAt(nextScale);
+      const nextX = clampToRange(anchoredPan.x, -maxX, maxX);
+      const nextY = clampToRange(anchoredPan.y, -maxY, maxY);
+      panOffset.current = { x: nextX, y: nextY };
+      lastScale.current = nextScale;
+      liveScale.current = nextScale;
+      appliedScale.current = nextScale;
+
+      // Cheap live transform on top of whatever's currently baked — same
+      // translate2/scale2 math as the pinch move handler above.
+      const liveRelativeScale = nextScale / burstStart.scale;
+      translateX.setValue(nextX - liveRelativeScale * burstStart.pan.x);
+      translateY.setValue(nextY - liveRelativeScale * burstStart.pan.y);
+      scale.setValue(liveRelativeScale);
+
+      // Debounce the expensive bake until wheel input goes idle.
+      if (wheelIdleTimerRef.current) {
+        clearTimeout(wheelIdleTimerRef.current);
+      }
+      wheelIdleTimerRef.current = setTimeout(() => {
+        wheelIdleTimerRef.current = null;
+        wheelBurstStartRef.current = null;
+        // A touch gesture may have taken over since this timer was
+        // scheduled (its onPanResponderGrant would have cleared the timer —
+        // this is a defensive belt-and-suspenders check, not the primary
+        // guard).
+        if (gestureActiveRef.current) {
+          return;
+        }
+        setInteracting(false);
+        setViewBoxRect(
+          bakeViewBox({
+            base: fitViewBoxRectRef.current,
+            viewport: viewportRef.current,
+            pan: panOffset.current,
+            scale: liveScale.current,
+          }),
+        );
+        translateX.setValue(0);
+        translateY.setValue(0);
+        scale.setValue(1);
+      }, WHEEL_SETTLE_DELAY_MS);
+    },
+    [axisBoundsAt, translateX, translateY, scale],
+  );
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') {
+      return;
+    }
+    // A plain `View`'s ref forwards to its underlying DOM node on web (unlike
+    // ScrollView, which needs getScrollableNode()) — same cast pattern as the
+    // other web-only DOM listeners in this codebase (see ShelfEdges). The ref
+    // only attaches once the settled (non-loading, non-empty) canvas JSX
+    // mounts, so this must re-run once `settled` flips from null so the retry
+    // finds a real node instead of permanently bailing on the mount-time null.
+    const node = containerRef.current as unknown as HTMLElement | null;
+    if (!node) {
+      return;
+    }
+    const onWheel = (event: WheelEvent) => {
+      // Always consumed: besides driving our own zoom, this stops Ctrl+wheel
+      // from triggering the browser's native page-zoom over the canvas.
+      event.preventDefault();
+      applyWheelZoom(event.deltaY, {
+        x: event.clientX - containerOriginRef.current.x,
+        y: event.clientY - containerOriginRef.current.y,
+      });
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, [applyWheelZoom, settled]);
+
+  // Reset the pan/zoom transform to identity AND the baked viewBoxRect back
+  // to `fitViewBoxRect`, which restores the initial fit-to-bounds view. Lets a
+  // user who flung the graph off-screen (or zoomed deep) get back without a
+  // way-out dead end.
   const recenter = () => {
+    // A pending debounced wheel bake (see WHEEL_SETTLE_DELAY_MS above) would
+    // otherwise fire later and overwrite this reset with stale burst state.
+    if (wheelIdleTimerRef.current) {
+      clearTimeout(wheelIdleTimerRef.current);
+      wheelIdleTimerRef.current = null;
+    }
+    wheelBurstStartRef.current = null;
+    setViewBoxRect(fitViewBoxRect);
+    setInteracting(false);
+    setNearbyBookmarkLabelIds(new Set());
     translateX.setOffset(0);
     translateX.setValue(0);
     translateY.setOffset(0);
@@ -558,6 +1053,7 @@ export default function GraphScreen() {
     lastScale.current = 1;
     liveScale.current = 1;
     appliedScale.current = 1;
+    gestureStartScaleRef.current = 1;
     panOffset.current = { x: 0, y: 0 };
     panStart.current = { x: 0, y: 0 };
     pinch.current = null;
@@ -684,6 +1180,42 @@ export default function GraphScreen() {
     );
   }, [settled, nodeById, labelById, palette, t, openBookmark, applyTagFacet]);
 
+  const renderBookmarkLabel = useCallback(
+    (node: (typeof bookmarkNodes)[number]) => (
+      <SvgText
+        key={`l${node.id}`}
+        x={node.x}
+        y={node.y + BOOKMARK_R + BOOKMARK_LABEL_SIZE}
+        fill={palette.textSecondary}
+        fontSize={BOOKMARK_LABEL_SIZE}
+        fontWeight={BOOKMARK_LABEL_WEIGHT}
+        textAnchor="middle"
+        pointerEvents="none"
+      >
+        {truncateGraphLabel(
+          bookmarkTitleById.get(node.bookmark_id) ?? node.label,
+          BOOKMARK_LABEL_MAX_CHARS,
+        )}
+      </SvgText>
+    ),
+    [bookmarkTitleById, palette.textSecondary],
+  );
+  const priorityBookmarkLabels = useMemo(
+    () => priorityBookmarkNodes.map(renderBookmarkLabel),
+    [priorityBookmarkNodes, renderBookmarkLabel],
+  );
+  const bulkBookmarkLabels = useMemo(
+    () => bulkBookmarkNodes.map(renderBookmarkLabel),
+    [bulkBookmarkNodes, renderBookmarkLabel],
+  );
+  const nearbyBookmarkLabels = useMemo(
+    () =>
+      bulkBookmarkNodes
+        .filter((node) => nearbyBookmarkLabelIds.has(node.id))
+        .map(renderBookmarkLabel),
+    [bulkBookmarkNodes, nearbyBookmarkLabelIds, renderBookmarkLabel],
+  );
+
   // No active bookmarks → a calm, intentional empty state (never a blank canvas).
   // This short-circuits BEFORE the loading state: an empty stash shows the empty
   // state, not a spinner. `input.bookmarks` is the active inbox, which is exactly
@@ -735,7 +1267,11 @@ export default function GraphScreen() {
       style={[styles.container, { backgroundColor: palette.background }]}
       onLayout={onLayout}
     >
-      <View testID="graph-canvas" style={StyleSheet.absoluteFill} {...panResponder.panHandlers}>
+      <View
+        testID="graph-canvas"
+        style={[StyleSheet.absoluteFill, Platform.OS === 'web' ? WEB_NO_TEXT_SELECT : null]}
+        {...panResponder.panHandlers}
+      >
         <Animated.View
           // Promote this layer to its own GPU/composited texture ONLY while a gesture
           // is active, so a pan/zoom composites the cached layer instead of repainting
@@ -752,7 +1288,26 @@ export default function GraphScreen() {
         >
           <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
             {svgChildren}
+            {priorityBookmarkLabels}
           </Svg>
+          <View
+            pointerEvents="none"
+            testID="graph-bookmark-labels-bulk"
+            style={[StyleSheet.absoluteFill, interacting ? styles.hiddenLabelLayer : null]}
+          >
+            <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
+              {bulkBookmarkLabels}
+            </Svg>
+          </View>
+          <View
+            pointerEvents="none"
+            testID="graph-bookmark-labels-nearby"
+            style={[StyleSheet.absoluteFill, interacting ? null : styles.hiddenLabelLayer]}
+          >
+            <Svg width={w} height={h} viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
+              {nearbyBookmarkLabels}
+            </Svg>
+          </View>
         </Animated.View>
       </View>
 
@@ -829,6 +1384,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     overflow: 'hidden',
+  },
+  hiddenLabelLayer: {
+    display: 'none',
   },
   emptyContainer: {
     flex: 1,

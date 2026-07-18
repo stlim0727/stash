@@ -30,8 +30,10 @@ import {
   getPendingFeedbackSource,
   getPendingFeedbackScreenshot,
 } from '@/feedback/screenshot-session';
+import { getShareDiagnostics, hydrateNativeShareDebugLog } from '@/share/share-diagnostics';
 import { getStorageDiagnostics } from '@/storage/diagnostics';
 import { useT } from '@/i18n';
+import { Button } from '@/ui/Button';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
 import type { MessageKey } from '@/i18n/messages';
 import { useBookmarks } from '@/store/bookmarks';
@@ -120,6 +122,26 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     }
   }, [submit.status, router]);
 
+  // Re-read the native module's durable share-intent breadcrumb (Android,
+  // Sentry STASH-2Q) as soon as this screen mounts: the startup-only read in
+  // `_layout.tsx` misses a same-session report — the common case, since a
+  // user who hits a failed share typically taps "Report a problem" right
+  // away, well before any process restart. Bump a tick so the preview below
+  // reflects it too, even though handleSubmit/handleShare re-await the read
+  // themselves right before collecting, independent of this effect's timing.
+  const [nativeDebugTick, setNativeDebugTick] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    void hydrateNativeShareDebugLog().then(() => {
+      if (!cancelled) {
+        setNativeDebugTick((tick) => tick + 1);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const appVersion = Constants.expoConfig?.version ?? '0.0.0';
   const platform = Platform.OS;
 
@@ -149,6 +171,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         build: buildLabel,
         logs: recentLogLines(),
         storage: getStorageDiagnostics(),
+        shareAttempt: getShareDiagnostics(),
         screenshot: includeScreenshot ? screenshot : null,
       }),
     [
@@ -167,12 +190,16 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     ],
   );
 
-  const context = useMemo(collectContext, [collectContext]);
+  const context = useMemo(collectContext, [collectContext, nativeDebugTick]);
   const contextPreview = useMemo(() => previewContext(context), [context]);
   const logCount = context.logs?.length ?? 0;
 
   const handleShare = async () => {
     try {
+      // Re-await the native breadcrumb read here too, independent of the mount
+      // effect's timing, so a share triggered right after a failed capture
+      // still carries it (Sentry STASH-2Q).
+      await hydrateNativeShareDebugLog();
       await Share.share({ message: formatDiagnosticsReport(collectContext()) });
     } catch {
       // User dismissed the share sheet, or it is unavailable — nothing to do.
@@ -180,7 +207,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   };
 
   const trimmed = message.trim();
-  const canSubmit = trimmed.length > 0 && auth.isSignedIn && submit.status !== 'submitting';
+  const canSubmit = trimmed.length > 0 && auth.status === 'authenticated' && submit.status !== 'submitting';
 
   // Once the user starts composing a follow-up report, a prior success/error
   // banner is stale: leaving the "thanks" message up over the form (with the
@@ -203,6 +230,10 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
 
     setSubmit({ status: 'submitting' });
     try {
+      // Re-await the native breadcrumb read here too (Sentry STASH-2Q) —
+      // guarantees the submitted diagnostics carry it regardless of whether
+      // the mount effect above has resolved yet.
+      await hydrateNativeShareDebugLog();
       // Re-ensure the session so a token that expired while this screen stayed
       // open is refreshed before we post; otherwise the request is rejected
       // with "JWT expired".
@@ -242,6 +273,52 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
           <Text style={[styles.fieldValue, { color: palette.text }]}>
             {t('report.cloudUnavailableBody')}
           </Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('report.shareDiagnosticsA11y')}
+          style={[styles.secondaryButton, { borderColor: palette.border }]}
+          onPress={() => void handleShare()}
+        >
+          <View style={styles.buttonRow}>
+            <Ionicons
+              testID="share-diagnostics-icon"
+              name="share-social-outline"
+              size={18}
+              color={palette.text}
+            />
+            <Text style={[styles.secondaryButtonLabel, { color: palette.text }]}>
+              {t('report.shareWithCount', { count: logCount })}
+            </Text>
+          </View>
+        </Pressable>
+        <Text
+          accessibilityLabel={t('report.contextPreviewA11y')}
+          style={[styles.code, { color: palette.text, borderColor: palette.border }]}
+        >
+          {contextPreview}
+        </Text>
+      </ScrollView>
+    ) : auth.status === 'anonymous' ? (
+      <ScrollView
+        style={webOverscrollContain}
+        contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 16 }]}
+      >
+        <View style={[styles.field, { backgroundColor: palette.card }]}>
+          <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+            {t('report.signInRequiredTitle')}
+          </Text>
+          <Text style={[styles.fieldValue, { color: palette.text }]}>
+            {t('report.signInRequiredBody')}
+          </Text>
+          <Button
+            variant="secondary"
+            size="sm"
+            style={styles.signInButton}
+            onPress={() => router.push('/settings')}
+          >
+            {t('settings.account.signIn')}
+          </Button>
         </View>
         <Pressable
           accessibilityRole="button"
@@ -533,6 +610,9 @@ const styles = StyleSheet.create({
   },
   fieldValue: {
     fontSize: 15,
+  },
+  signInButton: {
+    alignSelf: 'flex-start',
   },
   privacyNote: {
     fontSize: 13,

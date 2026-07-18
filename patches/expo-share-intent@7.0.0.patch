@@ -1,5 +1,287 @@
+diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..a4f24b3c3b1b5ed010f26eea29d18750e07d74ff 100644
+--- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
++++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
+@@ -54,6 +54,17 @@ class ExpoShareIntentModule : Module() {
+         private fun notifyError(message: String) {
+             instance!!.sendEvent("onError", mapOf("value" to message))
+         }
++        // Purely observational — unlike notifyError, this must NEVER drive the
++        // JS-side error/reset flow (ShareIntentHandler treats `onError` as a
++        // real failure: it shows a toast, navigates to Inbox, and calls
++        // resetShareIntent(), which would misfire on a normal internal relaunch
++        // hand-off and could race with the very intent this is trying to
++        // observe — caught in PR review on STASH-2K's first attempt, which
++        // reused notifyError for this same call site). A dedicated event with
++        // no listener wired to any behavior keeps this call inert.
++        private fun notifyDebug(message: String) {
++            instance!!.sendEvent("onDebugLog", mapOf("value" to message))
++        }
+ 
+         @SuppressLint("Range")
+         private fun getFileInfo(uri: Uri): Map<String, String?> {
+@@ -113,7 +124,21 @@ class ExpoShareIntentModule : Module() {
+ 
+         fun handleShareIntent(intent: Intent) {
+             val activity = instance?.currentActivity
+-            if (activity != null && !activity.isTaskRoot) {
++            val attemptId = ShareIntentDebugJournal.record(
++                activity?.applicationContext ?: instance?.context,
++                activity,
++                intent,
++                "module_handle",
++            )
++            if (attemptId != null) notifyDebug("share lifecycle: attemptId=$attemptId phase=module_handle")
++            val isShareAction = intent.action == Intent.ACTION_SEND ||
++                intent.action == Intent.ACTION_SEND_MULTIPLE
++            // The upstream non-root relaunch was added for Google Files
++            // ACTION_VIEW. Applying it to ACTION_SEND drops text shares from
++            // apps such as Brave during the finish/relaunch hand-off (STASH-2S).
++            // Process real shares in the current activity; toast mode will
++            // finish it after the capture is durable, returning to the sender.
++            if (activity != null && !activity.isTaskRoot && !isShareAction) {
+                 val newIntent = Intent(intent).apply {
+                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                 }
+@@ -121,8 +146,18 @@ class ExpoShareIntentModule : Module() {
+                 activity.finish()
+                 return
+             }
+-            if (intent.type == null) return
+-            if (intent.type!!.startsWith("text/plain")) {
++            if (intent.type == null) {
++                // OnNewIntent fires for every intent the activity receives, including
++                // the plain launcher relaunch (ACTION_MAIN, no type) on every normal
++                // app open — only a genuine share action carrying no type is worth
++                // surfacing (STASH-2E: the previous unconditional notifyError here
++                // fired on ordinary app opens, not failed shares).
++                if (intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE) {
++                    notifyError("null intent.type for action: " + intent.action)
++                }
++                return
++            }
++            if (intent.type!!.startsWith("text/")) {
+                 // text / urls
+                 if (intent.action == Intent.ACTION_SEND) {
+                     notifyShareIntent(mapOf(
+@@ -130,6 +165,7 @@ class ExpoShareIntentModule : Module() {
+                         "type" to "text",
+                         "meta" to mapOf(
+                             "title" to intent.getCharSequenceExtra(Intent.EXTRA_TITLE),
++                            "attemptId" to attemptId,
+                         )
+                     ))
+                 } else if (intent.action == Intent.ACTION_VIEW) {
+@@ -142,14 +178,21 @@ class ExpoShareIntentModule : Module() {
+                 if (intent.action == Intent.ACTION_SEND) {
+                     val uri = intent.parcelable<Uri>(Intent.EXTRA_STREAM);
+                     if (uri != null) {
+-                        notifyShareIntent(mapOf( "files" to arrayOf(getFileInfo(uri), "type" to "file")))
++                        notifyShareIntent(mapOf(
++                            "files" to arrayOf(getFileInfo(uri), "type" to "file"),
++                            "meta" to mapOf("attemptId" to attemptId),
++                        ))
+                     } else {
+                         notifyError("empty uri for file sharing: " + intent.action)
+                     }
+                 } else if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
+                     val uris = intent.parcelableArrayList<Uri>(Intent.EXTRA_STREAM)
+                     if (uris != null) {
+-                        notifyShareIntent(mapOf( "files" to uris.map { getFileInfo(it) }, "type" to "file"))
++                        notifyShareIntent(mapOf(
++                            "files" to uris.map { getFileInfo(it) },
++                            "type" to "file",
++                            "meta" to mapOf("attemptId" to attemptId),
++                        ))
+                     } else {
+                         notifyError("empty uris array for file sharing: " + intent.action)
+                     }
+@@ -177,7 +220,7 @@ class ExpoShareIntentModule : Module() {
+     override fun definition() = ModuleDefinition {
+         Name("ExpoShareIntentModule")
+ 
+-        Events("onChange", "onStateChange", "onError")
++        Events("onChange", "onStateChange", "onError", "onDebugLog")
+ 
+         AsyncFunction("getShareIntent") { _: String ->
+             // get the Intent from onCreate activity (app not running in background)
+@@ -196,7 +239,28 @@ class ExpoShareIntentModule : Module() {
+             ExpoShareIntentSingleton.isPending
+         }
+ 
++        // Read-and-clear the five most recent native share lifecycle attempts.
++        AsyncFunction("getNativeShareDebugJournal") { _: String ->
++            ShareIntentDebugJournal.readAndClear(context)
++        }
++
++        AsyncFunction("dismissApp") { _: String ->
++            val activity = instance?.currentActivity
++            if (activity != null) {
++                // If the activity is not the task root, finishing it just reveals
++                // the activity below it in the stack (Sentry STASH-2T).
++                // Minimize the entire task to return control to the sending app.
++                activity.moveTaskToBack(true)
++            }
++        }
++
+         OnNewIntent {
++            ShareIntentDebugJournal.record(
++                currentActivity?.applicationContext ?: context,
++                currentActivity,
++                it,
++                "module_on_new_intent",
++            )
+             handleShareIntent(it)
+         }
+ 
+diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
+index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..92de040ed44ef503d87cfafd4ae845aa7561ff68 100644
+--- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
++++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentReactActivityLifecycleListener.kt
+@@ -13,6 +13,9 @@ import expo.modules.core.interfaces.ReactActivityLifecycleListener
+ class ExpoShareIntentReactActivityLifecycleListener(activityContext: Context) : ReactActivityLifecycleListener {
+ 
+     override fun onCreate(activity: Activity?, savedInstanceState: Bundle?) {
++        activity?.intent?.let {
++            ShareIntentDebugJournal.record(activity.applicationContext, activity, it, "activity_on_create")
++        }
+         // only store when the new intent is not empty
+         if (activity?.intent?.type != null) {
+             ExpoShareIntentSingleton.intent = activity?.intent
+diff --git a/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
+new file mode 100644
+index 0000000000000000000000000000000000000000..79d38fbc551d7a8899d655980bd8040a3ccf9614
+--- /dev/null
++++ b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
+@@ -0,0 +1,104 @@
++package expo.modules.shareintent
++
++import android.app.Activity
++import android.content.Context
++import android.content.Intent
++import org.json.JSONArray
++import org.json.JSONObject
++import java.text.SimpleDateFormat
++import java.util.Date
++import java.util.Locale
++import java.util.TimeZone
++import java.util.UUID
++
++/** Privacy-safe lifecycle evidence for the five most recent Android shares. */
++object ShareIntentDebugJournal {
++    private const val PREFS_NAME = "expo_share_intent_debug"
++    private const val JOURNAL_KEY = "attempt_journal"
++    private const val LEGACY_KEY = "last_intent"
++    private const val ATTEMPT_ID_EXTRA = "expo.modules.shareintent.DEBUG_ATTEMPT_ID"
++    private const val MAX_ATTEMPTS = 5
++
++    fun ensureAttemptId(intent: Intent): String? {
++        val existing = intent.getStringExtra(ATTEMPT_ID_EXTRA)
++        if (!existing.isNullOrBlank()) return existing
++        return UUID.randomUUID().toString().also { intent.putExtra(ATTEMPT_ID_EXTRA, it) }
++    }
++
++    @Synchronized
++    fun record(context: Context?, activity: Activity?, intent: Intent, phase: String): String? {
++        if (context == null) return null
++        val attemptId = ensureAttemptId(intent) ?: return null
++        try {
++            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
++            val journal = try {
++                JSONArray(prefs.getString(JOURNAL_KEY, "[]") ?: "[]")
++            } catch (_: Exception) {
++                JSONArray()
++            }
++            var attempt: JSONObject? = null
++            for (index in 0 until journal.length()) {
++                val candidate = journal.optJSONObject(index)
++                if (candidate?.optString("attemptId") == attemptId) {
++                    attempt = candidate
++                    break
++                }
++            }
++            if (attempt == null) {
++                attempt = JSONObject().apply {
++                    put("attemptId", attemptId)
++                    put("capturedAt", now())
++                    put("action", intent.action ?: JSONObject.NULL)
++                    put("mimeType", intent.type ?: JSONObject.NULL)
++                    put("senderPackage", referrerPackage(activity, intent) ?: JSONObject.NULL)
++                    put("isTaskRoot", activity?.isTaskRoot ?: JSONObject.NULL)
++                    put(
++                        "isShareAction",
++                        intent.action == Intent.ACTION_SEND || intent.action == Intent.ACTION_SEND_MULTIPLE,
++                    )
++                    put("hasText", intent.hasExtra(Intent.EXTRA_TEXT))
++                    put("hasStream", intent.hasExtra(Intent.EXTRA_STREAM))
++                    put("phases", JSONArray())
++                }
++                journal.put(attempt)
++            }
++            attempt.getJSONArray("phases").put(JSONObject().apply {
++                put("phase", phase)
++                put("at", now())
++            })
++            while (journal.length() > MAX_ATTEMPTS) journal.remove(0)
++            prefs.edit().putString(JOURNAL_KEY, journal.toString()).apply()
++            return attemptId
++        } catch (_: Exception) {
++            return attemptId
++        }
++    }
++
++    @Synchronized
++    fun readAndClear(context: Context): String? {
++        return try {
++            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
++            val value = prefs.getString(JOURNAL_KEY, null)
++            prefs.edit().remove(JOURNAL_KEY).remove(LEGACY_KEY).apply()
++            value
++        } catch (_: Exception) {
++            null
++        }
++    }
++
++    @Suppress("DEPRECATION")
++    private fun referrerPackage(activity: Activity?, intent: Intent): String? {
++        val fromIntent = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_REFERRER)
++            ?: intent.getStringExtra(Intent.EXTRA_REFERRER_NAME)?.let { android.net.Uri.parse(it) }
++        val referrer = fromIntent ?: activity?.referrer ?: return null
++        return if (referrer.scheme == "android-app") {
++            referrer.host
++        } else {
++            "non-app:" + (referrer.scheme ?: "unknown")
++        }
++    }
++
++    private fun now(): String = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
++        timeZone = TimeZone.getTimeZone("UTC")
++    }.format(Date())
++}
+diff --git a/build/ExpoShareIntentModule.d.ts b/build/ExpoShareIntentModule.d.ts
+index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..d4174c5d23fb663150c2180a481b69614e4c1470 100644
+--- a/build/ExpoShareIntentModule.d.ts
++++ b/build/ExpoShareIntentModule.d.ts
+@@ -4,11 +4,17 @@ type ExpoShareIntentModuleEvents = {
+     onError: (event: ErrorEventPayload) => void;
+     onChange: (event: ChangeEventPayload) => void;
+     onStateChange: (event: StateEventPayload) => void;
++    // Purely observational (Sentry STASH-2K) — never wired to any behavior,
++    // unlike onError. Same payload shape as onError.
++    onDebugLog: (event: ErrorEventPayload) => void;
+ };
+ declare class ExpoShareIntentModuleType extends NativeModule<ExpoShareIntentModuleEvents> {
+     getShareIntent(url: string): string;
+     clearShareIntent(key: string): Promise<void>;
+     hasShareIntent(key: string): boolean;
++    // Read-and-clear the five most recent native share lifecycle attempts.
++    getNativeShareDebugJournal(key: string): Promise<string | null>;
++    dismissApp(key: string): Promise<void>;
+ }
+ declare const ExpoShareIntentModule: ExpoShareIntentModuleType | null;
+ export default ExpoShareIntentModule;
 diff --git a/build/useShareIntent.js b/build/useShareIntent.js
-index 1ab12c4..9257fd8 100644
+index 1ab12c4c9e429ef8adfdac61c096acc906063dcf..e775e752fb460127603ac7e5c8491d87af59f43a 100644
 --- a/build/useShareIntent.js
 +++ b/build/useShareIntent.js
 @@ -36,6 +36,10 @@ export default function useShareIntent(options = SHAREINTENT_OPTIONS_DEFAULT) {
@@ -31,16 +313,23 @@ index 1ab12c4..9257fd8 100644
      /**
       * Detect Native Module response
       */
-diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 6f68da5..71ad26b 100644
---- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-+++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-@@ -122,7 +122,7 @@ class ExpoShareIntentModule : Module() {
-                 return
-             }
-             if (intent.type == null) return
--            if (intent.type!!.startsWith("text/plain")) {
-+            if (intent.type!!.startsWith("text/")) {
-                 // text / urls
-                 if (intent.action == Intent.ACTION_SEND) {
-                     notifyShareIntent(mapOf(
+diff --git a/build/utils.js b/build/utils.js
+index 3d343c633b4bb267a1ee994352516997f8e058b3..3228ffda5da2c854caa0c1c9c28a948ab6aa9486 100644
+--- a/build/utils.js
++++ b/build/utils.js
+@@ -68,6 +68,7 @@ export const parseShareIntent = (value, options) => {
+             text: shareIntent.text,
+             webUrl,
+             meta: {
++                ...shareIntent.meta,
+                 title: shareIntent.meta?.title ?? undefined,
+             },
+         };
+@@ -90,6 +91,7 @@ export const parseShareIntent = (value, options) => {
+             file.mimeType.startsWith("video/"));
+         result = {
+             ...SHAREINTENT_DEFAULTVALUE,
++            meta: shareIntent?.meta ?? null,
+             files: shareIntent?.files
+                 ? shareIntent.files.reduce((acc, file) => {
+                     if (!file.path && !file.contentUri)

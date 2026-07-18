@@ -4,11 +4,13 @@ import { test } from 'node:test';
 import {
   createNeedsReconcileUpdate,
   hasRemoteIdentity,
+  isSyncable,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
   syncQueueEntry,
 } from './sync-bookmarks.ts';
 import { rekeyPendingTagOps, type PendingTagOp } from '@/domain/pending-tags';
+import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
@@ -365,6 +367,51 @@ test('update: failure stays retryable', async () => {
   assert.equal(result.removeEntry, undefined);
   assert.equal(result.entry.sync_status, 'failed');
   assert.equal(result.entry.retry_count, 1);
+});
+
+test('update: reconciles (removes local row + queue entry) when the remote row is confirmed gone (Sentry STASH-2F)', async () => {
+  // Deleted on another device while this device still had a queued edit —
+  // the exact, unambiguous error updateBookmark throws for a zero-row PATCH
+  // already scoped to the current user. Retrying can never succeed.
+  const { calls, repository } = fakeRepository();
+  const api = fakeApi({
+    updateBookmark: async () => {
+      throw new Error(BOOKMARK_NOT_FOUND_ERROR_MESSAGE);
+    },
+  });
+
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: '00000000-0000-4000-8000-000000000001' }),
+  );
+
+  assert.equal(result.removeEntry, true);
+  assert.equal(result.removedBookmarkId, '00000000-0000-4000-8000-000000000001');
+  assert.equal(result.entry.sync_status, 'synced');
+  assert.ok(calls.includes('deleteBookmark:00000000-0000-4000-8000-000000000001'));
+  assert.ok(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
+});
+
+test('update: a generic failure still stays retryable, not reconciled as gone', async () => {
+  // Guards against over-matching: only the exact BOOKMARK_NOT_FOUND_ERROR_MESSAGE
+  // triggers reconciliation. Anything else (network blip, 500, etc.) must keep
+  // retrying normally.
+  const { calls, repository } = fakeRepository();
+  const api = fakeApi({
+    updateBookmark: async () => {
+      throw new Error('Bookmark not found or not owned by the current user, maybe');
+    },
+  });
+
+  const entry = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
+  const result = await syncQueueEntry(api, repository, entry, () =>
+    makeBookmark({ id: '00000000-0000-4000-8000-000000000001' }),
+  );
+
+  assert.equal(result.removeEntry, undefined);
+  assert.equal(result.removedBookmarkId, undefined);
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.ok(!calls.includes('deleteBookmark:00000000-0000-4000-8000-000000000001'));
 });
 
 test('delete: permanently removes the remote row and leaves the queue', async () => {
@@ -893,4 +940,38 @@ test('makeMutationEntry targets the bookmark with a pending status', () => {
   assert.equal(entry.remote_id, '00000000-0000-4000-8000-000000000001');
   assert.equal(entry.operation, 'delete');
   assert.equal(entry.sync_status, 'pending');
+});
+
+test('isSyncable excludes a create that already failed with the permanent url_hash btree error (Sentry STASH-2J)', () => {
+  // Reproduces an entry stuck from BEFORE the client-side length guard shipped
+  // (a pre-fix build could still queue a too-long URL): last_error already
+  // carries this exact Postgres message from its last failed attempt, so it
+  // must stop being retried without needing a fresh failure to relabel it.
+  const stuck = makeCreateEntry({
+    sync_status: 'failed',
+    last_error:
+      'index row size 2888 exceeds btree version 4 maximum 2704 for index "bookmarks_user_url_hash_active_idx"',
+  });
+  assert.equal(isSyncable(stuck), false);
+});
+
+test('isSyncable still retries an ordinary failure (e.g. a network blip)', () => {
+  const transient = makeCreateEntry({ sync_status: 'failed', last_error: 'network down' });
+  assert.equal(isSyncable(transient), true);
+});
+
+test('isSyncable still retries a pending/syncing entry regardless of a stale last_error', () => {
+  assert.equal(
+    isSyncable(
+      makeCreateEntry({
+        sync_status: 'pending',
+        last_error: 'index row size 2888 exceeds btree version 4 maximum 2704 for index "x"',
+      }),
+    ),
+    true,
+  );
+});
+
+test('isSyncable excludes a synced entry as before', () => {
+  assert.equal(isSyncable(makeCreateEntry({ sync_status: 'synced' })), false);
 });

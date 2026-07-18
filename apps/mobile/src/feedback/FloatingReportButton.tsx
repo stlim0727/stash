@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
-import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { getHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 import { captureFeedbackScreenshot } from '@/feedback/screenshot';
 import {
   setPendingFeedbackScreenshot,
@@ -11,16 +12,37 @@ import {
   type FeedbackSourceContext,
 } from '@/feedback/screenshot-session';
 import { useT } from '@/i18n';
+import { getPreference, setPreference } from '@/storage/preferences';
+import { useBookmarks } from '@/store/bookmarks';
 import { usePalette } from '@/theme';
+import { useCaptureToast } from '@/ui/capture-toast';
 import { overlayLayer } from '@/ui/layering';
 
 interface FloatingReportButtonProps {
   children: React.ReactNode;
 }
 
-const SCREENSHOT_CAPTURE_TIMEOUT_MS = 1200;
+// 1200ms used to race out under normal conditions too — every "hero not
+// visible" report on record (STASH-1X, STASH-2G, STASH-2P) came back with
+// `screenshot: absent`, and each also logged heavy competing JS-thread work
+// (sync full-refresh, repeated Realtime reconnects) right around the same
+// moment. A tighter budget is exactly the one most likely to lose the race
+// precisely when a screenshot would be most useful. The capture is opt-in and
+// already shows a disabled/dimmed button while it runs, so a longer bound is
+// an acceptable wait, not a silent hang.
+const SCREENSHOT_CAPTURE_TIMEOUT_MS = 3000;
+// Same row as the inbox "+" FAB (bottom-right, `insets.bottom + 20`) — on
+// Inbox this button now sits bottom-left at the same offset instead of
+// stacked above it.
+const INBOX_BOTTOM_OFFSET = 20;
+// Every other screen's scroll content only reserves a few px of bottom
+// padding (it never accounted for a floating control at all), so this button
+// still needs real clearance there — unrelated to the "+" FAB, which only
+// exists on Inbox.
 const DEFAULT_BOTTOM_OFFSET = 88;
-const INBOX_BOTTOM_OFFSET = 92;
+// Persisted (repository meta store) so a user who long-presses this into its
+// minimized nub doesn't have to redo that every app launch.
+const MINIMIZED_PREF_KEY = 'pref.feedback.reportButtonMinimized';
 
 export function feedbackSourceFromPath(pathname: string | null): FeedbackSourceContext {
   if (!pathname || pathname === '/') {
@@ -76,7 +98,50 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
   const insets = useSafeAreaInsets();
   const captureRef = useRef<View>(null);
   const [capturing, setCapturing] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const hidden = shouldHide(pathname);
+  // On web the repository's meta store is only populated once BookmarksProvider's
+  // startup load resolves (`repository.init()`) — reading the preference before
+  // that finishes always sees an empty store, since a fresh mount's own effect
+  // runs before that ancestor's. Gate on `isLoading` so this reads only once the
+  // real persisted value is available.
+  const { isLoading } = useBookmarks();
+  // The capture toast is pass-through (`pointerEvents: 'none'`/`'box-none'`) so
+  // it never blocks the screen underneath — but its resting corner now overlaps
+  // this button, so a tap meant for the toast can land here instead. Go inert
+  // while one is up rather than relying on the toast to intercept the touch.
+  const { isVisible: toastVisible } = useCaptureToast();
+
+  useEffect(() => {
+    if (isLoading) {
+      return;
+    }
+    let active = true;
+    getPreference(MINIMIZED_PREF_KEY)
+      .then((raw) => {
+        if (active && raw === 'true') {
+          setMinimized(true);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [isLoading]);
+
+  const setMinimizedPersisted = (value: boolean) => {
+    // Before the repository finishes loading on web, its in-memory meta is
+    // still empty; writing here would persist a meta blob containing only
+    // this key and clobber every other meta entry (sort/view prefs, sync
+    // watermarks, pending tag ops) once the real one is read back in. Bail
+    // out silently — the loading window is brief and this isn't reachable
+    // through the normal open-report tap, only the long-press/expand actions.
+    if (isLoading) {
+      return;
+    }
+    setMinimized(value);
+    void setPreference(MINIMIZED_PREF_KEY, value ? 'true' : 'false').catch(() => {});
+  };
 
   const openReport = async () => {
     if (capturing) {
@@ -86,6 +151,13 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     try {
       const source = feedbackSourceFromPath(pathname);
       setPendingFeedbackSource(source);
+      // Logged (not stored separately) so it rides the existing log-buffer ->
+      // diagnostics.logs pipeline into the report, independent of whether the
+      // screenshot capture below succeeds or times out.
+      const heroSnapshot = getHeroDiagnosticsSnapshot();
+      if (heroSnapshot) {
+        console.info('feedback: inbox hero snapshot', JSON.stringify(heroSnapshot));
+      }
       setPendingFeedbackScreenshot(
         await withTimeout(
           captureFeedbackScreenshot(captureRef, source.surface),
@@ -101,16 +173,16 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
     router.push('/report');
   };
 
+  const bottom =
+    insets.bottom + (isInbox(pathname) ? INBOX_BOTTOM_OFFSET : DEFAULT_BOTTOM_OFFSET);
+
   const buttonStyle: StyleProp<ViewStyle> = [
     styles.button,
-    {
-      backgroundColor: palette.accent,
-      bottom: Math.max(
-        insets.bottom + (isInbox(pathname) ? INBOX_BOTTOM_OFFSET : DEFAULT_BOTTOM_OFFSET),
-        DEFAULT_BOTTOM_OFFSET,
-      ),
-      opacity: capturing ? 0.7 : 1,
-    },
+    { backgroundColor: palette.accent, bottom, opacity: capturing || toastVisible ? 0.7 : 1 },
+  ];
+  const nubStyle: StyleProp<ViewStyle> = [
+    styles.nub,
+    { backgroundColor: palette.accent, bottom, opacity: toastVisible ? 0.3 : 0.55 },
   ];
 
   return (
@@ -118,16 +190,27 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
       <View ref={captureRef} collapsable={false} style={styles.captureSurface}>
         {children}
       </View>
-      {hidden ? null : (
+      {hidden ? null : minimized ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('report.expandA11y')}
+          disabled={toastVisible}
+          onPress={() => setMinimizedPersisted(false)}
+          style={({ pressed }) => [nubStyle, pressed && styles.pressed]}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={14} color="#ffffff" />
+        </Pressable>
+      ) : (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={t('settings.report.label')}
-          disabled={capturing}
+          accessibilityHint={t('report.minimizeA11yHint')}
+          disabled={capturing || toastVisible}
           onPress={() => void openReport()}
+          onLongPress={() => setMinimizedPersisted(true)}
           style={({ pressed }) => [buttonStyle, pressed && styles.pressed]}
         >
-          <Ionicons name="chatbubble-ellipses-outline" size={18} color="#ffffff" />
-          <Text style={styles.label}>{t('settings.report.label')}</Text>
+          <Ionicons name="chatbubble-ellipses-outline" size={20} color="#ffffff" />
         </Pressable>
       )}
     </View>
@@ -144,25 +227,32 @@ const styles = StyleSheet.create({
   button: {
     ...overlayLayer(50),
     position: 'absolute',
-    right: 16,
-    minHeight: 44,
-    maxWidth: 188,
+    left: 16,
+    width: 44,
+    height: 44,
     borderRadius: 22,
-    paddingHorizontal: 14,
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.22,
     shadowRadius: 8,
   },
+  // Long-pressing the full button collapses it to this small, semi-transparent
+  // nub so it stops competing with the rest of the UI; tapping the nub only
+  // restores the full button (it never opens the report screen directly).
+  nub: {
+    ...overlayLayer(50),
+    position: 'absolute',
+    left: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.55,
+  },
   pressed: {
     transform: [{ scale: 0.98 }],
-  },
-  label: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
   },
 });

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { InteractionManager, processColor } from 'react-native';
+import { InteractionManager, Pressable, Text, processColor } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -37,6 +37,7 @@ jest.mock('expo-router', () => ({
 
 import GraphScreen, {
   anchoredPanForScale,
+  bakeViewBox,
   clampToRange,
   graphCanvasSize,
   maxPanOffset,
@@ -44,9 +45,14 @@ import GraphScreen, {
   MAX_SCALE,
   panWithPinchFocalDelta,
   pinchStartSnapshot,
+  selectNearbyBookmarkLabelIds,
+  selectPriorityBookmarkLabelIds,
   touchCenterInViewport,
+  truncateGraphLabel,
+  wheelZoomScale,
 } from '@/app/graph';
-import { BookmarksProvider } from '@/store/bookmarks';
+import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
+import type { PositionedNode } from '@/domain/graph';
 import type { Tag } from '@/domain/types';
 import { palettes } from '@/theme';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -63,6 +69,27 @@ function renderScreen() {
   return render(
     <BookmarksProvider>
       <GraphScreen />
+    </BookmarksProvider>,
+  );
+}
+
+// Fires a title-only edit through the same store the screen reads from, so a
+// test can exercise "the bookmark's title changed without any tag change" —
+// the case where the settled graph's cached `label` goes stale.
+function EditTitleTrigger({ id, title }: { id: string; title: string }) {
+  const { updateBookmarkFields } = useBookmarks();
+  return (
+    <Pressable testID="edit-title-trigger" onPress={() => updateBookmarkFields(id, { title })}>
+      <Text>edit</Text>
+    </Pressable>
+  );
+}
+
+function renderScreenWithEditTrigger(id: string, newTitle: string) {
+  return render(
+    <BookmarksProvider>
+      <GraphScreen />
+      <EditTitleTrigger id={id} title={newTitle} />
     </BookmarksProvider>,
   );
 }
@@ -84,6 +111,39 @@ function collectNodesWithProp(
     found.push({ props: current.props });
   }
   collectNodesWithProp(current.children, propName, found);
+  return found;
+}
+
+// react-native-svg splits a <Text> with a string child across two native
+// nodes: the outer RNSVGText carries `pointerEvents`, while the actual
+// rendered string lands on a nested RNSVGTSpan's `content` prop (see
+// collectNodesWithProp usage elsewhere in this file). This walks the tree and
+// pairs each RNSVGText's pointerEvents with its descendant TSpan's content.
+function collectSvgTextNodes(
+  node: unknown,
+): Array<{ pointerEvents: unknown; content: string | null }> {
+  const found: Array<{ pointerEvents: unknown; content: string | null }> = [];
+  const visit = (n: unknown) => {
+    if (!n || typeof n !== 'object') {
+      return;
+    }
+    if (Array.isArray(n)) {
+      n.forEach(visit);
+      return;
+    }
+    const current = n as { type?: string; props?: Record<string, unknown>; children?: unknown };
+    if (current.type === 'RNSVGText') {
+      const tspanContents = collectNodesWithProp(current.children, 'content')
+        .map((tspan) => tspan.props.content)
+        .filter((content): content is string => typeof content === 'string');
+      found.push({
+        pointerEvents: current.props?.pointerEvents,
+        content: tspanContents[0] ?? null,
+      });
+    }
+    visit(current.children);
+  };
+  visit(node);
   return found;
 }
 
@@ -206,6 +266,229 @@ test('shows the empty state when there are no bookmarks', async () => {
   expect(screen.queryByTestId('graph-screen')).toBeNull();
   // An empty stash short-circuits to the empty state — never the spinner.
   expect(screen.queryByTestId('graph-loading')).toBeNull();
+});
+
+describe('truncateGraphLabel', () => {
+  test('leaves short text untouched', () => {
+    expect(truncateGraphLabel('Kimchi jjigae', 18)).toBe('Kimchi jjigae');
+  });
+
+  test('trims trailing/leading whitespace even when under the cap', () => {
+    expect(truncateGraphLabel('  Local-first  ', 18)).toBe('Local-first');
+  });
+
+  test('caps long text with an ellipsis, at or under the cap length', () => {
+    const truncated = truncateGraphLabel('A genuinely very long bookmark title indeed', 18);
+    expect(truncated).toBe('A genuinely very…');
+    expect(truncated.length).toBeLessThanOrEqual(18);
+    expect(truncated.endsWith('…')).toBe(true);
+  });
+});
+
+describe('interaction bookmark label buckets', () => {
+  const bookmarkNode = (
+    id: string,
+    degree: number,
+    x: number,
+    y: number,
+  ): PositionedNode => ({
+    id: `b:${id}`,
+    kind: 'bookmark',
+    bookmark_id: id,
+    label: id,
+    degree,
+    x,
+    y,
+  });
+
+  test('keeps the highest-degree bookmark labels with deterministic ties', () => {
+    const selected = selectPriorityBookmarkLabelIds(
+      [
+        bookmarkNode('low', 1, 0, 0),
+        bookmarkNode('z-tie', 3, 0, 0),
+        bookmarkNode('high', 5, 0, 0),
+        bookmarkNode('a-tie', 3, 0, 0),
+      ],
+      3,
+    );
+
+    expect([...selected]).toEqual(['b:high', 'b:a-tie', 'b:z-tie']);
+  });
+
+  test('adds only the closest non-priority labels around the gesture focal point', () => {
+    const selected = selectNearbyBookmarkLabelIds({
+      nodes: [
+        bookmarkNode('priority', 5, 10, 10),
+        bookmarkNode('near', 1, 20, 20),
+        bookmarkNode('middle', 1, 50, 50),
+        bookmarkNode('far', 1, 90, 90),
+      ],
+      excludedIds: new Set(['b:priority']),
+      focal: { x: 18, y: 18 },
+      viewport: { w: 100, h: 100 },
+      viewBox: { minX: 0, minY: 0, w: 100, h: 100 },
+      scale: 1,
+      pan: { x: 0, y: 0 },
+      limit: 2,
+    });
+
+    expect([...selected]).toEqual(['b:near', 'b:middle']);
+  });
+
+  test('measures proximity after the live camera scale and pan', () => {
+    const selected = selectNearbyBookmarkLabelIds({
+      nodes: [bookmarkNode('left', 1, 25, 50), bookmarkNode('right', 1, 75, 50)],
+      excludedIds: new Set(),
+      focal: { x: 100, y: 50 },
+      viewport: { w: 100, h: 100 },
+      viewBox: { minX: 0, minY: 0, w: 100, h: 100 },
+      scale: 2,
+      pan: { x: 50, y: 0 },
+      limit: 1,
+    });
+
+    // At scale 2 with +50px pan, the left node projects to the focal x=100;
+    // selection must use that transformed position rather than raw graph x.
+    expect([...selected]).toEqual(['b:left']);
+  });
+});
+
+test('bookmark nodes render a length-capped title label', async () => {
+  // Two bookmarks share `cooking` so it survives the shared-tag backbone
+  // (minSharedDegree: 2) and both bookmark nodes render.
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000d1',
+        title: 'A genuinely very long bookmark title that should be truncated',
+      }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000d2', title: 'Short one' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking')],
+      bookmarkTags: [
+        {
+          bookmark_id: '7e64cf1e-0000-4000-8000-0000000000d1',
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+        {
+          bookmark_id: '7e64cf1e-0000-4000-8000-0000000000d2',
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+
+  await waitFor(() =>
+    expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000d1')).toBeTruthy(),
+  );
+  // react-native-svg's Text renders its string child into a nested TSpan's
+  // `content` prop, not an RN-visible text node, so RNTL's getByText can't see
+  // it — read the rendered label content directly off the tree instead.
+  const labelContents = collectNodesWithProp(screen.toJSON(), 'content')
+    .map((node) => node.props.content)
+    .filter((content): content is string => typeof content === 'string');
+  // The full title is truncated to the cap with an ellipsis, not shown in full.
+  expect(labelContents).toContain('A genuinely very…');
+  expect(labelContents).not.toContain(
+    'A genuinely very long bookmark title that should be truncated',
+  );
+  // A short title renders untouched.
+  expect(labelContents).toContain('Short one');
+});
+
+test('bookmark labels ignore pointer events so an overlapping label never blocks a tap', async () => {
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+  await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+
+  const textNodes = collectSvgTextNodes(screen.toJSON());
+  // seedLibrary's two tagged bookmarks ("Kimchi jjigae", "Local-first
+  // software") get pointer-transparent labels so an overlapping label can
+  // never steal a tap meant for the circle beneath it. "Local-first software"
+  // is over the 18-char cap, so match its truncated form (same helper the
+  // screen itself renders through).
+  const bookmarkLabelNodes = textNodes.filter((node) =>
+    [truncateGraphLabel('Kimchi jjigae', 18), truncateGraphLabel('Local-first software', 18)].includes(
+      node.content ?? '',
+    ),
+  );
+  expect(bookmarkLabelNodes).toHaveLength(2);
+  for (const node of bookmarkLabelNodes) {
+    expect(node.pointerEvents).toBe('none');
+  }
+  // The tag hub label is unrelated to this fix and keeps its default (it
+  // isn't the tap target either way — the hub circle sits under it).
+  const hubLabelNode = textNodes.find((node) => node.content === 'cooking');
+  expect(hubLabelNode?.pointerEvents).not.toBe('none');
+});
+
+test('a title-only edit updates the bookmark label without a tag-topology change', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000e1';
+  const other = '7e64cf1e-0000-4000-8000-0000000000e2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id, title: 'Original title' }),
+      makeStoredBookmark({ id: other, title: 'Other bookmark' }),
+    ],
+    {
+      tags: [makeTag('t-cooking', 'cooking')],
+      bookmarkTags: [
+        {
+          bookmark_id: id,
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+        {
+          bookmark_id: other,
+          tag_id: 't-cooking',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderScreenWithEditTrigger(id, 'Renamed title');
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+  await waitFor(() => expect(screen.getByTestId(`graph-bookmark-${id}`)).toBeTruthy());
+
+  const labelContentsBefore = collectNodesWithProp(screen.toJSON(), 'content')
+    .map((node) => node.props.content)
+    .filter((content): content is string => typeof content === 'string');
+  expect(labelContentsBefore).toContain('Original title');
+
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('edit-title-trigger'));
+  });
+
+  // The tag topology is unchanged, so this must NOT re-enter the loading
+  // state (no resettle) — the label updates in place.
+  expect(screen.queryByTestId('graph-loading')).toBeNull();
+  const labelContentsAfter = collectNodesWithProp(screen.toJSON(), 'content')
+    .map((node) => node.props.content)
+    .filter((content): content is string => typeof content === 'string');
+  expect(labelContentsAfter).toContain('Renamed title');
+  expect(labelContentsAfter).not.toContain('Original title');
 });
 
 test('tapping a bookmark node routes to its detail', async () => {
@@ -412,6 +695,208 @@ describe('pinch anchoring', () => {
       startFocal: { x: 200, y: 160 },
     });
   });
+});
+
+// The web-only wheel listener drives an Animated transform through native DOM
+// APIs (see the effect in app/graph.tsx), which the jest-expo test renderer
+// doesn't provide — same reason the pinch gesture above is asserted through its
+// pure math rather than a simulated touch stream. wheelZoomScale is that math
+// for the wheel path: it decides the NEXT scale from a raw `deltaY`; the
+// resulting pan gets anchored on the cursor via the same anchoredPanForScale
+// tested above.
+describe('wheel zoom', () => {
+  test('scrolling up (negative deltaY) zooms in', () => {
+    expect(wheelZoomScale(1, -100)).toBeGreaterThan(1);
+  });
+
+  test('scrolling down (positive deltaY) zooms out', () => {
+    expect(wheelZoomScale(1, 100)).toBeLessThan(1);
+  });
+
+  test('a zero delta leaves the scale unchanged', () => {
+    expect(wheelZoomScale(2, 0)).toBe(2);
+  });
+
+  test('clamps zoom-in at MAX_SCALE instead of overshooting', () => {
+    expect(wheelZoomScale(MAX_SCALE, -100000)).toBe(MAX_SCALE);
+  });
+
+  test('clamps zoom-out at MIN_SCALE instead of overshooting', () => {
+    expect(wheelZoomScale(MIN_SCALE, 100000)).toBe(MIN_SCALE);
+  });
+});
+
+// STASH-2N/STASH-2R: pinch-zoom used to be ONLY a CSS-style transform over a
+// fixed-resolution SVG, which is why bookmark-label text stayed visibly
+// blurred at high zoom even after a gesture settled — the underlying picture
+// was never redrawn at the new resolution. `bakeViewBox` computes a new
+// viewBox that, rendered with an IDENTITY transform, reproduces the exact
+// same on-screen content as the OLD system's `base` viewBox + `pan`/`scale`
+// transform — so the graph screen can reset the transform to identity after
+// baking and get a freshly-rendered (crisp) picture at the committed zoom,
+// with no visible jump. This independently re-derives the OLD system's
+// screen mapping (transform: translate ∘ scale-around-viewport-center, same
+// model `anchoredPanForScale` above already relies on) and asserts it agrees
+// with the NEW system (baked viewBox, identity transform) for sample points.
+describe('bake viewBox', () => {
+  function oldSystemScreenPoint(
+    point: { x: number; y: number },
+    base: { minX: number; minY: number; w: number; h: number },
+    viewport: { w: number; h: number },
+    pan: { x: number; y: number },
+    scale: number,
+  ) {
+    const fit = Math.min(viewport.w / base.w, viewport.h / base.h);
+    const offsetX = (viewport.w - base.w * fit) / 2;
+    const offsetY = (viewport.h - base.h * fit) / 2;
+    const preTransformX = offsetX + (point.x - base.minX) * fit;
+    const preTransformY = offsetY + (point.y - base.minY) * fit;
+    return {
+      x: viewport.w / 2 + scale * (preTransformX - viewport.w / 2) + pan.x,
+      y: viewport.h / 2 + scale * (preTransformY - viewport.h / 2) + pan.y,
+    };
+  }
+
+  function newSystemScreenPoint(
+    point: { x: number; y: number },
+    baked: { minX: number; minY: number; w: number; h: number },
+    viewport: { w: number; h: number },
+  ) {
+    return oldSystemScreenPoint(point, baked, viewport, { x: 0, y: 0 }, 1);
+  }
+
+  test('a no-op bake (scale 1, pan {0,0}) returns the base unchanged', () => {
+    const base = { minX: -20, minY: -10, w: 400, h: 300 };
+    expect(
+      bakeViewBox({ base, viewport: { w: 800, h: 600 }, pan: { x: 0, y: 0 }, scale: 1 }),
+    ).toEqual(base);
+  });
+
+  test('the baked identity view reproduces the same screen mapping as the original transform (zoomed in, panned, letterboxed)', () => {
+    const base = { minX: 0, minY: 0, w: 1000, h: 500 }; // wider than the 800x600 viewport → letterboxed on Y
+    const viewport = { w: 800, h: 600 };
+    const pan = { x: 37, y: -52 };
+    const scale = 2.5;
+
+    const baked = bakeViewBox({ base, viewport, pan, scale });
+    const samplePoints = [
+      { x: 0, y: 0 },
+      { x: 1000, y: 500 },
+      { x: 500, y: 250 }, // center
+      { x: 120, y: 480 },
+      { x: 900, y: 30 },
+    ];
+    for (const point of samplePoints) {
+      const before = oldSystemScreenPoint(point, base, viewport, pan, scale);
+      const after = newSystemScreenPoint(point, baked, viewport);
+      expect(after.x).toBeCloseTo(before.x, 6);
+      expect(after.y).toBeCloseTo(before.y, 6);
+    }
+  });
+
+  test('reproduces the same mapping when zoomed OUT (scale < 1)', () => {
+    const base = { minX: -100, minY: -100, w: 600, h: 800 }; // taller → letterboxed on X
+    const viewport = { w: 500, h: 500 };
+    const pan = { x: -15, y: 8 };
+    const scale = 0.6;
+
+    const baked = bakeViewBox({ base, viewport, pan, scale });
+    const point = { x: 260, y: -40 };
+    const before = oldSystemScreenPoint(point, base, viewport, pan, scale);
+    const after = newSystemScreenPoint(point, baked, viewport);
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
+  });
+
+  test('baking twice in a row (successive gestures) composes correctly', () => {
+    const base = { minX: 0, minY: 0, w: 1200, h: 900 };
+    const viewport = { w: 900, h: 700 };
+    const firstPan = { x: 40, y: -10 };
+    const firstScale = 1.8;
+
+    const afterFirst = bakeViewBox({ base, viewport, pan: firstPan, scale: firstScale });
+
+    const secondPan = { x: -25, y: 30 };
+    const secondScale = 1.4;
+    const afterSecond = bakeViewBox({ base: afterFirst, viewport, pan: secondPan, scale: secondScale });
+
+    // The combined effect of both bakes must equal replaying the two
+    // transforms directly against the ORIGINAL base (each one anchored on
+    // the viewport center in turn, same as two real successive gestures on
+    // the Animated transform stack) — a chain of gestures shouldn't drift
+    // from that "ground truth" composed result.
+    const point = { x: 300, y: 600 };
+    const viaTwoBakes = newSystemScreenPoint(point, afterSecond, viewport);
+    const direct = composeTwoTransforms(point, base, viewport, firstPan, firstScale, secondPan, secondScale);
+    expect(viaTwoBakes.x).toBeCloseTo(direct.x, 6);
+    expect(viaTwoBakes.y).toBeCloseTo(direct.y, 6);
+  });
+
+  // Regression for a review finding on #527: an earlier version of the
+  // production code re-based each bake on the PREVIOUS bake's own output
+  // (composing incrementally, like the "baking twice" test above exercises
+  // as a general property of the pure function) while resetting the pan
+  // clamp's reference point to the current baked window instead of the
+  // fixed original view. That let a chain of repeated max-pan gestures in
+  // the same direction each individually pass the clamp while drifting the
+  // real node content further off-screen every time. The fix: `panOffset`
+  // is cumulative and clamped to an ABSOLUTE range against the fixed
+  // `fitViewBoxRect` on every gesture, never reset — so this test asserts
+  // that invariant directly: clamping the same cumulative value twice in a
+  // row is idempotent at the boundary, not additive.
+  test('repeated max-pan gestures in the same direction stay clamped, not drift further', () => {
+    const fitViewBoxRect = { minX: -500, minY: -500, w: 1000, h: 1000 };
+    const viewport = { w: 400, h: 400 };
+    const scale = 1;
+    const fittedNodeExtent = 400; // arbitrary on-screen node span at scale 1
+    const maxX = maxPanOffset(scale, viewport.w, fittedNodeExtent);
+
+    // Gesture 1: a huge drag clamps the cumulative pan to +maxX.
+    let panOffset = clampToRange(999999, -maxX, maxX);
+    expect(panOffset).toBe(maxX);
+    const bakedAfterFirst = bakeViewBox({
+      base: fitViewBoxRect,
+      viewport,
+      pan: { x: panOffset, y: 0 },
+      scale,
+    });
+
+    // Gesture 2: cumulative pan is NOT reset after the first bake — it
+    // starts from `maxX`, and the same huge drag clamps right back to
+    // `maxX` rather than compounding past it.
+    panOffset = clampToRange(panOffset + 999999, -maxX, maxX);
+    expect(panOffset).toBe(maxX);
+    const bakedAfterSecond = bakeViewBox({
+      base: fitViewBoxRect,
+      viewport,
+      pan: { x: panOffset, y: 0 },
+      scale,
+    });
+
+    // Identical bake: the second gesture didn't move the view any further.
+    expect(bakedAfterSecond).toEqual(bakedAfterFirst);
+  });
+
+  // Applies transform 1 then transform 2 directly against `base`, composing
+  // them the way two successive gestures would on the real Animated
+  // transform stack (each anchored on the viewport center in turn) — an
+  // independent route to the "two settled gestures" result that never goes
+  // through `bakeViewBox`, for the chained-bake test above to check against.
+  function composeTwoTransforms(
+    point: { x: number; y: number },
+    base: { minX: number; minY: number; w: number; h: number },
+    viewport: { w: number; h: number },
+    pan1: { x: number; y: number },
+    scale1: number,
+    pan2: { x: number; y: number },
+    scale2: number,
+  ) {
+    const afterFirstScreen = oldSystemScreenPoint(point, base, viewport, pan1, scale1);
+    return {
+      x: viewport.w / 2 + scale2 * (afterFirstScreen.x - viewport.w / 2) + pan2.x,
+      y: viewport.h / 2 + scale2 * (afterFirstScreen.y - viewport.h / 2) + pan2.y,
+    };
+  }
 });
 
 describe('graph canvas sizing', () => {

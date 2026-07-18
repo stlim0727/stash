@@ -20,6 +20,8 @@ import {
   Keyboard,
   LayoutAnimation,
   Linking,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
@@ -28,6 +30,7 @@ import {
   type StyleProp,
   Text,
   TextInput,
+  useColorScheme,
   useWindowDimensions,
   View,
   type ViewStyle,
@@ -36,6 +39,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { usePalette } from '@/theme';
+import { AnonymousNudgeBanner } from '@/ui/AnonymousNudgeBanner';
+import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { Chip } from '@/ui/Chip';
 import { SearchSuggestionShelf } from '@/ui/SearchSuggestionShelf';
@@ -49,7 +54,7 @@ import {
   serializeRecents,
 } from '@/domain/recent-searches';
 import type { SearchSuggestion } from '@/domain/search-suggestions';
-import { pendingSuggestedFolder, pendingSuggestions } from '@/domain/ai-suggestions';
+import { pendingSuggestedFolder, pendingSummary, pendingSuggestions } from '@/domain/ai-suggestions';
 import { collectionMatchKey } from '@/domain/collection-match';
 import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
@@ -94,7 +99,13 @@ import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark } from '@/domain/types';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
+import {
+  INITIAL_HEADER_COLLAPSE_STATE,
+  nextHeaderCollapseState,
+  type HeaderCollapseState,
+} from '@/domain/header-collapse';
 import { shouldShowWordmarkFallback } from '@/domain/wordmark';
+import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
   const parts: string[] = [];
@@ -414,8 +425,9 @@ export default function InboxScreen() {
   // bilingual lockup is used; today every locale shares the "Keepory" lockup.
   // The a11y label mirrors what sighted users see (e.g. "Keepory").
   const hasLocalName = t('app.nameLocal') !== t('app.name');
+  const colorScheme = useColorScheme();
   const wmSet = hasLocalName ? WORDMARK.local : WORDMARK.en;
-  const wordmark = { source: wmSet.dark, ratio: wmSet.ratio };
+  const wordmark = { source: colorScheme === 'dark' ? wmSet.dark : wmSet.light, ratio: wmSet.ratio };
   const wordmarkLabel = hasLocalName ? `${t('app.name')} ${t('app.nameLocal')}` : t('app.name');
   // The wordmark is a pre-rendered PNG. If it ever fails to load — a browser that
   // blocks the asset, or a request dropped across the OAuth redirect (seen in a
@@ -444,6 +456,7 @@ export default function InboxScreen() {
     getEnrichment,
     getReviewedSuggestions,
     getDismissedFolderSuggestions,
+    getReviewedSummary,
     unseenSuggestionIds,
     collections,
     trashBookmark,
@@ -491,6 +504,14 @@ export default function InboxScreen() {
   const openSearch = useCallback(() => {
     // The focus-on-open effect below moves focus into the field once it mounts.
     setSearchOpen(true);
+    // The search field itself mounts inside the web collapsible wrapper — if
+    // that's currently collapsed, the field would mount off-screen: the hero
+    // icon flips to "close" but there's nothing visible to type into (caught
+    // in PR review). Force it expanded whenever search opens; harmless to
+    // call on native, which doesn't read this state for anything visual.
+    const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
+    headerCollapseRef.current = expanded;
+    setHeaderCollapse(expanded);
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
   // (Telegram-faithful — opening search always starts fresh). Every close path
@@ -639,7 +660,10 @@ export default function InboxScreen() {
         bookmark.collection_id,
         getDismissedFolderSuggestions(bookmark.id),
       );
-      if (pending.length > 0 || folder) {
+      // A summary-only card (no tags, no folder) is reviewable too — mirror
+      // Review's inclusion rule here as well, so it isn't stranded off-badge.
+      const summary = pendingSummary(bookmark.metadata_status, enrichment, getReviewedSummary(bookmark.id));
+      if (pending.length > 0 || folder || summary) {
         count += 1;
       }
     }
@@ -652,6 +676,7 @@ export default function InboxScreen() {
     getEnrichment,
     getReviewedSuggestions,
     getDismissedFolderSuggestions,
+    getReviewedSummary,
   ]);
 
   // Every inbox bookmark still worth reviewing — a pending (un-applied,
@@ -673,7 +698,8 @@ export default function InboxScreen() {
         bookmark.collection_id,
         getDismissedFolderSuggestions(bookmark.id),
       );
-      if (pending.length > 0 || folder) {
+      const summary = pendingSummary(bookmark.metadata_status, enrichment, getReviewedSummary(bookmark.id));
+      if (pending.length > 0 || folder || summary) {
         count += 1;
       }
     }
@@ -685,6 +711,7 @@ export default function InboxScreen() {
     getEnrichment,
     getReviewedSuggestions,
     getDismissedFolderSuggestions,
+    getReviewedSummary,
   ]);
 
   // Whether the review banner is in its escalated "new arrivals" state (accent
@@ -704,7 +731,83 @@ export default function InboxScreen() {
   // scroll movement (clamped to the header's height), so an upward flick reveals
   // the header immediately wherever you are in the list, not only at the top.
   const scrollY = useRef(new Animated.Value(0)).current;
+  // Plain (non-Animated) mirror of the list's scroll offset, updated by the
+  // same onScroll below. Cheap to read synchronously — used only to decide
+  // whether the remount reset effect below actually mattered, for the
+  // STASH-2B confirmation breadcrumb.
+  const lastScrollYRef = useRef(0);
   const [headerHeight, setHeaderHeight] = useState(0);
+  // Web only (see the render below): the hero row (wordmark/count/search/
+  // settings) never moves at all on web — it isn't coupled to the collapse
+  // mechanism in any way, so it structurally cannot be hidden by a stuck/stale
+  // animation value the way the whole cluster could (Sentry STASH-2B,
+  // STASH-2G). Only the content below it (sort/filter pills + browse/
+  // suggestion shelf, measured separately as `collapsibleHeight`) collapses,
+  // driven by `domain/header-collapse.ts` — state derived fresh from the
+  // current scroll offset every tick instead of an accumulated Animated
+  // value — and animated with a real CSS transition rather than JS-driven
+  // Animated. Native is untouched: the whole cluster still collapses together
+  // via `headerTranslate` below, exactly as before.
+  //
+  // Layout notes for the collapsible wrapper (both caught in PR review):
+  // it's `position: absolute` on web (own top offset, own opaque background)
+  // rather than a normal-flow sibling, so it does NOT contribute to the outer
+  // surface's own layout height — a normal-flow sibling would, even once
+  // translated away (transforms never affect layout), leaving the outer's
+  // still-opaque, still-full-height background painted over list rows in the
+  // "reclaimed" space. And it has to translate up by heroHeight PLUS its own
+  // height to clear the screen entirely — by only its own height would just
+  // bring its bottom edge to rest against the hero's, still overlapping (and
+  // painting over, as the later sibling) the pinned hero.
+  const [heroHeight, setHeroHeight] = useState(0);
+  const [collapsibleHeight, setCollapsibleHeight] = useState(0);
+  const [headerCollapse, setHeaderCollapse] = useState<HeaderCollapseState>(
+    INITIAL_HEADER_COLLAPSE_STATE,
+  );
+  // The web scroll listener below recomputes this on every scroll-event tick
+  // via `nextHeaderCollapseState`, whose `anchorScrollY` changes on nearly
+  // every tick while the user keeps scrolling in one direction (it tracks the
+  // running extreme point — see domain/header-collapse.ts) — but render only
+  // ever reads `.collapsed` (the translateY below). Promoting every tick
+  // straight into React state forced a full InboxScreen re-render, and with
+  // it every mounted card's heavy JSX in card view, at scroll-event frequency
+  // (~60/sec) on web. This ref carries the full state between ticks so
+  // anchor-tracking stays exact; `setHeaderCollapse` only fires when
+  // `.collapsed` actually flips, which is the only thing render cares about.
+  const headerCollapseRef = useRef<HeaderCollapseState>(INITIAL_HEADER_COLLAPSE_STATE);
+  const isWebPlatform = Platform.OS === 'web';
+  // `headerHeight` means "total expanded height" (used below for the list's
+  // top padding/scroll inset and the filter bar's resting position) — native
+  // still measures it directly off the one surface (unchanged); web derives
+  // it as the sum of the two independently-measured pieces, since the outer
+  // surface's own layout no longer includes the collapsible piece there.
+  useEffect(() => {
+    if (isWebPlatform) {
+      setHeaderHeight(heroHeight + collapsibleHeight);
+    }
+  }, [isWebPlatform, heroHeight, collapsibleHeight]);
+  // Keep a live snapshot of the hero's render state for `FloatingReportButton`
+  // to read if the user files a "Report a problem" — see
+  // `feedback/hero-diagnostics-session.ts` for why (recurring "hero not
+  // visible" reports with no way to tell what actually happened).
+  useEffect(() => {
+    setHeroDiagnosticsSnapshot({
+      collapsed: headerCollapse.collapsed,
+      heroHeight,
+      collapsibleHeight,
+      wordmarkLoaded,
+      wordmarkFailed,
+      showWordmarkFallback,
+    });
+  }, [
+    headerCollapse.collapsed,
+    heroHeight,
+    collapsibleHeight,
+    wordmarkLoaded,
+    wordmarkFailed,
+    showWordmarkFallback,
+  ]);
+  useEffect(() => () => setHeroDiagnosticsSnapshot(null), []);
   // The pinned active-filter bar is measured separately (it lives in its own
   // non-translating layer below the header). When it's showing, both scroll
   // containers reserve extra top padding for it so the first rows aren't hidden.
@@ -729,17 +832,46 @@ export default function InboxScreen() {
   }, [headerClamp, headerHeight]);
   // The bar rests at `headerHeight` (just under the revealed header) and rides up
   // by `headerHeight - insets.top` as the header collapses, stopping at the
-  // status-bar line so it never tucks under the notch.
+  // status-bar line so it never tucks under the notch. On web the hero is
+  // pinned and never leaves `[0, heroHeight]` (see above), so the bar's
+  // collapsed floor must stop at `heroHeight` instead of `insets.top` — the
+  // native floor would tuck the bar's resting position back under the hero's
+  // now-permanent footprint, hiding it (and its clear-filter action) behind
+  // the hero (caught in PR review).
   const filterBarTranslate = useMemo(() => {
     if (!headerClamp || !headerHeight) {
       return 0;
     }
+    const floor = isWebPlatform ? heroHeight : insets.top;
     return headerClamp.interpolate({
       inputRange: [0, headerHeight],
-      outputRange: [0, -(headerHeight - insets.top)],
+      outputRange: [0, -(headerHeight - floor)],
       extrapolate: 'clamp',
     });
-  }, [headerClamp, headerHeight, insets.top]);
+  }, [headerClamp, headerHeight, insets.top, isWebPlatform, heroHeight]);
+  // The FlatList remounts on a fresh `key` whenever `viewMode`/`columns`
+  // changes (numColumns can't mutate on an existing instance), which resets
+  // its native scroll position to the top — but nothing fires a fresh
+  // onScroll(0) from a remount alone, so `scrollY` (driving the collapsing
+  // header above) is left stale at whatever offset it held before the
+  // switch. If the header was collapsed at that point, it stays collapsed —
+  // the entire hero cluster invisible over a freshly top-scrolled list, with
+  // no further scroll needed to trigger it. Resetting `scrollY` here keeps it
+  // in sync with the list's actual (reset) position. (Sentry STASH-2B:
+  // "Keepory 히어로가 안보임" — the hero not showing after a view-mode switch.)
+  useEffect(() => {
+    if (lastScrollYRef.current > 0) {
+      trackBreadcrumb('header', 'reset scrollY on view-mode remount', {
+        previousScrollY: Math.round(lastScrollYRef.current),
+      });
+    }
+    scrollY.setValue(0);
+    lastScrollYRef.current = 0;
+    // Same reasoning for the web-only collapse state: a remount resets the
+    // list to the top, so the collapsible row must not stay stuck collapsed.
+    headerCollapseRef.current = INITIAL_HEADER_COLLAPSE_STATE;
+    setHeaderCollapse(INITIAL_HEADER_COLLAPSE_STATE);
+  }, [viewMode, columns, scrollY]);
 
   // Load the saved sort + view mode once, then persist any change. The guards
   // stop the initial defaults from clobbering the stored values before they
@@ -1484,6 +1616,11 @@ export default function InboxScreen() {
     router.push(scopeParam ? `/browse/tags?scope=${scopeParam}` : '/browse/tags');
   }, [router, filter]);
 
+  // Wide-web-only: the Tags/Graph pills gain a visible label (like Sort already
+  // has) once there's room, reusing the same breakpoint the wide-screen Settings
+  // sheet gates on rather than inventing a new one.
+  const showPillLabels = isWeb && winWidth >= SETTINGS_SHEET_MIN_WIDTH;
+
   return (
     <InboxRootSurface
       backgroundColor={palette.background}
@@ -1508,11 +1645,28 @@ export default function InboxScreen() {
         // children (chips, sort pill, cloud toggle, banner) stay tappable, so
         // taps in empty space fall through to the cloud/list (STASH-7/STASH-8).
         pointerEvents="box-none"
-        onLayout={(event) => setHeaderHeight(event.nativeEvent.layout.height)}
+        // On web, headerHeight is derived above from heroHeight+collapsibleHeight
+        // instead (the collapsible piece is `position: absolute` there, so this
+        // surface's own layout no longer includes it) — skip so the two don't
+        // fight each other.
+        onLayout={
+          isWeb ? undefined : (event) => setHeaderHeight(event.nativeEvent.layout.height)
+        }
         baseStyle={[styles.header, { backgroundColor: palette.background }]}
-        animatedStyle={{ transform: [{ translateY: headerTranslate }] }}
+        // On web this outer surface never translates — the hero (its first
+        // child, immediately below) stays fixed in place unconditionally; only
+        // the inner wrapper further down (the collapsible content) moves. On
+        // native the whole cluster still collapses together as one unit,
+        // unchanged.
+        animatedStyle={{ transform: [{ translateY: isWeb ? 0 : headerTranslate }] }}
       >
-        <View style={[styles.hero, { maxWidth: contentMaxWidth, paddingTop: insets.top + 6 }]}>
+        <View
+          onLayout={(event) => setHeroHeight(event.nativeEvent.layout.height)}
+          style={[
+            styles.hero,
+            { maxWidth: contentMaxWidth, paddingTop: insets.top + 6, position: 'relative', zIndex: 2 },
+          ]}
+        >
           {/* Compact single-row hero: the brand wordmark with the saved-count
               sitting inline on its baseline, and a bare settings gear. The old
               stacked tagline + count lines and the "설정" caption were pure
@@ -1606,6 +1760,46 @@ export default function InboxScreen() {
             </Pressable>
           </View>
         </View>
+        {/* Everything below the hero — error/session banners, search, sort/
+            filter pills, browse shelf — is what actually collapses (see the
+            state declaration above for the full rationale). On native this is
+            a plain in-flow sibling with no style override — untouched, that
+            platform's collapse still happens one level up via
+            `headerTranslate`. overlayLayer(1) (below the hero's zIndex 2, see
+            the hero View) so it never paints over the pinned hero
+            mid-transition, even while passing through its rectangle on the
+            way off-screen (caught in PR review — position/elevation alone
+            don't control paint order between two absolutely-positioned
+            siblings; z-index does). Using overlayLayer() rather than a bare
+            zIndex — its elevation is a no-op on web but keeps this block out
+            of the zIndex-without-elevation lint (STASH-7), which is a static
+            text scan that can't see the `isWeb` runtime gate. */}
+        <View
+          onLayout={(event) => setCollapsibleHeight(event.nativeEvent.layout.height)}
+          pointerEvents="box-none"
+          style={
+            isWeb
+              ? ([
+                  {
+                    position: 'absolute',
+                    top: heroHeight,
+                    left: 0,
+                    right: 0,
+                    ...overlayLayer(1),
+                    backgroundColor: palette.background,
+                    transform: [
+                      {
+                        translateY: headerCollapse.collapsed
+                          ? -(heroHeight + collapsibleHeight)
+                          : 0,
+                      },
+                    ],
+                    transition: 'transform 200ms ease-out',
+                  },
+                ] as unknown as StyleProp<ViewStyle>)
+              : undefined
+          }
+        >
         {loadError ? (
           <Pressable
             accessibilityRole="button"
@@ -1734,6 +1928,11 @@ export default function InboxScreen() {
               ]}
             >
               <Ionicons name="pricetags-outline" size={15} color={palette.textSecondary} />
+              {showPillLabels ? (
+                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
+                  {t('nav.browseTags')}
+                </Text>
+              ) : null}
             </Pressable>
           ) : null}
           {inbox.length > 0 ? (
@@ -1748,6 +1947,11 @@ export default function InboxScreen() {
               ]}
             >
               <Ionicons name="git-network-outline" size={15} color={palette.textSecondary} />
+              {showPillLabels ? (
+                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
+                  {t('nav.graph')}
+                </Text>
+              ) : null}
             </Pressable>
           ) : null}
           <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
@@ -1861,6 +2065,7 @@ export default function InboxScreen() {
             ) : null}
           </ShelfContainer>
         ) : null}
+        </View>
       </WebCrispAnimatedSurface>
       {showFilterBar && scope ? (
         // Pinned active-filter bar: its OWN non-translating layer between the
@@ -1921,6 +2126,18 @@ export default function InboxScreen() {
         style={isWeb ? styles.webListNoTransform : undefined}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
           useNativeDriver: !isWeb,
+          listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+            const y = event.nativeEvent.contentOffset.y;
+            lastScrollYRef.current = y;
+            if (isWeb) {
+              const next = nextHeaderCollapseState(headerCollapseRef.current, y, collapsibleHeight);
+              const flipped = next.collapsed !== headerCollapseRef.current.collapsed;
+              headerCollapseRef.current = next;
+              if (flipped) {
+                setHeaderCollapse(next);
+              }
+            }
+          },
         })}
         scrollEventThrottle={16}
         // Dragging the results dismisses the keyboard (→ keyboardDidHide drops the
@@ -1939,18 +2156,28 @@ export default function InboxScreen() {
           { paddingTop: listPaddingTop, paddingBottom: insets.bottom + 96 },
         ]}
         ListHeaderComponent={
-          // The section label only earns its vertical space while searching,
-          // where the match COUNT is real information. In the default/faceted
-          // state it's redundant chrome: a newest-first list obviously leads
-          // with the newest item, and a narrowed view is already named by the
-          // pinned filter bar — so drop it to lift the first card up the screen.
-          // (Still hidden on a zero-result search, where the recovery card
-          // already says "no matches", to avoid a double-negative.)
-          searching && visible.length > 0 ? (
-            <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
-              {sectionLabel}
-            </Text>
-          ) : null
+          <>
+            {/* Anonymous-account nudge: inline, above the list content, below the
+                search/filter shelf (which lives outside the list). Renders nothing
+                until the user is anonymous with a real (2+) library and hasn't
+                dismissed it durably. */}
+            <AnonymousNudgeBanner
+              isAnonymous={auth.status === 'anonymous'}
+              bookmarkCount={inbox.length}
+            />
+            {/* The section label only earns its vertical space while searching,
+                where the match COUNT is real information. In the default/faceted
+                state it's redundant chrome: a newest-first list obviously leads
+                with the newest item, and a narrowed view is already named by the
+                pinned filter bar — so drop it to lift the first card up the screen.
+                (Still hidden on a zero-result search, where the recovery card
+                already says "no matches", to avoid a double-negative.) */}
+            {searching && visible.length > 0 ? (
+              <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
+                {sectionLabel}
+              </Text>
+            ) : null}
+          </>
         }
         ListEmptyComponent={
           isLoading ? (
@@ -2004,8 +2231,10 @@ export default function InboxScreen() {
               </Text>
             </View>
           ) : (
-            // First run: teach the share-sheet capture (the app's whole point),
-            // not just "add below" — otherwise Stash reads as a manual URL box.
+            // First run: teach the real capture path for THIS platform. Native's
+            // whole point is the share sheet; web has no share intent
+            // (expo-share-intent is a no-op there — see share/), so it must not
+            // promise a "Share a link from any app" flow that doesn't exist here.
             <View style={styles.emptyState} testID="inbox-empty-onboarding">
               <Ionicons
                 name="bookmarks-outline"
@@ -2016,28 +2245,69 @@ export default function InboxScreen() {
               <Text style={[styles.emptyTitle, { color: palette.text }]}>
                 {t('inbox.emptyTitle')}
               </Text>
-              <View style={styles.emptyHintRow}>
-                <Ionicons
-                  name="share-outline"
-                  size={18}
-                  color={palette.accent}
-                  style={styles.emptyHintIcon}
-                />
-                <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
-                  {t('inbox.emptyHintShare')}
-                </Text>
-              </View>
-              <View style={styles.emptyHintRow}>
-                <Ionicons
-                  name="add-circle-outline"
-                  size={18}
-                  color={palette.accent}
-                  style={styles.emptyHintIcon}
-                />
-                <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
-                  {t('inbox.emptyHintAdd')}
-                </Text>
-              </View>
+              {isWeb ? (
+                <>
+                  <View style={styles.emptyHintRow} testID="inbox-empty-web-step">
+                    <Ionicons
+                      name="add-circle-outline"
+                      size={18}
+                      color={palette.accent}
+                      style={styles.emptyHintIcon}
+                    />
+                    <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                      {t('inbox.emptyHintWebStep')}
+                    </Text>
+                  </View>
+                  <View style={[styles.emptyDivider, { backgroundColor: palette.border }]} />
+                  <Text style={[styles.emptyHintFallback, { color: palette.textSecondary }]}>
+                    {t('inbox.emptyHintWebNote')}
+                  </Text>
+                  {/* No live Play Store listing yet (see docs/development/play-store.md),
+                      so this is a soft, disabled pill rather than a link to nowhere. */}
+                  <Button variant="ghost" size="sm" disabled style={styles.emptyPlatformPill}>
+                    {t('inbox.emptyHintWebGetAndroid')}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <View style={styles.emptyHintRow} testID="inbox-empty-step-1">
+                    <Text style={[styles.emptyStepNumber, { color: palette.accent }]}>1</Text>
+                    <Ionicons
+                      name="share-outline"
+                      size={18}
+                      color={palette.accent}
+                      style={styles.emptyHintIcon}
+                    />
+                    <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                      {t('inbox.emptyHintStep1')}
+                    </Text>
+                  </View>
+                  <View style={styles.emptyHintRow} testID="inbox-empty-step-2">
+                    <Text style={[styles.emptyStepNumber, { color: palette.accent }]}>2</Text>
+                    <Ionicons
+                      name="bookmark-outline"
+                      size={18}
+                      color={palette.accent}
+                      style={styles.emptyHintIcon}
+                    />
+                    <Text style={[styles.emptyHintText, { color: palette.textSecondary }]}>
+                      {t('inbox.emptyHintStep2')}
+                    </Text>
+                  </View>
+                  <View style={[styles.emptyDivider, { backgroundColor: palette.border }]} />
+                  <Text style={[styles.emptyHintFallback, { color: palette.textSecondary }]}>
+                    {t('inbox.emptyHintFallback')}
+                  </Text>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    style={styles.emptyPlatformPill}
+                    onPress={() => void Linking.openURL('https://keepory.app').catch(() => {})}
+                  >
+                    {t('inbox.emptyHintGetWeb')}
+                  </Button>
+                </>
+              )}
             </View>
           )
         }
@@ -2059,6 +2329,7 @@ export default function InboxScreen() {
                 inlineId={item.bookmarkId}
                 onInlineClose={() => setInlineDetailId(null)}
                 markAccessOnMount={false}
+                hidePreviewHero={viewMode === 'card'}
               />
             );
             const detailWidth =
@@ -2071,11 +2342,11 @@ export default function InboxScreen() {
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
           // Pending AI suggestions = high-confidence suggested tags not yet
-          // applied PLUS a pending folder recommendation (see
-          // @/domain/ai-suggestions), surfaced so they're reviewable from the
-          // list rather than buried in Detail. Counts the folder too so a
-          // folder-only bookmark still shows the "✨" badge, matching the
-          // banner/Settings/Review inclusion rule.
+          // applied PLUS a pending folder recommendation PLUS a pending summary
+          // (see @/domain/ai-suggestions), surfaced so they're reviewable from
+          // the list rather than buried in Detail. Counts the folder/summary too
+          // so a folder- or summary-only bookmark still shows the "✨" badge,
+          // matching the banner/Settings/Review inclusion rule.
           const appliedNames = new Set(cardTags.map((tag) => tag.name.toLowerCase()));
           const cardEnrichment = getEnrichment(item.id);
           const suggestionCount =
@@ -2088,7 +2359,8 @@ export default function InboxScreen() {
               getDismissedFolderSuggestions(item.id),
             )
               ? 1
-              : 0);
+              : 0) +
+            (pendingSummary(item.metadata_status, cardEnrichment, getReviewedSummary(item.id)) ? 1 : 0);
           const openDetail = () => {
             if (Platform.OS === 'web') {
               setInlineDetailId((current) => (current === item.id ? null : item.id));
@@ -2670,6 +2942,28 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     lineHeight: 20,
+  },
+  // Leading "1"/"2" marker on each teach row, making the 2-step order explicit
+  // rather than implied by top-to-bottom position alone.
+  emptyStepNumber: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginRight: 8,
+    marginTop: 1,
+    width: 14,
+  },
+  emptyDivider: {
+    width: 160,
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 14,
+  },
+  emptyHintFallback: {
+    fontSize: 12,
+    textAlign: 'center',
+    maxWidth: 280,
+  },
+  emptyPlatformPill: {
+    marginTop: 14,
   },
   errorBanner: {
     fontSize: 13,

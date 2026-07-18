@@ -44,7 +44,7 @@ CircleCI (see Step 2). Step 3 is a local `git log` + classification.
      inputs={ "version": "vX.Y.Z-rcN" })   # e.g. v1.1.0-rc4
    ```
    Always pass the `version` input — it stamps `APP_VERSION` into the APK and, since #302, into the `dev` release name/body, which is what makes the rc number self-recording (no ledger PR needed). A hyphenated `-rcN` refreshes the rolling **`dev`** prerelease in place.
-5. **Logging is now optional.** The `dev` release self-records the label, so a `build-history.md` row is narrative-only, not required. Only add one (via a normal PR) if the user wants the per-rc "what's new" history preserved.
+5. **Logging & Release Notes:** Logging in `build-history.md` is optional. However, to attach a release note / QA checklist to the GitHub `dev` release, write the compiled notes to `docs/release-notes/vX.Y.Z-rcN.md` (e.g. `docs/release-notes/v1.2.0-rc19.md`), commit, and push it to `main` before triggering the build dispatch.
 
 ## Step 2 — Cleanup runs automatically on CircleCI (nothing to dispatch)
 
@@ -87,6 +87,7 @@ GitHub Actions). If a manual run is genuinely needed:
    (`mcp__github__pull_request_read`) for the "why" before writing the line.
 4. Emit the checklist as GitHub-flavored markdown, headed by the build under test
    (`vX.Y.Z-rcN @ <sha>`), grouped by the categories above.
+5. **Attach to Release Notes:** Write this markdown checklist to `docs/release-notes/vX.Y.Z-rcN.md` (e.g. `docs/release-notes/v1.2.0-rc19.md`). Commit and push this file to the remote `main` branch **before** dispatching the build. This ensures that the GitHub Actions run picks up the file and prepends it to the release notes on BOTH GitHub and Firebase App Distribution.
 
 ## Report
 
@@ -94,5 +95,5 @@ End with a compact summary of all three:
 - **Built:** `vX.Y.Z-rcN` (android-apk.yml on `main` @ `<sha>`) → refreshes `dev`.
 - **Cleaned:** nothing to dispatch — Firebase cleanup runs nightly on CircleCI
   (`ops_firebase_cleanup`, `17 4 * * *` UTC); the GitHub-artifact prune is retired.
-- **Checklist:** the grouped 24h QA list.
+- **Checklist:** the grouped 24h QA list (also committed to `docs/release-notes/vX.Y.Z-rcN.md` and attached to the GitHub and Firebase releases).
 - Offer to confirm the **build** outcome once `android-apk.yml` finishes.

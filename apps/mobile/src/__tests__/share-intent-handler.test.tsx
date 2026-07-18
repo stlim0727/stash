@@ -80,18 +80,39 @@ let mockShareIntent: {
   shareIntent: {
     webUrl: string | null;
     text: string | null;
-    meta?: { title?: string };
+    meta?: { title?: string; attemptId?: string };
     files?: Array<{ path: string; mimeType: string; fileName: string }> | null;
   };
   resetShareIntent: jest.Mock;
   error?: string | null;
 };
+// Captures the 'onDebugLog' listener the handler registers, so a test can
+// invoke it directly to simulate the native module emitting the event.
+let onDebugLogListener: ((event: { value: string }) => void) | null = null;
+const mockRemoveDebugLogListener = jest.fn();
+const mockShareIntentModule = {
+  addListener: jest.fn((eventName: string, listener: (event: { value: string }) => void) => {
+    if (eventName === 'onDebugLog') {
+      onDebugLogListener = listener;
+    }
+    return { remove: mockRemoveDebugLogListener };
+  }),
+};
 jest.mock('expo-share-intent', () => ({
   useShareIntentContext: () => mockShareIntent,
+  // A getter (not a direct property) so it's evaluated lazily at access time,
+  // not when this factory runs — the factory executes as soon as something
+  // requires 'expo-share-intent' (hoisted above `const mockShareIntentModule`
+  // in source order), so a direct reference here would capture it before it's
+  // initialized.
+  get ShareIntentModule() {
+    return mockShareIntentModule;
+  },
 }));
 
 import { SHARE_BEHAVIOR_PREF_KEY } from '@/domain/share-behavior';
 import { parsePendingShareConfirm, SHARE_CONFIRM_PREF_KEY } from '@/domain/share-confirm';
+import { parseShareAttemptDiagnostics, SHARE_DIAGNOSTICS_PREF_KEY } from '@/domain/share-diagnostics';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
@@ -129,6 +150,9 @@ beforeEach(async () => {
   mockCanDismiss.mockReturnValue(false);
   mockCopyImage.mockClear();
   mockRecordLog.mockClear();
+  onDebugLogListener = null;
+  mockShareIntentModule.addListener.mockClear();
+  mockRemoveDebugLogListener.mockClear();
   // Reset the persisted share-behavior preference to the default between tests
   // (the fake repo's meta store outlives a single test).
   await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'toast');
@@ -499,6 +523,47 @@ describe('ShareIntentHandler', () => {
     await waitFor(() => expect(mockShareIntent.resetShareIntent).toHaveBeenCalled());
     expect(fakeRepo.__queue()).toHaveLength(0);
     expect(await fakeRepo.repository.listBookmarks()).toHaveLength(0);
+    // Regression coverage for Sentry STASH-27/STASH-2A: this exact "nothing
+    // extracted" shape is what those reports almost certainly hit, but the
+    // in-memory log buffer reset before the user filed feedback, so nothing
+    // proved it. The durable record now survives that restart.
+    const record = parseShareAttemptDiagnostics(
+      await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
+    );
+    expect(record).toMatchObject({ hasUrl: false, hasText: false, hasImage: false, result: 'invalid' });
+    unmount();
+  });
+
+  it('durably records a successful URL share for the next diagnostics report', async () => {
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: 'https://example.com/durable',
+        text: null,
+        meta: { attemptId: 'native-attempt-1' },
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Keepory');
+    await waitFor(async () => {
+      const record = parseShareAttemptDiagnostics(
+        await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
+      );
+      expect(record).toMatchObject({
+        attemptId: 'native-attempt-1',
+        hasUrl: true,
+        hasText: false,
+        hasImage: false,
+        result: 'created',
+        durable: true,
+      });
+      expect(record?.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(record?.persistedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
     unmount();
   });
 
@@ -531,6 +596,40 @@ describe('ShareIntentHandler', () => {
       ([level, message]) => level === 'error' && message === '[share] native share intent error',
     )?.[2]?.[0];
     expect(loggedError.message).toBe('empty uri for file sharing: android.intent.action.SEND');
+    unmount();
+  });
+
+  it('logs a native onDebugLog event without triggering the error/reset/navigate flow (Sentry STASH-2K)', async () => {
+    // The instrumentation added for STASH-2K's investigation must stay purely
+    // observational — reusing the `onError` channel for it (an earlier
+    // attempt, caught in PR review) would have shown a false "no link found"
+    // toast and reset the share on every ordinary non-task-root relaunch.
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: false,
+      shareIntent: { webUrl: null, text: null },
+      resetShareIntent: jest.fn(),
+      error: null,
+    };
+
+    const { unmount } = await renderHandler();
+
+    await waitFor(() => expect(onDebugLogListener).not.toBeNull());
+    await act(async () => {
+      onDebugLogListener?.({ value: 'relaunching non-task-root activity for action: android.intent.action.SEND' });
+    });
+
+    expect(mockRecordLog).toHaveBeenCalledWith(
+      'info',
+      '[share] native debug: relaunching non-task-root activity for action: android.intent.action.SEND',
+    );
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(mockShareIntent.resetShareIntent).not.toHaveBeenCalled();
+    expect(fakeRepo.__queue()).toHaveLength(0);
+    // Let the store's own async startup load (BookmarksProvider) settle before
+    // tearing down — unmounting mid-load left a stray promise that resolved
+    // into the NEXT test's freshly-reset fake repository, breaking it.
+    await waitFor(() => expect(fakeRepo.__listBookmarksCalls()).toBeGreaterThan(0));
     unmount();
   });
 

@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-13 (Sentry issue helper, SQLite preflight fix).
+Last updated: 2026-07-15 (RN-web zIndex-stacking trap; header-collapse review-cycle pointer).
 
 ## Successor Agent Orientation
 
@@ -153,6 +153,19 @@ These are "do not break" rules, not just implementation notes.
 - Pending confirmation is drained by `share-confirm-handler.tsx` on cold start
   or background-to-active resume and must never navigate unless the user taps
   "View".
+- A durable "last share attempt" record (`domain/share-diagnostics.ts` +
+  `share/share-diagnostics.ts`, meta-store backed, hydrated at startup) is
+  recorded after every share resolves — shape only (`hasUrl`/`hasText`/
+  `hasImage`, file MIME types, save result), never content. It exists because
+  the in-app log ring buffer and storage diagnostics are in-memory only: a
+  "Report a problem" filed in a later app session (after a silently-failed
+  share's own process already ended) used to show only that session's own
+  unrelated startup noise, never the share itself (Sentry STASH-2A/STASH-27).
+  Check `getShareDiagnostics()` / the report's `shareAttempt` field before
+  assuming a recurring share complaint needs another blind native-intent
+  patch — STASH-1Z/STASH-25 (sqlite preflight) and STASH-21 (Shorts text
+  intents) were each guessed from user description alone with no way to
+  confirm the fix actually addressed what failed.
 
 ### Trash And Delete
 
@@ -317,6 +330,35 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   open thread against the current code before deciding it is addressed.
 - If a compound git command is denied, earlier parts did not run either. Re-fetch
   and verify SHAs before building or deploying from `main`.
+- In-app feedback reports (Sentry tag `logger: feedback-bridge`, `source:
+  in-app-feedback`) carry **no Sentry breadcrumbs** — `trackBreadcrumb` writes
+  are attached to a captured exception's session, not to a user-typed feedback
+  submission. Don't spend a round-trip checking `get_sentry_resource`
+  (`resourceType: breadcrumbs`) for one of these; it 404s. The `context.logs`/
+  `context.storage`/`context.shareAttempt` fields in the report body are the
+  only evidence, and the first two are in-memory-only (reset on app restart),
+  so verify they actually date from the failure before trusting them as proof
+  of what happened.
+- On web (RN-web/CSS stacking rules), a sibling with **any** explicit
+  `position` + positive `zIndex` paints above **all** `zIndex:auto`/unset
+  siblings in the same stacking context, regardless of DOM/mount order — so
+  giving only the *moving* layer a `zIndex` (to control its own paint order
+  relative to content behind it) does not guarantee a *different*, unpositioned
+  sibling (e.g. a "pinned" element with no explicit stacking) stays visually on
+  top of it. To keep A above B, both need competing explicit values (via
+  `overlayLayer(z)` — see `ui/layering.ts`), not just B. Caught on the web-only
+  pinned-hero layer in `app/index.tsx` (STASH-2G, PR #504): the collapsible
+  content got `zIndex: 1` for its own reasons, which then unexpectedly painted
+  over the pinned hero mid-transition until the hero was also given
+  `position: relative` + a higher `zIndex`.
+- `domain/header-collapse.ts` (the web-only collapsing-header state that
+  replaced `Animated.diffClamp`, STASH-2G/PR #504) took **three** Codex review
+  rounds to get right, each one only fixing the exact scroll sequence the
+  previous comment described. See the "Replace a stateful animation/hysteresis
+  primitive" bullet in `CLAUDE.md`'s Working principles before touching this
+  file again — the durable fix was modeling the anchor as `diffClamp`'s actual
+  invariant (track the running min/max since the last flip), not "the offset
+  where the current state began."
 
 ## Future Work
 

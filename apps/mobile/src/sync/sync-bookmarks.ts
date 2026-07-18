@@ -1,4 +1,4 @@
-import { createBookmarkApi } from '@/api/bookmarks';
+import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE, createBookmarkApi } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
 import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
@@ -15,6 +15,19 @@ export interface EntrySyncResult {
   removeEntry?: boolean;
   /** For creates: what was actually sent, so callers can reconcile later edits. */
   uploadedPayload?: CreateBookmarkInput;
+  /** Present when the local bookmark row was removed (deleted on another
+   *  device while this device had a queued edit for it — see below). */
+  removedBookmarkId?: string;
+}
+
+/**
+ * True when an `update` failed because the row is confirmed gone remotely —
+ * deleted on this account (any device) or never owned by this user — as
+ * opposed to a transient network/server error. Unambiguous because the
+ * request that threw it was already scoped to the current user's own id.
+ */
+function isBookmarkGoneRemotely(error: unknown): boolean {
+  return error instanceof Error && error.message === BOOKMARK_NOT_FOUND_ERROR_MESSAGE;
 }
 
 function errorMessage(error: unknown): string {
@@ -261,6 +274,28 @@ export async function syncQueueEntry(
       }
       return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
     } catch (error) {
+      if (isBookmarkGoneRemotely(error)) {
+        // Deleted on another device while this device still had a queued
+        // edit for it. Pull-side reconciliation deliberately never deletes a
+        // local row that has queued work (see pull-bookmarks.ts), so without
+        // this the edit would retry forever against a row that can never
+        // come back — a climbing retry_count visible in Settings' Sync Queue
+        // (Sentry STASH-2F: "Lots of retrial"). Finish what pull would have
+        // done: remove the local row, then the queue entry (in that order so
+        // a crash in between still self-heals via the "bookmark gone
+        // locally" branch above on the next pass).
+        recordLog(
+          'info',
+          `sync: removing local row ${entry.local_id} — deleted on another device (queued update could not land)`,
+        );
+        await repository.deleteBookmark(entry.local_id);
+        await removeQueueEntryIfNotSuperseded(repository, entry);
+        return {
+          entry: { ...entry, sync_status: 'synced', updated_at: now },
+          removeEntry: true,
+          removedBookmarkId: entry.local_id,
+        };
+      }
       return { entry: await failEntry(repository, entry, error, now) };
     }
   }
@@ -399,11 +434,40 @@ export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
   return createBookmarkApi(session);
 }
 
+// Postgres's default btree index page can't hold an index row over roughly
+// 2.7KB, and the dedupe index is keyed on (user_id, url_hash) — a URL long
+// enough (Sentry STASH-2J: an Oracle email-verification link) blows that
+// limit on EVERY retry, forever, since the URL will always be too long. A
+// client-side length guard (domain/urls.ts isUrlTooLong) now stops any NEW
+// bookmark from ever being queued this way, but an entry already queued on a
+// pre-fix build still carries this exact Postgres message in `last_error`
+// from its last failed attempt — checking that text (rather than requiring a
+// fresh failure to relabel it) lets an already-stuck entry stop being
+// retried the moment the app updates, with no further doomed request needed.
+const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
+
+/** Exported so the caller can DRAIN these from the visible queue (see
+ *  `syncNow`'s "permanently unsyncable" cleanup) — merely excluding them from
+ *  `isSyncable` stops the doomed retries but leaves the row sitting as
+ *  `sync_status: 'failed'` in the queue forever, which every "waiting to
+ *  sync" count (e.g. Settings) still counts as pending work that can never
+ *  drain (caught in PR review). */
+export function isPermanentlyUnsyncableUrl(entry: LocalPendingBookmark): boolean {
+  return (
+    entry.sync_status === 'failed' &&
+    typeof entry.last_error === 'string' &&
+    entry.last_error.includes(URL_TOO_LONG_ERROR_TEXT)
+  );
+}
+
 export function isSyncable(entry: LocalPendingBookmark): boolean {
   // Anything not yet 'synced' is eligible. 'syncing' is included so an entry
   // that an interrupted run left in-flight (e.g. the app was backgrounded or a
   // storage write threw mid-upload) is retried rather than orphaned forever.
-  return entry.sync_status !== 'synced';
+  // The one exception is a permanently-too-long URL (above): retrying it can
+  // never succeed, so excluding it here stops both the automatic sync effect
+  // and an explicit "Sync now" from hammering the same doomed request.
+  return entry.sync_status !== 'synced' && !isPermanentlyUnsyncableUrl(entry);
 }
 
 /**

@@ -75,6 +75,7 @@ test('buildDiagnosticsContext excludes user content — it only keeps known keys
     'build',
     'logs',
     'storage',
+    'shareAttempt',
     'capturedAt',
   ];
   for (const key of Object.keys(context)) {
@@ -107,6 +108,26 @@ test('buildDiagnosticsContext includes structured storage diagnostics when provi
   const report = formatDiagnosticsReport(context);
   assert.match(report, /"storage"/);
   assert.match(report, /"sqliteOpen"/);
+});
+
+test('buildDiagnosticsContext includes the durable last share-attempt record when provided', () => {
+  const context = buildDiagnosticsContext({
+    shareAttempt: {
+      hasUrl: false,
+      hasText: false,
+      hasImage: false,
+      fileCount: 0,
+      fileMimeTypes: [],
+      result: 'invalid',
+      updatedAt: '2026-07-13T11:30:00.000Z',
+    },
+  });
+
+  assert.equal(context.shareAttempt?.result, 'invalid');
+  assert.equal(context.shareAttempt?.hasUrl, false);
+
+  const report = formatDiagnosticsReport(context);
+  assert.match(report, /"shareAttempt"/);
 });
 
 test('build and logs are included when provided and formatted for sharing', () => {

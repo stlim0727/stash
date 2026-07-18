@@ -163,9 +163,8 @@ test('folds the search/sort/view controls away on an empty library', async () =>
   // the first screen is all about the first save — an onboarding card that
   // teaches the share-sheet capture, with the chrome folded away.
   await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
-  expect(
-    screen.getByText('Share a link from any app and pick Keepory to save it in a tap.'),
-  ).toBeTruthy();
+  expect(screen.getByText('Open any app, tap Share')).toBeTruthy();
+  expect(screen.getByText('Choose Keepory — saved instantly')).toBeTruthy();
   expect(screen.queryByPlaceholderText('Search your stash')).toBeNull();
   expect(screen.queryByTestId('inbox-view-card')).toBeNull();
 });
@@ -272,6 +271,33 @@ test('the per-card ✨ badge counts a folder-only recommendation (no tags)', asy
   // banner/Review inclusion rule (regression: the badge ignored folders).
   expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
   // ...and the same folder-only item counts toward the persistent review banner.
+  expect(screen.getByTestId('review-chip')).toBeTruthy();
+  expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
+});
+
+test('the per-card ✨ badge and the review banner count a summary-only bookmark (no tags, no folder)', async () => {
+  const id = '7e64cf1e-0000-4000-8000-0000000000f3';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Summary only' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: id,
+        summary: 'A concise overview.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Summary only')).toBeTruthy());
+  // A pending summary (Review's newest suggestion type) counts toward the
+  // per-card badge and the persistent review banner exactly like a folder-only
+  // recommendation does — otherwise it would be reviewable on /review but
+  // invisible from the Inbox.
+  expect(screen.getByLabelText('1 AI suggestion')).toBeTruthy();
   expect(screen.getByTestId('review-chip')).toBeTruthy();
   expect(screen.getByText('✨ 1 suggestion to review')).toBeTruthy();
 });
@@ -896,20 +922,46 @@ test('web opens bookmark detail inline instead of pushing the detail route', asy
       title: 'Inline web detail',
       url: 'https://example.com/inline',
       url_hash: 'https://example.com/inline',
+      preview_image_url: 'https://example.com/inline-preview.png',
     }),
   ]);
 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Inline web detail')).toBeTruthy());
+  expect(screen.getByTestId('inbox-card-preview')).toBeTruthy();
 
   await fireEvent.press(screen.getByRole('button', { name: 'Inline web detail' }));
 
   await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  expect(screen.queryByTestId('bookmark-detail-preview')).toBeNull();
   expect(mockPush).not.toHaveBeenCalledWith({
     pathname: '/bookmark/[id]',
     params: { id: '7e64cf1e-0000-4000-8000-000000000042' },
   });
   expect((await fakeRepo.repository.listBookmarks())[0].last_accessed_at).toBeUndefined();
+});
+
+test('web list inline detail keeps the detail preview hero', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000043',
+      title: 'List web detail',
+      url: 'https://example.com/list-inline',
+      url_hash: 'https://example.com/list-inline',
+      preview_image_url: 'https://example.com/list-preview.png',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('List web detail')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
+
+  await fireEvent.press(screen.getByRole('button', { name: 'List web detail' }));
+
+  await waitFor(() => expect(screen.getByTestId('bookmark-inline-detail')).toBeTruthy());
+  expect(screen.getByTestId('bookmark-detail-preview')).toBeTruthy();
 });
 
 test('web inline detail keeps the wide card grid stable', async () => {

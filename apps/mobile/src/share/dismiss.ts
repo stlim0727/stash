@@ -1,4 +1,5 @@
 import { BackHandler, Platform, ToastAndroid } from 'react-native';
+import { ShareIntentModule } from 'expo-share-intent';
 
 /**
  * Post-capture dismissal for a *toast-mode* share.
@@ -37,7 +38,11 @@ export function dismissAfterShare(message: string): boolean {
     return false;
   }
   // Fire the confirmation before we leave so it survives the activity finishing.
-  ToastAndroid.show(message, ToastAndroid.SHORT);
-  BackHandler.exitApp();
+  ToastAndroid.show(message, ToastAndroid.LONG);
+  if (ShareIntentModule && typeof ShareIntentModule.dismissApp === 'function') {
+    ShareIntentModule.dismissApp('');
+  } else {
+    BackHandler.exitApp();
+  }
   return true;
 }
