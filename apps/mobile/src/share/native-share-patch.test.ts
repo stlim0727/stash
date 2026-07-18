@@ -42,11 +42,14 @@ test('non-root Android shares bypass the lossy activity relaunch', () => {
   );
 });
 
-test('Android intents keep a privacy-safe five-attempt lifecycle journal', () => {
+test('Android intents keep a privacy-safe lifecycle journal', () => {
   assert.match(lifecycleListener, /"activity_on_create"/);
   assert.match(nativeModule, /"module_on_new_intent"/);
   assert.match(nativeModule, /"module_handle"/);
-  assert.match(debugJournal, /MAX_ATTEMPTS = 5/);
+  // Was 5 attempts (Sentry STASH-2T/STASH-2V: a burst of retries plus a few
+  // ordinary app opens could evict every real share attempt from a 5-slot
+  // window before a report ever captured it) — widened to 20.
+  assert.match(debugJournal, /MAX_ATTEMPTS = 20/);
   assert.match(debugJournal, /"capturedAt"/);
   assert.match(debugJournal, /"senderPackage"/);
   assert.match(debugJournal, /"hasText"/);

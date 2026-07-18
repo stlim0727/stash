@@ -31,6 +31,16 @@ export interface ShareAttemptInput {
   fileCount: number;
   fileMimeTypes: string[];
   result: ShareAttemptResult;
+  /**
+   * Milliseconds between the share landing in JS (`receivedAt`) and the store
+   * finishing its cold-start load, i.e. how long the share sat waiting before
+   * it could be processed. Present only when the share actually had to wait
+   * (a genuinely cold app) — near-zero/absent means the store was already
+   * loaded. Distinguishes a slow-cold-start race from a share that never
+   * reached this code at all (Sentry STASH-2T/STASH-2V: "shared but failed
+   * to save", no toast, Inbox just sat there).
+   */
+  loadWaitMs?: number;
 }
 
 export interface ShareAttemptDiagnostics extends ShareAttemptInput {
@@ -54,6 +64,9 @@ export function buildShareAttemptDiagnostics(input: ShareAttemptInput): ShareAtt
     fileCount: Math.max(0, Math.floor(input.fileCount) || 0),
     fileMimeTypes: input.fileMimeTypes.filter((m) => typeof m === 'string').slice(0, MAX_MIME_TYPES),
     result: VALID_RESULTS.has(input.result) ? input.result : 'invalid',
+    ...(typeof input.loadWaitMs === 'number' && Number.isFinite(input.loadWaitMs) && input.loadWaitMs >= 0
+      ? { loadWaitMs: Math.round(input.loadWaitMs) }
+      : {}),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -99,6 +112,9 @@ export function parseShareAttemptDiagnostics(
       ...(typeof data.durable === 'boolean' ? { durable: data.durable } : {}),
       ...(typeof data.persistedAt === 'string' && data.persistedAt
         ? { persistedAt: data.persistedAt }
+        : {}),
+      ...(typeof data.loadWaitMs === 'number' && Number.isFinite(data.loadWaitMs) && data.loadWaitMs >= 0
+        ? { loadWaitMs: Math.round(data.loadWaitMs) }
         : {}),
     };
   } catch {
