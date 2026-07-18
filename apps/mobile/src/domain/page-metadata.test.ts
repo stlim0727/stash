@@ -238,6 +238,31 @@ test('fetchPageMetadata sends the honest bot UA first and does not retry on succ
   }
 });
 
+test('fetchPageMetadata fetches the https twin of an http:// URL (cleartext is blocked on device)', async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  globalThis.fetch = (async (target: string) => {
+    requested.push(String(target));
+    if (String(target).startsWith('http://')) {
+      // Android API 28+ rejects cleartext HTTP before any redirect can run.
+      throw new TypeError('Network request failed');
+    }
+    return htmlResponse('<head><meta property="og:title" content="플레이스 설계자"></head>', {
+      url: String(target),
+    });
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('http://welaaa.com/ebook/detail/211212');
+    assert.equal(meta?.title, '플레이스 설계자');
+    assert.ok(requested.length > 0);
+    for (const u of requested) {
+      assert.match(u, /^https:\/\//);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('fetchPageMetadata retries as a browser when the bot UA is refused (403)', async () => {
   const originalFetch = globalThis.fetch;
   const userAgents: string[] = [];

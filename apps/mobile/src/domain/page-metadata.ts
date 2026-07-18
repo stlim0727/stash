@@ -280,12 +280,18 @@ export function previewSourceUrl(rawUrl: string): string | null {
  * portal returned a 403, a shell, a redirect, or a network error.
  */
 export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | null> {
+  // Android (API 28+) blocks cleartext HTTP, so an http:// share (e.g. from an
+  // app whose share payload predates its own https move) dies on-device before
+  // the server's usual http→https redirect can run. Fetch the https twin
+  // instead; the stored bookmark URL keeps its original scheme.
+  const target = url.replace(/^http:\/\//i, 'https://');
+
   // Some sites (YouTube especially) serve a consent/JS-only shell to bare
   // fetches, so scraping yields a useless "YouTube" title and logo. Prefer
   // their oEmbed endpoint, which returns the real title + thumbnail; fall back
   // to HTML scraping when there's no oEmbed provider or it fails.
   let oembedOutcome: string | null = null;
-  const directOembed = await fetchKnownOembedMetadata(url);
+  const directOembed = await fetchKnownOembedMetadata(target);
   if (directOembed.metadata?.title) {
     return directOembed.metadata;
   }
@@ -293,14 +299,14 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
     oembedOutcome = directOembed.outcome;
   }
 
-  const bot = await fetchHtmlMetadata(url, BOT_USER_AGENT);
+  const bot = await fetchHtmlMetadata(target, BOT_USER_AGENT);
   if (bot.metadata?.title) {
     return bot.metadata;
   }
   // The honest request was refused or returned a title-less shell; try once as a
   // browser. Keep the bot result as a fallback so we never discard usable
   // partial metadata (e.g. a favicon) the browser retry can't improve on.
-  const browser = await fetchHtmlMetadata(url, BROWSER_USER_AGENT);
+  const browser = await fetchHtmlMetadata(target, BROWSER_USER_AGENT);
   let result = browser.metadata ?? bot.metadata;
   const landedOn = browser.finalUrl ?? bot.finalUrl;
 
@@ -308,7 +314,7 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // (notably YouTube Shorts). The original URL has no oEmbed endpoint, and the
   // redirected HTML can still be a title-less shell, so try the final URL before
   // conceding to URL-derived fallback metadata.
-  if (!result?.title && landedOn && landedOn !== url) {
+  if (!result?.title && landedOn && landedOn !== target) {
     const redirectedOembed = await fetchKnownOembedMetadata(landedOn);
     if (redirectedOembed.metadata?.title) {
       recordLog('info', `preview: recovered via oEmbed for ${landedOn} from ${url}`);
