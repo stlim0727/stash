@@ -1685,10 +1685,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const dedupeKey = canonicalizeUrl(normalized);
 
       // Reject up front rather than queuing a save that can never succeed: the
-      // server's `url_hash` index (generated from `url` before enrichment) has a
-      // Postgres row-size limit. Even if `dedupeKey` is short (e.g. huge hash dropped),
-      // the raw `url` determines the server's initial index row size (Sentry STASH-2V).
-      if (isUrlTooLong(normalized)) {
+      // server's `url_hash` index has a Postgres row-size limit that a sufficiently
+      // long canonical URL blows on every retry, forever (Sentry STASH-2V / STASH-2J).
+      if (isUrlTooLong(dedupeKey)) {
         return {
           status: 'invalid',
           error: 'This web address is too long to save.',
@@ -1811,11 +1810,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           continue;
         }
         const dedupeKey = canonicalizeUrl(normalized);
-        // Same permanent-failure guard as addBookmark (Sentry STASH-2V): a URL
-        // long enough to blow the server's url_hash index row-size limit would queue
-        // a create that can never succeed. Check the raw `normalized` url, not just
-        // `dedupeKey`. Skip it rather than import a dead entry.
-        if (isUrlTooLong(normalized)) {
+        // Same permanent-failure guard as addBookmark (Sentry STASH-2V / STASH-2J): a URL
+        // whose canonical dedupeKey is long enough to blow the server's url_hash index
+        // row-size limit would queue a create that can never succeed. Skip it rather than
+        // import a dead entry.
+        if (isUrlTooLong(dedupeKey)) {
           skipped += 1;
           continue;
         }

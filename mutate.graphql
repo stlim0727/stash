@@ -1,0 +1,1 @@
+mutation { resolve1: resolveReviewThread(input: { threadId: "PRRT_kwDOS2KpDc6R9aEs" }) { thread { isResolved } } resolve2: resolveReviewThread(input: { threadId: "PRRT_kwDOS2KpDc6R9c_f" }) { thread { isResolved } } }
