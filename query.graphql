@@ -1,1 +1,0 @@
-query { repository(owner: "stlim0727", name: "stash") { pullRequest(number: 539) { reviewThreads(first: 10) { nodes { id isResolved } } } } }
