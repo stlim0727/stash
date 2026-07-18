@@ -33,14 +33,18 @@ export function canDismissAfterShare(): boolean {
   return Platform.OS === 'android';
 }
 
-export function dismissAfterShare(message: string): boolean {
+export async function dismissAfterShare(message: string): Promise<boolean> {
   if (!canDismissAfterShare()) {
     return false;
   }
   // Fire the confirmation before we leave so it survives the activity finishing.
   ToastAndroid.show(message, ToastAndroid.LONG);
   if (ShareIntentModule && typeof ShareIntentModule.dismissApp === 'function') {
-    ShareIntentModule.dismissApp('');
+    const success = await ShareIntentModule.dismissApp('');
+    if (success === false) {
+      console.error('dismissAfterShare failed: native dismissApp returned false (no currentActivity)');
+      return false;
+    }
   } else {
     BackHandler.exitApp();
   }

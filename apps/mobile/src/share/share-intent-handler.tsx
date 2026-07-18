@@ -274,7 +274,7 @@ export function ShareIntentHandler() {
         if (isNewSave && canDismissAfterShare()) {
           await recordPendingShareConfirm();
         }
-        if (dismissAfterShare(message)) {
+        if (await dismissAfterShare(message)) {
           return;
         }
       }

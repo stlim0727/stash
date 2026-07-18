@@ -48,7 +48,7 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   (Codex theme refresh) and #427 (this handoff docs update). #417, #424, #425,
   and #426 had merged. Reconcile against the live open-PR list; some may have
   merged or closed.
-- **Sentry DB sync (2026-07-13):** Organization `self-463` and project `stash` confirmed. Sentry MCP tools are not configured in this environment, but you can query or resolve issues directly via the local helper `pnpm sentry:issue <id>` (e.g. `pnpm sentry:issue STASH-23`), which loads the auth token from `.env.local`. Check Sentry directly for real-time unresolved issues, and do not rely on local docs to look up active Sentry issues.
+- **Sentry DB sync (2026-07-18):** Organization `self-463` and project `stash` confirmed. **RULE:** Sentry must always be considered available. If Sentry MCP tools are not configured or fail, you MUST proactively query the Sentry API directly using the `SENTRY_AUTH_TOKEN` from `.env.local` (either by writing a quick Node/curl script or using the local helper `pnpm sentry:issue <id>`). Never rely on local docs to look up active Sentry issues, and do not give up if MCP is down.
 - **The invariants below are load-bearing, not FYI.** "Capture is sacred,"
   user-authored vs generated fields, and "a local cosmetic repair must never bump
   `updated_at` or enqueue sync" have each been re-broken by agents who skimmed

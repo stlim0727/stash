@@ -176,9 +176,10 @@ export function canonicalizeUrl(input: string): string {
  */
 export const MAX_SAVEABLE_URL_LENGTH = 2000;
 
-/** Call with the CANONICALIZED url (`canonicalizeUrl`'s output) — canonical
- *  form is what actually becomes `url_hash`, and canonicalization can only
- *  shrink a URL (stripping tracking params/fragment), never grow it. */
-export function isUrlTooLong(canonicalUrl: string): boolean {
-  return canonicalUrl.length > MAX_SAVEABLE_URL_LENGTH;
+/** Call with the RAW url (`normalizeUrl`'s output) — NOT the canonicalized
+ *  form. Canonicalization drops fragments and params, which might make a URL
+ *  look short locally, but the server's `url_hash` index starts off populated
+ *  with the raw URL, blowing the Postgres btree limit (Sentry STASH-2V). */
+export function isUrlTooLong(url: string): boolean {
+  return url.length > MAX_SAVEABLE_URL_LENGTH;
 }

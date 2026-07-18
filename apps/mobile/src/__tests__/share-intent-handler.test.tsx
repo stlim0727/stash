@@ -60,7 +60,7 @@ const mockDismiss = jest.fn<boolean, [string]>();
 // `dismissAfterShare`, so the tests drive the two together per platform.
 const mockCanDismiss = jest.fn<boolean, []>();
 jest.mock('@/share/dismiss', () => ({
-  dismissAfterShare: (message: string) => mockDismiss(message),
+  dismissAfterShare: (message: string) => Promise.resolve(mockDismiss(message)),
   canDismissAfterShare: () => mockCanDismiss(),
 }));
 
