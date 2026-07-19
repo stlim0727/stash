@@ -744,4 +744,28 @@ describe('ShareIntentHandler', () => {
       fakeRepo.repository.insertBookmark = originalInsert;
     }
   });
+
+  it('toast mode reverts the pending confirm and lands on Inbox if self-dismissal fails', async () => {
+    // Android can self-dismiss, but if the dismissal fails, it should revert the
+    // written pending confirmation record, show the in-app toast, and navigate to the Inbox.
+    fakeRepo.__reset([]);
+    mockDismiss.mockReturnValue(false);
+    mockCanDismiss.mockReturnValue(true);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/dismiss-fail', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Keepory');
+    await waitFor(() => expect(mockDismiss).toHaveBeenCalledWith('Saved to Keepory'));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+
+    // The confirmation record must be reverted since dismissal failed and the user remains in-app
+    const confirm = parsePendingShareConfirm(await fakeRepo.repository.getMeta(SHARE_CONFIRM_PREF_KEY));
+    expect(confirm).toBeNull();
+    unmount();
+  });
 });

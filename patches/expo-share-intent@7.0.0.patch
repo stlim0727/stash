@@ -152,10 +152,10 @@ index db573ecbd560de3c71aa443b7ad88d1b5e1c8dc7..aa66e9218248146f8fa92a0c14e95909
              ExpoShareIntentSingleton.intent = activity?.intent
 diff --git a/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
 new file mode 100644
-index 0000000000000000000000000000000000000000..afa71d2e5559d7765c3e16574b6efd33e57af5dc
+index 0000000000000000000000000000000000000000..c67b18cd8a7d333d7f9229067c100fb1fafc285a
 --- /dev/null
 +++ b/android/src/main/java/expo/modules/shareintent/ShareIntentDebugJournal.kt
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,110 @@
 +package expo.modules.shareintent
 +
 +import android.app.Activity
@@ -169,13 +169,19 @@ index 0000000000000000000000000000000000000000..afa71d2e5559d7765c3e16574b6efd33
 +import java.util.TimeZone
 +import java.util.UUID
 +
-+/** Privacy-safe lifecycle evidence for the five most recent Android shares. */
++/** Privacy-safe lifecycle evidence for the most recent Android shares. */
 +object ShareIntentDebugJournal {
 +    private const val PREFS_NAME = "expo_share_intent_debug"
 +    private const val JOURNAL_KEY = "attempt_journal"
 +    private const val LEGACY_KEY = "last_intent"
 +    private const val ATTEMPT_ID_EXTRA = "expo.modules.shareintent.DEBUG_ATTEMPT_ID"
-+    private const val MAX_ATTEMPTS = 5
++    // Was 5 (Sentry STASH-2T/STASH-2V: a user who retries a failing share
++    // several times, plus a couple of ordinary app opens in between, can
++    // evict every real share attempt from a 5-slot window before they ever
++    // file a report — leaving only the unrelated later app-opens as
++    // "evidence" and making a real OS-level share-intent-delivery failure
++    // look identical to a plain app launch.
++    private const val MAX_ATTEMPTS = 20
 +
 +    fun ensureAttemptId(intent: Intent): String? {
 +        val existing = intent.getStringExtra(ATTEMPT_ID_EXTRA)

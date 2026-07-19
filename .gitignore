@@ -44,6 +44,3 @@ tmp/
 
 # ui-preview skill output (local scratch images, not source)
 scratchpad/
-
-# AntiCrow ローカルデータ
-.anticrow/
