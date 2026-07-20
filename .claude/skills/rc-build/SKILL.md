@@ -53,11 +53,19 @@ CircleCI migration (#288). Do **not** try to `workflow_dispatch` it — that 422
 ("Workflow does not have 'workflow_dispatch' trigger"). Cleanup is now split:
 
 - **Firebase App Distribution releases** → ported to the CircleCI job
-  `ops_firebase_cleanup` (`.circleci/config.yml`). It runs **nightly** — the
-  `nightly-ops` schedule, `cron: "17 4 * * *"` (UTC) on `main` — as a real delete
-  that keeps the newest `KEEP=20` and prunes releases older than `MAX_AGE_DAYS=7`.
-  Those bounds are **baked into the job as env**, not per-run inputs, so there is
-  nothing to pass and nothing for the agent to fire during an RC build.
+  `ops_firebase_cleanup` (`.circleci/config.yml`). It runs **nightly** as a real
+  delete that keeps the newest `KEEP=20` and prunes releases older than
+  `MAX_AGE_DAYS=7`. Those bounds are **baked into the job as env**, not per-run
+  inputs, so there is nothing to pass and nothing for the agent to fire during
+  an RC build. The `nightly-ops` workflow itself is gated on the
+  `run_nightly_ops` pipeline parameter, fired daily at `17 4 * * *` UTC by a
+  **CircleCI Scheduled Pipeline** (project settings → Triggers, not YAML) —
+  this project is on the GitHub App integration, and the old inline
+  `triggers: - schedule:` key silently never fires for GitHub-App-connected
+  projects. (It shipped that way and went stale for ~a week before anyone
+  noticed the backlog; if the nightly job ever seems to have stopped running
+  again, check the Scheduled Pipeline still exists via
+  `GET /project/{slug}/schedule` before assuming the cleanup logic itself broke.)
 - **GitHub Actions artifact prune** → **retired** (intentionally not ported in
   #288). Only `android-apk.yml` still produces Actions artifacts now; if that
   quota ever needs pruning it's a separate, manual concern.

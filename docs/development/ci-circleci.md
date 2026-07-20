@@ -31,7 +31,7 @@ preserved in git history under `.github/workflows/` before this change.
 | --- | --- | --- |
 | `ci` (lint + typecheck + tests) | every push / PR | `ci.yml` |
 | `release` (Sentry release) | a `v*` git tag | `sentry-release.yml` |
-| `nightly-ops` (Firebase release cleanup) | daily 04:17 UTC on `main` | `ops.yml` (Firebase task only) |
+| `nightly-ops` (Firebase release cleanup) | pipeline param `run_nightly_ops=true`, fired by a CircleCI **Scheduled Pipeline** (project settings → Triggers) at 04:17 UTC daily on `main` — inline `triggers: - schedule:` in config.yml does not fire on GitHub-App-connected projects like this one, so the schedule must live in project settings, not the YAML | `ops.yml` (Firebase task only) |
 | `manual-screenshots` | pipeline param `run_screenshots=true` | `android-screenshots.yml` |
 | `manual-app-testing` | pipeline param `run_app_testing=true` | `app-testing.yml` |
 | `manual-secrets-check` | pipeline param `run_secrets_check=true` | `secrets-check.yml` |

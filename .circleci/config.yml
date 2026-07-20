@@ -47,6 +47,14 @@ parameters:
   run_ops:
     type: boolean
     default: false
+  # Set by the CircleCI Scheduled Pipeline (project settings), not by hand.
+  # Inline workflow `triggers: - schedule:` doesn't fire on GitHub-App-connected
+  # projects (this one) — CircleCI silently never runs it, which is how the
+  # nightly Firebase cleanup went stale. A parameter-gated workflow triggered by
+  # a Scheduled Pipeline is the supported equivalent for GitHub App projects.
+  run_nightly_ops:
+    type: boolean
+    default: false
   # APK version tag for a manual build, e.g. "v0.1.0". Blank = rolling dev build.
   version:
     type: string
@@ -361,6 +369,7 @@ workflows:
         - not: << pipeline.parameters.run_app_testing >>
         - not: << pipeline.parameters.run_secrets_check >>
         - not: << pipeline.parameters.run_ops >>
+        - not: << pipeline.parameters.run_nightly_ops >>
     jobs:
       - checks
 
@@ -396,14 +405,21 @@ workflows:
       - ops_firebase_cleanup:
           dry_run: true
 
-  # Nightly Firebase App Distribution cleanup (replaces ops.yml's daily prune,
-  # whose only job — pruning GitHub Actions artifacts — no longer applies).
+  # Firebase App Distribution cleanup (replaces ops.yml's daily prune, whose
+  # only job — pruning GitHub Actions artifacts — no longer applies).
+  #
+  # NOTE: this workflow is named "nightly-ops" and is meant to run on a
+  # schedule, but there is currently no working scheduler wired up. The old
+  # inline `triggers: - schedule:` block silently never fired (verified via
+  # the CircleCI API — this project has zero "schedule"-triggered pipelines
+  # ever, only "webhook"/"api"), and CircleCI's replacement — Scheduled
+  # Pipelines, configured in Project Settings — returns "Scheduled pipelines
+  # is not supported for standalone projects" for this project (it's on the
+  # GitHub App integration but not claimed into a real CircleCI
+  # Organization/plan). Until that's resolved (claim the project into an org,
+  # or find another scheduler), trigger it the same way as manual-ops: set
+  # run_nightly_ops=true on a pipeline via the CircleCI UI/API.
   nightly-ops:
-    triggers:
-      - schedule:
-          cron: "17 4 * * *"
-          filters:
-            branches:
-              only: [main]
+    when: << pipeline.parameters.run_nightly_ops >>
     jobs:
       - ops_firebase_cleanup
