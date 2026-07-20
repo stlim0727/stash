@@ -422,4 +422,11 @@ workflows:
   nightly-ops:
     when: << pipeline.parameters.run_nightly_ops >>
     jobs:
-      - ops_firebase_cleanup
+      # Real delete path (dry_run defaults false) — restrict to main so a
+      # trigger fired against a feature branch can't prune Firebase releases
+      # using that branch's unreviewed config/script (the old schedule was
+      # implicitly main-only via its `filters.branches.only: [main]`).
+      - ops_firebase_cleanup:
+          filters:
+            branches:
+              only: [main]
