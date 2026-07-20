@@ -31,7 +31,7 @@ preserved in git history under `.github/workflows/` before this change.
 | --- | --- | --- |
 | `ci` (lint + typecheck + tests) | every push / PR | `ci.yml` |
 | `release` (Sentry release) | a `v*` git tag | `sentry-release.yml` |
-| `nightly-ops` (Firebase release cleanup) | pipeline param `run_nightly_ops=true` — **manual only**, triggered from the CircleCI UI/API on `main`. There is no working scheduler: the old inline `triggers: - schedule:` never fired, and CircleCI Scheduled Pipelines (the supported replacement) return "not supported for standalone projects" for this project | `ops.yml` (Firebase task only) |
+| `nightly-ops` (Firebase release cleanup) | pipeline param `run_nightly_ops=true` — **manual only, CircleCI web UI "Trigger Pipeline" on `main`**. There is no working scheduler, and the REST API can't trigger it either (`POST /project/.../pipeline` 400s for this standalone project): the old inline `triggers: - schedule:` never fired, and CircleCI Scheduled Pipelines (the supported replacement) return "not supported for standalone projects" for this project | `ops.yml` (Firebase task only) |
 | `manual-screenshots` | pipeline param `run_screenshots=true` | `android-screenshots.yml` |
 | `manual-app-testing` | pipeline param `run_app_testing=true` | `app-testing.yml` |
 | `manual-secrets-check` | pipeline param `run_secrets_check=true` | `secrets-check.yml` |

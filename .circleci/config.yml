@@ -47,11 +47,13 @@ parameters:
   run_ops:
     type: boolean
     default: false
-  # Set by the CircleCI Scheduled Pipeline (project settings), not by hand.
-  # Inline workflow `triggers: - schedule:` doesn't fire on GitHub-App-connected
-  # projects (this one) — CircleCI silently never runs it, which is how the
-  # nightly Firebase cleanup went stale. A parameter-gated workflow triggered by
-  # a Scheduled Pipeline is the supported equivalent for GitHub App projects.
+  # Currently set BY HAND from the CircleCI UI's "Trigger Pipeline" — there is
+  # no working scheduler. The old inline `triggers: - schedule:` block silently
+  # never fired (which is how the Firebase cleanup went stale in the first
+  # place), and CircleCI Scheduled Pipelines — the supported replacement —
+  # return "not supported for standalone projects" for this project (it's on
+  # the GitHub App integration but not claimed into a real CircleCI
+  # Organization/plan). See the nightly-ops workflow below for the full story.
   run_nightly_ops:
     type: boolean
     default: false
@@ -416,9 +418,11 @@ workflows:
   # Pipelines, configured in Project Settings — returns "Scheduled pipelines
   # is not supported for standalone projects" for this project (it's on the
   # GitHub App integration but not claimed into a real CircleCI
-  # Organization/plan). Until that's resolved (claim the project into an org,
-  # or find another scheduler), trigger it the same way as manual-ops: set
-  # run_nightly_ops=true on a pipeline via the CircleCI UI/API.
+  # Organization/plan). The REST API can't trigger it either — `POST
+  # /project/.../pipeline` 400s for this standalone project — so until that's
+  # resolved (claim the project into an org, or find another scheduler), it
+  # only runs when a human sets run_nightly_ops=true via the CircleCI web UI's
+  # "Trigger Pipeline" button.
   nightly-ops:
     when: << pipeline.parameters.run_nightly_ops >>
     jobs:
