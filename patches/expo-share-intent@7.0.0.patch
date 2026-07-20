@@ -1,5 +1,5 @@
 diff --git a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
-index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..2fd3a4b817ad90a8074bae357e57110337ffb284 100644
+index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..2ae9954b5717aae42df880b18069dc50a0721c7c 100644
 --- a/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 +++ b/android/src/main/java/expo/modules/shareintent/ExpoShareIntentModule.kt
 @@ -54,6 +54,17 @@ class ExpoShareIntentModule : Module() {
@@ -105,12 +105,11 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..2fd3a4b817ad90a8074bae357e571103
  
          AsyncFunction("getShareIntent") { _: String ->
              // get the Intent from onCreate activity (app not running in background)
-@@ -196,7 +239,29 @@ class ExpoShareIntentModule : Module() {
+@@ -196,7 +239,30 @@ class ExpoShareIntentModule : Module() {
              ExpoShareIntentSingleton.isPending
          }
  
-+        // Read-and-clear the most recent native share lifecycle attempts (see
-+        // ShareIntentDebugJournal.MAX_ATTEMPTS).
++        // Read-and-clear the five most recent native share lifecycle attempts.
 +        AsyncFunction("getNativeShareDebugJournal") { _: String ->
 +            ShareIntentDebugJournal.readAndClear(context)
 +        }
@@ -122,6 +121,8 @@ index 0153c89c7e2ce4fa20351bc2d5e7b1c6cd341dbe..2fd3a4b817ad90a8074bae357e571103
 +                // the activity below it in the stack (Sentry STASH-2T).
 +                // Minimize the entire task to return control to the sending app.
 +                activity.moveTaskToBack(true)
++            } else {
++                false
 +            }
 +        }
 +
@@ -266,7 +267,7 @@ index 0000000000000000000000000000000000000000..c67b18cd8a7d333d7f9229067c100fb1
 +    }.format(Date())
 +}
 diff --git a/build/ExpoShareIntentModule.d.ts b/build/ExpoShareIntentModule.d.ts
-index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..5585c8f9e11fa0a852c8ff8990b864c604b04a9e 100644
+index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..5e330707fa85b18f2f41b51a0946c0fdeb51b55f 100644
 --- a/build/ExpoShareIntentModule.d.ts
 +++ b/build/ExpoShareIntentModule.d.ts
 @@ -4,11 +4,17 @@ type ExpoShareIntentModuleEvents = {
@@ -281,9 +282,9 @@ index c1179ac96bc17c8c3e00d6fd1bb44ee08d6c2a95..5585c8f9e11fa0a852c8ff8990b864c6
      getShareIntent(url: string): string;
      clearShareIntent(key: string): Promise<void>;
      hasShareIntent(key: string): boolean;
-+    // Read-and-clear the most recent native share lifecycle attempts.
++    // Read-and-clear the five most recent native share lifecycle attempts.
 +    getNativeShareDebugJournal(key: string): Promise<string | null>;
-+    dismissApp(key: string): Promise<void>;
++    dismissApp(key: string): Promise<boolean>;
  }
  declare const ExpoShareIntentModule: ExpoShareIntentModuleType | null;
  export default ExpoShareIntentModule;

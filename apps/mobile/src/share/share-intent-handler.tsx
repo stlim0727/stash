@@ -14,7 +14,7 @@ import { useT } from '@/i18n';
 import { recordLog } from '@/observability/log-buffer';
 import { trackBreadcrumb } from '@/observability/sentry';
 import { canDismissAfterShare, dismissAfterShare } from '@/share/dismiss';
-import { recordPendingShareConfirm } from '@/share/pending-confirm';
+import { recordPendingShareConfirm, takePendingShareConfirm } from '@/share/pending-confirm';
 import { recordShareAttempt, recordSharePersistence } from '@/share/share-diagnostics';
 import { getPreference } from '@/storage/preferences';
 import { useBookmarks } from '@/store/bookmarks';
@@ -274,8 +274,12 @@ export function ShareIntentHandler() {
         if (isNewSave && canDismissAfterShare()) {
           await recordPendingShareConfirm();
         }
-        if (dismissAfterShare(message)) {
+        if (await dismissAfterShare(message)) {
           return;
+        }
+        // Revert the confirmation if self-dismissal failed, so reopening does not show a stale toast
+        if (isNewSave && canDismissAfterShare()) {
+          await takePendingShareConfirm();
         }
       }
       show(message);
