@@ -881,7 +881,13 @@ export default function BookmarkDetailScreen({
             onPress={() => setDraftTitle(bookmark.title ?? '')}
           >
             <Text
-              style={[styles.title, { color: palette.text }]}
+              style={[
+                styles.title,
+                {
+                  color: bookmark.title_is_derived ? palette.textSecondary : palette.text,
+                  fontWeight: bookmark.title_is_derived ? '500' : '800',
+                },
+              ]}
               // Measure unclamped on first layout so overflow detection is
               // reliable across platforms; clamp once we know the line count.
               numberOfLines={

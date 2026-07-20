@@ -2414,7 +2414,10 @@ export default function InboxScreen() {
                     testID="inbox-list-title"
                     style={[
                       styles.listTitle,
-                      { color: item.title_is_derived ? palette.textSecondary : palette.text },
+                      {
+                        color: item.title_is_derived ? palette.textSecondary : palette.text,
+                        fontWeight: item.title_is_derived ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
+                      },
                     ]}
                     numberOfLines={1}
                     text={displayTitle(item) ?? t('common.untitled')}
@@ -2538,7 +2541,10 @@ export default function InboxScreen() {
                     testID="inbox-compact-title"
                     style={[
                       styles.listTitle,
-                      { color: item.title_is_derived ? palette.textSecondary : palette.text },
+                      {
+                        color: item.title_is_derived ? palette.textSecondary : palette.text,
+                        fontWeight: item.title_is_derived ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
+                      },
                     ]}
                     numberOfLines={1}
                     text={displayTitle(item) ?? t('common.untitled')}
@@ -2635,7 +2641,10 @@ export default function InboxScreen() {
                       testID="inbox-card-title"
                       style={[
                         styles.cardTitle,
-                        { color: item.title_is_derived ? palette.textSecondary : palette.text },
+                        {
+                          color: item.title_is_derived ? palette.textSecondary : palette.text,
+                          fontWeight: item.title_is_derived ? WEB_MEDIUM_WEIGHT : WEB_BOLD_WEIGHT,
+                        },
                       ]}
                       numberOfLines={1}
                       text={displayTitle(item) ?? t('common.untitled')}
@@ -3156,6 +3165,7 @@ const styles = StyleSheet.create({
   listText: {
     flex: 1,
     gap: 2,
+    minWidth: 0,
   },
   // Compact rows are a touch taller than list rows to give the thumbnail and the
   // extra meta line room without crowding — still roughly half a card's height.
@@ -3246,6 +3256,7 @@ const styles = StyleSheet.create({
   },
   cardTitlePressable: {
     flex: 1,
+    minWidth: 0,
   },
   cardTitle: {
     flex: 1,
