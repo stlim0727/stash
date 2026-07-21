@@ -204,6 +204,7 @@ export const en = {
   'inbox.inCollection': 'in {name}',
   'inbox.addBookmark': 'Add bookmark',
   'inbox.settingsA11y': 'Settings',
+  'inbox.scrollToTopA11y': 'Scroll to top',
   'inbox.searchOpenA11y': 'Search',
   'inbox.searchCloseA11y': 'Close search',
   'inbox.tagCloudTagA11y': {

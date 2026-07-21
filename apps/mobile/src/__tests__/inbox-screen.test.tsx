@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Linking, Platform, StyleSheet } from 'react-native';
+import { FlatList, Linking, Platform, StyleSheet } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -1493,4 +1493,19 @@ test('a phone-width viewport keeps the card layout single-column (no grid paddin
   await waitFor(() => expect(screen.getByText('Card one')).toBeTruthy());
 
   expect(screen.queryByTestId('inbox-grid-filler')).toBeNull();
+});
+
+test('tapping the hero wordmark scrolls the list back to the top', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ title: 'Only one' })]);
+  const scrollToOffsetSpy = jest
+    .spyOn(FlatList.prototype, 'scrollToOffset')
+    .mockImplementation(() => {});
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-hero-wordmark'));
+
+  expect(scrollToOffsetSpy).toHaveBeenCalledWith({ offset: 0, animated: true });
+  scrollToOffsetSpy.mockRestore();
 });
