@@ -25,6 +25,23 @@ export function displayTitle(
 }
 
 /**
+ * Whether the label {@link displayTitle} renders is a fallback rather than a
+ * real title: either `title_is_derived` was recorded locally (enrichment ran
+ * and only found a generated title), or there is no usable title at all and
+ * `displayTitle` is rendering the raw URL. Remote-mapped and pre-migration
+ * rows never carry `title_is_derived`, so the URL-fallback check catches
+ * those too. Callers use this to de-emphasize fallback titles in the UI.
+ */
+export function isTitleDerived(
+  bookmark: Pick<Bookmark, 'title' | 'url' | 'title_is_derived'>,
+): boolean {
+  if (bookmark.title_is_derived) {
+    return true;
+  }
+  return !bookmark.title?.trim() && Boolean(bookmark.url);
+}
+
+/**
  * A screen-reader-friendly label for a bookmark. Unlike {@link displayTitle},
  * which falls back to the raw URL (so VoiceOver spells out the entire link) or
  * the full note body, this prefers a bare hostname for URL bookmarks and a
