@@ -1,8 +1,18 @@
-# CI on CircleCI
+# CI on CircleCI (+ GitHub Actions, dual)
 
-Stash runs CI on **CircleCI** (`.circleci/config.yml`). It was migrated off
-GitHub Actions when the Actions quota was exhausted; the old workflows are
-preserved in git history under `.github/workflows/` before this change.
+Stash's primary CI gate is **CircleCI** (`.circleci/config.yml`). It was
+migrated off GitHub Actions when the Actions quota was exhausted; the old
+workflows are preserved in git history under `.github/workflows/` before that
+change.
+
+**The gate now also runs on GitHub Actions** (`.github/workflows/ci.yml`),
+restored from that same git history, in parallel — added when the CircleCI
+plan ran out of credits, so PRs still get a real lint/typecheck/test signal
+even when CircleCI can't run. Both workflows run the same steps (lint,
+typecheck, `pnpm test`, `pnpm test:components`, web export) on every
+push/PR; keep them in sync if the gate's steps change. The Android APK build
+and the rest of the manual/opt-in jobs below stay CircleCI/Actions-specific
+as documented.
 
 ## One-time setup
 
