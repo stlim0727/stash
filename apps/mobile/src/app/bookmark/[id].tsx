@@ -28,7 +28,7 @@ import { TagField } from '@/ui/TagField';
 import { useCaptureToast } from '@/ui/capture-toast';
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import { hostFromUrl } from '@/domain/item-icon';
-import { displayTitle } from '@/domain/item-display';
+import { displayTitle, isTitleDerived } from '@/domain/item-display';
 import { pendingSuggestions, suggestedFolderTokens, summaryToken } from '@/domain/ai-suggestions';
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
@@ -884,8 +884,8 @@ export default function BookmarkDetailScreen({
               style={[
                 styles.title,
                 {
-                  color: bookmark.title_is_derived ? palette.textSecondary : palette.text,
-                  fontWeight: bookmark.title_is_derived ? '500' : '800',
+                  color: isTitleDerived(bookmark) ? palette.textSecondary : palette.text,
+                  fontWeight: isTitleDerived(bookmark) ? '500' : '800',
                 },
               ]}
               // Measure unclamped on first layout so overflow detection is

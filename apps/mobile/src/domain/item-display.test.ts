@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { displayTitle } from './item-display.ts';
+import { displayTitle, isTitleDerived } from './item-display.ts';
 
 test('prefers a user-authored title over everything else', () => {
   assert.equal(
@@ -34,4 +34,27 @@ test('treats a whitespace-only title as absent', () => {
 test('returns null when there is nothing to show', () => {
   assert.equal(displayTitle({ title: null, url: null, description: null }), null);
   assert.equal(displayTitle({ title: '  ', url: null, description: '  ' }), null);
+});
+
+test('isTitleDerived is true when title_is_derived was recorded', () => {
+  assert.equal(
+    isTitleDerived({ title: 'Generated title', url: 'https://example.com', title_is_derived: true }),
+    true,
+  );
+});
+
+test('isTitleDerived is true for a raw URL fallback even without title_is_derived', () => {
+  assert.equal(isTitleDerived({ title: null, url: 'https://example.com' }), true);
+  assert.equal(isTitleDerived({ title: '   ', url: 'https://example.com' }), true);
+});
+
+test('isTitleDerived is false for a real user-authored title', () => {
+  assert.equal(
+    isTitleDerived({ title: 'My title', url: 'https://example.com', title_is_derived: false }),
+    false,
+  );
+});
+
+test('isTitleDerived is false for a URL-less note falling back to description', () => {
+  assert.equal(isTitleDerived({ title: null, url: null }), false);
 });

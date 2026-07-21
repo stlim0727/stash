@@ -59,7 +59,7 @@ import { collectionMatchKey } from '@/domain/collection-match';
 import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
-import { accessibilityTitle, displayTitle } from '@/domain/item-display';
+import { accessibilityTitle, displayTitle, isTitleDerived } from '@/domain/item-display';
 import {
   ALL_FILTER,
   UNCOLLECTED_FILTER,
@@ -2415,8 +2415,8 @@ export default function InboxScreen() {
                     style={[
                       styles.listTitle,
                       {
-                        color: item.title_is_derived ? palette.textSecondary : palette.text,
-                        fontWeight: item.title_is_derived ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
+                        color: isTitleDerived(item) ? palette.textSecondary : palette.text,
+                        fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
                       },
                     ]}
                     numberOfLines={1}
@@ -2542,8 +2542,8 @@ export default function InboxScreen() {
                     style={[
                       styles.listTitle,
                       {
-                        color: item.title_is_derived ? palette.textSecondary : palette.text,
-                        fontWeight: item.title_is_derived ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
+                        color: isTitleDerived(item) ? palette.textSecondary : palette.text,
+                        fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
                       },
                     ]}
                     numberOfLines={1}
@@ -2642,8 +2642,8 @@ export default function InboxScreen() {
                       style={[
                         styles.cardTitle,
                         {
-                          color: item.title_is_derived ? palette.textSecondary : palette.text,
-                          fontWeight: item.title_is_derived ? WEB_MEDIUM_WEIGHT : WEB_BOLD_WEIGHT,
+                          color: isTitleDerived(item) ? palette.textSecondary : palette.text,
+                          fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_BOLD_WEIGHT,
                         },
                       ]}
                       numberOfLines={1}
