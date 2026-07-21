@@ -1,9 +1,16 @@
 name: CI
 
 # Runs the same lint/typecheck/test gate as .circleci/config.yml's `ci`
-# workflow, in parallel with CircleCI. Restored after CircleCI's plan ran out
-# of credits, so PRs still get a real CI signal on GitHub Actions while
-# CircleCI is unavailable. Keep both in sync if the gate's steps change.
+# workflow. Restored after CircleCI's plan ran out of credits, so PRs can
+# still get a real CI signal on GitHub Actions while CircleCI is unavailable.
+# Gated by the CI_PROVIDER repo variable (Settings -> Secrets and variables ->
+# Actions -> Variables) so only one provider actually runs the gate at a time
+# instead of burning both CircleCI credits and Actions minutes on every push:
+#   CI_PROVIDER = github   -> this job runs, CircleCI's checks job is the
+#                             redundant one (still triggers, but harmless)
+#   unset / anything else  -> this job is skipped (no runner allocated, no
+#                             minutes billed); CircleCI is the active gate
+# Keep both configs' steps in sync if the gate changes.
 
 on:
   push:
@@ -12,6 +19,7 @@ on:
 
 jobs:
   checks:
+    if: vars.CI_PROVIDER == 'github'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
