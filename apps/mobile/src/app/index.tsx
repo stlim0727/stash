@@ -662,7 +662,12 @@ export default function InboxScreen() {
       );
       // A summary-only card (no tags, no folder) is reviewable too — mirror
       // Review's inclusion rule here as well, so it isn't stranded off-badge.
-      const summary = pendingSummary(bookmark.metadata_status, enrichment, getReviewedSummary(bookmark.id));
+      const summary = pendingSummary(
+        bookmark.metadata_status,
+        enrichment,
+        getReviewedSummary(bookmark.id),
+        bookmark.title,
+      );
       if (pending.length > 0 || folder || summary) {
         count += 1;
       }
@@ -698,7 +703,12 @@ export default function InboxScreen() {
         bookmark.collection_id,
         getDismissedFolderSuggestions(bookmark.id),
       );
-      const summary = pendingSummary(bookmark.metadata_status, enrichment, getReviewedSummary(bookmark.id));
+      const summary = pendingSummary(
+        bookmark.metadata_status,
+        enrichment,
+        getReviewedSummary(bookmark.id),
+        bookmark.title,
+      );
       if (pending.length > 0 || folder || summary) {
         count += 1;
       }
@@ -2360,7 +2370,14 @@ export default function InboxScreen() {
             )
               ? 1
               : 0) +
-            (pendingSummary(item.metadata_status, cardEnrichment, getReviewedSummary(item.id)) ? 1 : 0);
+            (pendingSummary(
+              item.metadata_status,
+              cardEnrichment,
+              getReviewedSummary(item.id),
+              item.title,
+            )
+              ? 1
+              : 0);
           const openDetail = () => {
             if (Platform.OS === 'web') {
               setInlineDetailId((current) => (current === item.id ? null : item.id));

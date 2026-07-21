@@ -421,6 +421,31 @@ test('a real-model summary is kept even with no tags to suggest', async () => {
   expect(screen.getByText('gemini-2.0')).toBeTruthy();
 });
 
+test('a real-model summary that just restates the title stays hidden (STASH-31)', async () => {
+  mockRouteId = SYNCED_ID;
+  // Not the dummy-v0 fallback — a genuine model call — but with no fetched page
+  // description to draw from, the model paraphrased the title back rather than
+  // adding anything new. That's the exact complaint behind STASH-31 ("AI
+  // suggested memos are all useless"): silence it like the dummy-v0 boilerplate.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID, title: 'My Secret Gambas Recipe' })],
+    undefined,
+    [
+      makeEnrichment({
+        bookmark_id: SYNCED_ID,
+        summary: 'A cooking video showing my secret gambas recipe.',
+        model: 'gemini-2.0',
+        suggested_tags: [],
+      }),
+    ],
+  );
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('My Secret Gambas Recipe')).toBeTruthy());
+
+  expect(screen.queryByText('A cooking video showing my secret gambas recipe.')).toBeNull();
+});
+
 test('the summary "Use as note" fills an empty note', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset(

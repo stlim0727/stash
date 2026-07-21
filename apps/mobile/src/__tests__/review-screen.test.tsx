@@ -690,7 +690,7 @@ test('bulk "Dismiss all" on a mixed card (tags + summary) also dismisses the sum
     [
       makeEnrichment({
         bookmark_id: id,
-        summary: 'A mixed-card summary.',
+        summary: 'Combines two AI suggestion types on one card.',
         model: 'gemini-2.0',
         suggested_tags: [{ name: 'design', confidence: 0.9 }],
       }),
@@ -699,7 +699,7 @@ test('bulk "Dismiss all" on a mixed card (tags + summary) also dismisses the sum
 
   const screen = await renderReview();
   await waitFor(() => expect(screen.getByText('Mixed card')).toBeTruthy());
-  expect(screen.getByText('A mixed-card summary.')).toBeTruthy();
+  expect(screen.getByText('Combines two AI suggestion types on one card.')).toBeTruthy();
 
   await fireEvent.press(screen.getByLabelText('Dismiss all suggestions for Mixed card'));
 
@@ -708,7 +708,9 @@ test('bulk "Dismiss all" on a mixed card (tags + summary) also dismisses the sum
   await waitFor(() => expect(screen.queryByText('Mixed card')).toBeNull());
   const bookmark = fakeRepo.__bookmarks().find((b) => b.id === id);
   expect(bookmark?.notes).toBe('Untouched.');
-  expect(bookmark?.reviewed_summary_tokens).toContain(summaryToken('A mixed-card summary.')!);
+  expect(bookmark?.reviewed_summary_tokens).toContain(
+    summaryToken('Combines two AI suggestion types on one card.')!,
+  );
 });
 
 test('a stale enrichment shows the same hint as Detail', async () => {

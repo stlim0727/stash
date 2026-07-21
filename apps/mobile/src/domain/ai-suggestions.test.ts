@@ -6,6 +6,7 @@ import {
   addReviewedNames,
   addReviewedSummaryToken,
   dismissedFolderTokensFor,
+  isTitleRestatement,
   parseDismissedFolderMap,
   parseReviewedMap,
   parseReviewedSummaryMap,
@@ -367,4 +368,49 @@ test('pendingSummary is null for an empty/whitespace-only summary', () => {
 
 test('pendingSummary is null for a missing enrichment', () => {
   assert.equal(pendingSummary('complete', null, new Set()), null);
+});
+
+test('isTitleRestatement is true when the summary mostly repeats the title\'s own words', () => {
+  assert.equal(
+    isTitleRestatement('A cooking video showing my secret gambas recipe.', 'My Secret Gambas Recipe'),
+    true,
+  );
+});
+
+test('isTitleRestatement is false when the summary adds real content beyond the title', () => {
+  assert.equal(
+    isTitleRestatement(
+      'Uses garlic-infused olive oil and dried chili flakes, simmered for four minutes before adding shrimp.',
+      'My Secret Gambas Recipe',
+    ),
+    false,
+  );
+});
+
+test('isTitleRestatement is false for an empty or blank title', () => {
+  assert.equal(isTitleRestatement('Some summary text.', ''), false);
+  assert.equal(isTitleRestatement('Some summary text.', '   '), false);
+});
+
+test('pendingSummary is null when the summary mostly restates the title (STASH-31)', () => {
+  const enrichment = makeSummaryEnrichment({
+    summary: 'A cooking video showing my secret gambas recipe.',
+  });
+  assert.equal(pendingSummary('complete', enrichment, new Set(), 'My Secret Gambas Recipe'), null);
+});
+
+test('pendingSummary keeps a summary that adds real content beyond the title', () => {
+  const enrichment = makeSummaryEnrichment({
+    summary:
+      'Uses garlic-infused olive oil and dried chili flakes, simmered for four minutes before adding shrimp.',
+  });
+  const result = pendingSummary('complete', enrichment, new Set(), 'My Secret Gambas Recipe');
+  assert.deepEqual(result, { text: enrichment.summary, token: summaryToken(enrichment.summary) });
+});
+
+test('pendingSummary skips the restatement check when no title is given', () => {
+  const enrichment = makeSummaryEnrichment({
+    summary: 'A cooking video showing my secret gambas recipe.',
+  });
+  assert.notEqual(pendingSummary('complete', enrichment, new Set()), null);
 });
