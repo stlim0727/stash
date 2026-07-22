@@ -1,0 +1,46 @@
+name: Firebase App Distribution Cleanup
+
+on:
+  schedule:
+    # Run nightly at 04:17 UTC
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (only list releases, do not delete)'
+        type: boolean
+        required: true
+        default: false
+
+jobs:
+  cleanup:
+    if: vars.CI_PROVIDER == 'github' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Firebase release cleanup
+        env:
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          KEEP: "20"
+          MAX_AGE_DAYS: "7"
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FIREBASE_APP_ID" ] || [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "Firebase secrets not set — nothing to clean up."
+            exit 0
+          fi
+          # SA JSON via a file (never inline) so it can't leak into logs.
+          # The secret may be raw JSON or base64-encoded JSON.
+          SA="$RUNNER_TEMP/firebase-sa.json"
+          if printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | grep -q '{'; then
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$SA"
+          else
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT" | base64 -d > "$SA" 2>/dev/null || true
+          fi
+          trap 'rm -f "$SA"' EXIT
+          export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+          node scripts/firebase-app-distribution-cleanup.mjs
