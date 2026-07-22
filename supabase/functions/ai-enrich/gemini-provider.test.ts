@@ -202,6 +202,22 @@ test('drops generic media tags and collections from model output', async () => {
   assert.equal(out.confidence, 0.82);
 });
 
+test('tells the model not to just restate the title as the summary', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await provider.enrich(input());
+  const body = calls[0].init?.body ?? '';
+  assert.match(body, /Never just restate, rephrase, or translate the title/);
+  assert.match(body, /Null if the metadata gives nothing beyond what the title already says/);
+});
+
 test('omits the existing-tags line when the user has no tags yet', async () => {
   const { fetchImpl, calls } = stubFetch({
     summary: null,

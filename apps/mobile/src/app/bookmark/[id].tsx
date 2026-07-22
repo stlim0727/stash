@@ -29,7 +29,12 @@ import { useCaptureToast } from '@/ui/capture-toast';
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import { hostFromUrl } from '@/domain/item-icon';
 import { displayTitle, isTitleDerived } from '@/domain/item-display';
-import { pendingSuggestions, suggestedFolderTokens, summaryToken } from '@/domain/ai-suggestions';
+import {
+  isTitleRestatement,
+  pendingSuggestions,
+  suggestedFolderTokens,
+  summaryToken,
+} from '@/domain/ai-suggestions';
 import type { SuggestedFolder } from '@/domain/ai-suggestions';
 import { FolderSuggestionLabel, folderChipA11yLabel } from '@/ui/folder-suggestion-chip';
 import { ProposedSummary } from '@/ui/ProposedSummary';
@@ -384,11 +389,18 @@ export default function BookmarkDetailScreen({
   // from a later enrichment yields a new token and re-surfaces.
   const summaryTok = summaryToken(enrichment?.summary);
   const summaryReviewed = summaryTok !== null && getReviewedSummary(bookmark.id).has(summaryTok);
+  // STASH-31 ("AI-suggested memos are all useless"): with no fetched page
+  // description to draw from, the model's only real input is usually the
+  // title, so a low-effort summary just restates it back. Suppress that case
+  // here too (see isTitleRestatement in @/domain/ai-suggestions) so Detail
+  // agrees with pendingSummary's rule for Review/Inbox.
+  const summaryText = enrichment?.summary?.trim() ?? '';
   const showAiSummary =
     !isPreviewFailed &&
-    Boolean(enrichment?.summary?.trim()) &&
+    Boolean(summaryText) &&
     !summaryReviewed &&
-    enrichment?.model !== 'dummy-v0';
+    enrichment?.model !== 'dummy-v0' &&
+    !isTitleRestatement(summaryText, bookmark.title ?? '');
   const showAiReport = hasActionableSuggestions || showAiSummary;
   // The screen-level "Dismiss all suggestions" (in the AI control strip) only
   // earns its place once suggestions are spread across 2+ widgets — folder,

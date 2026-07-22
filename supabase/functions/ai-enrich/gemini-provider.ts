@@ -112,7 +112,7 @@ function buildSystemInstruction(language: string): string {
     'You organize a user\'s saved bookmarks.',
     `Write the natural-language fields — summary, topics, and suggested_tags — in ${language}, regardless of the language of the bookmark's title, URL, site, or description. Translate the concepts into ${language}; do not copy words from the source language. (suggested_collection is the one exception — see below.)`,
     'Given a bookmark\'s metadata, assess its content and return:',
-    '- summary: one or two neutral sentences describing what the bookmark is (a usable note). Null if there is too little to go on.',
+    '- summary: one or two sentences adding a specific detail that is NOT already obvious from the title — what it specifically covers, a key fact, technique, or outcome. Never just restate, rephrase, or translate the title or content type (e.g. "this is a YouTube video about X"). Null if the metadata gives nothing beyond what the title already says.',
     '- topics: a few short lowercase subject keywords.',
     '- suggested_tags: up to five short lowercase tags, each with a confidence from 0 to 1. If one of the provided existing tags fits the bookmark, reuse its exact name verbatim (do NOT translate it) rather than coining a near-duplicate — this keeps the user\'s tag vocabulary consolidated. Only invent a new tag (in the target language) when no existing tag fits.',
     '- suggested_collection: a single best-fit collection NAME for filing this bookmark. If one of the provided existing collections fits, copy its NAME verbatim (do NOT translate it). If none fit, propose a concise, reusable new collection name in Title Case (a broad theme, not a one-off). Use null only when the content is too sparse to categorize at all.',

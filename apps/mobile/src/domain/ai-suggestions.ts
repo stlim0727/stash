@@ -301,25 +301,68 @@ export function addReviewedSummaryToken(
 }
 
 /**
+ * Minimum share of the title's own words a summary must repeat back before it
+ * counts as restating the title rather than adding anything new (STASH-31:
+ * "AI-suggested memos are all useless"). With no fetched page description to
+ * draw from (bookmarks.description is populated on well under 1% of rows —
+ * the metadata fetcher never parses it), the model's only real input is
+ * usually the title, so a low-effort summary just paraphrases it back
+ * ("this is a YouTube video about X" for a title that already says X).
+ */
+const TITLE_RESTATEMENT_THRESHOLD = 0.7;
+
+function wordSet(value: string): Set<string> {
+  return new Set(value.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+}
+
+/**
+ * True when `summary` repeats back most of `title`'s own words rather than
+ * adding information beyond it. Pure word-overlap, so it only catches the
+ * literal, same-script restatements — a paraphrase translated into another
+ * language slips through — this is a floor against the clearest cases, not a
+ * full semantic check.
+ */
+export function isTitleRestatement(summary: string, title: string): boolean {
+  const titleWords = wordSet(title);
+  if (titleWords.size === 0) {
+    return false;
+  }
+  const summaryWords = wordSet(summary);
+  let shared = 0;
+  for (const word of titleWords) {
+    if (summaryWords.has(word)) {
+      shared += 1;
+    }
+  }
+  return shared / titleWords.size >= TITLE_RESTATEMENT_THRESHOLD;
+}
+
+/**
  * The AI summary worth offering as a proposed note for a bookmark, honoring
  * the same eligibility rule as the Detail screen's ProposedSummary widget: a
- * failed preview, an already-reviewed token, or the dummy-v0 heuristic
- * fallback (whose boilerplate text would leak the internal model name) never
- * qualify. Centralized so Review and the Inbox badge/banner agree with Detail
- * on when a summary still counts as "pending" — bundles the token alongside
- * the text since callers that offer accept/dismiss need both. Returns `null`
- * when there's nothing to surface.
+ * failed preview, an already-reviewed token, the dummy-v0 heuristic fallback
+ * (whose boilerplate text would leak the internal model name), or a summary
+ * that just {@link isTitleRestatement restates the title} never qualify.
+ * Centralized so Review and the Inbox badge/banner agree with Detail on when
+ * a summary still counts as "pending" — bundles the token alongside the text
+ * since callers that offer accept/dismiss need both. `title` is optional: a
+ * caller with no title on hand simply skips the restatement check. Returns
+ * `null` when there's nothing to surface.
  */
 export function pendingSummary(
   metadataStatus: MetadataStatus,
   enrichment: AIEnrichment | undefined | null,
   reviewedTokens: ReadonlySet<string>,
+  title?: string | null,
 ): { text: string; token: string } | null {
   if (metadataStatus === 'failed' || enrichment?.model === 'dummy-v0') {
     return null;
   }
   const text = enrichment?.summary?.trim();
   if (!text) {
+    return null;
+  }
+  if (title && isTitleRestatement(text, title)) {
     return null;
   }
   const token = summaryToken(text);

@@ -874,6 +874,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           bookmark?.metadata_status ?? 'complete',
           enrichment,
           new Set(bookmark?.reviewed_summary_tokens ?? []),
+          bookmark?.title,
         ) !== null;
       if (pendingSuggestions(enrichment, applied, reviewed).length === 0 && !hasFolder && !hasSummary) {
         return;

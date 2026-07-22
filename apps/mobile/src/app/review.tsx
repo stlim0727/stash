@@ -125,7 +125,12 @@ export default function ReviewScreen() {
         bookmark.collection_id,
         getDismissedFolderSuggestions(bookmark.id),
       );
-      const summary = pendingSummary(bookmark.metadata_status, enrichment, getReviewedSummary(bookmark.id));
+      const summary = pendingSummary(
+        bookmark.metadata_status,
+        enrichment,
+        getReviewedSummary(bookmark.id),
+        bookmark.title,
+      );
       if (suggestions.length > 0 || folder || summary) {
         result.push({
           id: bookmark.id,
