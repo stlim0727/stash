@@ -233,7 +233,7 @@ export const ko: Catalog = {
   'settings.share.toast': '공유한 링크는 토스트만 표시합니다',
   'settings.analytics.label': '개인정보 보호 사용 분석 공유',
   'settings.analytics.enabled':
-    '앱 실행, 화면 범주, 플랫폼/로그인 상태, 시각, 무작위 분석 ID를 공유합니다',
+    '앱 실행, 화면 범주, 플랫폼/로그인 상태, 공유 성능/지연 시간, 시각, 무작위 분석 ID를 공유합니다',
   'settings.analytics.disabled': '꺼짐 — 분석 데이터를 보내지 않습니다',
   'settings.analytics.errorTitle': '분석 설정을 저장하지 못했습니다',
   'settings.analytics.errorBody':

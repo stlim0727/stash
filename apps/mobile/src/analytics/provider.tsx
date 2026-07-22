@@ -32,6 +32,7 @@ interface AnalyticsContextValue {
   adExperimentEnabled: boolean;
   setEnabled(enabled: boolean): Promise<void>;
   capture(event: unknown): void;
+  flush(): Promise<void>;
 }
 
 const disabledAnalyticsContext: AnalyticsContextValue = {
@@ -40,6 +41,7 @@ const disabledAnalyticsContext: AnalyticsContextValue = {
   adExperimentEnabled: false,
   setEnabled: async () => {},
   capture: () => {},
+  flush: async () => {},
 };
 
 const AnalyticsContext = createContext<AnalyticsContextValue>(disabledAnalyticsContext);
@@ -182,9 +184,13 @@ export function AnalyticsProvider({ children }: { children: ReactNode }) {
     [runtime],
   );
 
+  const flush = useCallback(async () => {
+    await runtime.flush();
+  }, [runtime]);
+
   const value = useMemo(
-    () => ({ enabled, ready, adExperimentEnabled, setEnabled, capture }),
-    [adExperimentEnabled, enabled, ready, setEnabled, capture],
+    () => ({ enabled, ready, adExperimentEnabled, setEnabled, capture, flush }),
+    [adExperimentEnabled, enabled, ready, setEnabled, capture, flush],
   );
 
   return <AnalyticsContext.Provider value={value}>{children}</AnalyticsContext.Provider>;

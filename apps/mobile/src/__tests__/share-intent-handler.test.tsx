@@ -74,11 +74,13 @@ jest.mock('@/observability/log-buffer', () => {
 });
 
 const mockCapture = jest.fn();
+const mockFlush = jest.fn(async () => {});
 jest.mock('@/analytics/provider', () => ({
   useAnalytics: () => ({
     enabled: true,
     ready: true,
     capture: mockCapture,
+    flush: mockFlush,
   }),
 }));
 
@@ -780,6 +782,7 @@ describe('ShareIntentHandler', () => {
 
   it('triggers capture_completed PostHog event on successful save', async () => {
     mockCapture.mockClear();
+    mockFlush.mockClear();
     fakeRepo.__reset([]);
     mockShareIntent = {
       hasShareIntent: true,
@@ -803,11 +806,13 @@ describe('ShareIntentHandler', () => {
         })
       );
     });
+    expect(mockFlush).toHaveBeenCalled();
     unmount();
   });
 
   it('triggers capture_completed PostHog event on duplicate save', async () => {
     mockCapture.mockClear();
+    mockFlush.mockClear();
     const existingBookmark = makeStoredBookmark({
       id: 'existing-id',
       url: 'https://example.com/ph-duplicate',
@@ -835,11 +840,13 @@ describe('ShareIntentHandler', () => {
         })
       );
     });
+    expect(mockFlush).toHaveBeenCalled();
     unmount();
   });
 
   it('triggers capture_completed PostHog event on invalid save', async () => {
     mockCapture.mockClear();
+    mockFlush.mockClear();
     fakeRepo.__reset([]);
     mockShareIntent = {
       hasShareIntent: true,
@@ -862,6 +869,7 @@ describe('ShareIntentHandler', () => {
         })
       );
     });
+    expect(mockFlush).not.toHaveBeenCalled();
     unmount();
   });
 });

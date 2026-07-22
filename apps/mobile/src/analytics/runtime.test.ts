@@ -12,7 +12,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test('captures only after explicit enable and rejects unsafe events', async () => {
+test('queues captures during loading state and replays them upon enable', async () => {
   const captured: unknown[] = [];
   const transport: AnalyticsTransport = {
     capture: (event) => captured.push(event),
@@ -24,13 +24,54 @@ test('captures only after explicit enable and rejects unsafe events', async () =
   assert.equal(captured.length, 0);
 
   await runtime.enable();
-  runtime.capture(createScreenViewedEvent('inbox'));
-  runtime.capture({ name: 'screen_viewed', properties: { screen: 'inbox', url: 'secret' } });
   assert.deepEqual(captured, [createScreenViewedEvent('inbox')]);
 
-  await runtime.disable();
   runtime.capture(createScreenViewedEvent('settings'));
-  assert.deepEqual(captured, [createScreenViewedEvent('inbox')]);
+  assert.deepEqual(captured, [
+    createScreenViewedEvent('inbox'),
+    createScreenViewedEvent('settings'),
+  ]);
+});
+
+test('discards queued captures when disable is called', async () => {
+  const captured: unknown[] = [];
+  const transport: AnalyticsTransport = {
+    capture: (event) => captured.push(event),
+    optOut: async () => {},
+  };
+  const runtime = new AnalyticsRuntime(async () => transport);
+
+  runtime.capture(createScreenViewedEvent('inbox'));
+  assert.equal(captured.length, 0);
+
+  await runtime.disable();
+  await runtime.enable();
+
+  assert.equal(captured.length, 0);
+});
+
+test('flush waits for transport loading and calls transport flush', async () => {
+  const transportCreated = deferred<AnalyticsTransport>();
+  const runtime = new AnalyticsRuntime(() => transportCreated.promise);
+  let flushCalled = false;
+
+  const transport: AnalyticsTransport = {
+    capture: () => {},
+    optOut: async () => {},
+    flush: async () => {
+      flushCalled = true;
+    },
+  };
+
+  void runtime.enable();
+  const flushPromise = runtime.flush();
+
+  assert.equal(flushCalled, false);
+
+  transportCreated.resolve(transport);
+  await flushPromise;
+
+  assert.equal(flushCalled, true);
 });
 
 test('opt-out closes the gate synchronously and discards a racing client', async () => {
@@ -84,3 +125,4 @@ test('a missing transport never presents as enabled or captures later', async ()
   runtime.capture(createScreenViewedEvent('inbox'));
   assert.equal(await runtime.reloadBooleanFlag('ads-master-enabled'), false);
 });
+

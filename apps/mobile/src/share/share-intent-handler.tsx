@@ -316,6 +316,7 @@ export function ShareIntentHandler() {
         if (isNewSave && canDismissAfterShare()) {
           await recordPendingShareConfirm();
         }
+        await analytics.flush();
         if (await dismissAfterShare(message)) {
           return;
         }
