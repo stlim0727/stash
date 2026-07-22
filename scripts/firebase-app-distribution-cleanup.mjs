@@ -11,7 +11,7 @@
 // Inputs (env):
 //   GOOGLE_APPLICATION_CREDENTIALS  path to the service-account JSON key
 //   FIREBASE_APP_ID                 e.g. 1:1234567890:android:abcdef
-//   KEEP                            keep the N most recent releases (default 20)
+//   KEEP                            keep the N most recent releases (default 5)
 //   MAX_AGE_DAYS                    delete releases older than N days (default 0 = ignore age)
 //   DRY_RUN                         "true" to only report what would be deleted
 //
@@ -136,7 +136,7 @@ async function listAllReleases(appName, token) {
 async function main() {
   const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   const appId = process.env.FIREBASE_APP_ID;
-  const keep = intInput("KEEP", process.env.KEEP, 20);
+  const keep = intInput("KEEP", process.env.KEEP, 5);
   const maxAgeDays = intInput("MAX_AGE_DAYS", process.env.MAX_AGE_DAYS, 0);
   const dryRun = process.env.DRY_RUN === "true";
 
