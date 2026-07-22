@@ -19,6 +19,7 @@ import { useAppConfig } from '@/supabase/use-min-app-version';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { FloatingReportButton } from '@/feedback/FloatingReportButton';
 import { UpdateRequired } from '@/ui/UpdateRequired';
+import { AnalyticsProvider } from '@/analytics/provider';
 
 // Capture console output into an in-memory buffer so the "Report a problem"
 // screen can attach real logs. Install before anything else so early errors
@@ -102,14 +103,16 @@ function RootLayout() {
           <I18nProvider>
             <SupabaseAuthProvider>
               <BookmarksProvider>
-                <CaptureToastProvider>
-                  <ShareIntentHandler />
-                  <ShareConfirmHandler />
-                  <FloatingReportButton>
-                    <RootStack />
-                  </FloatingReportButton>
-                  <StatusBar style="auto" />
-                </CaptureToastProvider>
+                <AnalyticsProvider>
+                  <CaptureToastProvider>
+                    <ShareIntentHandler />
+                    <ShareConfirmHandler />
+                    <FloatingReportButton>
+                      <RootStack />
+                    </FloatingReportButton>
+                    <StatusBar style="auto" />
+                  </CaptureToastProvider>
+                </AnalyticsProvider>
               </BookmarksProvider>
             </SupabaseAuthProvider>
           </I18nProvider>
