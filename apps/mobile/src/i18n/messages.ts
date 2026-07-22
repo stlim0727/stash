@@ -336,6 +336,13 @@ export const en = {
   'settings.share.label': 'Open Inbox after sharing',
   'settings.share.inbox': 'Shared links open the Inbox',
   'settings.share.toast': 'Shared links just show a toast',
+  'settings.analytics.label': 'Share privacy-safe usage analytics',
+  'settings.analytics.enabled':
+    'Shares app opens, screen categories, platform/sign-in state, time, and a random analytics ID',
+  'settings.analytics.disabled': 'Off — no analytics are sent',
+  'settings.analytics.errorTitle': 'Could not save analytics preference',
+  'settings.analytics.errorBody':
+    'Analytics stays off for this session. Please try again so the choice is saved for the next launch.',
   'settings.search.clearLabel': 'Clear search history',
   'settings.search.clearValue': '{count} recent searches',
   'settings.search.clearEmpty': 'No recent searches',

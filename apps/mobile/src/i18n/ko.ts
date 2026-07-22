@@ -231,6 +231,13 @@ export const ko: Catalog = {
   'settings.share.label': '공유 후 받은함 열기',
   'settings.share.inbox': '공유한 링크가 받은함을 엽니다',
   'settings.share.toast': '공유한 링크는 토스트만 표시합니다',
+  'settings.analytics.label': '개인정보 보호 사용 분석 공유',
+  'settings.analytics.enabled':
+    '앱 실행, 화면 범주, 플랫폼/로그인 상태, 시각, 무작위 분석 ID를 공유합니다',
+  'settings.analytics.disabled': '꺼짐 — 분석 데이터를 보내지 않습니다',
+  'settings.analytics.errorTitle': '분석 설정을 저장하지 못했습니다',
+  'settings.analytics.errorBody':
+    '이번 실행에서는 분석이 꺼진 상태로 유지됩니다. 다음 실행에도 적용되도록 다시 시도해 주세요.',
   'settings.search.clearLabel': '검색 기록 지우기',
   'settings.search.clearValue': '최근 검색 {count}개',
   'settings.search.clearEmpty': '최근 검색 없음',

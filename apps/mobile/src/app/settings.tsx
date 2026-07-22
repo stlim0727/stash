@@ -54,6 +54,7 @@ import { useBookmarks } from '@/store/bookmarks';
 import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import type { OAuthProvider } from '@/supabase/types';
+import { useAnalytics } from '@/analytics/provider';
 
 const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
 
@@ -111,6 +112,22 @@ export default function SettingsScreen() {
     importBookmarks,
   } = useBookmarks();
   const auth = useSupabaseAuth();
+  const analytics = useAnalytics();
+  const [analyticsBusy, setAnalyticsBusy] = useState(false);
+
+  const handleAnalyticsChange = (enabled: boolean) => {
+    if (!analytics.ready || analyticsBusy) return;
+    setAnalyticsBusy(true);
+    void analytics
+      .setEnabled(enabled)
+      .catch(() =>
+        Alert.alert(
+          t('settings.analytics.errorTitle'),
+          t('settings.analytics.errorBody'),
+        ),
+      )
+      .finally(() => setAnalyticsBusy(false));
+  };
 
   // Sign in / out happens inline in the account card (no separate screen).
   // `authBusy` disables the auth buttons while a provider flow or sign-out runs.
@@ -551,6 +568,26 @@ export default function SettingsScreen() {
             <Switch
               value={shareBehavior === 'inbox'}
               onValueChange={(on) => setShareBehavior(on ? 'inbox' : 'toast')}
+              trackColor={{ true: palette.accent, false: palette.border }}
+              thumbColor="#ffffff"
+            />
+          }
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="analytics-outline"
+          label={t('settings.analytics.label')}
+          value={
+            analytics.enabled
+              ? t('settings.analytics.enabled')
+              : t('settings.analytics.disabled')
+          }
+          right={
+            <Switch
+              value={analytics.enabled}
+              disabled={!analytics.ready || analyticsBusy}
+              onValueChange={handleAnalyticsChange}
               trackColor={{ true: palette.accent, false: palette.border }}
               thumbColor="#ffffff"
             />
