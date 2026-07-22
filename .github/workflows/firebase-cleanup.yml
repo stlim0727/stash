@@ -24,7 +24,7 @@ jobs:
         env:
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          KEEP: "20"
+          KEEP: "5"
           MAX_AGE_DAYS: "7"
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |

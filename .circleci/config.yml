@@ -286,7 +286,7 @@ jobs:
       - run:
           name: Firebase release cleanup
           environment:
-            KEEP: "20"
+            KEEP: "5"
             MAX_AGE_DAYS: "7"
           command: |
             set -euo pipefail
