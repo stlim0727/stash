@@ -23,8 +23,11 @@ no benefit. The GitHub Actions `checks` job is gated by a repo variable:
 
 Set it at *GitHub repo → Settings → Secrets and variables → Actions →
 Variables → `CI_PROVIDER`*. Flip it back to unset (or delete it) once
-CircleCI has credits again. The Android APK build and the rest of the
-manual/opt-in jobs below stay CircleCI/Actions-specific as documented.
+CircleCI has credits again.
+
+When `CI_PROVIDER` is set to `github`:
+- The automated nightly Firebase App Distribution release cleanup runs on GitHub Actions (via `.github/workflows/firebase-cleanup.yml` scheduled at `17 4 * * *` UTC) instead of CircleCI. The CircleCI `ops_firebase_cleanup` job will automatically check the variable via the GitHub API (using `GH_TOKEN` or `GITHUB_TOKEN`) or the `CI_PROVIDER` environment variable and halt itself.
+- The Android APK build and other manual/opt-in jobs remain provider-specific as documented.
 
 ## One-time setup
 

@@ -260,6 +260,30 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Check CI Provider (Skip if CI_PROVIDER=github)
+          command: |
+            if [ "${CI_PROVIDER:-}" = "github" ]; then
+              echo "CI_PROVIDER environment variable is set to github. Skipping CircleCI cleanup."
+              circleci-agent step halt
+            fi
+            TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+            if [ -n "$TOKEN" ]; then
+              PROVIDER=$(curl -s -S -H "Authorization: token $TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                https://api.github.com/repos/stlim0727/stash/actions/variables/CI_PROVIDER \
+                | node -e "
+                  let data;
+                  try {
+                    data = JSON.parse(require('fs').readFileSync(0, 'utf-8'));
+                  } catch {}
+                  console.log((data && data.value) || '');
+                ")
+              if [ "$PROVIDER" = "github" ]; then
+                echo "GitHub repository variable CI_PROVIDER is set to github. Skipping CircleCI cleanup."
+                circleci-agent step halt
+              fi
+            fi
+      - run:
           name: Firebase release cleanup
           environment:
             KEEP: "20"
