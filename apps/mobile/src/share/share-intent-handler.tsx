@@ -1,6 +1,10 @@
 import { useRouter } from 'expo-router';
 import { ShareIntentModule, useShareIntentContext } from 'expo-share-intent';
 import { useEffect, useRef, useState } from 'react';
+import { Platform } from 'react-native';
+
+import { useAnalytics } from '@/analytics/provider';
+import { createCaptureCompletedEvent } from '@/analytics/events';
 
 import {
   DEFAULT_SHARE_BEHAVIOR,
@@ -48,6 +52,7 @@ function nextJsAttemptId(): string {
 export function ShareIntentHandler() {
   const { hasShareIntent, shareIntent, resetShareIntent, error } = useShareIntentContext();
   const { addBookmark, isLoading } = useBookmarks();
+  const analytics = useAnalytics();
   const router = useRouter();
   const { show } = useCaptureToast();
   const t = useT();
@@ -213,13 +218,50 @@ export function ShareIntentHandler() {
     // Bracket the save so a post-share freeze can be tied to how long the durable
     // write took. Coarse only — status/duration/durability, never content.
     trackBreadcrumb('share', 'saving', { status: result.status });
-    void persisted?.then(
-      (durable) => {
-        recordSharePersistence(share.attemptId, durable);
-        trackBreadcrumb('share', 'persisted', { ms: Date.now() - saveStartedAt, durable });
-      },
-      () => recordSharePersistence(share.attemptId, false),
-    );
+    const platform =
+      Platform.OS === 'android' || Platform.OS === 'ios' || Platform.OS === 'web'
+        ? Platform.OS
+        : 'web';
+
+    if (result.status === 'invalid') {
+      analytics.capture(
+        createCaptureCompletedEvent(
+          'share',
+          'invalid',
+          false,
+          0,
+          platform,
+        )
+      );
+    } else {
+      void persisted?.then(
+        (durable) => {
+          recordSharePersistence(share.attemptId, durable);
+          trackBreadcrumb('share', 'persisted', { ms: Date.now() - saveStartedAt, durable });
+          analytics.capture(
+            createCaptureCompletedEvent(
+              'share',
+              result.status as 'created' | 'duplicate',
+              durable,
+              Date.now() - saveStartedAt,
+              platform,
+            )
+          );
+        },
+        () => {
+          recordSharePersistence(share.attemptId, false);
+          analytics.capture(
+            createCaptureCompletedEvent(
+              'share',
+              result.status as 'created' | 'duplicate',
+              false,
+              Date.now() - saveStartedAt,
+              platform,
+            )
+          );
+        }
+      );
+    }
 
     // Resolve the post-share behavior, then either jump to the Inbox (inbox
     // mode) or get back out of the way (toast mode). Reading the preference is

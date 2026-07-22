@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createAppOpenEvent, createScreenViewedEvent } from './events.ts';
+import { createAppOpenEvent, createScreenViewedEvent, createCaptureCompletedEvent } from './events.ts';
 import {
   getSanitizationReason,
   isForbiddenKey,
@@ -230,4 +230,28 @@ test('returns frozen clean event and detailed result', () => {
   assert.ok(Object.isFrozen(result.event));
   assert.ok(Object.isFrozen(result.event?.properties));
   assert.deepEqual(result.event, input);
+});
+
+test('valid capture_completed events pass sanitization', () => {
+  const event = createCaptureCompletedEvent('share', 'created', true, 120, 'android');
+  const sanitized = sanitizeEvent(event);
+  assert.deepEqual(sanitized, event);
+  assert.equal(getSanitizationReason(event), null);
+});
+
+test('rejects invalid properties on capture_completed', () => {
+  const invalidEvents = [
+    { name: 'capture_completed', properties: { source: 'not_share', result: 'created', durable: true, persistence_ms: 100, platform: 'android' } },
+    { name: 'capture_completed', properties: { source: 'share', result: 'invalid_result', durable: true, persistence_ms: 100, platform: 'android' } },
+    { name: 'capture_completed', properties: { source: 'share', result: 'created', durable: 'yes', persistence_ms: 100, platform: 'android' } },
+    { name: 'capture_completed', properties: { source: 'share', result: 'created', durable: true, persistence_ms: 1.5, platform: 'android' } },
+    { name: 'capture_completed', properties: { source: 'share', result: 'created', durable: true, persistence_ms: 20000, platform: 'android' } },
+    { name: 'capture_completed', properties: { source: 'share', result: 'created', durable: true, persistence_ms: -5, platform: 'android' } },
+    { name: 'capture_completed', properties: { source: 'share', result: 'created', durable: true, persistence_ms: 100, platform: 'windows' } },
+  ];
+
+  for (const input of invalidEvents) {
+    assert.equal(sanitizeEvent(input), null, `Event ${JSON.stringify(input)} should be rejected`);
+    assert.notEqual(getSanitizationReason(input), null);
+  }
 });
