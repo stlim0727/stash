@@ -125,4 +125,3 @@ test('a missing transport never presents as enabled or captures later', async ()
   runtime.capture(createScreenViewedEvent('inbox'));
   assert.equal(await runtime.reloadBooleanFlag('ads-master-enabled'), false);
 });
-
