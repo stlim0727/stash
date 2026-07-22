@@ -1327,6 +1327,10 @@ export default function InboxScreen() {
     isWeb,
   } = useShelfEdges(showShelf, [winWidth, chips.length]);
   const InboxList = (isWeb ? FlatList : AnimatedFlatList) as typeof FlatList;
+  const listRef = useRef<FlatList<InboxListItem>>(null);
+  const scrollToTop = useCallback(() => {
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, []);
 
   const activeChip = chips.find((chip) => sameFilter(chip.filter, filter));
   // Facet-scoped search placeholder (B4): a pure projection of the active facet,
@@ -1676,17 +1680,22 @@ export default function InboxScreen() {
             {/* The brand wordmark is a pre-rendered image (the Keepory duckling
                 lockup) rather than bundled fonts — a few KB of PNG instead of
                 multi-MB font files. Every locale uses the same lockup; a
-                light/dark variant matches the theme. */}
-            <View
+                light/dark variant matches the theme. Tapping it scrolls the
+                list back to the top, the same as tapping a title bar. */}
+            <Pressable
+              testID="inbox-hero-wordmark"
+              accessibilityRole="button"
+              accessibilityLabel={wordmarkLabel}
+              accessibilityHint={t('inbox.scrollToTopA11y')}
+              hitSlop={8}
+              onPress={scrollToTop}
               style={[
                 styles.heroWordmarkBox,
                 { width: wordmarkWidth, height: WORDMARK_HEIGHT },
               ]}
             >
               <Image
-                accessible={!showWordmarkFallback}
-                accessibilityRole={showWordmarkFallback ? undefined : 'header'}
-                accessibilityLabel={showWordmarkFallback ? undefined : wordmarkLabel}
+                accessible={false}
                 testID="inbox-wordmark-image"
                 source={wordmark.source}
                 resizeMode="contain"
@@ -1711,8 +1720,7 @@ export default function InboxScreen() {
               />
               {showWordmarkFallback ? (
                 <Text
-                  accessibilityRole="header"
-                  accessibilityLabel={wordmarkLabel}
+                  accessible={false}
                   testID="inbox-wordmark-fallback"
                   style={[styles.heroWordmarkFallback, { color: palette.text }]}
                   numberOfLines={1}
@@ -1720,7 +1728,7 @@ export default function InboxScreen() {
                   {t('app.name')}
                 </Text>
               ) : null}
-            </View>
+            </Pressable>
             <Text
               style={[styles.heroCountText, { color: palette.textSecondary }]}
               numberOfLines={1}
@@ -2116,6 +2124,7 @@ export default function InboxScreen() {
         </WebCrispAnimatedSurface>
       ) : null}
       <InboxList
+        ref={listRef}
         data={gridData}
         keyExtractor={(item) => item.id}
         // Remount when the column count changes: FlatList forbids mutating

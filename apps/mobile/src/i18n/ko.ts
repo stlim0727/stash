@@ -131,6 +131,7 @@ export const ko: Catalog = {
   'inbox.inCollection': '{name}에 있음',
   'inbox.addBookmark': '북마크 추가',
   'inbox.settingsA11y': '설정',
+  'inbox.scrollToTopA11y': '맨 위로 스크롤',
   'inbox.searchOpenA11y': '검색',
   'inbox.searchCloseA11y': '검색 닫기',
   'inbox.tagCloudTagA11y': { other: '#{name}, 북마크 {count}개' },
