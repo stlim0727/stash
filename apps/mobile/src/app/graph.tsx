@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -722,11 +722,6 @@ export default function GraphScreen() {
     }
     wheelBurstStartRef.current = null;
     setViewBoxRect(fitViewBoxRect);
-    translateX.setOffset(0);
-    translateX.setValue(0);
-    translateY.setOffset(0);
-    translateY.setValue(0);
-    scale.setValue(1);
     lastScale.current = 1;
     liveScale.current = 1;
     appliedScale.current = 1;
@@ -735,6 +730,25 @@ export default function GraphScreen() {
     panStart.current = { x: 0, y: 0 };
     pinch.current = null;
   }, [fitViewBoxRect]);
+
+  // The Animated transform must reset to identity in the SAME committed
+  // frame as a new baked `viewBoxRect`, not right after the `setViewBoxRect`
+  // call that schedules it: that call is an async React state update, while
+  // `Animated.Value#setValue` applies immediately, so resetting inline (the
+  // old code, here and in settle()/recenter()/the wheel-bake timeout below)
+  // raced the two — for one frame the transform read as identity against
+  // the STILL-OLD viewBox, a visible snap back to the pre-gesture view
+  // before the re-render landed and snapped forward to the real one
+  // (reported as a stutter on Android on release). `useLayoutEffect` fires
+  // after `viewBoxRect`'s new value has been committed, so pairing the reset
+  // here keeps both changes in the same displayed frame.
+  useLayoutEffect(() => {
+    translateX.setOffset(0);
+    translateX.setValue(0);
+    translateY.setOffset(0);
+    translateY.setValue(0);
+    scale.setValue(1);
+  }, [viewBoxRect, translateX, translateY, scale]);
 
   // Per-axis pan bound at a given scale, relative to the FIXED
   // `fitViewBoxRect` baseline (never the current baked `viewBoxRect` — see
@@ -792,9 +806,6 @@ export default function GraphScreen() {
             scale: liveScale.current,
           }),
         );
-        translateX.setValue(0);
-        translateY.setValue(0);
-        scale.setValue(1);
         appliedScale.current = liveScale.current;
         gestureStartScaleRef.current = liveScale.current;
         panStart.current = { x: 0, y: 0 };
@@ -995,9 +1006,6 @@ export default function GraphScreen() {
             scale: liveScale.current,
           }),
         );
-        translateX.setValue(0);
-        translateY.setValue(0);
-        scale.setValue(1);
       }, WHEEL_SETTLE_DELAY_MS);
     },
     [axisBoundsAt, translateX, translateY, scale],
@@ -1045,11 +1053,6 @@ export default function GraphScreen() {
     setViewBoxRect(fitViewBoxRect);
     setInteracting(false);
     setNearbyBookmarkLabelIds(new Set());
-    translateX.setOffset(0);
-    translateX.setValue(0);
-    translateY.setOffset(0);
-    translateY.setValue(0);
-    scale.setValue(1);
     lastScale.current = 1;
     liveScale.current = 1;
     appliedScale.current = 1;
