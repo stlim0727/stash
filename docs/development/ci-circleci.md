@@ -1,8 +1,30 @@
-# CI on CircleCI
+# CI on CircleCI (+ GitHub Actions, dual)
 
-Stash runs CI on **CircleCI** (`.circleci/config.yml`). It was migrated off
-GitHub Actions when the Actions quota was exhausted; the old workflows are
-preserved in git history under `.github/workflows/` before this change.
+Stash's primary CI gate is **CircleCI** (`.circleci/config.yml`). It was
+migrated off GitHub Actions when the Actions quota was exhausted; the old
+workflows are preserved in git history under `.github/workflows/` before that
+change.
+
+**The gate can also run on GitHub Actions** (`.github/workflows/ci.yml`),
+restored from that same git history — added when the CircleCI plan ran out
+of credits, so PRs can still get a real lint/typecheck/test signal when
+CircleCI can't run. Both workflows run the same steps (lint, typecheck,
+`pnpm test`, `pnpm test:components`, web export); keep them in sync if the
+gate's steps change.
+
+Only one provider is meant to actually run the gate at a time — running both
+on every push burns CircleCI credits and Actions minutes simultaneously for
+no benefit. The GitHub Actions `checks` job is gated by a repo variable:
+
+| `CI_PROVIDER` repo variable | GitHub Actions `ci.yml` | CircleCI `ci` workflow |
+| --- | --- | --- |
+| `github` | runs the gate | still triggers (CircleCI has no matching gate — pause the project in the CircleCI dashboard, e.g. Project Settings, if you want to stop it from queuing/spending credits) |
+| unset / anything else (default) | skipped — no runner allocated, no minutes billed | runs the gate |
+
+Set it at *GitHub repo → Settings → Secrets and variables → Actions →
+Variables → `CI_PROVIDER`*. Flip it back to unset (or delete it) once
+CircleCI has credits again. The Android APK build and the rest of the
+manual/opt-in jobs below stay CircleCI/Actions-specific as documented.
 
 ## One-time setup
 
