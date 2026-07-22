@@ -338,7 +338,7 @@ export const en = {
   'settings.share.toast': 'Shared links just show a toast',
   'settings.analytics.label': 'Share privacy-safe usage analytics',
   'settings.analytics.enabled':
-    'Shares app opens, screen categories, platform/sign-in state, time, and a random analytics ID',
+    'Shares app opens, screen categories, platform/sign-in state, share performance/latency, time, and a random analytics ID',
   'settings.analytics.disabled': 'Off — no analytics are sent',
   'settings.analytics.errorTitle': 'Could not save analytics preference',
   'settings.analytics.errorBody':

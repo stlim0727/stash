@@ -6,6 +6,7 @@ import {
   ALLOWED_SCREENS,
   createAppOpenEvent,
   createScreenViewedEvent,
+  createCaptureCompletedEvent,
   EVENT_CATALOG,
 } from './events.ts';
 
@@ -56,4 +57,24 @@ test('Allowed sets match catalog sets', () => {
   assert.equal(EVENT_CATALOG.app_open.platform, ALLOWED_PLATFORMS);
   assert.equal(EVENT_CATALOG.app_open.auth_state, ALLOWED_AUTH_STATES);
   assert.equal(EVENT_CATALOG.screen_viewed.screen, ALLOWED_SCREENS);
+});
+
+test('createCaptureCompletedEvent builds valid capture_completed payload', () => {
+  const event = createCaptureCompletedEvent('share', 'created', true, 312.4, 'android');
+  assert.deepEqual(event, {
+    name: 'capture_completed',
+    properties: {
+      source: 'share',
+      result: 'created',
+      durable: true,
+      persistence_ms: 312,
+      platform: 'android',
+    },
+  });
+
+  const clampedEvent = createCaptureCompletedEvent('share', 'duplicate', false, 12000, 'ios');
+  assert.equal(clampedEvent.properties.persistence_ms, 10000);
+
+  const clampedNegativeEvent = createCaptureCompletedEvent('share', 'invalid', true, -50, 'web');
+  assert.equal(clampedNegativeEvent.properties.persistence_ms, 0);
 });

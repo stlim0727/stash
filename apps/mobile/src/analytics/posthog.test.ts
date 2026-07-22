@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createAppOpenEvent, createScreenViewedEvent } from './events.ts';
+import { createAppOpenEvent, createScreenViewedEvent, createCaptureCompletedEvent } from './events.ts';
 import {
   AD_EXPERIMENT_FLAG_KEY,
   ANALYTICS_STATE_KEY,
@@ -270,4 +270,43 @@ test('rejects every host except the exact EU ingestion origin', async () => {
       null,
     );
   }
+});
+
+test('wire payload contains only capture_completed properties on capture_completed events', async () => {
+  const storage = memoryStorage();
+  const requests: Array<{ input: string; init: RequestInit }> = [];
+  const transport = await createPostHogHttpTransport({
+    ...baseOptions,
+    storage,
+    fetcher: async (input, init) => {
+      requests.push({ input, init });
+      return new Response(null, { status: 200 });
+    },
+  });
+  assert.ok(transport);
+
+  transport.capture(createCaptureCompletedEvent('share', 'created', true, 150, 'android'));
+  await transport.flush();
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].input, 'https://eu.i.posthog.com/batch/');
+  assert.deepEqual(JSON.parse(String(requests[0].init.body)), {
+    api_key: 'phc_test',
+    batch: [
+      {
+        event: 'capture_completed',
+        properties: {
+          distinct_id: `ka_${'a'.repeat(32)}`,
+          source: 'share',
+          result: 'created',
+          durable: true,
+          persistence_ms: 150,
+          platform: 'android',
+          $geoip_disable: true,
+          $process_person_profile: false,
+        },
+        timestamp: '2026-07-21T00:00:00.000Z',
+      },
+    ],
+  });
 });

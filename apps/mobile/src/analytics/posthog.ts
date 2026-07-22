@@ -250,25 +250,40 @@ export class PostHogHttpTransport implements AnalyticsTransport {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               api_key: this.apiKey,
-              batch: batch.map(({ event, occurredAt }) => ({
-                event: event.name,
-                properties:
-                  event.name === 'app_open'
-                    ? {
-                        distinct_id: this.installationId,
-                        platform: event.properties.platform,
-                        auth_state: event.properties.auth_state,
-                        $geoip_disable: true,
-                        $process_person_profile: false,
-                      }
-                    : {
-                        distinct_id: this.installationId,
-                        screen: event.properties.screen,
-                        $geoip_disable: true,
-                        $process_person_profile: false,
-                      },
-                timestamp: occurredAt,
-              })),
+              batch: batch.map(({ event, occurredAt }) => {
+                const baseProperties = {
+                  distinct_id: this.installationId,
+                  $geoip_disable: true,
+                  $process_person_profile: false,
+                };
+                let properties: Record<string, unknown>;
+                if (event.name === 'app_open') {
+                  properties = {
+                    ...baseProperties,
+                    platform: event.properties.platform,
+                    auth_state: event.properties.auth_state,
+                  };
+                } else if (event.name === 'screen_viewed') {
+                  properties = {
+                    ...baseProperties,
+                    screen: event.properties.screen,
+                  };
+                } else {
+                  properties = {
+                    ...baseProperties,
+                    source: event.properties.source,
+                    result: event.properties.result,
+                    durable: event.properties.durable,
+                    persistence_ms: event.properties.persistence_ms,
+                    platform: event.properties.platform,
+                  };
+                }
+                return {
+                  event: event.name,
+                  properties,
+                  timestamp: occurredAt,
+                };
+              }),
             }),
             signal: controller.signal,
           });

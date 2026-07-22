@@ -167,6 +167,13 @@ These are "do not break" rules, not just implementation notes.
   intents) were each guessed from user description alone with no way to
   confirm the fix actually addressed what failed.
 
+### Analytics
+
+- Privacy-safe PostHog analytics uses a strict event allowlist and key sanitizer (`src/analytics/sanitize.ts`).
+- New allowlisted events must be defined in the `EVENT_CATALOG` (`src/analytics/events.ts`).
+- The `capture_completed` event measures bookmark save result and durable persistence latency (`persistence_ms`) from share captures without leaking user content or identifiers.
+- Capturing analytics must be fire-and-forget; never await analytics operations or network calls in primary save, dismiss, or navigation paths.
+
 ### Trash And Delete
 
 - User-facing delete moves bookmarks to Trash by setting `deleted_at`.

@@ -73,6 +73,17 @@ jest.mock('@/observability/log-buffer', () => {
   };
 });
 
+const mockCapture = jest.fn();
+const mockFlush = jest.fn(async () => {});
+jest.mock('@/analytics/provider', () => ({
+  useAnalytics: () => ({
+    enabled: true,
+    ready: true,
+    capture: mockCapture,
+    flush: mockFlush,
+  }),
+}));
+
 // Controllable share-intent context: a cold-start share has hasShareIntent
 // true from the very first render, before the durable store has loaded.
 let mockShareIntent: {
@@ -766,6 +777,99 @@ describe('ShareIntentHandler', () => {
     // The confirmation record must be reverted since dismissal failed and the user remains in-app
     const confirm = parsePendingShareConfirm(await fakeRepo.repository.getMeta(SHARE_CONFIRM_PREF_KEY));
     expect(confirm).toBeNull();
+    unmount();
+  });
+
+  it('triggers capture_completed PostHog event on successful save', async () => {
+    mockCapture.mockClear();
+    mockFlush.mockClear();
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/ph-success', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Keepory');
+
+    await waitFor(() => {
+      expect(mockCapture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'capture_completed',
+          properties: expect.objectContaining({
+            source: 'share',
+            result: 'created',
+            durable: true,
+          }),
+        })
+      );
+    });
+    expect(mockFlush).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('triggers capture_completed PostHog event on duplicate save', async () => {
+    mockCapture.mockClear();
+    mockFlush.mockClear();
+    const existingBookmark = makeStoredBookmark({
+      id: 'existing-id',
+      url: 'https://example.com/ph-duplicate',
+    });
+    fakeRepo.__reset([existingBookmark]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/ph-duplicate', text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Already in Keepory');
+
+    await waitFor(() => {
+      expect(mockCapture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'capture_completed',
+          properties: expect.objectContaining({
+            source: 'share',
+            result: 'duplicate',
+            durable: true,
+          }),
+        })
+      );
+    });
+    expect(mockFlush).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('triggers capture_completed PostHog event on invalid save', async () => {
+    mockCapture.mockClear();
+    mockFlush.mockClear();
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: null, text: null },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { unmount } = await renderHandler();
+
+    await waitFor(() => {
+      expect(mockCapture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'capture_completed',
+          properties: expect.objectContaining({
+            source: 'share',
+            result: 'invalid',
+            durable: false,
+            persistence_ms: 0,
+          }),
+        })
+      );
+    });
+    expect(mockFlush).not.toHaveBeenCalled();
     unmount();
   });
 });

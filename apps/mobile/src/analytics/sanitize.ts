@@ -3,6 +3,7 @@ import type {
   AnalyticsEventName,
   AppOpenEvent,
   ScreenViewedEvent,
+  CaptureCompletedEvent,
 } from './events.ts';
 import { EVENT_CATALOG } from './events.ts';
 
@@ -192,17 +193,42 @@ export function sanitizeEventWithReason(input: unknown): SanitizationResult {
       };
     }
 
-    const allowedValues = (catalogEntry as Record<string, ReadonlySet<string>>)[key];
-    if (typeof val !== 'string' || !allowedValues.has(val)) {
-      if (isSensitiveValue(val)) {
+    const validator = (catalogEntry as Record<string, unknown>)[key];
+    if (validator === 'boolean') {
+      if (typeof val !== 'boolean') {
         return {
           event: null,
-          reason: `Value for property "${key}" resembles sensitive data`,
+          reason: `Invalid value "${String(val)}" for property "${key}" in event "${eventName}"`,
         };
       }
+    } else if (validator === 'number') {
+      if (typeof val !== 'number' || !Number.isInteger(val) || val < 0 || val > 10000) {
+        return {
+          event: null,
+          reason: `Invalid value "${String(val)}" for property "${key}" in event "${eventName}"`,
+        };
+      }
+    } else if (
+      validator instanceof Set ||
+      (typeof validator === 'object' && validator !== null && 'has' in validator)
+    ) {
+      const allowedValues = validator as ReadonlySet<unknown>;
+      if (typeof val !== 'string' || !allowedValues.has(val)) {
+        if (isSensitiveValue(val)) {
+          return {
+            event: null,
+            reason: `Value for property "${key}" resembles sensitive data`,
+          };
+        }
+        return {
+          event: null,
+          reason: `Invalid value "${String(val)}" for property "${key}" in event "${eventName}"`,
+        };
+      }
+    } else {
       return {
         event: null,
-        reason: `Invalid value "${String(val)}" for property "${key}" in event "${eventName}"`,
+        reason: `Unknown validator type for property "${key}" in event "${eventName}"`,
       };
     }
 
@@ -218,10 +244,21 @@ export function sanitizeEventWithReason(input: unknown): SanitizationResult {
             auth_state: sanitizedProperties.auth_state,
           }),
         } as AppOpenEvent)
-      : Object.freeze({
+      : eventName === 'screen_viewed'
+      ? Object.freeze({
           name: eventName,
           properties: Object.freeze({ screen: sanitizedProperties.screen }),
-        } as ScreenViewedEvent);
+        } as ScreenViewedEvent)
+      : Object.freeze({
+          name: eventName,
+          properties: Object.freeze({
+            source: sanitizedProperties.source as 'share',
+            result: sanitizedProperties.result as 'created' | 'duplicate' | 'invalid',
+            durable: sanitizedProperties.durable as boolean,
+            persistence_ms: sanitizedProperties.persistence_ms as number,
+            platform: sanitizedProperties.platform as any,
+          }),
+        } as CaptureCompletedEvent);
 
   return { event: cleanEvent, reason: null };
 }
