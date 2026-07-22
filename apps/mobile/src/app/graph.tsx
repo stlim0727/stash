@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -583,6 +583,19 @@ export default function GraphScreen() {
   // handler closures below, which can't see a fresh state value.
   const [viewBoxRect, setViewBoxRect] = useState<ViewBoxRect>(fitViewBoxRect);
   const viewBox = `${viewBoxRect.minX} ${viewBoxRect.minY} ${viewBoxRect.w} ${viewBoxRect.h}`;
+  // Bumped alongside every `setViewBoxRect` call below, and the only dep of
+  // the transform-reset effect (see `transformResetToken` useLayoutEffect
+  // further down) — NOT `viewBoxRect` itself. A `setViewBoxRect(fitViewBoxRect)`
+  // call (recenter/topology-resettle) can pass a value that's already
+  // reference-equal to the current `viewBoxRect` (e.g. recentering before an
+  // in-flight debounced wheel-zoom bake has ever replaced it), which makes
+  // React bail out of that state update — no re-render, so an effect keyed on
+  // `viewBoxRect` would never re-fire and the Animated transform would stay
+  // stuck at its live (non-identity) value while the refs reset underneath it
+  // (review finding on #561). This token always changes, so the effect always
+  // re-fires exactly once per bake.
+  const [transformResetToken, setTransformResetToken] = useState(0);
+  const bumpTransformResetToken = () => setTransformResetToken((v) => v + 1);
   // `bakeViewBox`'s `base` is ALWAYS `fitViewBoxRect` — never the previous
   // bake's output — mirrored into a ref for the memoized panResponder/wheel
   // handler closures below, which can't see a fresh memo value. Baking from
@@ -722,11 +735,7 @@ export default function GraphScreen() {
     }
     wheelBurstStartRef.current = null;
     setViewBoxRect(fitViewBoxRect);
-    translateX.setOffset(0);
-    translateX.setValue(0);
-    translateY.setOffset(0);
-    translateY.setValue(0);
-    scale.setValue(1);
+    bumpTransformResetToken();
     lastScale.current = 1;
     liveScale.current = 1;
     appliedScale.current = 1;
@@ -735,6 +744,26 @@ export default function GraphScreen() {
     panStart.current = { x: 0, y: 0 };
     pinch.current = null;
   }, [fitViewBoxRect]);
+
+  // The Animated transform must reset to identity in the SAME committed
+  // frame as a new baked `viewBoxRect`, not right after the `setViewBoxRect`
+  // call that schedules it: that call is an async React state update, while
+  // `Animated.Value#setValue` applies immediately, so resetting inline (the
+  // old code, here and in settle()/recenter()/the wheel-bake timeout below)
+  // raced the two — for one frame the transform read as identity against
+  // the STILL-OLD viewBox, a visible snap back to the pre-gesture view
+  // before the re-render landed and snapped forward to the real one
+  // (reported as a stutter on Android on release). `useLayoutEffect` fires
+  // after the commit carrying the new `viewBoxRect`, so pairing the reset
+  // here keeps both changes in the same displayed frame. Keyed on
+  // `transformResetToken`, not `viewBoxRect` — see that token's comment above.
+  useLayoutEffect(() => {
+    translateX.setOffset(0);
+    translateX.setValue(0);
+    translateY.setOffset(0);
+    translateY.setValue(0);
+    scale.setValue(1);
+  }, [transformResetToken, translateX, translateY, scale]);
 
   // Per-axis pan bound at a given scale, relative to the FIXED
   // `fitViewBoxRect` baseline (never the current baked `viewBoxRect` — see
@@ -792,9 +821,7 @@ export default function GraphScreen() {
             scale: liveScale.current,
           }),
         );
-        translateX.setValue(0);
-        translateY.setValue(0);
-        scale.setValue(1);
+        bumpTransformResetToken();
         appliedScale.current = liveScale.current;
         gestureStartScaleRef.current = liveScale.current;
         panStart.current = { x: 0, y: 0 };
@@ -995,9 +1022,7 @@ export default function GraphScreen() {
             scale: liveScale.current,
           }),
         );
-        translateX.setValue(0);
-        translateY.setValue(0);
-        scale.setValue(1);
+        bumpTransformResetToken();
       }, WHEEL_SETTLE_DELAY_MS);
     },
     [axisBoundsAt, translateX, translateY, scale],
@@ -1043,13 +1068,9 @@ export default function GraphScreen() {
     }
     wheelBurstStartRef.current = null;
     setViewBoxRect(fitViewBoxRect);
+    bumpTransformResetToken();
     setInteracting(false);
     setNearbyBookmarkLabelIds(new Set());
-    translateX.setOffset(0);
-    translateX.setValue(0);
-    translateY.setOffset(0);
-    translateY.setValue(0);
-    scale.setValue(1);
     lastScale.current = 1;
     liveScale.current = 1;
     appliedScale.current = 1;
