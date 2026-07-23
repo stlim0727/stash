@@ -87,6 +87,7 @@ import {
 } from '@/domain/view-mode';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { trackBreadcrumb } from '@/observability/sentry';
+import { syncFlush } from '@/ui/sync-flush';
 import { useT } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
@@ -501,35 +502,136 @@ export default function InboxScreen() {
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
   const searchRef = useRef<TextInput>(null);
+  // STASH-33/34/35/36 root cause: the list has `keyboardDismissMode="on-drag"`
+  // (below, near the FlatList) so scrolling the results dismisses the
+  // keyboard. Opening search from a collapsed header forces a large relayout
+  // in the same commit as the field mounting and requesting focus — an
+  // incidental drag/scroll landing in that same window (a real finger's
+  // residual movement from the opening tap, or scroll produced by the
+  // header/list reflow itself) can register as a drag-start on the
+  // underlying list and fire that on-drag dismiss milliseconds later. That's
+  // indistinguishable at the JS level from a real blur/keyboardDidHide, so it
+  // hits the exact same auto-close path every report has shown (confirmed:
+  // STASH-37, first report on the build with this fix, showed the field
+  // staying open). No local repro ever reproduced this — every synthetic
+  // interaction tested (mouse clicks, Playwright's touchscreen.tap(),
+  // simulated scroll) is perfectly still, unlike a real device.
+  //
+  // Fix: suppress on-drag dismissal for a short window right after opening
+  // (long enough to absorb incidental drag/scroll from the opening itself,
+  // short enough that a genuine subsequent drag still dismisses the keyboard
+  // normally). Real state, not a ref: clearing it after the window needs to
+  // actually re-render to put `keyboardDismissMode` back to "on-drag" on the
+  // FlatList prop below — a ref write alone wouldn't do that without some
+  // other, unrelated re-render happening to pick it up.
+  const [suppressOnDragDismiss, setSuppressOnDragDismiss] = useState(false);
+  const SUPPRESS_ON_DRAG_DISMISS_MS = 500;
+  // A close-then-reopen within the window left the OLD timer armed, so it
+  // could clear the NEW open's suppression early (a fast enough second open
+  // would inherit however much time was left on the first one, not the full
+  // 500ms) — caught in PR review, Codex. Track it so a fresh open cancels
+  // any still-pending timer before arming its own, and clear it on unmount
+  // too, so no stray setState fires after the component is gone.
+  const suppressOnDragDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (suppressOnDragDismissTimerRef.current !== null) {
+        clearTimeout(suppressOnDragDismissTimerRef.current);
+      }
+    },
+    [],
+  );
   const openSearch = useCallback(() => {
-    // The focus-on-open effect below moves focus into the field once it mounts.
-    setSearchOpen(true);
-    // The search field itself mounts inside the web collapsible wrapper — if
-    // that's currently collapsed, the field would mount off-screen: the hero
-    // icon flips to "close" but there's nothing visible to type into (caught
-    // in PR review). Force it expanded whenever search opens; harmless to
-    // call on native, which doesn't read this state for anything visual.
-    const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
-    headerCollapseRef.current = expanded;
-    setHeaderCollapse(expanded);
+    // Diagnostic trail for the "search icon tap does nothing but the list
+    // scrolls slightly" report: if this breadcrumb is ABSENT for a tap the
+    // user saw happen, the touch never reached JS (swallowed by the list's
+    // scroll responder — the same hit-test class as STASH-7/STASH-8), not a
+    // bug in this function. If it's present but the field still isn't
+    // visible, the reveal-focus effect / collapse-state breadcrumbs below
+    // narrow it further.
+    trackBreadcrumb('search', 'open tap', {
+      scrollY: Math.round(lastScrollYRef.current),
+      collapsedBefore: headerCollapseRef.current.collapsed,
+    });
+    // Flush synchronously and call .focus() right after — inside the tap's
+    // own call stack rather than a later effect. Some mobile browsers only
+    // reliably honor a focus call made synchronously within the originating
+    // gesture; this isn't what fixed STASH-33/34/35/36/37 (that was the
+    // on-drag suppression below), but removing it has never been verified
+    // safe on its own, so it stays as a defensive measure. Harmless on
+    // native (`syncFlush` is a plain passthrough there — see
+    // `ui/sync-flush.native.ts`).
+    syncFlush(() => {
+      setSearchOpen(true);
+      setSuppressOnDragDismiss(true);
+      // The search field itself mounts inside the web collapsible wrapper — if
+      // that's currently collapsed, the field would mount off-screen: the hero
+      // icon flips to "close" but there's nothing visible to type into (caught
+      // in PR review). Force it expanded whenever search opens; harmless to
+      // call on native, which doesn't read this state for anything visual.
+      const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
+      headerCollapseRef.current = expanded;
+      setHeaderCollapse(expanded);
+    });
+    searchRef.current?.focus();
+    // The focus-on-open effect below is the fallback for any mount-order
+    // race the synchronous call above missed.
+    if (suppressOnDragDismissTimerRef.current !== null) {
+      clearTimeout(suppressOnDragDismissTimerRef.current);
+    }
+    suppressOnDragDismissTimerRef.current = setTimeout(() => {
+      suppressOnDragDismissTimerRef.current = null;
+      setSuppressOnDragDismiss(false);
+    }, SUPPRESS_ON_DRAG_DISMISS_MS);
+  }, []);
+  // While search is open, every scroll tick pins the header at
+  // `{ collapsed: false, anchorScrollY: <wherever the user was> }` (see the
+  // scroll listener below). Left as-is once search closes, that anchor
+  // strands wherever the user happened to be: deep in a long list, normal
+  // collapse then needs to scroll DOWN more than collapsibleHeight past it,
+  // which may be impossible near the bottom — the header gets stuck expanded
+  // until a viewMode remount resets it. Recompute fresh from the current
+  // offset instead, same as if the header had just now scrolled to this
+  // position from the top. Shared by every path that can close search — not
+  // just the explicit closeSearch() below, but the empty-blur and native
+  // keyboardDidHide auto-closes too, which set searchOpen false directly
+  // without going through closeSearch (caught in PR review, Codex — the
+  // first version of this fix only covered closeSearch).
+  const restoreHeaderCollapseOnSearchClose = useCallback(() => {
+    const restored = nextHeaderCollapseState(
+      INITIAL_HEADER_COLLAPSE_STATE,
+      lastScrollYRef.current,
+      collapsibleHeightRef.current,
+    );
+    headerCollapseRef.current = restored;
+    if (Platform.OS === 'web') {
+      setHeaderCollapse(restored);
+    }
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
-  // (Telegram-faithful — opening search always starts fresh). Every close path
-  // funnels through here so the invariant "query is non-empty ⇒ search is open"
-  // holds and there's never an orphaned live search behind a hidden field.
+  // (Telegram-faithful — opening search always starts fresh). This is the
+  // EXPLICIT close (the ✕ tap); the empty-blur and native keyboardDidHide
+  // auto-closes below run their own version of the blur/clear steps (they
+  // don't share this function), but both also call
+  // restoreHeaderCollapseOnSearchClose.
   const closeSearch = useCallback(() => {
+    trackBreadcrumb('search', 'close', { scrollY: Math.round(lastScrollYRef.current) });
     clearBlurHide();
     setSearchFocused(false);
     searchRef.current?.blur();
     setQuery('');
     setSearchOpen(false);
-  }, [clearBlurHide]);
+    restoreHeaderCollapseOnSearchClose();
+  }, [clearBlurHide, restoreHeaderCollapseOnSearchClose]);
   // Move focus into the field once it has actually mounted (it only mounts while
   // searchOpen), raising the keyboard + carrying screen-reader focus — the same
   // thing `autoFocus` does, but driven by our open state. Runs after the mount
   // commit (the effect fires once the field is in the tree), so the ref is set.
   useEffect(() => {
     if (searchOpen) {
+      // hasRef=false here would mean the field hadn't mounted yet when this
+      // effect ran (a mount-order race), so .focus() below was a silent no-op.
+      trackBreadcrumb('search', 'focus effect', { hasRef: searchRef.current != null });
       searchRef.current?.focus();
     }
   }, [searchOpen]);
@@ -560,11 +662,12 @@ export default function InboxScreen() {
         // state); a recent-suggestion tap leaves a query so it won't close.
         if (queryRef.current.length === 0) {
           setSearchOpen(false);
+          restoreHeaderCollapseOnSearchClose();
         }
       }, 0);
     });
     return () => sub.remove();
-  }, [clearBlurHide]);
+  }, [clearBlurHide, restoreHeaderCollapseOnSearchClose]);
   // The user's own recent searches (most-recent-first). Local-only: persisted in
   // the meta store as `pref.search.recents`, never enqueued or synced.
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -771,6 +874,11 @@ export default function InboxScreen() {
   // painting over, as the later sibling) the pinned hero.
   const [heroHeight, setHeroHeight] = useState(0);
   const [collapsibleHeight, setCollapsibleHeight] = useState(0);
+  // closeSearch (declared earlier in this component) reads this via the ref,
+  // not the state value directly, so it isn't forced to sit below this
+  // declaration just to list it as a useCallback dependency.
+  const collapsibleHeightRef = useRef(collapsibleHeight);
+  collapsibleHeightRef.current = collapsibleHeight;
   const [headerCollapse, setHeaderCollapse] = useState<HeaderCollapseState>(
     INITIAL_HEADER_COLLAPSE_STATE,
   );
@@ -1250,14 +1358,29 @@ export default function InboxScreen() {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     }
   }
-  // Same one-shot easing for the tap-to-open reflow: opening swaps the sort row
-  // + shelf for the field (the header's height changes), so animate that single
-  // commit instead of letting the top jump. Off the native-driver translateY, so
-  // they don't fight. Native only.
+  // Same one-shot easing for the tap-to-CLOSE reflow only: closing swaps the
+  // field back for the sort row + shelf (the header's height changes again),
+  // so animate that single commit instead of letting the top jump. Off the
+  // header's native-driver translateY, so they don't fight. Native only.
+  //
+  // Deliberately NOT applied to the OPEN transition (searchOpen false→true):
+  // `LayoutAnimation.Presets.easeInEaseOut`'s `create` config fades newly
+  // mounted views in via opacity over its 300ms duration — which is exactly
+  // the search TextInput on this commit. The focus-on-open effect below still
+  // calls `.focus()` immediately and the keyboard still raises right away, but
+  // the field itself (and the sort row fading out under `delete`) is still
+  // animating into place for the next 300ms, so the tap reads as "doesn't
+  // focus right away, just a slight momentary scroll" instead of an instant,
+  // stable focus (confirmed with a spy on `configureNext` — see
+  // `inbox-screen.test.tsx`, "opening search focuses the field immediately,
+  // with no fade-in animation on the newly mounted input"). Leaving the open
+  // transition un-eased matches web, which has no such animation and already
+  // mounts the field solid on the same commit.
   const prevSearchOpen = useRef(searchOpen);
   if (prevSearchOpen.current !== searchOpen) {
+    const wasOpen = prevSearchOpen.current;
     prevSearchOpen.current = searchOpen;
-    if (Platform.OS !== 'web') {
+    if (Platform.OS !== 'web' && wasOpen && !searchOpen) {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     }
   }
@@ -1671,8 +1794,12 @@ export default function InboxScreen() {
         // child, immediately below) stays fixed in place unconditionally; only
         // the inner wrapper further down (the collapsible content) moves. On
         // native the whole cluster still collapses together as one unit,
-        // unchanged.
-        animatedStyle={{ transform: [{ translateY: isWeb ? 0 : headerTranslate }] }}
+        // unchanged — except while search is open: pinned at 0 so the search
+        // field (which lives in this same cluster on native) can't scroll out
+        // from under the user mid-search, matching the web-side guard in the
+        // scroll listener above. `headerTranslate` keeps updating live off
+        // `scrollY` underneath, so un-pinning on close has no jump to correct.
+        animatedStyle={{ transform: [{ translateY: isWeb || searchOpen ? 0 : headerTranslate }] }}
       >
         <View
           onLayout={(event) => setHeroHeight(event.nativeEvent.layout.height)}
@@ -1879,10 +2006,23 @@ export default function InboxScreen() {
               onChangeText={setQuery}
               onFocus={() => {
                 // A re-focus cancels any pending deferred hide from a prior blur.
+                trackBreadcrumb('search', 'field focus');
                 clearBlurHide();
                 setSearchFocused(true);
               }}
               onBlur={() => {
+                // Diagnostic for the "search icon tap does nothing, field never
+                // appears" report: this is the ONLY place besides closeSearch()
+                // that can drop searchOpen back to false, and closeSearch()
+                // already logs its own breadcrumb — so an unexplained close with
+                // no preceding 'close' breadcrumb means THIS path fired instead,
+                // and this line pins down why (an empty query so soon after
+                // opening that focus never stuck is exactly the "opens then
+                // immediately, silently closes itself" symptom).
+                trackBreadcrumb('search', 'field blur', {
+                  queryEmpty: query.length === 0,
+                  scrollY: Math.round(lastScrollYRef.current),
+                });
                 // Defer the hide so a suggestion chip's onPress (which fires after
                 // the native blur) resolves against a still-mounted shelf. A real
                 // dismissal still settles on the next tick.
@@ -1895,7 +2035,9 @@ export default function InboxScreen() {
                   // can read results / refine with the keyboard down (the
                   // existing slimSearchHeader "results, keyboard down" state).
                   if (query.length === 0) {
+                    trackBreadcrumb('search', 'auto-close on empty blur');
                     setSearchOpen(false);
+                    restoreHeaderCollapseOnSearchClose();
                   }
                 }, 0);
               }}
@@ -2110,7 +2252,13 @@ export default function InboxScreen() {
               borderBottomColor: palette.border,
             },
           ]}
-          animatedStyle={{ transform: [{ translateY: filterBarTranslate }] }}
+          // Rides the same shared `headerClamp` as the header (see its
+          // definition above), so while search is open it needs the same pin:
+          // otherwise this bar keeps riding up toward its floor as the results
+          // list scrolls even though the header above it is now pinned at 0,
+          // and ends up sliding under the still-expanded, opaque header —
+          // hiding its own clear action (caught in PR review, Codex).
+          animatedStyle={{ transform: [{ translateY: searchOpen ? 0 : filterBarTranslate }] }}
         >
           <View style={[styles.filterBarInner, { backgroundColor: palette.accentSoft }]}>
             <Ionicons name={scope.icon} size={16} color={palette.accentText} style={styles.filterBarIcon} />
@@ -2135,6 +2283,7 @@ export default function InboxScreen() {
       ) : null}
       <InboxList
         ref={listRef}
+        testID="inbox-list"
         data={gridData}
         keyExtractor={(item) => item.id}
         // Remount when the column count changes: FlatList forbids mutating
@@ -2148,11 +2297,31 @@ export default function InboxScreen() {
           listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
             const y = event.nativeEvent.contentOffset.y;
             lastScrollYRef.current = y;
-            if (isWeb) {
+            // `headerCollapseRef` is tracked on BOTH platforms — not just
+            // web. `setHeaderCollapse` below (the actual React state) still
+            // only drives web's CSS-transform collapsible wrapper; native's
+            // real collapse animation is the separate Animated.diffClamp
+            // `headerTranslate`, untouched here. But native needs SOME
+            // synchronous "is the header currently collapsed" signal too,
+            // for openSearch's focus-defer decision — this ref used to only
+            // update in the web branch, so on the native APK (where
+            // STASH-33/34/35 also reports) it stayed stuck at the initial
+            // `collapsed: false` forever and the defer branch never ran for
+            // the exact case it targets (caught in PR review, Codex).
+            if (searchOpen) {
+              // While the search UI is open, scroll must never collapse it
+              // out from under the user — openSearch forced it expanded on
+              // open, and it should stay that way regardless of how far
+              // they scroll through results, until they explicitly close
+              // search. Keep tracking the anchor (not just freezing it) so
+              // a later close doesn't compare against a stale point and
+              // collapse immediately.
+              headerCollapseRef.current = { collapsed: false, anchorScrollY: y };
+            } else {
               const next = nextHeaderCollapseState(headerCollapseRef.current, y, collapsibleHeight);
               const flipped = next.collapsed !== headerCollapseRef.current.collapsed;
               headerCollapseRef.current = next;
-              if (flipped) {
+              if (isWeb && flipped) {
                 setHeaderCollapse(next);
               }
             }
@@ -2162,7 +2331,13 @@ export default function InboxScreen() {
         // Dragging the results dismisses the keyboard (→ keyboardDidHide drops the
         // focused state and the suggestion shelf). The shelf's own ScrollView owns
         // keyboardShouldPersistTaps for its chips; this list doesn't need it.
-        keyboardDismissMode="on-drag"
+        // Suppressed for a brief window right after opening search
+        // (suppressOnDragDismiss) — see the comment above openSearch,
+        // STASH-33/34/35/36: a real finger's incidental movement from the
+        // SAME tap that opened search can register as a drag-start on this
+        // list and fire an on-drag dismiss milliseconds later, which is
+        // indistinguishable from a real one and closes search right back up.
+        keyboardDismissMode={suppressOnDragDismiss ? 'none' : 'on-drag'}
         // Keep the scrollbar clear of the floating header (and the pinned filter
         // bar when it's showing).
         scrollIndicatorInsets={{ top: scrollInsetTop }}
