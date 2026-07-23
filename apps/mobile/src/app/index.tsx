@@ -284,6 +284,22 @@ const WEB_CARD_GRID_TOP_GAP = Platform.OS === 'web' ? 12 : 4;
 const WEB_CARD_GRID_COLUMN_GAP = 16;
 const LIST_PADDING = 16;
 const CARD_PREVIEW_HEIGHT = Platform.select({ web: 124, default: 132 });
+// Root cause of the reported "desktop browser: tap ✕, the field doesn't
+// close" bug: a mousedown on this button blurs the still-focused search
+// input *before* the click fires. That blur's own deferred empty-query
+// auto-close (see the TextInput's onBlur below) had time to run first
+// whenever there was any real gap between mouse-down and mouse-up (i.e. any
+// actual human click, not a zero-delay synthetic one) — closing the field
+// and flipping this same button back to its "search" icon so the click that
+// followed reopened it instead of closing it. Only reproduced with a real
+// held-then-released click, never with an instant synthetic one, which is
+// why earlier Playwright repros (instant `.click()`) missed it. Web-only:
+// preventing mousedown's default here stops the browser from shifting focus
+// (and thus blurring) at all, so the click's own onPress deterministically
+// decides open vs close. react-native-web's Pressable forwards unrecognized
+// props like this straight to the underlying DOM node.
+const preventMouseDownFocusSteal =
+  Platform.OS === 'web' ? { onMouseDown: (e: { preventDefault: () => void }) => e.preventDefault() } : null;
 const WEB_AMBIENT_BACKGROUND = Platform.OS === 'web'
   ? ({
       backgroundImage:
@@ -1887,6 +1903,7 @@ export default function InboxScreen() {
                 accessibilityState={{ expanded: searchOpen }}
                 hitSlop={8}
                 onPress={() => (searchOpen ? closeSearch() : openSearch())}
+                {...preventMouseDownFocusSteal}
               >
                 <View style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}>
                   <Ionicons name={searchOpen ? 'close' : 'search'} size={20} color={palette.text} />
