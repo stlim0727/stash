@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { FlatList, Linking, Platform, StyleSheet } from 'react-native';
+import { FlatList, LayoutAnimation, Linking, Platform, StyleSheet } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -547,6 +547,46 @@ test('search is tap-to-open: the field is hidden until the magnifier is pressed'
   await waitFor(() => expect(screen.queryByTestId('inbox-search-input')).toBeNull());
   expect(screen.getByText('Newest')).toBeTruthy();
   expect(screen.getByTestId('browse-shelf')).toBeTruthy();
+});
+
+test('opening search focuses the field immediately, with no fade-in animation on the newly mounted input', async () => {
+  // Regression test for a reported bug: tapping the search icon felt like "a
+  // slight momentary scroll" instead of an immediate, stable focus. Root
+  // cause — opening search swaps the sort row for the search field in the
+  // same commit, and that commit was wrapped in
+  // `LayoutAnimation.configureNext(Presets.easeInEaseOut)`. That preset's
+  // `create` config fades every newly mounted native view in via opacity over
+  // 300ms — including the search TextInput itself — so even though `.focus()`
+  // fires immediately, the field is still animating into place while the
+  // header reflows underneath it, reading as a delayed/masked focus. Assert
+  // the OPEN transition does not configure that animation (native only — it's
+  // always a no-op on web), while the CLOSE transition still does (its
+  // fold-away has no competing focus expectation to race against).
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000c9',
+      title: 'Instant focus fixture',
+    }),
+  ]);
+
+  const configureNextSpy = jest.spyOn(LayoutAnimation, 'configureNext');
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Instant focus fixture')).toBeTruthy());
+
+  configureNextSpy.mockClear();
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+
+  // The field mounted without an animated create/delete transition on this
+  // commit, so it's solid (not opacity-fading in) by the time it's focused.
+  expect(configureNextSpy).not.toHaveBeenCalled();
+  await waitFor(() => expect(screen.getByTestId('inbox-search-input')).toBeTruthy());
+
+  // Closing still gets the smoothing — no regression on the fold-away.
+  configureNextSpy.mockClear();
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  await waitFor(() => expect(screen.queryByTestId('inbox-search-input')).toBeNull());
+  expect(configureNextSpy).toHaveBeenCalledWith(LayoutAnimation.Presets.easeInEaseOut);
 });
 
 test('centers the search suggestion shelf on the same rail as the search field on desktop', async () => {

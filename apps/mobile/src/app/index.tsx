@@ -1250,14 +1250,29 @@ export default function InboxScreen() {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     }
   }
-  // Same one-shot easing for the tap-to-open reflow: opening swaps the sort row
-  // + shelf for the field (the header's height changes), so animate that single
-  // commit instead of letting the top jump. Off the native-driver translateY, so
-  // they don't fight. Native only.
+  // Same one-shot easing for the tap-to-CLOSE reflow only: closing swaps the
+  // field back for the sort row + shelf (the header's height changes again),
+  // so animate that single commit instead of letting the top jump. Off the
+  // header's native-driver translateY, so they don't fight. Native only.
+  //
+  // Deliberately NOT applied to the OPEN transition (searchOpen false→true):
+  // `LayoutAnimation.Presets.easeInEaseOut`'s `create` config fades newly
+  // mounted views in via opacity over its 300ms duration — which is exactly
+  // the search TextInput on this commit. The focus-on-open effect below still
+  // calls `.focus()` immediately and the keyboard still raises right away, but
+  // the field itself (and the sort row fading out under `delete`) is still
+  // animating into place for the next 300ms, so the tap reads as "doesn't
+  // focus right away, just a slight momentary scroll" instead of an instant,
+  // stable focus (confirmed with a spy on `configureNext` — see
+  // `inbox-screen.test.tsx`, "opening search focuses the field immediately,
+  // with no fade-in animation on the newly mounted input"). Leaving the open
+  // transition un-eased matches web, which has no such animation and already
+  // mounts the field solid on the same commit.
   const prevSearchOpen = useRef(searchOpen);
   if (prevSearchOpen.current !== searchOpen) {
+    const wasOpen = prevSearchOpen.current;
     prevSearchOpen.current = searchOpen;
-    if (Platform.OS !== 'web') {
+    if (Platform.OS !== 'web' && wasOpen && !searchOpen) {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     }
   }
