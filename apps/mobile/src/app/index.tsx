@@ -520,6 +520,12 @@ export default function InboxScreen() {
   // the imperative focus (and the keyboard/blur churn that comes with it) is
   // deferred, and only in the one condition that's ever actually failed.
   const FOCUS_SETTLE_AFTER_EXPAND_MS = 260;
+  // Set right before scheduling a deferred focus, cleared once it actually
+  // fires (or on close) — the fallback effect below reads this so it doesn't
+  // undo the deferral by focusing immediately on the same `searchOpen` commit
+  // (caught in PR review, Codex — the effect ran regardless of this ref
+  // existing at all in the first version of this fix).
+  const deferredFocusPendingRef = useRef(false);
   const openSearch = useCallback(() => {
     // Diagnostic trail for the "search icon tap does nothing but the list
     // scrolls slightly" report: if this breadcrumb is ABSENT for a tap the
@@ -551,7 +557,11 @@ export default function InboxScreen() {
     });
     if (wasCollapsed) {
       trackBreadcrumb('search', 'deferring focus for header-expand settle');
-      setTimeout(() => searchRef.current?.focus(), FOCUS_SETTLE_AFTER_EXPAND_MS);
+      deferredFocusPendingRef.current = true;
+      setTimeout(() => {
+        deferredFocusPendingRef.current = false;
+        searchRef.current?.focus();
+      }, FOCUS_SETTLE_AFTER_EXPAND_MS);
     } else {
       searchRef.current?.focus();
     }
@@ -573,7 +583,7 @@ export default function InboxScreen() {
   // thing `autoFocus` does, but driven by our open state. Runs after the mount
   // commit (the effect fires once the field is in the tree), so the ref is set.
   useEffect(() => {
-    if (searchOpen) {
+    if (searchOpen && !deferredFocusPendingRef.current) {
       // hasRef=false here would mean the field hadn't mounted yet when this
       // effect ran (a mount-order race), so .focus() below was a silent no-op.
       trackBreadcrumb('search', 'focus effect', { hasRef: searchRef.current != null });
@@ -2234,23 +2244,32 @@ export default function InboxScreen() {
           listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
             const y = event.nativeEvent.contentOffset.y;
             lastScrollYRef.current = y;
-            if (isWeb) {
-              if (searchOpen) {
-                // While the search UI is open, scroll must never collapse it
-                // out from under the user — openSearch forced it expanded on
-                // open, and it should stay that way regardless of how far
-                // they scroll through results, until they explicitly close
-                // search. Keep tracking the anchor (not just freezing it) so
-                // a later close doesn't compare against a stale point and
-                // collapse immediately.
-                headerCollapseRef.current = { collapsed: false, anchorScrollY: y };
-              } else {
-                const next = nextHeaderCollapseState(headerCollapseRef.current, y, collapsibleHeight);
-                const flipped = next.collapsed !== headerCollapseRef.current.collapsed;
-                headerCollapseRef.current = next;
-                if (flipped) {
-                  setHeaderCollapse(next);
-                }
+            // `headerCollapseRef` is tracked on BOTH platforms — not just
+            // web. `setHeaderCollapse` below (the actual React state) still
+            // only drives web's CSS-transform collapsible wrapper; native's
+            // real collapse animation is the separate Animated.diffClamp
+            // `headerTranslate`, untouched here. But native needs SOME
+            // synchronous "is the header currently collapsed" signal too,
+            // for openSearch's focus-defer decision — this ref used to only
+            // update in the web branch, so on the native APK (where
+            // STASH-33/34/35 also reports) it stayed stuck at the initial
+            // `collapsed: false` forever and the defer branch never ran for
+            // the exact case it targets (caught in PR review, Codex).
+            if (searchOpen) {
+              // While the search UI is open, scroll must never collapse it
+              // out from under the user — openSearch forced it expanded on
+              // open, and it should stay that way regardless of how far
+              // they scroll through results, until they explicitly close
+              // search. Keep tracking the anchor (not just freezing it) so
+              // a later close doesn't compare against a stale point and
+              // collapse immediately.
+              headerCollapseRef.current = { collapsed: false, anchorScrollY: y };
+            } else {
+              const next = nextHeaderCollapseState(headerCollapseRef.current, y, collapsibleHeight);
+              const flipped = next.collapsed !== headerCollapseRef.current.collapsed;
+              headerCollapseRef.current = next;
+              if (isWeb && flipped) {
+                setHeaderCollapse(next);
               }
             }
           },
