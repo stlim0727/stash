@@ -158,16 +158,26 @@ interface FacetChip {
 // Glyph for each layout in the view-mode segmented control.
 const VIEW_MODE_ICON: Record<ViewMode, ComponentProps<typeof Ionicons>['name']> = {
   card: 'albums-outline',
-  compact: 'reorder-four-outline',
   list: 'list-outline',
 };
 
 // Translation key for each layout's human label (segmented-control a11y).
 const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   card: 'viewMode.card',
-  compact: 'viewMode.compact',
   list: 'viewMode.list',
 };
+
+/** Extract a clean display label (domain or site name) for the quick-open preview ribbon. */
+function ribbonLabel(item: Bookmark): string {
+  if (item.site_name) return item.site_name;
+  if (!item.url) return '';
+  try {
+    const parsed = new URL(item.url);
+    return parsed.hostname.replace(/^www\./, '');
+  } catch {
+    return item.url;
+  }
+}
 
 // Friendly label + icon for each sort preset, keyed by its serialized form.
 // Phrasing each order as a whole choice ("Newest", "Recently opened") reads
@@ -2401,102 +2411,6 @@ export default function InboxScreen() {
             }
           };
 
-          // Compact, single-line rows trade the preview image and inline meta
-          // chips for density — more bookmarks visible per screen.
-          if (viewMode === 'list') {
-            return (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.listRow,
-                  {
-                    backgroundColor: palette.surfaceElevated,
-                    borderColor: palette.border,
-                    opacity: pressed ? 0.78 : 1,
-                  },
-                ]}
-                onPress={openDetail}
-                onLongPress={() => setMenuItem(item)}
-                // accessible={false} demotes the row to a plain container: a
-                // Pressable is accessible by default, which would otherwise add a
-                // second, noisy a11y target (label inferred from the raw URL +
-                // sibling action text) and collapse the nested controls. With it
-                // off, only the inner title button and the ↗ / … buttons below
-                // are focusable.
-                accessible={false}
-              >
-                <ItemIcon item={item} compact testID="inbox-list-monogram" />
-                {/* The title/body is the accessible "open details" button; the
-                    row container above is accessible={false} so the nested ↗ / …
-                    buttons remain independently focusable. */}
-                <Pressable
-                  style={styles.listText}
-                  accessibilityRole="button"
-                  accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
-                  accessibilityHint={t('inbox.openBookmarkHint')}
-                  onPress={openDetail}
-                  onLongPress={() => setMenuItem(item)}
-                >
-                  <HighlightedText
-                    testID="inbox-list-title"
-                    style={[
-                      styles.listTitle,
-                      {
-                        color: isTitleDerived(item) ? palette.textSecondary : palette.text,
-                        fontWeight: isTitleDerived(item) ? WEB_MEDIUM_WEIGHT : WEB_SEMIBOLD_WEIGHT,
-                      },
-                    ]}
-                    numberOfLines={1}
-                    text={displayTitle(item) ?? t('common.untitled')}
-                    query={highlightQuery}
-                    highlightStyle={highlightStyle}
-                  />
-                  {item.url ? (
-                    <HighlightedText
-                      style={[styles.listUrl, { color: palette.textSecondary }]}
-                      numberOfLines={1}
-                      text={item.url}
-                      query={highlightQuery}
-                      highlightStyle={highlightStyle}
-                    />
-                  ) : null}
-                </Pressable>
-                {suggestionCount > 0 ? (
-                  <View
-                    accessibilityLabel={t('inbox.aiSuggestionsA11y', { count: suggestionCount })}
-                    style={[styles.suggestBadge, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
-                  >
-                    <Text style={[styles.suggestBadgeLabel, { color: palette.accentText }]}>
-                      ✨ {suggestionCount}
-                    </Text>
-                  </View>
-                ) : null}
-                {/* Explicit overflow so the move/share/trash actions aren't
-                    hidden behind a long-press only — the sole reach for a
-                    note/image row that has no ↗ open button. */}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={t('inbox.moreActions')}
-                  hitSlop={8}
-                  style={styles.moreButton}
-                  onPress={() => setMenuItem(item)}
-                >
-                  <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
-                </Pressable>
-                {item.url ? (
-                  <Pressable
-                    accessibilityRole="link"
-                    accessibilityLabel={t('common.openLink')}
-                    hitSlop={8}
-                    style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
-                    onPress={openLink}
-                  >
-                    <Text style={[styles.cardOpenLabel, { color: palette.accentText }]}>↗</Text>
-                  </Pressable>
-                ) : null}
-              </Pressable>
-            );
-          }
-
           // In search mode, make sure a tag that the query matched is among the
           // shown tags — otherwise a result matched via a 4th+ tag looks random.
           // Promote matching tags to the front, then take the first three.
@@ -2512,20 +2426,11 @@ export default function InboxScreen() {
             ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
           const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
-          // Surface the site name only when it's the reason this result matched
-          // (generated site metadata, kept visually distinct from the user-
-          // authored chips above so we never blur the two). When the match came
-          // from the title or a tag, that's already explained — an unexplained
-          // site chip would just be noise competing with the user's own fields.
           const showSiteChip = searching && valueMatchesTerms(item.site_name, searchTerms);
 
-          // Compact sits between cards and the dense list: it keeps the card's
-          // thumbnail (a real visual cue) but at list density — a small leading
-          // image plus one collapsed meta line, so more bookmarks fit per screen
-          // without losing "which one was this?" recognition. The preview image
-          // is generated metadata, so it's purely a thumbnail; the title/URL/meta
-          // beside it stay the user-vs-generated split the cards already draw.
-          if (viewMode === 'compact') {
+          // List density view mode: compact row layout featuring thumbnail image
+          // with quick-open badge, title/url/tags in middle, and overflow menu.
+          if (viewMode === 'list') {
             const thumbUri = item.local_image_uri ?? item.preview_image_url ?? null;
             const compactMeta = metaParts.join('  ·  ');
             return (
@@ -2541,20 +2446,30 @@ export default function InboxScreen() {
                 ]}
                 onPress={openDetail}
                 onLongPress={() => setMenuItem(item)}
-                // See the list branch: keep the row a plain container so the
-                // nested title button and ↗ / … controls stay independently
-                // focusable instead of being swallowed by a noisy row target.
                 accessible={false}
               >
-                {thumbUri ? (
-                  <Image
-                    testID="inbox-compact-thumb"
-                    source={{ uri: thumbUri }}
-                    style={[styles.compactThumb, { backgroundColor: palette.mutedSurface }]}
-                  />
-                ) : (
-                  <ItemIcon item={item} testID="inbox-compact-monogram" />
-                )}
+                <Pressable
+                  accessibilityRole={item.url ? 'link' : 'button'}
+                  accessibilityLabel={item.url ? t('common.openLink') : (accessibilityTitle(item) ?? t('common.untitled'))}
+                  onPress={item.url ? openLink : openDetail}
+                  onLongPress={() => setMenuItem(item)}
+                  style={styles.compactThumbWrap}
+                >
+                  {thumbUri ? (
+                    <Image
+                      testID="inbox-compact-thumb"
+                      source={{ uri: thumbUri }}
+                      style={[styles.compactThumb, { backgroundColor: palette.mutedSurface }]}
+                    />
+                  ) : (
+                    <ItemIcon item={item} testID="inbox-list-monogram" />
+                  )}
+                  {item.url ? (
+                    <View style={[styles.thumbMiniBadge, { backgroundColor: palette.accent }]}>
+                      <Ionicons name="open-outline" size={10} color="#ffffff" />
+                    </View>
+                  ) : null}
+                </Pressable>
                 <Pressable
                   style={styles.listText}
                   accessibilityRole="button"
@@ -2564,7 +2479,7 @@ export default function InboxScreen() {
                   onLongPress={() => setMenuItem(item)}
                 >
                   <HighlightedText
-                    testID="inbox-compact-title"
+                    testID="inbox-list-title"
                     style={[
                       styles.listTitle,
                       {
@@ -2611,17 +2526,6 @@ export default function InboxScreen() {
                 >
                   <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
                 </Pressable>
-                {item.url ? (
-                  <Pressable
-                    accessibilityRole="link"
-                    accessibilityLabel={t('common.openLink')}
-                    hitSlop={8}
-                    style={[styles.listOpen, { backgroundColor: palette.accentSoft }]}
-                    onPress={openLink}
-                  >
-                    <Text style={[styles.cardOpenLabel, { color: palette.accentText }]}>↗</Text>
-                  </Pressable>
-                ) : null}
               </Pressable>
             );
           }
@@ -2629,20 +2533,32 @@ export default function InboxScreen() {
           const previewUri = item.local_image_uri ?? item.preview_image_url ?? null;
           const cardElement = (
             <Card style={styles.card}>
-              <Pressable
-                onPress={openDetail}
-                onLongPress={() => setMenuItem(item)}
-                // See the list branch: keep the card a plain container so the
-                // nested title button and the sibling … control stay
-                // independently focusable.
+              <View
+                // Container for card layout
                 accessible={false}
               >
                 {previewUri ? (
-                  <Image
+                  <Pressable
                     testID="inbox-card-preview"
-                    source={{ uri: previewUri }}
-                    style={styles.cardPreview}
-                  />
+                    accessibilityRole={item.url ? 'link' : 'button'}
+                    accessibilityLabel={item.url ? t('common.openLink') : (accessibilityTitle(item) ?? t('common.untitled'))}
+                    onPress={item.url ? openLink : openDetail}
+                    onLongPress={() => setMenuItem(item)}
+                    style={styles.cardPreviewContainer}
+                  >
+                    <Image
+                      source={{ uri: previewUri }}
+                      style={styles.cardPreview}
+                    />
+                    {item.url ? (
+                      <View style={styles.previewRibbon}>
+                        <Text style={styles.previewRibbonText} numberOfLines={1}>
+                          {ribbonLabel(item)}
+                        </Text>
+                        <Ionicons name="open-outline" size={12} color="#ffffff" />
+                      </View>
+                    ) : null}
+                  </Pressable>
                 ) : null}
                 <View
                   style={[
@@ -2651,7 +2567,14 @@ export default function InboxScreen() {
                   ]}
                 >
                   <View style={styles.cardTitleRow}>
-                  <ItemIcon item={item} testID="inbox-card-monogram" />
+                  <Pressable
+                    accessibilityRole={item.url ? 'link' : 'button'}
+                    accessibilityLabel={item.url ? t('common.openLink') : (accessibilityTitle(item) ?? t('common.untitled'))}
+                    onPress={item.url ? openLink : openDetail}
+                    onLongPress={() => setMenuItem(item)}
+                  >
+                    <ItemIcon item={item} testID="inbox-card-monogram" />
+                  </Pressable>
                   {/* Only the title is the accessible "open details" button so
                       the sibling … overflow button stays independently
                       focusable; the whole card remains tappable visually. */}
@@ -2709,24 +2632,6 @@ export default function InboxScreen() {
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />
-                    <Pressable
-                      accessibilityRole="link"
-                      accessibilityLabel={t('common.openLink')}
-                      hitSlop={12}
-                      style={[
-                        styles.cardUrlOpen,
-                        Platform.OS === 'web'
-                          ? { backgroundColor: palette.surface, borderColor: palette.border }
-                          : { backgroundColor: palette.accentSoft },
-                      ]}
-                      onPress={openLink}
-                    >
-                      {Platform.OS === 'web' ? (
-                        <Ionicons name="open-outline" size={13} color={palette.textSecondary} />
-                      ) : (
-                        <Text style={[styles.cardOpenLabel, { color: palette.accentText }]}>↗</Text>
-                      )}
-                    </Pressable>
                   </View>
                 ) : null}
                 {visibleMetaParts.length > 0 ? (
@@ -2776,7 +2681,7 @@ export default function InboxScreen() {
                     <Text style={[styles.cardStatus, { color: palette.accent }]}>{status}</Text>
                   ) : null}
                 </View>
-              </Pressable>
+              </View>
             </Card>
           );
           // In a multi-column grid each cell must claim its column width (flex:
@@ -3204,6 +3109,21 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 12,
   },
+  compactThumbWrap: {
+    position: 'relative',
+  },
+  thumbMiniBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    borderRadius: 999,
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+  },
   compactMeta: {
     fontSize: 12,
     fontWeight: WEB_MEDIUM_WEIGHT,
@@ -3234,9 +3154,34 @@ const styles = StyleSheet.create({
   cardMoreButton: {
     marginLeft: 'auto',
   },
+  cardPreviewContainer: {
+    position: 'relative',
+    width: '100%',
+    height: CARD_PREVIEW_HEIGHT,
+  },
   cardPreview: {
     width: '100%',
     height: CARD_PREVIEW_HEIGHT,
+  },
+  previewRibbon: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  previewRibbonText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
+    maxWidth: 140,
   },
   cardBody: {
     padding: 16,

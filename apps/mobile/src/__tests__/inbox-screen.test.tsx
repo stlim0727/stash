@@ -894,24 +894,15 @@ test('the view segmented control switches between card and list layouts', async 
 
   await fireEvent.press(screen.getByTestId('inbox-view-list'));
 
-  // Selecting List renders the same bookmark as a compact list row.
+  // Selecting List renders the same bookmark as a list row.
   await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
   expect(screen.queryByTestId('inbox-card-title')).toBeNull();
-  expect(screen.getByText('Local-first software')).toBeTruthy();
-
-  // Selecting Compact renders the same bookmark as a compact row (its own title
-  // testID), distinct from both the card and the dense list.
-  await fireEvent.press(screen.getByTestId('inbox-view-compact'));
-  await waitFor(() => expect(screen.getByTestId('inbox-compact-title')).toBeTruthy());
-  expect(screen.queryByTestId('inbox-card-title')).toBeNull();
-  expect(screen.queryByTestId('inbox-list-title')).toBeNull();
   expect(screen.getByText('Local-first software')).toBeTruthy();
 
   // Selecting Cards again returns to the card layout.
   await fireEvent.press(screen.getByTestId('inbox-view-card'));
   await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
-  expect(screen.queryByTestId('inbox-compact-title')).toBeNull();
 });
 
 test('web opens bookmark detail inline instead of pushing the detail route', async () => {
@@ -1126,7 +1117,7 @@ test('selecting the All chip also strips the URL facet params (STASH-T, all rese
   });
 });
 
-test('the layout segment offers Cards, Compact and List (no Tag-cloud option)', async () => {
+test('the layout segment offers Cards and List (no Tag-cloud option)', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000a1', title: 'Kimchi jjigae' }),
   ]);
@@ -1134,11 +1125,10 @@ test('the layout segment offers Cards, Compact and List (no Tag-cloud option)', 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Kimchi jjigae')).toBeTruthy());
 
-  // The segment renders exactly the three item layouts; the cloud moved to its
-  // own Browse-by-tag toggle.
+  // The segment renders exactly the two item layouts.
   expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
-  expect(screen.getByTestId('inbox-view-compact')).toBeTruthy();
   expect(screen.getByTestId('inbox-view-list')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-view-compact')).toBeNull();
   expect(screen.queryByTestId('inbox-view-cloud')).toBeNull();
   const browseToggle = screen.getByTestId('inbox-browse-tags-toggle');
   expect(browseToggle).toBeTruthy();
