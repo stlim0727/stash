@@ -502,26 +502,30 @@ export default function InboxScreen() {
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
   const searchRef = useRef<TextInput>(null);
-  // STASH-33/34/35: two earlier theories (WebKit async-focus, then a
-  // spurious-blur grace-window retry) both turned out wrong — the bug repros
-  // on Android (Brave AND the native APK, not just web), and the grace-window
-  // retry broke two legitimate fast-blur-to-close behaviors that tests
-  // already covered (Android Back-button dismiss; a plain quick blur), since
-  // there's no way to tell a "real" instant blur from a "spurious" one by
-  // timing alone. Every report DOES share one concrete, 100%-consistent
-  // precondition: `collapsedBefore: true` — the header was fully collapsed,
-  // so opening search forces it to fully expand in the exact same commit as
-  // the field mounting and requesting focus/keyboard. The bug never once
-  // reported with the header already expanded. So: only when coming from
-  // collapsed, ALSO nudge focus again after that expand has had a beat to
-  // settle — on top of, not instead of, the immediate synchronous call
-  // below, since mobile browsers only reliably honor a *first* programmatic
-  // focus while still inside the tap's own call stack (why `syncFlush`
-  // exists at all — caught in PR review, Codex: an earlier version of this
-  // fix deferred the ONLY focus call on web too, which would have broken
-  // that). The deferred nudge is what recovers focus if Android's
-  // keyboard/resize handling knocks the immediate one away.
-  const FOCUS_SETTLE_AFTER_EXPAND_MS = 260;
+  // STASH-33/34/35/36: three earlier theories all turned out wrong, each
+  // disproven by the NEXT report's breadcrumbs rather than reasoning alone —
+  // see the git history on this block for what didn't work and why. STASH-36
+  // (build 7e6e43b, which included a "focus immediately, ALSO nudge again at
+  // +260ms" fix) was the one that finally showed WHY nudging can't work at
+  // all: `field blur` → `auto-close on empty blur` fires ~5-40ms after
+  // `field focus`, every time — the auto-close already happens LONG before
+  // any deferred nudge would ever get a chance to fire. A later re-focus
+  // can't out-run a close that's already happened.
+  //
+  // So: every report shares `collapsedBefore: true` (the header was fully
+  // collapsed, forcing a full expand in the same commit as the field
+  // mounting), and on WEB that expand isn't instant — the collapsible
+  // wrapper below animates via a real CSS `transition: transform 200ms`.
+  // Calling `.focus()` while that transition is still in flight is a known
+  // class of Android/Chromium bug: the keyboard-driven viewport resize races
+  // the ongoing transform transition and the browser silently drops the
+  // focus it just granted. Fix: suppress that one transition (snap the
+  // header open instantly instead of sliding it) specifically for a
+  // collapsed-state open, so there's nothing in flight for a synchronous
+  // focus to race against. No delay needed — focus stays immediate on every
+  // open, satisfying the same synchronous-gesture requirement `syncFlush`
+  // exists for.
+  const suppressHeaderTransitionRef = useRef(false);
   const openSearch = useCallback(() => {
     // Diagnostic trail for the "search icon tap does nothing but the list
     // scrolls slightly" report: if this breadcrumb is ABSENT for a tap the
@@ -535,6 +539,9 @@ export default function InboxScreen() {
       scrollY: Math.round(lastScrollYRef.current),
       collapsedBefore: wasCollapsed,
     });
+    if (wasCollapsed) {
+      suppressHeaderTransitionRef.current = true;
+    }
     // Flush synchronously and call .focus() right after — inside the tap's
     // own call stack rather than a later effect — since mobile browsers only
     // reliably honor a focus call made synchronously within the originating
@@ -553,8 +560,12 @@ export default function InboxScreen() {
     });
     searchRef.current?.focus();
     if (wasCollapsed) {
-      trackBreadcrumb('search', 'scheduling focus nudge for header-expand settle');
-      setTimeout(() => searchRef.current?.focus(), FOCUS_SETTLE_AFTER_EXPAND_MS);
+      // Let the instant (transition-suppressed) snap-open commit and paint,
+      // then restore the animated transition for future normal scroll-driven
+      // collapse/reveal.
+      requestAnimationFrame(() => {
+        suppressHeaderTransitionRef.current = false;
+      });
     }
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
@@ -1879,7 +1890,15 @@ export default function InboxScreen() {
                           : 0,
                       },
                     ],
-                    transition: 'transform 200ms ease-out',
+                    // Suppressed for one paint when search opens from a
+                    // collapsed header (see the comment above openSearch,
+                    // STASH-33/34/35/36) — an in-flight transform transition
+                    // racing a synchronous focus() request is what silently
+                    // drops focus on Android. Every other collapse/reveal
+                    // (plain scroll) keeps the animated slide.
+                    transition: suppressHeaderTransitionRef.current
+                      ? 'none'
+                      : 'transform 200ms ease-out',
                   },
                 ] as unknown as StyleProp<ViewStyle>)
               : undefined
