@@ -502,6 +502,24 @@ export default function InboxScreen() {
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
   const searchRef = useRef<TextInput>(null);
+  // STASH-33/34/35: two earlier theories (WebKit async-focus, then a
+  // spurious-blur grace-window retry) both turned out wrong — the bug repros
+  // on Android (Brave AND the native APK, not just web), and the grace-window
+  // retry broke two legitimate fast-blur-to-close behaviors that tests
+  // already covered (Android Back-button dismiss; a plain quick blur), since
+  // there's no way to tell a "real" instant blur from a "spurious" one by
+  // timing alone. Every report DOES share one concrete, 100%-consistent
+  // precondition: `collapsedBefore: true` — the header was fully collapsed,
+  // so opening search forces it to fully expand in the exact same commit as
+  // the field mounting and requesting focus/keyboard. The bug never once
+  // reported with the header already expanded. So: only when coming from
+  // collapsed, let that expand settle for one beat before requesting focus —
+  // giving Android's own keyboard/resize handling a chance to react to the
+  // large relayout on its own, instead of racing it against a fresh keyboard
+  // request. The field still mounts and appears immediately either way; only
+  // the imperative focus (and the keyboard/blur churn that comes with it) is
+  // deferred, and only in the one condition that's ever actually failed.
+  const FOCUS_SETTLE_AFTER_EXPAND_MS = 260;
   const openSearch = useCallback(() => {
     // Diagnostic trail for the "search icon tap does nothing but the list
     // scrolls slightly" report: if this breadcrumb is ABSENT for a tap the
@@ -510,21 +528,16 @@ export default function InboxScreen() {
     // bug in this function. If it's present but the field still isn't
     // visible, the reveal-focus effect / collapse-state breadcrumbs below
     // narrow it further.
+    const wasCollapsed = headerCollapseRef.current.collapsed;
     trackBreadcrumb('search', 'open tap', {
       scrollY: Math.round(lastScrollYRef.current),
-      collapsedBefore: headerCollapseRef.current.collapsed,
+      collapsedBefore: wasCollapsed,
     });
-    // STASH-33/34: on web, flush these state updates synchronously (instead of
-    // letting React batch them into the next microtask) and call `.focus()`
-    // immediately after, still inside this same onPress call stack. The
-    // previous effect-based focus (still below, as a fallback) ran a tick
-    // later — outside the original tap's call stack — and the reports' own
-    // breadcrumbs showed the field DID receive a real DOM focus event every
-    // time, then silently blurred ~30-60ms later with no scroll and no other
-    // state change in between: exactly the signature of a browser (WebKit in
-    // particular) deciding a focus queued into a later effect wasn't really
-    // user-initiated and revoking it. Native has no such constraint —
-    // `syncFlush` is a plain passthrough there (see `ui/sync-flush.native.ts`).
+    // Flush synchronously and call .focus() right after — inside the tap's
+    // own call stack rather than a later effect — as a general good practice
+    // for keeping focus association tight; kept from the earlier WebKit
+    // theory even though it wasn't the fix, since it's harmless on native
+    // (`syncFlush` is a plain passthrough there — see `ui/sync-flush.native.ts`).
     syncFlush(() => {
       setSearchOpen(true);
       // The search field itself mounts inside the web collapsible wrapper — if
@@ -536,7 +549,12 @@ export default function InboxScreen() {
       headerCollapseRef.current = expanded;
       setHeaderCollapse(expanded);
     });
-    searchRef.current?.focus();
+    if (wasCollapsed) {
+      trackBreadcrumb('search', 'deferring focus for header-expand settle');
+      setTimeout(() => searchRef.current?.focus(), FOCUS_SETTLE_AFTER_EXPAND_MS);
+    } else {
+      searchRef.current?.focus();
+    }
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
   // (Telegram-faithful — opening search always starts fresh). Every close path
