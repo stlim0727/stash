@@ -2800,14 +2800,18 @@ export default function InboxScreen() {
                   ]}
                 >
                   <View style={styles.cardTitleRow}>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
-                      onPress={openDetail}
-                      onLongPress={() => setMenuItem(item)}
-                    >
+                    {!previewUri && item.url ? (
+                      <Pressable
+                        accessibilityRole="link"
+                        accessibilityLabel={t('common.openLink')}
+                        onPress={openLink}
+                        onLongPress={() => setMenuItem(item)}
+                      >
+                        <ItemIcon item={item} testID="inbox-card-monogram" />
+                      </Pressable>
+                    ) : (
                       <ItemIcon item={item} testID="inbox-card-monogram" />
-                    </Pressable>
+                    )}
                   {/* Only the title is the accessible "open details" button so
                       the sibling … overflow button stays independently
                       focusable; the whole card remains tappable visually. */}
