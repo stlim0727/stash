@@ -87,6 +87,7 @@ import {
 } from '@/domain/view-mode';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { trackBreadcrumb } from '@/observability/sentry';
+import { syncFlush } from '@/ui/sync-flush';
 import { useT } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
@@ -552,18 +553,29 @@ export default function InboxScreen() {
       scrollY: Math.round(lastScrollYRef.current),
       collapsedBefore: headerCollapseRef.current.collapsed,
     });
-    setSearchOpen(true);
-    setSuppressOnDragDismiss(true);
-    // The search field itself mounts inside the web collapsible wrapper — if
-    // that's currently collapsed, the field would mount off-screen: the hero
-    // icon flips to "close" but there's nothing visible to type into (caught
-    // in PR review). Force it expanded whenever search opens; harmless to
-    // call on native, which doesn't read this state for anything visual.
-    const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
-    headerCollapseRef.current = expanded;
-    setHeaderCollapse(expanded);
-    // The focus-on-open effect below moves focus into the field once it
-    // mounts.
+    // Flush synchronously and call .focus() right after — inside the tap's
+    // own call stack rather than a later effect. Some mobile browsers only
+    // reliably honor a focus call made synchronously within the originating
+    // gesture; this isn't what fixed STASH-33/34/35/36/37 (that was the
+    // on-drag suppression below), but removing it has never been verified
+    // safe on its own, so it stays as a defensive measure. Harmless on
+    // native (`syncFlush` is a plain passthrough there — see
+    // `ui/sync-flush.native.ts`).
+    syncFlush(() => {
+      setSearchOpen(true);
+      setSuppressOnDragDismiss(true);
+      // The search field itself mounts inside the web collapsible wrapper — if
+      // that's currently collapsed, the field would mount off-screen: the hero
+      // icon flips to "close" but there's nothing visible to type into (caught
+      // in PR review). Force it expanded whenever search opens; harmless to
+      // call on native, which doesn't read this state for anything visual.
+      const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
+      headerCollapseRef.current = expanded;
+      setHeaderCollapse(expanded);
+    });
+    searchRef.current?.focus();
+    // The focus-on-open effect below is the fallback for any mount-order
+    // race the synchronous call above missed.
     if (suppressOnDragDismissTimerRef.current !== null) {
       clearTimeout(suppressOnDragDismissTimerRef.current);
     }
@@ -583,6 +595,24 @@ export default function InboxScreen() {
     searchRef.current?.blur();
     setQuery('');
     setSearchOpen(false);
+    // While search was open, every scroll tick pinned the header at
+    // `{ collapsed: false, anchorScrollY: <wherever the user was> }` (see the
+    // scroll listener below). Left as-is, closing deep in a long list strands
+    // that anchor far from the top: normal collapse now needs to scroll DOWN
+    // more than collapsibleHeight past it, which may be impossible near the
+    // bottom of the list — the header gets stuck expanded until a viewMode
+    // remount resets it (caught in PR review, Codex). Recompute fresh from
+    // the current offset instead of leaving the pinned anchor behind, same
+    // as if the header had just now scrolled to this position from the top.
+    const restored = nextHeaderCollapseState(
+      INITIAL_HEADER_COLLAPSE_STATE,
+      lastScrollYRef.current,
+      collapsibleHeightRef.current,
+    );
+    headerCollapseRef.current = restored;
+    if (Platform.OS === 'web') {
+      setHeaderCollapse(restored);
+    }
   }, [clearBlurHide]);
   // Move focus into the field once it has actually mounted (it only mounts while
   // searchOpen), raising the keyboard + carrying screen-reader focus — the same
@@ -834,6 +864,11 @@ export default function InboxScreen() {
   // painting over, as the later sibling) the pinned hero.
   const [heroHeight, setHeroHeight] = useState(0);
   const [collapsibleHeight, setCollapsibleHeight] = useState(0);
+  // closeSearch (declared earlier in this component) reads this via the ref,
+  // not the state value directly, so it isn't forced to sit below this
+  // declaration just to list it as a useCallback dependency.
+  const collapsibleHeightRef = useRef(collapsibleHeight);
+  collapsibleHeightRef.current = collapsibleHeight;
   const [headerCollapse, setHeaderCollapse] = useState<HeaderCollapseState>(
     INITIAL_HEADER_COLLAPSE_STATE,
   );
