@@ -513,19 +513,15 @@ export default function InboxScreen() {
   // so opening search forces it to fully expand in the exact same commit as
   // the field mounting and requesting focus/keyboard. The bug never once
   // reported with the header already expanded. So: only when coming from
-  // collapsed, let that expand settle for one beat before requesting focus —
-  // giving Android's own keyboard/resize handling a chance to react to the
-  // large relayout on its own, instead of racing it against a fresh keyboard
-  // request. The field still mounts and appears immediately either way; only
-  // the imperative focus (and the keyboard/blur churn that comes with it) is
-  // deferred, and only in the one condition that's ever actually failed.
+  // collapsed, ALSO nudge focus again after that expand has had a beat to
+  // settle — on top of, not instead of, the immediate synchronous call
+  // below, since mobile browsers only reliably honor a *first* programmatic
+  // focus while still inside the tap's own call stack (why `syncFlush`
+  // exists at all — caught in PR review, Codex: an earlier version of this
+  // fix deferred the ONLY focus call on web too, which would have broken
+  // that). The deferred nudge is what recovers focus if Android's
+  // keyboard/resize handling knocks the immediate one away.
   const FOCUS_SETTLE_AFTER_EXPAND_MS = 260;
-  // Set right before scheduling a deferred focus, cleared once it actually
-  // fires (or on close) — the fallback effect below reads this so it doesn't
-  // undo the deferral by focusing immediately on the same `searchOpen` commit
-  // (caught in PR review, Codex — the effect ran regardless of this ref
-  // existing at all in the first version of this fix).
-  const deferredFocusPendingRef = useRef(false);
   const openSearch = useCallback(() => {
     // Diagnostic trail for the "search icon tap does nothing but the list
     // scrolls slightly" report: if this breadcrumb is ABSENT for a tap the
@@ -540,10 +536,10 @@ export default function InboxScreen() {
       collapsedBefore: wasCollapsed,
     });
     // Flush synchronously and call .focus() right after — inside the tap's
-    // own call stack rather than a later effect — as a general good practice
-    // for keeping focus association tight; kept from the earlier WebKit
-    // theory even though it wasn't the fix, since it's harmless on native
-    // (`syncFlush` is a plain passthrough there — see `ui/sync-flush.native.ts`).
+    // own call stack rather than a later effect — since mobile browsers only
+    // reliably honor a focus call made synchronously within the originating
+    // gesture. Harmless on native (`syncFlush` is a plain passthrough there
+    // — see `ui/sync-flush.native.ts`).
     syncFlush(() => {
       setSearchOpen(true);
       // The search field itself mounts inside the web collapsible wrapper — if
@@ -555,15 +551,10 @@ export default function InboxScreen() {
       headerCollapseRef.current = expanded;
       setHeaderCollapse(expanded);
     });
+    searchRef.current?.focus();
     if (wasCollapsed) {
-      trackBreadcrumb('search', 'deferring focus for header-expand settle');
-      deferredFocusPendingRef.current = true;
-      setTimeout(() => {
-        deferredFocusPendingRef.current = false;
-        searchRef.current?.focus();
-      }, FOCUS_SETTLE_AFTER_EXPAND_MS);
-    } else {
-      searchRef.current?.focus();
+      trackBreadcrumb('search', 'scheduling focus nudge for header-expand settle');
+      setTimeout(() => searchRef.current?.focus(), FOCUS_SETTLE_AFTER_EXPAND_MS);
     }
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
@@ -583,7 +574,7 @@ export default function InboxScreen() {
   // thing `autoFocus` does, but driven by our open state. Runs after the mount
   // commit (the effect fires once the field is in the tree), so the ref is set.
   useEffect(() => {
-    if (searchOpen && !deferredFocusPendingRef.current) {
+    if (searchOpen) {
       // hasRef=false here would mean the field hadn't mounted yet when this
       // effect ran (a mount-order race), so .focus() below was a silent no-op.
       trackBreadcrumb('search', 'focus effect', { hasRef: searchRef.current != null });
