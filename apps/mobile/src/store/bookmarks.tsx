@@ -2441,6 +2441,30 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Return a sentinel the Detail screen (still) localizes into a calm
         // message pending its own follow-up UI change.
         if (error instanceof SupabaseRequestError && error.status === 429) {
+          // STASH #578 Phase 2: instead of just returning the rate-limited
+          // sentinel, enqueue this bookmark for the background overflow
+          // worker to retry later. Fire-and-forget in the strictest sense —
+          // wrapped in its own try/catch (not just a promise .catch(), since a
+          // missing session or a synchronous throw must not escape either):
+          // an enqueue failure must never change what the caller sees for
+          // this 429, and is never retried here.
+          if (auth.session) {
+            try {
+              createSyncApi(auth.session)
+                .enqueuePendingEnrichment(bookmarkId, localeRef.current ?? undefined)
+                .catch((enqueueError: unknown) => {
+                  recordLog(
+                    'warn',
+                    `pending_ai_enrichment enqueue failed: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)}`,
+                  );
+                });
+            } catch (enqueueError) {
+              recordLog(
+                'warn',
+                `pending_ai_enrichment enqueue threw: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)}`,
+              );
+            }
+          }
           return AI_RATE_LIMITED;
         }
         // Anything else is a genuine failure the user can't act on (e.g. the
@@ -3012,11 +3036,30 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             enrichmentsRef.current.map((enrichment) => [enrichment.id, enrichment] as const),
           );
           let anyRetryCleared = false;
+          // STASH #578 Phase 2: extend the burst-completion toast (STASH #574
+          // Phase 1, `AI_ENRICHMENT_BURST_TOAST_MIN`) to also cover
+          // enrichments this sync pull delivered that this device didn't
+          // itself just dispatch — the background worker's (or another
+          // device's) output. Count only rows genuinely new/updated to this
+          // device (isNewOrNewer below) AND not currently attributed to this
+          // device's own direct-dispatch loop (aiEnriching.current): a
+          // direct dispatch's own successful response already lands in
+          // enrichmentsRef with the SAME updated_at before this pull can ever
+          // see it again (the watermark overlap re-fetches it, but isNewOrNewer
+          // is then false), so this in-flight check only matters for the rare
+          // race where a pull observes a row before this device's own
+          // in-flight request settles — without it, that one row would get
+          // double-counted (once here, once by the direct-dispatch settle
+          // handler below).
+          let workerDrivenCount = 0;
           for (const enrichment of result.enrichments) {
             const known = knownById.get(enrichment.id);
             const isNewOrNewer = !known || enrichment.updated_at > known.updated_at;
             if (isNewOrNewer) {
               noteUnseenSuggestions(enrichment);
+              if (!aiEnriching.current.has(enrichment.bookmark_id)) {
+                workerDrivenCount += 1;
+              }
             }
             // This bookmark now has an enrichment row through some path other
             // than this device's own requestAiEnrichment call — a server-side
@@ -3037,6 +3080,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           }
           if (anyRetryCleared) {
             syncAiRetryIds();
+          }
+          // Second producer into the same consumer state as the direct-dispatch
+          // drain loop's toast (below): same threshold, same shape, just a
+          // different source of "N bookmarks summarized & tagged" completions.
+          if (workerDrivenCount >= AI_ENRICHMENT_BURST_TOAST_MIN) {
+            aiBurstTokenSeq.current += 1;
+            setAiEnrichmentBurstToast({ count: workerDrivenCount, token: aiBurstTokenSeq.current });
           }
           setEnrichments((current) =>
             mergeById(

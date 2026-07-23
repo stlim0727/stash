@@ -109,8 +109,18 @@ jest.mock('@/api/bookmarks', () => {
   // Pull's enrichment feed. Spied so a test can simulate another device
   // refreshing AI suggestions (a row arriving via pull rather than a local tap).
   const listEnrichmentsUpdatedSince = jest.fn(async () => [] as unknown[]);
+  // STASH #578 Phase 2: enqueue-on-429 overflow path. Spied so a test can
+  // assert it's called (or not) when requestAiEnrichment is rate limited.
+  const enqueuePendingEnrichment = jest.fn(async () => {});
   return {
-    __spies: { requestEnrichment, addTags, listBookmarkIds, createBookmark, listEnrichmentsUpdatedSince },
+    __spies: {
+      requestEnrichment,
+      addTags,
+      listBookmarkIds,
+      createBookmark,
+      listEnrichmentsUpdatedSince,
+      enqueuePendingEnrichment,
+    },
     createBookmarkApi: () => ({
       requestEnrichment,
       addTags,
@@ -121,6 +131,7 @@ jest.mock('@/api/bookmarks', () => {
       listTags: empty,
       listBookmarkTags: empty,
       listCollections: empty,
+      enqueuePendingEnrichment,
     }),
   };
 });
@@ -139,6 +150,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
     listBookmarkIds: jest.Mock;
     createBookmark: jest.Mock;
     listEnrichmentsUpdatedSince: jest.Mock;
+    enqueuePendingEnrichment: jest.Mock;
   };
 };
 
@@ -181,6 +193,7 @@ beforeEach(() => {
   apiMock.__spies.createBookmark.mockClear();
   apiMock.__spies.listEnrichmentsUpdatedSince.mockReset();
   apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValue([]);
+  apiMock.__spies.enqueuePendingEnrichment.mockClear();
 });
 
 test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
@@ -222,6 +235,50 @@ test('requestAiEnrichment surfaces a calm message when rate limited (429)', asyn
 
   expect(error).toBe(AI_RATE_LIMITED);
   expect(store.current!.getEnrichment(SYNCED_ID)).toBeUndefined();
+});
+
+test('a 429 enqueues the bookmark for the background overflow worker (STASH #578)', async () => {
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  await waitFor(() => expect(apiMock.__spies.enqueuePendingEnrichment).toHaveBeenCalledTimes(1));
+  expect(apiMock.__spies.enqueuePendingEnrichment).toHaveBeenCalledWith(SYNCED_ID, 'en');
+});
+
+test('a 429 still surfaces the rate-limited sentinel even if the enqueue call itself fails', async () => {
+  // Fire-and-forget: an enqueue failure must never change what the caller
+  // sees for the original 429, nor throw out of requestAiEnrichment.
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+  apiMock.__spies.enqueuePendingEnrichment.mockRejectedValueOnce(new Error('network down'));
+
+  let error: string | null = 'unset';
+  await act(async () => {
+    error = await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  expect(error).toBe(AI_RATE_LIMITED);
+});
+
+test('a non-429 failure does not enqueue for the overflow worker', async () => {
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new Error('ai-enrich returned 500');
+  });
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  expect(apiMock.__spies.enqueuePendingEnrichment).not.toHaveBeenCalled();
 });
 
 test('requestAiEnrichment forwards the device\'s freshest metadata', async () => {
@@ -1475,4 +1532,133 @@ test('a pull that re-delivers the same already-known enrichment (watermark overl
   expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
   const persisted = JSON.parse(fakeRepo.__meta('ai_suggestion_retry') ?? '{}');
   expect(persisted[SYNCED_ID].attemptCount).toBe(1);
+});
+
+// STASH #578 Phase 2: the background overflow worker delivers its results
+// through the ordinary sync pull (no new polling/realtime), so a pull that
+// brings down 2+ enrichments this device never itself requested should feed
+// the same "N bookmarks summarized & tagged" burst-completion toast that a
+// burst of direct auto-dispatches already triggers (STASH #574 Phase 1).
+const SECOND_SYNCED_ID = '7e64cf1e-0000-4000-8000-000000000002';
+
+test('a sync pull delivering 2+ worker-driven enrichments feeds the burst-completion toast', async () => {
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID }),
+    makeStoredBookmark({ id: SECOND_SYNCED_ID }),
+  ]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(store.current!.aiEnrichmentBurstToast).toBeNull();
+
+  // Neither enrichment came from this device's own direct dispatch (no
+  // requestAiEnrichment call happened for either id) — exactly how the
+  // background worker's output arrives.
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({ id: 'enrich-worker-1', bookmark_id: SYNCED_ID }),
+    makeEnrichment({ id: 'enrich-worker-2', bookmark_id: SECOND_SYNCED_ID }),
+  ]);
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  await waitFor(() => expect(store.current!.getEnrichment(SYNCED_ID)).toBeDefined());
+  expect(store.current!.aiEnrichmentBurstToast).not.toBeNull();
+  expect(store.current!.aiEnrichmentBurstToast?.count).toBe(2);
+});
+
+test('a sync pull delivering only 1 worker-driven enrichment stays silent (below the burst threshold)', async () => {
+  const store = await renderReady();
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({ id: 'enrich-worker-solo', bookmark_id: SYNCED_ID }),
+  ]);
+
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  await waitFor(() => expect(store.current!.getEnrichment(SYNCED_ID)).toBeDefined());
+  expect(store.current!.aiEnrichmentBurstToast).toBeNull();
+});
+
+test('a pull re-delivering an already-known enrichment (watermark overlap) does not double count toward the burst toast', async () => {
+  // Same watermark-overlap scenario as the retry-marker test above: an
+  // unchanged, already-known row must not count as "new" a second time and
+  // spuriously push a lone re-delivery over the burst threshold.
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: SYNCED_ID }), makeStoredBookmark({ id: SECOND_SYNCED_ID })],
+    undefined,
+    [makeEnrichment({ id: 'enrich-known', bookmark_id: SYNCED_ID, updated_at: '2026-06-13T00:00:00.000Z' })],
+  );
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+
+  // The pull re-returns the SAME already-known row (unchanged) alongside one
+  // genuinely new one — only the new one should count, leaving the total (1)
+  // below the burst threshold.
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({ id: 'enrich-known', bookmark_id: SYNCED_ID, updated_at: '2026-06-13T00:00:00.000Z' }),
+    makeEnrichment({ id: 'enrich-worker-new', bookmark_id: SECOND_SYNCED_ID }),
+  ]);
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  await waitFor(() => expect(store.current!.getEnrichment(SECOND_SYNCED_ID)).toBeDefined());
+  expect(store.current!.aiEnrichmentBurstToast).toBeNull();
+});
+
+test('an enrichment pulled while this device has a direct dispatch in flight for it is not double-counted toward the burst toast', async () => {
+  // If this device's own direct-dispatch request for SYNCED_ID is still in
+  // flight when a pull happens to observe its (not-yet-locally-known) row,
+  // that arrival is attributable to the in-flight direct dispatch, not the
+  // background worker — it must not also count here (the direct-dispatch
+  // settle handler owns counting it, once its own request resolves).
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID }),
+    makeStoredBookmark({ id: SECOND_SYNCED_ID }),
+  ]);
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+
+  // Hold the direct requestAiEnrichment call open on a manually-resolved
+  // promise (never a bare `new Promise(() => {})`, so this test can settle it
+  // itself before finishing rather than leaking a permanently-pending
+  // promise) so `aiEnriching` still marks SYNCED_ID as in flight when the pull
+  // below runs.
+  let releaseDirectRequest!: (value: unknown) => void;
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(
+    () => new Promise((resolve) => { releaseDirectRequest = resolve; }),
+  );
+  let inFlight!: Promise<string | null>;
+  await act(async () => {
+    inFlight = store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+  expect(store.current!.isEnriching(SYNCED_ID)).toBe(true);
+
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({ id: 'enrich-inflight', bookmark_id: SYNCED_ID }),
+    makeEnrichment({ id: 'enrich-worker-only', bookmark_id: SECOND_SYNCED_ID }),
+  ]);
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  await waitFor(() => expect(store.current!.getEnrichment(SECOND_SYNCED_ID)).toBeDefined());
+  // Only SECOND_SYNCED_ID's arrival is attributable to the worker — 1 total,
+  // below the burst threshold.
+  expect(store.current!.aiEnrichmentBurstToast).toBeNull();
+
+  // Let the held-open direct request settle so nothing leaks into other tests.
+  await act(async () => {
+    releaseDirectRequest(makeEnrichment({ id: 'enrich-direct-settled', bookmark_id: SYNCED_ID }));
+    await inFlight;
+  });
 });
