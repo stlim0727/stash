@@ -2144,7 +2144,13 @@ export default function InboxScreen() {
               borderBottomColor: palette.border,
             },
           ]}
-          animatedStyle={{ transform: [{ translateY: filterBarTranslate }] }}
+          // Rides the same shared `headerClamp` as the header (see its
+          // definition above), so while search is open it needs the same pin:
+          // otherwise this bar keeps riding up toward its floor as the results
+          // list scrolls even though the header above it is now pinned at 0,
+          // and ends up sliding under the still-expanded, opaque header —
+          // hiding its own clear action (caught in PR review, Codex).
+          animatedStyle={{ transform: [{ translateY: searchOpen ? 0 : filterBarTranslate }] }}
         >
           <View style={[styles.filterBarInner, { backgroundColor: palette.accentSoft }]}>
             <Ionicons name={scope.icon} size={16} color={palette.accentText} style={styles.filterBarIcon} />
