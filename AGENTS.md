@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-19 (Sentry DB sync and Android share intent dismissal).
+Last updated: 2026-07-23 (inbox search open/close saga and graph pan/zoom snap-back fix).
 
 ## Successor Agent Orientation
 
@@ -44,10 +44,11 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
     function separately.
   - Milestone status in `docs/development/milestones.md` is **historical**; the
     app is well past it. Do not infer current state from the milestone list.
-- **In-flight when this was last edited (2026-07-09):** open PRs were #415
-  (Codex theme refresh) and #427 (this handoff docs update). #417, #424, #425,
-  and #426 had merged. Reconcile against the live open-PR list; some may have
-  merged or closed.
+- **In-flight when this was last edited (2026-07-23):** no open PRs. The most
+  recent merges were the inbox search-open/close saga (#566, #567, #569 — see
+  the `domain/header-collapse.ts` Known Traps entry) and a graph view
+  pan/zoom timing fix (#561). Reconcile against the live open-PR list; some
+  may have opened since.
 - **Sentry DB sync (2026-07-18):** Organization `self-463` and project `stash` confirmed. **RULE:** Sentry must always be considered available. If Sentry MCP tools are not configured or fail, you MUST proactively query the Sentry API directly using the `SENTRY_AUTH_TOKEN` from `.env.local` (either by writing a quick Node/curl script or using the local helper `pnpm sentry:issue <id>`). Never rely on local docs to look up active Sentry issues, and do not give up if MCP is down.
 - **The invariants below are load-bearing, not FYI.** "Capture is sacred,"
   user-authored vs generated fields, and "a local cosmetic repair must never bump
@@ -366,6 +367,55 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   file again — the durable fix was modeling the anchor as `diffClamp`'s actual
   invariant (track the running min/max since the last flip), not "the offset
   where the current state began."
+  - Follow-on saga in `app/index.tsx` (STASH-33 through STASH-37, PRs #566/
+    #567/#569 — inbox search open/close on web): the root cause of "tap the
+    search icon, the field opens then immediately closes/never focuses" was
+    the underlying `FlatList`'s `keyboardDismissMode="on-drag"` firing on
+    incidental scroll/drag from the *opening* gesture itself — indistinguishable
+    from a real blur, so the existing (correct) empty-query auto-close fired.
+    Fixed with a short timed suppression window after `openSearch()`, not by
+    guessing at focus/blur timing (two earlier theories — `flushSync` for
+    synchronous focus, and CSS-transition suppression — were tested against
+    real STASH reports and proven insufficient before this one was found).
+  - `openSearch` pins the header expanded for the duration of the search
+    session and must snapshot **every** value the eventual restore depends on
+    — not just the collapse state. PR #566 restored only from
+    `INITIAL_HEADER_COLLAPSE_STATE`, which discarded a reveal already in
+    effect before search opened (closing search collapsed a row the user had
+    legitimately just revealed, PR #569). The fix snapshots the real
+    pre-search `HeaderCollapseState` in `openSearch` and resumes the
+    hysteresis from it on close — and PR #569 itself first shipped without
+    also snapshotting the collapsible wrapper's measured **height** (Codex PR
+    review catch): that height differs between the search-open layout
+    (search input, no sort/browse row) and the normal layout the header
+    reverts to, so restoring against the live (search-open) height compared
+    the pre-search anchor against the wrong threshold for scroll deltas that
+    straddle the two. General lesson: when a UI mode pins/suppresses state and
+    you snapshot-and-restore across it, snapshot the whole computation's
+    inputs together, not just the headline state.
+  - A button whose own icon/meaning toggles based on which element currently
+    has focus (the search open/✕ toggle) needs `onMouseDown` `preventDefault`
+    on web (PR #567) — react-native-web's `Pressable` forwards unrecognized
+    props like `onMouseDown` straight to the host DOM node. Without it, a
+    mousedown on the button blurs the still-focused input *before* the click
+    fires; with any real (non-instant) gap between mouse-down and mouse-up,
+    an empty-query auto-close-on-blur can run first and flip the button back
+    to its other state, so the click that follows does the opposite of what
+    the user pressed. Only reproduced with a real held-then-released click in
+    headless Chromium — an instant synthetic `.click()` never gave the
+    deferred close a chance to run first, which is why it eluded PR #566's
+    own repro.
+- Graph view (`app/graph.tsx`) pan/zoom-release snap-back flash on Android
+  (PR #561): resetting the `Animated` transform to identity right after
+  scheduling a new baked `viewBox` raced React's async state commit against
+  the synchronous `Animated` update, so one frame rendered the reset
+  transform against the still-old `viewBox` — a visible snap back before the
+  re-render landed and snapped forward to the real view. Fixed by deferring
+  the reset to a `useLayoutEffect` keyed on the `viewBoxRect`, so both changes
+  commit in the same frame. A same-reference `setViewBoxRect` call (a
+  same-object bake with nothing new) is a React no-op that won't re-fire an
+  effect keyed on that object — key this class of effect on a monotonic token
+  bumped alongside the state write instead, not the object itself.
 
 ## Future Work
 
