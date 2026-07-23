@@ -43,7 +43,27 @@ import {
   pendingSuggestions,
   reviewedNamesFor,
   reviewedSummaryTokensFor,
+  suggestedFolderTokens,
 } from '@/domain/ai-suggestions';
+import { acceptSuggestionBundle } from '@/domain/suggestion-actions';
+import {
+  AI_SUGGESTIONS_MODE_PREF_KEY,
+  DEFAULT_AI_SUGGESTIONS_MODE,
+  parseAiSuggestionsMode,
+  serializeAiSuggestionsMode,
+  type AiSuggestionsMode,
+} from '@/domain/ai-suggestions-pref';
+import {
+  AI_ENRICHMENT_BURST_TOAST_MIN,
+  AI_ENRICHMENT_DISPATCH_STAGGER_MS,
+  EMPTY_AI_ENRICHMENT_BURST_QUEUE,
+  clearBurstCompletion,
+  dequeueAiEnrichmentDispatch,
+  enqueueAiEnrichmentDispatch,
+  isBurstComplete,
+  recordAiEnrichmentDispatchSettled,
+  type AiEnrichmentBurstQueue,
+} from '@/domain/ai-enrichment-burst';
 import { parseStringSetMap } from '@/domain/string-set-map';
 import type { StringSetMap } from '@/domain/string-set-map';
 import {
@@ -194,6 +214,20 @@ interface BookmarksContextValue {
     bookmarkId: string,
     source?: 'auto' | 'manual',
   ) => Promise<string | null>;
+  /** The user's AI-suggestions mode (STASH #573): 'off' skips the automatic
+   *  enrichment trigger entirely (manual "Suggest with AI" still works),
+   *  'confirm' is today's existing review-badge behavior (the default), and
+   *  'auto_accept' applies high-confidence suggestions with no review step. */
+  aiSuggestionsMode: AiSuggestionsMode;
+  /** Change + durably persist the AI-suggestions mode. */
+  setAiSuggestionsMode: (mode: AiSuggestionsMode) => void;
+  /** Set once a burst of 2+ background auto-enrichments finishes (STASH #574
+   *  Phase 1) — `count` is how many settled; `token` is a monotonic id so two
+   *  consecutive bursts with the same count both surface a toast. Null
+   *  otherwise (including for a single, routine completion — not a "burst"). */
+  aiEnrichmentBurstToast: { count: number; token: number } | null;
+  /** Clear `aiEnrichmentBurstToast` once its toast has been shown. */
+  dismissAiEnrichmentBurstToast: () => void;
   /** Re-fetch generated page preview metadata for a URL bookmark. */
   refreshBookmarkPreview: (bookmarkId: string) => Promise<string | null>;
   /** True while a user-initiated preview refresh is in flight for this bookmark. */
@@ -666,6 +700,57 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ) => Promise<string | null>)
     | null
   >(null);
+  // Set once `autoAcceptEnrichment` is defined below (it needs
+  // acceptSuggestedTags/assignCollection/createCollection, all declared after
+  // requestAiEnrichment) — mirrors the requestAiEnrichmentRef pattern just
+  // above for the same forward-reference reason.
+  const autoAcceptEnrichmentRef = useRef<
+    ((bookmarkId: string, enrichment: AIEnrichment) => Promise<void>) | null
+  >(null);
+  // The user's AI-suggestions mode (STASH #573): gates the three automatic
+  // enrichment-trigger call sites (never the manual "Suggest with AI" tap) and
+  // drives auto_accept below. The ref is the source of truth read inside
+  // callbacks/effects so a live Settings change takes effect immediately
+  // without needing every effect to depend on the reactive value; `aiSuggestionsMode`
+  // state exists only so Settings can display the current choice.
+  const aiSuggestionsModeRef = useRef<AiSuggestionsMode>(DEFAULT_AI_SUGGESTIONS_MODE);
+  const [aiSuggestionsMode, setAiSuggestionsModeState] = useState<AiSuggestionsMode>(
+    DEFAULT_AI_SUGGESTIONS_MODE,
+  );
+  // Staggered dispatch queue for automatic AI-enrichment triggers (STASH #574
+  // Phase 1) — see `domain/ai-enrichment-burst.ts`. Only the two background
+  // "trigger for a batch of ids" call sites route through this; the single-
+  // bookmark preview-refresh follow-up trigger fires immediately as before,
+  // since it's a direct continuation of a user-initiated action, not a burst.
+  const aiDispatchQueueRef = useRef<AiEnrichmentBurstQueue>(EMPTY_AI_ENRICHMENT_BURST_QUEUE);
+  const aiDispatchInFlight = useRef(false);
+  // Reactive signal for the "N bookmarks summarized & tagged" completion toast.
+  // `token` is a monotonic counter (not just `count`) so two consecutive bursts
+  // with the same count still re-fire the toast-showing effect — a same-value
+  // update alone is a React no-op for an effect keyed on it (see the graph-view
+  // snap-back trap in AGENTS.md's Known Traps).
+  const [aiEnrichmentBurstToast, setAiEnrichmentBurstToast] = useState<{
+    count: number;
+    token: number;
+  } | null>(null);
+  const aiBurstTokenSeq = useRef(0);
+
+  // Change + durably persist the AI-suggestions mode. The ref updates
+  // synchronously so the very next auto-trigger check (even one already
+  // mid-flight in the same tick) observes the new mode.
+  const setAiSuggestionsMode = useCallback((mode: AiSuggestionsMode) => {
+    aiSuggestionsModeRef.current = mode;
+    setAiSuggestionsModeState(mode);
+    ensureRepositoryReady()
+      .then(() => repository.setMeta(AI_SUGGESTIONS_MODE_PREF_KEY, serializeAiSuggestionsMode(mode)))
+      .catch((error) => logStorageError('ai suggestions mode', error));
+  }, []);
+
+  // STASH #574 Phase 1: dismiss the "N bookmarks summarized & tagged" toast
+  // signal once it's been shown.
+  const dismissAiEnrichmentBurstToast = useCallback(() => {
+    setAiEnrichmentBurstToast(null);
+  }, []);
 
   // Apply + persist a new tag-data snapshot in one step. The ref is updated
   // synchronously so a follow-up tag op in the same tick reads the latest.
@@ -1254,6 +1339,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedUnseenRaw,
             storedDismissedFoldersRaw,
             storedReviewedSummariesRaw,
+            storedAiSuggestionsModeRaw,
           ] = await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
@@ -1267,8 +1353,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.getMeta(UNSEEN_SUGGESTIONS_KEY),
             repository.getMeta(DISMISSED_FOLDERS_KEY),
             repository.getMeta(REVIEWED_SUMMARIES_KEY),
+            repository.getMeta(AI_SUGGESTIONS_MODE_PREF_KEY),
           ]);
           if (!cancelled) {
+            // Re-hydrate the AI-suggestions mode so the auto-trigger gate and
+            // auto_accept behavior are correct from the very first render, not
+            // just after the user revisits Settings.
+            const storedAiSuggestionsMode = parseAiSuggestionsMode(storedAiSuggestionsModeRaw);
+            aiSuggestionsModeRef.current = storedAiSuggestionsMode;
+            setAiSuggestionsModeState(storedAiSuggestionsMode);
             // Re-hydrate deferred AI triggers so a bookmark whose create synced
             // before the app was killed still gets auto suggestions once its
             // metadata enrichment settles (the effect below picks it up).
@@ -2034,7 +2127,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (syncsRemotely) {
           enqueueMutation(id, 'update');
         }
-        if (metadata_status !== 'failed') {
+        // STASH #573: 'off' means never auto-trigger AI enrichment. This is a
+        // direct continuation of the user's own "refresh preview" tap (not a
+        // background batch), so it fires immediately rather than through the
+        // staggered burst queue below.
+        if (metadata_status !== 'failed' && aiSuggestionsModeRef.current !== 'off') {
           void requestAiEnrichmentRef.current?.(id, 'auto', {
             title: updated.title,
             description: updated.description,
@@ -2278,13 +2375,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           enrichment,
           ...current.filter((item) => item.bookmark_id !== bookmarkId),
         ]);
-        // A background auto-enrichment lands without the user looking at this
-        // bookmark, so flag it for the Inbox "new suggestions" banner. A manual
-        // "Suggest with AI" tap happens on the Detail screen — the user is
-        // already witnessing it — so it doesn't (and Detail clears the flag).
-        if (source === 'auto') {
-          noteUnseenSuggestions(enrichment);
-        }
         try {
           await ensureRepositoryReady();
           await repository.upsertEnrichments([enrichment]);
@@ -2295,6 +2385,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // retry — clear any armed marker from an earlier failed attempt
         // (auto or manual; unified — see armAiRetry below).
         clearAiRetry(bookmarkId);
+        // STASH #573 auto_accept mode: apply high-confidence tag/folder
+        // suggestions with no review step. Runs AFTER the enrichment is
+        // durably recorded and retry state is cleared, and in its own
+        // try/catch: this is a convenience layered on top of an already-
+        // successful fetch, so a bug here (e.g. a failed createCollection
+        // call) must never make a genuinely successful enrichment look like
+        // a failed attempt (which would both discard the fetched enrichment
+        // above — it never happened, the write already landed — and wrongly
+        // arm a retry for a request that actually succeeded).
+        if (aiSuggestionsModeRef.current === 'auto_accept') {
+          try {
+            await autoAcceptEnrichmentRef.current?.(bookmarkId, enrichment);
+          } catch (error) {
+            recordLog('warn', `ai-enrich auto_accept failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        // A background auto-enrichment lands without the user looking at this
+        // bookmark, so flag it for the Inbox "new suggestions" banner. A manual
+        // "Suggest with AI" tap happens on the Detail screen — the user is
+        // already witnessing it — so it doesn't (and Detail clears the flag).
+        // In auto_accept mode this only fires for whatever auto-accept left
+        // behind (e.g. a pending summary — auto-accept never touches notes).
+        if (source === 'auto') {
+          noteUnseenSuggestions(enrichment);
+        }
         return null;
       } catch (error) {
         // Any failure here writes no ai_enrichments row: arm (or re-arm) this
@@ -2477,6 +2592,67 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [auth, applyTagData],
   );
+
+  // STASH #573 auto_accept mode: apply an enrichment's tag/folder suggestions
+  // automatically, with no review step. Reuses the exact same eligibility
+  // rules (`pendingSuggestions`'s SUGGESTION_MIN_CONFIDENCE filter,
+  // `pendingSuggestedFolder`'s dismissal honoring) and application path
+  // (`acceptSuggestionBundle`) as the Detail/Review screens' manual "Accept"
+  // actions — no separate confidence threshold, no separate write path.
+  //
+  // Only ever FILLS still-null generated fields, never overwrites anything the
+  // user set:
+  //  - Tags are additive (a set), so applying new suggested tags can't clobber
+  //    an existing one.
+  //  - The folder suggestion is only applied when the bookmark is currently
+  //    UNFILED (`collection_id === null`). `pendingSuggestedFolder` also
+  //    returns a "move" recommendation (its `from` set) whenever the AI's pick
+  //    differs from wherever the bookmark already lives — silently executing
+  //    that unattended would be auto-accept relocating something the user (or
+  //    an earlier accepted suggestion) deliberately filed, which is exactly
+  //    the kind of user-authored-state trampling "Capture is sacred" guards
+  //    against. Gating on "currently unfiled" keeps every application here an
+  //    add, never a move.
+  const autoAcceptEnrichment = useCallback(
+    async (bookmarkId: string, enrichment: AIEnrichment): Promise<void> => {
+      const bookmark = bookmarksRef.current?.find((item) => item.id === bookmarkId);
+      if (!bookmark) {
+        return; // gone (trashed/deleted) mid-flight — nothing to apply to
+      }
+      const applied = appliedTagNamesRef(bookmarkId);
+      const reviewed = new Set(
+        (bookmark.dismissed_suggested_tags ?? []).map((name) => name.toLowerCase()),
+      );
+      const suggestions = pendingSuggestions(enrichment, applied, reviewed);
+      const dismissedFolderTokens = new Set(bookmark.dismissed_suggested_folders ?? []);
+      const folder = bookmark.collection_id
+        ? null // already filed — never auto-relocate, see comment above
+        : pendingSuggestedFolder(
+            enrichment,
+            tagDataRef.current.collections,
+            null,
+            dismissedFolderTokens,
+          );
+      if (suggestions.length === 0 && !folder) {
+        return;
+      }
+      const folderTokens = suggestedFolderTokens(folder, enrichment.suggested_collection_name);
+      await acceptSuggestionBundle(
+        { acceptSuggestedTags, addTagsToBookmark, assignCollection, createCollection, dismissFolderSuggestion },
+        {
+          bookmarkId,
+          aiSuggestions: suggestions,
+          folder,
+          folderTokens,
+          createCollectionError: 'Could not create the collection.',
+        },
+      );
+    },
+    [appliedTagNamesRef, acceptSuggestedTags, addTagsToBookmark, assignCollection, createCollection, dismissFolderSuggestion],
+  );
+  useEffect(() => {
+    autoAcceptEnrichmentRef.current = autoAcceptEnrichment;
+  }, [autoAcceptEnrichment]);
 
   const syncNow = useCallback(async (): Promise<boolean> => {
     if (syncInFlight.current) {
@@ -3050,7 +3226,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // attempt — when auth restores, the rerun would skip it and the trigger
     // would never fire until another restart. On a cold start, storage loads
     // before the session is restored, so this gate matters.
-    if (bookmarks === null || !auth.session || pendingAiTrigger.current.size === 0) {
+    // STASH #573: 'off' means never auto-trigger. Leave `aiTriggerAttempted`
+    // untouched so a later switch to 'confirm'/'auto_accept' re-evaluates
+    // every still-pending id instead of finding it already "attempted".
+    if (
+      bookmarks === null ||
+      !auth.session ||
+      pendingAiTrigger.current.size === 0 ||
+      aiSuggestionsModeRef.current === 'off'
+    ) {
       return;
     }
     for (const id of [...pendingAiTrigger.current]) {
@@ -3084,21 +3268,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // than here, so a relaunch inside the backoff window goes through
       // checkAiRetries' backoff-respecting path instead of this effect
       // re-firing the request immediately on every restart.
-      void requestAiEnrichment(id, 'auto').then((error) => {
-        if (!error) {
-          clearPendingAiTrigger(id);
-        }
-      });
+      //
+      // STASH #574 Phase 1: queue for staggered dispatch instead of firing
+      // immediately, so a burst of bookmarks whose metadata settles around the
+      // same time (e.g. a multi-share) doesn't fire N ai-enrich requests at
+      // once. The drain effect below is what actually calls
+      // requestAiEnrichment and clears this marker on success.
+      aiDispatchQueueRef.current = enqueueAiEnrichmentDispatch(aiDispatchQueueRef.current, id);
     }
-  }, [bookmarks, auth.session, requestAiEnrichment, clearPendingAiTrigger]);
+  }, [bookmarks, auth.session, aiSuggestionsMode, requestAiEnrichment, clearPendingAiTrigger]);
 
   // Backoff-scheduled AI-suggestion retries: re-attempt any bookmark with an
   // armed retry marker (a prior auto OR manual requestAiEnrichment failure)
   // once enough wall-clock time has passed since its last attempt (see
   // AI_RETRY_BACKOFF_MS). Reads aiRetryState directly (the ref, not the
-  // reactive mirror) so it always sees the latest bookkeeping.
+  // reactive mirror) so it always sees the latest bookkeeping. STASH #573:
+  // no-ops entirely when the mode is 'off'.
   const checkAiRetries = useCallback(() => {
-    if (!auth.session) {
+    if (!auth.session || aiSuggestionsModeRef.current === 'off') {
       return;
     }
     const now = Date.now();
@@ -3113,9 +3300,60 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (now - new Date(state.lastAttemptAt).getTime() < waitMs) {
         continue; // backoff not yet elapsed
       }
-      void requestAiEnrichment(id, 'auto');
+      // STASH #574 Phase 1: queue for staggered dispatch (see the deferred
+      // auto AI enrichment effect above for why).
+      aiDispatchQueueRef.current = enqueueAiEnrichmentDispatch(aiDispatchQueueRef.current, id);
     }
   }, [auth.session, requestAiEnrichment]);
+
+  // STASH #574 Phase 1: drains aiDispatchQueueRef at a steady stagger, calling
+  // requestAiEnrichment for one queued id at a time instead of a whole burst
+  // firing simultaneously. Both producers above (the deferred first-trigger
+  // effect and checkAiRetries) only enqueue; this is the one place that
+  // actually dispatches, so it's also the one place that knows when a burst
+  // has fully drained — which is what decides whether the completion toast is
+  // worth showing.
+  useEffect(() => {
+    if (!auth.session) {
+      return;
+    }
+    const interval = setInterval(() => {
+      if (aiSuggestionsModeRef.current === 'off') {
+        // Mode flipped off mid-burst: drop whatever's left rather than keep
+        // firing requests for a feature the user just turned off.
+        aiDispatchQueueRef.current = EMPTY_AI_ENRICHMENT_BURST_QUEUE;
+        return;
+      }
+      if (aiDispatchInFlight.current) {
+        return; // still waiting on the previous dispatch to settle
+      }
+      const { queue, id } = dequeueAiEnrichmentDispatch(aiDispatchQueueRef.current);
+      aiDispatchQueueRef.current = queue;
+      if (!id) {
+        return;
+      }
+      aiDispatchInFlight.current = true;
+      void requestAiEnrichment(id, 'auto')
+        .then((error) => {
+          if (!error) {
+            void clearPendingAiTrigger(id);
+          }
+        })
+        .finally(() => {
+          aiDispatchInFlight.current = false;
+          aiDispatchQueueRef.current = recordAiEnrichmentDispatchSettled(aiDispatchQueueRef.current);
+          if (isBurstComplete(aiDispatchQueueRef.current)) {
+            const completed = aiDispatchQueueRef.current.completedInBurst;
+            aiDispatchQueueRef.current = clearBurstCompletion(aiDispatchQueueRef.current);
+            if (completed >= AI_ENRICHMENT_BURST_TOAST_MIN) {
+              aiBurstTokenSeq.current += 1;
+              setAiEnrichmentBurstToast({ count: completed, token: aiBurstTokenSeq.current });
+            }
+          }
+        });
+    }, AI_ENRICHMENT_DISPATCH_STAGGER_MS);
+    return () => clearInterval(interval);
+  }, [auth.session, requestAiEnrichment, clearPendingAiTrigger]);
 
   // Cold-launch retry check: once storage has loaded and auth is ready, run
   // the backoff check once so a bookmark whose wait already elapsed while the
@@ -3361,6 +3599,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       addTagsToBookmark,
       removeTagFromBookmark,
       requestAiEnrichment,
+      aiSuggestionsMode,
+      setAiSuggestionsMode,
+      aiEnrichmentBurstToast,
+      dismissAiEnrichmentBurstToast,
       refreshBookmarkPreview,
       isRefreshingPreview,
       isEnriching,
@@ -3407,6 +3649,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       addTagsToBookmark,
       removeTagFromBookmark,
       requestAiEnrichment,
+      aiSuggestionsMode,
+      setAiSuggestionsMode,
+      aiEnrichmentBurstToast,
+      dismissAiEnrichmentBurstToast,
       refreshBookmarkPreview,
       isRefreshingPreview,
       isEnriching,

@@ -32,6 +32,7 @@ import {
   SHARE_BEHAVIOR_PREF_KEY,
   type ShareBehavior,
 } from '@/domain/share-behavior';
+import { AI_SUGGESTIONS_MODES, type AiSuggestionsMode } from '@/domain/ai-suggestions-pref';
 import {
   exportFilename,
   toCsv,
@@ -90,6 +91,14 @@ const LANGUAGE_OPTIONS: { value: LocalePreference; labelKey: MessageKey }[] = [
   })),
 ];
 
+/** The AI-suggestions mode options, in display order (least → most automatic),
+ *  with their label keys. */
+const AI_SUGGESTIONS_MODE_OPTIONS: { value: AiSuggestionsMode; labelKey: MessageKey }[] =
+  AI_SUGGESTIONS_MODES.map((mode) => ({
+    value: mode,
+    labelKey: `settings.aiSuggestions.${mode}` as MessageKey,
+  }));
+
 export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
@@ -110,7 +119,10 @@ export default function SettingsScreen() {
     getTagsForBookmark,
     getEnrichment,
     importBookmarks,
+    aiSuggestionsMode,
+    setAiSuggestionsMode,
   } = useBookmarks();
+  const [aiSuggestionsSheetOpen, setAiSuggestionsSheetOpen] = useState(false);
   const auth = useSupabaseAuth();
   const analytics = useAnalytics();
   const [analyticsBusy, setAnalyticsBusy] = useState(false);
@@ -557,6 +569,17 @@ export default function SettingsScreen() {
         <Row
           styles={styles}
           palette={palette}
+          icon="sparkles-outline"
+          label={t('settings.aiSuggestions.label')}
+          value={t(
+            AI_SUGGESTIONS_MODE_OPTIONS.find((option) => option.value === aiSuggestionsMode)
+              ?.labelKey ?? 'settings.aiSuggestions.confirm',
+          )}
+          onPress={() => setAiSuggestionsSheetOpen(true)}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
           icon="share-outline"
           label={t('settings.share.label')}
           value={
@@ -818,6 +841,21 @@ export default function SettingsScreen() {
           onPress: () => {
             setLocalePreference(option.value);
             setLanguageSheetOpen(false);
+          },
+        }))}
+      />
+
+      <ActionSheet
+        visible={aiSuggestionsSheetOpen}
+        title={t('settings.aiSuggestions.sheetTitle')}
+        onClose={() => setAiSuggestionsSheetOpen(false)}
+        actions={AI_SUGGESTIONS_MODE_OPTIONS.map((option) => ({
+          key: option.value,
+          label: t(option.labelKey),
+          selected: option.value === aiSuggestionsMode,
+          onPress: () => {
+            setAiSuggestionsMode(option.value);
+            setAiSuggestionsSheetOpen(false);
           },
         }))}
       />

@@ -283,6 +283,9 @@ export const en = {
   'toast.trashed': 'Moved to Trash',
   'toast.noLink': 'No link found to save',
   'toast.urlTooLong': 'This link is too long to save',
+  // STASH #574 Phase 1: shown once a burst of background auto-enrichments
+  // finishes (2+ settled together) — never for a single, routine completion.
+  'toast.aiEnrichmentBurst': { other: '{count} bookmarks summarized & tagged' },
   'toast.saveFailed': 'Could not save to Keepory',
   'toast.linkCopied': 'Link copied',
 
@@ -357,6 +360,11 @@ export const en = {
   'settings.language.en': 'English',
   'settings.language.ko': '한국어',
   'settings.language.sheetTitle': 'App language',
+  'settings.aiSuggestions.label': 'AI suggestions',
+  'settings.aiSuggestions.sheetTitle': 'AI suggestions mode',
+  'settings.aiSuggestions.off': 'Off — never auto-suggest',
+  'settings.aiSuggestions.confirm': 'Review suggestions before applying',
+  'settings.aiSuggestions.auto_accept': 'Auto-apply high-confidence suggestions',
   'settings.diagnostics.title': 'Diagnostics',
   'settings.diagnostics.supabaseAuth': 'Supabase auth',
   'settings.diagnostics.lastPulled': 'Last pulled',

@@ -16,6 +16,7 @@ import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
 import { useAppConfig } from '@/supabase/use-min-app-version';
+import { AiEnrichmentBurstToast } from '@/ui/AiEnrichmentBurstToast';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { FloatingReportButton } from '@/feedback/FloatingReportButton';
 import { UpdateRequired } from '@/ui/UpdateRequired';
@@ -107,6 +108,7 @@ function RootLayout() {
                   <CaptureToastProvider>
                     <ShareIntentHandler />
                     <ShareConfirmHandler />
+                    <AiEnrichmentBurstToast />
                     <FloatingReportButton>
                       <RootStack />
                     </FloatingReportButton>
