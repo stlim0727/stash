@@ -526,6 +526,26 @@ export default function InboxScreen() {
   // open, satisfying the same synchronous-gesture requirement `syncFlush`
   // exists for.
   const suppressHeaderTransitionRef = useRef(false);
+  // STASH-33/34/35/36 root cause, finally: the list has
+  // `keyboardDismissMode="on-drag"` (below, near the FlatList) so scrolling
+  // the results while search is focused dismisses the keyboard. A real
+  // finger tap always carries a small amount of incidental movement — unlike
+  // every synthetic tap this was tested with locally (mouse clicks,
+  // Playwright's touchscreen.tap()), which have none, which is exactly why
+  // no local repro ever reproduced this. On Android that residual movement
+  // from the SAME tap that opened search can register as the start of a
+  // drag on the underlying list and fire the on-drag dismiss milliseconds
+  // after focus — which is indistinguishable at the JS level from a real
+  // blur/keyboardDidHide, so it hits the exact same auto-close path. Fix:
+  // suppress on-drag dismissal for a short window right after opening (long
+  // enough to absorb residual jitter from the opening gesture, short enough
+  // that a genuine subsequent drag still dismisses the keyboard normally).
+  // Real state, not a ref: clearing it after the window needs to actually
+  // re-render to put `keyboardDismissMode` back to "on-drag" on the FlatList
+  // prop below — a ref write alone wouldn't do that without some other,
+  // unrelated re-render happening to pick it up.
+  const [suppressOnDragDismiss, setSuppressOnDragDismiss] = useState(false);
+  const SUPPRESS_ON_DRAG_DISMISS_MS = 500;
   const openSearch = useCallback(() => {
     // Diagnostic trail for the "search icon tap does nothing but the list
     // scrolls slightly" report: if this breadcrumb is ABSENT for a tap the
@@ -549,6 +569,7 @@ export default function InboxScreen() {
     // — see `ui/sync-flush.native.ts`).
     syncFlush(() => {
       setSearchOpen(true);
+      setSuppressOnDragDismiss(true);
       // The search field itself mounts inside the web collapsible wrapper — if
       // that's currently collapsed, the field would mount off-screen: the hero
       // icon flips to "close" but there's nothing visible to type into (caught
@@ -567,6 +588,9 @@ export default function InboxScreen() {
         suppressHeaderTransitionRef.current = false;
       });
     }
+    setTimeout(() => {
+      setSuppressOnDragDismiss(false);
+    }, SUPPRESS_ON_DRAG_DISMISS_MS);
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
   // (Telegram-faithful — opening search always starts fresh). Every close path
@@ -2288,7 +2312,13 @@ export default function InboxScreen() {
         // Dragging the results dismisses the keyboard (→ keyboardDidHide drops the
         // focused state and the suggestion shelf). The shelf's own ScrollView owns
         // keyboardShouldPersistTaps for its chips; this list doesn't need it.
-        keyboardDismissMode="on-drag"
+        // Suppressed for a brief window right after opening search
+        // (suppressOnDragDismiss) — see the comment above openSearch,
+        // STASH-33/34/35/36: a real finger's incidental movement from the
+        // SAME tap that opened search can register as a drag-start on this
+        // list and fire an on-drag dismiss milliseconds later, which is
+        // indistinguishable from a real one and closes search right back up.
+        keyboardDismissMode={suppressOnDragDismiss ? 'none' : 'on-drag'}
         // Keep the scrollbar clear of the floating header (and the pinned filter
         // bar when it's showing).
         scrollIndicatorInsets={{ top: scrollInsetTop }}
