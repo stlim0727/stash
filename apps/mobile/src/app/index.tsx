@@ -584,26 +584,20 @@ export default function InboxScreen() {
       setSuppressOnDragDismiss(false);
     }, SUPPRESS_ON_DRAG_DISMISS_MS);
   }, []);
-  // Fold the whole search UI away: blur, drop focus, and CLEAR the query
-  // (Telegram-faithful — opening search always starts fresh). Every close path
-  // funnels through here so the invariant "query is non-empty ⇒ search is open"
-  // holds and there's never an orphaned live search behind a hidden field.
-  const closeSearch = useCallback(() => {
-    trackBreadcrumb('search', 'close', { scrollY: Math.round(lastScrollYRef.current) });
-    clearBlurHide();
-    setSearchFocused(false);
-    searchRef.current?.blur();
-    setQuery('');
-    setSearchOpen(false);
-    // While search was open, every scroll tick pinned the header at
-    // `{ collapsed: false, anchorScrollY: <wherever the user was> }` (see the
-    // scroll listener below). Left as-is, closing deep in a long list strands
-    // that anchor far from the top: normal collapse now needs to scroll DOWN
-    // more than collapsibleHeight past it, which may be impossible near the
-    // bottom of the list — the header gets stuck expanded until a viewMode
-    // remount resets it (caught in PR review, Codex). Recompute fresh from
-    // the current offset instead of leaving the pinned anchor behind, same
-    // as if the header had just now scrolled to this position from the top.
+  // While search is open, every scroll tick pins the header at
+  // `{ collapsed: false, anchorScrollY: <wherever the user was> }` (see the
+  // scroll listener below). Left as-is once search closes, that anchor
+  // strands wherever the user happened to be: deep in a long list, normal
+  // collapse then needs to scroll DOWN more than collapsibleHeight past it,
+  // which may be impossible near the bottom — the header gets stuck expanded
+  // until a viewMode remount resets it. Recompute fresh from the current
+  // offset instead, same as if the header had just now scrolled to this
+  // position from the top. Shared by every path that can close search — not
+  // just the explicit closeSearch() below, but the empty-blur and native
+  // keyboardDidHide auto-closes too, which set searchOpen false directly
+  // without going through closeSearch (caught in PR review, Codex — the
+  // first version of this fix only covered closeSearch).
+  const restoreHeaderCollapseOnSearchClose = useCallback(() => {
     const restored = nextHeaderCollapseState(
       INITIAL_HEADER_COLLAPSE_STATE,
       lastScrollYRef.current,
@@ -613,7 +607,22 @@ export default function InboxScreen() {
     if (Platform.OS === 'web') {
       setHeaderCollapse(restored);
     }
-  }, [clearBlurHide]);
+  }, []);
+  // Fold the whole search UI away: blur, drop focus, and CLEAR the query
+  // (Telegram-faithful — opening search always starts fresh). This is the
+  // EXPLICIT close (the ✕ tap); the empty-blur and native keyboardDidHide
+  // auto-closes below run their own version of the blur/clear steps (they
+  // don't share this function), but both also call
+  // restoreHeaderCollapseOnSearchClose.
+  const closeSearch = useCallback(() => {
+    trackBreadcrumb('search', 'close', { scrollY: Math.round(lastScrollYRef.current) });
+    clearBlurHide();
+    setSearchFocused(false);
+    searchRef.current?.blur();
+    setQuery('');
+    setSearchOpen(false);
+    restoreHeaderCollapseOnSearchClose();
+  }, [clearBlurHide, restoreHeaderCollapseOnSearchClose]);
   // Move focus into the field once it has actually mounted (it only mounts while
   // searchOpen), raising the keyboard + carrying screen-reader focus — the same
   // thing `autoFocus` does, but driven by our open state. Runs after the mount
@@ -653,11 +662,12 @@ export default function InboxScreen() {
         // state); a recent-suggestion tap leaves a query so it won't close.
         if (queryRef.current.length === 0) {
           setSearchOpen(false);
+          restoreHeaderCollapseOnSearchClose();
         }
       }, 0);
     });
     return () => sub.remove();
-  }, [clearBlurHide]);
+  }, [clearBlurHide, restoreHeaderCollapseOnSearchClose]);
   // The user's own recent searches (most-recent-first). Local-only: persisted in
   // the meta store as `pref.search.recents`, never enqueued or synced.
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
@@ -2027,6 +2037,7 @@ export default function InboxScreen() {
                   if (query.length === 0) {
                     trackBreadcrumb('search', 'auto-close on empty blur');
                     setSearchOpen(false);
+                    restoreHeaderCollapseOnSearchClose();
                   }
                 }, 0);
               }}
