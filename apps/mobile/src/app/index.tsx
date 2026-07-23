@@ -501,46 +501,28 @@ export default function InboxScreen() {
   }, []);
   useEffect(() => clearBlurHide, [clearBlurHide]);
   const searchRef = useRef<TextInput>(null);
-  // STASH-33/34/35/36: three earlier theories all turned out wrong, each
-  // disproven by the NEXT report's breadcrumbs rather than reasoning alone —
-  // see the git history on this block for what didn't work and why. STASH-36
-  // (build 7e6e43b, which included a "focus immediately, ALSO nudge again at
-  // +260ms" fix) was the one that finally showed WHY nudging can't work at
-  // all: `field blur` → `auto-close on empty blur` fires ~5-40ms after
-  // `field focus`, every time — the auto-close already happens LONG before
-  // any deferred nudge would ever get a chance to fire. A later re-focus
-  // can't out-run a close that's already happened.
+  // STASH-33/34/35/36 root cause: the list has `keyboardDismissMode="on-drag"`
+  // (below, near the FlatList) so scrolling the results dismisses the
+  // keyboard. Opening search from a collapsed header forces a large relayout
+  // in the same commit as the field mounting and requesting focus — an
+  // incidental drag/scroll landing in that same window (a real finger's
+  // residual movement from the opening tap, or scroll produced by the
+  // header/list reflow itself) can register as a drag-start on the
+  // underlying list and fire that on-drag dismiss milliseconds later. That's
+  // indistinguishable at the JS level from a real blur/keyboardDidHide, so it
+  // hits the exact same auto-close path every report has shown (confirmed:
+  // STASH-37, first report on the build with this fix, showed the field
+  // staying open). No local repro ever reproduced this — every synthetic
+  // interaction tested (mouse clicks, Playwright's touchscreen.tap(),
+  // simulated scroll) is perfectly still, unlike a real device.
   //
-  // So: every report shares `collapsedBefore: true` (the header was fully
-  // collapsed, forcing a full expand in the same commit as the field
-  // mounting), and on WEB that expand isn't instant — the collapsible
-  // wrapper below animates via a real CSS `transition: transform 200ms`.
-  // Calling `.focus()` while that transition is still in flight is a known
-  // class of Android/Chromium bug: the keyboard-driven viewport resize races
-  // the ongoing transform transition and the browser silently drops the
-  // focus it just granted. Fix: suppress that one transition (snap the
-  // header open instantly instead of sliding it) specifically for a
-  // collapsed-state open, so there's nothing in flight for focus to race
-  // against.
-  const suppressHeaderTransitionRef = useRef(false);
-  // STASH-33/34/35/36 root cause, finally: the list has
-  // `keyboardDismissMode="on-drag"` (below, near the FlatList) so scrolling
-  // the results while search is focused dismisses the keyboard. A real
-  // finger tap always carries a small amount of incidental movement — unlike
-  // every synthetic tap this was tested with locally (mouse clicks,
-  // Playwright's touchscreen.tap()), which have none, which is exactly why
-  // no local repro ever reproduced this. On Android that residual movement
-  // from the SAME tap that opened search can register as the start of a
-  // drag on the underlying list and fire the on-drag dismiss milliseconds
-  // after focus — which is indistinguishable at the JS level from a real
-  // blur/keyboardDidHide, so it hits the exact same auto-close path. Fix:
-  // suppress on-drag dismissal for a short window right after opening (long
-  // enough to absorb residual jitter from the opening gesture, short enough
-  // that a genuine subsequent drag still dismisses the keyboard normally).
-  // Real state, not a ref: clearing it after the window needs to actually
-  // re-render to put `keyboardDismissMode` back to "on-drag" on the FlatList
-  // prop below — a ref write alone wouldn't do that without some other,
-  // unrelated re-render happening to pick it up.
+  // Fix: suppress on-drag dismissal for a short window right after opening
+  // (long enough to absorb incidental drag/scroll from the opening itself,
+  // short enough that a genuine subsequent drag still dismisses the keyboard
+  // normally). Real state, not a ref: clearing it after the window needs to
+  // actually re-render to put `keyboardDismissMode` back to "on-drag" on the
+  // FlatList prop below — a ref write alone wouldn't do that without some
+  // other, unrelated re-render happening to pick it up.
   const [suppressOnDragDismiss, setSuppressOnDragDismiss] = useState(false);
   const SUPPRESS_ON_DRAG_DISMISS_MS = 500;
   const openSearch = useCallback(() => {
@@ -551,14 +533,10 @@ export default function InboxScreen() {
     // bug in this function. If it's present but the field still isn't
     // visible, the reveal-focus effect / collapse-state breadcrumbs below
     // narrow it further.
-    const wasCollapsed = headerCollapseRef.current.collapsed;
     trackBreadcrumb('search', 'open tap', {
       scrollY: Math.round(lastScrollYRef.current),
-      collapsedBefore: wasCollapsed,
+      collapsedBefore: headerCollapseRef.current.collapsed,
     });
-    if (wasCollapsed) {
-      suppressHeaderTransitionRef.current = true;
-    }
     setSearchOpen(true);
     setSuppressOnDragDismiss(true);
     // The search field itself mounts inside the web collapsible wrapper — if
@@ -571,14 +549,6 @@ export default function InboxScreen() {
     setHeaderCollapse(expanded);
     // The focus-on-open effect below moves focus into the field once it
     // mounts.
-    if (wasCollapsed) {
-      // Let the instant (transition-suppressed) snap-open commit and paint,
-      // then restore the animated transition for future normal scroll-driven
-      // collapse/reveal.
-      requestAnimationFrame(() => {
-        suppressHeaderTransitionRef.current = false;
-      });
-    }
     setTimeout(() => {
       setSuppressOnDragDismiss(false);
     }, SUPPRESS_ON_DRAG_DISMISS_MS);
@@ -1905,15 +1875,7 @@ export default function InboxScreen() {
                           : 0,
                       },
                     ],
-                    // Suppressed for one paint when search opens from a
-                    // collapsed header (see the comment above openSearch,
-                    // STASH-33/34/35/36) — an in-flight transform transition
-                    // racing a synchronous focus() request is what silently
-                    // drops focus on Android. Every other collapse/reveal
-                    // (plain scroll) keeps the animated slide.
-                    transition: suppressHeaderTransitionRef.current
-                      ? 'none'
-                      : 'transform 200ms ease-out',
+                    transition: 'transform 200ms ease-out',
                   },
                 ] as unknown as StyleProp<ViewStyle>)
               : undefined
@@ -2256,6 +2218,7 @@ export default function InboxScreen() {
       ) : null}
       <InboxList
         ref={listRef}
+        testID="inbox-list"
         data={gridData}
         keyExtractor={(item) => item.id}
         // Remount when the column count changes: FlatList forbids mutating

@@ -549,6 +549,52 @@ test('search is tap-to-open: the field is hidden until the magnifier is pressed'
   expect(screen.getByTestId('browse-shelf')).toBeTruthy();
 });
 
+test('suppresses on-drag keyboard dismissal for a moment after opening search', async () => {
+  // Regression test for STASH-33/34/35/36: the list has
+  // keyboardDismissMode="on-drag", so scrolling the results dismisses the
+  // keyboard. Opening search from a collapsed header forces a large relayout
+  // in the same commit as the field mounting and requesting focus — an
+  // incidental drag/scroll landing in that same window (a real finger's
+  // residual movement from the opening tap, or scroll produced by the
+  // relayout itself) can register as a drag-start and fire that dismissal
+  // milliseconds later, indistinguishable from a real one, closing search
+  // right back up. Fixed by suppressing on-drag dismissal for a short window
+  // right after opening. Can't reproduce the actual drag-gesture recognition
+  // here (jsdom/react-test-renderer don't simulate it), but the state
+  // transition the fix depends on — the prop goes to "none" right on open and
+  // reverts to "on-drag" once the window elapses — is exactly what this pins.
+  jest.useFakeTimers();
+  try {
+    fakeRepo.__reset([
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000cb',
+        title: 'On-drag dismiss fixture',
+      }),
+    ]);
+
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('On-drag dismiss fixture')).toBeTruthy());
+
+    const list = screen.getByTestId('inbox-list');
+    expect(list).toHaveProp('keyboardDismissMode', 'on-drag');
+
+    await fireEvent.press(screen.getByTestId('inbox-search-open'));
+    expect(list).toHaveProp('keyboardDismissMode', 'none');
+
+    await act(async () => {
+      jest.advanceTimersByTime(499);
+    });
+    expect(list).toHaveProp('keyboardDismissMode', 'none');
+
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(list).toHaveProp('keyboardDismissMode', 'on-drag');
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test('opening search focuses the field immediately, with no fade-in animation on the newly mounted input', async () => {
   // Regression test for a reported bug: tapping the search icon felt like "a
   // slight momentary scroll" instead of an immediate, stable focus. Root
