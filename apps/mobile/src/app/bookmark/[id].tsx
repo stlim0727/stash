@@ -1243,6 +1243,7 @@ export default function BookmarkDetailScreen({
             style={styles.dismissAll}
             onPress={handleDismissAllSuggestions}
           >
+            <Ionicons name="close-circle-outline" size={14} color={palette.textSecondary} />
             <Text style={[styles.dismissAllLabel, { color: palette.textSecondary }]}>
               {t('detail.aiDismissAll')}
             </Text>
@@ -1581,6 +1582,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   dismissAll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     alignSelf: 'flex-start',
     paddingVertical: 4,
   },
