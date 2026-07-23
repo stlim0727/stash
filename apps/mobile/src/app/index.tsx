@@ -87,6 +87,7 @@ import {
 } from '@/domain/view-mode';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { trackBreadcrumb } from '@/observability/sentry';
+import { syncFlush } from '@/ui/sync-flush';
 import { useT } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
@@ -513,16 +514,29 @@ export default function InboxScreen() {
       scrollY: Math.round(lastScrollYRef.current),
       collapsedBefore: headerCollapseRef.current.collapsed,
     });
-    // The focus-on-open effect below moves focus into the field once it mounts.
-    setSearchOpen(true);
-    // The search field itself mounts inside the web collapsible wrapper — if
-    // that's currently collapsed, the field would mount off-screen: the hero
-    // icon flips to "close" but there's nothing visible to type into (caught
-    // in PR review). Force it expanded whenever search opens; harmless to
-    // call on native, which doesn't read this state for anything visual.
-    const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
-    headerCollapseRef.current = expanded;
-    setHeaderCollapse(expanded);
+    // STASH-33/34: on web, flush these state updates synchronously (instead of
+    // letting React batch them into the next microtask) and call `.focus()`
+    // immediately after, still inside this same onPress call stack. The
+    // previous effect-based focus (still below, as a fallback) ran a tick
+    // later — outside the original tap's call stack — and the reports' own
+    // breadcrumbs showed the field DID receive a real DOM focus event every
+    // time, then silently blurred ~30-60ms later with no scroll and no other
+    // state change in between: exactly the signature of a browser (WebKit in
+    // particular) deciding a focus queued into a later effect wasn't really
+    // user-initiated and revoking it. Native has no such constraint —
+    // `syncFlush` is a plain passthrough there (see `ui/sync-flush.native.ts`).
+    syncFlush(() => {
+      setSearchOpen(true);
+      // The search field itself mounts inside the web collapsible wrapper — if
+      // that's currently collapsed, the field would mount off-screen: the hero
+      // icon flips to "close" but there's nothing visible to type into (caught
+      // in PR review). Force it expanded whenever search opens; harmless to
+      // call on native, which doesn't read this state for anything visual.
+      const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
+      headerCollapseRef.current = expanded;
+      setHeaderCollapse(expanded);
+    });
+    searchRef.current?.focus();
   }, []);
   // Fold the whole search UI away: blur, drop focus, and CLEAR the query
   // (Telegram-faithful — opening search always starts fresh). Every close path
