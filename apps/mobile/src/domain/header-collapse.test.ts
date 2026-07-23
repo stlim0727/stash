@@ -134,3 +134,39 @@ test('resuming from the real pre-open state (not from scratch) preserves a revea
     'continuing from the real pre-search anchor preserves the reveal instead',
   );
 });
+
+test('restoring must use the pre-search collapsible height, not whatever height applies during search (PR review catch)', () => {
+  // The collapsible wrapper measures a different height once search opens
+  // (search input mounted, no sort/browse row) than the normal layout it
+  // reverts to on close. `openSearch` snapshots that pre-search height
+  // alongside the pre-search state; using the CURRENT (search-open) height
+  // instead at close time compares the pre-search anchor against the wrong
+  // threshold. Concrete measured values from a real build: ~86px closed,
+  // ~104px while searching — a scroll delta of 90px straddles the two.
+  const preSearchState: HeaderCollapseState = { collapsed: false, anchorScrollY: 0 };
+  const closedLayoutHeight = 86;
+  const searchOpenLayoutHeight = 104;
+  const closeScrollY = 90; // > closedLayoutHeight, < searchOpenLayoutHeight
+
+  const restoredWithWrongHeight = nextHeaderCollapseState(
+    preSearchState,
+    closeScrollY,
+    searchOpenLayoutHeight,
+  );
+  assert.equal(
+    restoredWithWrongHeight.collapsed,
+    false,
+    'sanity check: the search-open height wrongly keeps it expanded — proving the bug is real, not this test being vacuous',
+  );
+
+  const restoredWithPreSearchHeight = nextHeaderCollapseState(
+    preSearchState,
+    closeScrollY,
+    closedLayoutHeight,
+  );
+  assert.equal(
+    restoredWithPreSearchHeight.collapsed,
+    true,
+    'the pre-search (closed-layout) height correctly collapses once past its own threshold',
+  );
+});

@@ -586,8 +586,15 @@ export default function InboxScreen() {
       // in PR review). Force it expanded whenever search opens; harmless to
       // call on native, which doesn't read this state for anything visual.
       // Snapshot the real state first — restoreHeaderCollapseOnSearchClose
-      // resumes the hysteresis from here instead of from scratch.
+      // resumes the hysteresis from here instead of from scratch. The
+      // collapsible wrapper's measured height comes along too: it re-measures
+      // to the search-open layout's height (search input, no sort/browse row)
+      // once search mounts, which can be shorter or taller than the normal
+      // layout it reverts to on close — using the CURRENT (search-open)
+      // height against the PRE-search anchor at close time compares against
+      // the wrong threshold (caught in PR review, Codex).
       preSearchHeaderCollapseRef.current = headerCollapseRef.current;
+      preSearchCollapsibleHeightRef.current = collapsibleHeightRef.current;
       const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
       headerCollapseRef.current = expanded;
       setHeaderCollapse(expanded);
@@ -620,6 +627,12 @@ export default function InboxScreen() {
   // hysteresis from THAT anchor (rather than 0) at the current scroll offset
   // gets both right — an unmoved position stays exactly as it was, and a
   // position that moved far enough during search still collapses normally.
+  // The collapsible height comes from that same pre-search snapshot too, not
+  // the live `collapsibleHeightRef` — the search-open layout (search input,
+  // no sort/browse row) can measure a different height than the normal
+  // layout the header reverts to on close, so comparing the pre-search
+  // anchor against the WRONG (search-open) height picked the wrong threshold
+  // (caught in PR review, Codex).
   // Shared by every path that can close search — not just the explicit
   // closeSearch() below, but the empty-blur and native keyboardDidHide
   // auto-closes too, which set searchOpen false directly without going
@@ -629,7 +642,7 @@ export default function InboxScreen() {
     const restored = nextHeaderCollapseState(
       preSearchHeaderCollapseRef.current,
       lastScrollYRef.current,
-      collapsibleHeightRef.current,
+      preSearchCollapsibleHeightRef.current,
     );
     headerCollapseRef.current = restored;
     if (Platform.OS === 'web') {
@@ -924,6 +937,11 @@ export default function InboxScreen() {
   // The real (unpinned) collapse state from just before `openSearch` forced
   // `headerCollapseRef` expanded — see `restoreHeaderCollapseOnSearchClose`.
   const preSearchHeaderCollapseRef = useRef<HeaderCollapseState>(INITIAL_HEADER_COLLAPSE_STATE);
+  // The collapsible wrapper's measured height from that same pre-search
+  // moment — it re-measures once the search-open layout (search input, no
+  // sort/browse row) mounts, which isn't necessarily the same height as the
+  // normal layout the header reverts to on close.
+  const preSearchCollapsibleHeightRef = useRef<number>(0);
   const isWebPlatform = Platform.OS === 'web';
   // `headerHeight` means "total expanded height" (used below for the list's
   // top padding/scroll inset and the filter bar's resting position) — native
