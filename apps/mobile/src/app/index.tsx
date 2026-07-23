@@ -502,6 +502,17 @@ export default function InboxScreen() {
   useEffect(() => clearBlurHide, [clearBlurHide]);
   const searchRef = useRef<TextInput>(null);
   const openSearch = useCallback(() => {
+    // Diagnostic trail for the "search icon tap does nothing but the list
+    // scrolls slightly" report: if this breadcrumb is ABSENT for a tap the
+    // user saw happen, the touch never reached JS (swallowed by the list's
+    // scroll responder — the same hit-test class as STASH-7/STASH-8), not a
+    // bug in this function. If it's present but the field still isn't
+    // visible, the reveal-focus effect / collapse-state breadcrumbs below
+    // narrow it further.
+    trackBreadcrumb('search', 'open tap', {
+      scrollY: Math.round(lastScrollYRef.current),
+      collapsedBefore: headerCollapseRef.current.collapsed,
+    });
     // The focus-on-open effect below moves focus into the field once it mounts.
     setSearchOpen(true);
     // The search field itself mounts inside the web collapsible wrapper — if
@@ -518,6 +529,7 @@ export default function InboxScreen() {
   // funnels through here so the invariant "query is non-empty ⇒ search is open"
   // holds and there's never an orphaned live search behind a hidden field.
   const closeSearch = useCallback(() => {
+    trackBreadcrumb('search', 'close', { scrollY: Math.round(lastScrollYRef.current) });
     clearBlurHide();
     setSearchFocused(false);
     searchRef.current?.blur();
@@ -530,6 +542,9 @@ export default function InboxScreen() {
   // commit (the effect fires once the field is in the tree), so the ref is set.
   useEffect(() => {
     if (searchOpen) {
+      // hasRef=false here would mean the field hadn't mounted yet when this
+      // effect ran (a mount-order race), so .focus() below was a silent no-op.
+      trackBreadcrumb('search', 'focus effect', { hasRef: searchRef.current != null });
       searchRef.current?.focus();
     }
   }, [searchOpen]);
@@ -2166,6 +2181,16 @@ export default function InboxScreen() {
             if (isWeb) {
               const next = nextHeaderCollapseState(headerCollapseRef.current, y, collapsibleHeight);
               const flipped = next.collapsed !== headerCollapseRef.current.collapsed;
+              // Diagnostic for the same "search field disappears right after
+              // opening" report: openSearch forces the header expanded, so a
+              // flip back to collapsed while search is still open means
+              // something re-collapsed it out from under the user immediately
+              // after — this is the signal that theory needs.
+              if (flipped && next.collapsed && searchOpen) {
+                trackBreadcrumb('search', 'collapsed while open', {
+                  scrollY: Math.round(y),
+                });
+              }
               headerCollapseRef.current = next;
               if (flipped) {
                 setHeaderCollapse(next);
