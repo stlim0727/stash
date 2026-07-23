@@ -1913,10 +1913,23 @@ export default function InboxScreen() {
               onChangeText={setQuery}
               onFocus={() => {
                 // A re-focus cancels any pending deferred hide from a prior blur.
+                trackBreadcrumb('search', 'field focus');
                 clearBlurHide();
                 setSearchFocused(true);
               }}
               onBlur={() => {
+                // Diagnostic for the "search icon tap does nothing, field never
+                // appears" report: this is the ONLY place besides closeSearch()
+                // that can drop searchOpen back to false, and closeSearch()
+                // already logs its own breadcrumb — so an unexplained close with
+                // no preceding 'close' breadcrumb means THIS path fired instead,
+                // and this line pins down why (an empty query so soon after
+                // opening that focus never stuck is exactly the "opens then
+                // immediately, silently closes itself" symptom).
+                trackBreadcrumb('search', 'field blur', {
+                  queryEmpty: query.length === 0,
+                  scrollY: Math.round(lastScrollYRef.current),
+                });
                 // Defer the hide so a suggestion chip's onPress (which fires after
                 // the native blur) resolves against a still-mounted shelf. A real
                 // dismissal still settles on the next tick.
@@ -1929,6 +1942,7 @@ export default function InboxScreen() {
                   // can read results / refine with the keyboard down (the
                   // existing slimSearchHeader "results, keyboard down" state).
                   if (query.length === 0) {
+                    trackBreadcrumb('search', 'auto-close on empty blur');
                     setSearchOpen(false);
                   }
                 }, 0);
