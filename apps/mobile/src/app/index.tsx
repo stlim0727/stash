@@ -87,7 +87,6 @@ import {
 } from '@/domain/view-mode';
 import { getPreference, setPreference } from '@/storage/preferences';
 import { trackBreadcrumb } from '@/observability/sentry';
-import { syncFlush } from '@/ui/sync-flush';
 import { useT } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
@@ -521,10 +520,8 @@ export default function InboxScreen() {
   // the ongoing transform transition and the browser silently drops the
   // focus it just granted. Fix: suppress that one transition (snap the
   // header open instantly instead of sliding it) specifically for a
-  // collapsed-state open, so there's nothing in flight for a synchronous
-  // focus to race against. No delay needed — focus stays immediate on every
-  // open, satisfying the same synchronous-gesture requirement `syncFlush`
-  // exists for.
+  // collapsed-state open, so there's nothing in flight for focus to race
+  // against.
   const suppressHeaderTransitionRef = useRef(false);
   // STASH-33/34/35/36 root cause, finally: the list has
   // `keyboardDismissMode="on-drag"` (below, near the FlatList) so scrolling
@@ -562,24 +559,18 @@ export default function InboxScreen() {
     if (wasCollapsed) {
       suppressHeaderTransitionRef.current = true;
     }
-    // Flush synchronously and call .focus() right after — inside the tap's
-    // own call stack rather than a later effect — since mobile browsers only
-    // reliably honor a focus call made synchronously within the originating
-    // gesture. Harmless on native (`syncFlush` is a plain passthrough there
-    // — see `ui/sync-flush.native.ts`).
-    syncFlush(() => {
-      setSearchOpen(true);
-      setSuppressOnDragDismiss(true);
-      // The search field itself mounts inside the web collapsible wrapper — if
-      // that's currently collapsed, the field would mount off-screen: the hero
-      // icon flips to "close" but there's nothing visible to type into (caught
-      // in PR review). Force it expanded whenever search opens; harmless to
-      // call on native, which doesn't read this state for anything visual.
-      const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
-      headerCollapseRef.current = expanded;
-      setHeaderCollapse(expanded);
-    });
-    searchRef.current?.focus();
+    setSearchOpen(true);
+    setSuppressOnDragDismiss(true);
+    // The search field itself mounts inside the web collapsible wrapper — if
+    // that's currently collapsed, the field would mount off-screen: the hero
+    // icon flips to "close" but there's nothing visible to type into (caught
+    // in PR review). Force it expanded whenever search opens; harmless to
+    // call on native, which doesn't read this state for anything visual.
+    const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
+    headerCollapseRef.current = expanded;
+    setHeaderCollapse(expanded);
+    // The focus-on-open effect below moves focus into the field once it
+    // mounts.
     if (wasCollapsed) {
       // Let the instant (transition-suppressed) snap-open commit and paint,
       // then restore the animated transition for future normal scroll-driven
