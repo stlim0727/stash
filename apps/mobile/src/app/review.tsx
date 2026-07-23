@@ -386,7 +386,7 @@ export default function ReviewScreen() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  icon="checkmark-circle-outline"
+                  icon={hasTags ? 'checkmark-done-outline' : 'checkmark-circle-outline'}
                   accessibilityLabel={acceptA11y}
                   disabled={busy}
                   style={styles.actionButton}

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -230,6 +231,7 @@ export function TagField({
               style={styles.bulkAction}
               onPress={onAcceptAllSuggestions}
             >
+              <Ionicons name="checkmark-done-outline" size={14} color={palette.accent} />
               <Text style={[styles.bulkActionLabel, { color: palette.accent }]}>
                 {t('tagField.addAll')}
               </Text>
@@ -244,6 +246,7 @@ export function TagField({
               style={styles.bulkAction}
               onPress={onDismissAllSuggestions}
             >
+              <Ionicons name="close-circle-outline" size={14} color={palette.textSecondary} />
               <Text style={[styles.bulkActionLabel, { color: palette.textSecondary }]}>
                 {t('tagField.dismissAll')}
               </Text>
@@ -327,6 +330,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   bulkAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     justifyContent: 'center',
     paddingVertical: 5,
     paddingHorizontal: 6,
