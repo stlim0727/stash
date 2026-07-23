@@ -585,6 +585,9 @@ export default function InboxScreen() {
       // icon flips to "close" but there's nothing visible to type into (caught
       // in PR review). Force it expanded whenever search opens; harmless to
       // call on native, which doesn't read this state for anything visual.
+      // Snapshot the real state first — restoreHeaderCollapseOnSearchClose
+      // resumes the hysteresis from here instead of from scratch.
+      preSearchHeaderCollapseRef.current = headerCollapseRef.current;
       const expanded = { collapsed: false, anchorScrollY: lastScrollYRef.current };
       headerCollapseRef.current = expanded;
       setHeaderCollapse(expanded);
@@ -602,20 +605,29 @@ export default function InboxScreen() {
   }, []);
   // While search is open, every scroll tick pins the header at
   // `{ collapsed: false, anchorScrollY: <wherever the user was> }` (see the
-  // scroll listener below). Left as-is once search closes, that anchor
-  // strands wherever the user happened to be: deep in a long list, normal
-  // collapse then needs to scroll DOWN more than collapsibleHeight past it,
-  // which may be impossible near the bottom — the header gets stuck expanded
-  // until a viewMode remount resets it. Recompute fresh from the current
-  // offset instead, same as if the header had just now scrolled to this
-  // position from the top. Shared by every path that can close search — not
-  // just the explicit closeSearch() below, but the empty-blur and native
-  // keyboardDidHide auto-closes too, which set searchOpen false directly
-  // without going through closeSearch (caught in PR review, Codex — the
-  // first version of this fix only covered closeSearch).
+  // scroll listener below), so `headerCollapseRef.current` at close time holds
+  // that pinned value, not the real pre-search hysteresis anchor. Continuing
+  // from `INITIAL_HEADER_COLLAPSE_STATE` (as if the header had just now
+  // scrolled to this position from the top) fixed the original stuck-expanded
+  // bug (deep in a long list, no room to scroll further down and re-trigger a
+  // collapse) but overcorrected: it discards a legitimate reveal that was
+  // already in effect before search opened (scroll up, pause, scroll back
+  // down a little — see domain/header-collapse.ts's reveal/collapse
+  // hysteresis) and forces a full collapse on close instead (STASH report:
+  // closing search made the whole top row vanish, not just the field).
+  // `openSearch` snapshots the real pre-search state into
+  // `preSearchHeaderCollapseRef` before pinning it expanded; continuing the
+  // hysteresis from THAT anchor (rather than 0) at the current scroll offset
+  // gets both right — an unmoved position stays exactly as it was, and a
+  // position that moved far enough during search still collapses normally.
+  // Shared by every path that can close search — not just the explicit
+  // closeSearch() below, but the empty-blur and native keyboardDidHide
+  // auto-closes too, which set searchOpen false directly without going
+  // through closeSearch (caught in PR review, Codex — the first version of
+  // this fix only covered closeSearch).
   const restoreHeaderCollapseOnSearchClose = useCallback(() => {
     const restored = nextHeaderCollapseState(
-      INITIAL_HEADER_COLLAPSE_STATE,
+      preSearchHeaderCollapseRef.current,
       lastScrollYRef.current,
       collapsibleHeightRef.current,
     );
@@ -909,6 +921,9 @@ export default function InboxScreen() {
   // anchor-tracking stays exact; `setHeaderCollapse` only fires when
   // `.collapsed` actually flips, which is the only thing render cares about.
   const headerCollapseRef = useRef<HeaderCollapseState>(INITIAL_HEADER_COLLAPSE_STATE);
+  // The real (unpinned) collapse state from just before `openSearch` forced
+  // `headerCollapseRef` expanded — see `restoreHeaderCollapseOnSearchClose`.
+  const preSearchHeaderCollapseRef = useRef<HeaderCollapseState>(INITIAL_HEADER_COLLAPSE_STATE);
   const isWebPlatform = Platform.OS === 'web';
   // `headerHeight` means "total expanded height" (used below for the list's
   // top padding/scroll inset and the filter bar's resting position) — native
@@ -1937,6 +1952,7 @@ export default function InboxScreen() {
             of the zIndex-without-elevation lint (STASH-7), which is a static
             text scan that can't see the `isWeb` runtime gate. */}
         <View
+          testID="inbox-collapsible-header"
           onLayout={(event) => setCollapsibleHeight(event.nativeEvent.layout.height)}
           pointerEvents="box-none"
           style={
