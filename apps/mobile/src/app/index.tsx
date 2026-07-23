@@ -2679,7 +2679,14 @@ export default function InboxScreen() {
                   accessibilityLabel={item.url ? t('common.openLink') : (accessibilityTitle(item) ?? t('common.untitled'))}
                   onPress={item.url ? openLink : openDetail}
                   onLongPress={() => setMenuItem(item)}
-                  style={styles.compactThumbWrap}
+                  hitSlop={6}
+                  style={({ pressed }) => [
+                    styles.compactThumbWrap,
+                    {
+                      borderColor: item.url ? palette.accent : palette.border,
+                      opacity: pressed ? 0.75 : 1,
+                    },
+                  ]}
                 >
                   {thumbUri ? (
                     <Image
@@ -2691,8 +2698,8 @@ export default function InboxScreen() {
                     <ItemIcon item={item} testID="inbox-list-monogram" />
                   )}
                   {item.url ? (
-                    <View style={[styles.thumbMiniBadge, { backgroundColor: palette.accent }]}>
-                      <Ionicons name="open-outline" size={10} color="#ffffff" />
+                    <View style={[styles.thumbMiniBadge, { backgroundColor: palette.accent, borderColor: palette.surfaceElevated }]}>
+                      <Ionicons name="open-outline" size={11} color="#ffffff" />
                     </View>
                   ) : null}
                 </Pressable>
@@ -2793,14 +2800,18 @@ export default function InboxScreen() {
                   ]}
                 >
                   <View style={styles.cardTitleRow}>
-                  <Pressable
-                    accessibilityRole={item.url ? 'link' : 'button'}
-                    accessibilityLabel={item.url ? t('common.openLink') : (accessibilityTitle(item) ?? t('common.untitled'))}
-                    onPress={item.url ? openLink : openDetail}
-                    onLongPress={() => setMenuItem(item)}
-                  >
-                    <ItemIcon item={item} testID="inbox-card-monogram" />
-                  </Pressable>
+                    {!previewUri && item.url ? (
+                      <Pressable
+                        accessibilityRole="link"
+                        accessibilityLabel={t('common.openLink')}
+                        onPress={openLink}
+                        onLongPress={() => setMenuItem(item)}
+                      >
+                        <ItemIcon item={item} testID="inbox-card-monogram" />
+                      </Pressable>
+                    ) : (
+                      <ItemIcon item={item} testID="inbox-card-monogram" />
+                    )}
                   {/* Only the title is the accessible "open details" button so
                       the sibling … overflow button stays independently
                       focusable; the whole card remains tappable visually. */}
@@ -3330,25 +3341,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 10,
   },
-  compactThumb: {
-    width: 52,
-    height: 52,
-    borderRadius: 12,
-  },
   compactThumbWrap: {
     position: 'relative',
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    overflow: 'visible',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compactThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
   },
   thumbMiniBadge: {
     position: 'absolute',
-    bottom: -2,
-    right: -2,
+    bottom: -3,
+    right: -3,
     borderRadius: 999,
-    width: 18,
-    height: 18,
+    width: 20,
+    height: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#ffffff',
+    borderWidth: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 3,
   },
   compactMeta: {
     fontSize: 12,
