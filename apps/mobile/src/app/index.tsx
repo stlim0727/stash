@@ -525,6 +525,21 @@ export default function InboxScreen() {
   // other, unrelated re-render happening to pick it up.
   const [suppressOnDragDismiss, setSuppressOnDragDismiss] = useState(false);
   const SUPPRESS_ON_DRAG_DISMISS_MS = 500;
+  // A close-then-reopen within the window left the OLD timer armed, so it
+  // could clear the NEW open's suppression early (a fast enough second open
+  // would inherit however much time was left on the first one, not the full
+  // 500ms) — caught in PR review, Codex. Track it so a fresh open cancels
+  // any still-pending timer before arming its own, and clear it on unmount
+  // too, so no stray setState fires after the component is gone.
+  const suppressOnDragDismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (suppressOnDragDismissTimerRef.current !== null) {
+        clearTimeout(suppressOnDragDismissTimerRef.current);
+      }
+    },
+    [],
+  );
   const openSearch = useCallback(() => {
     // Diagnostic trail for the "search icon tap does nothing but the list
     // scrolls slightly" report: if this breadcrumb is ABSENT for a tap the
@@ -549,7 +564,11 @@ export default function InboxScreen() {
     setHeaderCollapse(expanded);
     // The focus-on-open effect below moves focus into the field once it
     // mounts.
-    setTimeout(() => {
+    if (suppressOnDragDismissTimerRef.current !== null) {
+      clearTimeout(suppressOnDragDismissTimerRef.current);
+    }
+    suppressOnDragDismissTimerRef.current = setTimeout(() => {
+      suppressOnDragDismissTimerRef.current = null;
       setSuppressOnDragDismiss(false);
     }, SUPPRESS_ON_DRAG_DISMISS_MS);
   }, []);

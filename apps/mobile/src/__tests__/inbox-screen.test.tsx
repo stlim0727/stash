@@ -595,6 +595,72 @@ test('suppresses on-drag keyboard dismissal for a moment after opening search', 
   }
 });
 
+test('a fast close-then-reopen restarts the on-drag suppression window instead of inheriting the first timer', async () => {
+  // Regression test (caught in PR review, Codex): openSearch used to arm a
+  // bare setTimeout without tracking or cancelling it. Close-then-reopen
+  // within the window left the FIRST open's timer still armed, so it could
+  // clear the SECOND open's suppression early — e.g. open at t=0 (timer for
+  // t=500), close at t=300, reopen at t=450 (a new timer for t=950), but the
+  // stale t=500 timer fires anyway at only +50ms into the second open,
+  // reverting to "on-drag" ~450ms too soon and reopening the exact race this
+  // fix exists to close. Assert the second open's suppression survives past
+  // where the FIRST timer would have fired, lasting the full window from the
+  // SECOND open instead.
+  jest.useFakeTimers();
+  try {
+    fakeRepo.__reset([
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000cc',
+        title: 'Close-then-reopen fixture',
+      }),
+    ]);
+
+    const screen = await renderInbox();
+    await waitFor(() => expect(screen.getByText('Close-then-reopen fixture')).toBeTruthy());
+
+    const list = screen.getByTestId('inbox-list');
+
+    // t=0: first open.
+    await fireEvent.press(screen.getByTestId('inbox-search-open'));
+    expect(list).toHaveProp('keyboardDismissMode', 'none');
+
+    // t=300: close, well before the first timer (t=500) would fire.
+    await act(async () => {
+      jest.advanceTimersByTime(300);
+    });
+    await fireEvent.press(screen.getByTestId('inbox-search-open'));
+
+    // t=450: second open — must cancel the stale first timer and arm its own.
+    await act(async () => {
+      jest.advanceTimersByTime(150);
+    });
+    await fireEvent.press(screen.getByTestId('inbox-search-open'));
+    expect(list).toHaveProp('keyboardDismissMode', 'none');
+
+    // t=500 (only +50ms into the second open): the FIRST open's stale timer
+    // would fire here if it hadn't been cancelled. Suppression must still
+    // hold — this is the assertion that would have failed before the fix.
+    await act(async () => {
+      jest.advanceTimersByTime(50);
+    });
+    expect(list).toHaveProp('keyboardDismissMode', 'none');
+
+    // t=949 (499ms into the second open): still holding.
+    await act(async () => {
+      jest.advanceTimersByTime(449);
+    });
+    expect(list).toHaveProp('keyboardDismissMode', 'none');
+
+    // t=950 (the full 500ms from the SECOND open): now it lifts.
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(list).toHaveProp('keyboardDismissMode', 'on-drag');
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test('opening search focuses the field immediately, with no fade-in animation on the newly mounted input', async () => {
   // Regression test for a reported bug: tapping the search icon felt like "a
   // slight momentary scroll" instead of an immediate, stable focus. Root
