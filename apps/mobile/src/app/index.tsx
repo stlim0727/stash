@@ -1701,8 +1701,12 @@ export default function InboxScreen() {
         // child, immediately below) stays fixed in place unconditionally; only
         // the inner wrapper further down (the collapsible content) moves. On
         // native the whole cluster still collapses together as one unit,
-        // unchanged.
-        animatedStyle={{ transform: [{ translateY: isWeb ? 0 : headerTranslate }] }}
+        // unchanged — except while search is open: pinned at 0 so the search
+        // field (which lives in this same cluster on native) can't scroll out
+        // from under the user mid-search, matching the web-side guard in the
+        // scroll listener above. `headerTranslate` keeps updating live off
+        // `scrollY` underneath, so un-pinning on close has no jump to correct.
+        animatedStyle={{ transform: [{ translateY: isWeb || searchOpen ? 0 : headerTranslate }] }}
       >
         <View
           onLayout={(event) => setHeroHeight(event.nativeEvent.layout.height)}
@@ -2179,21 +2183,22 @@ export default function InboxScreen() {
             const y = event.nativeEvent.contentOffset.y;
             lastScrollYRef.current = y;
             if (isWeb) {
-              const next = nextHeaderCollapseState(headerCollapseRef.current, y, collapsibleHeight);
-              const flipped = next.collapsed !== headerCollapseRef.current.collapsed;
-              // Diagnostic for the same "search field disappears right after
-              // opening" report: openSearch forces the header expanded, so a
-              // flip back to collapsed while search is still open means
-              // something re-collapsed it out from under the user immediately
-              // after — this is the signal that theory needs.
-              if (flipped && next.collapsed && searchOpen) {
-                trackBreadcrumb('search', 'collapsed while open', {
-                  scrollY: Math.round(y),
-                });
-              }
-              headerCollapseRef.current = next;
-              if (flipped) {
-                setHeaderCollapse(next);
+              if (searchOpen) {
+                // While the search UI is open, scroll must never collapse it
+                // out from under the user — openSearch forced it expanded on
+                // open, and it should stay that way regardless of how far
+                // they scroll through results, until they explicitly close
+                // search. Keep tracking the anchor (not just freezing it) so
+                // a later close doesn't compare against a stale point and
+                // collapse immediately.
+                headerCollapseRef.current = { collapsed: false, anchorScrollY: y };
+              } else {
+                const next = nextHeaderCollapseState(headerCollapseRef.current, y, collapsibleHeight);
+                const flipped = next.collapsed !== headerCollapseRef.current.collapsed;
+                headerCollapseRef.current = next;
+                if (flipped) {
+                  setHeaderCollapse(next);
+                }
               }
             }
           },
