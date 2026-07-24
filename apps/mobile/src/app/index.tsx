@@ -2774,9 +2774,7 @@ export default function InboxScreen() {
                   <View style={styles.cardPreviewContainer}>
                     <Pressable
                       testID="inbox-card-preview"
-                      accessibilityRole="button"
-                      accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
-                      accessibilityHint={t('inbox.openBookmarkHint')}
+                      accessible={false}
                       onPress={openDetail}
                       onLongPress={() => setMenuItem(item)}
                       style={StyleSheet.absoluteFill}
