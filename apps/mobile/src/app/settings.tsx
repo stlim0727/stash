@@ -46,6 +46,13 @@ import {
   parseRecents,
   serializeRecents,
 } from '@/domain/recent-searches';
+import {
+  DEFAULT_PUSH_NOTIFICATIONS_ENABLED,
+  LAST_REGISTERED_PUSH_TOKEN_PREF_KEY,
+  PUSH_NOTIFICATIONS_PREF_KEY,
+  parsePushNotificationsEnabled,
+  serializePushNotificationsEnabled,
+} from '@/domain/push-notifications-pref';
 import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import { getPreference, setPreference } from '@/storage/preferences';
@@ -56,6 +63,9 @@ import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import type { OAuthProvider } from '@/supabase/types';
 import { useAnalytics } from '@/analytics/provider';
+import { requestPushPermissionAndToken } from '@/notifications/push-permission';
+import { createDefaultPushTokenWriter } from '@/notifications/push-token-client';
+import { deregisterPushToken, registerPushToken } from '@/notifications/push-token-registration';
 
 const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
 
@@ -403,6 +413,146 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const isAuthenticated = auth.status === 'authenticated';
 
+  // Push notification for AI-catchup (STASH #579): "notify once the AI
+  // enrichment overflow queue (#578) fully drains for this user." Opt-in
+  // only — the OS permission prompt only fires when the user flips this on,
+  // never on launch. Loaded/persisted the same local-preference way as the
+  // other toggles above.
+  const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(
+    DEFAULT_PUSH_NOTIFICATIONS_ENABLED,
+  );
+  const [pushNotificationsBusy, setPushNotificationsBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    getPreference(PUSH_NOTIFICATIONS_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setPushNotificationsEnabled(parsePushNotificationsEnabled(raw));
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Requires a real (non-anonymous) session — an anonymous device has no
+  // stable cross-device identity to bind a token to, see the push_tokens
+  // migration — AND an AI-suggestions mode other than `off`, since `off`
+  // means nothing ever queues for the backend worker to notify about.
+  // Rather than hide the row when either is unmet, it stays visible but
+  // disabled with an explanatory value line (same pattern as "Clear search
+  // history" below), so the setting doesn't appear to vanish. Turning AI
+  // suggestions back on does NOT require re-flipping this toggle: an
+  // already-enabled preference (and its registered token, if any) is left
+  // alone rather than force-cleared while suggestions are off.
+  const canUsePushNotifications = isAuthenticated && aiSuggestionsMode !== 'off';
+
+  const handlePushNotificationsChange = (enabled: boolean) => {
+    if (pushNotificationsBusy || !canUsePushNotifications) {
+      return;
+    }
+    setPushNotificationsBusy(true);
+    void (async () => {
+      // Everything below is best-effort and must never surface an unhandled
+      // rejection or leave the switch stuck busy — wrapping the whole flow
+      // (not just the individual client calls, which already swallow their
+      // own errors) covers e.g. createSupabaseClient() throwing when
+      // Supabase env vars are missing.
+      try {
+        await runPushNotificationsChange(enabled);
+      } catch (err) {
+        console.warn('[push-notifications] Toggle handling failed:', err);
+        setPushNotificationsEnabled(false);
+        await setPreference(
+          PUSH_NOTIFICATIONS_PREF_KEY,
+          serializePushNotificationsEnabled(false),
+        ).catch(() => {});
+      }
+    })().finally(() => setPushNotificationsBusy(false));
+  };
+
+  const runPushNotificationsChange = async (enabled: boolean) => {
+    if (!enabled) {
+      setPushNotificationsEnabled(false);
+      await setPreference(
+        PUSH_NOTIFICATIONS_PREF_KEY,
+        serializePushNotificationsEnabled(false),
+      ).catch(() => {});
+      // Best-effort deregister of whatever token this device last
+      // registered. Never surfaced to the user and never lets a failure
+      // stop the toggle from turning off locally — a leftover server-side
+      // token is harmless (Expo/the worker prune it once it's stale) and
+      // this must never block anything (Capture is sacred extends here:
+      // nothing about this feature may block or delay unrelated UI).
+      const lastToken = await getPreference(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY).catch(() => null);
+      if (lastToken && auth.session) {
+        await deregisterPushToken({
+          client: createDefaultPushTokenWriter(),
+          session: auth.session,
+          token: lastToken,
+        });
+      }
+      await setPreference(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY, '').catch(() => {});
+      return;
+    }
+
+    const outcome = await requestPushPermissionAndToken();
+    if (outcome.outcome !== 'granted') {
+      setPushNotificationsEnabled(false);
+      await setPreference(
+        PUSH_NOTIFICATIONS_PREF_KEY,
+        serializePushNotificationsEnabled(false),
+      ).catch(() => {});
+      if (outcome.outcome === 'denied') {
+        Alert.alert(
+          t('settings.pushNotifications.deniedTitle'),
+          t('settings.pushNotifications.deniedBody'),
+        );
+      } else if (outcome.outcome === 'no_project_id') {
+        Alert.alert(
+          t('settings.pushNotifications.unavailableTitle'),
+          t('settings.pushNotifications.unavailableBody'),
+        );
+      }
+      return;
+    }
+
+    if (!auth.session) {
+      // Session dropped mid-flow (e.g. a sign-out raced the permission
+      // prompt) — nothing to register a token against.
+      setPushNotificationsEnabled(false);
+      return;
+    }
+
+    const registered = await registerPushToken({
+      client: createDefaultPushTokenWriter(),
+      session: auth.session,
+      token: outcome.token,
+      platform: outcome.platform,
+    });
+    if (!registered) {
+      setPushNotificationsEnabled(false);
+      await setPreference(
+        PUSH_NOTIFICATIONS_PREF_KEY,
+        serializePushNotificationsEnabled(false),
+      ).catch(() => {});
+      Alert.alert(
+        t('settings.pushNotifications.unavailableTitle'),
+        t('settings.pushNotifications.unavailableBody'),
+      );
+      return;
+    }
+
+    setPushNotificationsEnabled(true);
+    await Promise.all([
+      setPreference(PUSH_NOTIFICATIONS_PREF_KEY, serializePushNotificationsEnabled(true)).catch(
+        () => {},
+      ),
+      setPreference(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY, outcome.token).catch(() => {}),
+    ]);
+  };
+
   // Sync row is status-led: the right-hand glyph is the action/state.
   //  - cloud reachable + something queued → tappable refresh (upload-then-pull)
   //  - syncing → spinner
@@ -576,6 +726,35 @@ export default function SettingsScreen() {
               ?.labelKey ?? 'settings.aiSuggestions.confirm',
           )}
           onPress={() => setAiSuggestionsSheetOpen(true)}
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="notifications-outline"
+          label={t('settings.pushNotifications.label')}
+          value={
+            !isAuthenticated
+              ? t('settings.pushNotifications.signInRequired')
+              : aiSuggestionsMode === 'off'
+                ? t('settings.pushNotifications.aiOff')
+                : pushNotificationsEnabled
+                  ? t('settings.pushNotifications.on')
+                  : t('settings.pushNotifications.off')
+          }
+          right={
+            pushNotificationsBusy ? (
+              <ActivityIndicator color={palette.textSecondary} />
+            ) : (
+              <Switch
+                accessibilityLabel={t('settings.pushNotifications.label')}
+                value={pushNotificationsEnabled}
+                disabled={!canUsePushNotifications}
+                onValueChange={handlePushNotificationsChange}
+                trackColor={{ true: palette.accent, false: palette.border }}
+                thumbColor="#ffffff"
+              />
+            )
+          }
         />
         <Row
           styles={styles}
