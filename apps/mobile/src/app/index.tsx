@@ -2771,27 +2771,35 @@ export default function InboxScreen() {
                 accessible={false}
               >
                 {previewUri ? (
-                  <Pressable
-                    testID="inbox-card-preview"
-                    accessibilityRole={item.url ? 'link' : 'button'}
-                    accessibilityLabel={item.url ? t('common.openLink') : (accessibilityTitle(item) ?? t('common.untitled'))}
-                    onPress={item.url ? openLink : openDetail}
-                    onLongPress={() => setMenuItem(item)}
-                    style={styles.cardPreviewContainer}
-                  >
-                    <Image
-                      source={{ uri: previewUri }}
-                      style={styles.cardPreview}
-                    />
+                  <View style={styles.cardPreviewContainer}>
+                    <Pressable
+                      testID="inbox-card-preview"
+                      accessible={false}
+                      onPress={openDetail}
+                      onLongPress={() => setMenuItem(item)}
+                      style={StyleSheet.absoluteFill}
+                    >
+                      <Image
+                        source={{ uri: previewUri }}
+                        style={styles.cardPreview}
+                      />
+                    </Pressable>
                     {item.url ? (
-                      <View style={styles.previewRibbon}>
+                      <Pressable
+                        accessibilityRole="link"
+                        accessibilityLabel={t('common.openLink')}
+                        onPress={openLink}
+                        onLongPress={() => setMenuItem(item)}
+                        hitSlop={6}
+                        style={styles.previewRibbon}
+                      >
                         <Text style={styles.previewRibbonText} numberOfLines={1}>
                           {ribbonLabel(item)}
                         </Text>
                         <Ionicons name="open-outline" size={12} color="#ffffff" />
-                      </View>
+                      </Pressable>
                     ) : null}
-                  </Pressable>
+                  </View>
                 ) : null}
                 <View
                   style={[
@@ -2800,18 +2808,7 @@ export default function InboxScreen() {
                   ]}
                 >
                   <View style={styles.cardTitleRow}>
-                    {!previewUri && item.url ? (
-                      <Pressable
-                        accessibilityRole="link"
-                        accessibilityLabel={t('common.openLink')}
-                        onPress={openLink}
-                        onLongPress={() => setMenuItem(item)}
-                      >
-                        <ItemIcon item={item} testID="inbox-card-monogram" />
-                      </Pressable>
-                    ) : (
-                      <ItemIcon item={item} testID="inbox-card-monogram" />
-                    )}
+                    <ItemIcon item={item} testID="inbox-card-monogram" />
                   {/* Only the title is the accessible "open details" button so
                       the sibling … overflow button stays independently
                       focusable; the whole card remains tappable visually. */}
@@ -2869,6 +2866,18 @@ export default function InboxScreen() {
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />
+                    {!previewUri ? (
+                      <Pressable
+                        accessibilityRole="link"
+                        accessibilityLabel={t('common.openLink')}
+                        onPress={openLink}
+                        onLongPress={() => setMenuItem(item)}
+                        hitSlop={6}
+                        style={[styles.cardUrlOpen, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                      >
+                        <Ionicons name="open-outline" size={13} color={palette.accentText} />
+                      </Pressable>
+                    ) : null}
                   </View>
                 ) : null}
                 {visibleMetaParts.length > 0 ? (
