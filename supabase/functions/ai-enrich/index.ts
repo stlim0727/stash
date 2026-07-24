@@ -28,7 +28,16 @@ import type { EnrichmentInput, EnrichmentOutput, EnrichmentProvider } from './pr
 import { matchSuggestedCollection } from './collection-match.ts';
 import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
 import { isUuid } from './validation.ts';
-import { chunk, nextAttemptState } from './batch-worker.ts';
+import {
+  chunk,
+  nextAttemptState,
+  pickDrainedUsers,
+  pushBodyForLocale,
+  PUSH_TITLE,
+  staleTokenIndexes,
+  tallyProcessedByUser,
+  type ExpoPushTicket,
+} from './batch-worker.ts';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
 // Use the Gemini-backed provider when an API key is configured; otherwise fall
@@ -181,6 +190,12 @@ async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefine
 const BATCH_CLAIM_LIMIT = 40;
 /** Items per single batched Gemini call — within the 5-10 range from #578. */
 const BATCH_CHUNK_SIZE = 8;
+
+/** Expo's push-send endpoint (STASH #579). Registered/non-anonymous users
+ *  only — see the push_tokens migration; nothing here bypasses that, it just
+ *  reads whatever rows exist, and the client-side + RLS gates ensure only
+ *  real accounts ever have one. */
+const EXPO_PUSH_SEND_URL = 'https://exp.host/--/api/v2/push/send';
 
 function serviceRest(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${SUPABASE_URL}/rest/v1${path}`, {
@@ -409,6 +424,130 @@ async function processEnrichmentChunk(
   );
 }
 
+interface PushTokenRow {
+  id: string;
+  token: string;
+}
+
+/**
+ * Send one drained-queue push notification to every device `userId` has
+ * registered, then delete any token Expo's synchronous response already
+ * flagged as unregistered. Never throws — every failure is caught and logged
+ * by the caller (`notifyDrainedUsers`), which wraps every per-user call the
+ * same way; this function additionally guards its own body so a bug here
+ * can't take down a sibling user's notification in the same `Promise.all`.
+ */
+async function notifyUserDrained(
+  userId: string,
+  count: number,
+  locale: string | null,
+): Promise<void> {
+  try {
+    // Service-role read — no RLS needed server-side (see the push_tokens
+    // migration; the client's own SELECT policy is for its own UI only).
+    const tokensRes = await serviceRest(`/push_tokens?user_id=eq.${userId}&select=id,token`);
+    if (!tokensRes.ok) {
+      console.error('Drained-queue: failed to load push tokens', userId, tokensRes.status);
+      return;
+    }
+    const tokens = (await tokensRes.json()) as PushTokenRow[];
+    if (tokens.length === 0) {
+      return; // Opted out / never registered a device. Nothing to send.
+    }
+
+    const body = pushBodyForLocale(locale, count);
+    const messages = tokens.map((row) => ({
+      to: row.token,
+      sound: 'default',
+      title: PUSH_TITLE,
+      body,
+      data: { type: 'ai_enrichment_drained' },
+    }));
+
+    let tickets: ExpoPushTicket[];
+    try {
+      const sendRes = await fetch(EXPO_PUSH_SEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(messages),
+      });
+      const payload = (await sendRes.json()) as { data?: ExpoPushTicket[] };
+      if (!sendRes.ok || !payload.data) {
+        console.error('Drained-queue: Expo push send failed', userId, sendRes.status);
+        return;
+      }
+      tickets = payload.data;
+    } catch (err) {
+      console.error('Drained-queue: Expo push send threw', userId, err);
+      return;
+    }
+
+    // Stale-token cleanup (immediate ticket status only — see
+    // staleTokenIndexes' docs for why the async receipt endpoint is
+    // deliberately out of scope for v1). Best-effort: a failed delete just
+    // means this token gets tried again (and possibly cleaned up) next time.
+    const staleIndexes = staleTokenIndexes(tickets);
+    await Promise.all(
+      staleIndexes.map((i) => {
+        const tokenRow = tokens[i];
+        if (!tokenRow) return Promise.resolve();
+        return serviceRest(`/push_tokens?id=eq.${tokenRow.id}`, { method: 'DELETE' }).catch(
+          (err) => {
+            console.error('Drained-queue: failed to delete stale push token', tokenRow.id, err);
+          },
+        );
+      }),
+    );
+  } catch (err) {
+    console.error('Drained-queue: notifyUserDrained failed', userId, err);
+  }
+}
+
+/**
+ * After a tick's chunks finish, notify every user among `eligible` whose
+ * ENTIRE pending_ai_enrichment backlog just drained to zero (STASH #579) —
+ * not once per tick/chunk. Detection is a single grouped query across every
+ * affected user (never a full-table scan, never one query per user — see
+ * `pickDrainedUsers`'s docs). Wrapped so NOTHING here can ever fail or delay
+ * the worker's actual job: `runBatchWorker` awaits this after processing so
+ * the edge function's isolate stays alive for it, but every error inside is
+ * caught here and never rethrown.
+ */
+async function notifyDrainedUsers(eligible: PendingEnrichmentRow[]): Promise<void> {
+  if (eligible.length === 0) {
+    return;
+  }
+  try {
+    const tally = tallyProcessedByUser(eligible);
+    const affectedUserIds = [...tally.keys()];
+
+    const remainingRes = await serviceRest(
+      `/pending_ai_enrichment?select=user_id&user_id=in.(${affectedUserIds.join(',')})&status=in.(pending,processing)`,
+    );
+    if (!remainingRes.ok) {
+      console.error('Drained-queue: remaining-rows check failed', remainingRes.status);
+      return;
+    }
+    const stillPendingUserIds = new Set(
+      ((await remainingRes.json()) as Array<{ user_id: string }>).map((row) => row.user_id),
+    );
+    const drainedUserIds = pickDrainedUsers(affectedUserIds, stillPendingUserIds);
+    if (drainedUserIds.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      drainedUserIds.map((userId) => {
+        const info = tally.get(userId);
+        if (!info) return Promise.resolve();
+        return notifyUserDrained(userId, info.count, info.locale);
+      }),
+    );
+  } catch (err) {
+    console.error('Drained-queue notification pass failed:', err);
+  }
+}
+
 async function runBatchWorker(): Promise<Response> {
   try {
     const claimRes = await serviceRest(`/rpc/claim_pending_ai_enrichment_batch`, {
@@ -460,6 +599,11 @@ async function runBatchWorker(): Promise<Response> {
     await Promise.all(
       chunks.map((rows) => processEnrichmentChunk(rows, bookmarksById, contextByUser)),
     );
+
+    // STASH #579: best-effort drained-queue push notification, after the
+    // real work above is fully settled. Never throws (see its own docs) and
+    // never affects `processed`/`deferred` below.
+    await notifyDrainedUsers(eligible);
 
     return json({ processed: eligible.length, deferred: deferred.length }, 200);
   } catch (error) {

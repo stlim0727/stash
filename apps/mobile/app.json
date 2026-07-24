@@ -52,7 +52,8 @@
           ]
         }
       ],
-      "@sentry/react-native/expo"
+      "@sentry/react-native/expo",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,

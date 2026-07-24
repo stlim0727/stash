@@ -365,6 +365,17 @@ export const en = {
   'settings.aiSuggestions.off': 'Off — never auto-suggest',
   'settings.aiSuggestions.confirm': 'Review suggestions before applying',
   'settings.aiSuggestions.auto_accept': 'Auto-apply high-confidence suggestions',
+  'settings.pushNotifications.label': 'Notify when AI catches up',
+  'settings.pushNotifications.on': 'On — a push arrives once AI finishes a backlog',
+  'settings.pushNotifications.off': 'Off',
+  'settings.pushNotifications.signInRequired': 'Sign in to enable',
+  'settings.pushNotifications.aiOff': 'Turn on AI suggestions first',
+  'settings.pushNotifications.deniedTitle': 'Notifications are turned off',
+  'settings.pushNotifications.deniedBody':
+    'Stash can’t send this notification without permission. Enable notifications for Stash in your device Settings, then try again.',
+  'settings.pushNotifications.unavailableTitle': 'Can’t enable notifications right now',
+  'settings.pushNotifications.unavailableBody':
+    'Something went wrong setting up notifications on this device. Please try again later.',
   'settings.diagnostics.title': 'Diagnostics',
   'settings.diagnostics.supabaseAuth': 'Supabase auth',
   'settings.diagnostics.lastPulled': 'Last pulled',
