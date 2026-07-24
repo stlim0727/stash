@@ -24,10 +24,11 @@
 
 import { DummyProvider } from './dummy-provider.ts';
 import { GeminiContentError, GeminiProvider } from './gemini-provider.ts';
-import type { EnrichmentOutput, EnrichmentProvider } from './provider.ts';
+import type { EnrichmentInput, EnrichmentOutput, EnrichmentProvider } from './provider.ts';
 import { matchSuggestedCollection } from './collection-match.ts';
 import { resolveCallerAuth, shouldFailClosedOnRateLimit } from './request-auth.ts';
 import { isUuid } from './validation.ts';
+import { chunk, nextAttemptState } from './batch-worker.ts';
 
 // ── The swappable seam ──────────────────────────────────────────────────────
 // Use the Gemini-backed provider when an API key is configured; otherwise fall
@@ -166,6 +167,307 @@ async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefine
   }
 }
 
+// ── Overflow-queue batch worker (STASH #578 Phase 2) ────────────────────────
+// Triggered only by the pg_cron dispatch in the pending_ai_enrichment_queue
+// migration (see runBatchWorker's call site above). Everything below is
+// service-role-authenticated by construction (serviceRest always sends the
+// service-role key) and never shares code paths with the single-item
+// synchronous handler above — that path is untouched by this addition.
+
+/** How many pending rows one worker tick claims across ALL users. Bounded so
+ *  one tick's wall-clock time (chunks run concurrently, so ~one chunk's worth
+ *  of Gemini latency) stays comfortably under the cron dispatch's pg_net
+ *  timeout (see the migration). */
+const BATCH_CLAIM_LIMIT = 40;
+/** Items per single batched Gemini call — within the 5-10 range from #578. */
+const BATCH_CHUNK_SIZE = 8;
+
+function serviceRest(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(`${SUPABASE_URL}/rest/v1${path}`, {
+    ...init,
+    headers: {
+      apikey: SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      'Content-Type': 'application/json',
+      ...(init.headers ?? {}),
+    },
+  });
+}
+
+interface PendingEnrichmentRow {
+  id: string;
+  bookmark_id: string;
+  user_id: string;
+  locale: string | null;
+  attempts: number;
+}
+
+/** Mark a claimed row's outcome. Best-effort: a failure here just means the
+ *  row stays 'processing' until the claim query's 10-minute staleness reclaim
+ *  picks it up again — never thrown, so one bookkeeping write failure can't
+ *  cascade into failing siblings in the same chunk. */
+async function markPendingEnrichmentSettled(
+  id: string,
+  status: 'done' | 'pending' | 'failed',
+  attempts: number,
+): Promise<void> {
+  try {
+    const res = await serviceRest(`/pending_ai_enrichment?id=eq.${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, attempts, updated_at: new Date().toISOString() }),
+    });
+    if (!res.ok) {
+      console.error('Batch worker: failed to update pending_ai_enrichment row', id, res.status);
+    }
+  } catch (err) {
+    console.error('Batch worker: error updating pending_ai_enrichment row', id, err);
+  }
+}
+
+/** Same collections/tags lookup as the single-item path above (see its inline
+ *  comments for the full "why"), reimplemented standalone rather than
+ *  refactored out of the single-item handler — that handler must stay
+ *  provably unchanged by this addition. Scoped to one user at a time; the
+ *  worker calls this once per DISTINCT user among a claimed batch, not once
+ *  per row, since several claimed rows commonly share a user. */
+async function loadEnrichmentContextForUser(
+  userId: string,
+): Promise<{ collections: Array<{ id: string; name: string }>; existingTags: string[] }> {
+  let collections: Array<{ id: string; name: string }> = [];
+  const colRes = await serviceRest(`/collections?user_id=eq.${userId}&select=id,name`);
+  if (colRes.ok) {
+    collections = (await colRes.json()) as Array<{ id: string; name: string }>;
+  }
+  let existingTags: string[] = [];
+  const [activeRes, tagRes] = await Promise.all([
+    serviceRest(`/bookmarks?user_id=eq.${userId}&deleted_at=is.null&is_archived=is.false&select=id`),
+    serviceRest(`/tags?user_id=eq.${userId}&select=name,bookmark_tags(bookmark_id)`),
+  ]);
+  if (activeRes.ok && tagRes.ok) {
+    const activeIds = new Set(
+      ((await activeRes.json()) as Array<{ id: string }>).map((b) => b.id),
+    );
+    const rows = (await tagRes.json()) as Array<{
+      name: unknown;
+      bookmark_tags?: Array<{ bookmark_id?: string }>;
+    }>;
+    existingTags = rows
+      .map((row) => ({
+        name: typeof row.name === 'string' ? row.name.trim() : '',
+        uses: (row.bookmark_tags ?? []).filter(
+          (link) => link.bookmark_id && activeIds.has(link.bookmark_id),
+        ).length,
+      }))
+      .filter((tag) => tag.name && tag.uses > 0)
+      .sort((a, b) => b.uses - a.uses)
+      .slice(0, MAX_EXISTING_TAGS)
+      .map((tag) => tag.name);
+  }
+  return { collections, existingTags };
+}
+
+/** Spend one rate-limit slot for `userId` via the existing service-role-only
+ *  RPC (request_ai_enrichment_slot_for — see the ai_enrich_server_trigger
+ *  migration). This is the fix for the abuse gap a client-writable overflow
+ *  queue would otherwise open: without this, a caller could bypass the
+ *  synchronous path's 429 entirely by inserting straight into
+ *  pending_ai_enrichment (the client-facing INSERT policy has no quota check
+ *  of its own — see the migration), then let the worker burn unlimited real
+ *  Gemini calls on their behalf. Checked once per CLAIMED ROW (matching the
+ *  synchronous path's one-slot-per-bookmark accounting), so N items from the
+ *  same user in one tick still only ever consume N of that user's slots.
+ *  Fails OPEN on an RPC error (a transient limiter hiccup must not strand
+ *  overflow rows forever — this is a best-effort background job, not a live
+ *  user-facing request the way the synchronous path's fail-open/closed policy
+ *  is for). Only called when `enforceRateLimit` (a real, billable provider is
+ *  configured) — see its call site. */
+async function claimEnrichmentQuotaSlot(userId: string): Promise<boolean> {
+  try {
+    const res = await serviceRest(`/rpc/request_ai_enrichment_slot_for`, {
+      method: 'POST',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ p_user_id: userId }),
+    });
+    if (!res.ok) {
+      console.error('Batch worker: rate-limit check failed', userId, res.status);
+      return true;
+    }
+    const verdict = (await res.json()) as { allowed?: boolean };
+    return verdict.allowed !== false;
+  } catch (err) {
+    console.error('Batch worker: rate-limit check threw', userId, err);
+    return true;
+  }
+}
+
+/** Run one Gemini batch call for `rows` and persist each result. Falls back
+ *  to per-item heuristics (mirroring the single-item path's degrade-on-error
+ *  behavior) if the batch call itself fails, rather than leaving the whole
+ *  chunk stuck; only a failure in the fallback itself (shouldn't happen — it
+ *  is network-free) reaches the outer catch and reschedules the chunk. */
+async function processEnrichmentChunk(
+  rows: PendingEnrichmentRow[],
+  bookmarksById: Map<string, BookmarkRow>,
+  contextByUser: Map<string, { collections: Array<{ id: string; name: string }>; existingTags: string[] }>,
+): Promise<void> {
+  const emptyContext = { collections: [] as Array<{ id: string; name: string }>, existingTags: [] as string[] };
+  const inputs: EnrichmentInput[] = rows.map((row) => {
+    const bookmark = bookmarksById.get(row.bookmark_id);
+    const ctx = contextByUser.get(row.user_id) ?? emptyContext;
+    return {
+      url: bookmark?.url ?? null,
+      title: bookmark?.title ?? null,
+      description: bookmark?.description ?? null,
+      notes: bookmark?.notes ?? null,
+      site_name: bookmark?.site_name ?? null,
+      content_type: bookmark?.content_type ?? 'url',
+      collections: ctx.collections.map((col) => col.name),
+      existing_tags: ctx.existingTags,
+      locale: row.locale ?? undefined,
+    };
+  });
+
+  let outputs: EnrichmentOutput[];
+  let usedModel = provider.model;
+  let degraded = provider === fallbackProvider;
+  let degradedReason: DegradedReason | null = degraded ? 'not_configured' : null;
+  try {
+    if (provider instanceof GeminiProvider) {
+      const result = await provider.enrichBatch(inputs);
+      outputs = result.outputs;
+    } else {
+      outputs = await Promise.all(inputs.map((input) => provider.enrich(input)));
+    }
+  } catch (err) {
+    console.error('Batch enrichment provider failed; using fallback for this chunk:', err);
+    degraded = true;
+    degradedReason = classifyDegradedReason(err);
+    usedModel = fallbackProvider.model;
+    outputs = await Promise.all(inputs.map((input) => fallbackProvider.enrich(input)));
+  }
+
+  await Promise.all(
+    rows.map(async (row, index) => {
+      const bookmark = bookmarksById.get(row.bookmark_id);
+      const output = outputs[index];
+      if (!bookmark || !output) {
+        // Defensive: shouldn't happen (a deleted bookmark cascade-deletes its
+        // pending row; enrichBatch's length is validated against inputs).
+        // Retry rather than fail outright — this may be a transient blip.
+        const next = nextAttemptState(row.attempts);
+        await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
+        return;
+      }
+      const ctx = contextByUser.get(row.user_id) ?? emptyContext;
+      const matched = matchSuggestedCollection(ctx.collections, output.suggested_collection);
+      const enrichmentRow = {
+        bookmark_id: row.bookmark_id,
+        user_id: row.user_id,
+        summary: output.summary,
+        topics: output.topics,
+        suggested_tags: output.suggested_tags,
+        suggested_collection_id: matched?.id ?? null,
+        suggested_collection_name:
+          !matched && output.suggested_collection?.trim() ? output.suggested_collection.trim() : null,
+        model: usedModel,
+        status: 'complete',
+        confidence: output.confidence,
+        degraded,
+        degraded_reason: degradedReason,
+        // A batch call's usage covers the whole chunk, not one bookmark — see
+        // BatchEnrichmentResult's docs. Left null (not divided/duplicated)
+        // rather than misrepresenting per-bookmark spend; the ai_enrichment_calls
+        // ledger is likewise not written for batch-produced rows.
+        prompt_tokens: null,
+        output_tokens: null,
+        total_tokens: null,
+        updated_at: new Date().toISOString(),
+      };
+      try {
+        const saveRes = await serviceRest(`/ai_enrichments?on_conflict=bookmark_id`, {
+          method: 'POST',
+          headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+          body: JSON.stringify(enrichmentRow),
+        });
+        if (!saveRes.ok) {
+          console.error(
+            'Batch worker: failed to save ai_enrichments row',
+            row.bookmark_id,
+            saveRes.status,
+          );
+          const next = nextAttemptState(row.attempts);
+          await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
+          return;
+        }
+        await markPendingEnrichmentSettled(row.id, 'done', row.attempts);
+      } catch (err) {
+        console.error('Batch worker: error saving ai_enrichments row', row.bookmark_id, err);
+        const next = nextAttemptState(row.attempts);
+        await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
+      }
+    }),
+  );
+}
+
+async function runBatchWorker(): Promise<Response> {
+  try {
+    const claimRes = await serviceRest(`/rpc/claim_pending_ai_enrichment_batch`, {
+      method: 'POST',
+      headers: { Prefer: 'return=representation' },
+      body: JSON.stringify({ p_limit: BATCH_CLAIM_LIMIT }),
+    });
+    if (!claimRes.ok) {
+      console.error('Batch worker: claim RPC failed', claimRes.status, await claimRes.text());
+      return json({ error: 'claim_failed' }, 500);
+    }
+    const claimed = (await claimRes.json()) as PendingEnrichmentRow[];
+    if (claimed.length === 0) {
+      return json({ processed: 0, deferred: 0 }, 200);
+    }
+
+    // Per-row quota gate (see claimEnrichmentQuotaSlot's docs for why this is
+    // required, not optional). Skipped entirely when running the network-free
+    // fallback provider — nothing to protect (mirrors `enforceRateLimit` on
+    // the single-item path above).
+    let eligible = claimed;
+    let deferred: PendingEnrichmentRow[] = [];
+    if (enforceRateLimit) {
+      const granted = await Promise.all(claimed.map((row) => claimEnrichmentQuotaSlot(row.user_id)));
+      eligible = claimed.filter((_, i) => granted[i]);
+      deferred = claimed.filter((_, i) => !granted[i]);
+    }
+    // Rows still over quota go straight back to 'pending' with no attempts
+    // penalty — this isn't a failure, just "try again once the window rolls
+    // over" — so the next tick's claim picks them up again unchanged.
+    await Promise.all(deferred.map((row) => markPendingEnrichmentSettled(row.id, 'pending', row.attempts)));
+
+    if (eligible.length === 0) {
+      return json({ processed: 0, deferred: deferred.length }, 200);
+    }
+
+    const bookmarkIds = [...new Set(eligible.map((row) => row.bookmark_id))];
+    const bookmarksRes = await serviceRest(
+      `/bookmarks?id=in.(${bookmarkIds.join(',')})&select=id,user_id,url,title,description,notes,site_name,content_type`,
+    );
+    const bookmarks = bookmarksRes.ok ? ((await bookmarksRes.json()) as BookmarkRow[]) : [];
+    const bookmarksById = new Map(bookmarks.map((b) => [b.id, b] as const));
+
+    const userIds = [...new Set(eligible.map((row) => row.user_id))];
+    const contexts = await Promise.all(userIds.map((id) => loadEnrichmentContextForUser(id)));
+    const contextByUser = new Map(userIds.map((id, i) => [id, contexts[i]] as const));
+
+    const chunks = chunk(eligible, BATCH_CHUNK_SIZE);
+    await Promise.all(
+      chunks.map((rows) => processEnrichmentChunk(rows, bookmarksById, contextByUser)),
+    );
+
+    return json({ processed: eligible.length, deferred: deferred.length }, 200);
+  } catch (error) {
+    console.error('Batch worker failed:', error);
+    return json({ error: error instanceof Error ? error.message : 'Batch worker failed' }, 500);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
@@ -195,6 +497,23 @@ Deno.serve(async (req) => {
   } catch {
     return json({ error: 'Invalid JSON body' }, 400);
   }
+
+  // STASH #578 Phase 2: the pg_cron-scheduled overflow-queue worker pings this
+  // endpoint with `{ batch_worker: true }` instead of a bookmark_id. Gated on
+  // `serverPath` (the shared-secret caller, never a normal user JWT) — this
+  // mode reads/writes across ALL users via service-role, so it must never be
+  // reachable by anyone holding just their own session token.
+  if (body.batch_worker === true) {
+    if (!serverPath) {
+      return json({ error: 'Unauthorized' }, 401);
+    }
+    if (!SERVICE_ROLE_KEY) {
+      console.error('Batch worker invoked but SUPABASE_SERVICE_ROLE_KEY is unset');
+      return json({ error: 'Server path not configured' }, 500);
+    }
+    return await runBatchWorker();
+  }
+
   const bookmarkId = body.bookmark_id;
   if (typeof bookmarkId !== 'string' || !bookmarkId) {
     return json({ error: 'bookmark_id is required' }, 400);

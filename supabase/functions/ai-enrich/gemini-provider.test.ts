@@ -371,3 +371,127 @@ test('reports its model id with a gemini prefix', () => {
 test('requires an api key', () => {
   assert.throws(() => new GeminiProvider({ apiKey: '', fetchImpl: stubFetch(null).fetchImpl }));
 });
+
+// ── Batch worker path (STASH #578 Phase 2) ──────────────────────────────────
+
+test('enrichBatch sends one call embedding all items and maps results back in order', async () => {
+  const { fetchImpl, calls } = stubFetch([
+    {
+      summary: 'First item summary.',
+      topics: ['a'],
+      suggested_tags: [{ name: 'alpha', confidence: 0.9 }],
+      suggested_collection: null,
+      confidence: 0.9,
+    },
+    {
+      summary: 'Second item summary.',
+      topics: ['b'],
+      suggested_tags: [{ name: 'beta', confidence: 0.8 }],
+      suggested_collection: 'Cooking',
+      confidence: 0.8,
+    },
+  ]);
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  const { outputs, usage } = await provider.enrichBatch([
+    input({ title: 'First' }),
+    input({ title: 'Second' }),
+  ]);
+
+  assert.equal(calls.length, 1);
+  assert.equal(outputs.length, 2);
+  assert.equal(outputs[0].summary, 'First item summary.');
+  assert.equal(outputs[1].summary, 'Second item summary.');
+  assert.equal(outputs[1].suggested_collection, 'Cooking');
+  assert.equal(usage, null);
+  const body = calls[0].init?.body ?? '';
+  assert.match(body, /Item 1:/);
+  assert.match(body, /Item 2:/);
+  assert.match(body, /First/);
+  assert.match(body, /Second/);
+  assert.match(body, /JSON array of exactly 2 objects/);
+});
+
+test('enrichBatch lets each item request its own language independently', async () => {
+  const { fetchImpl, calls } = stubFetch([
+    { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
+    { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
+  ]);
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await provider.enrichBatch([input({ locale: 'ko' }), input({ locale: 'en' })]);
+  const body = calls[0].init?.body ?? '';
+  assert.match(body, /Item 1:[\s\S]*Write this item's summary, suggested_tags, and topics in Korean/);
+  assert.match(body, /Item 2:[\s\S]*Write this item's summary, suggested_tags, and topics in English/);
+});
+
+test('enrichBatch returns an empty result without calling Gemini for zero inputs', async () => {
+  const { fetchImpl, calls } = stubFetch([]);
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  const { outputs, usage } = await provider.enrichBatch([]);
+  assert.deepEqual(outputs, []);
+  assert.equal(usage, null);
+  assert.equal(calls.length, 0);
+});
+
+test('enrichBatch throws when the model returns the wrong array length', async () => {
+  const { fetchImpl } = stubFetch([
+    { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
+  ]);
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await assert.rejects(
+    () => provider.enrichBatch([input(), input()]),
+    (err: unknown) => {
+      assert.ok(err instanceof GeminiContentError);
+      assert.match(err.message, /expected an array of 2, got an array of 1/);
+      return true;
+    },
+  );
+});
+
+test('enrichBatch throws when the model returns a non-array', async () => {
+  const { fetchImpl } = stubFetch({ not: 'an array' });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  await assert.rejects(
+    () => provider.enrichBatch([input()]),
+    (err: unknown) => {
+      assert.ok(err instanceof GeminiContentError);
+      assert.match(err.message, /expected an array of 1, got object/);
+      return true;
+    },
+  );
+});
+
+test('enrichBatch reports the real usage for the whole call, not per item', async () => {
+  const { fetchImpl } = stubFetch(
+    [
+      { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
+      { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
+    ],
+    { usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 300, totalTokenCount: 1200 } },
+  );
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+
+  const { usage } = await provider.enrichBatch([input(), input()]);
+  assert.deepEqual(usage, { prompt_tokens: 900, output_tokens: 300, total_tokens: 1200 });
+});
+
+test('enrichBatch aborts and throws when the endpoint hangs past the timeout', async () => {
+  const fetchImpl: FetchLike = (_url, init) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () =>
+        reject(new DOMException('aborted', 'AbortError')),
+      );
+    });
+  const provider = new GeminiProvider({ apiKey: 'k', timeoutMs: 10, fetchImpl });
+  await assert.rejects(() => provider.enrichBatch([input()]), /Gemini batch request timed out after 10ms/);
+});
+
+test('enrichBatch throws on a non-ok response', async () => {
+  const { fetchImpl } = stubFetch(null, { ok: false, status: 429 });
+  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
+  await assert.rejects(() => provider.enrichBatch([input()]), /Gemini batch request failed \(429\)/);
+});

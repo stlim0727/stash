@@ -651,6 +651,33 @@ export class BookmarkApi {
     return enrichmentFromRemote(row);
   }
 
+  /**
+   * STASH #578 Phase 2: enqueue a bookmark for the background overflow
+   * worker. Called ONLY when the direct `requestEnrichment` call above was
+   * rejected with 429 (quota exceeded) — this is not a replacement for the
+   * synchronous path, just what happens instead of a plain failed attempt
+   * once the per-user quota is exhausted.
+   *
+   * A plain INSERT (never an upsert) with `resolution=ignore-duplicates`: the
+   * table's unique `bookmark_id` constraint means a repeat 429 for a bookmark
+   * that's already queued silently no-ops against the existing row instead of
+   * erroring — this table has no client-facing update policy, so the client
+   * can only ever create its own first overflow request per bookmark, never
+   * revive or reset one the worker already settled.
+   */
+  async enqueuePendingEnrichment(bookmarkId: string, locale?: string): Promise<void> {
+    await this.client.request('/rest/v1/pending_ai_enrichment', {
+      method: 'POST',
+      accessToken: this.session.access_token,
+      headers: { Prefer: 'resolution=ignore-duplicates' },
+      body: {
+        bookmark_id: bookmarkId,
+        user_id: this.session.user.id,
+        ...(locale ? { locale } : {}),
+      },
+    });
+  }
+
   async applyAISuggestions(input: ApplyAISuggestionsInput): Promise<BookmarkDetail | null> {
     if (input.tag_names && input.tag_names.length > 0) {
       await this.addTags({
