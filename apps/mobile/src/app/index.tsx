@@ -2825,6 +2825,19 @@ export default function InboxScreen() {
             ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
           const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
+          const siteLabelText = siteLabel(item);
+          // A search match can live only in the URL's path/query string (not in
+          // the clean site label) — e.g. searching "12345" against
+          // https://example.com/article/12345. Fall back to the raw URL so the
+          // highlighted match stays visible instead of appearing unrelated
+          // (AGENTS.md: search highlights title and URL matches).
+          const urlRowText =
+            searching &&
+            item.url &&
+            !valueMatchesTerms(siteLabelText, searchTerms) &&
+            valueMatchesTerms(item.url, searchTerms)
+              ? item.url
+              : siteLabelText;
 
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.
@@ -2901,7 +2914,7 @@ export default function InboxScreen() {
                     <HighlightedText
                       style={[styles.listUrl, { color: palette.textSecondary }]}
                       numberOfLines={1}
-                      text={siteLabel(item)}
+                      text={urlRowText}
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />
@@ -3034,7 +3047,7 @@ export default function InboxScreen() {
                     <HighlightedText
                       style={[styles.cardUrl, { color: palette.textSecondary }]}
                       numberOfLines={1}
-                      text={siteLabel(item)}
+                      text={urlRowText}
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />

@@ -1715,6 +1715,31 @@ test('list view rows show the site label instead of the raw URL', async () => {
   expect(screen.queryByText('https://www.example.com/article')).toBeNull();
 });
 
+test('a search match that lives only in the URL path falls back to the raw URL so the highlight stays visible', async () => {
+  // Neither the title nor the (absent) site_name contains "98765" — only the
+  // URL's path does. filterBookmarks still includes this result, so the URL
+  // row must show the matching text instead of the unrelated site label.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a5',
+      title: 'Unrelated note',
+      url: 'https://example.com/article/98765',
+      url_hash: 'https://example.com/article/98765',
+      site_name: null,
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '98765');
+
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
+  expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
+  expect(screen.queryByText('example.com')).toBeNull();
+});
+
 test('a 4th+ tag that matched the query is promoted into the shown tag chips', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000a3';
   // The matching tag ("kubernetes") sorts last alphabetically and is the 4th
