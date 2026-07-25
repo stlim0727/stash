@@ -3055,25 +3055,37 @@ export default function InboxScreen() {
                 </View>
                 {item.url ? (
                   <View style={styles.cardUrlRow}>
-                    <HighlightedText
-                      style={[styles.cardUrl, { color: palette.textSecondary }]}
-                      numberOfLines={1}
-                      text={siteLabelText}
-                      query={highlightQuery}
-                      highlightStyle={highlightStyle}
-                    />
-                    {!previewUri ? (
+                    {previewUri ? (
+                      <HighlightedText
+                        style={[styles.cardUrl, { color: palette.textSecondary }]}
+                        numberOfLines={1}
+                        text={siteLabelText}
+                        query={highlightQuery}
+                        highlightStyle={highlightStyle}
+                      />
+                    ) : (
+                      // No preview image: the site-name + open-link affordance
+                      // mirrors the pill shown on the ribbon over a preview
+                      // image (same shape, same site-name text), instead of a
+                      // plain text label plus a separate icon-only button.
                       <Pressable
                         accessibilityRole="link"
                         accessibilityLabel={t('common.openLink')}
                         onPress={openLink}
                         onLongPress={() => setMenuItem(item)}
                         hitSlop={6}
-                        style={[styles.cardUrlOpen, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                        style={[styles.cardUrlOpenPill, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
                       >
+                        <HighlightedText
+                          style={[styles.cardUrlOpenPillText, { color: palette.accentText }]}
+                          numberOfLines={1}
+                          text={siteLabelText}
+                          query={highlightQuery}
+                          highlightStyle={highlightStyle}
+                        />
                         <Ionicons name="open-outline" size={13} color={palette.accentText} />
                       </Pressable>
-                    ) : null}
+                    )}
                   </View>
                 ) : null}
                 {showUrlMatchLine && item.url ? (
@@ -3706,15 +3718,20 @@ const styles = StyleSheet.create({
     fontSize: Platform.select({ web: 12, default: 13 }),
     lineHeight: Platform.select({ web: 16, default: undefined }),
   },
-  cardUrlOpen: {
-    borderRadius: 999,
-    borderWidth: Platform.select({ web: StyleSheet.hairlineWidth, default: 0 }),
-    width: Platform.select({ web: 24, default: undefined }),
-    height: Platform.select({ web: 24, default: 22 }),
-    minWidth: Platform.select({ web: 24, default: 26 }),
-    paddingHorizontal: Platform.select({ web: 0, default: 7 }),
+  cardUrlOpenPill: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  cardUrlOpenPillText: {
+    fontSize: 11,
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
+    maxWidth: 140,
   },
   metaChipRow: {
     flexDirection: 'row',
