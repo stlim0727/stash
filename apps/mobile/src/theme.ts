@@ -51,6 +51,10 @@ export const palettes = {
     accentText: '#1a5ca8',
     highlight: '#c9941c',
     highlightText: '#151b26',
+    // Soft tinted fill derived from `highlight`, following the same pattern as
+    // `accentSoft`/`successSoft`. Used by Folder View's hash-based collection
+    // tile coloring (see `@/domain/collection-color`).
+    highlightSoft: '#faf1de',
     danger: '#c0392b',
     dangerSoft: '#fce8e6',
     success: '#1e7a4e',
@@ -72,6 +76,7 @@ export const palettes = {
     accentText: '#d8ebff',
     highlight: '#eecb69',
     highlightText: '#151b26',
+    highlightSoft: '#3d3420',
     danger: '#ff8a7a',
     dangerSoft: '#432529',
     success: '#8eddbb',

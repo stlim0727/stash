@@ -56,6 +56,7 @@ import {
 import type { SearchSuggestion } from '@/domain/search-suggestions';
 import { pendingSuggestedFolder, pendingSummary, pendingSuggestions } from '@/domain/ai-suggestions';
 import { collectionMatchKey } from '@/domain/collection-match';
+import { collectionColorKey, type CollectionColorKey } from '@/domain/collection-color';
 import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
@@ -160,12 +161,14 @@ interface FacetChip {
 const VIEW_MODE_ICON: Record<ViewMode, ComponentProps<typeof Ionicons>['name']> = {
   card: 'albums-outline',
   list: 'list-outline',
+  folder: 'folder-outline',
 };
 
 // Translation key for each layout's human label (segmented-control a11y).
 const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   card: 'viewMode.card',
   list: 'viewMode.list',
+  folder: 'viewMode.folder',
 };
 
 /** Extract a clean display label (domain or site name) for the quick-open preview ribbon. */
@@ -323,7 +326,19 @@ const WEB_AMBIENT_BACKGROUND = Platform.OS === 'web'
 // renderItem short-circuits it to an empty flex spacer.
 type GridPlaceholder = { id: string; __placeholder: true; role?: 'selected-row' };
 type InlineDetailItem = { id: string; __inlineDetail: true; bookmarkId: string; fullWidth?: boolean };
-type InboxListItem = Bookmark | GridPlaceholder | InlineDetailItem;
+// Folder View tile — either a facet (the uncollected bucket or a real
+// Collection, both tappable via `filter`) or the trailing "new folder"
+// affordance (`kind: 'new'`, no `filter`).
+type FolderTileItem = {
+  id: string;
+  __folderTile: true;
+  kind: 'uncollected' | 'collection' | 'new';
+  label?: string;
+  count?: number;
+  filter?: InboxFilter;
+  colorKey?: CollectionColorKey;
+};
+type InboxListItem = Bookmark | GridPlaceholder | InlineDetailItem | FolderTileItem;
 
 /**
  * Web-only positioning shell for the browse shelf. On native it renders NOTHING
@@ -726,6 +741,18 @@ export default function InboxScreen() {
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
+  // Folder View is transient (never persisted as the resting layout — see
+  // domain/view-mode.ts). Tapping a folder tile drops the user back into
+  // whichever item layout they were on before entering Folder View, so this
+  // tracks that "last real layout" without touching the stored preference.
+  const lastNonFolderViewModeRef = useRef<ViewMode>(
+    viewMode === 'folder' ? DEFAULT_VIEW_MODE : viewMode,
+  );
+  useEffect(() => {
+    if (viewMode !== 'folder') {
+      lastNonFolderViewModeRef.current = viewMode;
+    }
+  }, [viewMode]);
   const [inlineDetailId, setInlineDetailId] = useState<string | null>(null);
 
   // Responsive multi-column card grid on wide (desktop-web) viewports. Only the
@@ -736,8 +763,14 @@ export default function InboxScreen() {
   const { width: winWidth } = useWindowDimensions();
   const columns = viewMode === 'card'
     ? Math.min(3, Math.max(1, Math.floor(winWidth / 380)))
-    : 1;
-  const contentMaxWidth = columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
+    // Folder View is always a fixed 2-column grid of tiles (phone and web
+    // alike) — it isn't the responsive card grid, so it doesn't scale with
+    // viewport width the way `card` does.
+    : viewMode === 'folder'
+      ? 2
+      : 1;
+  const contentMaxWidth =
+    viewMode === 'card' && columns > 1 ? columns * 372 : CONTENT_MAX_WIDTH;
   // The suggest/session banners are cards carrying a 16px horizontal margin
   // (styles.suggestBanner), so capping them with `width: '100%'` would lay out
   // as full width PLUS 32px of margin and overflow the row on phones. Give them
@@ -1245,6 +1278,51 @@ export default function InboxScreen() {
       uncollectedCount: uncollected,
     };
   }, [inbox, getTagsForBookmark, getCollection]);
+
+  // Folder View tiles: reuse the SAME collection chips the browse shelf already
+  // computed (name + item count) rather than re-deriving them, so the two views
+  // never disagree. Tag chips are excluded — Folder View is Collections only.
+  // Order: the uncollected/"받은함" bucket first (tray icon, `mutedSurface`, not
+  // hash-colored), then real collections (already alpha-sorted by `chips`),
+  // then a trailing "New folder" tile.
+  const folderTiles = useMemo<FolderTileItem[]>(() => {
+    const tiles: FolderTileItem[] = [];
+    if (hasUncollected) {
+      tiles.push({
+        id: '__folder-uncollected',
+        __folderTile: true,
+        kind: 'uncollected',
+        label: t('inbox.filterNoCollection'),
+        count: uncollectedCount,
+        filter: UNCOLLECTED_FILTER,
+      });
+    }
+    for (const chip of chips) {
+      if (chip.filter.kind !== 'collection') {
+        continue;
+      }
+      tiles.push({
+        id: `__folder-${chip.key}`,
+        __folderTile: true,
+        kind: 'collection',
+        label: chip.label,
+        count: chip.count,
+        filter: chip.filter,
+        colorKey: collectionColorKey(chip.filter.id),
+      });
+    }
+    tiles.push({ id: '__folder-new', __folderTile: true, kind: 'new' });
+    return tiles;
+  }, [chips, hasUncollected, uncollectedCount, t]);
+
+  // Pad to an even number of tiles so the trailing row keeps its column width
+  // (mirrors the placeholder padding the card grid already does below).
+  const folderGridData = useMemo<(FolderTileItem | GridPlaceholder)[]>(() => {
+    if (folderTiles.length % 2 === 0) {
+      return folderTiles;
+    }
+    return [...folderTiles, { id: '__folder-ph', __placeholder: true }];
+  }, [folderTiles]);
 
   const facetFiltered = useMemo(
     () => filterByFacet(inbox, filter, tagIdsFor),
@@ -1798,6 +1876,37 @@ export default function InboxScreen() {
     clearFacetParams();
   }, [clearFacetParams]);
 
+  // Tapping a Folder View tile behaves like tapping the matching BrowseChip
+  // (same filter mechanism, same pinned filter bar), plus it drops the user
+  // back into whichever item layout they were on before opening Folder View —
+  // a transient switch, so it deliberately does NOT persist to
+  // INBOX_VIEW_PREF_KEY the way the segmented-control toggle below does.
+  const openFolderTile = useCallback(
+    (target: InboxFilter) => {
+      onSelectFilter(target);
+      setViewMode(lastNonFolderViewModeRef.current);
+    },
+    [onSelectFilter],
+  );
+
+  // No standalone "create empty collection" flow exists yet anywhere in the
+  // app — the only place a collection can be created is the inline
+  // "type a name to create" row inside a bookmark's collection field
+  // (CollectionPicker, opened from Bookmark Detail). Route to the most
+  // recently saved bookmark's detail screen as the nearest existing
+  // affordance, rather than inventing a standalone create-folder flow here.
+  const onNewFolderTilePress = useCallback(() => {
+    const target = inbox[0];
+    if (!target) {
+      return;
+    }
+    if (Platform.OS === 'web') {
+      setInlineDetailId(target.id);
+      return;
+    }
+    router.push({ pathname: '/bookmark/[id]', params: { id: target.id } });
+  }, [inbox, router]);
+
   // Open the dedicated tag-browse route, carrying the current facet as its scope
   // so the cloud/list there opens already scoped to what the user was browsing.
   // A live search isn't carried (the route has its own search field); the facet
@@ -2177,6 +2286,14 @@ export default function InboxScreen() {
           ) : null}
           <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
             {VIEW_MODES.map((mode) => {
+              // Folder View has nothing to show without a real Collection to
+              // tile — hide the toggle entirely rather than offering a mode
+              // that always renders just the uncollected bucket + "New
+              // folder". Mirrors the `inbox.length > 0` gate on the Tags/
+              // Graph pills above, keyed on collection count instead.
+              if (mode === 'folder' && collections.length === 0) {
+                return null;
+              }
               const active = viewMode === mode;
               return (
                 <Pressable
@@ -2345,7 +2462,7 @@ export default function InboxScreen() {
       <InboxList
         ref={listRef}
         testID="inbox-list"
-        data={gridData}
+        data={viewMode === 'folder' ? folderGridData : gridData}
         keyExtractor={(item) => item.id}
         // Remount when the column count changes: FlatList forbids mutating
         // numColumns on an existing instance.
@@ -2592,6 +2709,43 @@ export default function InboxScreen() {
             return item.fullWidth ? (
               <View testID="inbox-inline-detail-row" style={{ width: detailWidth }}>{detail}</View>
             ) : detail;
+          }
+          if ('__folderTile' in item) {
+            if (item.kind === 'new') {
+              return (
+                <Pressable
+                  testID="folder-tile-new"
+                  accessibilityRole="button"
+                  accessibilityLabel={t('inbox.newFolderA11y')}
+                  onPress={onNewFolderTilePress}
+                  style={[styles.folderTile, styles.folderTileNew, { borderColor: palette.border }]}
+                >
+                  <Ionicons name="add-outline" size={22} color={palette.textSecondary} />
+                  <Text style={[styles.folderTileLabel, { color: palette.textSecondary }]} numberOfLines={1}>
+                    {t('inbox.newFolder')}
+                  </Text>
+                </Pressable>
+              );
+            }
+            const tileIcon = item.kind === 'uncollected' ? 'file-tray-outline' : 'folder-outline';
+            const tileColor = item.kind === 'uncollected' ? palette.mutedSurface : palette[item.colorKey ?? 'accentSoft'];
+            return (
+              <Pressable
+                testID={`folder-tile-${item.id}`}
+                accessibilityRole="button"
+                accessibilityLabel={item.label}
+                onPress={() => item.filter && openFolderTile(item.filter)}
+                style={[styles.folderTile, { backgroundColor: tileColor }]}
+              >
+                <Ionicons name={tileIcon} size={26} color={palette.text} />
+                <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
+                  {item.label}
+                </Text>
+                <Text style={[styles.folderTileCount, { color: palette.textSecondary }]}>
+                  {t('inbox.folderTileCount', { count: item.count ?? 0 })}
+                </Text>
+              </Pressable>
+            );
           }
           const status = statusLabel(item, t);
           const collectionName = getCollection(item.collection_id)?.name ?? null;
@@ -3552,6 +3706,31 @@ const styles = StyleSheet.create({
     fontWeight: WEB_MEDIUM_WEIGHT,
   },
   cardStatus: {
+    fontSize: 12,
+    fontWeight: WEB_MEDIUM_WEIGHT,
+  },
+  folderTile: {
+    flex: 1,
+    minHeight: 116,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 16,
+  },
+  folderTileNew: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderStyle: 'dashed',
+    backgroundColor: 'transparent',
+  },
+  folderTileLabel: {
+    fontSize: 14,
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
+    textAlign: 'center',
+    maxWidth: '100%',
+  },
+  folderTileCount: {
     fontSize: 12,
     fontWeight: WEB_MEDIUM_WEIGHT,
   },

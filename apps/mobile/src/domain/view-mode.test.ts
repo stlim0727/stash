@@ -15,23 +15,25 @@ test('default layout is cards', () => {
   assert.equal(DEFAULT_VIEW_MODE, 'card');
 });
 
-test('VIEW_MODES lists the two layouts in control order (richest → densest)', () => {
-  assert.deepEqual(VIEW_MODES, ['card', 'list']);
-  assert.equal(VIEW_MODES.length, 2);
+test('VIEW_MODES lists the three layouts in control order (richest → densest, folder last)', () => {
+  assert.deepEqual(VIEW_MODES, ['card', 'list', 'folder']);
+  assert.equal(VIEW_MODES.length, 3);
 });
 
-test('nextViewMode cycles card → list → card', () => {
+test('nextViewMode cycles card → list → folder → card', () => {
   assert.equal(nextViewMode('card'), 'list');
-  assert.equal(nextViewMode('list'), 'card');
+  assert.equal(nextViewMode('list'), 'folder');
+  assert.equal(nextViewMode('folder'), 'card');
 });
 
 test('describeViewMode labels each mode', () => {
   assert.equal(describeViewMode('card'), 'Cards');
   assert.equal(describeViewMode('list'), 'List');
+  assert.equal(describeViewMode('folder'), 'Folders');
 });
 
 test('serialize/parse round-trips and falls back to the default', () => {
-  const modes: ViewMode[] = ['card', 'list'];
+  const modes: ViewMode[] = ['card', 'list', 'folder'];
   for (const mode of modes) {
     assert.equal(parseViewMode(serializeViewMode(mode)), mode);
   }

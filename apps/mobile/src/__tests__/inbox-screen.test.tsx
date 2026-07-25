@@ -1057,6 +1057,106 @@ test('the view segmented control switches between card and list layouts', async 
   expect(screen.queryByTestId('inbox-list-title')).toBeNull();
 });
 
+test('the folder view toggle is hidden until the library has a real collection', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f0', title: 'Loose link' }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Loose link')).toBeTruthy());
+
+  expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
+  expect(screen.getByTestId('inbox-view-list')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-view-folder')).toBeNull();
+});
+
+test('folder view shows a tile per collection, the uncollected bucket, and a New Folder tile', async () => {
+  const workId = '7e64cf1e-0000-4000-8000-0000000000f1';
+  const looseId = '7e64cf1e-0000-4000-8000-0000000000f2';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: workId, title: 'Work doc', collection_id: 'col-work' }),
+      makeStoredBookmark({ id: looseId, title: 'Loose link', collection_id: null }),
+    ],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
+
+  expect(screen.getByTestId('inbox-view-folder')).toBeTruthy();
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+
+  // The tile grid replaces the flat bookmark list.
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-uncollected')).toBeTruthy());
+  expect(screen.queryByText('Work doc')).toBeNull();
+  expect(screen.queryByText('Loose link')).toBeNull();
+
+  const uncollectedTile = screen.getByTestId('folder-tile-__folder-uncollected');
+  expect(within(uncollectedTile).getByText('1 item')).toBeTruthy();
+  const workTile = screen.getByTestId('folder-tile-__folder-c:col-work');
+  expect(within(workTile).getByText('1 item')).toBeTruthy();
+  expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
+});
+
+test('tapping a folder tile filters the Inbox and returns to the layout used before Folder View', async () => {
+  const workId = '7e64cf1e-0000-4000-8000-0000000000f3';
+  const looseId = '7e64cf1e-0000-4000-8000-0000000000f4';
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: workId, title: 'Work doc', collection_id: 'col-work' }),
+      makeStoredBookmark({ id: looseId, title: 'Loose link', collection_id: null }),
+    ],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
+
+  // Start from List (not the default Cards) so returning from Folder View is a
+  // real assertion, not a coincidence of the default.
+  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await waitFor(() => expect(screen.getAllByTestId('inbox-list-title').length).toBe(2));
+
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('folder-tile-__folder-c:col-work'));
+
+  // Same filter mechanism as tapping the matching BrowseChip: narrowed to Work.
+  // Back on the List layout the user was on before entering Folder View — not
+  // Cards, the persisted default — so exactly one (List-rendered) row shows.
+  await waitFor(() => expect(screen.getAllByTestId('inbox-list-title').length).toBe(1));
+  expect(screen.getByText('Work doc')).toBeTruthy();
+  expect(screen.queryByText('Loose link')).toBeNull();
+  expect(screen.queryByTestId('folder-tile-new')).toBeNull();
+});
+
+test('a tile-driven return to a prior layout is transient — only an explicit toggle tap persists', async () => {
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f5', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
+
+  // Explicitly toggling into Folder View persists, exactly like Card/List.
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
+  await waitFor(async () =>
+    expect(await fakeRepo.repository.getMeta(INBOX_VIEW_PREF_KEY)).toBe('folder'),
+  );
+
+  // Tapping a tile drops back to Cards (the mode active before Folder View)...
+  await fireEvent.press(screen.getByTestId('folder-tile-__folder-c:col-work'));
+  await waitFor(() => expect(screen.getByTestId('inbox-card-title')).toBeTruthy());
+
+  // ...but that transient return is never written back — the stored
+  // preference still reflects the last EXPLICIT toggle tap (Folder).
+  expect(await fakeRepo.repository.getMeta(INBOX_VIEW_PREF_KEY)).toBe('folder');
+});
+
 test('web opens bookmark detail inline instead of pushing the detail route', async () => {
   Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
   fakeRepo.__reset([

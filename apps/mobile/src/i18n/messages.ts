@@ -174,6 +174,12 @@ export const en = {
   // a user collection that happens to be named "Inbox" (the visible row stays
   // the clean "Inbox", the tray icon disambiguates it visually).
   'inbox.inboxNoCollectionA11y': 'Inbox (no collection)',
+  // Folder View: a grid of tappable Collection tiles instead of the flat
+  // bookmark list. Each tile's subtitle is its item count; the trailing tile
+  // is a dashed "New folder" affordance.
+  'inbox.folderTileCount': { one: '{count} item', other: '{count} items' },
+  'inbox.newFolder': 'New folder',
+  'inbox.newFolderA11y': 'Create a new folder',
   'inbox.aiSuggestionsA11y': { one: '{count} AI suggestion', other: '{count} AI suggestions' },
   'inbox.newSuggestions': {
     one: '✨ {count} new AI suggestion',
@@ -266,6 +272,7 @@ export const en = {
   'viewMode.card': 'Cards',
   'viewMode.compact': 'Compact',
   'viewMode.list': 'List',
+  'viewMode.folder': 'Folders',
 
   // Add bookmark.
   'add.urlLabel': 'URL',

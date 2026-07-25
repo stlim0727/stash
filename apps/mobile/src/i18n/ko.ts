@@ -118,6 +118,9 @@ export const ko: Catalog = {
   'inbox.moveToCollectionTitle': '컬렉션으로 이동',
   'inbox.inboxNoCollection': '받은함',
   'inbox.inboxNoCollectionA11y': '받은함 (컬렉션 없음)',
+  'inbox.folderTileCount': { other: '{count}개 항목' },
+  'inbox.newFolder': '새 폴더',
+  'inbox.newFolderA11y': '새 폴더 만들기',
   'inbox.aiSuggestionsA11y': { other: 'AI 제안 {count}개' },
   'inbox.newSuggestions': { other: '✨ 새 AI 제안 {count}개' },
   'inbox.newSuggestionsReview': '검토',
@@ -171,6 +174,7 @@ export const ko: Catalog = {
   'viewMode.card': '카드',
   'viewMode.compact': '콤팩트',
   'viewMode.list': '목록',
+  'viewMode.folder': '폴더',
 
   'add.urlLabel': 'URL',
   'add.urlPlaceholder': 'https://',
