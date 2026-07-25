@@ -1715,10 +1715,11 @@ test('list view rows show the site label instead of the raw URL', async () => {
   expect(screen.queryByText('https://www.example.com/article')).toBeNull();
 });
 
-test('a search match that lives only in the URL path falls back to the raw URL so the highlight stays visible', async () => {
+test('a search match that lives only in the URL path adds a second line so the label and the highlight both stay visible', async () => {
   // Neither the title nor the (absent) site_name contains "98765" — only the
-  // URL's path does. filterBookmarks still includes this result, so the URL
-  // row must show the matching text instead of the unrelated site label.
+  // URL's path does. filterBookmarks still includes this result, so a second
+  // line must show the raw URL alongside the persistent site label (not
+  // instead of it — the label stays visible per STASH-39).
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-0000000000a5',
@@ -1736,15 +1737,15 @@ test('a search match that lives only in the URL path falls back to the raw URL s
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '98765');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
+  expect(screen.getByText('example.com')).toBeTruthy();
   expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
-  expect(screen.queryByText('example.com')).toBeNull();
 });
 
-test('a multi-term search where the label covers one term but not the other still falls back to the raw URL', async () => {
+test('a multi-term search where the label covers one term but not the other adds the URL as a second line', async () => {
   // "example" matches the site label ("example.com"), but "98765" only
   // matches the URL path. filterBookmarks ANDs both terms, so showing just
   // the label (which happens to satisfy "example") would silently hide the
-  // "98765" match entirely — the URL row must still show the raw URL.
+  // "98765" match — a second line carrying the raw URL must appear too.
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-0000000000a6',
@@ -1762,8 +1763,33 @@ test('a multi-term search where the label covers one term but not the other stil
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'example 98765');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
+  expect(screen.getByText('example.com')).toBeTruthy();
   expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
-  expect(screen.queryByText('example.com')).toBeNull();
+});
+
+test('a query matching both site_name and a URL-only term keeps both matches visible', async () => {
+  // "wired" matches site_name ("WIRED"), while "98765" only matches the URL
+  // path. Neither field's match subsumes the other — swapping the label for
+  // the URL (or vice versa) would silently drop one match. Both must render.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a7',
+      title: 'Unrelated note',
+      url: 'https://example.com/article/98765',
+      url_hash: 'https://example.com/article/98765',
+      site_name: 'WIRED',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'wired 98765');
+
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
+  expect(screen.getByText('WIRED')).toBeTruthy();
+  expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
 });
 
 test('a 4th+ tag that matched the query is promoted into the shown tag chips', async () => {

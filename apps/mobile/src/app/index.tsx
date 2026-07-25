@@ -2826,17 +2826,20 @@ export default function InboxScreen() {
           ];
           const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
           const siteLabelText = siteLabel(item);
-          // A query term can match only in the URL's path/query string, not in
-          // the clean site label — e.g. "98765" against
-          // https://example.com/article/98765. filterBookmarks ANDs terms, so
-          // even a multi-term query ("example 98765") where the label happens
-          // to cover ONE term still needs the raw URL once any term is only
-          // covered by the URL, or that term's highlight silently disappears
+          // The clean site label is always the primary, persistent text (STASH-39).
+          // A query term can additionally match only in the URL's path/query
+          // string, not in the label — e.g. "98765" against
+          // https://example.com/article/98765, possibly alongside another term
+          // that DOES match the label (site_name "WIRED" + "98765" in the URL).
+          // filterBookmarks ANDs terms, so when any term is covered only by the
+          // URL, show it as a second line in addition to the label — not instead
+          // of it, so a simultaneous label-only match stays visible too
           // (AGENTS.md: search highlights title and URL matches).
           const termHiddenByLabel = (term: string) =>
             valueMatchesTerms(item.url, [term]) && !valueMatchesTerms(siteLabelText, [term]);
-          const urlRowText =
-            searching && item.url && searchTerms.some(termHiddenByLabel) ? item.url : siteLabelText;
+          const showUrlMatchLine = Boolean(
+            searching && item.url && searchTerms.some(termHiddenByLabel),
+          );
 
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.
@@ -2913,7 +2916,16 @@ export default function InboxScreen() {
                     <HighlightedText
                       style={[styles.listUrl, { color: palette.textSecondary }]}
                       numberOfLines={1}
-                      text={urlRowText}
+                      text={siteLabelText}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                  ) : null}
+                  {showUrlMatchLine && item.url ? (
+                    <HighlightedText
+                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />
@@ -3046,7 +3058,7 @@ export default function InboxScreen() {
                     <HighlightedText
                       style={[styles.cardUrl, { color: palette.textSecondary }]}
                       numberOfLines={1}
-                      text={urlRowText}
+                      text={siteLabelText}
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />
@@ -3063,6 +3075,15 @@ export default function InboxScreen() {
                       </Pressable>
                     ) : null}
                   </View>
+                ) : null}
+                {showUrlMatchLine && item.url ? (
+                  <HighlightedText
+                    style={[styles.cardUrl, { color: palette.textSecondary }]}
+                    numberOfLines={1}
+                    text={item.url}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
                 ) : null}
                 {visibleMetaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
