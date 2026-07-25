@@ -68,6 +68,24 @@ export function accessibilityTitle(
   return description ? truncateForSpeech(description) : null;
 }
 
+/**
+ * A clean display label (domain or site name) for a bookmark, used anywhere a
+ * card or row shows the site instead of the raw URL: the human `site_name`,
+ * then a parsed hostname with `www.` stripped, then the raw URL if it fails to
+ * parse, then `''` if there is no URL at all.
+ *
+ * Pure and dependency-free (aside from the host parser) so it is unit-testable.
+ */
+export function siteLabel(bookmark: Pick<Bookmark, 'site_name' | 'url'>): string {
+  if (bookmark.site_name) {
+    return bookmark.site_name;
+  }
+  if (!bookmark.url) {
+    return '';
+  }
+  return hostFromUrl(bookmark.url) ?? bookmark.url;
+}
+
 function truncateForSpeech(text: string): string {
   const trimmed = text.trim();
   if (trimmed.length <= 80) {

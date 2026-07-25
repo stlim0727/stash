@@ -60,7 +60,7 @@ import { collectionColorKey, type CollectionColorKey } from '@/domain/collection
 import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
-import { accessibilityTitle, displayTitle, isTitleDerived } from '@/domain/item-display';
+import { accessibilityTitle, displayTitle, isTitleDerived, siteLabel } from '@/domain/item-display';
 import {
   ALL_FILTER,
   UNCOLLECTED_FILTER,
@@ -171,18 +171,6 @@ const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   list: 'viewMode.list',
   folder: 'viewMode.folder',
 };
-
-/** Extract a clean display label (domain or site name) for the quick-open preview ribbon. */
-function ribbonLabel(item: Bookmark): string {
-  if (item.site_name) return item.site_name;
-  if (!item.url) return '';
-  try {
-    const parsed = new URL(item.url);
-    return parsed.hostname.replace(/^www\./, '');
-  } catch {
-    return item.url;
-  }
-}
 
 // Friendly label + icon for each sort preset, keyed by its serialized form.
 // Phrasing each order as a whole choice ("Newest", "Recently opened") reads
@@ -2837,7 +2825,6 @@ export default function InboxScreen() {
             ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
           const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
-          const showSiteChip = searching && valueMatchesTerms(item.site_name, searchTerms);
 
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.
@@ -2914,7 +2901,7 @@ export default function InboxScreen() {
                     <HighlightedText
                       style={[styles.listUrl, { color: palette.textSecondary }]}
                       numberOfLines={1}
-                      text={item.url}
+                      text={siteLabel(item)}
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />
@@ -2979,7 +2966,7 @@ export default function InboxScreen() {
                         style={styles.previewRibbon}
                       >
                         <Text style={styles.previewRibbonText} numberOfLines={1}>
-                          {ribbonLabel(item)}
+                          {siteLabel(item)}
                         </Text>
                         <Ionicons name="open-outline" size={12} color="#ffffff" />
                       </Pressable>
@@ -3047,7 +3034,7 @@ export default function InboxScreen() {
                     <HighlightedText
                       style={[styles.cardUrl, { color: palette.textSecondary }]}
                       numberOfLines={1}
-                      text={item.url}
+                      text={siteLabel(item)}
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
                     />
@@ -3088,24 +3075,6 @@ export default function InboxScreen() {
                         </Text>
                       </View>
                     ))}
-                  </View>
-                ) : null}
-                {showSiteChip ? (
-                  // Generated site metadata — styled as a neutral, outlined site
-                  // chip (not the filled accent meta chips) so it never reads as
-                  // a user-typed value.
-                  <View style={styles.siteChipRow}>
-                    <View
-                      testID="inbox-card-site"
-                      style={[styles.siteChip, { borderColor: palette.border, backgroundColor: palette.surface }]}
-                    >
-                      <Text
-                        style={[styles.siteChipLabel, { color: palette.textSecondary }]}
-                        numberOfLines={1}
-                      >
-                        {t('inbox.siteChip', { name: item.site_name! })}
-                      </Text>
-                    </View>
                   </View>
                 ) : null}
                   {status ? (
@@ -3700,7 +3669,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cardUrl: {
-    flex: 1,
+    flexShrink: 1,
     fontSize: Platform.select({ web: 12, default: 13 }),
     lineHeight: Platform.select({ web: 16, default: undefined }),
   },
@@ -3728,20 +3697,6 @@ const styles = StyleSheet.create({
   metaChipLabel: {
     fontSize: Platform.select({ web: 11, default: 12 }),
     fontWeight: Platform.select({ web: WEB_MEDIUM_WEIGHT, default: WEB_SEMIBOLD_WEIGHT }),
-  },
-  siteChipRow: {
-    flexDirection: 'row',
-  },
-  siteChip: {
-    flexShrink: 1,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingVertical: 3,
-    paddingHorizontal: 9,
-  },
-  siteChipLabel: {
-    fontSize: 12,
-    fontWeight: WEB_MEDIUM_WEIGHT,
   },
   cardStatus: {
     fontSize: 12,
