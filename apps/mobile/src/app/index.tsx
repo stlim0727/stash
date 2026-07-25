@@ -2826,18 +2826,17 @@ export default function InboxScreen() {
           ];
           const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
           const siteLabelText = siteLabel(item);
-          // A search match can live only in the URL's path/query string (not in
-          // the clean site label) — e.g. searching "12345" against
-          // https://example.com/article/12345. Fall back to the raw URL so the
-          // highlighted match stays visible instead of appearing unrelated
+          // A query term can match only in the URL's path/query string, not in
+          // the clean site label — e.g. "98765" against
+          // https://example.com/article/98765. filterBookmarks ANDs terms, so
+          // even a multi-term query ("example 98765") where the label happens
+          // to cover ONE term still needs the raw URL once any term is only
+          // covered by the URL, or that term's highlight silently disappears
           // (AGENTS.md: search highlights title and URL matches).
+          const termHiddenByLabel = (term: string) =>
+            valueMatchesTerms(item.url, [term]) && !valueMatchesTerms(siteLabelText, [term]);
           const urlRowText =
-            searching &&
-            item.url &&
-            !valueMatchesTerms(siteLabelText, searchTerms) &&
-            valueMatchesTerms(item.url, searchTerms)
-              ? item.url
-              : siteLabelText;
+            searching && item.url && searchTerms.some(termHiddenByLabel) ? item.url : siteLabelText;
 
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.

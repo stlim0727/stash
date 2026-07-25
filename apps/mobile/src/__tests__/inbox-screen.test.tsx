@@ -1740,6 +1740,32 @@ test('a search match that lives only in the URL path falls back to the raw URL s
   expect(screen.queryByText('example.com')).toBeNull();
 });
 
+test('a multi-term search where the label covers one term but not the other still falls back to the raw URL', async () => {
+  // "example" matches the site label ("example.com"), but "98765" only
+  // matches the URL path. filterBookmarks ANDs both terms, so showing just
+  // the label (which happens to satisfy "example") would silently hide the
+  // "98765" match entirely — the URL row must still show the raw URL.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a6',
+      title: 'Unrelated note',
+      url: 'https://example.com/article/98765',
+      url_hash: 'https://example.com/article/98765',
+      site_name: null,
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'example 98765');
+
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
+  expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
+  expect(screen.queryByText('example.com')).toBeNull();
+});
+
 test('a 4th+ tag that matched the query is promoted into the shown tag chips', async () => {
   const id = '7e64cf1e-0000-4000-8000-0000000000a3';
   // The matching tag ("kubernetes") sorts last alphabetically and is the 4th
