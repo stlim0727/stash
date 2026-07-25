@@ -96,6 +96,7 @@ import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
+import { CreateCollectionDialog } from '@/ui/CreateCollectionDialog';
 import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -506,6 +507,7 @@ export default function InboxScreen() {
     deleteBookmark,
     assignCollection,
     markBookmarkAccessed,
+    createCollection,
   } = useBookmarks();
   const { show: showToast } = useCaptureToast();
   const [query, setQuery] = useState('');
@@ -1237,7 +1239,7 @@ export default function InboxScreen() {
 
   // Browse facets derived from what is actually in the Inbox, so every chip
   // leads to at least one bookmark and the bar stays empty for fresh installs.
-  const { chips, hasUncollected, uncollectedCount } = useMemo(() => {
+  const { chips, hasUncollected, uncollectedCount, collectionCounts } = useMemo(() => {
     const collectionCounts = new Map<string, number>();
     const tagsById = new Map<string, string>();
     let uncollected = 0;
@@ -1276,15 +1278,22 @@ export default function InboxScreen() {
       chips: [...collectionChips, ...tagChips],
       hasUncollected: uncollected > 0,
       uncollectedCount: uncollected,
+      collectionCounts,
     };
   }, [inbox, getTagsForBookmark, getCollection]);
 
-  // Folder View tiles: reuse the SAME collection chips the browse shelf already
-  // computed (name + item count) rather than re-deriving them, so the two views
-  // never disagree. Tag chips are excluded — Folder View is Collections only.
+  // Folder View tiles. Deliberately NOT filtered down to `chips`' collection
+  // entries — those only include a collection that already holds an Inbox
+  // bookmark, so a just-created empty collection (see the "New folder" dialog
+  // below) would never appear as a tile. Folder View reads as a directory of
+  // every real Collection (à la Drive/Files, empty folders included), so it
+  // iterates the full `collections` list instead and looks up each one's count
+  // from the SAME per-collection tally the browse shelf computed (0 if absent)
+  // — the two views still never disagree on a count, they just differ on
+  // whether an empty collection gets a row at all.
   // Order: the uncollected/"받은함" bucket first (tray icon, `mutedSurface`, not
-  // hash-colored), then real collections (already alpha-sorted by `chips`),
-  // then a trailing "New folder" tile.
+  // hash-colored), then real collections (alpha-sorted), then a trailing
+  // "New folder" tile.
   const folderTiles = useMemo<FolderTileItem[]>(() => {
     const tiles: FolderTileItem[] = [];
     if (hasUncollected) {
@@ -1297,23 +1306,26 @@ export default function InboxScreen() {
         filter: UNCOLLECTED_FILTER,
       });
     }
-    for (const chip of chips) {
-      if (chip.filter.kind !== 'collection') {
-        continue;
-      }
+    // Mirrors the browse shelf's own guard: a collection with an empty/
+    // whitespace name (a partial sync, an edge case elsewhere) must not
+    // render as a blank tile.
+    const sortedCollections = collections
+      .filter((collection) => collection.name?.trim())
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (const collection of sortedCollections) {
       tiles.push({
-        id: `__folder-${chip.key}`,
+        id: `__folder-c:${collection.id}`,
         __folderTile: true,
         kind: 'collection',
-        label: chip.label,
-        count: chip.count,
-        filter: chip.filter,
-        colorKey: collectionColorKey(chip.filter.id),
+        label: collection.name,
+        count: collectionCounts.get(collection.id) ?? 0,
+        filter: { kind: 'collection', id: collection.id },
+        colorKey: collectionColorKey(collection.id),
       });
     }
     tiles.push({ id: '__folder-new', __folderTile: true, kind: 'new' });
     return tiles;
-  }, [chips, hasUncollected, uncollectedCount, t]);
+  }, [collections, collectionCounts, hasUncollected, uncollectedCount, t]);
 
   // Pad to an even number of tiles so the trailing row keeps its column width
   // (mirrors the placeholder padding the card grid already does below).
@@ -1889,23 +1901,42 @@ export default function InboxScreen() {
     [onSelectFilter],
   );
 
-  // No standalone "create empty collection" flow exists yet anywhere in the
-  // app — the only place a collection can be created is the inline
-  // "type a name to create" row inside a bookmark's collection field
-  // (CollectionPicker, opened from Bookmark Detail). Route to the most
-  // recently saved bookmark's detail screen as the nearest existing
-  // affordance, rather than inventing a standalone create-folder flow here.
+  // "New folder" tile → a minimal name-only dialog (CreateCollectionDialog),
+  // Folder-View-scoped. Reuses the store's `createCollection` — the same
+  // function CollectionPicker's inline "type to create" row (Bookmark Detail)
+  // calls — rather than a second create-collection implementation.
+  const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
+  const [newFolderBusy, setNewFolderBusy] = useState(false);
+  const [newFolderError, setNewFolderError] = useState<string | null>(null);
   const onNewFolderTilePress = useCallback(() => {
-    const target = inbox[0];
-    if (!target) {
+    setNewFolderError(null);
+    setNewFolderDialogOpen(true);
+  }, []);
+  const closeNewFolderDialog = useCallback(() => {
+    if (newFolderBusy) {
       return;
     }
-    if (Platform.OS === 'web') {
-      setInlineDetailId(target.id);
-      return;
-    }
-    router.push({ pathname: '/bookmark/[id]', params: { id: target.id } });
-  }, [inbox, router]);
+    setNewFolderDialogOpen(false);
+    setNewFolderError(null);
+  }, [newFolderBusy]);
+  const handleCreateFolder = useCallback(
+    async (name: string) => {
+      setNewFolderBusy(true);
+      setNewFolderError(null);
+      const result = await createCollection(name);
+      setNewFolderBusy(false);
+      if (result.collection) {
+        // No filter/navigation change — the new (empty) collection just shows
+        // up as its own tile in the grid already on screen (folderTiles is
+        // derived from the live `collections` list, so this re-render alone
+        // picks it up; see the comment above folderTiles).
+        setNewFolderDialogOpen(false);
+        return;
+      }
+      setNewFolderError(result.error ?? t('detail.errorCreateCollection'));
+    },
+    [createCollection, t],
+  );
 
   // Open the dedicated tag-browse route, carrying the current facet as its scope
   // so the cloud/list there opens already scoped to what the user was browsing.
@@ -3121,6 +3152,13 @@ export default function InboxScreen() {
           },
         }))}
         onClose={() => setSortMenuOpen(false)}
+      />
+      <CreateCollectionDialog
+        visible={newFolderDialogOpen}
+        busy={newFolderBusy}
+        error={newFolderError}
+        onCreate={handleCreateFolder}
+        onClose={closeNewFolderDialog}
       />
     </InboxRootSurface>
   );

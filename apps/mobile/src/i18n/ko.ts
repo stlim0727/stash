@@ -121,6 +121,8 @@ export const ko: Catalog = {
   'inbox.folderTileCount': { other: '{count}개 항목' },
   'inbox.newFolder': '새 폴더',
   'inbox.newFolderA11y': '새 폴더 만들기',
+  'inbox.newFolderNamePlaceholder': '폴더 이름',
+  'inbox.newFolderCreate': '만들기',
   'inbox.aiSuggestionsA11y': { other: 'AI 제안 {count}개' },
   'inbox.newSuggestions': { other: '✨ 새 AI 제안 {count}개' },
   'inbox.newSuggestionsReview': '검토',

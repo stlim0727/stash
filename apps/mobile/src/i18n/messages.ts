@@ -180,6 +180,9 @@ export const en = {
   'inbox.folderTileCount': { one: '{count} item', other: '{count} items' },
   'inbox.newFolder': 'New folder',
   'inbox.newFolderA11y': 'Create a new folder',
+  // "New folder" dialog: a single name field plus Cancel/Create.
+  'inbox.newFolderNamePlaceholder': 'Folder name',
+  'inbox.newFolderCreate': 'Create',
   'inbox.aiSuggestionsA11y': { one: '{count} AI suggestion', other: '{count} AI suggestions' },
   'inbox.newSuggestions': {
     one: '✨ {count} new AI suggestion',

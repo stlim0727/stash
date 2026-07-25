@@ -9,19 +9,67 @@ jest.mock('react-native-safe-area-context', () => ({
 jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
 );
+// Every existing test in this file runs with no Supabase session at all. One
+// test (Folder View's "New folder" dialog, which needs `createCollection` to
+// actually resolve) arms a genuine session; `mock`-prefixed so Jest's factory
+// hoisting allows referencing it, reset after each test so the override never
+// leaks into an unrelated one. Mirrors bookmark-detail-screen.test.tsx.
+const mockAuthSessionValue = {
+  access_token: 'token',
+  refresh_token: 'refresh',
+  token_type: 'bearer',
+  expires_at: Math.floor(Date.now() / 1000) + 3600,
+  user: { id: 'user-test' },
+};
+let mockAuthSession: typeof mockAuthSessionValue | null = null;
+afterEach(() => {
+  mockAuthSession = null;
+});
 jest.mock('@/supabase/auth-provider', () => ({
   useSupabaseAuth: () => ({
-    status: 'not_configured',
-    session: null,
-    userId: null,
-    message: 'not configured',
-    ensureAnonymousSession: async () => null,
+    status: mockAuthSession ? 'anonymous' : 'not_configured',
+    session: mockAuthSession,
+    userId: mockAuthSession ? 'user-test' : null,
+    message: mockAuthSession ? null : 'not configured',
+    ensureAnonymousSession: async () => mockAuthSession,
   }),
   SupabaseAuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+// Stub the network API so the one test that arms a real session (above)
+// doesn't hit a real backend — including for `createCollection`, which the
+// "New folder" dialog calls through the store.
+let mockNextCollectionId = 0;
+jest.mock('@/api/bookmarks', () => {
+  const empty = async () => [];
+  return {
+    createBookmarkApi: () => ({
+      requestEnrichment: async () => null,
+      addTags: async () => [],
+      createBookmark: async () => ({ bookmark_id: 'unused' }),
+      listBookmarksUpdatedSince: empty,
+      listBookmarkIds: empty,
+      listEnrichmentsUpdatedSince: empty,
+      listTags: empty,
+      listBookmarkTags: empty,
+      listCollections: empty,
+      createCollection: async (name: string) => {
+        mockNextCollectionId += 1;
+        const now = new Date().toISOString();
+        return {
+          id: `new-col-${mockNextCollectionId}`,
+          user_id: 'user-test',
+          name,
+          description: null,
+          created_at: now,
+          updated_at: now,
+        };
+      },
+    }),
+  };
+});
 // Drive the responsive card grid off a controllable viewport. Defaults to a
 // phone width so every existing test keeps columns === 1 (single column);
 // individual tests widen it to exercise the multi-column path.
@@ -1155,6 +1203,37 @@ test('a tile-driven return to a prior layout is transient — only an explicit t
   // ...but that transient return is never written back — the stored
   // preference still reflects the last EXPLICIT toggle tap (Folder).
   expect(await fakeRepo.repository.getMeta(INBOX_VIEW_PREF_KEY)).toBe('folder');
+});
+
+test('the New Folder tile opens a create-collection dialog, and a successful submit creates and shows the new tile', async () => {
+  mockAuthSession = mockAuthSessionValue;
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f6', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-new')).toBeTruthy());
+
+  // Tapping New Folder opens the dialog in place — no navigation anywhere.
+  await fireEvent.press(screen.getByTestId('folder-tile-new'));
+  await waitFor(() => expect(screen.getByTestId('create-collection-input')).toBeTruthy());
+  expect(mockPush).not.toHaveBeenCalledWith(
+    expect.objectContaining({ pathname: '/bookmark/[id]' }),
+  );
+
+  await fireEvent.changeText(screen.getByTestId('create-collection-input'), 'Recipes');
+  await fireEvent.press(screen.getByTestId('create-collection-submit'));
+
+  // The dialog closes on success, and the newly created (still empty)
+  // collection shows up as its own tile in the SAME Folder View grid —
+  // verifying the tile list actually reacts to a fresh `collections` entry,
+  // not just to collections that already hold a bookmark.
+  await waitFor(() => expect(screen.queryByTestId('create-collection-input')).toBeNull());
+  await waitFor(() => expect(screen.getByText('Recipes')).toBeTruthy());
+  expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
 });
 
 test('web opens bookmark detail inline instead of pushing the detail route', async () => {
