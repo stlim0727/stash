@@ -3053,39 +3053,29 @@ export default function InboxScreen() {
                     <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
                   </Pressable>
                 </View>
-                {item.url ? (
+                {!previewUri && item.url ? (
+                  // A preview image already carries its own ribbon with the
+                  // site name; repeating it here as plain text would be
+                  // redundant, so this pill only renders when there's no
+                  // image to carry that affordance.
                   <View style={styles.cardUrlRow}>
-                    {previewUri ? (
+                    <Pressable
+                      accessibilityRole="link"
+                      accessibilityLabel={t('common.openLink')}
+                      onPress={openLink}
+                      onLongPress={() => setMenuItem(item)}
+                      hitSlop={6}
+                      style={[styles.cardUrlOpenPill, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                    >
                       <HighlightedText
-                        style={[styles.cardUrl, { color: palette.textSecondary }]}
+                        style={[styles.cardUrlOpenPillText, { color: palette.accentText }]}
                         numberOfLines={1}
                         text={siteLabelText}
                         query={highlightQuery}
                         highlightStyle={highlightStyle}
                       />
-                    ) : (
-                      // No preview image: the site-name + open-link affordance
-                      // mirrors the pill shown on the ribbon over a preview
-                      // image (same shape, same site-name text), instead of a
-                      // plain text label plus a separate icon-only button.
-                      <Pressable
-                        accessibilityRole="link"
-                        accessibilityLabel={t('common.openLink')}
-                        onPress={openLink}
-                        onLongPress={() => setMenuItem(item)}
-                        hitSlop={6}
-                        style={[styles.cardUrlOpenPill, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
-                      >
-                        <HighlightedText
-                          style={[styles.cardUrlOpenPillText, { color: palette.accentText }]}
-                          numberOfLines={1}
-                          text={siteLabelText}
-                          query={highlightQuery}
-                          highlightStyle={highlightStyle}
-                        />
-                        <Ionicons name="open-outline" size={13} color={palette.accentText} />
-                      </Pressable>
-                    )}
+                      <Ionicons name="open-outline" size={13} color={palette.accentText} />
+                    </Pressable>
                   </View>
                 ) : null}
                 {showUrlMatchLine && item.url ? (

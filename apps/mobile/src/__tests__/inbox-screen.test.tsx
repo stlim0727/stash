@@ -1691,8 +1691,10 @@ test('a card with a preview image still shows the ribbon site label unchanged', 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByTestId('inbox-card-preview')).toBeTruthy());
 
-  // "WIRED" appears both on the image ribbon and in the URL row beneath it.
-  expect(screen.getAllByText('WIRED').length).toBeGreaterThan(0);
+  // "WIRED" appears exactly once, on the image ribbon — repeating it in a
+  // plain-text caption underneath would be redundant since the ribbon
+  // already carries the site name.
+  expect(screen.getByText('WIRED')).toBeTruthy();
 });
 
 test('list view rows show the site label instead of the raw URL', async () => {
