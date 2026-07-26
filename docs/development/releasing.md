@@ -18,6 +18,9 @@ desktop, no artifact zip to unpack.
     _latest_), kept forever; its notes come from `docs/release-notes/<tag>.md`.
   - blank `version` / **hyphenated** tag (e.g. `v0.1.7-rc8`) ⇒ refreshes the single
     rolling **`dev`** prerelease in place, so test builds don't clutter Releases.
+    A blank `version` is no longer anonymous: the workflow computes the next
+    `vX.Y.Z-rcN` itself from `apps/mobile/app.json` and the `dev` release's
+    tracked rc state.
 - The APK is also stored as a **workflow run artifact** for tooling — but for
   installing on a phone, prefer the Release asset (no unzip).
 - Dispatch it from *Actions → Android APK → Run workflow* (set `version`), or via

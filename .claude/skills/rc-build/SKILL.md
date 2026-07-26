@@ -27,6 +27,12 @@ remind the user to fire it manually. Step 3 is a local `git log` + classificatio
 
 ## Step 1 — Build the next RC APK
 
+`android-apk.yml` now computes the next `vX.Y.Z-rcN` itself when `version` is
+left blank (from `apps/mobile/app.json` and the `dev` release's tracked rc
+state), so a blank dispatch is a safe fallback. Still resolve the number
+yourself first — it's what you log in `build-history.md`, and it's the
+cross-check that catches a stale/mistracked marker before it reaches CI.
+
 1. **Find the next rc number.** Resolve the target `X.Y.Z` from `apps/mobile/app.json` `version` **first** — that is the cycle you're building. Then:
    - **Read the rolling `dev` release** — `mcp__github__get_release_by_tag(owner="stlim0727", repo="stash", tag="dev")`. Its `name` now carries the label (`Development build — vX.Y.Z-rcN (latest)`, stamped by `android-apk.yml` since #302). **Only trust its `rcN` when the label's `X.Y.Z` equals `app.json`'s `version`.**
      - **Match** → next is `rc(N+1)`.

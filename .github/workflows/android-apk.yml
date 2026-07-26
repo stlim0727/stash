@@ -557,7 +557,12 @@ jobs:
             fi
 
             RC_MARKER="$OLD_MARKER"
-            if [[ "$THIS_LABEL" == "v${APP_VERSION}-rc"[0-9]* ]]; then
+            # An exact, fully-numeric match — the glob `-rc[0-9]*` would also
+            # accept a label like `v1.2.3-rc1-test`, since the trailing `*`
+            # matches any remaining characters, wrongly treating a test build
+            # as a real "rc1" advance.
+            APP_VERSION_RE=$(printf '%s' "$APP_VERSION" | sed 's/\./\\./g')
+            if [[ "$THIS_LABEL" =~ ^v${APP_VERSION_RE}-rc[0-9]+$ ]]; then
               THIS_RC="${THIS_LABEL##*-rc}"
               OLD_BASE="${OLD_MARKER%-rc*}"
               OLD_RC="${OLD_MARKER##*-rc}"
