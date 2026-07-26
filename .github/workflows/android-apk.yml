@@ -135,27 +135,6 @@ jobs:
           restore-keys: |
             metro-${{ runner.os }}-
 
-      # A rerun of a failed job (e.g. the Firebase distribution step failed)
-      # re-executes "Determine build version" too, but by then the dev
-      # release's rc-state marker already reflects THIS run's own first-attempt
-      # publish — recomputing would advance rc again for the same commit/
-      # run_number. Cache the allocated version under a per-run, per-attempt
-      # key: actions/cache entries are immutable, so if an attempt recomputes
-      # a *different* value (its earlier cached one was claimed by another
-      # run in the meantime — see below), saving under the same key as a
-      # prior attempt would silently no-op and strand the stale value for the
-      # next attempt to wrongly reuse. `restore-keys` prefix-matches to the
-      # most recently saved attempt so a later rerun still picks up whatever
-      # the most recent attempt actually computed.
-      - name: Restore allocated version (job reruns)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/apk-version.txt
-          key: apk-version-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            apk-version-${{ github.run_id }}-
-
       # A blank workflow_dispatch (no `version` input) used to fall back to
       # app.json's bare version with no `-rcN`, so the build carried no RC
       # label and `docs/development/build-history.md` couldn't self-derive the
@@ -172,51 +151,9 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           if [ -n "$INPUT_VERSION" ]; then
-            echo "$INPUT_VERSION" > /tmp/apk-version.txt
             echo "Using explicit version input: $INPUT_VERSION"
             echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
             exit 0
-          fi
-
-          # Blank dispatch, smart-compute: a rerun of a failed job re-executes
-          # this step too. If THIS run (any attempt) already published under
-          # a cached label, reuse it rather than recomputing, which would
-          # read the now-advanced live marker and draw a second rc for the
-          # same commit. But concurrency only serializes overlapping runs,
-          # not a rerun of one that already finished: a *different* run —
-          # even one building the identical commit, which a sha-based check
-          # can't tell apart — may have already published in the meantime.
-          # Identify ownership via a hidden run-id marker in the dev
-          # release's body (stamped by "Compose release notes"), not a git/
-          # API commit field. GitHub run_ids are monotonically increasing
-          # across the whole instance, so also use that ordering: a marker
-          # numerically *ahead* of ours means a later run has already
-          # published and superseded this one — rerunning a stale dispatch
-          # after that shouldn't silently draw a fresh label and republish
-          # older/lower-versionCode code over it, so fail loudly and point
-          # the operator at dispatching a fresh build instead.
-          if [ -f /tmp/apk-version.txt ]; then
-            CACHED=$(cat /tmp/apk-version.txt)
-            if DEV_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/dev" 2>/tmp/gh-dev-err.log); then
-              DEV_INFO_FOR_RUNID=$(echo "$DEV_JSON" | jq -r '(.body // "") + "\n" + (.name // "")')
-            elif grep -q '404' /tmp/gh-dev-err.log; then
-              DEV_INFO_FOR_RUNID=""
-            else
-              echo "::error::Failed to look up the dev release to validate a cached rc allocation (not a 404 — refusing to silently treat it as unconfirmed):"
-              cat /tmp/gh-dev-err.log
-              exit 1
-            fi
-            DEV_RUN_ID=$(echo "$DEV_INFO_FOR_RUNID" | grep -oE 'run-id: [0-9]+' | head -1 | sed 's/run-id: //' || true)
-
-            if [ "$DEV_RUN_ID" = "$GITHUB_RUN_ID" ]; then
-              echo "Reusing version allocated and already published by this run: $CACHED"
-              echo "version=$CACHED" >> "$GITHUB_OUTPUT"
-              exit 0
-            elif [ -n "$DEV_RUN_ID" ] && [ "$DEV_RUN_ID" -gt "$GITHUB_RUN_ID" ]; then
-              echo "::error::A different, later run (run-id $DEV_RUN_ID) already published to the dev release since this run started — this run is stale. Dispatch a fresh build instead of rerunning it."
-              exit 1
-            fi
-            echo "Cached allocation ($CACHED) not yet published by this run (dev run-id is ${DEV_RUN_ID:-<none>}) — recomputing from live state."
           fi
 
           APP_VERSION=$(node -p "require('./apps/mobile/app.json').expo.version")
@@ -255,6 +192,32 @@ jobs:
           if [ -z "$LAST_LABEL" ]; then
             LAST_LABEL=$(echo "$DEV_INFO" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 || true)
           fi
+
+          # A rerun of a failed job (e.g. the Firebase distribution step
+          # failed) re-executes this step too — checked unconditionally
+          # (not gated behind a local cache hit, which a rerun can't always
+          # rely on: evicted, or a cache-service hiccup on this fresh
+          # runner) via the hidden run-id marker "Compose release notes"
+          # stamps on every dev publish. GitHub run_ids are monotonically
+          # increasing across the whole instance.
+          DEV_RUN_ID=$(echo "$DEV_INFO" | grep -oE 'run-id: [0-9]+' | head -1 | sed 's/run-id: //' || true)
+          if [ "$DEV_RUN_ID" = "$GITHUB_RUN_ID" ]; then
+            # This run (any attempt) already published dev's current rc —
+            # reuse it verbatim. Recomputing would read our own already-
+            # advanced marker and draw a second rc for the same commit.
+            echo "Reusing version this run already published: $LAST_LABEL"
+            echo "version=$LAST_LABEL" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ -n "$DEV_RUN_ID" ] && [ "$DEV_RUN_ID" -gt "$GITHUB_RUN_ID" ]; then
+            # Concurrency only serializes overlapping runs, not a rerun of
+            # one that already finished: a numerically later run_id means a
+            # *different*, later run already published since this one
+            # started — proceeding would republish older/lower-versionCode
+            # code under a fresh, higher-looking rc label.
+            echo "::error::A different, later run (run-id $DEV_RUN_ID) already published to the dev release since this run started — this run is stale. Dispatch a fresh build instead of rerunning it."
+            exit 1
+          fi
+
           LAST_BASE="${LAST_LABEL%-rc*}"
           LAST_RC="${LAST_LABEL##*-rc}"
 
@@ -265,15 +228,7 @@ jobs:
           fi
 
           echo "Last dev build: ${LAST_LABEL:-<none>}; app.json target: $APP_VERSION -> computed $NEXT"
-          echo "$NEXT" > /tmp/apk-version.txt
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
-
-      - name: Save allocated version (job reruns)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        uses: actions/cache/save@v4
-        with:
-          path: /tmp/apk-version.txt
-          key: apk-version-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Prebuild Android project
         working-directory: apps/mobile

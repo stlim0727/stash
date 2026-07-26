@@ -41,8 +41,14 @@ cross-check that catches a stale/mistracked marker before it reaches CI.
      tool is exposed; otherwise use local `refs/tags/dev` plus
      `docs/development/build-history.md` as the fallback. Its `name` carries the
      label (`Development build — vX.Y.Z-rcN (latest)`, stamped by
-     `android-apk.yml` since #302). **Only trust its `rcN` when the label's
-     `X.Y.Z` equals `app.json`'s `version`.**
+     `android-apk.yml` since #302), **but check the `body` first for a hidden
+     `<!-- rc-state: vX.Y.Z-rcN -->` marker** — the workflow's blank-dispatch
+     allocator writes the real rc there and it survives a non-rc test build
+     (e.g. `v1.2.3-test1`) overwriting the name; the name alone can be stale in
+     that case. If neither is legible or you're unsure which is current, leave
+     `version` blank on dispatch — the workflow resolves it the same way.
+     **Only trust the resolved `rcN` when its `X.Y.Z` equals `app.json`'s
+     `version`.**
      - **Match** → next is `rc(N+1)`.
      - **`app.json` is ahead of the `dev` label** (a fresh cycle bump with no RC built yet — e.g. `app.json` says `1.2.0` but `dev` still reads `v1.1.0-rcN`) → the label is **stale**; start the new cycle at **`rc1`** (`vX.Y.Z-rc1` from `app.json`). Do **not** carry the old cycle's number forward.
    - **Cross-check** the current cycle's table in `docs/development/build-history.md` (next = highest `-rcN` + 1). If that cycle has no table yet (a fresh version bump), it's `rc1` and you create the section.
