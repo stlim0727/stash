@@ -437,7 +437,7 @@ test('search filters the list and shows the match count', async () => {
 
   // Search is tap-to-open now: reveal the field before typing.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'local-first');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'local-first');
 
   // The derived query is debounced, so the count/filter settle a beat later.
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
@@ -481,7 +481,7 @@ test('slims the header while searching: the sort row and browse shelf fold away'
   // Open search (tap-to-open), type, then blur to reach the "results, keyboard
   // down" slim state (searching + field blurred).
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  const searchInput = screen.getByPlaceholderText('Search titles, tags, folders');
+  const searchInput = screen.getByPlaceholderText('Search titles, tags, collections');
   await fireEvent.changeText(searchInput, 'local-first');
   await fireEvent(searchInput, 'blur');
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
@@ -516,7 +516,7 @@ test('highlights the matched span in a result title while searching', async () =
   expect(screen.queryByText('software')).toBeNull();
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'software');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'software');
 
   // The matched span renders as its own run carrying the accent highlight.
   const match = await waitFor(() => screen.getByText('software'));
@@ -549,7 +549,7 @@ test('a punctuation-only query is not a search (keeps the normal Inbox section)'
   // A query that normalizes to zero search tokens must NOT flip to the search
   // (Matches/results) section, and must not filter the library down.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '...');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), '...');
 
   // Stays on the normal Inbox (no results header, no section label) and the
   // zero-result recovery card must NOT appear — it's not a search at all.
@@ -1236,6 +1236,138 @@ test('the New Folder tile opens a create-collection dialog, and a successful sub
   expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
 });
 
+test('Folder View has its own sort menu (name/count), not the bookmark date/accessed one', async () => {
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f7', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-new')).toBeTruthy());
+
+  // The pill itself reflects the folder-sort default (name-ascending), not the
+  // bookmark default ("Newest").
+  expect(screen.getByText('Name A–Z')).toBeTruthy();
+  expect(screen.queryByText('Newest')).toBeNull();
+
+  await fireEvent.press(screen.getByText('Name A–Z'));
+
+  // The 4 folder-scoped options are present...
+  expect(screen.getByText('Name Z–A')).toBeTruthy();
+  expect(screen.getByText('Most items')).toBeTruthy();
+  expect(screen.getByText('Fewest items')).toBeTruthy();
+  // ...and none of the bookmark-level ones leak into this menu.
+  expect(screen.queryByText('Oldest')).toBeNull();
+  expect(screen.queryByText('Recently opened')).toBeNull();
+  expect(screen.queryByText('Least recently opened')).toBeNull();
+});
+
+test('picking "Most items" reorders the real-collection tiles; uncollected/new-folder stay pinned', async () => {
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001a1', collection_id: 'col-alpha' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001b1', collection_id: 'col-mango' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001b2', collection_id: 'col-mango' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001c1', collection_id: 'col-zeta' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001c2', collection_id: 'col-zeta' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001c3', collection_id: 'col-zeta' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001d1', collection_id: null }),
+    ],
+    {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        makeCollection('col-alpha', 'Alpha'), // 1 item
+        makeCollection('col-mango', 'Mango'), // 2 items
+        makeCollection('col-zeta', 'Zeta'), // 3 items
+      ],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-zeta')).toBeTruthy());
+
+  const tileIds = () =>
+    screen.getAllByTestId(/^folder-tile-/).map((node) => node.props.testID as string);
+
+  // Default (name-ascending): Alpha, Mango, Zeta between the pinned tiles.
+  expect(tileIds()).toEqual([
+    'folder-tile-__folder-uncollected',
+    'folder-tile-__folder-c:col-alpha',
+    'folder-tile-__folder-c:col-mango',
+    'folder-tile-__folder-c:col-zeta',
+    'folder-tile-new',
+  ]);
+
+  await fireEvent.press(screen.getByText('Name A–Z'));
+  await fireEvent.press(screen.getByText('Most items'));
+
+  // Zeta (3) > Mango (2) > Alpha (1) — but the uncollected bucket stays first
+  // and "New folder" stays last regardless of the chosen order.
+  await waitFor(() =>
+    expect(tileIds()).toEqual([
+      'folder-tile-__folder-uncollected',
+      'folder-tile-__folder-c:col-zeta',
+      'folder-tile-__folder-c:col-mango',
+      'folder-tile-__folder-c:col-alpha',
+      'folder-tile-new',
+    ]),
+  );
+});
+
+test('Folder View and Card/List sorts are independent — switching layouts loses neither', async () => {
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000002a1',
+        title: 'apple',
+        collection_id: 'col-work',
+        created_at: '2026-01-01T00:00:00.000Z',
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000002a2',
+        title: 'Zebra',
+        collection_id: null,
+        created_at: '2026-01-03T00:00:00.000Z',
+      }),
+    ],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('apple')).toBeTruthy());
+
+  // Change the bookmark-level sort away from its default (Newest → Oldest).
+  expect(screen.getByText('Newest')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Newest'));
+  await fireEvent.press(screen.getByText('Oldest'));
+  expect(screen.getByText('Oldest')).toBeTruthy();
+
+  // Enter Folder View: its own sort control starts at its own default
+  // (Name A–Z), untouched by the bookmark-level change above.
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByText('Name A–Z')).toBeTruthy());
+
+  // Change the folder sort away from its default.
+  await fireEvent.press(screen.getByText('Name A–Z'));
+  await fireEvent.press(screen.getByText('Most items'));
+  await waitFor(() => expect(screen.getByText('Most items')).toBeTruthy());
+
+  // Back to List: the bookmark sort still reads "Oldest" — the folder-sort
+  // change didn't disturb it.
+  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await waitFor(() => expect(screen.getByText('Oldest')).toBeTruthy());
+
+  // Back into Folder View: its sort still reads "Most items" — switching
+  // layouts twice didn't reset either control.
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByText('Most items')).toBeTruthy());
+});
+
 test('web opens bookmark detail inline instead of pushing the detail route', async () => {
   Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
   fakeRepo.__reset([
@@ -1630,7 +1762,7 @@ test('shows the no-matches empty state for an unmatched search', async () => {
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'zzz');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'zzz');
 
   await waitFor(() => expect(screen.getByText('No bookmarks match your search.')).toBeTruthy());
   // The recovery card stands alone — the "0 results" section label is suppressed
@@ -1736,7 +1868,7 @@ test('a search match that lives only in the URL path adds a second line so the l
   await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '98765');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), '98765');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   expect(screen.getByText('example.com')).toBeTruthy();
@@ -1762,7 +1894,7 @@ test('a multi-term search where the label covers one term but not the other adds
   await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'example 98765');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'example 98765');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   expect(screen.getByText('example.com')).toBeTruthy();
@@ -1787,7 +1919,7 @@ test('a query matching both site_name and a URL-only term keeps both matches vis
   await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'wired 98765');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'wired 98765');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   expect(screen.getByText('WIRED')).toBeTruthy();
@@ -1823,7 +1955,7 @@ test('a 4th+ tag that matched the query is promoted into the shown tag chips', a
   await waitFor(() => expect(screen.getByText('Ops runbook')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'kubernetes');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'kubernetes');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   // The matched tag is promoted into the card's (max 3) shown meta chips. While
@@ -1856,7 +1988,7 @@ test('the debounced query does not filter until typing settles', async () => {
     await fireEvent.press(screen.getByTestId('inbox-search-open'));
     await act(async () => {
       fireEvent.changeText(
-        screen.getByPlaceholderText('Search titles, tags, folders'),
+        screen.getByPlaceholderText('Search titles, tags, collections'),
         'local-first',
       );
     });
@@ -1884,12 +2016,12 @@ test('the empty-search state offers a clear control and a searchable-fields hint
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  const input = screen.getByPlaceholderText('Search titles, tags, folders');
+  const input = screen.getByPlaceholderText('Search titles, tags, collections');
   await fireEvent.changeText(input, 'zzz');
 
   await waitFor(() => expect(screen.getByTestId('inbox-empty-search')).toBeTruthy());
   // The hint tells the user the search reaches beyond titles …
-  expect(screen.getByText('Search also looks in tags, folders, and site names.')).toBeTruthy();
+  expect(screen.getByText('Search also looks in tags, collections, and site names.')).toBeTruthy();
 
   // … and the visible Clear control resets the query, returning to the full list.
   await fireEvent.press(screen.getByLabelText('Clear search'));

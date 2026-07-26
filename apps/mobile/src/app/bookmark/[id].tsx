@@ -89,6 +89,7 @@ export default function BookmarkDetailScreen({
     isEnriching,
     isManuallyEnriching,
     isAiSuggestionPostponed,
+    isAiSuggestionServerQueued,
     hadPriorEnrichmentAttempt,
     acceptSuggestedTags,
     getReviewedSuggestions,
@@ -269,6 +270,12 @@ export default function BookmarkDetailScreen({
   // True only while waiting out backoff (goes false the instant a retry
   // starts) — drives the calm "still working on it" note.
   const aiPostponed = isAiSuggestionPostponed(bookmark.id);
+  // True once the 429 that armed aiPostponed above was CONFIRMED accepted
+  // into the server-side overflow queue — a stronger, self-resolving promise
+  // than the generic "postponed" note. armAiRetry fires unconditionally on
+  // EVERY failure (this 429 included), so both flags are true at once for a
+  // rate-limited bookmark; this one takes priority below.
+  const aiServerQueued = isAiSuggestionServerQueued(bookmark.id);
   const previewRefreshing = isRefreshingPreview(bookmark.id);
 
   // AI suggestions: surface only high-confidence tags not already applied
@@ -1079,7 +1086,7 @@ export default function BookmarkDetailScreen({
         {folderSuggestionChip ? (
           <View style={styles.folderSuggestionBlock}>
             <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-              {t('detail.suggestedFolderLabel')}
+              {t('detail.suggestedCollectionLabel')}
             </Text>
             <View style={styles.folderSuggestionRow}>
               <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
@@ -1176,7 +1183,18 @@ export default function BookmarkDetailScreen({
           <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('detail.aiStale')}</Text>
         ) : null}
 
-        {aiPostponed ? (
+        {aiServerQueued ? (
+          // A CONFIRMED server-side queue entry outranks the generic
+          // "postponed" note below: armAiRetry arms unconditionally on every
+          // failure (this 429 included), so aiPostponed is also true here —
+          // but this is the stronger, self-resolving promise, so it wins.
+          <Text
+            accessibilityRole="text"
+            style={[styles.hint, { color: palette.textSecondary }]}
+          >
+            {t('detail.aiQueued')}
+          </Text>
+        ) : aiPostponed ? (
           // A live, currently-armed retry marker (waiting out its backoff)
           // always wins over showDegradedNote below: that note can describe a
           // stale, already-completed attempt, while this reflects the

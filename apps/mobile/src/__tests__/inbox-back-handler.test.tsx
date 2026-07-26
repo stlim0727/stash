@@ -158,7 +158,7 @@ test('hardware back closes a live search before exiting', async () => {
 
   // Search is tap-to-open now: reveal the field, then type.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  const input = screen.getByPlaceholderText('Search titles, tags, folders');
+  const input = screen.getByPlaceholderText('Search titles, tags, collections');
   await fireEvent.changeText(input, 'local-first');
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
 
@@ -166,7 +166,7 @@ test('hardware back closes a live search before exiting', async () => {
   // consumes the press.
   expect(await pressBack()).toBe(true);
   await waitFor(() => expect(screen.getByText('Raindrop review')).toBeTruthy());
-  expect(screen.queryByPlaceholderText('Search titles, tags, folders')).toBeNull();
+  expect(screen.queryByPlaceholderText('Search titles, tags, collections')).toBeNull();
 });
 
 test('hardware back is left to the OS when the Inbox is not narrowed', async () => {

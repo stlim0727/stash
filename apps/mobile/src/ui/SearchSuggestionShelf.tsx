@@ -127,7 +127,7 @@ export function SearchSuggestionShelf({
               ? t('search.recentChipA11y', { query: chipQuery })
               : suggestion.kind === 'tag'
                 ? t('search.tagChipA11y', { name: suggestion.label.replace(/^#/, '') })
-                : t('search.folderChipA11y', { name: suggestion.label });
+                : t('search.collectionChipA11y', { name: suggestion.label });
           // Removing a recent is a destructive action only reachable by
           // long-press for sighted users; expose it to VoiceOver/TalkBack as an
           // accessibility action so screen-reader users can delete it too.
