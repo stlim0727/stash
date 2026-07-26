@@ -159,6 +159,24 @@ jobs:
           APP_VERSION=$(git show FETCH_HEAD:apps/mobile/app.json | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).expo.version)")
           APP_VERSION_RE=$(printf '%s' "$APP_VERSION" | sed 's/\./\\./g')
 
+          # Reading app.json from main isn't enough on its own: actions/
+          # checkout still built whatever ref this dispatch actually
+          # selected, so a blank or current-cycle-rc dispatch made against an
+          # old/feature branch would label that branch's code as the next
+          # main rc and ship it through the shared dev release/Firebase.
+          # Require the dispatch itself to be on main for these two cases
+          # (an explicit off-cycle or non-rc dispatch is unaffected — it
+          # doesn't touch the main-tracked cycle at all, e.g. a release
+          # branch's own test build).
+          IS_MAIN_CYCLE_RC=false
+          if [ -z "$INPUT_VERSION" ] || [[ "$INPUT_VERSION" =~ ^v${APP_VERSION_RE}-rc[0-9]+$ ]]; then
+            IS_MAIN_CYCLE_RC=true
+          fi
+          if [ "$IS_MAIN_CYCLE_RC" = "true" ] && [ "${{ github.ref_name }}" != "main" ]; then
+            echo "::error::A blank or current-cycle RC dispatch must run from main (this run is on '${{ github.ref_name }}') — RCs always ship from main. Dispatch from main, or pass an explicit off-cycle version if you intend to build a different ref/line."
+            exit 1
+          fi
+
           # Fetch the dev release once — used both to validate an explicit
           # RC input below and to smart-compute the next one when blank.
           # A 404 (no `dev` release exists yet) genuinely means "first build
@@ -205,6 +223,12 @@ jobs:
           LAST_BASE="${LAST_LABEL%-rc*}"
           LAST_RC="${LAST_LABEL##*-rc}"
 
+          # Computed here (not only in the blank-dispatch path below) so the
+          # explicit-input branch can also recognize "I already published
+          # this myself" — see the rerun check just below. GitHub run_ids
+          # are monotonically increasing across the whole instance.
+          DEV_RUN_ID=$(echo "$DEV_BODY" | grep -oE 'run-id: [0-9]+' | head -1 | sed 's/run-id: //' || true)
+
           if [ -n "$INPUT_VERSION" ]; then
             # Concurrency serializes overlapping runs but doesn't stop two
             # operators from each precomputing the same explicit rc *before*
@@ -213,8 +237,12 @@ jobs:
             # operator's stale number over what the first already shipped.
             # Only revalidate the risky shape — an explicit rc for the
             # *current* app.json cycle — since that's the only case hidden
-            # allocator state can actually collide with.
-            if [[ "$INPUT_VERSION" =~ ^v${APP_VERSION_RE}-rc[0-9]+$ ]]; then
+            # allocator state can actually collide with. Exempt a rerun of
+            # THIS run's own successful publish (e.g. it failed later in
+            # Firebase distribution): its own marker will show LAST_RC ==
+            # INPUT_RC with our own run-id, which must retry cleanly rather
+            # than being rejected as "stale".
+            if [[ "$INPUT_VERSION" =~ ^v${APP_VERSION_RE}-rc[0-9]+$ ]] && [ "$DEV_RUN_ID" != "$GITHUB_RUN_ID" ]; then
               INPUT_RC="${INPUT_VERSION##*-rc}"
               if [ -n "$LAST_RC" ] && [ "${LAST_BASE#v}" = "$APP_VERSION" ] && [ "$LAST_RC" -ge "$INPUT_RC" ]; then
                 echo "::error::Explicit version $INPUT_VERSION is stale — dev has already reached rc$LAST_RC for $APP_VERSION. Re-check the current state (or leave version blank to let the workflow allocate the next number)."
@@ -231,9 +259,7 @@ jobs:
           # (not gated behind a local cache hit, which a rerun can't always
           # rely on: evicted, or a cache-service hiccup on this fresh
           # runner) via the hidden run-id marker "Compose release notes"
-          # stamps on every dev publish. GitHub run_ids are monotonically
-          # increasing across the whole instance.
-          DEV_RUN_ID=$(echo "$DEV_BODY" | grep -oE 'run-id: [0-9]+' | head -1 | sed 's/run-id: //' || true)
+          # stamps on every dev publish.
           if [ "$DEV_RUN_ID" = "$GITHUB_RUN_ID" ]; then
             # This run (any attempt) already published dev's current rc —
             # reuse it verbatim. Recomputing would read our own already-
@@ -571,13 +597,21 @@ jobs:
             fi
 
             # Hidden run-id marker: records which workflow run last published
-            # to dev, unconditionally (no backward-protection needed — unlike
-            # rc-state, "who published most recently" has no notion of
-            # advancing/regressing). "Determine build version" uses this,
-            # not the commit sha, to tell "this exact run already published"
-            # from "a different run published the same commit" and from "a
-            # later run has since superseded this one."
-            echo "<!-- run-id: ${{ github.run_id }} -->" >> "$BODY"
+            # to dev. "Determine build version" uses this, not the commit
+            # sha, to tell "this exact run already published" from "a
+            # different run published the same commit" and from "a later
+            # run has since superseded this one" — which only holds if the
+            # marker itself never moves backward. GitHub run_ids are
+            # monotonically increasing, so a rerun of an *older*, non-rc or
+            # off-cycle dev build (which bypasses the rc-state guard above
+            # entirely) must not overwrite a genuinely later run's id;
+            # keep whichever is greater.
+            OLD_RUN_ID=$(echo "$OLD_BODY" | grep -oE 'run-id: [0-9]+' | head -1 | sed 's/run-id: //' || true)
+            NEW_RUN_ID="${{ github.run_id }}"
+            if [ -n "$OLD_RUN_ID" ] && [ "$OLD_RUN_ID" -gt "$NEW_RUN_ID" ]; then
+              NEW_RUN_ID="$OLD_RUN_ID"
+            fi
+            echo "<!-- run-id: $NEW_RUN_ID -->" >> "$BODY"
           fi
 
           if [ -f "$NOTES" ]; then
