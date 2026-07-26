@@ -1236,6 +1236,138 @@ test('the New Folder tile opens a create-collection dialog, and a successful sub
   expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
 });
 
+test('Folder View has its own sort menu (name/count), not the bookmark date/accessed one', async () => {
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000f7', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-new')).toBeTruthy());
+
+  // The pill itself reflects the folder-sort default (name-ascending), not the
+  // bookmark default ("Newest").
+  expect(screen.getByText('Name A–Z')).toBeTruthy();
+  expect(screen.queryByText('Newest')).toBeNull();
+
+  await fireEvent.press(screen.getByText('Name A–Z'));
+
+  // The 4 folder-scoped options are present...
+  expect(screen.getByText('Name Z–A')).toBeTruthy();
+  expect(screen.getByText('Most items')).toBeTruthy();
+  expect(screen.getByText('Fewest items')).toBeTruthy();
+  // ...and none of the bookmark-level ones leak into this menu.
+  expect(screen.queryByText('Oldest')).toBeNull();
+  expect(screen.queryByText('Recently opened')).toBeNull();
+  expect(screen.queryByText('Least recently opened')).toBeNull();
+});
+
+test('picking "Most items" reorders the real-collection tiles; uncollected/new-folder stay pinned', async () => {
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001a1', collection_id: 'col-alpha' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001b1', collection_id: 'col-mango' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001b2', collection_id: 'col-mango' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001c1', collection_id: 'col-zeta' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001c2', collection_id: 'col-zeta' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001c3', collection_id: 'col-zeta' }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000001d1', collection_id: null }),
+    ],
+    {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        makeCollection('col-alpha', 'Alpha'), // 1 item
+        makeCollection('col-mango', 'Mango'), // 2 items
+        makeCollection('col-zeta', 'Zeta'), // 3 items
+      ],
+    },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-view-folder')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-zeta')).toBeTruthy());
+
+  const tileIds = () =>
+    screen.getAllByTestId(/^folder-tile-/).map((node) => node.props.testID as string);
+
+  // Default (name-ascending): Alpha, Mango, Zeta between the pinned tiles.
+  expect(tileIds()).toEqual([
+    'folder-tile-__folder-uncollected',
+    'folder-tile-__folder-c:col-alpha',
+    'folder-tile-__folder-c:col-mango',
+    'folder-tile-__folder-c:col-zeta',
+    'folder-tile-new',
+  ]);
+
+  await fireEvent.press(screen.getByText('Name A–Z'));
+  await fireEvent.press(screen.getByText('Most items'));
+
+  // Zeta (3) > Mango (2) > Alpha (1) — but the uncollected bucket stays first
+  // and "New folder" stays last regardless of the chosen order.
+  await waitFor(() =>
+    expect(tileIds()).toEqual([
+      'folder-tile-__folder-uncollected',
+      'folder-tile-__folder-c:col-zeta',
+      'folder-tile-__folder-c:col-mango',
+      'folder-tile-__folder-c:col-alpha',
+      'folder-tile-new',
+    ]),
+  );
+});
+
+test('Folder View and Card/List sorts are independent — switching layouts loses neither', async () => {
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000002a1',
+        title: 'apple',
+        collection_id: 'col-work',
+        created_at: '2026-01-01T00:00:00.000Z',
+      }),
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000002a2',
+        title: 'Zebra',
+        collection_id: null,
+        created_at: '2026-01-03T00:00:00.000Z',
+      }),
+    ],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('apple')).toBeTruthy());
+
+  // Change the bookmark-level sort away from its default (Newest → Oldest).
+  expect(screen.getByText('Newest')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Newest'));
+  await fireEvent.press(screen.getByText('Oldest'));
+  expect(screen.getByText('Oldest')).toBeTruthy();
+
+  // Enter Folder View: its own sort control starts at its own default
+  // (Name A–Z), untouched by the bookmark-level change above.
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByText('Name A–Z')).toBeTruthy());
+
+  // Change the folder sort away from its default.
+  await fireEvent.press(screen.getByText('Name A–Z'));
+  await fireEvent.press(screen.getByText('Most items'));
+  await waitFor(() => expect(screen.getByText('Most items')).toBeTruthy());
+
+  // Back to List: the bookmark sort still reads "Oldest" — the folder-sort
+  // change didn't disturb it.
+  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await waitFor(() => expect(screen.getByText('Oldest')).toBeTruthy());
+
+  // Back into Folder View: its sort still reads "Most items" — switching
+  // layouts twice didn't reset either control.
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByText('Most items')).toBeTruthy());
+});
+
 test('web opens bookmark detail inline instead of pushing the detail route', async () => {
   Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
   fakeRepo.__reset([
