@@ -44,8 +44,15 @@ on:
 # vX.Y.Z build (its own versioned release/tag, no shared state) gets its own
 # per-version group and is never at risk of being silently dropped behind a
 # queue of dev builds.
+# A dispatch input that isn't a clean `vX.Y.Z` — including one that doesn't
+# even start with `v` (e.g. a typo'd "1.2.3") — is NOT treated as a stable
+# release by "Determine release target" below (it requires `LABEL == v*`);
+# it falls through to the shared rolling `dev` build instead. The group
+# predicate here mirrors that exactly (startsWith 'v' + no hyphen) so such an
+# input can't wrongly get an isolated per-version group while actually
+# targeting — and racing over — the shared dev release.
 concurrency:
-  group: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-') && format('android-apk-stable-{0}', github.ref_name)) || (github.event_name == 'workflow_dispatch' && inputs.version != '' && !contains(inputs.version, '-') && format('android-apk-stable-{0}', inputs.version)) || 'android-apk-dev' }}
+  group: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-') && format('android-apk-stable-{0}', github.ref_name)) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.version, 'v') && !contains(inputs.version, '-') && format('android-apk-stable-{0}', inputs.version)) || 'android-apk-dev' }}
   cancel-in-progress: false
 
 permissions:
@@ -157,18 +164,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ -f /tmp/apk-version.txt ]; then
-            REUSED=$(cat /tmp/apk-version.txt)
-            echo "Reusing version allocated by a previous attempt of this run: $REUSED"
-            echo "version=$REUSED" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           if [ -n "$INPUT_VERSION" ]; then
             echo "$INPUT_VERSION" > /tmp/apk-version.txt
             echo "Using explicit version input: $INPUT_VERSION"
             echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          # Blank dispatch, smart-compute: a rerun of a failed job re-executes
+          # this step too. If THIS run already published under a cached
+          # label — the dev release's target_commitish (set to github.sha at
+          # publish time) equals our own sha — reuse it rather than
+          # recomputing, which would read the now-advanced live marker and
+          # draw a second rc for the same commit. But concurrency only
+          # serializes overlapping runs, not a rerun of one that already
+          # finished: if a *different*, later run published in the meantime
+          # (dev's target_commitish points elsewhere), the cache is stale and
+          # that label is already claimed — fall through and recompute fresh
+          # from live state instead of colliding with it.
+          if [ -f /tmp/apk-version.txt ]; then
+            CACHED=$(cat /tmp/apk-version.txt)
+            DEV_SHA=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq '.target_commitish // ""' 2>/dev/null || echo "")
+            if [ "$DEV_SHA" = "$GITHUB_SHA" ]; then
+              echo "Reusing version allocated and already published by this run: $CACHED"
+              echo "version=$CACHED" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Cached allocation ($CACHED) not yet published by this run (dev is at ${DEV_SHA:-<none>}) — recomputing from live state."
           fi
 
           APP_VERSION=$(node -p "require('./apps/mobile/app.json').expo.version")
@@ -470,11 +492,16 @@ jobs:
           # a non-rc hyphenated test dispatch (e.g. v1.2.3-test1), so
           # "Determine build version" can always find the true last rc even
           # when the most recent dev build itself wasn't one. Only advances
-          # when THIS build's own label is itself an rc for the current cycle;
-          # otherwise re-emits whatever marker was already there unchanged.
+          # when THIS build's own label is itself an rc *for app.json's
+          # current cycle* — not just any rc-shaped label. An explicit RC for
+          # a different/older line (e.g. `v1.2.2-rc9` dispatched while the
+          # marker is tracking `1.2.3`) must NOT clobber the current cycle's
+          # marker with an older base; anything else re-emits whatever marker
+          # was already there unchanged.
           if [ "${{ steps.meta.outputs.tag }}" = "dev" ]; then
             THIS_LABEL="${{ steps.meta.outputs.label }}"
-            if [[ "$THIS_LABEL" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]]; then
+            APP_VERSION=$(node -p "require('./apps/mobile/app.json').expo.version")
+            if [[ "$THIS_LABEL" == "v${APP_VERSION}-rc"[0-9]* ]]; then
               RC_MARKER="$THIS_LABEL"
             else
               # This build is about to overwrite the dev release, so a
