@@ -10,6 +10,10 @@ name: Android APK
 # - clean `vX.Y.Z` (pushed tag or dispatch input): a versioned prerelease.
 # - blank dispatch or a hyphenated tag (e.g. v0.1.0-test1): refreshes the single
 #   rolling `dev` prerelease in place, so test builds don't clutter Releases.
+#   A blank dispatch no longer builds an unlabeled snapshot: the "Determine
+#   build version" step computes the next `vX.Y.Z-rcN` itself — same target
+#   version (apps/mobile/app.json) as the last `dev` build bumps only the rc
+#   number, a new target version bumps to that version's rc1.
 # The APK is also uploaded as a run artifact for tooling that consumes it.
 #
 # Optional build-time config via repo secrets (absent ⇒ local-only build):
@@ -19,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Tag to publish a Release at (e.g. v0.1.0). Blank = artifact only.'
+        description: 'Tag to publish a Release at (e.g. v0.1.0). Blank = auto-computed next rc.'
         required: false
         default: ''
   push:
@@ -106,16 +110,60 @@ jobs:
           restore-keys: |
             metro-${{ runner.os }}-
 
+      # A blank workflow_dispatch (no `version` input) used to fall back to
+      # app.json's bare version with no `-rcN`, so the build carried no RC
+      # label and `docs/development/build-history.md` couldn't self-derive the
+      # next number from it. Compute a smart default instead: same target
+      # version (`apps/mobile/app.json`) as the last `dev` build ⇒ bump only
+      # the rc number; app.json has already moved to a new target (or no prior
+      # `dev` build exists) ⇒ that's a new cycle, start at rc1. An explicit
+      # `version` input always wins, unchanged.
+      - name: Determine build version
+        id: version
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "Using explicit version input: $INPUT_VERSION"
+            echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          APP_VERSION=$(node -p "require('./apps/mobile/app.json').expo.version")
+
+          # The rolling `dev` prerelease self-records the label of the last
+          # build (e.g. name "Development build — v1.2.0-rc19 (latest)"); read
+          # it back to find the last rc cut for the current cycle.
+          DEV_NAME=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq .name 2>/dev/null || echo "")
+          LAST_LABEL=$(echo "$DEV_NAME" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' | head -1 || true)
+          LAST_BASE="${LAST_LABEL%%-rc*}"
+          LAST_RC=""
+          if [[ "$LAST_LABEL" == *-rc* ]]; then
+            LAST_RC="${LAST_LABEL##*-rc}"
+          fi
+
+          if [ -n "$LAST_RC" ] && [ "${LAST_BASE#v}" = "$APP_VERSION" ]; then
+            NEXT="v${APP_VERSION}-rc$((LAST_RC + 1))"
+          else
+            NEXT="v${APP_VERSION}-rc1"
+          fi
+
+          echo "Last dev build: ${LAST_LABEL:-<none>}; app.json target: $APP_VERSION -> computed $NEXT"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+
       - name: Prebuild Android project
         working-directory: apps/mobile
         # app.config.js stamps these onto the native project: APP_VERSION (from
-        # the release tag, leading `v` stripped in the config; empty on a blank
-        # dispatch ⇒ falls back to app.json's version) and a per-run versionCode
-        # so every App Distribution upload is unique and increasing. The GIT_*
-        # provenance is stamped into the config's `extra` here too so the embedded
+        # the release tag, leading `v` stripped in the config; on a blank
+        # dispatch this is now the smart-computed version above, not a raw
+        # app.json fallback) and a per-run versionCode so every App
+        # Distribution upload is unique and increasing. The GIT_* provenance is
+        # stamped into the config's `extra` here too so the embedded
         # Constants.expoConfig.extra carries the right commit (see app.config.js).
         env:
-          APP_VERSION: ${{ inputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
+          APP_VERSION: ${{ steps.version.outputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
           EXPO_PUBLIC_GIT_SHA: ${{ github.sha }}
           EXPO_PUBLIC_GIT_REF: ${{ github.ref_name }}
@@ -151,7 +199,7 @@ jobs:
           # Same version inputs as prebuild, so the JS bundle's
           # Constants.expoConfig.version (shown in Settings) matches the native
           # versionName/versionCode baked into the APK.
-          APP_VERSION: ${{ inputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
+          APP_VERSION: ${{ steps.version.outputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
           # Route every CMake/NDK C++ compile through ccache. React Native only
           # wires ccache when building RN *itself* from source; for a prebuilt-RN
@@ -225,8 +273,8 @@ jobs:
         run: |
           SHA_SHORT="${GITHUB_SHA:0:7}"
           LABEL=""
-          if [ -n "${{ inputs.version }}" ]; then
-            LABEL="${{ inputs.version }}"
+          if [ -n "${{ steps.version.outputs.version }}" ]; then
+            LABEL="${{ steps.version.outputs.version }}"
           elif [ "${{ github.event_name }}" = "push" ]; then
             LABEL="${{ github.ref_name }}"
           fi

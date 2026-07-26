@@ -294,6 +294,11 @@ Outputs:
 
 - A blank workflow `version` input or a hyphenated tag like `v0.1.7-rc8`
   refreshes the rolling `dev` prerelease and publishes `stash-dev-android.apk`.
+  A blank input is no longer an unlabeled build: the workflow's "Determine
+  build version" step computes the next `vX.Y.Z-rcN` itself from
+  `apps/mobile/app.json`'s version and the last `dev` release's self-recorded
+  label — same target version as the last build bumps only the rc number, a
+  new target version (an `app.json` bump) starts that version's rc1.
 - A clean `vX.Y.Z` tag publishes a stable/latest versioned release.
 
 Trigger manually from GitHub Actions, or push a `v*` tag. The APK is arm64-v8a
