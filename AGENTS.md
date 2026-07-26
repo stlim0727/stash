@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-23 (inbox search open/close saga and graph pan/zoom snap-back fix).
+Last updated: 2026-07-26 (android-apk.yml smart version allocation for blank dispatches).
 
 ## Successor Agent Orientation
 

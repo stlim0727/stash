@@ -30,6 +30,17 @@ on:
     tags:
       - 'v*'
 
+# Serialize runs: the smart version-allocation step reads the rolling `dev`
+# release before this run publishes its own update, and the publish steps
+# force-move the shared `dev` tag/release. Two overlapping runs would both read
+# the same "last rc" state and allocate the same next number, then race to
+# publish — whichever finishes last silently wins and the other's rc label is
+# reused for a different APK. `cancel-in-progress: false` queues the second
+# run instead of racing or killing it.
+concurrency:
+  group: android-apk-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -133,16 +144,17 @@ jobs:
 
           APP_VERSION=$(node -p "require('./apps/mobile/app.json').expo.version")
 
-          # The rolling `dev` prerelease self-records the label of the last
-          # build (e.g. name "Development build — v1.2.0-rc19 (latest)"); read
-          # it back to find the last rc cut for the current cycle.
-          DEV_NAME=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq .name 2>/dev/null || echo "")
-          LAST_LABEL=$(echo "$DEV_NAME" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?' | head -1 || true)
-          LAST_BASE="${LAST_LABEL%%-rc*}"
-          LAST_RC=""
-          if [[ "$LAST_LABEL" == *-rc* ]]; then
-            LAST_RC="${LAST_LABEL##*-rc}"
-          fi
+          # The rolling `dev` prerelease's *name* reflects whatever build was
+          # dispatched last, including a manual non-rc hyphenated test build
+          # (e.g. `v1.2.3-test1`) — reading that back would lose the real rc
+          # count. Instead read a hidden `rc-state` marker from the release
+          # *body*, which the "Compose release notes" step only ever advances
+          # for an actual rc build and otherwise carries forward unchanged, so
+          # a test build in between can't regress the next rc number.
+          DEV_BODY=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq .body 2>/dev/null || echo "")
+          LAST_LABEL=$(echo "$DEV_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+          LAST_BASE="${LAST_LABEL%-rc*}"
+          LAST_RC="${LAST_LABEL##*-rc}"
 
           if [ -n "$LAST_RC" ] && [ "${LAST_BASE#v}" = "$APP_VERSION" ]; then
             NEXT="v${APP_VERSION}-rc$((LAST_RC + 1))"
@@ -383,11 +395,34 @@ jobs:
       # also checks if a release note file for its specific version label
       # (e.g. docs/release-notes/v1.2.0-rc1.md) exists and includes it.
       - name: Compose release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           BODY=dist/RELEASE_BODY.md
           NOTES="docs/release-notes/${{ steps.meta.outputs.tag }}.md"
           LABEL_NOTES="docs/release-notes/${{ steps.meta.outputs.label }}.md"
           : > "$BODY"
+
+          # Hidden rc-state marker (dev release only, invisible in rendered
+          # markdown): carries the last actual rc build's label forward across
+          # a non-rc hyphenated test dispatch (e.g. v1.2.3-test1), so
+          # "Determine build version" can always find the true last rc even
+          # when the most recent dev build itself wasn't one. Only advances
+          # when THIS build's own label is itself an rc for the current cycle;
+          # otherwise re-emits whatever marker was already there unchanged.
+          if [ "${{ steps.meta.outputs.tag }}" = "dev" ]; then
+            THIS_LABEL="${{ steps.meta.outputs.label }}"
+            if [[ "$THIS_LABEL" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]]; then
+              RC_MARKER="$THIS_LABEL"
+            else
+              OLD_BODY=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq .body 2>/dev/null || echo "")
+              RC_MARKER=$(echo "$OLD_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+            fi
+            if [ -n "$RC_MARKER" ]; then
+              echo "<!-- rc-state: $RC_MARKER -->" >> "$BODY"
+            fi
+          fi
+
           if [ -f "$NOTES" ]; then
             cat "$NOTES" >> "$BODY"
             printf '\n\n---\n\n' >> "$BODY"
