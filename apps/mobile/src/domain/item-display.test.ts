@@ -74,3 +74,7 @@ test('siteLabel falls back to the raw URL when it fails to parse', () => {
 test('siteLabel returns an empty string when there is no url', () => {
   assert.equal(siteLabel({ site_name: null, url: null }), '');
 });
+
+test('siteLabel treats a whitespace-only site_name as missing and falls back to hostname', () => {
+  assert.equal(siteLabel({ site_name: '   ', url: 'https://www.example.com/a' }), 'example.com');
+});

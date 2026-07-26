@@ -77,8 +77,9 @@ export function accessibilityTitle(
  * Pure and dependency-free (aside from the host parser) so it is unit-testable.
  */
 export function siteLabel(bookmark: Pick<Bookmark, 'site_name' | 'url'>): string {
-  if (bookmark.site_name) {
-    return bookmark.site_name;
+  const trimmedSiteName = bookmark.site_name?.trim();
+  if (trimmedSiteName) {
+    return trimmedSiteName;
   }
   if (!bookmark.url) {
     return '';
