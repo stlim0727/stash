@@ -278,7 +278,10 @@ jobs:
           fi
 
           if [ -n "$LAST_RC" ] && [ "${LAST_BASE#v}" = "$APP_VERSION" ]; then
-            NEXT="v${APP_VERSION}-rc$((LAST_RC + 1))"
+            # `10#` forces base-10: a zero-padded rc (e.g. rc020, from a
+            # manually typed explicit label the marker then carried forward)
+            # would otherwise be misread as octal by `$(( ))`.
+            NEXT="v${APP_VERSION}-rc$((10#$LAST_RC + 1))"
           else
             NEXT="v${APP_VERSION}-rc1"
           fi
@@ -496,19 +499,6 @@ jobs:
           qrencode -o dist/install-qr.png -s 8 -m 2 "${{ steps.meta.outputs.url }}"
           ls -la dist
 
-      # The rolling `dev` tag is reused across builds. softprops updates the
-      # release + assets but won't move an existing tag (`target_commitish` is
-      # ignored once the tag exists), so force-point `dev` at this commit first —
-      # otherwise the tag and its source archives stay on the first dev build
-      # while the APK/body are from this one. Versioned tags are new each build,
-      # so they don't need this. `dev` doesn't match the `v*` push trigger, so
-      # this doesn't re-trigger the workflow.
-      - name: Repoint rolling dev tag at this commit
-        if: ${{ steps.meta.outputs.tag == 'dev' }}
-        run: |
-          git tag -f dev "$GITHUB_SHA"
-          git push -f origin "refs/tags/dev"
-
       # Compose the release body. For a versioned release, lead with the
       # human-written notes at docs/release-notes/<tag>.md (if present) so the
       # Release reads as a real changelog; the install/QR section is always
@@ -639,6 +629,23 @@ jobs:
           at build time.
           EOF
           echo "----- release body -----"; cat "$BODY"
+
+      # The rolling `dev` tag is reused across builds. softprops updates the
+      # release + assets but won't move an existing tag (`target_commitish` is
+      # ignored once the tag exists), so force-point `dev` at this commit first —
+      # otherwise the tag and its source archives stay on the first dev build
+      # while the APK/body are from this one. Versioned tags are new each build,
+      # so they don't need this. `dev` doesn't match the `v*` push trigger, so
+      # this doesn't re-trigger the workflow. Runs *after* "Compose release
+      # notes" (which reads the dev release's current state and can fail on a
+      # transient lookup error) so a failure there aborts before the tag moves,
+      # instead of leaving the tag repointed at a build whose release/APK
+      # never actually got published.
+      - name: Repoint rolling dev tag at this commit
+        if: ${{ steps.meta.outputs.tag == 'dev' }}
+        run: |
+          git tag -f dev "$GITHUB_SHA"
+          git push -f origin "refs/tags/dev"
 
       # Every build now publishes a Release with the raw .apk + QR. A clean
       # vX.Y.Z is a stable, "latest" release; everything else refreshes the
