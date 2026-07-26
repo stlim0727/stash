@@ -430,7 +430,7 @@ export default function ReviewScreen() {
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={t('review.dismissFolderA11y', {
+                  accessibilityLabel={t('review.dismissCollectionA11y', {
                     name: item.folder.name,
                     title: item.title,
                   })}

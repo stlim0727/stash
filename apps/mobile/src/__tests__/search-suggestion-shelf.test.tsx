@@ -53,7 +53,7 @@ function makeTag(id: string, name: string): Tag {
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 
-const SEARCH_PLACEHOLDER = 'Search titles, tags, folders';
+const SEARCH_PLACEHOLDER = 'Search titles, tags, collections';
 
 function renderInbox() {
   return render(
@@ -133,7 +133,7 @@ test('the shelf shows a recent, a #tag, and a folder chip', async () => {
   // Tag chip: #design, applies the tag facet on tap.
   expect(screen.getByLabelText('Filter by tag design')).toBeTruthy();
   // Folder chip: the collection name, applies the folder facet.
-  expect(screen.getByLabelText('Filter by folder Work')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by collection Work')).toBeTruthy();
 });
 
 test('tapping a recent chip fills the query and keeps the field focused', async () => {
@@ -471,7 +471,7 @@ test('a corrupt recents pref does not break the screen; tag/folder chips still s
   // The shelf still renders from the tag/folder sources; no recent chips.
   await waitFor(() => expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy());
   expect(screen.getByLabelText('Filter by tag design')).toBeTruthy();
-  expect(screen.getByLabelText('Filter by folder Work')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by collection Work')).toBeTruthy();
   expect(screen.queryByLabelText(/^Search again for/)).toBeNull();
 });
 
@@ -540,7 +540,7 @@ test('typing filters the shelf to matches and drops non-matching chips', async (
   expect(screen.getByTestId('search-suggestion-shelf')).toBeTruthy();
   expect(screen.getByLabelText('Search again for “design system”')).toBeTruthy();
   expect(screen.getByLabelText('Filter by tag design')).toBeTruthy();
-  expect(screen.getByLabelText('Filter by folder Design')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by collection Design')).toBeTruthy();
 });
 
 test('typing orders the shelf recent → tag → folder (cross-family grouping)', async () => {
@@ -654,7 +654,7 @@ test('focus-empty still shows the FULL unfiltered shelf (Phase-1 regression guar
   expect(screen.getByLabelText('Search again for “design system”')).toBeTruthy();
   expect(screen.getByLabelText('Filter by tag design')).toBeTruthy();
   expect(screen.getByLabelText('Filter by tag databases')).toBeTruthy();
-  expect(screen.getByLabelText('Filter by folder Design')).toBeTruthy();
+  expect(screen.getByLabelText('Filter by collection Design')).toBeTruthy();
 });
 
 // Phase-2 variant of the blur-during-tap race: the user has already typed a

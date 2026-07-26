@@ -23,12 +23,12 @@ export function folderChipA11yLabel(
   const from = folder.from?.name;
   if (folder.kind === 'existing') {
     return from
-      ? t('review.moveFolderA11y', { title, from, name: folder.name })
-      : t('review.acceptFolderA11y', { title, name: folder.name });
+      ? t('review.moveCollectionA11y', { title, from, name: folder.name })
+      : t('review.acceptCollectionA11y', { title, name: folder.name });
   }
   return from
-    ? t('review.moveCreateFolderA11y', { title, from, name: folder.name })
-    : t('review.createFolderA11y', { title, name: folder.name });
+    ? t('review.moveCreateCollectionA11y', { title, from, name: folder.name })
+    : t('review.createCollectionA11y', { title, name: folder.name });
 }
 
 /**
@@ -55,8 +55,8 @@ export function FolderSuggestionLabel({
     return (
       <Text style={{ color: accentColor }}>
         {folder.kind === 'existing'
-          ? t('review.folderAddArrow', { name: folder.name })
-          : t('review.folderCreateArrow', { name: folder.name })}
+          ? t('review.collectionAddArrow', { name: folder.name })
+          : t('review.collectionCreateArrow', { name: folder.name })}
       </Text>
     );
   }

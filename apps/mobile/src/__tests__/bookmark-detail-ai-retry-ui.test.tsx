@@ -50,6 +50,7 @@ jest.mock('@/store/bookmarks', () => {
       isEnriching: () => false,
       isManuallyEnriching: () => false,
       isAiSuggestionPostponed: () => false,
+      isAiSuggestionServerQueued: () => false,
       hadPriorEnrichmentAttempt: () => false,
       acceptSuggestedTags: async () => null,
       getReviewedSuggestions: () => new Set(),

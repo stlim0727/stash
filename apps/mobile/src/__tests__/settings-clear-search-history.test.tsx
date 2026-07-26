@@ -175,7 +175,7 @@ test('the Inbox reflects the cleared recents on its next focus', async () => {
   await act(async () => {
     fireEvent.press(screen.getByTestId('inbox-search-open'));
   });
-  const input = screen.getByPlaceholderText('Search titles, tags, folders');
+  const input = screen.getByPlaceholderText('Search titles, tags, collections');
   await act(async () => {
     fireEvent(input, 'focus');
   });
@@ -236,7 +236,7 @@ test('a focus re-read does not drop a just-submitted recent (in-flight write rac
     await act(async () => {
       fireEvent.press(screen.getByTestId('inbox-search-open'));
     });
-    const input = screen.getByPlaceholderText('Search titles, tags, folders');
+    const input = screen.getByPlaceholderText('Search titles, tags, collections');
     await act(async () => {
       fireEvent(input, 'focus');
     });

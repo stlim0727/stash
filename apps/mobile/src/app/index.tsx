@@ -79,6 +79,16 @@ import {
   type SortOption,
 } from '@/domain/sort';
 import {
+  DEFAULT_FOLDER_SORT,
+  FOLDER_SORT_PREF_KEY,
+  FOLDER_SORT_PRESETS,
+  parseFolderSort,
+  sameFolderSort,
+  serializeFolderSort,
+  sortFolderTiles,
+  type FolderSortOption,
+} from '@/domain/folder-sort';
+import {
   DEFAULT_VIEW_MODE,
   INBOX_VIEW_PREF_KEY,
   VIEW_MODES,
@@ -169,7 +179,7 @@ const VIEW_MODE_ICON: Record<ViewMode, ComponentProps<typeof Ionicons>['name']> 
 const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   card: 'viewMode.card',
   list: 'viewMode.list',
-  folder: 'viewMode.folder',
+  folder: 'viewMode.collection',
 };
 
 /** Extract a clean display label (domain or site name) for the quick-open preview ribbon. */
@@ -200,6 +210,21 @@ const SORT_ICON: Record<SortOption['field'], ComponentProps<typeof Ionicons>['na
   date: 'calendar-outline',
   accessed: 'time-outline',
   name: 'text-outline',
+};
+
+// Folder View's own sort menu (Collection tiles, not bookmarks) — a separate
+// small set of labels/icons since its field union (name/count) doesn't
+// overlap with the bookmark-level SORT_LABEL_KEY/SORT_ICON above.
+const FOLDER_SORT_LABEL_KEY: Record<string, MessageKey> = {
+  'name:asc': 'inbox.folderSortNameAsc',
+  'name:desc': 'inbox.folderSortNameDesc',
+  'count:desc': 'inbox.folderSortCountDesc',
+  'count:asc': 'inbox.folderSortCountAsc',
+};
+
+const FOLDER_SORT_ICON: Record<FolderSortOption['field'], ComponentProps<typeof Ionicons>['name']> = {
+  name: 'text-outline',
+  count: 'layers-outline',
 };
 
 /**
@@ -742,6 +767,10 @@ export default function InboxScreen() {
   const [filter, setFilter] = useState<InboxFilter>(ALL_FILTER);
   const [sort, setSort] = useState<SortOption>(DEFAULT_SORT);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  // Folder View's own sort order — independent of `sort` above (see
+  // domain/folder-sort.ts). Same `sortMenuOpen`/ActionSheet is reused for both;
+  // which preset list and label/state it reflects branches on `viewMode`.
+  const [folderSort, setFolderSort] = useState<FolderSortOption>(DEFAULT_FOLDER_SORT);
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_VIEW_MODE);
   // Folder View is transient (never persisted as the resting layout — see
   // domain/view-mode.ts). Tapping a folder tile drops the user back into
@@ -1089,6 +1118,7 @@ export default function InboxScreen() {
   // stop the initial defaults from clobbering the stored values before they
   // have loaded.
   const sortLoaded = useRef(false);
+  const folderSortLoaded = useRef(false);
   const viewLoaded = useRef(false);
   // Mirror the sort-pref guard: don't let the initial empty default clobber the
   // stored recents before they load.
@@ -1119,6 +1149,16 @@ export default function InboxScreen() {
       .finally(() => {
         sortLoaded.current = true;
       });
+    getPreference(FOLDER_SORT_PREF_KEY)
+      .then((raw) => {
+        if (active) {
+          setFolderSort(parseFolderSort(raw));
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        folderSortLoaded.current = true;
+      });
     getPreference(INBOX_VIEW_PREF_KEY)
       .then((raw) => {
         if (!active) {
@@ -1143,6 +1183,12 @@ export default function InboxScreen() {
     }
     void setPreference(INBOX_SORT_PREF_KEY, serializeSort(sort)).catch(() => {});
   }, [sort]);
+  useEffect(() => {
+    if (!folderSortLoaded.current) {
+      return;
+    }
+    void setPreference(FOLDER_SORT_PREF_KEY, serializeFolderSort(folderSort)).catch(() => {});
+  }, [folderSort]);
   useEffect(() => {
     if (!recentsLoaded.current) {
       return;
@@ -1308,24 +1354,32 @@ export default function InboxScreen() {
     }
     // Mirrors the browse shelf's own guard: a collection with an empty/
     // whitespace name (a partial sync, an edge case elsewhere) must not
-    // render as a blank tile.
-    const sortedCollections = collections
+    // render as a blank tile. Only this middle, real-collection segment is
+    // reordered by `folderSort` — the uncollected tile above stays pinned
+    // first and "New folder" below stays pinned last regardless of order.
+    const sortableCollections = collections
       .filter((collection) => collection.name?.trim())
-      .sort((a, b) => a.name.localeCompare(b.name));
-    for (const collection of sortedCollections) {
+      .map((collection) => ({
+        id: collection.id,
+        name: collection.name,
+        count: collectionCounts.get(collection.id) ?? 0,
+        collection,
+      }));
+    const sortedCollections = sortFolderTiles(sortableCollections, folderSort);
+    for (const { collection, count } of sortedCollections) {
       tiles.push({
         id: `__folder-c:${collection.id}`,
         __folderTile: true,
         kind: 'collection',
         label: collection.name,
-        count: collectionCounts.get(collection.id) ?? 0,
+        count,
         filter: { kind: 'collection', id: collection.id },
         colorKey: collectionColorKey(collection.id),
       });
     }
     tiles.push({ id: '__folder-new', __folderTile: true, kind: 'new' });
     return tiles;
-  }, [collections, collectionCounts, hasUncollected, uncollectedCount, t]);
+  }, [collections, collectionCounts, folderSort, hasUncollected, uncollectedCount, t]);
 
   // Pad to an even number of tiles so the trailing row keeps its column width
   // (mirrors the placeholder padding the card grid already does below).
@@ -1553,6 +1607,16 @@ export default function InboxScreen() {
   // current view, so a search/filter that yields zero rows still keeps the
   // controls (the user needs them to clear the query or facet).
   const showControls = inbox.length > 0 || searching;
+
+  // The sort pill/menu shows one of two independent controls depending on the
+  // active layout: Folder View's own name/count order, or the bookmark-level
+  // date/accessed/name order everywhere else. Switching layouts never
+  // disturbs the other control's state (see the two separate pref keys).
+  const isFolderSort = viewMode === 'folder';
+  const activeSortLabelKey = isFolderSort
+    ? FOLDER_SORT_LABEL_KEY[serializeFolderSort(folderSort)]
+    : SORT_LABEL_KEY[serializeSort(sort)];
+  const activeSortIcon = isFolderSort ? FOLDER_SORT_ICON[folderSort.field] : SORT_ICON[sort.field];
 
   // Record a submitted query into recents (trim + case-insensitive dedupe-to-
   // front + cap). The ONLY write path for recents — never on every keystroke.
@@ -2267,13 +2331,13 @@ export default function InboxScreen() {
               it lets all three sit on one line, reclaiming that row. */}
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={t('inbox.sortA11y', { label: t(SORT_LABEL_KEY[serializeSort(sort)]) })}
+            accessibilityLabel={t('inbox.sortA11y', { label: t(activeSortLabelKey) })}
             onPress={() => setSortMenuOpen(true)}
             style={[styles.sortPill, styles.sortPillFlexible, { backgroundColor: palette.surface, borderColor: palette.border }]}
           >
-            <Ionicons name={SORT_ICON[sort.field]} size={15} color={palette.textSecondary} />
+            <Ionicons name={activeSortIcon} size={15} color={palette.textSecondary} />
             <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
-              {t(SORT_LABEL_KEY[serializeSort(sort)])}
+              {t(activeSortLabelKey)}
             </Text>
             <Ionicons name="chevron-down" size={14} color={palette.textSecondary} />
           </Pressable>
@@ -2747,13 +2811,13 @@ export default function InboxScreen() {
                 <Pressable
                   testID="folder-tile-new"
                   accessibilityRole="button"
-                  accessibilityLabel={t('inbox.newFolderA11y')}
+                  accessibilityLabel={t('inbox.newCollectionA11y')}
                   onPress={onNewFolderTilePress}
                   style={[styles.folderTile, styles.folderTileNew, { borderColor: palette.border }]}
                 >
                   <Ionicons name="add-outline" size={22} color={palette.textSecondary} />
                   <Text style={[styles.folderTileLabel, { color: palette.textSecondary }]} numberOfLines={1}>
-                    {t('inbox.newFolder')}
+                    {t('inbox.newCollection')}
                   </Text>
                 </Pressable>
               );
@@ -2773,7 +2837,7 @@ export default function InboxScreen() {
                   {item.label}
                 </Text>
                 <Text style={[styles.folderTileCount, { color: palette.textSecondary }]}>
-                  {t('inbox.folderTileCount', { count: item.count ?? 0 })}
+                  {t('inbox.collectionTileCount', { count: item.count ?? 0 })}
                 </Text>
               </Pressable>
             );
@@ -3141,16 +3205,29 @@ export default function InboxScreen() {
       <ActionSheet
         visible={sortMenuOpen}
         title={t('inbox.sortMenuTitle')}
-        actions={SORT_PRESETS.map((option) => ({
-          key: serializeSort(option),
-          label: t(SORT_LABEL_KEY[serializeSort(option)]),
-          icon: SORT_ICON[option.field],
-          selected: sameSort(option, sort),
-          onPress: () => {
-            setSort(option);
-            setSortMenuOpen(false);
-          },
-        }))}
+        actions={
+          isFolderSort
+            ? FOLDER_SORT_PRESETS.map((option) => ({
+                key: serializeFolderSort(option),
+                label: t(FOLDER_SORT_LABEL_KEY[serializeFolderSort(option)]),
+                icon: FOLDER_SORT_ICON[option.field],
+                selected: sameFolderSort(option, folderSort),
+                onPress: () => {
+                  setFolderSort(option);
+                  setSortMenuOpen(false);
+                },
+              }))
+            : SORT_PRESETS.map((option) => ({
+                key: serializeSort(option),
+                label: t(SORT_LABEL_KEY[serializeSort(option)]),
+                icon: SORT_ICON[option.field],
+                selected: sameSort(option, sort),
+                onPress: () => {
+                  setSort(option);
+                  setSortMenuOpen(false);
+                },
+              }))
+        }
         onClose={() => setSortMenuOpen(false)}
       />
       <CreateCollectionDialog

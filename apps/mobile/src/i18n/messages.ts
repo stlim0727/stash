@@ -93,7 +93,7 @@ export const en = {
   'inbox.storageError':
     'Couldn’t open local storage — showing sample data. Your saves this session may not persist. Tap to report ›',
   'inbox.reportStorageProblem': 'Report storage problem',
-  'inbox.searchPlaceholder': 'Search titles, tags, folders',
+  'inbox.searchPlaceholder': 'Search titles, tags, collections',
   'inbox.searchPlaceholderScoped': 'Search in {name}',
   'inbox.searchPlaceholderUncollected': 'Inbox',
   'inbox.browse': 'Browse',
@@ -105,6 +105,12 @@ export const en = {
   'inbox.sortLeastRecentlyOpened': 'Least recently opened',
   'inbox.sortNameAsc': 'Name A–Z',
   'inbox.sortNameDesc': 'Name Z–A',
+  // Folder View's own sort menu (Collection tiles) — a separate 4-option set
+  // from the bookmark-level sort above (see domain/folder-sort.ts).
+  'inbox.folderSortNameAsc': 'Name A–Z',
+  'inbox.folderSortNameDesc': 'Name Z–A',
+  'inbox.folderSortCountDesc': 'Most items',
+  'inbox.folderSortCountAsc': 'Fewest items',
   'inbox.viewAsA11y': 'View as {mode}',
   // "Browse by tag" toggle: an icon-only control that navigates to the dedicated
   // tag-browse route (/browse/tags), carrying the current facet as its scope.
@@ -129,7 +135,7 @@ export const en = {
   'inbox.emptySearch': 'No bookmarks match your search.',
   // Recovery affordances shown beneath the empty-search message: a hint that the
   // search reaches beyond titles, and a button to drop the query.
-  'inbox.emptySearchHint': 'Search also looks in tags, folders, and site names.',
+  'inbox.emptySearchHint': 'Search also looks in tags, collections, and site names.',
   'inbox.clearSearch': 'Clear search',
   'inbox.clearSearchA11y': 'Clear search',
   // Sticky active-filter bar: tells the user the list is narrowed and offers a
@@ -176,13 +182,13 @@ export const en = {
   'inbox.inboxNoCollectionA11y': 'Inbox (no collection)',
   // Folder View: a grid of tappable Collection tiles instead of the flat
   // bookmark list. Each tile's subtitle is its item count; the trailing tile
-  // is a dashed "New folder" affordance.
-  'inbox.folderTileCount': { one: '{count} item', other: '{count} items' },
-  'inbox.newFolder': 'New folder',
-  'inbox.newFolderA11y': 'Create a new folder',
-  // "New folder" dialog: a single name field plus Cancel/Create.
-  'inbox.newFolderNamePlaceholder': 'Folder name',
-  'inbox.newFolderCreate': 'Create',
+  // is a dashed "New collection" affordance.
+  'inbox.collectionTileCount': { one: '{count} item', other: '{count} items' },
+  'inbox.newCollection': 'New collection',
+  'inbox.newCollectionA11y': 'Create a new collection',
+  // "New collection" dialog: a single name field plus Cancel/Create.
+  'inbox.newCollectionNamePlaceholder': 'Collection name',
+  'inbox.newCollectionCreate': 'Create',
   'inbox.aiSuggestionsA11y': { one: '{count} AI suggestion', other: '{count} AI suggestions' },
   'inbox.newSuggestions': {
     one: '✨ {count} new AI suggestion',
@@ -230,7 +236,7 @@ export const en = {
   'inbox.tagViewAll': 'All',
   'inbox.tagViewCloudA11y': 'Show the tag cloud',
   'inbox.tagViewAllA11y': 'Show all tags as a list',
-  // Header titles, by scope: whole library / a folder / the uncollected set.
+  // Header titles, by scope: whole library / a collection / the uncollected set.
   'inbox.tagsTitle': 'Tags',
   'inbox.tagsTitleScoped': 'Tags in {name}',
   'inbox.tagsTitleUncollected': 'Tags · Inbox',
@@ -262,7 +268,7 @@ export const en = {
   // the key is reserved for parity.
   'search.shelfFilteredA11y': 'Suggestions matching “{query}”',
   'search.tagChipA11y': 'Filter by tag {name}',
-  'search.folderChipA11y': 'Filter by folder {name}',
+  'search.collectionChipA11y': 'Filter by collection {name}',
   // Per-entry delete, exposed as an accessibility action on a recent chip.
   'search.removeRecentA11y': 'Remove recent search “{query}”',
   // Reserved for the Phase-2 Settings "Clear history" bulk-clear control; not
@@ -275,7 +281,7 @@ export const en = {
   'viewMode.card': 'Cards',
   'viewMode.compact': 'Compact',
   'viewMode.list': 'List',
-  'viewMode.folder': 'Folders',
+  'viewMode.collection': 'Collections',
 
   // Add bookmark.
   'add.urlLabel': 'URL',
@@ -447,15 +453,15 @@ export const en = {
   'detail.currentlyIn': 'Currently in: {name}',
   'detail.aiWorking': 'Working…',
   'detail.aiStale': 'Edited since these suggestions — refresh to update.',
-  // Suggested folder, shown as a one-tap chip next to the collection picker.
+  // Suggested collection, shown as a one-tap chip next to the collection picker.
   'detail.aiSuggestCollectionChip': '📁 ＋ {name}',
   'detail.aiFileIntoA11y': 'File into {name}',
-  // Shown when no existing folder matches the AI's hint: create it and file in.
+  // Shown when no existing collection matches the AI's hint: create it and file in.
   'detail.aiCreateCollectionChip': '📁 ＋ Create “{name}”',
   'detail.aiCreateCollectionA11y': 'Create collection {name} and file into it',
   'detail.aiDismissCollectionA11y': 'Dismiss suggested collection {name}',
-  // Micro-label above the folder suggestion pill under the collection picker.
-  'detail.suggestedFolderLabel': 'Suggested folder',
+  // Micro-label above the collection suggestion pill under the collection picker.
+  'detail.suggestedCollectionLabel': 'Suggested collection',
   // The AI summary, proposed as a note in its own dashed block under the note field.
   'detail.summaryLabel': '✨ Suggested summary',
   'detail.summaryUseAsNote': 'Use as note',
@@ -476,6 +482,7 @@ export const en = {
   'detail.aiPreviewFailed': 'AI suggestions are unavailable because the preview could not be loaded.',
   'detail.previewFailedNote': 'Failed to load preview and metadata.',
   'detail.aiPostponed': 'Still working on AI suggestions for this one — we’ll keep trying automatically.',
+  'detail.aiQueued': 'AI suggestions are queued and will arrive automatically — no need to check back.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
   // Shown as a calm, non-error note so the cause is never hidden (M12); the
   // precise cause is forwarded to monitoring rather than spelled out in full.
@@ -516,8 +523,8 @@ export const en = {
     other: 'Pending suggestions · {count} bookmarks',
   },
   // Bulk row, by card content. "Accept all"/"Dismiss all" act on tags AND the
-  // folder (both folder kinds: file into an existing one, or create+file);
-  // "Accept" / "Dismiss" are the folder-only (no tags) singulars.
+  // collection (both collection kinds: file into an existing one, or create+file);
+  // "Accept" / "Dismiss" are the collection-only (no tags) singulars.
   'review.acceptAll': 'Accept all',
   'review.acceptOne': 'Accept',
   'review.dismissAll': 'Dismiss all',
@@ -530,27 +537,27 @@ export const en = {
   'review.goToA11y': 'Go to {title}',
   'review.confidence': '{percent}%',
   // Chip prefixes that distinguish the two kinds of suggestion at a glance and
-  // match the Detail screen's folder chips: 📁 ＋ for a folder (collection,
-  // tap = file in), # for a tag.
+  // match the Detail screen's collection chips: 📁 ＋ for a collection (tap =
+  // file in), # for a tag.
   'review.tagChip': '#{name}',
-  'review.folderChip': '📁 ＋ {name}',
-  'review.createFolderChip': '📁 ＋ Create “{name}”',
-  // ADD vs CHANGE (move) folder forms. The "→" run targets are rendered as
+  'review.collectionChip': '📁 ＋ {name}',
+  'review.createCollectionChip': '📁 ＋ Create “{name}”',
+  // ADD vs CHANGE (move) collection forms. The "→" run targets are rendered as
   // separate <Text> children so the `from` name can be struck through and only
   // the arrow + target tinted; these strings are the non-strikethrough fallback
   // pieces / a11y labels. `addArrow` is "→ {name}" (file into an existing one);
   // `addCreateArrow` is "→ ＋ "{name}"" (create then file). For a move the chip
   // composes the struck `from` name with one of these arrows.
-  'review.folderAddArrow': '📁 → {name}',
-  'review.folderCreateArrow': '📁 ＋ Create “{name}”',
+  'review.collectionAddArrow': '📁 → {name}',
+  'review.collectionCreateArrow': '📁 ＋ Create “{name}”',
   'review.moveArrowTarget': '→ {name}',
   'review.moveCreateTarget': '→ ＋ “{name}”',
   // Chip a11y, per case (screen readers can't see the strikethrough).
-  'review.acceptFolderA11y': 'File {title} into {name}',
-  'review.createFolderA11y': 'Create collection {name} and file {title} into it',
-  'review.moveFolderA11y': 'Move {title} from {from} to {name}',
-  'review.moveCreateFolderA11y': 'Move {title} from {from} into a new collection {name}',
-  'review.dismissFolderA11y': 'Dismiss suggested collection {name} for {title}',
+  'review.acceptCollectionA11y': 'File {title} into {name}',
+  'review.createCollectionA11y': 'Create collection {name} and file {title} into it',
+  'review.moveCollectionA11y': 'Move {title} from {from} to {name}',
+  'review.moveCreateCollectionA11y': 'Move {title} from {from} into a new collection {name}',
+  'review.dismissCollectionA11y': 'Dismiss suggested collection {name} for {title}',
   // A move overwrites a user-chosen collection_id; the chip already shows the
   // ~~from~~ → to, so instead of confirming we file it and offer an Undo toast.
   'review.movedToast': 'Moved to “{name}”',
