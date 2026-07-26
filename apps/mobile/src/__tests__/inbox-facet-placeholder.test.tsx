@@ -51,7 +51,7 @@ function makeTag(id: string, name: string): Tag {
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 
-const DEFAULT_PLACEHOLDER = 'Search titles, tags, folders';
+const DEFAULT_PLACEHOLDER = 'Search titles, tags, collections';
 
 function renderInbox() {
   return render(

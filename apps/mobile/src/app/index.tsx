@@ -169,7 +169,7 @@ const VIEW_MODE_ICON: Record<ViewMode, ComponentProps<typeof Ionicons>['name']> 
 const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   card: 'viewMode.card',
   list: 'viewMode.list',
-  folder: 'viewMode.folder',
+  folder: 'viewMode.collection',
 };
 
 /** Extract a clean display label (domain or site name) for the quick-open preview ribbon. */
@@ -2747,13 +2747,13 @@ export default function InboxScreen() {
                 <Pressable
                   testID="folder-tile-new"
                   accessibilityRole="button"
-                  accessibilityLabel={t('inbox.newFolderA11y')}
+                  accessibilityLabel={t('inbox.newCollectionA11y')}
                   onPress={onNewFolderTilePress}
                   style={[styles.folderTile, styles.folderTileNew, { borderColor: palette.border }]}
                 >
                   <Ionicons name="add-outline" size={22} color={palette.textSecondary} />
                   <Text style={[styles.folderTileLabel, { color: palette.textSecondary }]} numberOfLines={1}>
-                    {t('inbox.newFolder')}
+                    {t('inbox.newCollection')}
                   </Text>
                 </Pressable>
               );
@@ -2773,7 +2773,7 @@ export default function InboxScreen() {
                   {item.label}
                 </Text>
                 <Text style={[styles.folderTileCount, { color: palette.textSecondary }]}>
-                  {t('inbox.folderTileCount', { count: item.count ?? 0 })}
+                  {t('inbox.collectionTileCount', { count: item.count ?? 0 })}
                 </Text>
               </Pressable>
             );

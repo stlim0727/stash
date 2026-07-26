@@ -1079,7 +1079,7 @@ export default function BookmarkDetailScreen({
         {folderSuggestionChip ? (
           <View style={styles.folderSuggestionBlock}>
             <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-              {t('detail.suggestedFolderLabel')}
+              {t('detail.suggestedCollectionLabel')}
             </Text>
             <View style={styles.folderSuggestionRow}>
               <View style={[styles.ghostChip, { borderColor: palette.accent }]}>
