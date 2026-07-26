@@ -185,7 +185,24 @@ jobs:
           # dispatch after this workflow change, against a `dev` release an
           # older workflow version produced — so that one-time gap doesn't
           # look like "no prior build" and restart the cycle at rc1.
-          DEV_INFO=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq '(.body // "") + "\n" + (.name // "")' 2>/dev/null || echo "")
+          #
+          # A 404 (no `dev` release exists yet) genuinely means "first build
+          # ever" and is safe to treat as empty. Any other failure (transient
+          # 403/5xx, network) must NOT be swallowed the same way — silently
+          # treating an outage as "no prior build" would reset an in-progress
+          # rc cycle back to rc1 and reuse an already-built label, so fail
+          # the run instead and let it be retried.
+          if DEV_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/dev" 2>/tmp/gh-dev-err.log); then
+            :
+          elif grep -q '404' /tmp/gh-dev-err.log; then
+            echo "No dev release exists yet (404) — first build."
+            DEV_JSON='{}'
+          else
+            echo "::error::Failed to look up the dev release for rc allocation (not a 404 — refusing to silently reset the rc counter):"
+            cat /tmp/gh-dev-err.log
+            exit 1
+          fi
+          DEV_INFO=$(echo "$DEV_JSON" | jq -r '(.body // "") + "\n" + (.name // "")')
           LAST_LABEL=$(echo "$DEV_INFO" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
           if [ -z "$LAST_LABEL" ]; then
             LAST_LABEL=$(echo "$DEV_INFO" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 || true)
@@ -460,7 +477,21 @@ jobs:
             if [[ "$THIS_LABEL" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]]; then
               RC_MARKER="$THIS_LABEL"
             else
-              OLD_BODY=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq .body 2>/dev/null || echo "")
+              # This build is about to overwrite the dev release, so a
+              # swallowed lookup failure here would permanently drop the
+              # marker (not just skip a read like in "Determine build
+              # version"). A 404 is a genuinely markerless dev release (fine,
+              # nothing to carry forward); anything else must fail loudly
+              # rather than silently publish over the last known rc state.
+              if OLD_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/dev" 2>/tmp/gh-dev-err.log); then
+                OLD_BODY=$(echo "$OLD_JSON" | jq -r '.body // ""')
+              elif grep -q '404' /tmp/gh-dev-err.log; then
+                OLD_BODY=""
+              else
+                echo "::error::Failed to look up the existing dev release before publishing over it (not a 404 — refusing to silently drop the rc-state marker):"
+                cat /tmp/gh-dev-err.log
+                exit 1
+              fi
               RC_MARKER=$(echo "$OLD_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
             fi
             if [ -n "$RC_MARKER" ]; then
