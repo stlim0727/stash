@@ -30,15 +30,22 @@ on:
     tags:
       - 'v*'
 
-# Serialize runs: the smart version-allocation step reads the rolling `dev`
-# release before this run publishes its own update, and the publish steps
-# force-move the shared `dev` tag/release. Two overlapping runs would both read
+# Serialize runs that share mutable state: the smart version-allocation step
+# reads the rolling `dev` release before this run publishes its own update, and
+# the publish steps force-move the shared `dev` tag/release. Two overlapping
+# dev-targeted runs (blank dispatch or any hyphenated version) would both read
 # the same "last rc" state and allocate the same next number, then race to
 # publish — whichever finishes last silently wins and the other's rc label is
-# reused for a different APK. `cancel-in-progress: false` queues the second
-# run instead of racing or killing it.
+# reused for a different APK. `cancel-in-progress: false` queues the second run
+# instead of racing or killing it. Scoped to `android-apk-dev` rather than one
+# repo-wide group: GitHub Actions keeps at most one *pending* run per
+# concurrency group and a newly queued run replaces (drops) an older pending
+# one in the same group, even with cancel-in-progress: false — so a clean
+# vX.Y.Z build (its own versioned release/tag, no shared state) gets its own
+# per-version group and is never at risk of being silently dropped behind a
+# queue of dev builds.
 concurrency:
-  group: android-apk-release
+  group: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-') && format('android-apk-stable-{0}', github.ref_name)) || (github.event_name == 'workflow_dispatch' && inputs.version != '' && !contains(inputs.version, '-') && format('android-apk-stable-{0}', inputs.version)) || 'android-apk-dev' }}
   cancel-in-progress: false
 
 permissions:
@@ -121,6 +128,20 @@ jobs:
           restore-keys: |
             metro-${{ runner.os }}-
 
+      # A rerun of a failed job (e.g. the Firebase distribution step failed)
+      # re-executes "Determine build version" too, but by then the dev
+      # release's rc-state marker already reflects THIS run's own first-attempt
+      # publish — recomputing would advance rc again for the same commit/
+      # run_number. Cache the allocated version under a run_id-scoped key
+      # (stable across attempts of the same run, unlike github.sha) so a rerun
+      # reuses the original allocation instead of drawing a new one.
+      - name: Restore allocated version (job reruns)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/apk-version.txt
+          key: apk-version-${{ github.run_id }}
+
       # A blank workflow_dispatch (no `version` input) used to fall back to
       # app.json's bare version with no `-rcN`, so the build carried no RC
       # label and `docs/development/build-history.md` couldn't self-derive the
@@ -136,7 +157,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
+          if [ -f /tmp/apk-version.txt ]; then
+            REUSED=$(cat /tmp/apk-version.txt)
+            echo "Reusing version allocated by a previous attempt of this run: $REUSED"
+            echo "version=$REUSED" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [ -n "$INPUT_VERSION" ]; then
+            echo "$INPUT_VERSION" > /tmp/apk-version.txt
             echo "Using explicit version input: $INPUT_VERSION"
             echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
             exit 0
@@ -147,12 +176,20 @@ jobs:
           # The rolling `dev` prerelease's *name* reflects whatever build was
           # dispatched last, including a manual non-rc hyphenated test build
           # (e.g. `v1.2.3-test1`) — reading that back would lose the real rc
-          # count. Instead read a hidden `rc-state` marker from the release
-          # *body*, which the "Compose release notes" step only ever advances
+          # count. Read a hidden `rc-state` marker from the release *body*
+          # instead, which the "Compose release notes" step only ever advances
           # for an actual rc build and otherwise carries forward unchanged, so
-          # a test build in between can't regress the next rc number.
-          DEV_BODY=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq .body 2>/dev/null || echo "")
-          LAST_LABEL=$(echo "$DEV_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+          # a test build in between can't regress the next rc number. Fall
+          # back to the release's self-recorded *name* label (the pre-marker
+          # scheme) when no body marker exists yet — e.g. the first blank
+          # dispatch after this workflow change, against a `dev` release an
+          # older workflow version produced — so that one-time gap doesn't
+          # look like "no prior build" and restart the cycle at rc1.
+          DEV_INFO=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq '(.body // "") + "\n" + (.name // "")' 2>/dev/null || echo "")
+          LAST_LABEL=$(echo "$DEV_INFO" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+          if [ -z "$LAST_LABEL" ]; then
+            LAST_LABEL=$(echo "$DEV_INFO" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 || true)
+          fi
           LAST_BASE="${LAST_LABEL%-rc*}"
           LAST_RC="${LAST_LABEL##*-rc}"
 
@@ -163,7 +200,15 @@ jobs:
           fi
 
           echo "Last dev build: ${LAST_LABEL:-<none>}; app.json target: $APP_VERSION -> computed $NEXT"
+          echo "$NEXT" > /tmp/apk-version.txt
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Save allocated version (job reruns)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/apk-version.txt
+          key: apk-version-${{ github.run_id }}
 
       - name: Prebuild Android project
         working-directory: apps/mobile
