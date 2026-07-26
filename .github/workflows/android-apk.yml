@@ -10,6 +10,10 @@ name: Android APK
 # - clean `vX.Y.Z` (pushed tag or dispatch input): a versioned prerelease.
 # - blank dispatch or a hyphenated tag (e.g. v0.1.0-test1): refreshes the single
 #   rolling `dev` prerelease in place, so test builds don't clutter Releases.
+#   A blank dispatch no longer builds an unlabeled snapshot: the "Determine
+#   build version" step computes the next `vX.Y.Z-rcN` itself — same target
+#   version (apps/mobile/app.json) as the last `dev` build bumps only the rc
+#   number, a new target version bumps to that version's rc1.
 # The APK is also uploaded as a run artifact for tooling that consumes it.
 #
 # Optional build-time config via repo secrets (absent ⇒ local-only build):
@@ -19,12 +23,37 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Tag to publish a Release at (e.g. v0.1.0). Blank = artifact only.'
+        description: 'Tag to publish a Release at (e.g. v0.1.0). Blank = auto-computed next rc.'
         required: false
         default: ''
   push:
     tags:
       - 'v*'
+
+# Serialize runs that share mutable state: the smart version-allocation step
+# reads the rolling `dev` release before this run publishes its own update, and
+# the publish steps force-move the shared `dev` tag/release. Two overlapping
+# dev-targeted runs (blank dispatch or any hyphenated version) would both read
+# the same "last rc" state and allocate the same next number, then race to
+# publish — whichever finishes last silently wins and the other's rc label is
+# reused for a different APK. `cancel-in-progress: false` queues the second run
+# instead of racing or killing it. Scoped to `android-apk-dev` rather than one
+# repo-wide group: GitHub Actions keeps at most one *pending* run per
+# concurrency group and a newly queued run replaces (drops) an older pending
+# one in the same group, even with cancel-in-progress: false — so a clean
+# vX.Y.Z build (its own versioned release/tag, no shared state) gets its own
+# per-version group and is never at risk of being silently dropped behind a
+# queue of dev builds.
+# A dispatch input that isn't a clean `vX.Y.Z` — including one that doesn't
+# even start with `v` (e.g. a typo'd "1.2.3") — is NOT treated as a stable
+# release by "Determine release target" below (it requires `LABEL == v*`);
+# it falls through to the shared rolling `dev` build instead. The group
+# predicate here mirrors that exactly (startsWith 'v' + no hyphen) so such an
+# input can't wrongly get an isolated per-version group while actually
+# targeting — and racing over — the shared dev release.
+concurrency:
+  group: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-') && format('android-apk-stable-{0}', github.ref_name)) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.version, 'v') && !contains(inputs.version, '-') && format('android-apk-stable-{0}', inputs.version)) || 'android-apk-dev' }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -106,16 +135,171 @@ jobs:
           restore-keys: |
             metro-${{ runner.os }}-
 
+      # A blank workflow_dispatch (no `version` input) used to fall back to
+      # app.json's bare version with no `-rcN`, so the build carried no RC
+      # label and `docs/development/build-history.md` couldn't self-derive the
+      # next number from it. Compute a smart default instead: same target
+      # version (`apps/mobile/app.json`) as the last `dev` build ⇒ bump only
+      # the rc number; app.json has already moved to a new target (or no prior
+      # `dev` build exists) ⇒ that's a new cycle, start at rc1. An explicit
+      # `version` input always wins, unchanged.
+      - name: Determine build version
+        id: version
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          # Resolve the target version from `main` specifically, not
+          # whatever ref this dispatch happens to be running against — RCs
+          # always ship from main (per the rc-build skill), so a blank or
+          # explicit dispatch made against an old branch must not read that
+          # branch's app.json and cross-contaminate the current rc cycle.
+          git fetch origin main --quiet
+          APP_VERSION=$(git show FETCH_HEAD:apps/mobile/app.json | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).expo.version)")
+          APP_VERSION_RE=$(printf '%s' "$APP_VERSION" | sed 's/\./\\./g')
+
+          # Reading app.json from main isn't enough on its own: actions/
+          # checkout still built whatever ref this dispatch actually
+          # selected, so a blank or current-cycle-rc dispatch made against an
+          # old/feature branch would label that branch's code as the next
+          # main rc and ship it through the shared dev release/Firebase.
+          # Require the dispatch itself to be on main for these two cases
+          # (an explicit off-cycle or non-rc dispatch is unaffected — it
+          # doesn't touch the main-tracked cycle at all, e.g. a release
+          # branch's own test build).
+          IS_MAIN_CYCLE_RC=false
+          if [ -z "$INPUT_VERSION" ] || [[ "$INPUT_VERSION" =~ ^v${APP_VERSION_RE}-rc[0-9]+$ ]]; then
+            IS_MAIN_CYCLE_RC=true
+          fi
+          if [ "$IS_MAIN_CYCLE_RC" = "true" ] && [ "${{ github.ref_name }}" != "main" ]; then
+            echo "::error::A blank or current-cycle RC dispatch must run from main (this run is on '${{ github.ref_name }}') — RCs always ship from main. Dispatch from main, or pass an explicit off-cycle version if you intend to build a different ref/line."
+            exit 1
+          fi
+
+          # Fetch the dev release once — used both to validate an explicit
+          # RC input below and to smart-compute the next one when blank.
+          # A 404 (no `dev` release exists yet) genuinely means "first build
+          # ever" and is safe to treat as empty. Any other failure (transient
+          # 403/5xx, network) must NOT be swallowed the same way — silently
+          # treating an outage as "no prior build" would reset an in-progress
+          # rc cycle back to rc1 and reuse an already-built label, so fail
+          # the run instead and let it be retried.
+          if DEV_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/dev" 2>/tmp/gh-dev-err.log); then
+            :
+          elif grep -q '404' /tmp/gh-dev-err.log; then
+            echo "No dev release exists yet (404) — first build."
+            DEV_JSON='{}'
+          else
+            echo "::error::Failed to look up the dev release for rc allocation (not a 404 — refusing to silently reset the rc counter):"
+            cat /tmp/gh-dev-err.log
+            exit 1
+          fi
+          DEV_BODY=$(echo "$DEV_JSON" | jq -r '.body // ""')
+          DEV_NAME=$(echo "$DEV_JSON" | jq -r '.name // ""')
+
+          # The rolling `dev` prerelease's *name* reflects whatever build was
+          # dispatched last, including a manual non-rc hyphenated test build
+          # (e.g. `v1.2.3-test1`) — reading that back would lose the real rc
+          # count. Read a hidden `rc-state` marker from the release *body*
+          # instead, which the "Compose release notes" step only ever advances
+          # for an actual rc build and otherwise carries forward unchanged, so
+          # a test build in between can't regress the next rc number. Fall
+          # back to the release's self-recorded *name* label (the pre-marker
+          # scheme) when no body marker exists yet — e.g. the first blank
+          # dispatch after this workflow change, against a `dev` release an
+          # older workflow version produced — so that one-time gap doesn't
+          # look like "no prior build" and restart the cycle at rc1.
+          LAST_LABEL=$(echo "$DEV_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+          if [ -z "$LAST_LABEL" ]; then
+            # Bootstrap fallback: search *name* only, never body — body can
+            # be human-written release notes/QA prose that mentions an
+            # unrelated rc number before the release's own generated "Build"
+            # line, which a body-wide search would wrongly match first. name
+            # is machine-generated by "Determine release target" and only
+            # ever contains this release's own resolved label.
+            LAST_LABEL=$(echo "$DEV_NAME" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 || true)
+          fi
+          LAST_BASE="${LAST_LABEL%-rc*}"
+          LAST_RC="${LAST_LABEL##*-rc}"
+
+          # Computed here (not only in the blank-dispatch path below) so the
+          # explicit-input branch can also recognize "I already published
+          # this myself" — see the rerun check just below. GitHub run_ids
+          # are monotonically increasing across the whole instance.
+          DEV_RUN_ID=$(echo "$DEV_BODY" | grep -oE 'run-id: [0-9]+' | head -1 | sed 's/run-id: //' || true)
+
+          if [ -n "$INPUT_VERSION" ]; then
+            # Concurrency serializes overlapping runs but doesn't stop two
+            # operators from each precomputing the same explicit rc *before*
+            # either publishes, then queueing both: the second one to
+            # acquire the lock would otherwise blindly publish its
+            # operator's stale number over what the first already shipped.
+            # Only revalidate the risky shape — an explicit rc for the
+            # *current* app.json cycle — since that's the only case hidden
+            # allocator state can actually collide with. Exempt a rerun of
+            # THIS run's own successful publish (e.g. it failed later in
+            # Firebase distribution): its own marker will show LAST_RC ==
+            # INPUT_RC with our own run-id, which must retry cleanly rather
+            # than being rejected as "stale".
+            if [[ "$INPUT_VERSION" =~ ^v${APP_VERSION_RE}-rc[0-9]+$ ]] && [ "$DEV_RUN_ID" != "$GITHUB_RUN_ID" ]; then
+              INPUT_RC="${INPUT_VERSION##*-rc}"
+              if [ -n "$LAST_RC" ] && [ "${LAST_BASE#v}" = "$APP_VERSION" ] && [ "$LAST_RC" -ge "$INPUT_RC" ]; then
+                echo "::error::Explicit version $INPUT_VERSION is stale — dev has already reached rc$LAST_RC for $APP_VERSION. Re-check the current state (or leave version blank to let the workflow allocate the next number)."
+                exit 1
+              fi
+            fi
+            echo "Using explicit version input: $INPUT_VERSION"
+            echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A rerun of a failed job (e.g. the Firebase distribution step
+          # failed) re-executes this step too — checked unconditionally
+          # (not gated behind a local cache hit, which a rerun can't always
+          # rely on: evicted, or a cache-service hiccup on this fresh
+          # runner) via the hidden run-id marker "Compose release notes"
+          # stamps on every dev publish.
+          if [ "$DEV_RUN_ID" = "$GITHUB_RUN_ID" ]; then
+            # This run (any attempt) already published dev's current rc —
+            # reuse it verbatim. Recomputing would read our own already-
+            # advanced marker and draw a second rc for the same commit.
+            echo "Reusing version this run already published: $LAST_LABEL"
+            echo "version=$LAST_LABEL" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ -n "$DEV_RUN_ID" ] && [ "$DEV_RUN_ID" -gt "$GITHUB_RUN_ID" ]; then
+            # Concurrency only serializes overlapping runs, not a rerun of
+            # one that already finished: a numerically later run_id means a
+            # *different*, later run already published since this one
+            # started — proceeding would republish older/lower-versionCode
+            # code under a fresh, higher-looking rc label.
+            echo "::error::A different, later run (run-id $DEV_RUN_ID) already published to the dev release since this run started — this run is stale. Dispatch a fresh build instead of rerunning it."
+            exit 1
+          fi
+
+          if [ -n "$LAST_RC" ] && [ "${LAST_BASE#v}" = "$APP_VERSION" ]; then
+            # `10#` forces base-10: a zero-padded rc (e.g. rc020, from a
+            # manually typed explicit label the marker then carried forward)
+            # would otherwise be misread as octal by `$(( ))`.
+            NEXT="v${APP_VERSION}-rc$((10#$LAST_RC + 1))"
+          else
+            NEXT="v${APP_VERSION}-rc1"
+          fi
+
+          echo "Last dev build: ${LAST_LABEL:-<none>}; app.json target: $APP_VERSION -> computed $NEXT"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+
       - name: Prebuild Android project
         working-directory: apps/mobile
         # app.config.js stamps these onto the native project: APP_VERSION (from
-        # the release tag, leading `v` stripped in the config; empty on a blank
-        # dispatch ⇒ falls back to app.json's version) and a per-run versionCode
-        # so every App Distribution upload is unique and increasing. The GIT_*
-        # provenance is stamped into the config's `extra` here too so the embedded
+        # the release tag, leading `v` stripped in the config; on a blank
+        # dispatch this is now the smart-computed version above, not a raw
+        # app.json fallback) and a per-run versionCode so every App
+        # Distribution upload is unique and increasing. The GIT_* provenance is
+        # stamped into the config's `extra` here too so the embedded
         # Constants.expoConfig.extra carries the right commit (see app.config.js).
         env:
-          APP_VERSION: ${{ inputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
+          APP_VERSION: ${{ steps.version.outputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
           EXPO_PUBLIC_GIT_SHA: ${{ github.sha }}
           EXPO_PUBLIC_GIT_REF: ${{ github.ref_name }}
@@ -151,7 +335,7 @@ jobs:
           # Same version inputs as prebuild, so the JS bundle's
           # Constants.expoConfig.version (shown in Settings) matches the native
           # versionName/versionCode baked into the APK.
-          APP_VERSION: ${{ inputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
+          APP_VERSION: ${{ steps.version.outputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
           # Route every CMake/NDK C++ compile through ccache. React Native only
           # wires ccache when building RN *itself* from source; for a prebuilt-RN
@@ -225,8 +409,8 @@ jobs:
         run: |
           SHA_SHORT="${GITHUB_SHA:0:7}"
           LABEL=""
-          if [ -n "${{ inputs.version }}" ]; then
-            LABEL="${{ inputs.version }}"
+          if [ -n "${{ steps.version.outputs.version }}" ]; then
+            LABEL="${{ steps.version.outputs.version }}"
           elif [ "${{ github.event_name }}" = "push" ]; then
             LABEL="${{ github.ref_name }}"
           fi
@@ -315,19 +499,6 @@ jobs:
           qrencode -o dist/install-qr.png -s 8 -m 2 "${{ steps.meta.outputs.url }}"
           ls -la dist
 
-      # The rolling `dev` tag is reused across builds. softprops updates the
-      # release + assets but won't move an existing tag (`target_commitish` is
-      # ignored once the tag exists), so force-point `dev` at this commit first —
-      # otherwise the tag and its source archives stay on the first dev build
-      # while the APK/body are from this one. Versioned tags are new each build,
-      # so they don't need this. `dev` doesn't match the `v*` push trigger, so
-      # this doesn't re-trigger the workflow.
-      - name: Repoint rolling dev tag at this commit
-        if: ${{ steps.meta.outputs.tag == 'dev' }}
-        run: |
-          git tag -f dev "$GITHUB_SHA"
-          git push -f origin "refs/tags/dev"
-
       # Compose the release body. For a versioned release, lead with the
       # human-written notes at docs/release-notes/<tag>.md (if present) so the
       # Release reads as a real changelog; the install/QR section is always
@@ -335,11 +506,104 @@ jobs:
       # also checks if a release note file for its specific version label
       # (e.g. docs/release-notes/v1.2.0-rc1.md) exists and includes it.
       - name: Compose release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           BODY=dist/RELEASE_BODY.md
           NOTES="docs/release-notes/${{ steps.meta.outputs.tag }}.md"
           LABEL_NOTES="docs/release-notes/${{ steps.meta.outputs.label }}.md"
           : > "$BODY"
+
+          # Hidden rc-state marker (dev release only, invisible in rendered
+          # markdown): carries the last actual rc build's label forward across
+          # a non-rc hyphenated test dispatch (e.g. v1.2.3-test1), so
+          # "Determine build version" can always find the true last rc even
+          # when the most recent dev build itself wasn't one. Always read the
+          # existing marker first — needed both to preserve it when this
+          # build isn't a legitimate advance, and to guard against THIS
+          # build's own label moving the tracked state *backward*: an
+          # explicit RC for a different/older line (`v1.2.2-rc9` while the
+          # marker tracks `1.2.3`), or a same-version but lower/duplicate rc
+          # number (an explicit rebuild or typo of an already-superseded rc,
+          # e.g. `v1.2.3-rc5` after the marker already reached `v1.2.3-rc19`)
+          # must NOT clobber a higher, already-issued number.
+          if [ "${{ steps.meta.outputs.tag }}" = "dev" ]; then
+            THIS_LABEL="${{ steps.meta.outputs.label }}"
+            # Read from `main`, not whatever ref this build happens to be
+            # from — the current rc cycle is tracked against main's
+            # app.json regardless of which ref actually built (see
+            # "Determine build version" for the matching read).
+            git fetch origin main --quiet
+            APP_VERSION=$(git show FETCH_HEAD:apps/mobile/app.json | node -e "console.log(JSON.parse(require('fs').readFileSync(0,'utf8')).expo.version)")
+
+            # This build is about to overwrite the dev release, so a
+            # swallowed lookup failure here would permanently drop the
+            # marker (not just skip a read like in "Determine build
+            # version"). A 404 is a genuinely markerless dev release (fine,
+            # nothing to carry forward); anything else must fail loudly
+            # rather than silently publish over the last known rc state.
+            if OLD_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/dev" 2>/tmp/gh-dev-err.log); then
+              OLD_BODY=$(echo "$OLD_JSON" | jq -r '.body // ""')
+              OLD_NAME=$(echo "$OLD_JSON" | jq -r '.name // ""')
+            elif grep -q '404' /tmp/gh-dev-err.log; then
+              OLD_BODY=""
+              OLD_NAME=""
+            else
+              echo "::error::Failed to look up the existing dev release before publishing over it (not a 404 — refusing to silently drop the rc-state marker):"
+              cat /tmp/gh-dev-err.log
+              exit 1
+            fi
+            # Same bootstrap as "Determine build version": an existing dev
+            # release that predates the rc-state marker (or was itself
+            # published by an older workflow version) carries the rc only in
+            # its old-style *name* — fall back to that so overwriting it
+            # (e.g. with this non-rc build) doesn't drop a real in-progress
+            # rc count. Search *name* only for the fallback, never body: body
+            # can be human-written release notes/QA prose mentioning an
+            # unrelated rc number, which a body-wide search would wrongly
+            # match first.
+            OLD_MARKER=$(echo "$OLD_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+            if [ -z "$OLD_MARKER" ]; then
+              OLD_MARKER=$(echo "$OLD_NAME" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 || true)
+            fi
+
+            RC_MARKER="$OLD_MARKER"
+            # An exact, fully-numeric match — the glob `-rc[0-9]*` would also
+            # accept a label like `v1.2.3-rc1-test`, since the trailing `*`
+            # matches any remaining characters, wrongly treating a test build
+            # as a real "rc1" advance.
+            APP_VERSION_RE=$(printf '%s' "$APP_VERSION" | sed 's/\./\\./g')
+            if [[ "$THIS_LABEL" =~ ^v${APP_VERSION_RE}-rc[0-9]+$ ]]; then
+              THIS_RC="${THIS_LABEL##*-rc}"
+              OLD_BASE="${OLD_MARKER%-rc*}"
+              OLD_RC="${OLD_MARKER##*-rc}"
+              if [ -z "$OLD_MARKER" ] || [ "${OLD_BASE#v}" != "$APP_VERSION" ] || [ "$THIS_RC" -gt "$OLD_RC" ]; then
+                RC_MARKER="$THIS_LABEL"
+              fi
+            fi
+
+            if [ -n "$RC_MARKER" ]; then
+              echo "<!-- rc-state: $RC_MARKER -->" >> "$BODY"
+            fi
+
+            # Hidden run-id marker: records which workflow run last published
+            # to dev. "Determine build version" uses this, not the commit
+            # sha, to tell "this exact run already published" from "a
+            # different run published the same commit" and from "a later
+            # run has since superseded this one" — which only holds if the
+            # marker itself never moves backward. GitHub run_ids are
+            # monotonically increasing, so a rerun of an *older*, non-rc or
+            # off-cycle dev build (which bypasses the rc-state guard above
+            # entirely) must not overwrite a genuinely later run's id;
+            # keep whichever is greater.
+            OLD_RUN_ID=$(echo "$OLD_BODY" | grep -oE 'run-id: [0-9]+' | head -1 | sed 's/run-id: //' || true)
+            NEW_RUN_ID="${{ github.run_id }}"
+            if [ -n "$OLD_RUN_ID" ] && [ "$OLD_RUN_ID" -gt "$NEW_RUN_ID" ]; then
+              NEW_RUN_ID="$OLD_RUN_ID"
+            fi
+            echo "<!-- run-id: $NEW_RUN_ID -->" >> "$BODY"
+          fi
+
           if [ -f "$NOTES" ]; then
             cat "$NOTES" >> "$BODY"
             printf '\n\n---\n\n' >> "$BODY"
@@ -365,6 +629,23 @@ jobs:
           at build time.
           EOF
           echo "----- release body -----"; cat "$BODY"
+
+      # The rolling `dev` tag is reused across builds. softprops updates the
+      # release + assets but won't move an existing tag (`target_commitish` is
+      # ignored once the tag exists), so force-point `dev` at this commit first —
+      # otherwise the tag and its source archives stay on the first dev build
+      # while the APK/body are from this one. Versioned tags are new each build,
+      # so they don't need this. `dev` doesn't match the `v*` push trigger, so
+      # this doesn't re-trigger the workflow. Runs *after* "Compose release
+      # notes" (which reads the dev release's current state and can fail on a
+      # transient lookup error) so a failure there aborts before the tag moves,
+      # instead of leaving the tag repointed at a build whose release/APK
+      # never actually got published.
+      - name: Repoint rolling dev tag at this commit
+        if: ${{ steps.meta.outputs.tag == 'dev' }}
+        run: |
+          git tag -f dev "$GITHUB_SHA"
+          git push -f origin "refs/tags/dev"
 
       # Every build now publishes a Release with the raw .apk + QR. A clean
       # vX.Y.Z is a stable, "latest" release; everything else refreshes the

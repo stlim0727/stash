@@ -27,13 +27,19 @@ remind the user to fire it manually. Step 3 is a local `git log` + classificatio
 
 ## Step 1 — Build the next RC APK
 
+`android-apk.yml` now computes the next `vX.Y.Z-rcN` itself when `version` is
+left blank (from `apps/mobile/app.json` and the `dev` release's tracked rc
+state), so a blank dispatch is a safe fallback. Still resolve the number
+yourself first — it's what you log in `build-history.md`, and it's the
+cross-check that catches a stale/mistracked marker before it reaches CI.
+
 1. **Find the next rc number.** Resolve the target `X.Y.Z` from `apps/mobile/app.json` `version` **first** — that is the cycle you're building. Then:
-   - **Read the rolling `dev` release** — `mcp__github__get_release_by_tag(owner="stlim0727", repo="stash", tag="dev")`. Its `name` now carries the label (`Development build — vX.Y.Z-rcN (latest)`, stamped by `android-apk.yml` since #302). **Only trust its `rcN` when the label's `X.Y.Z` equals `app.json`'s `version`.**
+   - **Read the rolling `dev` release** — `mcp__github__get_release_by_tag(owner="stlim0727", repo="stash", tag="dev")`. Its `name` carries the label (`Development build — vX.Y.Z-rcN (latest)`, stamped by `android-apk.yml` since #302), **but check the `body` first for a hidden `<!-- rc-state: vX.Y.Z-rcN -->` marker** — the workflow's blank-dispatch allocator writes the real rc there and it survives a non-rc test build (e.g. `v1.2.3-test1`) overwriting the name; the name alone can be stale in that case. If neither is legible or you're unsure which is current, leave `version` blank on dispatch — the workflow resolves it the same way. **Only trust the resolved `rcN` when its `X.Y.Z` equals `app.json`'s `version`.**
      - **Match** → next is `rc(N+1)`.
      - **`app.json` is ahead of the `dev` label** (a fresh cycle bump with no RC built yet — e.g. `app.json` says `1.2.0` but `dev` still reads `v1.1.0-rcN`) → the label is **stale**; start the new cycle at **`rc1`** (`vX.Y.Z-rc1` from `app.json`). Do **not** carry the old cycle's number forward.
    - **Cross-check** the current cycle's table in `docs/development/build-history.md` (next = highest `-rcN` + 1). If that cycle has no table yet (a fresh version bump), it's `rc1` and you create the section.
    - Break ties **only within the same `X.Y.Z`**: if the `dev` label and the ledger disagree for the *same* version, prefer the `dev` release (it reflects the last *actual* build) and note the discrepancy. A cross-version disagreement is not a tie — `app.json` wins and the cycle restarts at `rc1`.
-2. **Confirm there's new code to ship.** `git fetch origin main` then compare the `dev` release's `target_commitish` to `origin/main` HEAD (`git log <dev_sha>..origin/main --oneline`). If **nothing** changed, do **not** cut a new rc for identical code — say so (per the versioning golden rule: same code ⇒ keep the version, only the build number changes). Proceed only when there are new commits.
+2. **Confirm there's new code to ship.** `git fetch origin main tag dev --force`, then resolve the shipped base from the rolling `dev` tag commit: `git rev-parse refs/tags/dev`. Do not trust the GitHub Release object's `target_commitish` after the rolling release exists; the workflow force-moves the `dev` tag while release metadata can remain stale or branch-shaped. Compare that tag commit to `origin/main` HEAD (`git log refs/tags/dev..origin/main --oneline`). If **nothing** changed, do **not** cut a new rc for identical code — say so (per the versioning golden rule: same code ⇒ keep the version, only the build number changes). Proceed only when there are new commits.
    - **If this RC exists to ship a specific fix, confirm that fix is actually on `main` HEAD (merged) before dispatching.** RCs build from `main`, so cutting one while the fix is still on an open PR just reships the bug (this happened: rc13 was dispatched before the anonymous-fallback fix #375 merged, so rc14 had to follow once it landed). Verify the fix commit/PR is in `git log <dev_sha>..origin/main` — don't build on the *intent* to merge.
 3. **Check for open PRs against `main`** — `mcp__github__list_pull_requests(state="open", base="main")`. If any open PR looks like it belongs in this RC, ask the user whether to wait for it before building; otherwise proceed. (Ignore infra/docs PRs that clearly don't belong.)
 4. **Dispatch the build:**

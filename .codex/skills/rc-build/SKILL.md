@@ -30,13 +30,25 @@ remind the user to fire it manually. Step 3 is a local `git log` + classificatio
 
 ## Step 1 — Build the next RC APK
 
+`android-apk.yml` now computes the next `vX.Y.Z-rcN` itself when `version` is
+left blank (from `apps/mobile/app.json` and the `dev` release's tracked rc
+state), so a blank dispatch is a safe fallback. Still resolve the number
+yourself first — it's what you log in `build-history.md`, and it's the
+cross-check that catches a stale/mistracked marker before it reaches CI.
+
 1. **Find the next rc number.** Resolve the target `X.Y.Z` from `apps/mobile/app.json` `version` **first** — that is the cycle you're building. Then:
    - **Read the rolling `dev` release** using the GitHub app if a release-by-tag
      tool is exposed; otherwise use local `refs/tags/dev` plus
      `docs/development/build-history.md` as the fallback. Its `name` carries the
      label (`Development build — vX.Y.Z-rcN (latest)`, stamped by
-     `android-apk.yml` since #302). **Only trust its `rcN` when the label's
-     `X.Y.Z` equals `app.json`'s `version`.**
+     `android-apk.yml` since #302), **but check the `body` first for a hidden
+     `<!-- rc-state: vX.Y.Z-rcN -->` marker** — the workflow's blank-dispatch
+     allocator writes the real rc there and it survives a non-rc test build
+     (e.g. `v1.2.3-test1`) overwriting the name; the name alone can be stale in
+     that case. If neither is legible or you're unsure which is current, leave
+     `version` blank on dispatch — the workflow resolves it the same way.
+     **Only trust the resolved `rcN` when its `X.Y.Z` equals `app.json`'s
+     `version`.**
      - **Match** → next is `rc(N+1)`.
      - **`app.json` is ahead of the `dev` label** (a fresh cycle bump with no RC built yet — e.g. `app.json` says `1.2.0` but `dev` still reads `v1.1.0-rcN`) → the label is **stale**; start the new cycle at **`rc1`** (`vX.Y.Z-rc1` from `app.json`). Do **not** carry the old cycle's number forward.
    - **Cross-check** the current cycle's table in `docs/development/build-history.md` (next = highest `-rcN` + 1). If that cycle has no table yet (a fresh version bump), it's `rc1` and you create the section.
@@ -82,7 +94,7 @@ CircleCI migration (#288). Do **not** try to `workflow_dispatch` it — that 422
 
 - **Firebase App Distribution releases** → ported to the CircleCI job
   `ops_firebase_cleanup` (`.circleci/config.yml`), which keeps the newest
-  `KEEP=20` and prunes releases older than `MAX_AGE_DAYS=7` (baked into the job
+  `KEEP=5` and prunes releases older than `MAX_AGE_DAYS=7` (baked into the job
   as env, not per-run inputs). The `nightly-ops` workflow that runs it is gated
   on the `run_nightly_ops` pipeline parameter — **there is currently no
   scheduler that sets it**. The original inline `triggers: - schedule:` key

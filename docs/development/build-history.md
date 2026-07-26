@@ -29,12 +29,14 @@ candidates** (`vX.Y.Z-rcN`) that lead up to each stable cut.
   (highest `-rcN` in the current cycle's table) **+ 1**. If the cycle has no
   table yet (a fresh `app.json` version bump), start at `rc1` and create the
   section.
-- **Always pass the `version` input** (e.g. `v1.0.0-rc5`) so the build carries a
-  real label in the run instead of being an anonymous blank dispatch — that
-  label plus the row you add here is what makes this history trustworthy. A
-  hyphenated `-rcN` tag refreshes the single rolling **`dev`** prerelease in
-  place (it never clutters Releases); only a clean `vX.Y.Z` cuts a kept,
-  versioned Release.
+- **A blank `version` input is no longer an anonymous dispatch.** `android-apk.yml`
+  now computes the next `vX.Y.Z-rcN` itself from `apps/mobile/app.json` and the
+  `dev` release's tracked rc state, so the build still carries a real label even
+  without passing `version` explicitly. Passing it explicitly remains good
+  practice for an intentional, self-documenting dispatch — that label plus the
+  row you add here is what makes this history trustworthy. A hyphenated `-rcN`
+  tag refreshes the single rolling **`dev`** prerelease in place (it never
+  clutters Releases); only a clean `vX.Y.Z` cuts a kept, versioned Release.
 - **After triggering, immediately add a row** to the current cycle's table with
   the date, the `main` SHA it built from (the run's `head_sha`), and a one-line
   "what's new since the last RC." Skipping this is exactly how `v1.0.0-rc4` went
