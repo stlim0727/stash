@@ -76,12 +76,12 @@ export function CreateCollectionDialog({
           ]}
           onPress={() => {}}
         >
-          <Text style={[styles.title, { color: palette.text }]}>{t('inbox.newFolder')}</Text>
+          <Text style={[styles.title, { color: palette.text }]}>{t('inbox.newCollection')}</Text>
           <TextInput
             testID="create-collection-input"
-            accessibilityLabel={t('inbox.newFolderNamePlaceholder')}
+            accessibilityLabel={t('inbox.newCollectionNamePlaceholder')}
             style={[styles.input, { color: palette.text, borderColor: palette.border }]}
-            placeholder={t('inbox.newFolderNamePlaceholder')}
+            placeholder={t('inbox.newCollectionNamePlaceholder')}
             placeholderTextColor={palette.textSecondary}
             autoCapitalize="none"
             autoFocus
@@ -107,7 +107,7 @@ export function CreateCollectionDialog({
             <Pressable
               testID="create-collection-submit"
               accessibilityRole="button"
-              accessibilityLabel={t('inbox.newFolderCreate')}
+              accessibilityLabel={t('inbox.newCollectionCreate')}
               disabled={busy || trimmed.length === 0}
               onPress={submit}
               style={[
@@ -123,7 +123,7 @@ export function CreateCollectionDialog({
                 <ActivityIndicator color={palette.accentForeground} size="small" />
               ) : (
                 <Text style={[styles.buttonLabel, { color: palette.accentForeground }]}>
-                  {t('inbox.newFolderCreate')}
+                  {t('inbox.newCollectionCreate')}
                 </Text>
               )}
             </Pressable>

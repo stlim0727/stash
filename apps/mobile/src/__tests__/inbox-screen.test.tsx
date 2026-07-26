@@ -437,7 +437,7 @@ test('search filters the list and shows the match count', async () => {
 
   // Search is tap-to-open now: reveal the field before typing.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'local-first');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'local-first');
 
   // The derived query is debounced, so the count/filter settle a beat later.
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
@@ -481,7 +481,7 @@ test('slims the header while searching: the sort row and browse shelf fold away'
   // Open search (tap-to-open), type, then blur to reach the "results, keyboard
   // down" slim state (searching + field blurred).
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  const searchInput = screen.getByPlaceholderText('Search titles, tags, folders');
+  const searchInput = screen.getByPlaceholderText('Search titles, tags, collections');
   await fireEvent.changeText(searchInput, 'local-first');
   await fireEvent(searchInput, 'blur');
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
@@ -516,7 +516,7 @@ test('highlights the matched span in a result title while searching', async () =
   expect(screen.queryByText('software')).toBeNull();
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'software');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'software');
 
   // The matched span renders as its own run carrying the accent highlight.
   const match = await waitFor(() => screen.getByText('software'));
@@ -549,7 +549,7 @@ test('a punctuation-only query is not a search (keeps the normal Inbox section)'
   // A query that normalizes to zero search tokens must NOT flip to the search
   // (Matches/results) section, and must not filter the library down.
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), '...');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), '...');
 
   // Stays on the normal Inbox (no results header, no section label) and the
   // zero-result recovery card must NOT appear — it's not a search at all.
@@ -1630,7 +1630,7 @@ test('shows the no-matches empty state for an unmatched search', async () => {
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'zzz');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'zzz');
 
   await waitFor(() => expect(screen.getByText('No bookmarks match your search.')).toBeTruthy());
   // The recovery card stands alone — the "0 results" section label is suppressed
@@ -1667,7 +1667,7 @@ test('a search result that matched on its site name shows a distinct site chip',
   expect(screen.queryByTestId('inbox-card-site')).toBeNull();
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'wired');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'wired');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   // The matched result surfaces its site name; the chip carries the generated
@@ -1705,7 +1705,7 @@ test('a 4th+ tag that matched the query is promoted into the shown tag chips', a
   await waitFor(() => expect(screen.getByText('Ops runbook')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, folders'), 'kubernetes');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'kubernetes');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
   // The matched tag is promoted into the card's (max 3) shown meta chips. While
@@ -1738,7 +1738,7 @@ test('the debounced query does not filter until typing settles', async () => {
     await fireEvent.press(screen.getByTestId('inbox-search-open'));
     await act(async () => {
       fireEvent.changeText(
-        screen.getByPlaceholderText('Search titles, tags, folders'),
+        screen.getByPlaceholderText('Search titles, tags, collections'),
         'local-first',
       );
     });
@@ -1766,12 +1766,12 @@ test('the empty-search state offers a clear control and a searchable-fields hint
   await waitFor(() => expect(screen.getByText('Only one')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  const input = screen.getByPlaceholderText('Search titles, tags, folders');
+  const input = screen.getByPlaceholderText('Search titles, tags, collections');
   await fireEvent.changeText(input, 'zzz');
 
   await waitFor(() => expect(screen.getByTestId('inbox-empty-search')).toBeTruthy());
   // The hint tells the user the search reaches beyond titles …
-  expect(screen.getByText('Search also looks in tags, folders, and site names.')).toBeTruthy();
+  expect(screen.getByText('Search also looks in tags, collections, and site names.')).toBeTruthy();
 
   // … and the visible Clear control resets the query, returning to the full list.
   await fireEvent.press(screen.getByLabelText('Clear search'));
