@@ -239,8 +239,8 @@ export const ko: Catalog = {
   'settings.import.value': '백업이나 다른 앱의 북마크 복원',
   'settings.dataNote':
     '북마크는 당신의 것입니다. 어떤 브라우저나 북마크 앱에서도 가져올 수 있는 표준 HTML 파일, 스프레드시트용 CSV, 또는 전체 JSON 백업으로 — 오프라인에서도 언제든 내보낼 수 있습니다.',
-  'settings.share.label': '공유 후 미분류 열기',
-  'settings.share.inbox': '공유한 링크가 미분류를 엽니다',
+  'settings.share.label': '공유 후 인박스 열기',
+  'settings.share.inbox': '공유한 링크가 인박스를 엽니다',
   'settings.share.toast': '공유한 링크는 토스트만 표시합니다',
   'settings.analytics.label': '개인정보 보호 사용 분석 공유',
   'settings.analytics.enabled':
