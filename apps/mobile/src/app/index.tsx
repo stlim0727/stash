@@ -3065,8 +3065,16 @@ export default function InboxScreen() {
                   // Mirrors the ribbon's position over a preview image: the
                   // site-name + open-link pill sits above the title instead
                   // of below it, so the "where does this link go" affordance
-                  // lands in the same place regardless of preview image.
-                  <View style={styles.cardUrlRowTop}>
+                  // lands in the same place regardless of preview image. The
+                  // row itself opens the detail view so the space to the
+                  // left of the pill is tappable too, not just dead space.
+                  <Pressable
+                    accessible={false}
+                    tabIndex={-1}
+                    onPress={openDetail}
+                    onLongPress={() => setMenuItem(item)}
+                    style={styles.cardUrlRowTop}
+                  >
                     <Pressable
                       accessibilityRole="link"
                       accessibilityLabel={t('common.openLink')}
@@ -3084,7 +3092,7 @@ export default function InboxScreen() {
                       />
                       <Ionicons name="open-outline" size={13} color={palette.accentText} />
                     </Pressable>
-                  </View>
+                  </Pressable>
                 ) : null}
                 <View
                   style={[
@@ -3093,7 +3101,20 @@ export default function InboxScreen() {
                   ]}
                 >
                   <View style={styles.cardTitleRow}>
-                    <ItemIcon item={item} testID="inbox-card-monogram" />
+                    {/* Not independently labelled: it's a supplementary tap
+                        target over the same action the title/link pill
+                        already exposes to screen readers, so it stays out
+                        of the accessibility tree rather than duplicating
+                        the "Open link" label. */}
+                    <Pressable
+                      accessible={false}
+                      tabIndex={-1}
+                      onPress={item.url ? openLink : openDetail}
+                      onLongPress={() => setMenuItem(item)}
+                      hitSlop={6}
+                    >
+                      <ItemIcon item={item} testID="inbox-card-monogram" />
+                    </Pressable>
                   {/* Only the title is the accessible "open details" button so
                       the sibling … overflow button stays independently
                       focusable; the whole card remains tappable visually. */}
