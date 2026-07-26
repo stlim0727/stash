@@ -105,6 +105,12 @@ export const en = {
   'inbox.sortLeastRecentlyOpened': 'Least recently opened',
   'inbox.sortNameAsc': 'Name A–Z',
   'inbox.sortNameDesc': 'Name Z–A',
+  // Folder View's own sort menu (Collection tiles) — a separate 4-option set
+  // from the bookmark-level sort above (see domain/folder-sort.ts).
+  'inbox.folderSortNameAsc': 'Name A–Z',
+  'inbox.folderSortNameDesc': 'Name Z–A',
+  'inbox.folderSortCountDesc': 'Most items',
+  'inbox.folderSortCountAsc': 'Fewest items',
   'inbox.viewAsA11y': 'View as {mode}',
   // "Browse by tag" toggle: an icon-only control that navigates to the dedicated
   // tag-browse route (/browse/tags), carrying the current facet as its scope.
