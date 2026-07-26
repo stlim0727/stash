@@ -354,6 +354,7 @@ export const ko: Catalog = {
   'detail.aiPreviewFailed': '프리뷰 가져오기에 실패하여 AI 제안을 생성할 수 없습니다.',
   'detail.previewFailedNote': '프리뷰와 메타데이터를 불러오지 못했습니다.',
   'detail.aiPostponed': '아직 AI 제안을 준비 중이에요 — 자동으로 계속 다시 시도할게요.',
+  'detail.aiQueued': 'AI 제안이 예약되어 자동으로 도착할 거예요 — 다시 확인하지 않으셔도 돼요.',
   'detail.aiDegradedRateLimited':
     'AI 사용량이 많아 지금은 기본 제안을 표시합니다 — 잠시 후 다시 시도하면 AI 제안을 받을 수 있습니다.',
   'detail.aiDegradedUnavailable':

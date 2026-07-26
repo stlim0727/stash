@@ -281,6 +281,74 @@ test('a non-429 failure does not enqueue for the overflow worker', async () => {
   expect(apiMock.__spies.enqueuePendingEnrichment).not.toHaveBeenCalled();
 });
 
+test('a 429 with a CONFIRMED (resolved) enqueue marks the bookmark as server-queued (STASH #578 follow-up)', async () => {
+  // Distinct from the generic local-retry marker (armAiRetry, always armed
+  // for this same 429): this one is only set once the enqueue POST itself
+  // durably lands server-side.
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  await waitFor(() => expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true));
+});
+
+test('the server-queued flag survives exhausting the local retry cap, unlike isAiSuggestionPostponed (STASH #578 follow-up)', async () => {
+  // The core bug this feature fixes: AI_RETRY_MAX_ATTEMPTS gives up on the
+  // generic local marker and clears it entirely, reverting the bookmark to
+  // looking never-asked. The confirmed server-queued marker must NOT revert
+  // with it — the server queue entry is still alive and will still deliver.
+  const store = await renderReady();
+  // mockImplementationOnce (not the persistent mockImplementation the other
+  // retry-cap test below uses) so this doesn't leave every LATER test in this
+  // file's default (successful) requestEnrichment permanently replaced —
+  // this test runs earlier in file order than that one.
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
+    apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+      throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+    });
+    await act(async () => {
+      await store.current!.requestAiEnrichment(SYNCED_ID, attempt === 1 ? 'auto' : 'manual');
+    });
+  }
+  await waitFor(() => expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true));
+
+  // The generic marker has exhausted and cleared...
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
+  expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
+  // ...but the server-queued marker is untouched by that cap.
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
+});
+
+test('a 429 whose enqueue call REJECTS does not mark the bookmark as server-queued', async () => {
+  // No false promise: falls back to the generic armAiRetry treatment alone.
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+  apiMock.__spies.enqueuePendingEnrichment.mockRejectedValueOnce(new Error('network down'));
+
+  let error: string | null = 'unset';
+  await act(async () => {
+    error = await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+  expect(error).toBe(AI_RATE_LIMITED);
+
+  // Let the rejected enqueue promise's .catch() settle before asserting the
+  // negative — otherwise a bug that set the flag late would go unnoticed.
+  await waitFor(() => expect(apiMock.__spies.enqueuePendingEnrichment).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    await Promise.resolve();
+  });
+
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false);
+  expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
+});
+
 test('requestAiEnrichment forwards the device\'s freshest metadata', async () => {
   // Keep the seeded row in state so requestAiEnrichment can read its metadata
   // (without this the inert pull would diff it away as a remote deletion).
@@ -1473,6 +1541,32 @@ test('a pull that brings down an enrichment from another path (server trigger / 
   expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(false);
   expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
   expect(fakeRepo.__meta('ai_suggestion_retry')).toBe('{}');
+});
+
+test('a pull that delivers a real enrichment clears the confirmed server-queued marker (STASH #578 follow-up)', async () => {
+  // The background overflow worker's delivered result lands via the ordinary
+  // sync pull — the PRIMARY way this marker is expected to clear in
+  // practice. Answers "could this get stuck showing queued forever?": no.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta('ai_server_queued', JSON.stringify([SYNCED_ID]));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
+
+  // The background overflow worker's result arrives via pull.
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({ id: 'enrich-from-queue-worker', bookmark_id: SYNCED_ID }),
+  ]);
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  await waitFor(() => expect(store.current!.getEnrichment(SYNCED_ID)).toBeDefined());
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false);
+  expect(fakeRepo.__meta('ai_server_queued')).toBe('[]');
 });
 
 test('a pull that re-delivers the same already-known enrichment (watermark overlap) does not clear a legitimately armed retry marker', async () => {
