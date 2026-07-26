@@ -2997,6 +2997,31 @@ export default function InboxScreen() {
                     ) : null}
                   </View>
                 ) : null}
+                {!previewUri && item.url ? (
+                  // Mirrors the ribbon's position over a preview image: the
+                  // site-name + open-link pill sits above the title instead
+                  // of below it, so the "where does this link go" affordance
+                  // lands in the same place regardless of preview image.
+                  <View style={styles.cardUrlRowTop}>
+                    <Pressable
+                      accessibilityRole="link"
+                      accessibilityLabel={t('common.openLink')}
+                      onPress={openLink}
+                      onLongPress={() => setMenuItem(item)}
+                      hitSlop={6}
+                      style={[styles.cardUrlOpenPill, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                    >
+                      <HighlightedText
+                        style={[styles.cardUrlOpenPillText, { color: palette.accentText }]}
+                        numberOfLines={1}
+                        text={siteLabelText}
+                        query={highlightQuery}
+                        highlightStyle={highlightStyle}
+                      />
+                      <Ionicons name="open-outline" size={13} color={palette.accentText} />
+                    </Pressable>
+                  </View>
+                ) : null}
                 <View
                   style={[
                     styles.cardBody,
@@ -3053,31 +3078,6 @@ export default function InboxScreen() {
                     <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
                   </Pressable>
                 </View>
-                {!previewUri && item.url ? (
-                  // A preview image already carries its own ribbon with the
-                  // site name; repeating it here as plain text would be
-                  // redundant, so this pill only renders when there's no
-                  // image to carry that affordance.
-                  <View style={styles.cardUrlRow}>
-                    <Pressable
-                      accessibilityRole="link"
-                      accessibilityLabel={t('common.openLink')}
-                      onPress={openLink}
-                      onLongPress={() => setMenuItem(item)}
-                      hitSlop={6}
-                      style={[styles.cardUrlOpenPill, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
-                    >
-                      <HighlightedText
-                        style={[styles.cardUrlOpenPillText, { color: palette.accentText }]}
-                        numberOfLines={1}
-                        text={siteLabelText}
-                        query={highlightQuery}
-                        highlightStyle={highlightStyle}
-                      />
-                      <Ionicons name="open-outline" size={13} color={palette.accentText} />
-                    </Pressable>
-                  </View>
-                ) : null}
                 {showUrlMatchLine && item.url ? (
                   <HighlightedText
                     style={[styles.cardUrl, { color: palette.textSecondary }]}
@@ -3698,10 +3698,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: WEB_SEMIBOLD_WEIGHT,
   },
-  cardUrlRow: {
+  cardUrlRowTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 14,
   },
   cardUrl: {
     flexShrink: 1,
