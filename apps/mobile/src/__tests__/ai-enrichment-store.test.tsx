@@ -349,6 +349,62 @@ test('a 429 whose enqueue call REJECTS does not mark the bookmark as server-queu
   expect(store.current!.isAiSuggestionPostponed(SYNCED_ID)).toBe(true);
 });
 
+test('a slow enqueue confirmation does not strand the server-queued flag on an already-enriched bookmark (STASH #578 follow-up)', async () => {
+  // The set-after-clear race this guard exists for: the aiEnriching dedup
+  // guard for the FIRST (429'd) call releases as soon as its catch block
+  // returns AI_RATE_LIMITED — well before the un-awaited enqueue POST below
+  // settles. That leaves a window where a SECOND call for the same bookmark
+  // (e.g. an impatient manual "Suggest with AI" retap, which deliberately
+  // ignores backoff and fires immediately) can start, succeed, and land a
+  // real enrichment BEFORE the first call's enqueue confirmation arrives. If
+  // that confirmation then unconditionally marked the bookmark queued, it
+  // would strand "will arrive automatically" on a bookmark that's already
+  // done — nothing would ever clear it again (the sync-pull clear only fires
+  // for a strictly newer arrival).
+  const store = await renderReady();
+
+  let releaseEnqueue!: () => void;
+  const enqueueGate = new Promise<void>((resolve) => {
+    releaseEnqueue = resolve;
+  });
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+  apiMock.__spies.enqueuePendingEnrichment.mockImplementationOnce(async () => {
+    await enqueueGate; // held open — simulates a slow confirmation round trip
+  });
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+  await waitFor(() => expect(apiMock.__spies.enqueuePendingEnrichment).toHaveBeenCalledTimes(1));
+  // Nothing set yet — the enqueue confirmation is still held open.
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false);
+
+  // A faster, second attempt for the SAME bookmark succeeds directly — e.g.
+  // the user retapping "Suggest with AI" (which ignores backoff), or a
+  // worker delivery arriving via sync. Either way, this bookmark is now
+  // genuinely done before the first call's enqueue ever confirms.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) =>
+    makeSuccessEnrichment(bookmarkId),
+  );
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+  expect(store.current!.getEnrichment(SYNCED_ID)).toBeDefined();
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false);
+
+  // Now let the FIRST call's stale enqueue confirmation land, late.
+  await act(async () => {
+    releaseEnqueue();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  // It must NOT re-arm the marker on a bookmark that's already resolved.
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false);
+});
+
 test('requestAiEnrichment forwards the device\'s freshest metadata', async () => {
   // Keep the seeded row in state so requestAiEnrichment can read its metadata
   // (without this the inert pull would diff it away as a remote deletion).

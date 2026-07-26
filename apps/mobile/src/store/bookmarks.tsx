@@ -2586,6 +2586,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // an enqueue failure must never change what the caller sees for
           // this 429, and is never retried here.
           if (auth.session) {
+            // Snapshotted now (before the enqueue POST's round trip) so the
+            // .then() below can detect a set-after-clear race: this call's
+            // own aiEnriching guard releases in the `finally` below as soon
+            // as this 429 branch returns, well before this un-awaited
+            // promise settles — so a later call for the SAME bookmark (a
+            // manual retry, which deliberately ignores backoff and fires
+            // immediately) can start and even succeed in the meantime,
+            // landing a real enrichment and calling clearAiServerQueued
+            // (currently a no-op, since nothing is set yet). If this
+            // confirmation then lands afterward and sets the marker
+            // unconditionally, nothing would ever clear it again — the
+            // sync-pull clear only fires for a strictly newer arrival, and
+            // this bookmark is already done. Reference identity, not a
+            // timestamp: `updated_at` is server time and has no reliable
+            // relationship to the client clock at enqueue time, but every
+            // write to `enrichments` (direct success or sync-pull) replaces
+            // the array with fresh objects, so an unchanged reference here
+            // reliably means "nothing arrived for this bookmark meanwhile".
+            const enrichmentBeforeEnqueue = enrichmentsRef.current.find(
+              (item) => item.bookmark_id === bookmarkId,
+            );
             try {
               createSyncApi(auth.session)
                 .enqueuePendingEnrichment(bookmarkId, localeRef.current ?? undefined)
@@ -2596,7 +2617,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   // resolution — never eagerly, and never below in the
                   // .catch()/synchronous-throw branches, which fall back to
                   // the generic armAiRetry marker above alone.
-                  markAiServerQueued(bookmarkId);
+                  //
+                  // But skip it if a real enrichment already landed for this
+                  // bookmark since the enqueue was fired (a faster manual
+                  // retry, or — in principle — an extremely fast worker
+                  // delivery): marking it queued now would strand a "will
+                  // arrive automatically" note on an already-complete
+                  // bookmark forever. See the snapshot comment above.
+                  const enrichmentNow = enrichmentsRef.current.find(
+                    (item) => item.bookmark_id === bookmarkId,
+                  );
+                  if (enrichmentNow === enrichmentBeforeEnqueue) {
+                    markAiServerQueued(bookmarkId);
+                  }
                 })
                 .catch((enqueueError: unknown) => {
                   recordLog(
