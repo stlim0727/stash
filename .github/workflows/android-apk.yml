@@ -139,15 +139,22 @@ jobs:
       # re-executes "Determine build version" too, but by then the dev
       # release's rc-state marker already reflects THIS run's own first-attempt
       # publish — recomputing would advance rc again for the same commit/
-      # run_number. Cache the allocated version under a run_id-scoped key
-      # (stable across attempts of the same run, unlike github.sha) so a rerun
-      # reuses the original allocation instead of drawing a new one.
+      # run_number. Cache the allocated version under a per-run, per-attempt
+      # key: actions/cache entries are immutable, so if an attempt recomputes
+      # a *different* value (its earlier cached one was claimed by another
+      # run in the meantime — see below), saving under the same key as a
+      # prior attempt would silently no-op and strand the stale value for the
+      # next attempt to wrongly reuse. `restore-keys` prefix-matches to the
+      # most recently saved attempt so a later rerun still picks up whatever
+      # the most recent attempt actually computed.
       - name: Restore allocated version (job reruns)
         if: ${{ github.event_name == 'workflow_dispatch' }}
         uses: actions/cache/restore@v4
         with:
           path: /tmp/apk-version.txt
-          key: apk-version-${{ github.run_id }}
+          key: apk-version-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            apk-version-${{ github.run_id }}-
 
       # A blank workflow_dispatch (no `version` input) used to fall back to
       # app.json's bare version with no `-rcN`, so the build carried no RC
@@ -186,8 +193,24 @@ jobs:
           # stay stale/branch-shaped rather than tracking the tag).
           if [ -f /tmp/apk-version.txt ]; then
             CACHED=$(cat /tmp/apk-version.txt)
-            git fetch origin '+refs/tags/dev:refs/tags/dev' 2>/tmp/git-dev-err.log || true
-            DEV_TAG_SHA=$(git rev-parse refs/tags/dev 2>/dev/null || echo "")
+            # A cache hit means a prior attempt of THIS run already computed
+            # (and maybe published) $CACHED — so unlike the marker lookup
+            # below, "the dev tag doesn't exist at all" is not a legitimate
+            # state to land in here (some prior build already created it).
+            # Only that exact "ref doesn't exist" case is safe to treat as
+            # "not yet published by this run" (recompute); any other fetch
+            # failure (network/auth) must fail loudly instead of silently
+            # treating an already-published, still-valid allocation as
+            # unconfirmed and drawing a second rc for the same commit.
+            if git fetch origin '+refs/tags/dev:refs/tags/dev' 2>/tmp/git-dev-err.log; then
+              DEV_TAG_SHA=$(git rev-parse refs/tags/dev)
+            elif grep -q "couldn't find remote ref" /tmp/git-dev-err.log; then
+              DEV_TAG_SHA=""
+            else
+              echo "::error::Failed to fetch the dev tag to validate a cached rc allocation (not a missing-ref case — refusing to silently treat it as unconfirmed):"
+              cat /tmp/git-dev-err.log
+              exit 1
+            fi
             if [ "$DEV_TAG_SHA" = "$GITHUB_SHA" ]; then
               echo "Reusing version allocated and already published by this run: $CACHED"
               echo "version=$CACHED" >> "$GITHUB_OUTPUT"
@@ -250,7 +273,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: /tmp/apk-version.txt
-          key: apk-version-${{ github.run_id }}
+          key: apk-version-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Prebuild Android project
         working-directory: apps/mobile
@@ -514,15 +537,24 @@ jobs:
             # nothing to carry forward); anything else must fail loudly
             # rather than silently publish over the last known rc state.
             if OLD_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/dev" 2>/tmp/gh-dev-err.log); then
-              OLD_BODY=$(echo "$OLD_JSON" | jq -r '.body // ""')
+              OLD_INFO=$(echo "$OLD_JSON" | jq -r '(.body // "") + "\n" + (.name // "")')
             elif grep -q '404' /tmp/gh-dev-err.log; then
-              OLD_BODY=""
+              OLD_INFO=""
             else
               echo "::error::Failed to look up the existing dev release before publishing over it (not a 404 — refusing to silently drop the rc-state marker):"
               cat /tmp/gh-dev-err.log
               exit 1
             fi
-            OLD_MARKER=$(echo "$OLD_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+            # Same bootstrap as "Determine build version": an existing dev
+            # release that predates the rc-state marker (or was itself
+            # published by an older workflow version) carries the rc only in
+            # its old-style *name* — fall back to that so overwriting it
+            # (e.g. with this non-rc build) doesn't drop a real in-progress
+            # rc count.
+            OLD_MARKER=$(echo "$OLD_INFO" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+            if [ -z "$OLD_MARKER" ]; then
+              OLD_MARKER=$(echo "$OLD_INFO" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 || true)
+            fi
 
             RC_MARKER="$OLD_MARKER"
             if [[ "$THIS_LABEL" == "v${APP_VERSION}-rc"[0-9]* ]]; then
