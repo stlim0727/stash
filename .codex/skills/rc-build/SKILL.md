@@ -94,7 +94,7 @@ CircleCI migration (#288). Do **not** try to `workflow_dispatch` it — that 422
 
 - **Firebase App Distribution releases** → ported to the CircleCI job
   `ops_firebase_cleanup` (`.circleci/config.yml`), which keeps the newest
-  `KEEP=20` and prunes releases older than `MAX_AGE_DAYS=7` (baked into the job
+  `KEEP=5` and prunes releases older than `MAX_AGE_DAYS=7` (baked into the job
   as env, not per-run inputs). The `nightly-ops` workflow that runs it is gated
   on the `run_nightly_ops` pipeline parameter — **there is currently no
   scheduler that sets it**. The original inline `triggers: - schedule:` key
