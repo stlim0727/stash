@@ -60,7 +60,7 @@ import { collectionColorKey, type CollectionColorKey } from '@/domain/collection
 import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
-import { accessibilityTitle, displayTitle, isTitleDerived } from '@/domain/item-display';
+import { accessibilityTitle, displayTitle, isTitleDerived, siteLabel } from '@/domain/item-display';
 import {
   ALL_FILTER,
   UNCOLLECTED_FILTER,
@@ -181,18 +181,6 @@ const VIEW_MODE_LABEL_KEY: Record<ViewMode, MessageKey> = {
   list: 'viewMode.list',
   folder: 'viewMode.collection',
 };
-
-/** Extract a clean display label (domain or site name) for the quick-open preview ribbon. */
-function ribbonLabel(item: Bookmark): string {
-  if (item.site_name) return item.site_name;
-  if (!item.url) return '';
-  try {
-    const parsed = new URL(item.url);
-    return parsed.hostname.replace(/^www\./, '');
-  } catch {
-    return item.url;
-  }
-}
 
 // Friendly label + icon for each sort preset, keyed by its serialized form.
 // Phrasing each order as a whole choice ("Newest", "Recently opened") reads
@@ -2901,7 +2889,21 @@ export default function InboxScreen() {
             ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
           const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
-          const showSiteChip = searching && valueMatchesTerms(item.site_name, searchTerms);
+          const siteLabelText = siteLabel(item);
+          // The clean site label is always the primary, persistent text (STASH-39).
+          // A query term can additionally match only in the URL's path/query
+          // string, not in the label — e.g. "98765" against
+          // https://example.com/article/98765, possibly alongside another term
+          // that DOES match the label (site_name "WIRED" + "98765" in the URL).
+          // filterBookmarks ANDs terms, so when any term is covered only by the
+          // URL, show it as a second line in addition to the label — not instead
+          // of it, so a simultaneous label-only match stays visible too
+          // (AGENTS.md: search highlights title and URL matches).
+          const termHiddenByLabel = (term: string) =>
+            valueMatchesTerms(item.url, [term]) && !valueMatchesTerms(siteLabelText, [term]);
+          const showUrlMatchLine = Boolean(
+            searching && item.url && searchTerms.some(termHiddenByLabel),
+          );
 
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.
@@ -2978,6 +2980,15 @@ export default function InboxScreen() {
                     <HighlightedText
                       style={[styles.listUrl, { color: palette.textSecondary }]}
                       numberOfLines={1}
+                      text={siteLabelText}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                  ) : null}
+                  {showUrlMatchLine && item.url ? (
+                    <HighlightedText
+                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
                       text={item.url}
                       query={highlightQuery}
                       highlightStyle={highlightStyle}
@@ -3043,11 +3054,36 @@ export default function InboxScreen() {
                         style={styles.previewRibbon}
                       >
                         <Text style={styles.previewRibbonText} numberOfLines={1}>
-                          {ribbonLabel(item)}
+                          {siteLabel(item)}
                         </Text>
                         <Ionicons name="open-outline" size={12} color="#ffffff" />
                       </Pressable>
                     ) : null}
+                  </View>
+                ) : null}
+                {!previewUri && item.url ? (
+                  // Mirrors the ribbon's position over a preview image: the
+                  // site-name + open-link pill sits above the title instead
+                  // of below it, so the "where does this link go" affordance
+                  // lands in the same place regardless of preview image.
+                  <View style={styles.cardUrlRowTop}>
+                    <Pressable
+                      accessibilityRole="link"
+                      accessibilityLabel={t('common.openLink')}
+                      onPress={openLink}
+                      onLongPress={() => setMenuItem(item)}
+                      hitSlop={6}
+                      style={[styles.cardUrlOpenPill, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                    >
+                      <HighlightedText
+                        style={[styles.cardUrlOpenPillText, { color: palette.accentText }]}
+                        numberOfLines={1}
+                        text={siteLabelText}
+                        query={highlightQuery}
+                        highlightStyle={highlightStyle}
+                      />
+                      <Ionicons name="open-outline" size={13} color={palette.accentText} />
+                    </Pressable>
                   </View>
                 ) : null}
                 <View
@@ -3106,28 +3142,14 @@ export default function InboxScreen() {
                     <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
                   </Pressable>
                 </View>
-                {item.url ? (
-                  <View style={styles.cardUrlRow}>
-                    <HighlightedText
-                      style={[styles.cardUrl, { color: palette.textSecondary }]}
-                      numberOfLines={1}
-                      text={item.url}
-                      query={highlightQuery}
-                      highlightStyle={highlightStyle}
-                    />
-                    {!previewUri ? (
-                      <Pressable
-                        accessibilityRole="link"
-                        accessibilityLabel={t('common.openLink')}
-                        onPress={openLink}
-                        onLongPress={() => setMenuItem(item)}
-                        hitSlop={6}
-                        style={[styles.cardUrlOpen, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
-                      >
-                        <Ionicons name="open-outline" size={13} color={palette.accentText} />
-                      </Pressable>
-                    ) : null}
-                  </View>
+                {showUrlMatchLine && item.url ? (
+                  <HighlightedText
+                    style={[styles.cardUrl, { color: palette.textSecondary }]}
+                    numberOfLines={1}
+                    text={item.url}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
                 ) : null}
                 {visibleMetaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
@@ -3152,24 +3174,6 @@ export default function InboxScreen() {
                         </Text>
                       </View>
                     ))}
-                  </View>
-                ) : null}
-                {showSiteChip ? (
-                  // Generated site metadata — styled as a neutral, outlined site
-                  // chip (not the filled accent meta chips) so it never reads as
-                  // a user-typed value.
-                  <View style={styles.siteChipRow}>
-                    <View
-                      testID="inbox-card-site"
-                      style={[styles.siteChip, { borderColor: palette.border, backgroundColor: palette.surface }]}
-                    >
-                      <Text
-                        style={[styles.siteChipLabel, { color: palette.textSecondary }]}
-                        numberOfLines={1}
-                      >
-                        {t('inbox.siteChip', { name: item.site_name! })}
-                      </Text>
-                    </View>
                   </View>
                 ) : null}
                   {status ? (
@@ -3771,25 +3775,31 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: WEB_SEMIBOLD_WEIGHT,
   },
-  cardUrlRow: {
+  cardUrlRowTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 14,
   },
   cardUrl: {
-    flex: 1,
+    flexShrink: 1,
     fontSize: Platform.select({ web: 12, default: 13 }),
     lineHeight: Platform.select({ web: 16, default: undefined }),
   },
-  cardUrlOpen: {
-    borderRadius: 999,
-    borderWidth: Platform.select({ web: StyleSheet.hairlineWidth, default: 0 }),
-    width: Platform.select({ web: 24, default: undefined }),
-    height: Platform.select({ web: 24, default: 22 }),
-    minWidth: Platform.select({ web: 24, default: 26 }),
-    paddingHorizontal: Platform.select({ web: 0, default: 7 }),
+  cardUrlOpenPill: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  cardUrlOpenPillText: {
+    fontSize: 11,
+    fontWeight: WEB_SEMIBOLD_WEIGHT,
+    maxWidth: 140,
   },
   metaChipRow: {
     flexDirection: 'row',
@@ -3805,20 +3815,6 @@ const styles = StyleSheet.create({
   metaChipLabel: {
     fontSize: Platform.select({ web: 11, default: 12 }),
     fontWeight: Platform.select({ web: WEB_MEDIUM_WEIGHT, default: WEB_SEMIBOLD_WEIGHT }),
-  },
-  siteChipRow: {
-    flexDirection: 'row',
-  },
-  siteChip: {
-    flexShrink: 1,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingVertical: 3,
-    paddingHorizontal: 9,
-  },
-  siteChipLabel: {
-    fontSize: 12,
-    fontWeight: WEB_MEDIUM_WEIGHT,
   },
   cardStatus: {
     fontSize: 12,

@@ -104,7 +104,6 @@ export const ko: Catalog = {
   'inbox.scopeSearchIn': '{scope}에서 “{query}” 검색 결과',
   'inbox.scopeClearA11y': '필터를 지우고 모든 북마크 보기',
   'inbox.scopeClearSearchA11y': '검색 지우기',
-  'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': '이 보기에는 아직 아무것도 없습니다.',
   'inbox.emptyTitle': '아직 비어 있습니다',
   'inbox.emptyHintStep1': '어떤 앱에서든 공유 버튼을 누르세요',

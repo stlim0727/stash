@@ -149,9 +149,6 @@ export const en = {
   'inbox.scopeSearchIn': 'Results for “{query}” in {scope}',
   'inbox.scopeClearA11y': 'Clear filter and show all bookmarks',
   'inbox.scopeClearSearchA11y': 'Clear the search',
-  // Site-name chip on a search result (generated site metadata, not a user
-  // field). Marks WHY a result matched when nothing else on the card shows it.
-  'inbox.siteChip': '🌐 {name}',
   'inbox.emptyView': 'Nothing in this view yet.',
   'inbox.emptyTitle': 'Nothing saved yet',
   // Native first-run teach: a numbered 2-step share-capture walkthrough, plus a

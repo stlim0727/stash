@@ -1770,11 +1770,9 @@ test('shows the no-matches empty state for an unmatched search', async () => {
   expect(screen.queryByText('0 results')).toBeNull();
 });
 
-test('a search result that matched on its site name shows a distinct site chip', async () => {
-  // The bookmark's title/url don't contain "wired" — only its generated
-  // site_name does. Before B1 the card never rendered site_name, so this
-  // matched result looked like a buggy/random hit. In search mode it now shows
-  // a site chip explaining the match.
+test('a card without a preview image shows the site label instead of the raw URL', async () => {
+  // STASH-39: whether or not a card has a preview-image ribbon, it should
+  // consistently show a clean site name/hostname rather than the raw URL.
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-0000000000a1',
@@ -1783,29 +1781,149 @@ test('a search result that matched on its site name shows a distinct site chip',
       url_hash: 'https://example.com/article/12345',
       site_name: 'WIRED',
     }),
-    makeStoredBookmark({
-      id: '7e64cf1e-0000-4000-8000-0000000000a2',
-      title: 'Unrelated note',
-      url: 'https://other.example/post',
-      url_hash: 'https://other.example/post',
-      site_name: 'Other Blog',
-    }),
   ]);
 
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('The future of work')).toBeTruthy());
 
-  // No site chip outside search mode (it would clutter the normal Inbox).
-  expect(screen.queryByTestId('inbox-card-site')).toBeNull();
+  expect(screen.getByText('WIRED')).toBeTruthy();
+  expect(screen.queryByText('https://example.com/article/12345')).toBeNull();
+});
+
+test('a card without a preview image or site_name falls back to a parsed hostname', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a2',
+      title: 'Unrelated note',
+      url: 'https://www.other.example/post',
+      url_hash: 'https://www.other.example/post',
+      site_name: null,
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
+
+  expect(screen.getByText('other.example')).toBeTruthy();
+  expect(screen.queryByText('https://www.other.example/post')).toBeNull();
+});
+
+test('a card with a preview image still shows the ribbon site label unchanged', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a3',
+      title: 'Ribbon regression check',
+      url: 'https://example.com/article/98765',
+      url_hash: 'https://example.com/article/98765',
+      site_name: 'WIRED',
+      preview_image_url: 'https://example.com/preview.png',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-card-preview')).toBeTruthy());
+
+  // "WIRED" appears exactly once, on the image ribbon — repeating it in a
+  // plain-text caption underneath would be redundant since the ribbon
+  // already carries the site name.
+  expect(screen.getByText('WIRED')).toBeTruthy();
+});
+
+test('list view rows show the site label instead of the raw URL', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a4',
+      title: 'List row site label',
+      url: 'https://www.example.com/article',
+      url_hash: 'https://www.example.com/article',
+      site_name: null,
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('List row site label')).toBeTruthy());
+  await fireEvent.press(screen.getByTestId('inbox-view-list'));
+  await waitFor(() => expect(screen.getByTestId('inbox-list-title')).toBeTruthy());
+
+  expect(screen.getByText('example.com')).toBeTruthy();
+  expect(screen.queryByText('https://www.example.com/article')).toBeNull();
+});
+
+test('a search match that lives only in the URL path adds a second line so the label and the highlight both stay visible', async () => {
+  // Neither the title nor the (absent) site_name contains "98765" — only the
+  // URL's path does. filterBookmarks still includes this result, so a second
+  // line must show the raw URL alongside the persistent site label (not
+  // instead of it — the label stays visible per STASH-39).
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a5',
+      title: 'Unrelated note',
+      url: 'https://example.com/article/98765',
+      url_hash: 'https://example.com/article/98765',
+      site_name: null,
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
 
   await fireEvent.press(screen.getByTestId('inbox-search-open'));
-  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'wired');
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), '98765');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
-  // The matched result surfaces its site name; the chip carries the generated
-  // site value, kept visually distinct from user-authored chips.
-  expect(screen.getByTestId('inbox-card-site')).toBeTruthy();
-  expect(screen.getByText('🌐 WIRED')).toBeTruthy();
+  expect(screen.getByText('example.com')).toBeTruthy();
+  expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
+});
+
+test('a multi-term search where the label covers one term but not the other adds the URL as a second line', async () => {
+  // "example" matches the site label ("example.com"), but "98765" only
+  // matches the URL path. filterBookmarks ANDs both terms, so showing just
+  // the label (which happens to satisfy "example") would silently hide the
+  // "98765" match — a second line carrying the raw URL must appear too.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a6',
+      title: 'Unrelated note',
+      url: 'https://example.com/article/98765',
+      url_hash: 'https://example.com/article/98765',
+      site_name: null,
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'example 98765');
+
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
+  expect(screen.getByText('example.com')).toBeTruthy();
+  expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
+});
+
+test('a query matching both site_name and a URL-only term keeps both matches visible', async () => {
+  // "wired" matches site_name ("WIRED"), while "98765" only matches the URL
+  // path. Neither field's match subsumes the other — swapping the label for
+  // the URL (or vice versa) would silently drop one match. Both must render.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a7',
+      title: 'Unrelated note',
+      url: 'https://example.com/article/98765',
+      url_hash: 'https://example.com/article/98765',
+      site_name: 'WIRED',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Unrelated note')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'wired 98765');
+
+  await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
+  expect(screen.getByText('WIRED')).toBeTruthy();
+  expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
 });
 
 test('a 4th+ tag that matched the query is promoted into the shown tag chips', async () => {
