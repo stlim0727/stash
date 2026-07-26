@@ -173,24 +173,27 @@ jobs:
 
           # Blank dispatch, smart-compute: a rerun of a failed job re-executes
           # this step too. If THIS run already published under a cached
-          # label — the dev release's target_commitish (set to github.sha at
-          # publish time) equals our own sha — reuse it rather than
-          # recomputing, which would read the now-advanced live marker and
-          # draw a second rc for the same commit. But concurrency only
-          # serializes overlapping runs, not a rerun of one that already
-          # finished: if a *different*, later run published in the meantime
-          # (dev's target_commitish points elsewhere), the cache is stale and
-          # that label is already claimed — fall through and recompute fresh
-          # from live state instead of colliding with it.
+          # label, reuse it rather than recomputing, which would read the
+          # now-advanced live marker and draw a second rc for the same
+          # commit. But concurrency only serializes overlapping runs, not a
+          # rerun of one that already finished: if a *different*, later run
+          # published in the meantime, the cache is stale and that label is
+          # already claimed — fall through and recompute fresh instead of
+          # colliding with it. Identify "did THIS run publish it" via the
+          # `dev` git tag's actual commit, not the Release API object's
+          # `target_commitish` — per .codex/skills/rc-build/SKILL.md, that
+          # field is unreliable once the tag has been force-moved (it can
+          # stay stale/branch-shaped rather than tracking the tag).
           if [ -f /tmp/apk-version.txt ]; then
             CACHED=$(cat /tmp/apk-version.txt)
-            DEV_SHA=$(gh api "repos/${{ github.repository }}/releases/tags/dev" --jq '.target_commitish // ""' 2>/dev/null || echo "")
-            if [ "$DEV_SHA" = "$GITHUB_SHA" ]; then
+            git fetch origin '+refs/tags/dev:refs/tags/dev' 2>/tmp/git-dev-err.log || true
+            DEV_TAG_SHA=$(git rev-parse refs/tags/dev 2>/dev/null || echo "")
+            if [ "$DEV_TAG_SHA" = "$GITHUB_SHA" ]; then
               echo "Reusing version allocated and already published by this run: $CACHED"
               echo "version=$CACHED" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "Cached allocation ($CACHED) not yet published by this run (dev is at ${DEV_SHA:-<none>}) — recomputing from live state."
+            echo "Cached allocation ($CACHED) not yet published by this run (dev tag is at ${DEV_TAG_SHA:-<none>}) — recomputing from live state."
           fi
 
           APP_VERSION=$(node -p "require('./apps/mobile/app.json').expo.version")
@@ -491,36 +494,46 @@ jobs:
           # markdown): carries the last actual rc build's label forward across
           # a non-rc hyphenated test dispatch (e.g. v1.2.3-test1), so
           # "Determine build version" can always find the true last rc even
-          # when the most recent dev build itself wasn't one. Only advances
-          # when THIS build's own label is itself an rc *for app.json's
-          # current cycle* — not just any rc-shaped label. An explicit RC for
-          # a different/older line (e.g. `v1.2.2-rc9` dispatched while the
-          # marker is tracking `1.2.3`) must NOT clobber the current cycle's
-          # marker with an older base; anything else re-emits whatever marker
-          # was already there unchanged.
+          # when the most recent dev build itself wasn't one. Always read the
+          # existing marker first — needed both to preserve it when this
+          # build isn't a legitimate advance, and to guard against THIS
+          # build's own label moving the tracked state *backward*: an
+          # explicit RC for a different/older line (`v1.2.2-rc9` while the
+          # marker tracks `1.2.3`), or a same-version but lower/duplicate rc
+          # number (an explicit rebuild or typo of an already-superseded rc,
+          # e.g. `v1.2.3-rc5` after the marker already reached `v1.2.3-rc19`)
+          # must NOT clobber a higher, already-issued number.
           if [ "${{ steps.meta.outputs.tag }}" = "dev" ]; then
             THIS_LABEL="${{ steps.meta.outputs.label }}"
             APP_VERSION=$(node -p "require('./apps/mobile/app.json').expo.version")
-            if [[ "$THIS_LABEL" == "v${APP_VERSION}-rc"[0-9]* ]]; then
-              RC_MARKER="$THIS_LABEL"
+
+            # This build is about to overwrite the dev release, so a
+            # swallowed lookup failure here would permanently drop the
+            # marker (not just skip a read like in "Determine build
+            # version"). A 404 is a genuinely markerless dev release (fine,
+            # nothing to carry forward); anything else must fail loudly
+            # rather than silently publish over the last known rc state.
+            if OLD_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/dev" 2>/tmp/gh-dev-err.log); then
+              OLD_BODY=$(echo "$OLD_JSON" | jq -r '.body // ""')
+            elif grep -q '404' /tmp/gh-dev-err.log; then
+              OLD_BODY=""
             else
-              # This build is about to overwrite the dev release, so a
-              # swallowed lookup failure here would permanently drop the
-              # marker (not just skip a read like in "Determine build
-              # version"). A 404 is a genuinely markerless dev release (fine,
-              # nothing to carry forward); anything else must fail loudly
-              # rather than silently publish over the last known rc state.
-              if OLD_JSON=$(gh api "repos/${{ github.repository }}/releases/tags/dev" 2>/tmp/gh-dev-err.log); then
-                OLD_BODY=$(echo "$OLD_JSON" | jq -r '.body // ""')
-              elif grep -q '404' /tmp/gh-dev-err.log; then
-                OLD_BODY=""
-              else
-                echo "::error::Failed to look up the existing dev release before publishing over it (not a 404 — refusing to silently drop the rc-state marker):"
-                cat /tmp/gh-dev-err.log
-                exit 1
-              fi
-              RC_MARKER=$(echo "$OLD_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+              echo "::error::Failed to look up the existing dev release before publishing over it (not a 404 — refusing to silently drop the rc-state marker):"
+              cat /tmp/gh-dev-err.log
+              exit 1
             fi
+            OLD_MARKER=$(echo "$OLD_BODY" | grep -oE 'rc-state: v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | head -1 | sed 's/rc-state: //' || true)
+
+            RC_MARKER="$OLD_MARKER"
+            if [[ "$THIS_LABEL" == "v${APP_VERSION}-rc"[0-9]* ]]; then
+              THIS_RC="${THIS_LABEL##*-rc}"
+              OLD_BASE="${OLD_MARKER%-rc*}"
+              OLD_RC="${OLD_MARKER##*-rc}"
+              if [ -z "$OLD_MARKER" ] || [ "${OLD_BASE#v}" != "$APP_VERSION" ] || [ "$THIS_RC" -gt "$OLD_RC" ]; then
+                RC_MARKER="$THIS_LABEL"
+              fi
+            fi
+
             if [ -n "$RC_MARKER" ]; then
               echo "<!-- rc-state: $RC_MARKER -->" >> "$BODY"
             fi
