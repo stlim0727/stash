@@ -482,6 +482,7 @@ export const en = {
   'detail.aiPreviewFailed': 'AI suggestions are unavailable because the preview could not be loaded.',
   'detail.previewFailedNote': 'Failed to load preview and metadata.',
   'detail.aiPostponed': 'Still working on AI suggestions for this one — we’ll keep trying automatically.',
+  'detail.aiQueued': 'AI suggestions are queued and will arrive automatically — no need to check back.',
   // Degraded mode: the result came from the basic heuristics, not the AI model.
   // Shown as a calm, non-error note so the cause is never hidden (M12); the
   // precise cause is forwarded to monitoring rather than spelled out in full.

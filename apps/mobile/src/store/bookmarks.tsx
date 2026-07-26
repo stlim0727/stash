@@ -246,6 +246,19 @@ interface BookmarksContextValue {
    *  in-flight or never-requested state; clears once a retry succeeds or the
    *  attempt cap is exhausted (see `AI_RETRY_MAX_ATTEMPTS`). */
   isAiSuggestionPostponed: (bookmarkId: string) => boolean;
+  /** True if this bookmark's AI-enrichment 429 was CONFIRMED accepted into the
+   *  server-side overflow queue (STASH #578 Phase 2, `pending_ai_enrichment`)
+   *  — the background worker WILL deliver a real result via normal sync, no
+   *  action needed. Independent of `isAiSuggestionPostponed`/
+   *  `hadPriorEnrichmentAttempt`: those describe the LOCAL retry marker, which
+   *  arms unconditionally on every failure (including this same 429) and
+   *  eventually exhausts and clears after `AI_RETRY_MAX_ATTEMPTS`, at which
+   *  point a rate-limited bookmark would otherwise look exactly like one that
+   *  was never enriched even though the server queue entry is still alive.
+   *  This flag never expires on its own — it only clears once a real
+   *  enrichment actually lands (queue delivery via pull, or a later attempt
+   *  succeeding directly) or the bookmark is discarded. */
+  isAiSuggestionServerQueued: (bookmarkId: string) => boolean;
   /** True if a bookmark has EVER recorded a failed AI-enrichment attempt that
    *  hasn't since exhausted its retry cap — independent of whether it's
    *  currently enriching right now. Unlike {@link isAiSuggestionPostponed}
@@ -333,6 +346,18 @@ const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
  *  bookkeeping, parallel to `PENDING_AI_TRIGGER_KEY`: it never touches the
  *  bookmark row, `updated_at`, or the sync queue. */
 const AI_RETRY_STATE_KEY = 'ai_suggestion_retry';
+
+/** Durable key (JSON id array in meta) for bookmarks CONFIRMED accepted into
+ *  the server-side `pending_ai_enrichment` overflow queue after a 429
+ *  (STASH #578 Phase 2) — the background worker WILL deliver a real
+ *  enrichment via normal sync. Presence-only, like `PENDING_AI_TRIGGER_KEY`:
+ *  there's no per-id bookkeeping to track, just membership. Independent of
+ *  `AI_RETRY_STATE_KEY`: that marker arms unconditionally on every failure
+ *  (this 429 included) and self-clears after `AI_RETRY_MAX_ATTEMPTS`; this one
+ *  is only ever set on a CONFIRMED enqueue and only ever clears once a real
+ *  enrichment lands or the bookmark is discarded — see
+ *  `isAiSuggestionServerQueued`. */
+const AI_SERVER_QUEUED_KEY = 'ai_server_queued';
 
 interface AiRetryState {
   /** When the first attempt (of the current, unexhausted streak) failed. */
@@ -648,6 +673,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // in-between frame where the bookkeeping changed but isEnriching hasn't yet.
   const aiRetryState = useRef<Record<string, AiRetryState>>({});
   const [aiRetryIds, setAiRetryIds] = useState<ReadonlySet<string>>(new Set());
+  // Durable per-bookmark "confirmed server-queued" marker (see
+  // AI_SERVER_QUEUED_KEY): the ref is the source of truth, `aiServerQueuedIds`
+  // a reactive mirror — but unlike aiRetryState/aiRetryIds above, the mirror
+  // is refreshed immediately inside markAiServerQueued/clearAiServerQueued
+  // rather than deferred to a caller's settle handler, since this marker is
+  // presence-only (no per-id record to keep in lockstep with an isEnriching
+  // flip) and is set/cleared from places with no equivalent "same frame" flip
+  // to align with.
+  const aiServerQueued = useRef<Set<string>>(new Set());
+  const [aiServerQueuedIds, setAiServerQueuedIds] = useState<ReadonlySet<string>>(new Set());
   // Reactive mirror of `aiEnriching` so the UI can show an ambient "filling in"
   // placeholder while a request (auto-triggered or manual) is in flight.
   const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(new Set());
@@ -1114,6 +1149,51 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [persistAiRetryState],
   );
 
+  // Mirror the confirmed-server-queued set to durable meta after a ref
+  // mutation (mirrors persistPendingAiTrigger). Swallows failures — nothing
+  // downstream needs to gate on this write landing the way armAiRetry's
+  // caller gates on writeAiRetryState.
+  const persistAiServerQueued = useCallback((): Promise<void> => {
+    const ids = [...aiServerQueued.current];
+    return ensureRepositoryReady()
+      .then(() => repository.setMeta(AI_SERVER_QUEUED_KEY, JSON.stringify(ids)))
+      .catch((error) => logStorageError('ai server-queued', error));
+  }, []);
+
+  // Refresh the reactive mirror of aiServerQueued's members.
+  const syncAiServerQueuedIds = useCallback(() => {
+    setAiServerQueuedIds(new Set(aiServerQueued.current));
+  }, []);
+
+  // Mark a bookmark as CONFIRMED accepted into the server-side overflow
+  // queue. Callers must only invoke this once the enqueue POST itself has
+  // resolved — never eagerly, and never on a rejected or synchronously-thrown
+  // enqueue attempt (those fall back to the generic armAiRetry treatment
+  // alone; see requestAiEnrichment's 429 branch). Fire-and-forget, like the
+  // enqueue call site itself — must never block or throw into that path.
+  const markAiServerQueued = useCallback(
+    (bookmarkId: string) => {
+      aiServerQueued.current.add(bookmarkId);
+      persistAiServerQueued();
+      syncAiServerQueuedIds();
+    },
+    [persistAiServerQueued, syncAiServerQueuedIds],
+  );
+
+  // Clear a bookmark's confirmed-server-queued marker once a real enrichment
+  // actually lands for it, or it's discarded. No-op if absent, mirroring
+  // clearAiRetry's early return.
+  const clearAiServerQueued = useCallback(
+    (bookmarkId: string) => {
+      if (!aiServerQueued.current.delete(bookmarkId)) {
+        return;
+      }
+      persistAiServerQueued();
+      syncAiServerQueuedIds();
+    },
+    [persistAiServerQueued, syncAiServerQueuedIds],
+  );
+
   // Drop this (previous) account's AI-suggestion bookkeeping for the given
   // ids — mirrors dropPendingTagOpsForBookmarks's purpose for tag state.
   // Without this, a real A→real B switch (or logout) leaves A's
@@ -1124,10 +1204,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (ids: readonly string[]) => {
       let retryChanged = false;
       const nextRetry = { ...aiRetryState.current };
+      let serverQueuedChanged = false;
       for (const id of ids) {
         if (id in nextRetry) {
           delete nextRetry[id];
           retryChanged = true;
+        }
+        // The confirmed-server-queued marker is account-scoped bookkeeping
+        // just like aiRetryState/pendingAiTrigger above — drop it too, so a
+        // dropped account's stale queue confirmation can't linger and show a
+        // "queued" note under the next (different) session.
+        if (aiServerQueued.current.delete(id)) {
+          serverQueuedChanged = true;
         }
         pendingAiTrigger.current.delete(id);
         aiTriggerAttempted.current.delete(id);
@@ -1137,9 +1225,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         persistAiRetryState();
         syncAiRetryIds();
       }
+      if (serverQueuedChanged) {
+        persistAiServerQueued();
+        syncAiServerQueuedIds();
+      }
       persistPendingAiTrigger();
     },
-    [persistAiRetryState, syncAiRetryIds, persistPendingAiTrigger],
+    [
+      persistAiRetryState,
+      syncAiRetryIds,
+      persistPendingAiTrigger,
+      persistAiServerQueued,
+      syncAiServerQueuedIds,
+    ],
   );
 
   // Re-key this account's AI-suggestion bookkeeping (aiRetryState,
@@ -1182,6 +1280,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         persistAiRetryState();
         syncAiRetryIds();
       }
+      // Re-key the confirmed-server-queued marker the same way — without
+      // this, a bookmark whose 429 was already confirmed queued would lose
+      // that confirmation the moment an id swap (rehome, create-upload
+      // remote-id swap, crash-safe reconciliation) parks it under a new id.
+      let serverQueuedChanged = false;
+      for (const [oldId, newId] of idMap) {
+        if (aiServerQueued.current.delete(oldId)) {
+          aiServerQueued.current.add(newId);
+          serverQueuedChanged = true;
+        }
+      }
+      if (serverQueuedChanged) {
+        persistAiServerQueued();
+        syncAiServerQueuedIds();
+      }
       let triggerChanged = false;
       for (const [oldId, newId] of idMap) {
         if (pendingAiTrigger.current.delete(oldId)) {
@@ -1194,7 +1307,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         persistPendingAiTrigger();
       }
     },
-    [persistAiRetryState, syncAiRetryIds, persistPendingAiTrigger],
+    [
+      persistAiRetryState,
+      syncAiRetryIds,
+      persistPendingAiTrigger,
+      persistAiServerQueued,
+      syncAiServerQueuedIds,
+    ],
   );
 
   // Fire-and-forget metadata enrichment. Runs off the save path so capture is
@@ -1335,6 +1454,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedTagOpsRaw,
             storedAiTriggerRaw,
             storedAiRetryRaw,
+            storedAiServerQueuedRaw,
             storedReviewedRaw,
             storedUnseenRaw,
             storedDismissedFoldersRaw,
@@ -1349,6 +1469,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.getMeta(PENDING_TAG_OPS_KEY),
             repository.getMeta(PENDING_AI_TRIGGER_KEY),
             repository.getMeta(AI_RETRY_STATE_KEY),
+            repository.getMeta(AI_SERVER_QUEUED_KEY),
             repository.getMeta(REVIEWED_SUGGESTIONS_KEY),
             repository.getMeta(UNSEEN_SUGGESTIONS_KEY),
             repository.getMeta(DISMISSED_FOLDERS_KEY),
@@ -1373,6 +1494,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // cold-launch retry check below reads this ref).
             aiRetryState.current = parseAiRetryState(storedAiRetryRaw);
             setAiRetryIds(new Set(Object.keys(aiRetryState.current)));
+            // Re-hydrate the confirmed-server-queued set so a bookmark queued
+            // before the app was killed still shows the calm "queued" note
+            // instead of reverting to looking never-asked.
+            aiServerQueued.current = parseIdSet(storedAiServerQueuedRaw);
+            setAiServerQueuedIds(new Set(aiServerQueued.current));
             // Re-hydrate the "unseen AI suggestions" set so a suggestion that
             // landed in a session the user never returned to still drives the
             // Inbox banner on this launch.
@@ -2016,8 +2142,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // write fresh AI suggestions for content the user just discarded).
       clearAiRetry(id);
       syncAiRetryIds();
+      // A trashed bookmark has nothing left to wait for either — clear a
+      // confirmed-server-queue marker the same way.
+      clearAiServerQueued(id);
     },
-    [applyBookmarkUpdate, clearAiRetry, syncAiRetryIds],
+    [applyBookmarkUpdate, clearAiRetry, syncAiRetryIds, clearAiServerQueued],
   );
 
   const restoreBookmark = useCallback(
@@ -2170,6 +2299,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // doomed requests against a deleted bookmark.
       clearAiRetry(id);
       syncAiRetryIds();
+      // Same rationale as above: a permanently-gone row has nothing left to
+      // wait for from the server-side overflow queue either.
+      clearAiServerQueued(id);
       if (hasRemoteIdentity(id)) {
         // The row exists remotely: replace any queued work with a durable
         // delete mutation so the removal reaches Supabase even after restart.
@@ -2185,7 +2317,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .then(() => Promise.all([repository.deleteBookmark(id), repository.removeQueueEntry(id)]))
         .catch((error) => logStorageError('delete bookmark', error));
     },
-    [enqueueMutation, clearAiRetry, syncAiRetryIds],
+    [enqueueMutation, clearAiRetry, syncAiRetryIds, clearAiServerQueued],
   );
 
   const emptyTrash = useCallback(() => {
@@ -2385,6 +2517,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // retry — clear any armed marker from an earlier failed attempt
         // (auto or manual; unified — see armAiRetry below).
         clearAiRetry(bookmarkId);
+        // Covers a later attempt (local retry, manual tap) succeeding
+        // directly rather than via the overflow queue's delivery: this
+        // bookmark no longer needs the "queued, will arrive automatically"
+        // note either, since it just arrived right here.
+        clearAiServerQueued(bookmarkId);
         // STASH #573 auto_accept mode: apply high-confidence tag/folder
         // suggestions with no review step. Runs AFTER the enrichment is
         // durably recorded and retry state is cleared, and in its own
@@ -2449,9 +2586,51 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // an enqueue failure must never change what the caller sees for
           // this 429, and is never retried here.
           if (auth.session) {
+            // Snapshotted now (before the enqueue POST's round trip) so the
+            // .then() below can detect a set-after-clear race: this call's
+            // own aiEnriching guard releases in the `finally` below as soon
+            // as this 429 branch returns, well before this un-awaited
+            // promise settles — so a later call for the SAME bookmark (a
+            // manual retry, which deliberately ignores backoff and fires
+            // immediately) can start and even succeed in the meantime,
+            // landing a real enrichment and calling clearAiServerQueued
+            // (currently a no-op, since nothing is set yet). If this
+            // confirmation then lands afterward and sets the marker
+            // unconditionally, nothing would ever clear it again — the
+            // sync-pull clear only fires for a strictly newer arrival, and
+            // this bookmark is already done. Reference identity, not a
+            // timestamp: `updated_at` is server time and has no reliable
+            // relationship to the client clock at enqueue time, but every
+            // write to `enrichments` (direct success or sync-pull) replaces
+            // the array with fresh objects, so an unchanged reference here
+            // reliably means "nothing arrived for this bookmark meanwhile".
+            const enrichmentBeforeEnqueue = enrichmentsRef.current.find(
+              (item) => item.bookmark_id === bookmarkId,
+            );
             try {
               createSyncApi(auth.session)
                 .enqueuePendingEnrichment(bookmarkId, localeRef.current ?? undefined)
+                .then(() => {
+                  // CONFIRMED: the server durably accepted this bookmark into
+                  // the overflow queue, so the background worker will
+                  // deliver a real result via normal sync. Only set on this
+                  // resolution — never eagerly, and never below in the
+                  // .catch()/synchronous-throw branches, which fall back to
+                  // the generic armAiRetry marker above alone.
+                  //
+                  // But skip it if a real enrichment already landed for this
+                  // bookmark since the enqueue was fired (a faster manual
+                  // retry, or — in principle — an extremely fast worker
+                  // delivery): marking it queued now would strand a "will
+                  // arrive automatically" note on an already-complete
+                  // bookmark forever. See the snapshot comment above.
+                  const enrichmentNow = enrichmentsRef.current.find(
+                    (item) => item.bookmark_id === bookmarkId,
+                  );
+                  if (enrichmentNow === enrichmentBeforeEnqueue) {
+                    markAiServerQueued(bookmarkId);
+                  }
+                })
                 .catch((enqueueError: unknown) => {
                   recordLog(
                     'warn',
@@ -2505,7 +2684,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         syncAiRetryIds();
       }
     },
-    [auth, noteUnseenSuggestions, armAiRetry, clearAiRetry, syncAiRetryIds, clearPendingAiTrigger],
+    [
+      auth,
+      noteUnseenSuggestions,
+      armAiRetry,
+      clearAiRetry,
+      syncAiRetryIds,
+      clearPendingAiTrigger,
+      markAiServerQueued,
+      clearAiServerQueued,
+    ],
   );
   useEffect(() => {
     requestAiEnrichmentRef.current = requestAiEnrichment;
@@ -2544,6 +2732,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const isAiSuggestionPostponed = useCallback(
     (bookmarkId: string): boolean => aiRetryIds.has(bookmarkId) && !enrichingIds.has(bookmarkId),
     [aiRetryIds, enrichingIds],
+  );
+
+  // True if this bookmark's AI-enrichment 429 was confirmed accepted into the
+  // server-side overflow queue and hasn't since resolved (see
+  // AI_SERVER_QUEUED_KEY). Reads the reactive mirror, not the ref.
+  const isAiSuggestionServerQueued = useCallback(
+    (bookmarkId: string): boolean => aiServerQueuedIds.has(bookmarkId),
+    [aiServerQueuedIds],
   );
 
   // Accept AI-suggested tags: ensure + link them with `source: 'ai'` so their
@@ -3076,6 +3272,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             if (isNewOrNewer && enrichment.bookmark_id in aiRetryState.current) {
               clearAiRetry(enrichment.bookmark_id);
               anyRetryCleared = true;
+            }
+            // Parallel check for the confirmed-server-queued marker (see
+            // AI_SERVER_QUEUED_KEY) — this is the PRIMARY way it's expected
+            // to clear in practice: the background overflow worker's
+            // delivered result lands right here via ordinary sync. Same
+            // watermark-overlap gate as the retry-marker check above, and for
+            // the same reason: a stale re-delivery of an already-known,
+            // unchanged row must not be mistaken for a fresh arrival.
+            if (isNewOrNewer && aiServerQueued.current.has(enrichment.bookmark_id)) {
+              clearAiServerQueued(enrichment.bookmark_id);
             }
           }
           if (anyRetryCleared) {
@@ -3658,6 +3864,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isEnriching,
       isManuallyEnriching,
       isAiSuggestionPostponed,
+      isAiSuggestionServerQueued,
       hadPriorEnrichmentAttempt,
       acceptSuggestedTags,
       getReviewedSuggestions,
@@ -3708,6 +3915,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isEnriching,
       isManuallyEnriching,
       isAiSuggestionPostponed,
+      isAiSuggestionServerQueued,
       hadPriorEnrichmentAttempt,
       acceptSuggestedTags,
       getReviewedSuggestions,

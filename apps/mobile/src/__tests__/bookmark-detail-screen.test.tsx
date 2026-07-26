@@ -657,6 +657,27 @@ test('a bookmark with no enrichment yet but an armed retry marker shows the calm
   expect(screen.getByText('Suggest with AI')).toBeTruthy();
 });
 
+test('a bookmark confirmed queued in the server-side overflow queue shows the queued note, not the generic postponed one', async () => {
+  mockRouteId = SYNCED_ID;
+  // armAiRetry fires unconditionally on every failure, including the 429 that
+  // led to this queue confirmation, so both durable markers are armed at
+  // once here — mirroring what requestAiEnrichment's 429 branch actually
+  // leaves behind. The server-queued marker must win.
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark' })]);
+  const now = new Date().toISOString();
+  fakeRepo.__setMeta(
+    'ai_suggestion_retry',
+    JSON.stringify({ [SYNCED_ID]: { firstAttemptAt: now, lastAttemptAt: now, attemptCount: 1 } }),
+  );
+  fakeRepo.__setMeta('ai_server_queued', JSON.stringify([SYNCED_ID]));
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('A synced bookmark')).toBeTruthy());
+
+  expect(screen.getByText(/queued and will arrive automatically/)).toBeTruthy();
+  expect(screen.queryByText(/Still working on AI suggestions/)).toBeNull();
+});
+
 test('a genuine in-flight automatic retry through the real store keeps the skeleton suppressed', async () => {
   // Unlike bookmark-detail-ai-retry-ui.test.tsx (which mocks useBookmarks
   // wholesale) and the static "postponed, not in-flight" case above, this
