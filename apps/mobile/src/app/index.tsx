@@ -3070,6 +3070,7 @@ export default function InboxScreen() {
                   // left of the pill is tappable too, not just dead space.
                   <Pressable
                     accessible={false}
+                    tabIndex={-1}
                     onPress={openDetail}
                     onLongPress={() => setMenuItem(item)}
                     style={styles.cardUrlRowTop}
@@ -3107,6 +3108,7 @@ export default function InboxScreen() {
                         the "Open link" label. */}
                     <Pressable
                       accessible={false}
+                      tabIndex={-1}
                       onPress={item.url ? openLink : openDetail}
                       onLongPress={() => setMenuItem(item)}
                       hitSlop={6}
