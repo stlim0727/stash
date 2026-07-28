@@ -24,6 +24,14 @@ on:
         required: true
         default: false
 
+# The dedup check (search GitHub, then create) isn't atomic, so two runs
+# overlapping — a manual dispatch landing mid-schedule, or two dispatches back
+# to back — could both pass the "not found" check for the same issue before
+# either creates it and file a duplicate. Queue runs instead of racing them.
+concurrency:
+  group: sentry-github-sync
+  cancel-in-progress: false
+
 permissions:
   issues: write
   contents: read

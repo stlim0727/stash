@@ -10,6 +10,13 @@ import path from 'node:path';
 
 const SENTRY_API_BASE = 'https://sentry.io/api/0';
 const GITHUB_API_BASE = 'https://api.github.com';
+const DEFAULT_SENTRY_ORG = 'self-463';
+const DEFAULT_SENTRY_PROJECT = 'stash';
+// Safety bound on how many unresolved Sentry issues a single run will page
+// through looking for untracked ones — independent of --limit (which caps how
+// many new GitHub issues get *created* per run) so a large backlog doesn't
+// starve older issues that fall past the first page.
+const MAX_SCAN = 500;
 
 function readDotEnv(file) {
   if (!file || !fs.existsSync(file)) return {};
@@ -40,9 +47,16 @@ function loadConfig(args) {
   return {
     sentryToken:
       process.env.SENTRY_AUTH_TOKEN || cwdEnv.SENTRY_AUTH_TOKEN || pointerEnv.SENTRY_AUTH_TOKEN,
-    sentryOrg: process.env.SENTRY_ORG || cwdEnv.SENTRY_ORG || pointerEnv.SENTRY_ORG || null,
+    // Default to the Stash Sentry scope so a manual run without SENTRY_ORG/
+    // SENTRY_PROJECT set can't enumerate every org a broader token can see
+    // and file unrelated issues into this repo.
+    sentryOrg:
+      process.env.SENTRY_ORG || cwdEnv.SENTRY_ORG || pointerEnv.SENTRY_ORG || DEFAULT_SENTRY_ORG,
     sentryProject:
-      process.env.SENTRY_PROJECT || cwdEnv.SENTRY_PROJECT || pointerEnv.SENTRY_PROJECT || null,
+      process.env.SENTRY_PROJECT ||
+      cwdEnv.SENTRY_PROJECT ||
+      pointerEnv.SENTRY_PROJECT ||
+      DEFAULT_SENTRY_PROJECT,
     githubToken: process.env.GITHUB_TOKEN || cwdEnv.GITHUB_TOKEN,
     githubOwner: owner,
     githubRepo: name,
@@ -73,13 +87,16 @@ function printUsage() {
   pnpm sentry:sync-github-issues --dry-run
   pnpm sentry:sync-github-issues --limit 5 --query "is:unresolved level:fatal"
 
-Creates a GitHub issue for each unresolved Sentry issue (newest first, up to
---limit) that doesn't already have one — matched by "STASH-N" in the GitHub
-issue title. Safe to re-run on a schedule: already-migrated issues are skipped.
+Pages through unresolved Sentry issues (newest first, up to ${MAX_SCAN}) and
+creates a GitHub issue for each one that doesn't already have one — matched by
+"STASH-N" in the GitHub issue title — stopping once --limit (default 20) new
+issues have been created in this run; any left over are picked up next run.
+Safe to re-run on a schedule: already-migrated issues are skipped.
 
 Environment:
-  SENTRY_AUTH_TOKEN, optional SENTRY_ORG/SENTRY_PROJECT — from the shell,
-  .env.local, or the file pointed to by SENTRY_ENV_FILE (see sentry-issue.mjs).
+  SENTRY_AUTH_TOKEN — from the shell, .env.local, or the file pointed to by
+  SENTRY_ENV_FILE (see sentry-issue.mjs).
+  SENTRY_ORG/SENTRY_PROJECT — default to '${DEFAULT_SENTRY_ORG}'/'${DEFAULT_SENTRY_PROJECT}'.
   GITHUB_TOKEN — a token with 'issues: write' on the target repo.
   GITHUB_REPOSITORY — "owner/repo" (set automatically in GitHub Actions),
   or pass --repo owner/repo.`);
@@ -91,27 +108,47 @@ async function sentryGet(url, token) {
   if (!response.ok) {
     throw new Error(`Sentry ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
   }
-  return text ? JSON.parse(text) : null;
+  return { data: text ? JSON.parse(text) : null, linkHeader: response.headers.get('link') };
 }
 
-async function searchSentryIssues(config, query, limit) {
-  const orgs = config.sentryOrg ? [config.sentryOrg] : (await sentryGet(`${SENTRY_API_BASE}/organizations/`, config.sentryToken)).map((o) => o.slug);
-  const issues = [];
-  for (const org of orgs) {
-    const url = new URL(`${SENTRY_API_BASE}/organizations/${org}/issues/`);
-    url.searchParams.set('sort', 'date');
-    url.searchParams.set('limit', String(limit));
-    url.searchParams.set('query', query);
-    if (config.sentryProject) url.searchParams.set('project', config.sentryProject);
-    const found = await sentryGet(url.toString(), config.sentryToken);
-    for (const issue of found) issues.push({ org, ...issue });
+// Sentry paginates with a GitHub-style Link header, e.g.:
+//   <url>; rel="previous"; results="false"; cursor="...", <url>; rel="next"; results="true"; cursor="..."
+// `results="true"` is the actual "is there more data" signal — a `rel="next"`
+// link is always present even on the last page, just with results="false".
+function nextPageUrl(linkHeader) {
+  if (!linkHeader) return null;
+  for (const part of linkHeader.split(',')) {
+    const urlMatch = part.match(/<([^>]+)>/);
+    if (!urlMatch) continue;
+    if (/rel="next"/.test(part) && /results="true"/.test(part)) return urlMatch[1];
   }
-  issues.sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
-  return issues.slice(0, limit);
+  return null;
+}
+
+// Pages through unresolved Sentry issues (newest first) up to MAX_SCAN, so a
+// large backlog is fully visible to the dedup pass instead of only its first
+// page — the number of GitHub issues actually *created* is throttled
+// separately by --limit in run().
+async function searchSentryIssues(config, query) {
+  const url = new URL(`${SENTRY_API_BASE}/organizations/${config.sentryOrg}/issues/`);
+  url.searchParams.set('sort', 'date');
+  url.searchParams.set('limit', '100');
+  url.searchParams.set('query', query);
+  if (config.sentryProject) url.searchParams.set('project', config.sentryProject);
+
+  const issues = [];
+  let next = url.toString();
+  while (next && issues.length < MAX_SCAN) {
+    const { data, linkHeader } = await sentryGet(next, config.sentryToken);
+    for (const issue of data) issues.push(issue);
+    next = nextPageUrl(linkHeader);
+  }
+  return issues.slice(0, MAX_SCAN);
 }
 
 async function latestSentryEvent(config, issue) {
-  return sentryGet(`${SENTRY_API_BASE}/issues/${issue.id}/events/latest/`, config.sentryToken);
+  const { data } = await sentryGet(`${SENTRY_API_BASE}/issues/${issue.id}/events/latest/`, config.sentryToken);
+  return data;
 }
 
 function eventTag(event, key) {
@@ -181,12 +218,16 @@ async function run() {
     throw new Error('GITHUB_REPOSITORY (owner/repo) is required, or pass --repo owner/repo.');
   }
 
-  const issues = await searchSentryIssues(config, args.query, args.limit);
-  console.log(`Found ${issues.length} Sentry issue(s) matching "${args.query}".`);
+  const issues = await searchSentryIssues(config, args.query);
+  console.log(`Scanned ${issues.length} Sentry issue(s) matching "${args.query}".`);
 
   let created = 0;
   let skipped = 0;
   for (const issue of issues) {
+    if (created >= args.limit) {
+      console.log(`Reached --limit ${args.limit}; remaining issues will be picked up next run.`);
+      break;
+    }
     if (!issue.shortId) continue;
     const existing = await findExistingGithubIssue(config, issue.shortId);
     if (existing) {
@@ -198,6 +239,7 @@ async function run() {
     const title = `${issue.shortId}: ${issue.title}`.slice(0, 250);
     if (args.dryRun) {
       console.log(`would create: ${title}`);
+      created += 1;
       continue;
     }
 
