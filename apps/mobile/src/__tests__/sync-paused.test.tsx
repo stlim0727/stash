@@ -324,3 +324,39 @@ test('resetLibrary succeeds even while a paused syncNow call is mid-check', asyn
     await syncPromise;
   });
 });
+
+test('import while the startup cloud pull is still in flight is refused (Sentry STASH-3K/3M: fresh device, non-empty cloud account)', async () => {
+  // The realistic trigger for the reported "561 -> 1122" doubling: a fresh
+  // install (or post-reset re-signin) has an EMPTY local cache but a
+  // non-empty cloud account. isLoading clears almost immediately (nothing to
+  // read locally), but the startup pull that should re-download the existing
+  // library is still in flight — importing in that window can't see the
+  // account's real bookmarks and durably re-creates all of them.
+  fakeRepo.__reset([]);
+  let releasePull: () => void = () => {};
+  const pullGate = new Promise<void>((resolve) => {
+    releasePull = resolve;
+  });
+  apiMock.__listBookmarksUpdatedSinceMock.mockImplementation(async () => {
+    await pullGate;
+    return [];
+  });
+
+  const { result } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  // The startup pull is now in flight, blocked on the gate.
+  await waitFor(() => expect(result.current.isSyncing).toBe(true));
+
+  let summary: ReturnType<typeof result.current.importBookmarks> | null = null;
+  await act(async () => {
+    summary = result.current.importBookmarks([
+      { url: 'https://example.com/already-in-the-cloud', title: null, notes: null, tags: [], collection: null },
+    ]);
+  });
+  expect(summary).toEqual({ imported: 0, duplicates: 0, skipped: 0, notReady: true });
+  expect(fakeRepo.__queue()).toHaveLength(0);
+  expect(fakeRepo.__bookmarks()).toHaveLength(0);
+
+  releasePull();
+  await waitFor(() => expect(result.current.isSyncing).toBe(false));
+});

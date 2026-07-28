@@ -161,6 +161,14 @@ export interface ImportSummary {
   duplicates: number;
   /** Items skipped for lacking a usable URL (e.g. text-only saves). */
   skipped: number;
+  /**
+   * Set when nothing was processed because the library hasn't finished its
+   * initial load/sync yet (Sentry STASH-3K/3M): dedup reads the in-memory
+   * bookmark list, which is incomplete until then, so every item — including
+   * ones already in the (not-yet-loaded) library — would durably re-create as
+   * a fresh duplicate. The caller should ask the user to retry shortly.
+   */
+  notReady?: boolean;
 }
 
 interface BookmarksContextValue {
@@ -2106,13 +2114,43 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // listing the same URL twice doesn't create duplicates.
   const importBookmarks = useCallback(
     (items: ImportItem[]): ImportSummary => {
+      // Sentry STASH-3K/3M, confirmed by reproduction: dedup below only ever
+      // sees `bookmarksRef.current`, which is incomplete while the initial
+      // local load hasn't landed (bookmarksRef.current still null) or while
+      // the account's first cloud pull is still bringing down previously-
+      // synced rows (isSyncing true covers this window too, since the pull-
+      // on-first-ready effect fires essentially immediately after load).
+      // Importing during either window can't recognize already-existing
+      // rows and durably re-creates every one of them as a fresh duplicate —
+      // this is the exact "561 -> 1122" doubling reported twice. Refuse
+      // outright rather than risk it; the caller asks the user to retry.
+      if (bookmarksRef.current === null || isSyncing) {
+        recordLog(
+          'warn',
+          `import: refused (not ready) items=${items.length} loaded=${bookmarksRef.current !== null} isSyncing=${isSyncing}`,
+        );
+        return { imported: 0, duplicates: 0, skipped: 0, notReady: true };
+      }
       const now = new Date().toISOString();
       // Latest committed rows (the ref), so an import right after a save sees it.
+      const activeLocalBookmarks = (bookmarksRef.current ?? loadedBookmarks).filter(
+        (bookmark) => isActiveBookmark(bookmark),
+      );
       const seen = new Set(
-        (bookmarksRef.current ?? loadedBookmarks)
-          .filter((bookmark) => isActiveBookmark(bookmark))
+        activeLocalBookmarks
           .map((bookmark) => currentDedupeKey(bookmark))
           .filter((hash): hash is string => hash !== null),
+      );
+      // Sentry STASH-3K/3M: a bulk import has repeatedly doubled a user's
+      // library (their local total exactly 2x the cloud count) with no
+      // evidence of why — this and the summary log below are the
+      // instrumentation needed to tell apart "dedupe ran against a near-empty
+      // snapshot" (activeLocal/seenKeys far below the real library size) from
+      // "dedupe saw everything but let duplicates through anyway" (seenKeys
+      // matches the library size but `duplicates` is still ~0 on a re-import).
+      recordLog(
+        'info',
+        `import: starting items=${items.length} activeLocal=${activeLocalBookmarks.length} seenKeys=${seen.size}`,
       );
       const newBookmarks: Bookmark[] = [];
       const newEntries: LocalPendingBookmark[] = [];
@@ -2242,9 +2280,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           });
       }
 
+      recordLog(
+        'info',
+        `import: finished items=${items.length} imported=${imported} duplicates=${duplicates} skipped=${skipped}`,
+      );
       return { imported, duplicates, skipped };
     },
-    [loadedBookmarks, enrichInBackground],
+    [loadedBookmarks, enrichInBackground, isSyncing],
   );
 
 
@@ -3258,6 +3300,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
     // Upload-then-pull: even with nothing to upload, the pull still runs.
     const syncable = queue.filter(isSyncable);
+    // Sentry STASH-3K/3M: pairs with the import-side logging above. A bulk
+    // import that already shows up here with a suspiciously large create
+    // count (e.g. matching a prior "561 -> 1122" report) confirms the
+    // duplication happened before upload, not during it; a normal count here
+    // despite a later doubled server-side total would point at the upload
+    // path instead. Gated on size so an everyday small sync doesn't spam it.
+    const pendingCreateCount = syncable.filter((entry) => entry.operation === 'create').length;
+    if (pendingCreateCount > 10) {
+      recordLog(
+        'info',
+        `sync: uploading ${pendingCreateCount} pending create(s) (queue total ${queue.length})`,
+      );
+    }
 
     syncInFlight.current = true;
     setIsSyncing(true);

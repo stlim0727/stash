@@ -327,6 +327,8 @@ export const ko: Catalog = {
   'settings.export.savedBody': '선택한 폴더에 {name} 파일을 저장했습니다.',
   'settings.import.nothingTitle': '가져올 항목 없음',
   'settings.import.nothingBody': '{name}에서 북마크를 찾지 못했습니다.',
+  'settings.import.notReadyTitle': '라이브러리 로딩 중',
+  'settings.import.notReadyBody': '라이브러리를 아직 불러오거나 동기화하는 중이에요. 잠시 후 다시 가져오기를 시도해 주세요.',
   'settings.import.added': { other: '북마크 {count}개를 추가했습니다.' },
   'settings.import.duplicates': '{count}개는 이미 라이브러리에 있습니다.',
   'settings.import.skipped': '{count}개를 건너뛰었습니다 (웹 주소 없음).',

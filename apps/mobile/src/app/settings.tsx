@@ -316,6 +316,10 @@ export default function SettingsScreen() {
       const items = parseImport(kind, picked.text);
       const summary = importBookmarks(items);
 
+      if (summary.notReady) {
+        Alert.alert(t('settings.import.notReadyTitle'), t('settings.import.notReadyBody'));
+        return;
+      }
       if (summary.imported === 0 && summary.duplicates === 0 && summary.skipped === 0) {
         Alert.alert(t('settings.import.nothingTitle'), t('settings.import.nothingBody', { name: picked.name }));
         return;
