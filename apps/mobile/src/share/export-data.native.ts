@@ -55,11 +55,13 @@ export async function saveExportToDevice(file: ExportFile): Promise<boolean> {
   if (!permission.granted) {
     return false;
   }
-  // Pass the full filename: Android only appends an extension when the name's
-  // extension doesn't match the MIME type, so this never double-appends.
+  // SAF expects the display name *without* the extension — the provider derives
+  // it from the MIME type (see createFileAsync docs in expo-file-system's
+  // legacy FileSystem.ts). Passing the full filename can produce names like
+  // "stash-backup-2026-07-28.json.json".
   const uri = await StorageAccessFramework.createFileAsync(
     permission.directoryUri,
-    file.filename,
+    file.filename.replace(/\.[^.]+$/, ''),
     file.mimeType,
   );
   await StorageAccessFramework.writeAsStringAsync(uri, file.contents);
