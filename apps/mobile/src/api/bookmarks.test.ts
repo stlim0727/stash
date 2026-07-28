@@ -135,3 +135,63 @@ test('createBookmarks bulk-inserts only new rows and returns outputs in input or
   );
   assert.equal(calls.some((call) => call.path.startsWith('/rest/v1/bookmarks?id=in.')), true);
 });
+
+test('createBookmarks dedupes same-url inputs before the bulk POST', async () => {
+  const created = remoteBookmark({
+    id: '00000000-0000-4000-8000-000000000033',
+    url: 'https://example.com/same',
+    url_hash: 'https://example.com/same',
+    client_id: '33333333-3333-4333-8333-333333333333',
+  });
+  let postCount = 0;
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&url_hash=')) {
+        return [];
+      }
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks') {
+        postCount += 1;
+        assert.deepEqual(
+          (options.body as Array<Record<string, unknown>>).map((row) => ({
+            url: row.url,
+            url_hash: row.url_hash,
+            client_id: row.client_id,
+          })),
+          [
+            {
+              url: 'https://example.com/same',
+              url_hash: 'https://example.com/same',
+              client_id: '33333333-3333-4333-8333-333333333333',
+            },
+          ],
+        );
+        return [created];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+
+  const api = new BookmarkApi(SESSION, client as never);
+  const outputs = await api.createBookmarks([
+    {
+      url: 'https://example.com/same',
+      client_id: '33333333-3333-4333-8333-333333333333',
+    },
+    {
+      url: 'https://example.com/same',
+      client_id: '44444444-4444-4444-8444-444444444444',
+    },
+  ]);
+
+  assert.equal(postCount, 1);
+  assert.deepEqual(
+    outputs.map((output) => ({ id: output.bookmark_id, status: output.status })),
+    [
+      { id: '00000000-0000-4000-8000-000000000033', status: 'created' },
+      { id: '00000000-0000-4000-8000-000000000033', status: 'duplicate' },
+    ],
+  );
+});
