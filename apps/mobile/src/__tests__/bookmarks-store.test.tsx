@@ -447,6 +447,45 @@ test('a synced bookmark loaded on startup is not re-enqueued', async () => {
   expect(fakeRepo.__queue()).toHaveLength(0);
 });
 
+test('import: an enrichment finishing early never gets clobbered by the row\'s later durable insert (PR #594 review)', async () => {
+  // The race: importBookmarks persists rows sequentially, but an enrichment
+  // fetch that resolves before its row's insert lands would write the enriched
+  // row first — and the later insertBookmark (INSERT OR REPLACE on native)
+  // would replace it with the stale `metadata_status: 'pending'` snapshot,
+  // stranding the row pending in storage until another startup pass. Instant
+  // enrichment + artificially slow inserts make the pre-fix ordering lose
+  // deterministically.
+  const { result } = await renderStore();
+  mockEnrichBookmark.mockImplementation(async (bookmark) => ({
+    patch: { title: `Enriched ${bookmark.url}`, title_is_derived: false },
+    metadata_status: 'complete',
+  }));
+  const realInsert = fakeRepo.repository.insertBookmark;
+  jest.spyOn(fakeRepo.repository, 'insertBookmark').mockImplementation(async (bookmark) => {
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    return realInsert(bookmark);
+  });
+
+  await act(async () => {
+    result.current.importBookmarks([
+      { url: 'https://example.com/imported-1', title: null, notes: null, tags: [], collection: null },
+      { url: 'https://example.com/imported-2', title: null, notes: null, tags: [], collection: null },
+      { url: 'https://example.com/imported-3', title: null, notes: null, tags: [], collection: null },
+    ]);
+  });
+
+  // Every imported row must end up durably enriched — no row may be left
+  // persisted as 'pending' while React state says 'complete'.
+  await waitFor(() => {
+    const stored = fakeRepo.__bookmarks();
+    expect(stored).toHaveLength(3);
+    for (const row of stored) {
+      expect(row.metadata_status).toBe('complete');
+      expect(row.title).toBe(`Enriched ${row.url}`);
+    }
+  });
+});
+
 test('enriching a synced bookmark queues an update so metadata reaches the cloud', async () => {
   const { makeStoredBookmark } = require('./helpers/fake-repository');
   // A cloud-synced bookmark whose metadata has not been enriched yet.
