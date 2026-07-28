@@ -236,6 +236,26 @@ export const ko: Catalog = {
   'settings.import.label': '데이터 가져오기',
   'settings.import.importing': '가져오는 중…',
   'settings.import.value': '백업이나 다른 앱의 북마크 복원',
+  'settings.reset.label': '라이브러리 초기화',
+  'settings.reset.value': '이 계정의 모든 북마크와 데이터 삭제',
+  'settings.reset.resetting': '초기화 중…',
+  'settings.reset.signInRequired': '활성 세션이 필요합니다',
+  'settings.reset.dialogTitle': '라이브러리를 초기화할까요?',
+  'settings.reset.dialogBody':
+    '이 계정의 모든 북마크, 태그, 컬렉션, AI 데이터가 클라우드와 이 기기에서 영구적으로 삭제됩니다. 나중에 필요할 수 있다면 먼저 백업을 내보내세요. 이 작업은 되돌릴 수 없습니다.',
+  'settings.reset.confirmWord': 'RESET',
+  'settings.reset.typeToConfirm': '{word}를 입력해 확인하세요:',
+  'settings.reset.confirm': '모두 삭제',
+  'settings.reset.successTitle': '라이브러리 초기화 완료',
+  'settings.reset.successBody':
+    '모든 북마크와 데이터가 삭제되었습니다. 백업을 가져오거나 새로 시작할 수 있습니다.',
+  'settings.reset.failedTitle': '초기화 실패',
+  'settings.reset.failedBusy': '동기화가 진행 중입니다. 끝난 뒤 다시 시도해 주세요.',
+  'settings.reset.failedAuth': '활성 세션이 없습니다. 로그인(또는 온라인 상태)한 뒤 다시 시도해 주세요.',
+  'settings.reset.failedRemote':
+    '클라우드 데이터를 삭제하지 못했습니다 — 아무것도 변경되지 않았습니다. 연결을 확인하고 다시 시도해 주세요.',
+  'settings.reset.failedLocal':
+    '클라우드 데이터는 삭제되었지만 이 기기의 데이터 정리에 실패했습니다. 초기화를 한 번 더 실행해 기기 정리를 마무리해 주세요.',
   'settings.dataNote':
     '북마크는 당신의 것입니다. 어떤 브라우저나 북마크 앱에서도 가져올 수 있는 표준 HTML 파일, 스프레드시트용 CSV, 또는 전체 JSON 백업으로 — 오프라인에서도 언제든 내보낼 수 있습니다.',
   'settings.share.label': '공유 후 인박스 열기',

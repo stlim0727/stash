@@ -170,6 +170,17 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.tagData = data;
     this.write(TAG_DATA_KEY, this.tagData);
   }
+
+  async clearAllData(): Promise<void> {
+    this.bookmarks = [];
+    this.queue = [];
+    this.enrichments = [];
+    this.tagData = EMPTY_TAG_DATA;
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+    this.write(QUEUE_KEY, this.queue);
+    this.write(ENRICHMENTS_KEY, this.enrichments);
+    this.write(TAG_DATA_KEY, this.tagData);
+  }
 }
 
 export const repository: BookmarkRepository = new WebBookmarkRepository();

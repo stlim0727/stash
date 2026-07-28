@@ -347,6 +347,29 @@ export const en = {
   'settings.import.label': 'Import data',
   'settings.import.importing': 'Importing…',
   'settings.import.value': 'Restore a backup or another app’s bookmarks',
+  // Library reset (issue #600) — deletes the account's cloud + local library
+  // data. Deliberately worded as "reset library", never "delete account": the
+  // auth user itself is not deleted and sign-out is a separate, safe action.
+  'settings.reset.label': 'Reset library',
+  'settings.reset.value': 'Delete every bookmark & all data in this account',
+  'settings.reset.resetting': 'Resetting…',
+  'settings.reset.signInRequired': 'Needs an active session',
+  'settings.reset.dialogTitle': 'Reset library?',
+  'settings.reset.dialogBody':
+    'This permanently deletes ALL bookmarks, tags, collections, and AI data from this account — in the cloud and on this device. Export a backup first if you might want this data again. This cannot be undone.',
+  'settings.reset.confirmWord': 'RESET',
+  'settings.reset.typeToConfirm': 'Type {word} to confirm:',
+  'settings.reset.confirm': 'Delete everything',
+  'settings.reset.successTitle': 'Library reset',
+  'settings.reset.successBody':
+    'All bookmarks and data were deleted. You can import a backup or start fresh.',
+  'settings.reset.failedTitle': 'Reset failed',
+  'settings.reset.failedBusy': 'A sync is in progress. Wait for it to finish, then try again.',
+  'settings.reset.failedAuth': 'No active session. Sign in (or go online) and try again.',
+  'settings.reset.failedRemote':
+    'Could not delete the cloud data — nothing was changed. Check your connection and try again.',
+  'settings.reset.failedLocal':
+    'The cloud data was deleted, but clearing this device failed. Run the reset again to finish clearing this device.',
   'settings.dataNote':
     'Your bookmarks are yours. Export a standard HTML file any browser or bookmark app can import, a CSV for spreadsheets, or a full JSON backup — anytime, even offline.',
   'settings.share.label': 'Open Inbox after sharing',

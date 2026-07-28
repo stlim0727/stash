@@ -140,6 +140,19 @@ export type AddBookmarkResult =
       reason?: 'too_long';
     };
 
+/** Outcome of a full library reset (issue #600). */
+export type ResetLibraryResult =
+  | { ok: true }
+  /**
+   * - 'busy': a sync (or another reset) is in flight — try again when it settles.
+   * - 'auth': no signed-in session, so there is no cloud library to reset.
+   * - 'remote': the server-side wipe failed; nothing was changed locally.
+   * - 'local': the server wipe SUCCEEDED but clearing this device failed —
+   *   the cloud is already empty, so the explicit recovery is to retry the
+   *   reset (the RPC is idempotent) until the local clear lands.
+   */
+  | { ok: false; reason: 'busy' | 'auth' | 'remote' | 'local'; message?: string };
+
 /** Outcome counts from re-ingesting an imported file. */
 export interface ImportSummary {
   /** Bookmarks newly added to the library. */
@@ -188,6 +201,17 @@ interface BookmarksContextValue {
   restoreBookmark: (id: string) => void;
   /** Permanently delete all trashed bookmarks. */
   emptyTrash: () => void;
+  /**
+   * Destructive, online-only library reset (issue #600): wipe the current
+   * account's cloud data in one server-side RPC, then clear all local library
+   * state (bookmarks, sync queue, tag/collection cache, enrichments, AI
+   * bookkeeping, pull watermark) so stale queued work can never re-upload the
+   * just-deleted data. Requires a signed-in session; local state is only
+   * cleared after the remote wipe succeeds.
+   */
+  resetLibrary: () => Promise<ResetLibraryResult>;
+  /** True while a library reset is running — disable import/sync/reset UI. */
+  isResettingLibrary: boolean;
   /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
   updateBookmarkFields: (id: string, fields: { title?: string; notes?: string }) => void;
   /**
@@ -651,6 +675,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const unseenSuggestionIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isResettingLibrary, setIsResettingLibrary] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
   // The user id the pull effect last fired for. A sign-in (anonymous → real)
@@ -775,6 +800,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // since it's a direct continuation of a user-initiated action, not a burst.
   const aiDispatchQueueRef = useRef<AiEnrichmentBurstQueue>(EMPTY_AI_ENRICHMENT_BURST_QUEUE);
   const aiDispatchInFlight = useRef(false);
+  // Bumped by resetLibrary once the remote wipe succeeds. requestAiEnrichment
+  // snapshots it at entry and discards its settle paths (enrichment write /
+  // retry arming / server-queued confirmation) if the epoch moved meanwhile —
+  // otherwise an in-flight AI request racing a library reset would resurrect
+  // enrichment rows or arm retry bookkeeping for bookmarks the reset just
+  // deleted (PR #604 review).
+  const resetEpoch = useRef(0);
   // Reactive signal for the "N bookmarks summarized & tagged" completion toast.
   // `token` is a monotonic counter (not just `count`) so two consecutive bursts
   // with the same count still re-fire the toast-showing effect — a same-value
@@ -2378,6 +2410,94 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
   }, [deleteBookmark]);
 
+  // Destructive library reset (issue #600). Remote first: one server-side RPC
+  // wipes every cloud row the user owns set-wise (no per-bookmark delete
+  // entries); only once that succeeds is local state cleared — repository,
+  // sync queue, tag/collection cache, enrichments, AI bookkeeping, and the
+  // pull watermark — so stale queued mutations can never re-upload the
+  // just-deleted data. If the local clear fails the cloud is already empty and
+  // the RPC is idempotent, so the explicit recovery is to run the reset again.
+  const resetLibrary = useCallback(async (): Promise<ResetLibraryResult> => {
+    if (syncInFlight.current) {
+      return { ok: false, reason: 'busy' };
+    }
+    if (!auth.session) {
+      return { ok: false, reason: 'auth' };
+    }
+    // Take the sync-in-flight slot so a background sync can't upload or pull
+    // mid-wipe; syncNow calls made meanwhile no-op onto syncPendingRef.
+    syncInFlight.current = true;
+    setIsResettingLibrary(true);
+    try {
+      try {
+        // Refresh a token that expired while the app stayed open, mirroring
+        // syncNow — otherwise the RPC would 401 against a stale bearer.
+        const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+        await createSyncApi(session).resetLibrary();
+      } catch (error) {
+        recordLog('warn', `library reset: remote wipe failed: ${String(error)}`);
+        return {
+          ok: false,
+          reason: 'remote',
+          message: error instanceof Error ? error.message : undefined,
+        };
+      }
+      recordLog('warn', 'library reset: remote wipe succeeded; clearing local state');
+      // Quiesce the AI enrichment pipeline BEFORE clearing storage: drop every
+      // queued (not-yet-dispatched) auto-enrichment so the drain interval can't
+      // fire requests for just-deleted bookmarks, and bump the epoch so any
+      // request already in flight discards its settle paths instead of writing
+      // an enrichment row / arming retry bookkeeping into the cleared state.
+      resetEpoch.current += 1;
+      aiDispatchQueueRef.current = EMPTY_AI_ENRICHMENT_BURST_QUEUE;
+      try {
+        await ensureRepositoryReady();
+        await repository.clearAllData();
+        // Reset the pull watermark so the next sync does a clean full pull of
+        // the now-empty account instead of trusting a stale window.
+        await repository.setMeta(LAST_PULLED_AT_KEY, '');
+      } catch (error) {
+        logStorageError('library reset local clear', error);
+        return { ok: false, reason: 'local' };
+      }
+      // In-memory mirrors last, after the durable writes, so a kill in between
+      // re-reads the already-cleared repository on the next launch. The apply*
+      // helpers also persist their (now empty) meta blobs.
+      deletedIds.current.clear();
+      idAliases.current.clear();
+      aiRetryState.current = {};
+      aiServerQueued.current.clear();
+      pendingAiTrigger.current.clear();
+      aiTriggerAttempted.current.clear();
+      void persistAiRetryState();
+      void persistAiServerQueued();
+      void persistPendingAiTrigger();
+      syncAiRetryIds();
+      syncAiServerQueuedIds();
+      applyUnseenSuggestions(new Set());
+      applyTagOps([]);
+      applyTagData(EMPTY_TAG_DATA);
+      setBookmarks([]);
+      setQueue([]);
+      setEnrichments([]);
+      setLastPulledAt(null);
+      return { ok: true };
+    } finally {
+      syncInFlight.current = false;
+      setIsResettingLibrary(false);
+    }
+  }, [
+    auth,
+    applyTagData,
+    applyTagOps,
+    applyUnseenSuggestions,
+    persistAiRetryState,
+    persistAiServerQueued,
+    persistPendingAiTrigger,
+    syncAiRetryIds,
+    syncAiServerQueuedIds,
+  ]);
+
   // Push queued tag ops to the server when online: ensure tags exist, reconcile
   // the optimistic local tag id to the server one, and drop the op on success.
   // Failures stay queued for the next sync.
@@ -2499,9 +2619,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (!hasRemoteIdentity(bookmarkId)) {
         return 'AI suggestions are available once this bookmark has synced.';
       }
+      // The id may come from a queued dispatch (the stagger drain, a retry
+      // check) that outlived its bookmark — deleted, or wiped by a library
+      // reset. Don't fetch suggestions for a row that no longer exists
+      // locally; report success so stale trigger markers get cleaned up.
+      // (Aliased old ids are local-* and already rejected above.)
+      if (!bookmarksRef.current?.some((item) => item.id === bookmarkId)) {
+        return null;
+      }
       if (aiEnriching.current.has(bookmarkId)) {
         return null;
       }
+      // Library-reset race guard: snapshot the epoch now; every settle path
+      // below re-checks it and discards if a reset completed meanwhile.
+      const epochAtStart = resetEpoch.current;
       aiEnriching.current.add(bookmarkId);
       setEnrichingIds((prev) => new Set(prev).add(bookmarkId));
       if (source === 'manual') {
@@ -2553,6 +2684,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             throw error;
           }
         }
+        // A library reset completed while this request was in flight: the
+        // bookmark (and its cloud row) are gone, so discard the result rather
+        // than resurrect an enrichment for it in the just-cleared state.
+        if (resetEpoch.current !== epochAtStart) {
+          return null;
+        }
         // Newest enrichment for this bookmark wins (getEnrichment also picks newest).
         setEnrichments((current) => [
           enrichment,
@@ -2600,6 +2737,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         return null;
       } catch (error) {
+        // A library reset completed while this request was in flight: the
+        // bookmark is gone, so record nothing — no retry marker, no overflow
+        // enqueue — or the reset's just-emptied bookkeeping gets repopulated.
+        if (resetEpoch.current !== epochAtStart) {
+          return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
+        }
         // Any failure here writes no ai_enrichments row: arm (or re-arm) this
         // bookmark's backoff-scheduled retry marker regardless of source, so a
         // failed manual "Suggest with AI" tap is retried the same as a failed
@@ -2675,6 +2818,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   // delivery): marking it queued now would strand a "will
                   // arrive automatically" note on an already-complete
                   // bookmark forever. See the snapshot comment above.
+                  // Un-awaited, so this can also land AFTER a library reset
+                  // that ran while the enqueue round-tripped — in which case
+                  // the reference-equality check below would pass vacuously
+                  // (both sides undefined once the reset emptied the cache)
+                  // and strand a marker for a deleted bookmark. Same epoch
+                  // guard as the other settle paths.
+                  if (resetEpoch.current !== epochAtStart) {
+                    return;
+                  }
                   const enrichmentNow = enrichmentsRef.current.find(
                     (item) => item.bookmark_id === bookmarkId,
                   );
@@ -4081,6 +4233,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       trashBookmark,
       restoreBookmark,
       emptyTrash,
+      resetLibrary,
+      isResettingLibrary,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,
@@ -4132,6 +4286,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       trashBookmark,
       restoreBookmark,
       emptyTrash,
+      resetLibrary,
+      isResettingLibrary,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,

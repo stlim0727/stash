@@ -81,6 +81,12 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
     replaceTagData: async (data) => {
       tagData = data;
     },
+    clearAllData: async () => {
+      bookmarks = [];
+      queue = [];
+      enrichments = [];
+      tagData = { tags: [], bookmarkTags: [], collections: [] };
+    },
   };
 
   return {

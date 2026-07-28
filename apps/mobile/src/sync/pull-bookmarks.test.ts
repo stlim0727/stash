@@ -94,6 +94,9 @@ function fakeRepository(meta: Record<string, string> = {}) {
     replaceTagData: async (data) => {
       calls.push(`replaceTagData:${data.tags.length}:${data.collections.length}`);
     },
+    clearAllData: async () => {
+      calls.push('clearAllData');
+    },
   };
   return { calls, meta, repository };
 }
