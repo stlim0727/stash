@@ -145,7 +145,6 @@ function createUploadPayload(
 
 export async function syncCreateQueueEntryBatch(
   api: BookmarkApi,
-  repository: BookmarkRepository,
   entries: LocalPendingBookmark[],
   getBookmark: (id: string) => Bookmark | undefined,
 ): Promise<EntrySyncResult[]> {
@@ -177,7 +176,6 @@ export async function syncCreateQueueEntryBatch(
       last_error: null,
       updated_at: now,
     };
-    await repository.updateQueueEntry(syncedEntry);
 
     const localBookmark = getBookmark(entry.local_id);
     if (localBookmark) {
@@ -187,7 +185,6 @@ export async function syncCreateQueueEntryBatch(
         sync_status: 'synced',
         updated_at: now,
       };
-      await repository.replaceBookmark(localBookmark.id, syncedBookmark);
       results.push({
         entry: syncedEntry,
         bookmarkReplacement: { previousId: localBookmark.id, bookmark: syncedBookmark },
