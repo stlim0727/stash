@@ -7,6 +7,7 @@ import {
   isSyncable,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
+  syncCreateQueueEntryBatch,
   syncQueueEntry,
 } from './sync-bookmarks.ts';
 import { rekeyPendingTagOps, type PendingTagOp } from '@/domain/pending-tags';
@@ -104,6 +105,13 @@ function fakeApi(overrides: Partial<Record<keyof BookmarkApi, unknown>> = {}): B
       status: 'created',
       metadata_status: 'pending',
     }),
+    createBookmarks: async () => [
+      {
+        bookmark_id: '00000000-0000-4000-8000-000000000001',
+        status: 'created',
+        metadata_status: 'pending',
+      },
+    ],
     updateBookmark: async () => makeBookmark({ id: '00000000-0000-4000-8000-000000000001', sync_status: 'synced' }),
     deleteBookmark: async () => undefined,
     ...overrides,
@@ -169,6 +177,77 @@ test('create: forwards the payload client_id so a retried text note stays idempo
   );
 
   assert.equal(sent[0].client_id, 'cid-text');
+});
+
+test('bulk create: uploads latest titles and replaces local rows with returned remote ids', async () => {
+  const first = makeCreateEntry({
+    local_id: 'local-a',
+    payload: { url: 'https://example.com/a', title: 'stale', client_id: '11111111-1111-4111-8111-111111111111' },
+  });
+  const second = makeCreateEntry({
+    local_id: 'local-b',
+    payload: { url: 'https://example.com/b', client_id: '22222222-2222-4222-8222-222222222222' },
+  });
+  const { calls, repository } = fakeRepository();
+  const sent: unknown[] = [];
+  const api = fakeApi({
+    createBookmarks: async (inputs: unknown[]) => {
+      sent.push(inputs);
+      return [
+        {
+          bookmark_id: '00000000-0000-4000-8000-000000000101',
+          status: 'created',
+          metadata_status: 'pending',
+        },
+        {
+          bookmark_id: '00000000-0000-4000-8000-000000000102',
+          status: 'created',
+          metadata_status: 'pending',
+        },
+      ];
+    },
+  });
+  const latest = (id: string) =>
+    id === 'local-a'
+      ? makeBookmark({ id, title: 'fresh title', notes: 'fresh notes' })
+      : makeBookmark({ id, url: 'https://example.com/b' });
+
+  const results = await syncCreateQueueEntryBatch(api, repository, [first, second], latest);
+
+  assert.deepEqual(sent[0], [
+    {
+      url: 'https://example.com/a',
+      title: 'fresh title',
+      notes: 'fresh notes',
+      client_id: '11111111-1111-4111-8111-111111111111',
+    },
+    {
+      url: 'https://example.com/b',
+      title: undefined,
+      notes: undefined,
+      client_id: '22222222-2222-4222-8222-222222222222',
+    },
+  ]);
+  assert.equal(results.length, 2);
+  assert.equal(results[0]?.entry.remote_id, '00000000-0000-4000-8000-000000000101');
+  assert.equal(results[0]?.bookmarkReplacement?.previousId, 'local-a');
+  assert.equal(results[0]?.bookmarkReplacement?.bookmark.id, '00000000-0000-4000-8000-000000000101');
+  assert.equal(results[0]?.uploadedPayload?.title, 'fresh title');
+  assert.equal(results[1]?.entry.remote_id, '00000000-0000-4000-8000-000000000102');
+  assert.ok(calls.includes('updateQueueEntry:local-a:synced'));
+  assert.ok(calls.includes('replaceBookmark:local-a->00000000-0000-4000-8000-000000000101'));
+  assert.ok(calls.includes('updateQueueEntry:local-b:synced'));
+  assert.ok(calls.includes('replaceBookmark:local-b->00000000-0000-4000-8000-000000000102'));
+});
+
+test('bulk create: rejects non-create queue entries', async () => {
+  const { repository } = fakeRepository();
+  const update = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
+
+  await assert.rejects(
+    () => syncCreateQueueEntryBatch(fakeApi(), repository, [update], () => undefined),
+    /only accepts create/,
+  );
 });
 
 test('create: failure stays retryable with the error recorded', async () => {
