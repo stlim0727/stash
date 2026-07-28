@@ -3366,14 +3366,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // so it clears on the next cold start). swapBookmarkId folds the
           // lingering local-* row into the existing remote twin instead.
           setBookmarks((current) => swapBookmarkId(current ?? [], localId, reconciled));
-          void repository
-            .replaceBookmark(localId, reconciled)
-            .catch((error) => logStorageError('synced leftover reconcile', error));
         }
         setQueue((current) => current.filter((entry) => entry.sync_status !== 'synced'));
-        void Promise.all(
-          syncedLeftovers.map((entry) => repository.removeQueueEntry(entry.local_id)),
-        ).catch((error) => logStorageError('synced leftover cleanup', error));
+        // Sequential on purpose (Sentry STASH-3B/3N precedent): firing one
+        // repository call per leftover without awaiting the previous one
+        // (whether via Promise.all or an un-awaited call inside a for loop)
+        // stacks dozens of concurrent native SQLite calls on the single
+        // serialized connection under a large backlog. Fire-and-forget
+        // relative to syncNow's own progress (upload/pull must not wait on
+        // this), but internally one call at a time; each item keeps its own
+        // catch so one failure doesn't stop the rest.
+        void (async () => {
+          for (const { localId, reconciled } of swaps) {
+            try {
+              await repository.replaceBookmark(localId, reconciled);
+            } catch (error) {
+              logStorageError('synced leftover reconcile', error);
+            }
+          }
+          for (const entry of syncedLeftovers) {
+            try {
+              await repository.removeQueueEntry(entry.local_id);
+            } catch (error) {
+              logStorageError('synced leftover cleanup', error);
+            }
+          }
+        })();
       }
       // Re-ensure the session so a token that expired while the app stayed
       // open is refreshed before we sync; otherwise every entry would fail

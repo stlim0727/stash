@@ -373,8 +373,12 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   into dozens of simultaneous native calls piling up behind one serialized
   queue — "sqlite tail wait (depth N)" climbing into the tens, with
   multi-second stalls, is the tell. Already fixed once for bulk import
-  (STASH-3B) and once more for the startup orphaned-queue-entry reconciliation
-  (STASH-3N) — grep for `Promise.all` before adding a new bulk write path.
+  (STASH-3B) and twice more under STASH-3N — the startup orphaned-queue-entry
+  reconciliation, and (found by grepping for the same pattern right
+  afterward) `syncNow`'s "synced leftover" id-swap reconciliation, which
+  looked sequential (a `for` loop) but never awaited each call before firing
+  the next — grep for `Promise.all` **and** un-awaited calls inside `for`
+  loops before adding a new bulk write path.
 - On web (RN-web/CSS stacking rules), a sibling with **any** explicit
   `position` + positive `zIndex` paints above **all** `zIndex:auto`/unset
   siblings in the same stacking context, regardless of DOM/mount order — so

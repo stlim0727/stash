@@ -141,3 +141,64 @@ test('a synced create-leftover does not duplicate a bookmark whose remote twin w
   expect(stored).toHaveLength(1);
   expect(stored[0].id).toBe(REMOTE_ID);
 });
+
+test('multiple synced leftovers are reconciled sequentially, not as a concurrent burst (Sentry STASH-3N)', async () => {
+  // Same class of bug as the startup orphan re-enqueue: firing one
+  // repository call per leftover without awaiting the previous one stacks
+  // concurrent native SQLite calls on the single serialized connection under
+  // a large backlog ("sqlite tail wait" depth climbing into the tens).
+  const pairs = [1, 2, 3].map((n) => {
+    const localId = `local-leftover-${n}`;
+    const remoteId = `1a2b3c4d-0000-4000-8000-00000000ab0${n}`;
+    const url = `https://example.com/leftover-${n}`;
+    return {
+      localId,
+      remoteId,
+      local: makeStoredBookmark({ id: localId, url, url_hash: url, sync_status: 'pending' }),
+      remote: makeStoredBookmark({ id: remoteId, url, url_hash: url, sync_status: 'synced' }),
+    };
+  });
+  fakeRepo.__reset(pairs.flatMap((p) => [p.local, p.remote]));
+  apiMock.__setRemote(pairs.map((p) => p.remote));
+  for (const p of pairs) {
+    await fakeRepo.repository.enqueue({
+      local_id: p.localId,
+      remote_id: p.remoteId,
+      operation: 'create',
+      payload: { url: p.local.url ?? undefined },
+      sync_status: 'synced',
+      retry_count: 0,
+      last_error: null,
+      created_at: '2026-06-12T00:00:00.000Z',
+      updated_at: '2026-06-12T00:00:00.000Z',
+    });
+  }
+
+  const track = (fn: (...args: never[]) => Promise<unknown>) => {
+    let concurrent = 0;
+    let max = 0;
+    const wrapped = async (...args: never[]) => {
+      concurrent += 1;
+      max = Math.max(max, concurrent);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      concurrent -= 1;
+      return fn(...args);
+    };
+    return { wrapped, getMax: () => max };
+  };
+  const replaceTrack = track(fakeRepo.repository.replaceBookmark.bind(fakeRepo.repository));
+  const removeTrack = track(fakeRepo.repository.removeQueueEntry.bind(fakeRepo.repository));
+  fakeRepo.repository.replaceBookmark = replaceTrack.wrapped as typeof fakeRepo.repository.replaceBookmark;
+  fakeRepo.repository.removeQueueEntry = removeTrack.wrapped as typeof fakeRepo.repository.removeQueueEntry;
+
+  const { result } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+  await act(async () => {
+    await result.current.syncNow();
+  });
+
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+  expect(replaceTrack.getMax()).toBe(1);
+  expect(removeTrack.getMax()).toBe(1);
+});
