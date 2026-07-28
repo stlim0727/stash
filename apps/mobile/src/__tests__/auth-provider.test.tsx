@@ -168,6 +168,37 @@ test('repeated ensureAnonymousSession calls with a live session do not flicker s
   expect(result.current.status).toBe('anonymous');
 });
 
+test('a failed forced refresh does not get masked by the fast path on the next call', async () => {
+  // Codex review on the fix above: a forced refresh (e.g. after a 401) that
+  // fails on a transient network error sets `status` to `error` WITHOUT
+  // clearing the still locally-unexpired session. A later non-forced call
+  // must notice the status/session mismatch and retry restoration — not
+  // silently keep handing back the stale session while `status` stays stuck
+  // on `error` (Settings shows sign-in, background sync stays disabled)
+  // until the token's local expiry margin elapses or the app restarts.
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  fakeClient.restoreSession.mockRejectedValueOnce(new Error('network down'));
+  await act(async () => {
+    const resolved = await result.current.ensureAnonymousSession(true);
+    expect(resolved).toBeNull();
+  });
+  expect(result.current.status).toBe('error');
+  // The session itself is untouched by the failed forced refresh — it still
+  // looks locally unexpired, which is exactly what could mask the bad status.
+  expect(result.current.session?.access_token).toBe(mockAnonSession.access_token);
+
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAnonSession });
+  await act(async () => {
+    await result.current.ensureAnonymousSession();
+  });
+
+  // Retried restoration (did not take the stale fast path) and recovered.
+  expect(fakeClient.restoreSession).toHaveBeenCalled();
+  expect(result.current.status).toBe('anonymous');
+});
+
 test('a save after logout lazily mints an anonymous session', async () => {
   const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
   await waitFor(() => expect(result.current.status).toBe('anonymous'));

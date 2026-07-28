@@ -87,9 +87,11 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   const inFlight = useRef<Promise<SupabaseAuthSession | null> | null>(null);
 
   // Kept in sync every render so ensureAnonymousSession can read the latest
-  // session without needing it in its own dependency array.
+  // session/status without needing them in its own dependency array.
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   const ensureAnonymousSession = useCallback((forceRefresh = false): Promise<SupabaseAuthSession | null> => {
     if (configState.status === 'missing') {
@@ -104,11 +106,22 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
 
     // Many call sites (each auto AI-enrichment dispatch, every sync pass)
     // call this redundantly during a long sync. When the held session is
-    // still live, hand it back as-is instead of bouncing `status` through
-    // `loading` and back — that flip was flickering the signed-in/signed-out
-    // UI dozens of times during a large sync (Sentry STASH-3D).
+    // still live AND `status` already reflects it, hand it back as-is
+    // instead of bouncing `status` through `loading` and back — that flip
+    // was flickering the signed-in/signed-out UI dozens of times during a
+    // large sync (Sentry STASH-3D). The status match matters: a forced
+    // refresh that fails (e.g. a transient network error after a 401) sets
+    // `status` to `error`/`session_expired` WITHOUT clearing a still
+    // locally-unexpired session — without this check, every later call
+    // would keep handing back that session and silently stay stuck in the
+    // bad status instead of retrying.
     const current = sessionRef.current;
-    if (!forceRefresh && current && !isSessionExpired(current)) {
+    if (
+      !forceRefresh &&
+      current &&
+      !isSessionExpired(current) &&
+      statusRef.current === statusForSession(current)
+    ) {
       return Promise.resolve(current);
     }
 
