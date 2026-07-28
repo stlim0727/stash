@@ -2520,6 +2520,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (syncInFlight.current) {
       return { ok: false, reason: 'busy' };
     }
+    // An import's sequential durable-write loop (Sentry: user-reported "reset
+    // doesn't clear the queue in one shot") uses this separate counter, not
+    // syncInFlight. Without this check, a reset landing mid-import wipes
+    // storage via clearAllData() and the import's still-running loop then
+    // keeps calling insertBookmark/enqueue for its remaining items — silently
+    // repopulating the library right after the "clear".
+    if (localCreateFlushesInFlight.current > 0) {
+      return { ok: false, reason: 'busy' };
+    }
     if (!auth.session) {
       return { ok: false, reason: 'auth' };
     }
