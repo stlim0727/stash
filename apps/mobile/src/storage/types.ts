@@ -14,6 +14,12 @@ export interface TagData {
   collections: Collection[];
 }
 
+export interface CreateSyncCompletion {
+  previousId: string;
+  bookmark: Bookmark;
+  entry: LocalPendingBookmark;
+}
+
 /**
  * Durable local storage contract for bookmarks and the offline sync queue.
  *
@@ -36,6 +42,11 @@ export interface BookmarkRepository {
   updateBookmark(bookmark: Bookmark): Promise<void>;
   /** Atomically swap a row's identity, e.g. local ID -> remote ID after sync. */
   replaceBookmark(previousId: string, bookmark: Bookmark): Promise<void>;
+  /**
+   * Atomically finish a bulk create chunk: local bookmark ids adopt their remote
+   * ids and their completed create queue rows are removed together.
+   */
+  completeCreateSyncBatch?(completions: CreateSyncCompletion[]): Promise<void>;
   deleteBookmark(id: string): Promise<void>;
   listQueue(): Promise<LocalPendingBookmark[]>;
   enqueue(entry: LocalPendingBookmark): Promise<void>;

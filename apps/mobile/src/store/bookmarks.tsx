@@ -85,7 +85,7 @@ import { registerForForegroundState } from '@/storage/sqlite-app-lifecycle';
 import { repository } from '@/storage/repository';
 import { copyImageToLibrary } from '@/storage/image-store';
 import type { EnrichmentMetadataHint } from '@/api/bookmarks';
-import type { TagData } from '@/storage/types';
+import type { CreateSyncCompletion, TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { useRealtimeSync } from '@/supabase/realtime';
 import { SupabaseRequestError } from '@/supabase/client';
@@ -632,6 +632,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
+  const localCreateFlushesInFlight = useRef(0);
   // The active language, sent with AI enrichment requests so the model answers
   // in the user's locale (M12). Read through a ref so requestAiEnrichment stays
   // stable as the locale changes — it just picks up the latest value when fired.
@@ -2113,6 +2114,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (newBookmarks.length > 0) {
         setBookmarks((current) => [...newBookmarks, ...(current ?? [])]);
         setQueue((current) => [...current, ...newEntries]);
+        localCreateFlushesInFlight.current += 1;
         // Reserve every imported id in the enriching guard up front: the
         // pending-backfill effect fires on the next render (before the
         // sequential inserts below finish), and an enrichment fetch that beats
@@ -2144,11 +2146,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           })
           .catch((error) => logStorageError('imported bookmarks', error))
           .finally(() => {
+            localCreateFlushesInFlight.current = Math.max(
+              0,
+              localCreateFlushesInFlight.current - 1,
+            );
             // Rows whose insert never ran (storage failure): still enrich them —
             // they live on in optimistic state, and enrichment must not be lost
             // to a storage error. Nothing durable exists to clobber anyway.
             for (const bookmark of newBookmarks) {
               releaseAndEnrich(bookmark);
+            }
+            if (localCreateFlushesInFlight.current === 0 && syncPendingRef.current) {
+              setTimeout(() => {
+                void syncNowRef.current?.().catch(() => {});
+              }, 50);
             }
           });
       }
@@ -2930,6 +2941,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncPendingRef.current = true;
       return false;
     }
+    if (localCreateFlushesInFlight.current > 0) {
+      syncPendingRef.current = true;
+      return false;
+    }
     if (!auth.session) {
       return false;
     }
@@ -3122,6 +3137,114 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         return true;
       };
+      const applyBulkCreateChunkResults = async (
+        chunk: LocalPendingBookmark[],
+        results: Awaited<ReturnType<typeof syncCreateQueueEntryBatch>>,
+      ) => {
+        const completedLocalIds = new Set<string>();
+        const completions: CreateSyncCompletion[] = [];
+        const idMap = new Map<string, string>();
+        type UploadedPayload = NonNullable<typeof results[number]['uploadedPayload']>;
+        const followUpUpdates: Array<{ id: string; payload: UploadedPayload }> = [];
+        const pendingAiIds: string[] = [];
+        let nextBookmarks = bookmarksRef.current ?? [];
+
+        for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
+          const entry = chunk[resultIndex]!;
+          const result = results[resultIndex]!;
+
+          if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
+            const replacementId = result.bookmarkReplacement?.bookmark.id;
+            ensureRepositoryReady()
+              .then(() =>
+                Promise.all([
+                  replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
+                  removeQueueEntryIfNotSuperseded(repository, entry),
+                ]),
+              )
+              .catch((error) => logStorageError('post-delete sync cleanup', error));
+            if (result.entry.remote_id && result.entry.remote_id !== entry.local_id) {
+              enqueueMutation(result.entry.remote_id, 'delete');
+            }
+            continue;
+          }
+
+          if (!result.removeEntry) {
+            continue;
+          }
+
+          completedLocalIds.add(entry.local_id);
+
+          if (!result.bookmarkReplacement) {
+            continue;
+          }
+
+          const { previousId, bookmark: replacement } = result.bookmarkReplacement;
+          const latest = nextBookmarks.find((bookmark) => bookmark.id === previousId);
+          if (!latest) {
+            continue;
+          }
+          const merged: Bookmark = {
+            ...latest,
+            id: replacement.id,
+            sync_status: replacement.sync_status,
+            updated_at: replacement.updated_at,
+          };
+          nextBookmarks = swapBookmarkId(nextBookmarks, previousId, merged);
+          completions.push({ previousId, bookmark: merged, entry });
+
+          if (previousId !== merged.id) {
+            idAliases.current.set(previousId, merged.id);
+            idMap.set(previousId, merged.id);
+          }
+
+          if (result.uploadedPayload !== undefined) {
+            if (createNeedsReconcileUpdate(merged, result.uploadedPayload)) {
+              followUpUpdates.push({ id: merged.id, payload: result.uploadedPayload });
+            }
+            pendingAiIds.push(merged.id);
+          }
+        }
+
+        if (completedLocalIds.size === 0) {
+          return;
+        }
+
+        mutationsPushed = true;
+        bookmarksRef.current = nextBookmarks;
+        setBookmarks(nextBookmarks);
+        setQueue((current) => current.filter((queued) => !completedLocalIds.has(queued.local_id)));
+
+        if (idMap.size > 0) {
+          applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
+          const links = tagDataRef.current.bookmarkTags.map((link) => {
+            const nextBookmarkId = idMap.get(link.bookmark_id);
+            return nextBookmarkId ? { ...link, bookmark_id: nextBookmarkId } : link;
+          });
+          applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+          void syncTagOps();
+          remapAiRetryIdentity(idMap);
+        }
+
+        await ensureRepositoryReady();
+        if (repository.completeCreateSyncBatch) {
+          await repository.completeCreateSyncBatch(completions);
+        } else {
+          await Promise.all(
+            completions.flatMap(({ previousId, bookmark, entry }) => [
+              repository.replaceBookmark(previousId, bookmark),
+              removeQueueEntryIfNotSuperseded(repository, entry),
+            ]),
+          );
+        }
+
+        for (const { id } of followUpUpdates) {
+          enqueueMutation(id, 'update');
+        }
+        for (const id of pendingAiIds) {
+          markPendingAiTrigger(id);
+        }
+      };
       const bulkSyncedLocalIds = new Set<string>();
       const bulkCreateEntries = syncable.filter(
         (entry) =>
@@ -3142,22 +3265,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             );
             const results = await syncCreateQueueEntryBatch(
               api,
-              repository,
               chunk,
               getLatestBookmark,
             );
-            for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
-              const entry = chunk[resultIndex]!;
-              const result = results[resultIndex]!;
-              const applied = await applySyncEntryResult(entry, result);
-              if (applied) {
-                bulkSyncedLocalIds.add(entry.local_id);
-              }
+            await applyBulkCreateChunkResults(chunk, results);
+            for (const entry of chunk) {
+              bulkSyncedLocalIds.add(entry.local_id);
             }
           } catch (error) {
             recordLog(
               'warn',
-              `bulk create sync failed; falling back to single-entry sync (${error instanceof Error ? error.message : String(error)})`,
+              `bulk create sync failed; falling back to single-entry sync (${
+                error instanceof Error ? error.message : String(error)
+              })`,
             );
             setQueue((current) =>
               current.map((queued) => {
@@ -3780,6 +3900,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (!auth.session || aiSuggestionsModeRef.current === 'off') {
       return;
     }
+    if (
+      queueRef.current.some(
+        (entry) => entry.sync_status === 'pending' || entry.sync_status === 'syncing',
+      )
+    ) {
+      return;
+    }
     const now = Date.now();
     for (const [id, state] of Object.entries(aiRetryState.current)) {
       if (aiEnriching.current.has(id)) {
@@ -3818,6 +3945,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       if (aiDispatchInFlight.current) {
         return; // still waiting on the previous dispatch to settle
+      }
+      if (
+        queueRef.current.some(
+          (entry) => entry.sync_status === 'pending' || entry.sync_status === 'syncing',
+        )
+      ) {
+        return; // let bookmark sync settle before starting AI work for freshly-created rows
       }
       const { queue, id } = dequeueAiEnrichmentDispatch(aiDispatchQueueRef.current);
       aiDispatchQueueRef.current = queue;
