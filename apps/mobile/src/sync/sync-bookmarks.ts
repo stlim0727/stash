@@ -2,6 +2,7 @@ import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE, createBookmarkApi } from '@/api/bookm
 import type { BookmarkApi } from '@/api/bookmarks';
 import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
 import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
+import { canonicalizeUrl } from '@/domain/urls';
 import { recordLog } from '@/observability/log-buffer';
 import type { BookmarkRepository } from '@/storage/types';
 import { SupabaseRequestError } from '@/supabase/client';
@@ -589,6 +590,50 @@ export function planLeftoverReconciliation(
     const localRow = bookmarks.find((b) => b.id === leftover.local_id);
     if (!localRow) continue; // swap already completed — row is under the remote id
     swaps.push({ localId: leftover.local_id, reconciled: { ...localRow, id: remoteId, sync_status: 'synced' } });
+  }
+  return swaps;
+}
+
+/** A stray local-id row already marked synced, with no queue entry left to
+ *  drive it, that duplicates an already-synced remote-id twin. */
+export interface StrandedDuplicate {
+  localId: string;
+  keep: Bookmark;
+}
+
+/**
+ * Finds local-id bookmark rows marked `sync_status: 'synced'` that duplicate
+ * an already-synced remote-id row sharing the same canonical URL. This is a
+ * gap neither existing self-heal covers: `reconcileOrphanedQueueEntries`
+ * skips anything already `'synced'` (nothing left to drive), and
+ * `planLeftoverReconciliation` is driven by iterating the QUEUE — if this
+ * row's synced-leftover queue entry was removed before the id swap durably
+ * landed (or never created at all), there is nothing left to iterate. Left
+ * alone, the row survives as a permanent duplicate Inbox card that reappears
+ * on every relaunch (Sentry STASH-3P). The caller applies the swaps (folding
+ * the stray row onto `keep`, e.g. via `swapBookmarkId`) and persists them.
+ */
+export function reconcileStrandedSyncedDuplicates(bookmarks: Bookmark[]): StrandedDuplicate[] {
+  const dedupeKey = (bookmark: Bookmark): string | null =>
+    bookmark.url ? canonicalizeUrl(bookmark.url) : bookmark.url_hash;
+  const swaps: StrandedDuplicate[] = [];
+  for (const bookmark of bookmarks) {
+    if (hasRemoteIdentity(bookmark.id) || bookmark.sync_status !== 'synced') {
+      continue;
+    }
+    const key = dedupeKey(bookmark);
+    if (!key) {
+      continue;
+    }
+    const twin = bookmarks.find(
+      (candidate) =>
+        candidate.id !== bookmark.id &&
+        hasRemoteIdentity(candidate.id) &&
+        dedupeKey(candidate) === key,
+    );
+    if (twin) {
+      swaps.push({ localId: bookmark.id, keep: twin });
+    }
   }
   return swaps;
 }

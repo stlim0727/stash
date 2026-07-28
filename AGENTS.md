@@ -379,6 +379,22 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   looked sequential (a `for` loop) but never awaited each call before firing
   the next — grep for `Promise.all` **and** un-awaited calls inside `for`
   loops before adding a new bulk write path.
+- The two synced-bookmark self-heal passes in `store/bookmarks.tsx`'s
+  bootstrap effect each cover a different half of "a create's local→remote
+  id swap didn't finish before the app died," and neither notices the other's
+  gap: `reconcileOrphanedQueueEntries` skips any bookmark already marked
+  `sync_status: 'synced'` (assumes nothing left to drive), and
+  `planLeftoverReconciliation` is driven by iterating the QUEUE — a
+  synced-leftover entry removed before its id swap durably landed (or never
+  created) leaves nothing to iterate. A local-id row stuck in exactly that
+  state — `sync_status: 'synced'`, no queue entry, an already-synced remote-id
+  twin with the same canonical URL sitting right next to it — was invisible
+  to both passes and survived as a permanent duplicate Inbox card that
+  reappeared every relaunch (Sentry STASH-3P, "561 -> 781 -> 970" after a
+  561-bookmark import). `reconcileStrandedSyncedDuplicates` in
+  `sync/sync-bookmarks.ts` is the third self-heal pass, covering that specific
+  gap — a bootstrap-time canonical-URL scan across bookmark rows themselves
+  rather than the queue.
 - On web (RN-web/CSS stacking rules), a sibling with **any** explicit
   `position` + positive `zIndex` paints above **all** `zIndex:auto`/unset
   siblings in the same stacking context, regardless of DOM/mount order — so

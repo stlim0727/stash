@@ -110,6 +110,7 @@ import {
   makeMutationEntry,
   planLeftoverReconciliation,
   reconcileOrphanedQueueEntries,
+  reconcileStrandedSyncedDuplicates,
   removeQueueEntryIfNotSuperseded,
   syncCreateQueueEntryBatch,
   syncQueueEntry,
@@ -1690,6 +1691,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   await repository.enqueue(entry);
                 }
               })().catch((error) => logStorageError('orphan re-enqueue', error));
+            }
+            // Self-heal a different kind of straggler: a local-id row already
+            // marked 'synced', with no queue entry left to reference it (the
+            // orphan self-heal above skips anything already 'synced'), that
+            // duplicates an already-synced remote-id twin. Nothing else ever
+            // notices this — it would otherwise survive as a permanent
+            // duplicate Inbox card that reappears every relaunch (Sentry
+            // STASH-3P).
+            const strandedDuplicates = reconcileStrandedSyncedDuplicates(migratedBookmarks);
+            if (strandedDuplicates.length > 0) {
+              setBookmarks((current) => {
+                let next = current ?? [];
+                for (const { localId, keep } of strandedDuplicates) {
+                  next = swapBookmarkId(next, localId, keep);
+                }
+                return next;
+              });
+              // Sequential for the same reason as the orphan re-enqueue above.
+              (async () => {
+                for (const { localId, keep } of strandedDuplicates) {
+                  await repository.replaceBookmark(localId, keep);
+                }
+              })().catch((error) => logStorageError('stranded duplicate reconcile', error));
             }
             setEnrichments(storedEnrichments);
             // One-time cleanup: purge blank-named tags/collections (and orphaned

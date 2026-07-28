@@ -202,3 +202,48 @@ test('multiple synced leftovers are reconciled sequentially, not as a concurrent
   expect(replaceTrack.getMax()).toBe(1);
   expect(removeTrack.getMax()).toBe(1);
 });
+
+test('a stranded local-id row already marked synced, with no queue entry left to drive it, self-heals onto its remote twin (Sentry STASH-3P)', async () => {
+  // Models the state a lost synced-leftover queue entry would leave behind:
+  // the BOOKMARK row itself already carries sync_status 'synced' (as it would
+  // right after a successful upload, before the id swap), but nothing in the
+  // queue references it anymore — so neither reconcileOrphanedQueueEntries
+  // (skips anything already 'synced') nor the leftover reconciliation in
+  // syncNow (driven by iterating the queue, which has nothing to iterate)
+  // would otherwise notice this row needs to be folded into its twin.
+  // reconcileStrandedSyncedDuplicates is the bootstrap-time self-heal for
+  // exactly this gap.
+  const url = 'https://example.com/stranded-twin';
+  const strandedLocal = makeStoredBookmark({
+    id: 'local-stranded-1',
+    url,
+    url_hash: url,
+    sync_status: 'synced',
+  });
+  const remoteTwin = makeStoredBookmark({
+    id: '1a2b3c4d-0000-4000-8000-0000000000aa',
+    url,
+    url_hash: url,
+    sync_status: 'synced',
+  });
+  fakeRepo.__reset([strandedLocal, remoteTwin]);
+  apiMock.__setRemote([remoteTwin]);
+
+  const { result } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+  await act(async () => {
+    await result.current.syncNow();
+  });
+
+  const matching = result.current.inbox.filter((b) => b.url === url);
+  expect(matching).toHaveLength(1);
+  expect(matching[0]?.id).toBe(remoteTwin.id);
+
+  // Durable too: a reload must not resurrect the stranded local-* row.
+  await waitFor(() =>
+    expect(fakeRepo.__bookmarks().filter((b) => b.url === url)).toHaveLength(1),
+  );
+  const stored = fakeRepo.__bookmarks().filter((b) => b.url === url);
+  expect(stored[0]?.id).toBe(remoteTwin.id);
+});
