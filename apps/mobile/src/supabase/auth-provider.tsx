@@ -104,32 +104,37 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       return inFlight.current;
     }
 
-    // Many call sites (each auto AI-enrichment dispatch, every sync pass)
-    // call this redundantly during a long sync. When the held session is
-    // still live AND `status` already reflects it, hand it back as-is
-    // instead of bouncing `status` through `loading` and back — that flip
-    // was flickering the signed-in/signed-out UI dozens of times during a
-    // large sync (Sentry STASH-3D). The status match matters: a forced
-    // refresh that fails (e.g. a transient network error after a 401) sets
-    // `status` to `error`/`session_expired` WITHOUT clearing a still
-    // locally-unexpired session — without this check, every later call
-    // would keep handing back that session and silently stay stuck in the
-    // bad status instead of retrying.
+    // A locally-unexpired session whose `status` doesn't match it (e.g. a
+    // prior forced refresh failed on a transient network error, leaving
+    // `status` stuck on `error`/`session_expired` while the same
+    // server-rejected token still sits in `sessionRef`) must not be
+    // silently re-served by restoreSession's own "not locally expired, skip
+    // the network" fast path below — that would just re-mark the same bad
+    // token as good without ever actually refreshing it. Force a real
+    // refresh in that case, regardless of what the caller asked for.
     const current = sessionRef.current;
-    if (
-      !forceRefresh &&
-      current &&
-      !isSessionExpired(current) &&
-      statusRef.current === statusForSession(current)
-    ) {
-      return Promise.resolve(current);
-    }
+    const statusMismatch =
+      current !== null && !isSessionExpired(current) && statusRef.current !== statusForSession(current);
+    const effectiveForceRefresh = forceRefresh || statusMismatch;
 
-    setStatus('loading');
+    // Many call sites (each auto AI-enrichment dispatch, every sync pass)
+    // call this redundantly during a long sync. `restoreSession` below is
+    // itself cheap (no network) when a still-valid, status-matching session
+    // is already stored, so we always call it — including on web, where
+    // that storage read is what picks up another tab's sign-out/account
+    // switch — rather than short-circuiting in-memory and risking staleness.
+    // What we DON'T do is unconditionally announce `loading` first: only
+    // flip to it when this call is actually about to do real work. Doing so
+    // unconditionally was flickering the signed-in/signed-out UI on every
+    // redundant call during a large sync (Sentry STASH-3D); the case that
+    // turns out to be a no-op now settles without ever showing `loading`.
+    if (effectiveForceRefresh || !current || isSessionExpired(current)) {
+      setStatus('loading');
+    }
     const client = createSupabaseClient();
     const run = (async (): Promise<SupabaseAuthSession | null> => {
       try {
-        const restored = await client.restoreSession(forceRefresh);
+        const restored = await client.restoreSession(effectiveForceRefresh);
         if (restored.outcome === 'active') {
           const { session: active } = restored;
           setSession(active);

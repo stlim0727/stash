@@ -145,26 +145,40 @@ test('signOut revokes the session and drops to signed_out without minting a new 
   expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(1);
 });
 
-test('repeated ensureAnonymousSession calls with a live session do not flicker status through loading (Sentry STASH-3D)', async () => {
+test('repeated ensureAnonymousSession calls with a live, status-matching session do not flicker status through loading (Sentry STASH-3D)', async () => {
   // The reported bug: during a large sync, many independent call sites (each
   // auto AI-enrichment dispatch, every sync pass) call ensureAnonymousSession
-  // repeatedly. With a still-valid session in hand, the redundant calls must
-  // resolve directly rather than bouncing `status` through `loading`, which
-  // flickered the signed-in/signed-out UI.
-  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  // repeatedly. With a still-valid, status-matching session in hand, a
+  // redundant call must settle without ever bouncing `status` through
+  // `loading` — that flip flickered the signed-in/signed-out UI. It still
+  // consults restoreSession (so shared/cross-tab storage stays authoritative
+  // — see the web multi-tab test below), which itself resolves without a
+  // network round trip when the stored session is still valid.
+  const statuses: string[] = [];
+  const { result } = await renderHook(
+    () => {
+      const auth = useSupabaseAuth();
+      statuses.push(auth.status);
+      return auth;
+    },
+    { wrapper },
+  );
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
+  statuses.length = 0;
 
   fakeClient.restoreSession.mockClear();
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAnonSession });
 
   await act(async () => {
     const resolved = await result.current.ensureAnonymousSession();
     expect(resolved?.access_token).toBe(mockAnonSession.access_token);
   });
 
-  // No network/storage round trip (the old code called restoreSession, which
-  // set `status` to `loading` before it even resolved) and the same session
-  // handed straight back.
-  expect(fakeClient.restoreSession).not.toHaveBeenCalled();
+  // restoreSession(false) was called (no forced refresh), and any re-render
+  // along the way (e.g. from the `message` copy changing) never observed
+  // `status` as anything but `anonymous` — no `loading` flicker.
+  expect(fakeClient.restoreSession).toHaveBeenLastCalledWith(false);
+  expect(statuses).not.toContain('loading');
   expect(result.current.status).toBe('anonymous');
 });
 
@@ -172,8 +186,9 @@ test('a failed forced refresh does not get masked by the fast path on the next c
   // Codex review on the fix above: a forced refresh (e.g. after a 401) that
   // fails on a transient network error sets `status` to `error` WITHOUT
   // clearing the still locally-unexpired session. A later non-forced call
-  // must notice the status/session mismatch and retry restoration — not
-  // silently keep handing back the stale session while `status` stays stuck
+  // must notice the status/session mismatch and force a REAL refresh — not
+  // silently re-serve the same server-rejected token via restoreSession's
+  // own "not locally expired" fast path, which would leave `status` stuck
   // on `error` (Settings shows sign-in, background sync stays disabled)
   // until the token's local expiry margin elapses or the app restarts.
   const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
@@ -189,14 +204,43 @@ test('a failed forced refresh does not get masked by the fast path on the next c
   // looks locally unexpired, which is exactly what could mask the bad status.
   expect(result.current.session?.access_token).toBe(mockAnonSession.access_token);
 
+  fakeClient.restoreSession.mockClear();
   fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAnonSession });
   await act(async () => {
     await result.current.ensureAnonymousSession();
   });
 
-  // Retried restoration (did not take the stale fast path) and recovered.
-  expect(fakeClient.restoreSession).toHaveBeenCalled();
+  // The status/session mismatch forced a real refresh attempt (not a plain
+  // restore that would've just re-served the same bad token) and recovered.
+  expect(fakeClient.restoreSession).toHaveBeenLastCalledWith(true);
   expect(result.current.status).toBe('anonymous');
+});
+
+test('a background browser tab reconciles a session another tab wrote to shared storage (Codex review, web multi-tab)', async () => {
+  // Web sessions are shared via localStorage across same-origin tabs. If tab
+  // A signs into a different account, tab B's still-unexpired in-memory
+  // session must not be handed back unconditionally — that would let tab B
+  // keep syncing under the stale identity until token expiry or reload.
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  fakeClient.restoreSession.mockClear();
+  // Simulates another tab having signed into a real account: storage now
+  // holds a different, authenticated session even though this tab's cached
+  // anonymous session still looks locally unexpired.
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAuthedSession });
+
+  await act(async () => {
+    const resolved = await result.current.ensureAnonymousSession();
+    expect(resolved?.access_token).toBe(mockAuthedSession.access_token);
+  });
+
+  // Consulted storage (not forced — this isn't the stale-token-mismatch
+  // case, just an ordinary redundant call) and picked up the other tab's
+  // session instead of silently keeping the stale in-memory one.
+  expect(fakeClient.restoreSession).toHaveBeenLastCalledWith(false);
+  expect(result.current.status).toBe('authenticated');
+  expect(result.current.session?.access_token).toBe(mockAuthedSession.access_token);
 });
 
 test('a save after logout lazily mints an anonymous session', async () => {
