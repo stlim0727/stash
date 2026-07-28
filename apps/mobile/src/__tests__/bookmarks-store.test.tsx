@@ -27,6 +27,7 @@ jest.mock('@/domain/enrichment', () => ({
 
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
+import { clearLogEntries, getLogEntries } from '@/observability/log-buffer';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 
@@ -484,6 +485,87 @@ test('import: an enrichment finishing early never gets clobbered by the row\'s l
       expect(row.title).toBe(`Enriched ${row.url}`);
     }
   });
+});
+
+test('import: logs a start/finish summary (Sentry STASH-3K/3M instrumentation)', async () => {
+  // STASH-3K and its repeat STASH-3M both reported a bulk HTML import doubling
+  // the library (local total exactly 2x the cloud count) with no evidence of
+  // why — recordLog here is what would let the next occurrence show whether
+  // dedupe saw the existing library (seenKeys) and whether it actually caught
+  // duplicates on a re-import, instead of guessing again blind.
+  clearLogEntries();
+  fakeRepo.__reset([makeStoredBookmark({ url: 'https://example.com/already-here' })]);
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  let summary: ReturnType<typeof result.current.importBookmarks> | null = null;
+  await act(async () => {
+    summary = result.current.importBookmarks([
+      { url: 'https://example.com/already-here', title: null, notes: null, tags: [], collection: null },
+      { url: 'https://example.com/new-one', title: null, notes: null, tags: [], collection: null },
+    ]);
+  });
+
+  expect(summary).toEqual({ imported: 1, duplicates: 1, skipped: 0 });
+  const messages = getLogEntries().map((entry) => entry.message);
+  expect(messages).toContainEqual(
+    expect.stringMatching(/^import: starting items=2 activeLocal=1 seenKeys=1$/),
+  );
+  expect(messages).toContainEqual(
+    expect.stringMatching(/^import: finished items=2 imported=1 duplicates=1 skipped=0$/),
+  );
+  // Let the durable insert settle before the test ends — otherwise its
+  // un-awaited write lands after the next test's own fakeRepo.__reset().
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(2));
+});
+
+test('import while the initial load is still in flight is refused instead of durably duplicating rows (Sentry STASH-3K/3M repro)', async () => {
+  // Reproduces the reported "561 -> 1122" doubling directly: importBookmarks
+  // dedupes against bookmarksRef.current, which is empty until the initial
+  // load resolves. Gate that load (simulating the real-device SQLite latency
+  // seen in production diagnostics) and call importBookmarks while it's still
+  // in flight — before the fix, this durably created a second row for a URL
+  // that already existed in storage even though it hadn't loaded into React
+  // state yet.
+  const ALREADY_STORED_URL = 'https://example.com/already-here';
+  fakeRepo.__reset([makeStoredBookmark({ url: ALREADY_STORED_URL })]);
+
+  const originalListBookmarks = fakeRepo.repository.listBookmarks;
+  let releaseGate: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  fakeRepo.repository.listBookmarks = () => gate.then(() => originalListBookmarks());
+
+  const utils = await renderHook(() => useBookmarks(), { wrapper });
+  expect(utils.result.current.isLoading).toBe(true);
+
+  let summary: ReturnType<typeof utils.result.current.importBookmarks> | null = null;
+  await act(async () => {
+    summary = utils.result.current.importBookmarks([
+      { url: ALREADY_STORED_URL, title: null, notes: null, tags: [], collection: null },
+    ]);
+  });
+
+  expect(summary).toEqual({ imported: 0, duplicates: 0, skipped: 0, notReady: true });
+  // Nothing was queued or durably written — the refusal is a true no-op, not
+  // a deferred/silent retry.
+  expect(fakeRepo.__queue()).toHaveLength(0);
+  expect(fakeRepo.__bookmarks()).toHaveLength(1);
+
+  releaseGate();
+  fakeRepo.repository.listBookmarks = originalListBookmarks;
+  await waitFor(() => expect(utils.result.current.isLoading).toBe(false));
+
+  // Once loaded, importing the same URL now correctly dedupes.
+  let secondSummary: ReturnType<typeof utils.result.current.importBookmarks> | null = null;
+  await act(async () => {
+    secondSummary = utils.result.current.importBookmarks([
+      { url: ALREADY_STORED_URL, title: null, notes: null, tags: [], collection: null },
+    ]);
+  });
+  expect(secondSummary).toEqual({ imported: 0, duplicates: 1, skipped: 0 });
+  expect(fakeRepo.__bookmarks()).toHaveLength(1);
 });
 
 test('enriching a synced bookmark queues an update so metadata reaches the cloud', async () => {

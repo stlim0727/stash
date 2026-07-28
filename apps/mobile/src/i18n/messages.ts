@@ -442,6 +442,9 @@ export const en = {
   'settings.export.savedBody': 'Saved {name} to the folder you chose.',
   'settings.import.nothingTitle': 'Nothing to import',
   'settings.import.nothingBody': 'No bookmarks were found in {name}.',
+  'settings.import.notReadyTitle': 'Still loading your library',
+  'settings.import.notReadyBody':
+    'Your library is still loading or syncing. Please wait a moment and try importing again.',
   'settings.import.added': {
     one: 'Added {count} bookmark.',
     other: 'Added {count} bookmarks.',
