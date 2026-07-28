@@ -29,3 +29,13 @@ export async function deliverExport(file: ExportFile): Promise<void> {
     URL.revokeObjectURL(url);
   }
 }
+
+/**
+ * Web counterpart of the native save-to-device path (never surfaced in the web
+ * UI — a browser download already saves directly, so it just reuses the
+ * download). Exists so settings.tsx can import it from either platform module.
+ */
+export async function saveExportToDevice(file: ExportFile): Promise<boolean> {
+  await deliverExport(file);
+  return true;
+}

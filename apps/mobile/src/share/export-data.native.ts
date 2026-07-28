@@ -11,6 +11,7 @@
  */
 
 import { File, Paths } from 'expo-file-system';
+import { StorageAccessFramework } from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Share } from 'react-native';
 
@@ -41,4 +42,26 @@ export async function deliverExport(file: ExportFile): Promise<void> {
   // Fallback: at least surface the file URI on platforms where the sharing
   // module isn't available (the file is still written to disk above).
   await Share.share({ url: target.uri, title: file.filename }, { subject: file.filename });
+}
+
+/**
+ * Android-only: save the export straight into a user-chosen folder via the
+ * Storage Access Framework, bypassing the share sheet. Returns false when the
+ * user dismisses the system folder picker (not an error). settings.tsx only
+ * surfaces this on Android — iOS's share sheet already offers "Save to Files".
+ */
+export async function saveExportToDevice(file: ExportFile): Promise<boolean> {
+  const permission = await StorageAccessFramework.requestDirectoryPermissionsAsync();
+  if (!permission.granted) {
+    return false;
+  }
+  // Pass the full filename: Android only appends an extension when the name's
+  // extension doesn't match the MIME type, so this never double-appends.
+  const uri = await StorageAccessFramework.createFileAsync(
+    permission.directoryUri,
+    file.filename,
+    file.mimeType,
+  );
+  await StorageAccessFramework.writeAsStringAsync(uri, file.contents);
+  return true;
 }

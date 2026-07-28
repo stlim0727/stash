@@ -56,7 +56,7 @@ import {
 import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import { getPreference, setPreference } from '@/storage/preferences';
-import { deliverExport } from '@/share/export-data';
+import { deliverExport, saveExportToDevice } from '@/share/export-data';
 import { pickImportFile } from '@/share/import-data';
 import { useBookmarks } from '@/store/bookmarks';
 import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
@@ -207,12 +207,29 @@ export default function SettingsScreen() {
   // native). This is the user's "your data is yours" escape hatch — it works
   // offline and produces formats other apps can import.
   const [exportSheetOpen, setExportSheetOpen] = useState(false);
+  // Android only: the format the user picked, while the follow-up "share or
+  // save to device" sheet is open (null = sheet closed). iOS/web deliver
+  // immediately — the iOS share sheet already offers "Save to Files" and the
+  // web path is a direct download.
+  const [exportDeliveryKind, setExportDeliveryKind] = useState<'html' | 'json' | 'csv' | null>(
+    null,
+  );
   const [exporting, setExporting] = useState(false);
   const [languageSheetOpen, setLanguageSheetOpen] = useState(false);
   const totalBookmarks = inbox.length;
 
-  const runExport = async (kind: 'html' | 'json' | 'csv') => {
+  const chooseExport = (kind: 'html' | 'json' | 'csv') => {
+    if (Platform.OS === 'android') {
+      setExportSheetOpen(false);
+      setExportDeliveryKind(kind);
+      return;
+    }
+    void runExport(kind, 'share');
+  };
+
+  const runExport = async (kind: 'html' | 'json' | 'csv', delivery: 'share' | 'save') => {
     setExportSheetOpen(false);
+    setExportDeliveryKind(null);
     if (exporting) {
       return;
     }
@@ -252,7 +269,17 @@ export default function SettingsScreen() {
                 mimeType: 'application/json',
                 contents: toJsonBackup(input),
               };
-      await deliverExport(file);
+      if (delivery === 'save') {
+        const saved = await saveExportToDevice(file);
+        if (saved) {
+          Alert.alert(
+            t('settings.export.savedTitle'),
+            t('settings.export.savedBody', { name: file.filename }),
+          );
+        }
+      } else {
+        await deliverExport(file);
+      }
     } catch (error) {
       Alert.alert(
         t('settings.export.failedTitle'),
@@ -966,19 +993,53 @@ export default function SettingsScreen() {
             key: 'html',
             label: t('settings.exportSheet.html'),
             icon: 'globe-outline',
-            onPress: () => void runExport('html'),
+            onPress: () => chooseExport('html'),
           },
           {
             key: 'csv',
             label: t('settings.exportSheet.csv'),
             icon: 'grid-outline',
-            onPress: () => void runExport('csv'),
+            onPress: () => chooseExport('csv'),
           },
           {
             key: 'json',
             label: t('settings.exportSheet.json'),
             icon: 'code-slash-outline',
-            onPress: () => void runExport('json'),
+            onPress: () => chooseExport('json'),
+          },
+        ]}
+      />
+
+      {/* Android: how to deliver the chosen format — share sheet, or a direct
+          save into a user-picked folder (issue #601). */}
+      <ActionSheet
+        visible={exportDeliveryKind !== null}
+        title={
+          exportDeliveryKind
+            ? t(`settings.exportSheet.${exportDeliveryKind}` as MessageKey)
+            : undefined
+        }
+        onClose={() => setExportDeliveryKind(null)}
+        actions={[
+          {
+            key: 'share',
+            label: t('settings.exportSheet.share'),
+            icon: 'share-outline',
+            onPress: () => {
+              if (exportDeliveryKind) {
+                void runExport(exportDeliveryKind, 'share');
+              }
+            },
+          },
+          {
+            key: 'save',
+            label: t('settings.exportSheet.saveToDevice'),
+            icon: 'download-outline',
+            onPress: () => {
+              if (exportDeliveryKind) {
+                void runExport(exportDeliveryKind, 'save');
+              }
+            },
           },
         ]}
       />
