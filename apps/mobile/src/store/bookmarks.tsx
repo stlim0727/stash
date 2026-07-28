@@ -848,6 +848,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .then(() => repository.setMeta(SYNC_PAUSED_KEY, paused ? 'true' : 'false'))
       .catch((error) => logStorageError('sync paused pref', error));
     if (!paused) {
+      // Consume any "pending" signal a blocked attempt left while paused —
+      // the direct call below already satisfies it. Left alone, the run's
+      // own finally block would still see it set and schedule a redundant
+      // extra sync 50ms later (Sentry STASH-3K review).
+      syncPendingRef.current = false;
       void syncNowRef.current?.().catch(() => {});
     }
   }, []);
@@ -2557,6 +2562,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (!auth.session) {
       return false;
     }
+    // Tag adds/removes call this directly (not just syncNow's own call site
+    // below), so the pause guard has to live here too — otherwise a tag edit
+    // made while paused would upload immediately, breaking the "nothing
+    // uploads until you turn this off" promise (Sentry STASH-3K review). The
+    // op stays queued in pendingTagOpsRef and uploads once unpaused.
+    if (syncPausedRef.current) {
+      return false;
+    }
     const ops = pendingTagOpsRef.current;
     if (ops.length === 0) {
       return false;
@@ -3129,6 +3142,77 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     autoAcceptEnrichmentRef.current = autoAcceptEnrichment;
   }, [autoAcceptEnrichment]);
 
+  // Account-switch guard: reconciles the local cache with the signed-in user
+  // so a pull can never treat another account's rows as remote deletions.
+  // Anonymous data carries over (re-home); a different real account's cache
+  // is dropped (it stays safe in that account's cloud). Extracted so syncNow
+  // can call it from its normal pre-pull position AND from its pause guard
+  // (Sentry STASH-3K review) — a real account switch must never leave the
+  // previous account's cached bookmarks on screen under the new session just
+  // because sync is paused. Idempotent: once reconciled, a plan with nothing
+  // left to drop/rehome is a no-op, so calling it twice is harmless.
+  const reconcileAccountTransition = useCallback(
+    async (currentUser: { id: string; isAnonymous: boolean }): Promise<void> => {
+      try {
+        const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
+        const previousAnon = (await repository.getMeta(SYNCED_USER_ANON_KEY)) === 'true';
+        const plan = planAccountTransition(
+          previousUserId ? { id: previousUserId, isAnonymous: previousAnon } : null,
+          currentUser,
+          bookmarksRef.current ?? [],
+        );
+        await applyAccountTransition(
+          plan,
+          repository,
+          setBookmarks,
+          setQueue,
+          makeLocalId,
+          ensureRepositoryReady,
+          {
+            rehome: (idMap) => {
+              // Carry the old→new id forward so a screen holding a re-homed
+              // bookmark's old id still resolves it via getBookmark.
+              for (const [oldId, newId] of idMap) {
+                idAliases.current.set(oldId, newId);
+              }
+              // Re-key tag state from the re-homed bookmarks' old ids onto their
+              // new local ids so the carried-over tags upload (via syncTagOps)
+              // against the row that now exists in the new account.
+              applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
+              const links = tagDataRef.current.bookmarkTags.map((link) => {
+                const newId = idMap.get(link.bookmark_id);
+                return newId ? { ...link, bookmark_id: newId } : link;
+              });
+              applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+              // Re-key AI-suggestion bookkeeping the same way, so the carried-
+              // over bookmark keeps its retry eligibility under its new id
+              // instead of stranding it on the stale old one.
+              remapAiRetryIdentity(idMap);
+            },
+            drop: (ids) => {
+              // Real A→real B switch: purge A's pending tag ops + links so a
+              // later syncTagOps call (now under B's auth) can't upload A's
+              // tags as B or surface them in B's UI.
+              applyTagOps(dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids));
+              const dropped = new Set(ids);
+              const links = tagDataRef.current.bookmarkTags.filter(
+                (link) => !dropped.has(link.bookmark_id),
+              );
+              applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+              // Purge A's AI-suggestion bookkeeping too, so checkAiRetries (no
+              // ownership check) can't fire requestAiEnrichment against A's
+              // bookmark id under B's now-active session.
+              dropAiRetryBookkeeping(ids);
+            },
+          },
+        );
+      } catch (error) {
+        logStorageError('account transition', error);
+      }
+    },
+    [applyTagOps, applyTagData, remapAiRetryIdentity, dropAiRetryBookkeeping],
+  );
+
   const syncNow = useCallback(async (): Promise<boolean> => {
     if (syncInFlight.current) {
       syncPendingRef.current = true;
@@ -3138,11 +3222,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncPendingRef.current = true;
       return false;
     }
-    if (syncPausedRef.current) {
-      syncPendingRef.current = true;
+    if (!auth.session) {
       return false;
     }
-    if (!auth.session) {
+    if (syncPausedRef.current) {
+      // Even while paused, a real account switch must never leave the
+      // previous account's cached bookmarks visible under the new session —
+      // the pause toggle hiding a cross-account data leak instead of
+      // preventing one (Sentry STASH-3K review). Checked+reconciled via
+      // syncInFlight ALONE, deliberately never touching isSyncing: the
+      // auto-sync effect below re-fires on every isSyncing change, and a
+      // paused queue can never drain to satisfy its "still pending" check —
+      // flipping isSyncing on every no-op paused pass would hot-loop it.
+      syncInFlight.current = true;
+      try {
+        await ensureRepositoryReady();
+        const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
+        const sessionUser = auth.session.user;
+        if (previousUserId !== null && previousUserId !== sessionUser.id) {
+          await reconcileAccountTransition({
+            id: sessionUser.id,
+            isAnonymous: sessionUser.is_anonymous !== false,
+          });
+        }
+      } finally {
+        syncInFlight.current = false;
+      }
+      syncPendingRef.current = true;
       return false;
     }
     // Upload-then-pull: even with nothing to upload, the pull still runs.
@@ -3452,6 +3558,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       );
       if (bulkCreateEntries.length > 1) {
         for (let index = 0; index < bulkCreateEntries.length; index += BULK_CREATE_SYNC_CHUNK_SIZE) {
+          // Re-checked every chunk: pausing mid-import must stop the
+          // remaining chunks from uploading, not just block the next
+          // syncNow call.
+          if (syncPausedRef.current) {
+            break;
+          }
           const chunk = bulkCreateEntries.slice(index, index + BULK_CREATE_SYNC_CHUNK_SIZE);
           const chunkIds = new Set(chunk.map((entry) => entry.local_id));
           try {
@@ -3487,6 +3599,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
 
       for (const entry of syncable) {
+        // Same rationale as the bulk-chunk loop above: re-check every entry so
+        // pausing mid-run stops the remaining queue from uploading.
+        if (syncPausedRef.current) {
+          break;
+        }
         if (bulkSyncedLocalIds.has(entry.local_id)) {
           continue;
         }
@@ -3680,66 +3797,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         isAnonymous: session.user.is_anonymous !== false,
       };
 
-      // Account-switch guard: before pulling, reconcile the local cache with the
-      // signed-in user so a pull can never treat another account's rows as
-      // remote deletions. Anonymous data carries over (re-home); a different
-      // real account's cache is dropped (it stays safe in that account's cloud).
-      try {
-        const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
-        const previousAnon = (await repository.getMeta(SYNCED_USER_ANON_KEY)) === 'true';
-        const plan = planAccountTransition(
-          previousUserId ? { id: previousUserId, isAnonymous: previousAnon } : null,
-          currentUser,
-          bookmarksRef.current ?? [],
-        );
-        await applyAccountTransition(
-          plan,
-          repository,
-          setBookmarks,
-          setQueue,
-          makeLocalId,
-          ensureRepositoryReady,
-          {
-            rehome: (idMap) => {
-              // Carry the old→new id forward so a screen holding a re-homed
-              // bookmark's old id still resolves it via getBookmark.
-              for (const [oldId, newId] of idMap) {
-                idAliases.current.set(oldId, newId);
-              }
-              // Re-key tag state from the re-homed bookmarks' old ids onto their
-              // new local ids so the carried-over tags upload (via the syncTagOps
-              // call below) against the row that now exists in the new account.
-              applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
-              const links = tagDataRef.current.bookmarkTags.map((link) => {
-                const newId = idMap.get(link.bookmark_id);
-                return newId ? { ...link, bookmark_id: newId } : link;
-              });
-              applyTagData({ ...tagDataRef.current, bookmarkTags: links });
-              // Re-key AI-suggestion bookkeeping the same way, so the carried-
-              // over bookmark keeps its retry eligibility under its new id
-              // instead of stranding it on the stale old one.
-              remapAiRetryIdentity(idMap);
-            },
-            drop: (ids) => {
-              // Real A→real B switch: purge A's pending tag ops + links so the
-              // syncTagOps call below (now under B's auth) can't upload A's tags
-              // as B or surface them in B's UI.
-              applyTagOps(dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids));
-              const dropped = new Set(ids);
-              const links = tagDataRef.current.bookmarkTags.filter(
-                (link) => !dropped.has(link.bookmark_id),
-              );
-              applyTagData({ ...tagDataRef.current, bookmarkTags: links });
-              // Purge A's AI-suggestion bookkeeping too, so checkAiRetries (no
-              // ownership check) can't fire requestAiEnrichment against A's
-              // bookmark id under B's now-active session.
-              dropAiRetryBookkeeping(ids);
-            },
-          },
-        );
-      } catch (error) {
-        logStorageError('account transition', error);
-      }
+      // Before pulling: reconcile the local cache with the signed-in user so
+      // the pull can never treat another account's rows as remote deletions.
+      await reconcileAccountTransition(currentUser);
 
       // Upload any queued local-first tag ops before pulling, so the pull's
       // server snapshot already reflects them.
@@ -3750,123 +3810,127 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
       // Pull phase: bring down remote changes (other devices, cloud AI
       // enrichment). Local rows with queued work are never overwritten.
-      try {
-        const result = await pullRemoteChanges(
-          api,
-          repository,
-          () => bookmarksRef.current ?? [],
-          (bookmarkId) =>
-            deletedIds.current.has(bookmarkId) ||
-            queueRef.current.some(
-              (queued) => queued.local_id === bookmarkId && queued.sync_status !== 'synced',
-            ),
-          currentUser,
-        );
-        if (result.upserts.length > 0 || result.deletions.length > 0) {
-          const upsertIds = new Set(result.upserts.map((bookmark) => bookmark.id));
-          const removed = new Set(result.deletions);
-          setBookmarks((current) => [
-            ...(current ?? []).filter(
-              (bookmark) => !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
-            ),
-            ...result.upserts,
-          ]);
-        }
-        if (result.enrichments.length > 0) {
-          // Flag enrichments that arrived unwitnessed (a server-side trigger's
-          // result, or another device's) for the Inbox banner. Flag a row when
-          // it's brand new OR a genuine update — the edge function upserts on
-          // `bookmark_id` and keeps the same enrichment id, so a re-enrichment
-          // from another device reuses the id; gating on id novelty alone would
-          // miss those changed suggestions. Compare `updated_at` so a true update
-          // flags while the pull's watermark-overlap re-fetch of an *unchanged*
-          // row (same timestamp) doesn't re-surface a suggestion already seen.
-          const knownById = new Map(
-            enrichmentsRef.current.map((enrichment) => [enrichment.id, enrichment] as const),
+      // Re-checked here (not just at entry) so pausing mid-run — after the
+      // account reconciliation above but before this point — still skips it.
+      if (!syncPausedRef.current) {
+        try {
+          const result = await pullRemoteChanges(
+            api,
+            repository,
+            () => bookmarksRef.current ?? [],
+            (bookmarkId) =>
+              deletedIds.current.has(bookmarkId) ||
+              queueRef.current.some(
+                (queued) => queued.local_id === bookmarkId && queued.sync_status !== 'synced',
+              ),
+            currentUser,
           );
-          let anyRetryCleared = false;
-          // STASH #578 Phase 2: extend the burst-completion toast (STASH #574
-          // Phase 1, `AI_ENRICHMENT_BURST_TOAST_MIN`) to also cover
-          // enrichments this sync pull delivered that this device didn't
-          // itself just dispatch — the background worker's (or another
-          // device's) output. Count only rows genuinely new/updated to this
-          // device (isNewOrNewer below) AND not currently attributed to this
-          // device's own direct-dispatch loop (aiEnriching.current): a
-          // direct dispatch's own successful response already lands in
-          // enrichmentsRef with the SAME updated_at before this pull can ever
-          // see it again (the watermark overlap re-fetches it, but isNewOrNewer
-          // is then false), so this in-flight check only matters for the rare
-          // race where a pull observes a row before this device's own
-          // in-flight request settles — without it, that one row would get
-          // double-counted (once here, once by the direct-dispatch settle
-          // handler below).
-          let workerDrivenCount = 0;
-          for (const enrichment of result.enrichments) {
-            const known = knownById.get(enrichment.id);
-            const isNewOrNewer = !known || enrichment.updated_at > known.updated_at;
-            if (isNewOrNewer) {
-              noteUnseenSuggestions(enrichment);
-              if (!aiEnriching.current.has(enrichment.bookmark_id)) {
-                workerDrivenCount += 1;
+          if (result.upserts.length > 0 || result.deletions.length > 0) {
+            const upsertIds = new Set(result.upserts.map((bookmark) => bookmark.id));
+            const removed = new Set(result.deletions);
+            setBookmarks((current) => [
+              ...(current ?? []).filter(
+                (bookmark) => !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
+              ),
+              ...result.upserts,
+            ]);
+          }
+          if (result.enrichments.length > 0) {
+            // Flag enrichments that arrived unwitnessed (a server-side trigger's
+            // result, or another device's) for the Inbox banner. Flag a row when
+            // it's brand new OR a genuine update — the edge function upserts on
+            // `bookmark_id` and keeps the same enrichment id, so a re-enrichment
+            // from another device reuses the id; gating on id novelty alone would
+            // miss those changed suggestions. Compare `updated_at` so a true update
+            // flags while the pull's watermark-overlap re-fetch of an *unchanged*
+            // row (same timestamp) doesn't re-surface a suggestion already seen.
+            const knownById = new Map(
+              enrichmentsRef.current.map((enrichment) => [enrichment.id, enrichment] as const),
+            );
+            let anyRetryCleared = false;
+            // STASH #578 Phase 2: extend the burst-completion toast (STASH #574
+            // Phase 1, `AI_ENRICHMENT_BURST_TOAST_MIN`) to also cover
+            // enrichments this sync pull delivered that this device didn't
+            // itself just dispatch — the background worker's (or another
+            // device's) output. Count only rows genuinely new/updated to this
+            // device (isNewOrNewer below) AND not currently attributed to this
+            // device's own direct-dispatch loop (aiEnriching.current): a
+            // direct dispatch's own successful response already lands in
+            // enrichmentsRef with the SAME updated_at before this pull can ever
+            // see it again (the watermark overlap re-fetches it, but isNewOrNewer
+            // is then false), so this in-flight check only matters for the rare
+            // race where a pull observes a row before this device's own
+            // in-flight request settles — without it, that one row would get
+            // double-counted (once here, once by the direct-dispatch settle
+            // handler below).
+            let workerDrivenCount = 0;
+            for (const enrichment of result.enrichments) {
+              const known = knownById.get(enrichment.id);
+              const isNewOrNewer = !known || enrichment.updated_at > known.updated_at;
+              if (isNewOrNewer) {
+                noteUnseenSuggestions(enrichment);
+                if (!aiEnriching.current.has(enrichment.bookmark_id)) {
+                  workerDrivenCount += 1;
+                }
+              }
+              // This bookmark now has an enrichment row through some path other
+              // than this device's own requestAiEnrichment call — a server-side
+              // trigger, or another device's request, pulled down by normal
+              // sync. Clear any armed retry marker so checkAiRetries doesn't
+              // keep firing a redundant ai-enrich request for a bookmark that's
+              // actually already enriched. Gate on the same new-or-newer check
+              // as the unseen-suggestions flag above: the pull's watermark has a
+              // ~5-minute overlap window and can re-return the same
+              // already-known, unchanged row on a later pull. Without this
+              // gate, that re-delivery would clear a retry marker that a
+              // separate, later failed refresh attempt legitimately armed —
+              // even though nothing new actually arrived.
+              if (isNewOrNewer && enrichment.bookmark_id in aiRetryState.current) {
+                clearAiRetry(enrichment.bookmark_id);
+                anyRetryCleared = true;
+              }
+              // Parallel check for the confirmed-server-queued marker (see
+              // AI_SERVER_QUEUED_KEY) — this is the PRIMARY way it's expected
+              // to clear in practice: the background overflow worker's
+              // delivered result lands right here via ordinary sync. Same
+              // watermark-overlap gate as the retry-marker check above, and for
+              // the same reason: a stale re-delivery of an already-known,
+              // unchanged row must not be mistaken for a fresh arrival.
+              if (isNewOrNewer && aiServerQueued.current.has(enrichment.bookmark_id)) {
+                clearAiServerQueued(enrichment.bookmark_id);
               }
             }
-            // This bookmark now has an enrichment row through some path other
-            // than this device's own requestAiEnrichment call — a server-side
-            // trigger, or another device's request, pulled down by normal
-            // sync. Clear any armed retry marker so checkAiRetries doesn't
-            // keep firing a redundant ai-enrich request for a bookmark that's
-            // actually already enriched. Gate on the same new-or-newer check
-            // as the unseen-suggestions flag above: the pull's watermark has a
-            // ~5-minute overlap window and can re-return the same
-            // already-known, unchanged row on a later pull. Without this
-            // gate, that re-delivery would clear a retry marker that a
-            // separate, later failed refresh attempt legitimately armed —
-            // even though nothing new actually arrived.
-            if (isNewOrNewer && enrichment.bookmark_id in aiRetryState.current) {
-              clearAiRetry(enrichment.bookmark_id);
-              anyRetryCleared = true;
+            if (anyRetryCleared) {
+              syncAiRetryIds();
             }
-            // Parallel check for the confirmed-server-queued marker (see
-            // AI_SERVER_QUEUED_KEY) — this is the PRIMARY way it's expected
-            // to clear in practice: the background overflow worker's
-            // delivered result lands right here via ordinary sync. Same
-            // watermark-overlap gate as the retry-marker check above, and for
-            // the same reason: a stale re-delivery of an already-known,
-            // unchanged row must not be mistaken for a fresh arrival.
-            if (isNewOrNewer && aiServerQueued.current.has(enrichment.bookmark_id)) {
-              clearAiServerQueued(enrichment.bookmark_id);
+            // Second producer into the same consumer state as the direct-dispatch
+            // drain loop's toast (below): same threshold, same shape, just a
+            // different source of "N bookmarks summarized & tagged" completions.
+            if (workerDrivenCount >= AI_ENRICHMENT_BURST_TOAST_MIN) {
+              aiBurstTokenSeq.current += 1;
+              setAiEnrichmentBurstToast({ count: workerDrivenCount, token: aiBurstTokenSeq.current });
             }
+            setEnrichments((current) =>
+              mergeById(
+                result.enrichments,
+                current,
+                (enrichment) => enrichment.id,
+              ),
+            );
           }
-          if (anyRetryCleared) {
-            syncAiRetryIds();
-          }
-          // Second producer into the same consumer state as the direct-dispatch
-          // drain loop's toast (below): same threshold, same shape, just a
-          // different source of "N bookmarks summarized & tagged" completions.
-          if (workerDrivenCount >= AI_ENRICHMENT_BURST_TOAST_MIN) {
-            aiBurstTokenSeq.current += 1;
-            setAiEnrichmentBurstToast({ count: workerDrivenCount, token: aiBurstTokenSeq.current });
-          }
-          setEnrichments((current) =>
-            mergeById(
-              result.enrichments,
-              current,
-              (enrichment) => enrichment.id,
-            ),
+          // Re-layer any still-unsynced local tag ops over the fresh server
+          // snapshot so optimistic tags aren't dropped by the wholesale replace.
+          const mergedTagData = applyPendingTagOps(
+            result.tagData,
+            pendingTagOpsRef.current,
+            auth.userId ?? mockUserId,
           );
+          tagDataRef.current = mergedTagData;
+          setTagData(mergedTagData);
+          setLastPulledAt(result.pulledAt);
+        } catch (error) {
+          logStorageError('pull', error);
         }
-        // Re-layer any still-unsynced local tag ops over the fresh server
-        // snapshot so optimistic tags aren't dropped by the wholesale replace.
-        const mergedTagData = applyPendingTagOps(
-          result.tagData,
-          pendingTagOpsRef.current,
-          auth.userId ?? mockUserId,
-        );
-        tagDataRef.current = mergedTagData;
-        setTagData(mergedTagData);
-        setLastPulledAt(result.pulledAt);
-      } catch (error) {
-        logStorageError('pull', error);
       }
     } catch (error) {
       logStorageError('sync run', error);
@@ -3884,7 +3948,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       broadcastSyncNudgeRef.current?.();
     }
     return mutationsPushed;
-  }, [auth, queue, enqueueMutation, requestAiEnrichment, syncTagOps, noteUnseenSuggestions]);
+  }, [
+    auth,
+    queue,
+    enqueueMutation,
+    requestAiEnrichment,
+    syncTagOps,
+    noteUnseenSuggestions,
+    reconcileAccountTransition,
+  ]);
 
   // Realtime Sync initialization
   const { broadcastSyncNudge } = useRealtimeSync({
