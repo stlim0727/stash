@@ -60,6 +60,7 @@ jest.mock('@/api/bookmarks', () => {
     input.tags.map((name) => ({ id: `tag-${name}`, name, slug: name })),
   );
   const removeTags = jest.fn(async () => {});
+  const resetLibrary = jest.fn(async () => ({ bookmarks: 0 }));
   const empty = async () => [];
   // Ids the "server" knows about — so a seeded already-synced local bookmark
   // isn't treated as a remote deletion by the very first pull. Tests that
@@ -83,6 +84,7 @@ jest.mock('@/api/bookmarks', () => {
       createBookmark,
       addTags,
       removeTags,
+      resetLibrary,
     }),
   };
 });
@@ -274,4 +276,51 @@ test('adding a tag while paused does not upload until sync resumes', async () =>
     result.current.setSyncPaused(false);
   });
   await waitFor(() => expect(apiMock.__addTagsMock).toHaveBeenCalledTimes(1));
+});
+
+test('resetLibrary succeeds even while a paused syncNow call is mid-check', async () => {
+  // Reported after shipping the account-isolation fix: the paused branch used
+  // to hold syncInFlight for its ENTIRE check (including the routine read),
+  // and the auto-sync effect calls syncNow every time the queue changes and
+  // stays non-empty — which a paused queue always does. On real devices that
+  // read is a genuine SQLite call (hundreds of ms, per production
+  // diagnostics), so the lock was held often enough that resetLibrary's own
+  // busy-guard (the same syncInFlight flag) could never find it clear — "says
+  // busy" never resolved. A fake in-memory repository has no such latency, so
+  // this gates the meta read to force the race deterministically.
+  const { result } = await renderReadyStore();
+  await act(async () => {
+    result.current.setSyncPaused(true);
+  });
+
+  const originalGetMeta = fakeRepo.repository.getMeta;
+  let releaseGate: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  fakeRepo.repository.getMeta = (key: string) =>
+    key === 'synced_user_id' ? gate.then(() => originalGetMeta(key)) : originalGetMeta(key);
+
+  // Adding a bookmark while paused triggers the auto-sync effect's syncNow()
+  // call, which immediately blocks on the gated read above.
+  let syncPromise: Promise<boolean> | undefined;
+  await act(async () => {
+    result.current.addBookmark({ url: 'https://example.com/still-pending' });
+  });
+  await act(async () => {
+    syncPromise = result.current.syncNow();
+    await Promise.resolve();
+  });
+
+  let outcome: Awaited<ReturnType<typeof result.current.resetLibrary>> | null = null;
+  await act(async () => {
+    outcome = await result.current.resetLibrary();
+  });
+  expect(outcome).toEqual({ ok: true });
+
+  releaseGate();
+  fakeRepo.repository.getMeta = originalGetMeta;
+  await act(async () => {
+    await syncPromise;
+  });
 });

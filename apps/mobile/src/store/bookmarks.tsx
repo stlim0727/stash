@@ -3229,24 +3229,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Even while paused, a real account switch must never leave the
       // previous account's cached bookmarks visible under the new session —
       // the pause toggle hiding a cross-account data leak instead of
-      // preventing one (Sentry STASH-3K review). Checked+reconciled via
-      // syncInFlight ALONE, deliberately never touching isSyncing: the
-      // auto-sync effect below re-fires on every isSyncing change, and a
-      // paused queue can never drain to satisfy its "still pending" check —
-      // flipping isSyncing on every no-op paused pass would hot-loop it.
-      syncInFlight.current = true;
-      try {
-        await ensureRepositoryReady();
-        const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
-        const sessionUser = auth.session.user;
-        if (previousUserId !== null && previousUserId !== sessionUser.id) {
+      // preventing one (Sentry STASH-3K review). The read below is cheap and
+      // deliberately NOT guarded by syncInFlight: the auto-sync effect below
+      // re-fires syncNow on every queue change, and a paused queue never
+      // drains — so this runs often, and holding syncInFlight for the whole
+      // check would starve resetLibrary's own busy-guard, which reads the
+      // same flag (Sentry STASH-3K review, reported after shipping the first
+      // version of this fix: "reset says busy" never cleared because the
+      // lock was almost always held). The lock is only taken for the
+      // reconcile itself, which is rare (self-terminates after one run) and
+      // does write local state.
+      await ensureRepositoryReady();
+      const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
+      const sessionUser = auth.session.user;
+      if (previousUserId !== null && previousUserId !== sessionUser.id) {
+        syncInFlight.current = true;
+        try {
           await reconcileAccountTransition({
             id: sessionUser.id,
             isAnonymous: sessionUser.is_anonymous !== false,
           });
+        } finally {
+          syncInFlight.current = false;
         }
-      } finally {
-        syncInFlight.current = false;
       }
       syncPendingRef.current = true;
       return false;
