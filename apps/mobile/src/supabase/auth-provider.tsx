@@ -14,7 +14,7 @@ import { Platform } from 'react-native';
 
 import { setSentryUser } from '@/observability/sentry';
 import { describeSupabaseConfig, getSupabaseConfigState } from '@/supabase/config';
-import { createSupabaseClient } from '@/supabase/client';
+import { createSupabaseClient, isSessionExpired } from '@/supabase/client';
 import { trackAppVersionMetadata } from '@/supabase/app-version-tracker';
 import { runOAuthSignIn } from '@/supabase/run-oauth';
 import type { OAuthProvider, SupabaseAuthSession } from '@/supabase/types';
@@ -86,6 +86,13 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   // anonymous users.
   const inFlight = useRef<Promise<SupabaseAuthSession | null> | null>(null);
 
+  // Kept in sync every render so ensureAnonymousSession can read the latest
+  // session/status without needing them in its own dependency array.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
   const ensureAnonymousSession = useCallback((forceRefresh = false): Promise<SupabaseAuthSession | null> => {
     if (configState.status === 'missing') {
       setStatus('not_configured');
@@ -97,11 +104,37 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       return inFlight.current;
     }
 
-    setStatus('loading');
+    // A locally-unexpired session whose `status` doesn't match it (e.g. a
+    // prior forced refresh failed on a transient network error, leaving
+    // `status` stuck on `error`/`session_expired` while the same
+    // server-rejected token still sits in `sessionRef`) must not be
+    // silently re-served by restoreSession's own "not locally expired, skip
+    // the network" fast path below — that would just re-mark the same bad
+    // token as good without ever actually refreshing it. Force a real
+    // refresh in that case, regardless of what the caller asked for.
+    const current = sessionRef.current;
+    const statusMismatch =
+      current !== null && !isSessionExpired(current) && statusRef.current !== statusForSession(current);
+    const effectiveForceRefresh = forceRefresh || statusMismatch;
+
+    // Many call sites (each auto AI-enrichment dispatch, every sync pass)
+    // call this redundantly during a long sync. `restoreSession` below is
+    // itself cheap (no network) when a still-valid, status-matching session
+    // is already stored, so we always call it — including on web, where
+    // that storage read is what picks up another tab's sign-out/account
+    // switch — rather than short-circuiting in-memory and risking staleness.
+    // What we DON'T do is unconditionally announce `loading` first: only
+    // flip to it when this call is actually about to do real work. Doing so
+    // unconditionally was flickering the signed-in/signed-out UI on every
+    // redundant call during a large sync (Sentry STASH-3D); the case that
+    // turns out to be a no-op now settles without ever showing `loading`.
+    if (effectiveForceRefresh || !current || isSessionExpired(current)) {
+      setStatus('loading');
+    }
     const client = createSupabaseClient();
     const run = (async (): Promise<SupabaseAuthSession | null> => {
       try {
-        const restored = await client.restoreSession(forceRefresh);
+        const restored = await client.restoreSession(effectiveForceRefresh);
         if (restored.outcome === 'active') {
           const { session: active } = restored;
           setSession(active);
@@ -208,11 +241,6 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setSentryUser(userId);
   }, [userId]);
-
-  // Keep a ref to the latest session so the version-tracking effect can read it
-  // without re-firing every time the session object identity changes.
-  const sessionRef = useRef(session);
-  sessionRef.current = session;
 
   // Stamp the current app version / platform onto the user's metadata so we can
   // report which version each user is on. Fire-and-forget and change-only: it

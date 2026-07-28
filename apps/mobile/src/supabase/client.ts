@@ -95,7 +95,7 @@ export type SessionRestoreResult =
 
 const EXPIRY_MARGIN_SECONDS = 60;
 
-function isSessionExpired(session: SupabaseAuthSession): boolean {
+export function isSessionExpired(session: SupabaseAuthSession): boolean {
   if (!session.expires_at) {
     return true;
   }

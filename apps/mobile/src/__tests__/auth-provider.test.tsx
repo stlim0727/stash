@@ -30,12 +30,17 @@ jest.mock('@/supabase/config', () => ({
 }));
 
 jest.mock('@/supabase/client', () => {
+  const actual = jest.requireActual('@/supabase/client');
   const client = {
     restoreSession: jest.fn(async () => ({ outcome: 'none' })),
     signInAnonymously: jest.fn(async () => mockAnonSession),
     signOut: jest.fn(async () => {}),
   };
-  return { __client: client, createSupabaseClient: () => client };
+  return {
+    __client: client,
+    createSupabaseClient: () => client,
+    isSessionExpired: actual.isSessionExpired,
+  };
 });
 
 jest.mock('@/supabase/run-oauth', () => ({
@@ -138,6 +143,104 @@ test('signOut revokes the session and drops to signed_out without minting a new 
   expect(result.current.email).toBeNull();
   // Crucially, NO additional anonymous user was created on logout.
   expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(1);
+});
+
+test('repeated ensureAnonymousSession calls with a live, status-matching session do not flicker status through loading (Sentry STASH-3D)', async () => {
+  // The reported bug: during a large sync, many independent call sites (each
+  // auto AI-enrichment dispatch, every sync pass) call ensureAnonymousSession
+  // repeatedly. With a still-valid, status-matching session in hand, a
+  // redundant call must settle without ever bouncing `status` through
+  // `loading` — that flip flickered the signed-in/signed-out UI. It still
+  // consults restoreSession (so shared/cross-tab storage stays authoritative
+  // — see the web multi-tab test below), which itself resolves without a
+  // network round trip when the stored session is still valid.
+  const statuses: string[] = [];
+  const { result } = await renderHook(
+    () => {
+      const auth = useSupabaseAuth();
+      statuses.push(auth.status);
+      return auth;
+    },
+    { wrapper },
+  );
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+  statuses.length = 0;
+
+  fakeClient.restoreSession.mockClear();
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAnonSession });
+
+  await act(async () => {
+    const resolved = await result.current.ensureAnonymousSession();
+    expect(resolved?.access_token).toBe(mockAnonSession.access_token);
+  });
+
+  // restoreSession(false) was called (no forced refresh), and any re-render
+  // along the way (e.g. from the `message` copy changing) never observed
+  // `status` as anything but `anonymous` — no `loading` flicker.
+  expect(fakeClient.restoreSession).toHaveBeenLastCalledWith(false);
+  expect(statuses).not.toContain('loading');
+  expect(result.current.status).toBe('anonymous');
+});
+
+test('a failed forced refresh does not get masked by the fast path on the next call', async () => {
+  // Codex review on the fix above: a forced refresh (e.g. after a 401) that
+  // fails on a transient network error sets `status` to `error` WITHOUT
+  // clearing the still locally-unexpired session. A later non-forced call
+  // must notice the status/session mismatch and force a REAL refresh — not
+  // silently re-serve the same server-rejected token via restoreSession's
+  // own "not locally expired" fast path, which would leave `status` stuck
+  // on `error` (Settings shows sign-in, background sync stays disabled)
+  // until the token's local expiry margin elapses or the app restarts.
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  fakeClient.restoreSession.mockRejectedValueOnce(new Error('network down'));
+  await act(async () => {
+    const resolved = await result.current.ensureAnonymousSession(true);
+    expect(resolved).toBeNull();
+  });
+  expect(result.current.status).toBe('error');
+  // The session itself is untouched by the failed forced refresh — it still
+  // looks locally unexpired, which is exactly what could mask the bad status.
+  expect(result.current.session?.access_token).toBe(mockAnonSession.access_token);
+
+  fakeClient.restoreSession.mockClear();
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAnonSession });
+  await act(async () => {
+    await result.current.ensureAnonymousSession();
+  });
+
+  // The status/session mismatch forced a real refresh attempt (not a plain
+  // restore that would've just re-served the same bad token) and recovered.
+  expect(fakeClient.restoreSession).toHaveBeenLastCalledWith(true);
+  expect(result.current.status).toBe('anonymous');
+});
+
+test('a background browser tab reconciles a session another tab wrote to shared storage (Codex review, web multi-tab)', async () => {
+  // Web sessions are shared via localStorage across same-origin tabs. If tab
+  // A signs into a different account, tab B's still-unexpired in-memory
+  // session must not be handed back unconditionally — that would let tab B
+  // keep syncing under the stale identity until token expiry or reload.
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  fakeClient.restoreSession.mockClear();
+  // Simulates another tab having signed into a real account: storage now
+  // holds a different, authenticated session even though this tab's cached
+  // anonymous session still looks locally unexpired.
+  fakeClient.restoreSession.mockResolvedValueOnce({ outcome: 'active', session: mockAuthedSession });
+
+  await act(async () => {
+    const resolved = await result.current.ensureAnonymousSession();
+    expect(resolved?.access_token).toBe(mockAuthedSession.access_token);
+  });
+
+  // Consulted storage (not forced — this isn't the stale-token-mismatch
+  // case, just an ordinary redundant call) and picked up the other tab's
+  // session instead of silently keeping the stale in-memory one.
+  expect(fakeClient.restoreSession).toHaveBeenLastCalledWith(false);
+  expect(result.current.status).toBe('authenticated');
+  expect(result.current.session?.access_token).toBe(mockAuthedSession.access_token);
 });
 
 test('a save after logout lazily mints an anonymous session', async () => {
