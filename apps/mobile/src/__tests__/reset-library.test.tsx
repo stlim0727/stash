@@ -56,6 +56,9 @@ jest.mock('@/api/bookmarks', () => {
     id: 'new-remote-id',
     url: payload.url ?? null,
   }));
+  const requestEnrichmentMock = jest.fn(async () => {
+    throw new Error('requestEnrichment not stubbed for this test');
+  });
   return {
     __setRemote: (rows: Array<{ id: string }>) => {
       remote = rows;
@@ -63,6 +66,7 @@ jest.mock('@/api/bookmarks', () => {
     __resetLibraryMock: resetLibraryMock,
     __updateBookmarkMock: updateBookmarkMock,
     __createBookmarkMock: createBookmarkMock,
+    __requestEnrichmentMock: requestEnrichmentMock,
     createBookmarkApi: () => ({
       listBookmarksUpdatedSince: empty,
       listBookmarkIds: async () => remote.map((row) => row.id),
@@ -73,6 +77,7 @@ jest.mock('@/api/bookmarks', () => {
       createBookmark: createBookmarkMock,
       updateBookmark: updateBookmarkMock,
       resetLibrary: resetLibraryMock,
+      requestEnrichment: requestEnrichmentMock,
     }),
   };
 });
@@ -82,7 +87,11 @@ jest.mock('@/domain/enrichment', () => ({
 }));
 
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
-import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
+import {
+  makeEnrichment,
+  makeStoredBookmark,
+  type FakeRepositoryModule,
+} from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 const authMock = jest.requireMock('@/supabase/auth-provider') as {
@@ -93,6 +102,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
   __resetLibraryMock: jest.Mock;
   __updateBookmarkMock: jest.Mock;
   __createBookmarkMock: jest.Mock;
+  __requestEnrichmentMock: jest.Mock;
 };
 
 const REMOTE_ID = '1a2b3c4d-0000-4000-8000-00000000abcd';
@@ -210,6 +220,87 @@ test('a failed remote wipe changes nothing locally', async () => {
   // The watermark was NOT reset (the startup pull may have advanced it, but a
   // failed reset must never blank it into a full-refresh state).
   expect(fakeRepo.__meta(LAST_PULLED_AT_KEY)).not.toBe('');
+});
+
+test('an AI enrichment in flight when the reset lands is discarded, not resurrected (PR #604 review)', async () => {
+  const { result } = await mountSettled();
+
+  // Start an enrichment request and hold its response open across the reset.
+  let resolveEnrichment!: (value: unknown) => void;
+  apiMock.__requestEnrichmentMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveEnrichment = resolve;
+      }),
+  );
+  let requestPromise: Promise<string | null> = Promise.resolve(null);
+  await act(async () => {
+    requestPromise = result.current.requestAiEnrichment(REMOTE_ID);
+  });
+  expect(apiMock.__requestEnrichmentMock).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await result.current.resetLibrary();
+  });
+
+  // The in-flight request now settles successfully — AFTER the reset. Its
+  // result must be dropped, not written into the just-cleared state.
+  await act(async () => {
+    resolveEnrichment(makeEnrichment({ bookmark_id: REMOTE_ID }));
+    await requestPromise;
+  });
+
+  expect(result.current.getEnrichment(REMOTE_ID)).toBeUndefined();
+  expect(await fakeRepo.repository.listEnrichments()).toHaveLength(0);
+});
+
+test('an AI enrichment FAILING after the reset arms no retry bookkeeping for the deleted bookmark', async () => {
+  const { result } = await mountSettled();
+
+  let rejectEnrichment!: (error: Error) => void;
+  apiMock.__requestEnrichmentMock.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectEnrichment = reject;
+      }),
+  );
+  let requestPromise: Promise<string | null> = Promise.resolve(null);
+  await act(async () => {
+    requestPromise = result.current.requestAiEnrichment(REMOTE_ID);
+  });
+  expect(apiMock.__requestEnrichmentMock).toHaveBeenCalledTimes(1);
+
+  await act(async () => {
+    await result.current.resetLibrary();
+  });
+
+  await act(async () => {
+    rejectEnrichment(new Error('edge function down'));
+    await requestPromise;
+  });
+
+  // armAiRetry must NOT have written a retry marker for the wiped bookmark
+  // ('ai_suggestion_retry' is the store's durable AI-retry meta key; the reset
+  // itself persists an empty map).
+  const retryMeta = fakeRepo.__meta('ai_suggestion_retry');
+  expect(JSON.parse(retryMeta || '{}')).toEqual({});
+});
+
+test('a queued auto-dispatch for a bookmark that no longer exists is a no-op (no request fired)', async () => {
+  const { result } = await mountSettled();
+  await act(async () => {
+    await result.current.resetLibrary();
+  });
+
+  // Simulate the stagger drain (or a stale retry check) dispatching an id
+  // that the reset just deleted: requestAiEnrichment must refuse locally
+  // without hitting the network.
+  let outcome: string | null = 'unset';
+  await act(async () => {
+    outcome = await result.current.requestAiEnrichment(REMOTE_ID);
+  });
+  expect(outcome).toBeNull();
+  expect(apiMock.__requestEnrichmentMock).not.toHaveBeenCalled();
 });
 
 test('resetLibrary refuses without a session (online-only, signed-in-only)', async () => {
