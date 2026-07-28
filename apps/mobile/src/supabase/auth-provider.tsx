@@ -14,7 +14,7 @@ import { Platform } from 'react-native';
 
 import { setSentryUser } from '@/observability/sentry';
 import { describeSupabaseConfig, getSupabaseConfigState } from '@/supabase/config';
-import { createSupabaseClient } from '@/supabase/client';
+import { createSupabaseClient, isSessionExpired } from '@/supabase/client';
 import { trackAppVersionMetadata } from '@/supabase/app-version-tracker';
 import { runOAuthSignIn } from '@/supabase/run-oauth';
 import type { OAuthProvider, SupabaseAuthSession } from '@/supabase/types';
@@ -86,6 +86,11 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   // anonymous users.
   const inFlight = useRef<Promise<SupabaseAuthSession | null> | null>(null);
 
+  // Kept in sync every render so ensureAnonymousSession can read the latest
+  // session without needing it in its own dependency array.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
   const ensureAnonymousSession = useCallback((forceRefresh = false): Promise<SupabaseAuthSession | null> => {
     if (configState.status === 'missing') {
       setStatus('not_configured');
@@ -95,6 +100,16 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
 
     if (inFlight.current && !forceRefresh) {
       return inFlight.current;
+    }
+
+    // Many call sites (each auto AI-enrichment dispatch, every sync pass)
+    // call this redundantly during a long sync. When the held session is
+    // still live, hand it back as-is instead of bouncing `status` through
+    // `loading` and back — that flip was flickering the signed-in/signed-out
+    // UI dozens of times during a large sync (Sentry STASH-3D).
+    const current = sessionRef.current;
+    if (!forceRefresh && current && !isSessionExpired(current)) {
+      return Promise.resolve(current);
     }
 
     setStatus('loading');
@@ -208,11 +223,6 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setSentryUser(userId);
   }, [userId]);
-
-  // Keep a ref to the latest session so the version-tracking effect can read it
-  // without re-firing every time the session object identity changes.
-  const sessionRef = useRef(session);
-  sessionRef.current = session;
 
   // Stamp the current app version / platform onto the user's metadata so we can
   // report which version each user is on. Fire-and-forget and change-only: it

@@ -30,12 +30,17 @@ jest.mock('@/supabase/config', () => ({
 }));
 
 jest.mock('@/supabase/client', () => {
+  const actual = jest.requireActual('@/supabase/client');
   const client = {
     restoreSession: jest.fn(async () => ({ outcome: 'none' })),
     signInAnonymously: jest.fn(async () => mockAnonSession),
     signOut: jest.fn(async () => {}),
   };
-  return { __client: client, createSupabaseClient: () => client };
+  return {
+    __client: client,
+    createSupabaseClient: () => client,
+    isSessionExpired: actual.isSessionExpired,
+  };
 });
 
 jest.mock('@/supabase/run-oauth', () => ({
@@ -138,6 +143,29 @@ test('signOut revokes the session and drops to signed_out without minting a new 
   expect(result.current.email).toBeNull();
   // Crucially, NO additional anonymous user was created on logout.
   expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(1);
+});
+
+test('repeated ensureAnonymousSession calls with a live session do not flicker status through loading (Sentry STASH-3D)', async () => {
+  // The reported bug: during a large sync, many independent call sites (each
+  // auto AI-enrichment dispatch, every sync pass) call ensureAnonymousSession
+  // repeatedly. With a still-valid session in hand, the redundant calls must
+  // resolve directly rather than bouncing `status` through `loading`, which
+  // flickered the signed-in/signed-out UI.
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  fakeClient.restoreSession.mockClear();
+
+  await act(async () => {
+    const resolved = await result.current.ensureAnonymousSession();
+    expect(resolved?.access_token).toBe(mockAnonSession.access_token);
+  });
+
+  // No network/storage round trip (the old code called restoreSession, which
+  // set `status` to `loading` before it even resolved) and the same session
+  // handed straight back.
+  expect(fakeClient.restoreSession).not.toHaveBeenCalled();
+  expect(result.current.status).toBe('anonymous');
 });
 
 test('a save after logout lazily mints an anonymous session', async () => {
