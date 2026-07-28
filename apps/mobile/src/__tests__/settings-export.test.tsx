@@ -1,5 +1,6 @@
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
+import { Platform } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -36,8 +37,10 @@ jest.mock('expo-router', () => ({
 }));
 
 const mockDeliverExport = jest.fn(async (_file: unknown) => {});
+const mockSaveExportToDevice = jest.fn(async (_file: unknown) => true);
 jest.mock('@/share/export-data', () => ({
   deliverExport: (file: unknown) => mockDeliverExport(file),
+  saveExportToDevice: (file: unknown) => mockSaveExportToDevice(file),
 }));
 
 import SettingsScreen from '@/app/settings';
@@ -75,6 +78,7 @@ function renderSettings() {
 
 beforeEach(() => {
   mockDeliverExport.mockClear();
+  mockSaveExportToDevice.mockClear();
 });
 
 test('exports an HTML bookmarks file assembled from the stored library', async () => {
@@ -189,4 +193,70 @@ test('exports a CSV table assembled from the stored library', async () => {
   expect(firstRow).toContain('Local-first software');
   expect(firstRow).toContain('Research');
   expect(firstRow).toContain('reading');
+});
+
+// Android: picking a format opens a delivery sheet (share vs. save to device)
+// instead of sharing immediately. iOS/web keep the one-step flow, covered by
+// the tests above (jest-expo runs as iOS).
+describe('android delivery sheet', () => {
+  const defaultOSDescriptor = Object.getOwnPropertyDescriptor(Platform, 'OS')!;
+
+  beforeEach(() => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'android' });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(Platform, 'OS', defaultOSDescriptor);
+  });
+
+  async function openDeliverySheet() {
+    const bookmark = makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000dd',
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+    });
+    fakeRepo.__reset([bookmark], { tags: [], bookmarkTags: [], collections: [] });
+
+    const view = await renderSettings();
+    await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
+
+    await fireEvent.press(view.getByLabelText('Export my data'));
+    await waitFor(() => view.getByLabelText('Full backup (JSON)'));
+    await fireEvent.press(view.getByLabelText('Full backup (JSON)'));
+
+    // The format press must not deliver yet — the delivery sheet decides how.
+    expect(mockDeliverExport).not.toHaveBeenCalled();
+    expect(mockSaveExportToDevice).not.toHaveBeenCalled();
+    await waitFor(() => view.getByLabelText('Save to device'));
+    return view;
+  }
+
+  test('save to device routes the export through the SAF save path', async () => {
+    const view = await openDeliverySheet();
+
+    await fireEvent.press(view.getByLabelText('Save to device'));
+
+    await waitFor(() => expect(mockSaveExportToDevice).toHaveBeenCalledTimes(1));
+    expect(mockDeliverExport).not.toHaveBeenCalled();
+    const file = mockSaveExportToDevice.mock.calls[0][0] as {
+      filename: string;
+      mimeType: string;
+      contents: string;
+    };
+    expect(file.mimeType).toBe('application/json');
+    expect(file.filename).toMatch(/^stash-backup-\d{4}-\d{2}-\d{2}\.json$/);
+    expect(JSON.parse(file.contents).app).toBe('stash');
+  });
+
+  test('share keeps routing through the share-sheet delivery', async () => {
+    const view = await openDeliverySheet();
+
+    await fireEvent.press(view.getByLabelText('Share…'));
+
+    await waitFor(() => expect(mockDeliverExport).toHaveBeenCalledTimes(1));
+    expect(mockSaveExportToDevice).not.toHaveBeenCalled();
+    const file = mockDeliverExport.mock.calls[0][0] as { mimeType: string };
+    expect(file.mimeType).toBe('application/json');
+  });
 });
