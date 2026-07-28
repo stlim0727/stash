@@ -20,6 +20,8 @@ export interface EntrySyncResult {
   removedBookmarkId?: string;
 }
 
+export const BULK_CREATE_SYNC_CHUNK_SIZE = 50;
+
 /**
  * True when an `update` failed because the row is confirmed gone remotely —
  * deleted on this account (any device) or never owned by this user — as
@@ -115,6 +117,76 @@ function withoutOptionalBookmarkUpdateColumns(
     delete next[column];
   }
   return next;
+}
+
+function createUploadPayload(
+  entry: LocalPendingBookmark,
+  getBookmark: (id: string) => Bookmark | undefined,
+): CreateBookmarkInput {
+  const latestAtUpload = getBookmark(entry.local_id);
+  return latestAtUpload
+    ? {
+        ...entry.payload,
+        title: latestAtUpload.title ?? undefined,
+        notes: latestAtUpload.notes ?? undefined,
+      }
+    : entry.payload;
+}
+
+export async function syncCreateQueueEntryBatch(
+  api: BookmarkApi,
+  repository: BookmarkRepository,
+  entries: LocalPendingBookmark[],
+  getBookmark: (id: string) => Bookmark | undefined,
+): Promise<EntrySyncResult[]> {
+  if (entries.length === 0) {
+    return [];
+  }
+  if (entries.some((entry) => entry.operation !== 'create')) {
+    throw new Error('Bulk create sync only accepts create queue entries.');
+  }
+
+  const now = new Date().toISOString();
+  const uploadedPayloads = entries.map((entry) => createUploadPayload(entry, getBookmark));
+  const created = await api.createBookmarks(uploadedPayloads);
+  if (created.length !== entries.length) {
+    throw new Error('Bulk create sync returned the wrong number of results.');
+  }
+
+  const results: EntrySyncResult[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    const output = created[index]!;
+    const syncedEntry: LocalPendingBookmark = {
+      ...entry,
+      remote_id: output.bookmark_id,
+      sync_status: 'synced',
+      last_error: null,
+      updated_at: now,
+    };
+    await repository.updateQueueEntry(syncedEntry);
+
+    const localBookmark = getBookmark(entry.local_id);
+    if (localBookmark) {
+      const syncedBookmark: Bookmark = {
+        ...localBookmark,
+        id: output.bookmark_id,
+        sync_status: 'synced',
+        updated_at: now,
+      };
+      await repository.replaceBookmark(localBookmark.id, syncedBookmark);
+      results.push({
+        entry: syncedEntry,
+        bookmarkReplacement: { previousId: localBookmark.id, bookmark: syncedBookmark },
+        uploadedPayload: uploadedPayloads[index],
+      });
+      continue;
+    }
+
+    results.push({ entry: syncedEntry, uploadedPayload: uploadedPayloads[index] });
+  }
+
+  return results;
 }
 
 /**
@@ -313,14 +385,7 @@ export async function syncQueueEntry(
   // operation === 'create'
   // Send the LATEST user-authored fields, not the payload captured at save
   // time: the user may have edited title/notes before this upload ran.
-  const latestAtUpload = getBookmark(entry.local_id);
-  const payload: CreateBookmarkInput = latestAtUpload
-    ? {
-        ...entry.payload,
-        title: latestAtUpload.title ?? undefined,
-        notes: latestAtUpload.notes ?? undefined,
-      }
-    : entry.payload;
+  const payload = createUploadPayload(entry, getBookmark);
   try {
     const result = await api.createBookmark(payload);
     const syncedEntry: LocalPendingBookmark = {

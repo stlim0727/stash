@@ -38,6 +38,11 @@ export interface CreateBookmarkOutput {
   metadata_status: MetadataStatus;
 }
 
+export interface BulkCreateBookmarkOutput extends CreateBookmarkOutput {
+  client_id?: string | null;
+  url_hash?: string | null;
+}
+
 export interface ListBookmarksParams {
   query?: string;
   collection_id?: string | null;
@@ -319,6 +324,126 @@ export class BookmarkApi {
       status: 'created',
       metadata_status: created.metadata_status,
     };
+  }
+
+  async createBookmarks(inputs: CreateBookmarkInput[]): Promise<BulkCreateBookmarkOutput[]> {
+    if (inputs.length === 0) {
+      return [];
+    }
+
+    const timestamp = nowIso();
+    const prepared = inputs.map((input) => {
+      const payload = requirePayload(input);
+      const title = input.title?.trim() || null;
+      const description = input.description?.trim() || input.shared_text?.trim() || null;
+      const notes = input.notes?.trim() || null;
+      const sourceApp = input.source_app?.trim() || null;
+      const urlHash = payload.url ? canonicalizeUrl(payload.url) : null;
+      const clientId = input.client_id ?? null;
+      return {
+        urlHash,
+        clientId,
+        body: {
+          user_id: this.session.user.id,
+          url: payload.url,
+          canonical_url: null,
+          url_hash: urlHash,
+          client_id: clientId,
+          title,
+          description,
+          notes,
+          source_app: sourceApp,
+          content_type: payload.contentType,
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          collection_id: null,
+          is_archived: false,
+          deleted_at: null,
+          created_at: timestamp,
+          updated_at: timestamp,
+          last_saved_at: timestamp,
+          metadata_status: 'pending' as MetadataStatus,
+        },
+      };
+    });
+
+    const [existingByUrlHash, existingByClientId] = await Promise.all([
+      this.findActiveBookmarksByUrlHashes(
+        prepared.map((item) => item.urlHash).filter((value): value is string => value !== null),
+      ),
+      this.findBookmarksByClientIds(
+        prepared.map((item) => item.clientId).filter((value): value is string => value !== null),
+      ),
+    ]);
+
+    const outputs: Array<BulkCreateBookmarkOutput | null> = new Array(inputs.length).fill(null);
+    const duplicateIds = new Set<string>();
+    const inserts: Array<{ index: number; body: (typeof prepared)[number]['body'] }> = [];
+
+    prepared.forEach((item, index) => {
+      const existing =
+        (item.urlHash ? existingByUrlHash.get(item.urlHash) : null) ??
+        (item.clientId ? existingByClientId.get(item.clientId) : null);
+      if (existing) {
+        duplicateIds.add(existing.id);
+        outputs[index] = {
+          bookmark_id: existing.id,
+          status: 'duplicate',
+          metadata_status: existing.metadata_status,
+          client_id: existing.client_id,
+          url_hash: existing.url_hash,
+        };
+        return;
+      }
+      inserts.push({ index, body: item.body });
+    });
+
+    if (duplicateIds.size > 0) {
+      await this.updateLastSavedAt([...duplicateIds], timestamp);
+    }
+
+    if (inserts.length > 0) {
+      const rows = await this.client.request<RemoteBookmark[]>('/rest/v1/bookmarks', {
+        method: 'POST',
+        accessToken: this.session.access_token,
+        headers: { Prefer: 'return=representation' },
+        body: inserts.map((item) => item.body),
+      });
+      const rowsByClientId = new Map(
+        rows
+          .filter((row) => row.client_id)
+          .map((row) => [row.client_id as string, row] as const),
+      );
+      const rowsByUrlHash = new Map(
+        rows
+          .filter((row) => row.url_hash)
+          .map((row) => [row.url_hash as string, row] as const),
+      );
+      for (const item of inserts) {
+        const preparedItem = prepared[item.index]!;
+        const created =
+          (preparedItem.clientId ? rowsByClientId.get(preparedItem.clientId) : undefined) ??
+          (preparedItem.urlHash ? rowsByUrlHash.get(preparedItem.urlHash) : undefined);
+        if (!created) {
+          throw new Error('Supabase did not return every bulk-created bookmark.');
+        }
+        outputs[item.index] = {
+          bookmark_id: created.id,
+          status: 'created',
+          metadata_status: created.metadata_status,
+          client_id: created.client_id,
+          url_hash: created.url_hash,
+        };
+      }
+    }
+
+    return outputs.map((output) => {
+      if (!output) {
+        throw new Error('Bulk create did not resolve every bookmark.');
+      }
+      return output;
+    });
   }
 
   async listBookmarks(params: ListBookmarksParams = {}): Promise<Bookmark[]> {
@@ -717,6 +842,29 @@ export class BookmarkApi {
     return rows[0] ?? null;
   }
 
+  private async findActiveBookmarksByUrlHashes(
+    urlHashes: string[],
+  ): Promise<Map<string, RemoteBookmark>> {
+    const unique = [...new Set(urlHashes)];
+    if (unique.length === 0) {
+      return new Map();
+    }
+    const rows = await this.client.request<RemoteBookmark[]>(
+      appendSearchParams(
+        '/rest/v1/bookmarks',
+        new URLSearchParams({
+          select: '*',
+          user_id: `eq.${this.session.user.id}`,
+          url_hash: `in.${inFilter(unique)}`,
+          is_archived: 'eq.false',
+          deleted_at: 'is.null',
+        }),
+      ),
+      { accessToken: this.session.access_token },
+    );
+    return new Map(rows.filter((row) => row.url_hash).map((row) => [row.url_hash as string, row]));
+  }
+
   /**
    * Looks up a row by its device-generated capture id. Unlike the URL lookup
    * this is NOT filtered to active rows: client_id is globally unique per user,
@@ -738,6 +886,51 @@ export class BookmarkApi {
     );
 
     return rows[0] ?? null;
+  }
+
+  private async findBookmarksByClientIds(clientIds: string[]): Promise<Map<string, RemoteBookmark>> {
+    const unique = [...new Set(clientIds)];
+    if (unique.length === 0) {
+      return new Map();
+    }
+    const rows = await this.client.request<RemoteBookmark[]>(
+      appendSearchParams(
+        '/rest/v1/bookmarks',
+        new URLSearchParams({
+          select: '*',
+          user_id: `eq.${this.session.user.id}`,
+          client_id: `in.${inFilter(unique)}`,
+        }),
+      ),
+      { accessToken: this.session.access_token },
+    );
+    return new Map(
+      rows.filter((row) => row.client_id).map((row) => [row.client_id as string, row]),
+    );
+  }
+
+  private async updateLastSavedAt(bookmarkIds: string[], timestamp: string): Promise<void> {
+    if (bookmarkIds.length === 0) {
+      return;
+    }
+    await this.client.request(
+      appendSearchParams(
+        '/rest/v1/bookmarks',
+        new URLSearchParams({
+          id: `in.${inFilter(bookmarkIds)}`,
+          user_id: `eq.${this.session.user.id}`,
+        }),
+      ),
+      {
+        method: 'PATCH',
+        accessToken: this.session.access_token,
+        headers: { Prefer: 'return=minimal' },
+        body: {
+          last_saved_at: timestamp,
+          updated_at: timestamp,
+        },
+      },
+    );
   }
 
   private baseBookmarkListParams(params: ListBookmarksParams): URLSearchParams {
