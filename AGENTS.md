@@ -129,6 +129,12 @@ These are "do not break" rules, not just implementation notes.
   elsewhere.
 - Signing in must trigger `syncNow` based on changed `auth.userId`, even when
   the local queue is empty.
+- Sync, a bulk import's local-write flush, "Pause sync", and "Reset library"
+  each have their own "is this busy" signal (`syncInFlight`,
+  `localCreateFlushesInFlight`, `syncPausedRef`, `isResettingLibrary`) and
+  they don't all check each other the same way on purpose — see
+  `docs/architecture/sync-pause-import-reset.md` for the full interaction
+  matrix before touching any of the four.
 
 ### Metadata
 
@@ -353,6 +359,15 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   only evidence, and the first two are in-memory-only (reset on app restart),
   so verify they actually date from the failure before trusting them as proof
   of what happened.
+- A bulk import running before the initial load/first cloud pull settles
+  durably re-creates every existing bookmark as a fresh duplicate (dedup
+  reads an incomplete in-memory snapshot) — this reproduced twice in
+  production as an exact library doubling before `importBookmarks` grew a
+  `notReady` refusal. Reset also used to race an in-flight import's local
+  write loop the same way (wipes, then the import's stragglers repopulate
+  it). Both guards, plus how "Pause sync" fits in, are one connected model —
+  see `docs/architecture/sync-pause-import-reset.md` before changing any of
+  the four busy-state flags it documents.
 - On web (RN-web/CSS stacking rules), a sibling with **any** explicit
   `position` + positive `zIndex` paints above **all** `zIndex:auto`/unset
   siblings in the same stacking context, regardless of DOM/mount order — so

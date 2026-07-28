@@ -318,3 +318,48 @@ test('resetLibrary refuses without a session (online-only, signed-in-only)', asy
   expect(outcome).toMatchObject({ ok: false, reason: 'auth' });
   expect(apiMock.__resetLibraryMock).not.toHaveBeenCalled();
 });
+
+test('resetLibrary refuses while an import is still flushing in the background, instead of wiping mid-race', async () => {
+  // resetLibrary's busy-guard used to only check syncInFlight, not
+  // localCreateFlushesInFlight (the separate counter importBookmarks uses for
+  // its own sequential durable-write loop). Without this, a reset landing
+  // mid-import wiped storage via clearAllData() and the import's still-
+  // running loop then kept calling insertBookmark/enqueue for its remaining
+  // items — silently repopulating the "just cleared" library (user-reported:
+  // "reset doesn't clear the queue in one shot").
+  const { result } = await mountSettled();
+
+  // Never-resolving on purpose: this test only needs the import's durable
+  // write to still be in flight, not to ever complete.
+  const originalInsertBookmark = fakeRepo.repository.insertBookmark;
+  const neverResolves = new Promise<void>(() => {});
+  fakeRepo.repository.insertBookmark = async (bookmark) => {
+    await neverResolves;
+    return originalInsertBookmark(bookmark);
+  };
+
+  await act(async () => {
+    result.current.importBookmarks([
+      { url: 'https://example.com/still-flushing', title: null, notes: null, tags: [], collection: null },
+    ]);
+  });
+
+  let outcome: Awaited<ReturnType<typeof result.current.resetLibrary>> | null = null;
+  await act(async () => {
+    outcome = await result.current.resetLibrary();
+  });
+
+  // Refused outright — the pre-existing bookmark is untouched and the remote
+  // wipe RPC was never even called, rather than a partial/racy clear.
+  expect(outcome).toEqual({ ok: false, reason: 'busy' });
+  expect(apiMock.__resetLibraryMock).not.toHaveBeenCalled();
+  expect(fakeRepo.__bookmarks().map((b) => b.id)).toContain(REMOTE_ID);
+
+  // Restore the real insertBookmark so it can't affect later tests. The
+  // import's own durable write is deliberately left stuck mid-flight — this
+  // test only needs to prove the refusal, not the import's eventual
+  // completion (which would also retry this fixture's pre-seeded always-
+  // failing update entry, an unrelated pre-existing retry-loop interaction
+  // out of scope here).
+  fakeRepo.repository.insertBookmark = originalInsertBookmark;
+});
