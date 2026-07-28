@@ -12,6 +12,7 @@ import type { ReactNode } from 'react';
 import { resolveAliasedId, swapBookmarkId } from '@/domain/bookmark-id-swap';
 import { mockUserId } from '@/domain/mock-data';
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from '@/domain/urls';
+import { createConcurrencyLimiter } from '@/domain/concurrency';
 import { enrichBookmark } from '@/domain/enrichment';
 import { isTransientNetworkError } from '@/domain/network-errors';
 import { planTitleBackfill } from '@/domain/title-backfill';
@@ -393,6 +394,13 @@ const AI_RETRY_MAX_ATTEMPTS = 6;
  *  checking much more often than this buys nothing. */
 const AI_RETRY_CHECK_INTERVAL_MS = 5 * 60_000;
 
+/** Max metadata-enrichment fetches in flight at once (Sentry STASH-3B): a bulk
+ *  import (or the startup backfill after one) must trickle its fetches instead
+ *  of launching hundreds concurrently, which exhausted native resources and
+ *  aborted the ART runtime. Low enough to keep a 500-item burst harmless, high
+ *  enough that interactive saves never queue behind each other in practice. */
+const ENRICHMENT_FETCH_CONCURRENCY = 4;
+
 /** Parse the persisted AI-retry bookkeeping map, tolerating absent/corrupt
  *  values (mirrors `parseIdSet`/`parseTagOps` for the store's other durable
  *  meta blobs). */
@@ -652,6 +660,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Bookmark IDs currently being enriched, so concurrent passes (startup +
   // a fresh save) never double-process the same item.
   const enriching = useRef(new Set<string>());
+  // Caps how many enrichment fetches run at once (Sentry STASH-3B): a 500+
+  // bookmark import — or the startup backfill re-firing those still-pending
+  // rows after a relaunch — used to launch one fetch per bookmark
+  // simultaneously, and the native resource exhaustion SIGABRT-crashed the app.
+  const enrichmentSlots = useRef(createConcurrencyLimiter(ENRICHMENT_FETCH_CONCURRENCY));
   // Bookmark IDs with an AI enrichment request in flight, so an auto-trigger
   // and a manual "Suggest with AI" tap never fire duplicate requests.
   const aiEnriching = useRef(new Set<string>());
@@ -1324,7 +1337,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return;
     }
     enriching.current.add(bookmark.id);
-    (async () => {
+    // `enriching` (the dedupe guard) is set synchronously above; the fetch
+    // itself waits for a limiter slot so bulk passes stay bounded.
+    void enrichmentSlots.current(async () => {
       try {
         const { patch, metadata_status } = await enrichBookmark(bookmark);
         // A `create` that synced while the fetch was in flight re-keys the row
@@ -1422,7 +1437,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       } finally {
         enriching.current.delete(bookmark.id);
       }
-    })();
+    });
   }, [enqueueMutation]);
 
   useEffect(() => {
@@ -2089,12 +2104,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setBookmarks((current) => [...newBookmarks, ...(current ?? [])]);
         setQueue((current) => [...current, ...newEntries]);
         ensureRepositoryReady()
-          .then(() =>
-            Promise.all([
-              ...newBookmarks.map((bookmark) => repository.insertBookmark(bookmark)),
-              ...newEntries.map((entry) => repository.enqueue(entry)),
-            ]),
-          )
+          .then(async () => {
+            // Sequential on purpose (Sentry STASH-3B): a 500+ item import via
+            // Promise.all meant ~1000 simultaneous pending native SQLite calls.
+            // newBookmarks/newEntries are parallel arrays (pushed together above).
+            for (let i = 0; i < newBookmarks.length; i += 1) {
+              await repository.insertBookmark(newBookmarks[i]);
+              await repository.enqueue(newEntries[i]);
+            }
+          })
           .catch((error) => logStorageError('imported bookmarks', error));
         // Enrich after the rows are visible and persisted, like a fresh save.
         for (const bookmark of newBookmarks) {
