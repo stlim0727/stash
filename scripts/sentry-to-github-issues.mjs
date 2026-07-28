@@ -63,8 +63,16 @@ function loadConfig(args) {
   };
 }
 
+// In-app feedback reports (Sentry tag logger:feedback-bridge, source:
+// in-app-feedback — see supabase/functions/feedback-bridge/sentry-sink.ts)
+// carry the reporter's own free-form message as issue.title, which can
+// contain names, emails, or other details a user typed expecting private
+// support, not a public GitHub issue. Excluded from the default query;
+// pass --query explicitly to include them for a deliberate, reviewed sync.
+const DEFAULT_QUERY = 'is:unresolved !logger:feedback-bridge';
+
 function parseArgs(argv) {
-  const args = { limit: 20, dryRun: false, query: 'is:unresolved', repo: null };
+  const args = { limit: 20, dryRun: false, query: DEFAULT_QUERY, repo: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--limit') args.limit = Number(argv[++i]);
@@ -87,11 +95,13 @@ function printUsage() {
   pnpm sentry:sync-github-issues --dry-run
   pnpm sentry:sync-github-issues --limit 5 --query "is:unresolved level:fatal"
 
-Pages through unresolved Sentry issues (newest first, up to ${MAX_SCAN}) and
-creates a GitHub issue for each one that doesn't already have one — matched by
-"STASH-N" in the GitHub issue title — stopping once --limit (default 20) new
-issues have been created in this run; any left over are picked up next run.
-Safe to re-run on a schedule: already-migrated issues are skipped.
+Pages through unresolved Sentry issues (newest first, up to ${MAX_SCAN},
+default query excludes logger:feedback-bridge — see comment above
+DEFAULT_QUERY) and creates a GitHub issue for each one that doesn't already
+have one — matched by "STASH-N" in the GitHub issue title — stopping once
+--limit (default 20) new issues have been created in this run; any left over
+are picked up next run. Safe to re-run on a schedule: already-migrated issues
+are skipped.
 
 Environment:
   SENTRY_AUTH_TOKEN — from the shell, .env.local, or the file pointed to by
@@ -173,10 +183,32 @@ async function githubRequest(method, urlPath, config, body) {
   return text ? JSON.parse(text) : null;
 }
 
-async function findExistingGithubIssue(config, shortId) {
-  const q = `repo:${config.githubOwner}/${config.githubRepo} in:title "${shortId}" type:issue`;
-  const result = await githubRequest('GET', `/search/issues?q=${encodeURIComponent(q)}`, config);
-  return result.items.find((item) => item.title.startsWith(`${shortId}:`)) || result.items[0] || null;
+const SHORT_ID_PREFIX = /^([A-Z][A-Z0-9_-]*-[A-Z0-9]+):/;
+
+// Fetches every already-migrated shortId once via the repo issues list
+// (5000 req/hr core rate limit) instead of one Search API call per Sentry
+// issue (30 req/min, and counted against the whole token/repo) — a backlog
+// of already-tracked issues would otherwise exhaust that limit and make the
+// scheduled run fail at the same point, every run, before ever reaching the
+// untracked tail.
+async function fetchTrackedShortIds(config) {
+  const tracked = new Map();
+  let page = 1;
+  while (page <= 20) {
+    const result = await githubRequest(
+      'GET',
+      `/repos/${config.githubOwner}/${config.githubRepo}/issues?state=all&per_page=100&page=${page}`,
+      config,
+    );
+    for (const item of result) {
+      if (item.pull_request) continue;
+      const match = item.title.match(SHORT_ID_PREFIX);
+      if (match) tracked.set(match[1], item.number);
+    }
+    if (result.length < 100) break;
+    page += 1;
+  }
+  return tracked;
 }
 
 function buildIssueBody(issue, event) {
@@ -218,7 +250,10 @@ async function run() {
     throw new Error('GITHUB_REPOSITORY (owner/repo) is required, or pass --repo owner/repo.');
   }
 
-  const issues = await searchSentryIssues(config, args.query);
+  const [issues, tracked] = await Promise.all([
+    searchSentryIssues(config, args.query),
+    fetchTrackedShortIds(config),
+  ]);
   console.log(`Scanned ${issues.length} Sentry issue(s) matching "${args.query}".`);
 
   let created = 0;
@@ -229,9 +264,9 @@ async function run() {
       break;
     }
     if (!issue.shortId) continue;
-    const existing = await findExistingGithubIssue(config, issue.shortId);
-    if (existing) {
-      console.log(`skip:    ${issue.shortId} already tracked as #${existing.number}`);
+    const existingNumber = tracked.get(issue.shortId);
+    if (existingNumber) {
+      console.log(`skip:    ${issue.shortId} already tracked as #${existingNumber}`);
       skipped += 1;
       continue;
     }
