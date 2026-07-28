@@ -1678,9 +1678,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ...current.filter((entry) => !orphanIds.has(entry.local_id)),
                 ...orphanEntries,
               ]);
-              void Promise.all(orphanEntries.map((entry) => repository.enqueue(entry))).catch(
-                (error) => logStorageError('orphan re-enqueue', error),
-              );
+              // Sequential on purpose (Sentry STASH-3B precedent, applied here
+              // after STASH-3N): a large backlog of orphaned entries uploaded
+              // via Promise.all meant dozens of simultaneous native SQLite
+              // calls stacking up on the single serialized connection —
+              // "sqlite tail wait" depth reaching 40 with multi-second stalls
+              // on every launch, on a device whose backlog never fully drains
+              // within one session.
+              (async () => {
+                for (const entry of orphanEntries) {
+                  await repository.enqueue(entry);
+                }
+              })().catch((error) => logStorageError('orphan re-enqueue', error));
             }
             setEnrichments(storedEnrichments);
             // One-time cleanup: purge blank-named tags/collections (and orphaned

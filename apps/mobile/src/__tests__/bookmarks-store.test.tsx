@@ -439,6 +439,39 @@ test('a stranded pending bookmark with no queue entry is re-enqueued on startup'
   });
 });
 
+test('multiple stranded bookmarks are re-enqueued sequentially, not as a concurrent burst (Sentry STASH-3N)', async () => {
+  // The orphan re-enqueue used to fan out via Promise.all — on a device with
+  // a large backlog (a big import that never fully synced before the app was
+  // closed), that meant dozens of simultaneous native SQLite calls stacking
+  // up on the single serialized connection: "sqlite tail wait" depth
+  // reaching 40, multi-second stalls on every launch. Sequential now,
+  // matching the STASH-3B precedent already used for bulk import.
+  const { makeStoredBookmark } = require('./helpers/fake-repository');
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: 'local-stranded-1', url: 'https://example.com/s1', sync_status: 'pending' }),
+    makeStoredBookmark({ id: 'local-stranded-2', url: 'https://example.com/s2', sync_status: 'pending' }),
+    makeStoredBookmark({ id: 'local-stranded-3', url: 'https://example.com/s3', sync_status: 'pending' }),
+  ]);
+
+  let concurrent = 0;
+  let maxConcurrent = 0;
+  const originalEnqueue = fakeRepo.repository.enqueue;
+  fakeRepo.repository.enqueue = async (entry) => {
+    concurrent += 1;
+    maxConcurrent = Math.max(maxConcurrent, concurrent);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    concurrent -= 1;
+    return originalEnqueue(entry);
+  };
+
+  const { result } = await renderStore();
+  expect(result.current.inbox).toHaveLength(3);
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(3));
+
+  expect(maxConcurrent).toBe(1);
+  fakeRepo.repository.enqueue = originalEnqueue;
+});
+
 test('a synced bookmark loaded on startup is not re-enqueued', async () => {
   const { makeStoredBookmark } = require('./helpers/fake-repository');
   fakeRepo.__reset([makeStoredBookmark({ sync_status: 'synced' })]);
