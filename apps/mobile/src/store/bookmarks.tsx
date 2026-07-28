@@ -1678,9 +1678,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ...current.filter((entry) => !orphanIds.has(entry.local_id)),
                 ...orphanEntries,
               ]);
-              void Promise.all(orphanEntries.map((entry) => repository.enqueue(entry))).catch(
-                (error) => logStorageError('orphan re-enqueue', error),
-              );
+              // Sequential on purpose (Sentry STASH-3B precedent, applied here
+              // after STASH-3N): a large backlog of orphaned entries uploaded
+              // via Promise.all meant dozens of simultaneous native SQLite
+              // calls stacking up on the single serialized connection —
+              // "sqlite tail wait" depth reaching 40 with multi-second stalls
+              // on every launch, on a device whose backlog never fully drains
+              // within one session.
+              (async () => {
+                for (const entry of orphanEntries) {
+                  await repository.enqueue(entry);
+                }
+              })().catch((error) => logStorageError('orphan re-enqueue', error));
             }
             setEnrichments(storedEnrichments);
             // One-time cleanup: purge blank-named tags/collections (and orphaned
@@ -3357,14 +3366,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // so it clears on the next cold start). swapBookmarkId folds the
           // lingering local-* row into the existing remote twin instead.
           setBookmarks((current) => swapBookmarkId(current ?? [], localId, reconciled));
-          void repository
-            .replaceBookmark(localId, reconciled)
-            .catch((error) => logStorageError('synced leftover reconcile', error));
         }
         setQueue((current) => current.filter((entry) => entry.sync_status !== 'synced'));
-        void Promise.all(
-          syncedLeftovers.map((entry) => repository.removeQueueEntry(entry.local_id)),
-        ).catch((error) => logStorageError('synced leftover cleanup', error));
+        // Sequential on purpose (Sentry STASH-3B/3N precedent): firing one
+        // repository call per leftover without awaiting the previous one
+        // (whether via Promise.all or an un-awaited call inside a for loop)
+        // stacks dozens of concurrent native SQLite calls on the single
+        // serialized connection under a large backlog. Fire-and-forget
+        // relative to syncNow's own progress (upload/pull must not wait on
+        // this), but internally one call at a time; each item keeps its own
+        // catch so one failure doesn't stop the rest.
+        void (async () => {
+          for (const { localId, reconciled } of swaps) {
+            try {
+              await repository.replaceBookmark(localId, reconciled);
+            } catch (error) {
+              logStorageError('synced leftover reconcile', error);
+            }
+          }
+          for (const entry of syncedLeftovers) {
+            try {
+              await repository.removeQueueEntry(entry.local_id);
+            } catch (error) {
+              logStorageError('synced leftover cleanup', error);
+            }
+          }
+        })();
       }
       // Re-ensure the session so a token that expired while the app stayed
       // open is refreshed before we sync; otherwise every entry would fail
