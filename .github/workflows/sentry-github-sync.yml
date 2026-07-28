@@ -1,0 +1,60 @@
+name: Sentry to GitHub Issue Sync
+
+# Mirrors unresolved Sentry issues (self-463/stash) into GitHub issues titled
+# `STASH-N: <title>`, newest first. Idempotent: scripts/sentry-to-github-issues.mjs
+# searches GitHub by shortId before creating, so a run only files issues that
+# don't have one yet — no separate "last synced" state to maintain.
+#
+# Runs on GitHub Actions (not CircleCI) regardless of the CI_PROVIDER gate used
+# for the lint/test CI job: CircleCI has no working scheduler on this project's
+# plan (see docs/development/ci-circleci.md), and this job needs GITHUB_TOKEN
+# to create issues, which only GitHub Actions provides natively.
+#
+# Requires repo secret SENTRY_AUTH_TOKEN (Sentry org: self-463, project: stash).
+# Optional secrets SENTRY_ORG / SENTRY_PROJECT override the defaults below.
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (only list what would be created)'
+        type: boolean
+        required: true
+        default: false
+
+# The dedup check (search GitHub, then create) isn't atomic, so two runs
+# overlapping — a manual dispatch landing mid-schedule, or two dispatches back
+# to back — could both pass the "not found" check for the same issue before
+# either creates it and file a duplicate. Queue runs instead of racing them.
+concurrency:
+  group: sentry-github-sync
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync Sentry issues to GitHub
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG || 'self-463' }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT || 'stash' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ -z "$SENTRY_AUTH_TOKEN" ]; then
+            echo "SENTRY_AUTH_TOKEN not set — skipping Sentry sync."
+            exit 0
+          fi
+          ARGS=()
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          node scripts/sentry-to-github-issues.mjs "${ARGS[@]}"
