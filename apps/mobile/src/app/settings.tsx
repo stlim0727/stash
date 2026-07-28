@@ -123,6 +123,8 @@ export default function SettingsScreen() {
     queue,
     isSyncing,
     syncNow,
+    syncPaused,
+    setSyncPaused,
     inbox,
     trash,
     lastPulledAt,
@@ -631,15 +633,17 @@ export default function SettingsScreen() {
   ).length;
   const cloudAvailable = auth.isSignedIn; // anonymous OR authenticated session
   const hasPending = waiting > 0;
-  const canSync = cloudAvailable && hasPending && !isSyncing && !isResettingLibrary;
+  const canSync = cloudAvailable && hasPending && !isSyncing && !isResettingLibrary && !syncPaused;
 
-  const syncSummary = isSyncing
-    ? t('settings.sync.syncing', { count: waiting })
-    : !cloudAvailable
-      ? t('settings.sync.localOnly')
-      : hasPending
-        ? t('settings.sync.waiting', { count: waiting })
-        : t('settings.sync.allBackedUp');
+  const syncSummary = syncPaused
+    ? t('settings.sync.paused')
+    : isSyncing
+      ? t('settings.sync.syncing', { count: waiting })
+      : !cloudAvailable
+        ? t('settings.sync.localOnly')
+        : hasPending
+          ? t('settings.sync.waiting', { count: waiting })
+          : t('settings.sync.allBackedUp');
 
   const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
@@ -733,16 +737,38 @@ export default function SettingsScreen() {
           icon="sync"
           label={t('settings.sync.label')}
           value={syncSummary}
-          last
           onPress={canSync ? () => void syncNow() : undefined}
           right={
             isSyncing ? (
               <ActivityIndicator color={palette.textSecondary} />
             ) : canSync ? (
               <Ionicons name="refresh" size={18} color={palette.accent} />
-            ) : cloudAvailable ? (
+            ) : cloudAvailable && !syncPaused ? (
               <Ionicons name="checkmark-circle" size={20} color={palette.success} />
             ) : undefined
+          }
+        />
+        {/* Pause sync (Sentry STASH-3K follow-up): a safety valve for right
+            after a large import — while on, nothing uploads or pulls, giving
+            time to delete unwanted rows before they ever reach the network
+            (a still-local, never-synced delete drops out of the queue for
+            free; see deleteBookmark). */}
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="pause-circle-outline"
+          label={t('settings.syncPaused.label')}
+          value={syncPaused ? t('settings.syncPaused.on') : t('settings.syncPaused.off')}
+          last
+          right={
+            <Switch
+              accessibilityLabel={t('settings.syncPaused.label')}
+              value={syncPaused}
+              disabled={isResettingLibrary}
+              onValueChange={setSyncPaused}
+              trackColor={{ true: palette.accent, false: palette.border }}
+              thumbColor="#ffffff"
+            />
           }
         />
       </Card>

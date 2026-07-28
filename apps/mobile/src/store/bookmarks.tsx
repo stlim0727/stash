@@ -226,6 +226,12 @@ interface BookmarksContextValue {
   isSyncing: boolean;
   /** Upload pending/failed queue entries to Supabase. No-op without auth. */
   syncNow: () => Promise<boolean>;
+  /** True while sync is manually paused: syncNow no-ops (no upload, no pull)
+   *  until this is turned back off. Lets a bulk import be reviewed — and
+   *  unwanted rows deleted — before anything reaches the network. */
+  syncPaused: boolean;
+  /** Pause or resume sync. Turning it off immediately flushes anything queued. */
+  setSyncPaused: (paused: boolean) => void;
   /** When the last successful pull from Supabase completed, if ever. */
   lastPulledAt: string | null;
   /** The user's cloud collections (assignable; refreshed by pull sync). */
@@ -489,6 +495,12 @@ const REVIEWED_SUMMARIES_KEY = 'reviewed_ai_summaries';
  *  still announces itself on the next launch. */
 const UNSEEN_SUGGESTIONS_KEY = 'unseen_ai_suggestions';
 
+/** Manual "pause sync" safety valve (Sentry STASH-3K follow-up): while on,
+ *  syncNow no-ops entirely (no upload, no pull) so a bulk import can be
+ *  reviewed — and unwanted rows deleted — before anything reaches the
+ *  network. Persisted so it survives leaving the app mid-review. */
+const SYNC_PAUSED_KEY = 'pref.sync.paused';
+
 /** Opaque sentinel `requestAiEnrichment` returns when the AI endpoint rate-limits
  *  (HTTP 429). The store is i18n-free, so it can't localize the message itself;
  *  the Detail screen maps this to a translated string. Any non-UI caller (the
@@ -657,6 +669,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
   const localCreateFlushesInFlight = useRef(0);
+  // See SYNC_PAUSED_KEY above. The ref is read inside syncNow (the hot path);
+  // the state exists only so Settings can display/toggle the current choice.
+  const syncPausedRef = useRef(false);
+  const [syncPaused, setSyncPausedState] = useState(false);
   // The active language, sent with AI enrichment requests so the model answers
   // in the user's locale (M12). Read through a ref so requestAiEnrichment stays
   // stable as the locale changes — it just picks up the latest value when fired.
@@ -818,6 +834,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     token: number;
   } | null>(null);
   const aiBurstTokenSeq = useRef(0);
+
+  // Pause or resume sync. Turning it on makes syncNow no-op (see the guard
+  // inside it) so queued work sits still — long enough to delete unwanted
+  // rows locally before they ever reach the network (a local-only delete
+  // never enqueues a network call; see deleteBookmark). Turning it off
+  // immediately flushes whatever is queued rather than waiting for the next
+  // trigger.
+  const setSyncPaused = useCallback((paused: boolean) => {
+    syncPausedRef.current = paused;
+    setSyncPausedState(paused);
+    ensureRepositoryReady()
+      .then(() => repository.setMeta(SYNC_PAUSED_KEY, paused ? 'true' : 'false'))
+      .catch((error) => logStorageError('sync paused pref', error));
+    if (!paused) {
+      void syncNowRef.current?.().catch(() => {});
+    }
+  }, []);
 
   // Change + durably persist the AI-suggestions mode. The ref updates
   // synchronously so the very next auto-trigger check (even one already
@@ -1511,6 +1544,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedDismissedFoldersRaw,
             storedReviewedSummariesRaw,
             storedAiSuggestionsModeRaw,
+            storedSyncPausedRaw,
           ] = await Promise.all([
             repository.listBookmarks(),
             repository.listQueue(),
@@ -1526,6 +1560,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.getMeta(DISMISSED_FOLDERS_KEY),
             repository.getMeta(REVIEWED_SUMMARIES_KEY),
             repository.getMeta(AI_SUGGESTIONS_MODE_PREF_KEY),
+            repository.getMeta(SYNC_PAUSED_KEY),
           ]);
           if (!cancelled) {
             // Re-hydrate the AI-suggestions mode so the auto-trigger gate and
@@ -1534,6 +1569,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             const storedAiSuggestionsMode = parseAiSuggestionsMode(storedAiSuggestionsModeRaw);
             aiSuggestionsModeRef.current = storedAiSuggestionsMode;
             setAiSuggestionsModeState(storedAiSuggestionsMode);
+            // Re-hydrate the sync-paused pref so a review left mid-way (app
+            // closed before turning it back off) doesn't silently resume
+            // uploading on the next launch.
+            const storedSyncPaused = storedSyncPausedRaw === 'true';
+            syncPausedRef.current = storedSyncPaused;
+            setSyncPausedState(storedSyncPaused);
             // Re-hydrate deferred AI triggers so a bookmark whose create synced
             // before the app was killed still gets auto suggestions once its
             // metadata enrichment settles (the effect below picks it up).
@@ -3097,6 +3138,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncPendingRef.current = true;
       return false;
     }
+    if (syncPausedRef.current) {
+      syncPendingRef.current = true;
+      return false;
+    }
     if (!auth.session) {
       return false;
     }
@@ -4374,6 +4419,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       deleteBookmark,
       isSyncing,
       syncNow,
+      syncPaused,
+      setSyncPaused,
       lastPulledAt,
       collections: tagData.collections,
       addTagsToBookmark,
@@ -4427,6 +4474,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       deleteBookmark,
       isSyncing,
       syncNow,
+      syncPaused,
+      setSyncPaused,
       lastPulledAt,
       tagData.collections,
       addTagsToBookmark,
