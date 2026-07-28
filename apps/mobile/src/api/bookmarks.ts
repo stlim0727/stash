@@ -220,6 +220,16 @@ function appendSearchParams(path: string, params: URLSearchParams): string {
   return query ? `${path}?${query}` : path;
 }
 
+function bulkCreateKey(item: { urlHash: string | null; clientId: string | null }): string | null {
+  if (item.urlHash) {
+    return `url:${item.urlHash}`;
+  }
+  if (item.clientId) {
+    return `client:${item.clientId}`;
+  }
+  return null;
+}
+
 export class BookmarkApi {
   constructor(
     private readonly session: SupabaseAuthSession,
@@ -379,6 +389,8 @@ export class BookmarkApi {
 
     const outputs: Array<BulkCreateBookmarkOutput | null> = new Array(inputs.length).fill(null);
     const duplicateIds = new Set<string>();
+    const pendingByKey = new Map<string, number>();
+    const duplicateIndexesByInsertIndex = new Map<number, number[]>();
     const inserts: Array<{ index: number; body: (typeof prepared)[number]['body'] }> = [];
 
     prepared.forEach((item, index) => {
@@ -395,6 +407,17 @@ export class BookmarkApi {
           url_hash: existing.url_hash,
         };
         return;
+      }
+      const key = bulkCreateKey(item);
+      if (key) {
+        const firstIndex = pendingByKey.get(key);
+        if (firstIndex !== undefined) {
+          const duplicates = duplicateIndexesByInsertIndex.get(firstIndex) ?? [];
+          duplicates.push(index);
+          duplicateIndexesByInsertIndex.set(firstIndex, duplicates);
+          return;
+        }
+        pendingByKey.set(key, index);
       }
       inserts.push({ index, body: item.body });
     });
@@ -435,6 +458,16 @@ export class BookmarkApi {
           client_id: created.client_id,
           url_hash: created.url_hash,
         };
+        const duplicateIndexes = duplicateIndexesByInsertIndex.get(item.index) ?? [];
+        for (const duplicateIndex of duplicateIndexes) {
+          outputs[duplicateIndex] = {
+            bookmark_id: created.id,
+            status: 'duplicate',
+            metadata_status: created.metadata_status,
+            client_id: created.client_id,
+            url_hash: created.url_hash,
+          };
+        }
       }
     }
 

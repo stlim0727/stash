@@ -104,6 +104,7 @@ import {
   BULK_CREATE_SYNC_CHUNK_SIZE,
   createNeedsReconcileUpdate,
   createSyncApi,
+  hasBulkCreateResultKey,
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
@@ -3126,6 +3127,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         (entry) =>
           entry.operation === 'create' &&
           !deletedIds.current.has(entry.local_id) &&
+          hasBulkCreateResultKey(entry) &&
           isSyncable(entry),
       );
       if (bulkCreateEntries.length > 1) {

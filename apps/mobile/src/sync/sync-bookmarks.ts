@@ -22,6 +22,16 @@ export interface EntrySyncResult {
 
 export const BULK_CREATE_SYNC_CHUNK_SIZE = 50;
 
+export function hasBulkCreateResultKey(entry: LocalPendingBookmark): boolean {
+  if (entry.operation !== 'create') {
+    return false;
+  }
+  return (
+    (typeof entry.payload.client_id === 'string' && entry.payload.client_id.trim().length > 0) ||
+    (typeof entry.payload.url === 'string' && entry.payload.url.trim().length > 0)
+  );
+}
+
 /**
  * True when an `update` failed because the row is confirmed gone remotely —
  * deleted on this account (any device) or never owned by this user — as
@@ -144,6 +154,9 @@ export async function syncCreateQueueEntryBatch(
   }
   if (entries.some((entry) => entry.operation !== 'create')) {
     throw new Error('Bulk create sync only accepts create queue entries.');
+  }
+  if (entries.some((entry) => !hasBulkCreateResultKey(entry))) {
+    throw new Error('Bulk create sync requires a client_id or URL mapping key.');
   }
 
   const now = new Date().toISOString();

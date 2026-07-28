@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   createNeedsReconcileUpdate,
+  hasBulkCreateResultKey,
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
@@ -248,6 +249,46 @@ test('bulk create: rejects non-create queue entries', async () => {
     () => syncCreateQueueEntryBatch(fakeApi(), repository, [update], () => undefined),
     /only accepts create/,
   );
+});
+
+test('bulk create eligibility excludes legacy URL-less creates without client_id', async () => {
+  const legacyTextEntry = makeCreateEntry({
+    payload: { shared_text: 'legacy note without an idempotency key' },
+  });
+  const keyedTextEntry = makeCreateEntry({
+    payload: {
+      shared_text: 'newer note',
+      client_id: '11111111-1111-4111-8111-111111111111',
+    },
+  });
+  const urlEntry = makeCreateEntry({ payload: { url: 'https://example.com/a' } });
+
+  assert.equal(hasBulkCreateResultKey(legacyTextEntry), false);
+  assert.equal(hasBulkCreateResultKey(keyedTextEntry), true);
+  assert.equal(hasBulkCreateResultKey(urlEntry), true);
+});
+
+test('bulk create rejects unkeyed entries before calling the API', async () => {
+  const { repository } = fakeRepository();
+  let called = false;
+  const api = fakeApi({
+    createBookmarks: async () => {
+      called = true;
+      return [];
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      syncCreateQueueEntryBatch(
+        api,
+        repository,
+        [makeCreateEntry({ payload: { shared_text: 'legacy note' } })],
+        () => undefined,
+      ),
+    /requires a client_id or URL/,
+  );
+  assert.equal(called, false);
 });
 
 test('create: failure stays retryable with the error recorded', async () => {
