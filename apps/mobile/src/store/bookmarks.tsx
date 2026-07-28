@@ -2103,6 +2103,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (newBookmarks.length > 0) {
         setBookmarks((current) => [...newBookmarks, ...(current ?? [])]);
         setQueue((current) => [...current, ...newEntries]);
+        // Reserve every imported id in the enriching guard up front: the
+        // pending-backfill effect fires on the next render (before the
+        // sequential inserts below finish), and an enrichment fetch that beats
+        // this row's durable insert would write the enriched row first — only
+        // for the later insertBookmark (INSERT OR REPLACE on native) to replace
+        // it with the stale pending snapshot (PR #594 review). Each row starts
+        // enriching only once its own insert+enqueue has landed, which also
+        // keeps the enriched update from being clobbered in the queue table.
+        const reserved = new Set(newBookmarks.map((bookmark) => bookmark.id));
+        for (const id of reserved) {
+          enriching.current.add(id);
+        }
+        const releaseAndEnrich = (bookmark: Bookmark) => {
+          if (reserved.delete(bookmark.id)) {
+            enriching.current.delete(bookmark.id);
+            enrichInBackground(bookmark);
+          }
+        };
         ensureRepositoryReady()
           .then(async () => {
             // Sequential on purpose (Sentry STASH-3B): a 500+ item import via
@@ -2111,13 +2129,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             for (let i = 0; i < newBookmarks.length; i += 1) {
               await repository.insertBookmark(newBookmarks[i]);
               await repository.enqueue(newEntries[i]);
+              releaseAndEnrich(newBookmarks[i]);
             }
           })
-          .catch((error) => logStorageError('imported bookmarks', error));
-        // Enrich after the rows are visible and persisted, like a fresh save.
-        for (const bookmark of newBookmarks) {
-          enrichInBackground(bookmark);
-        }
+          .catch((error) => logStorageError('imported bookmarks', error))
+          .finally(() => {
+            // Rows whose insert never ran (storage failure): still enrich them —
+            // they live on in optimistic state, and enrichment must not be lost
+            // to a storage error. Nothing durable exists to clobber anyway.
+            for (const bookmark of newBookmarks) {
+              releaseAndEnrich(bookmark);
+            }
+          });
       }
 
       return { imported, duplicates, skipped };
