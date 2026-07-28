@@ -140,6 +140,19 @@ export type AddBookmarkResult =
       reason?: 'too_long';
     };
 
+/** Outcome of a full library reset (issue #600). */
+export type ResetLibraryResult =
+  | { ok: true }
+  /**
+   * - 'busy': a sync (or another reset) is in flight — try again when it settles.
+   * - 'auth': no signed-in session, so there is no cloud library to reset.
+   * - 'remote': the server-side wipe failed; nothing was changed locally.
+   * - 'local': the server wipe SUCCEEDED but clearing this device failed —
+   *   the cloud is already empty, so the explicit recovery is to retry the
+   *   reset (the RPC is idempotent) until the local clear lands.
+   */
+  | { ok: false; reason: 'busy' | 'auth' | 'remote' | 'local'; message?: string };
+
 /** Outcome counts from re-ingesting an imported file. */
 export interface ImportSummary {
   /** Bookmarks newly added to the library. */
@@ -188,6 +201,17 @@ interface BookmarksContextValue {
   restoreBookmark: (id: string) => void;
   /** Permanently delete all trashed bookmarks. */
   emptyTrash: () => void;
+  /**
+   * Destructive, online-only library reset (issue #600): wipe the current
+   * account's cloud data in one server-side RPC, then clear all local library
+   * state (bookmarks, sync queue, tag/collection cache, enrichments, AI
+   * bookkeeping, pull watermark) so stale queued work can never re-upload the
+   * just-deleted data. Requires a signed-in session; local state is only
+   * cleared after the remote wipe succeeds.
+   */
+  resetLibrary: () => Promise<ResetLibraryResult>;
+  /** True while a library reset is running — disable import/sync/reset UI. */
+  isResettingLibrary: boolean;
   /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
   updateBookmarkFields: (id: string, fields: { title?: string; notes?: string }) => void;
   /**
@@ -651,6 +675,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const unseenSuggestionIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isResettingLibrary, setIsResettingLibrary] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
   // The user id the pull effect last fired for. A sign-in (anonymous → real)
@@ -2378,6 +2403,87 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
   }, [deleteBookmark]);
 
+  // Destructive library reset (issue #600). Remote first: one server-side RPC
+  // wipes every cloud row the user owns set-wise (no per-bookmark delete
+  // entries); only once that succeeds is local state cleared — repository,
+  // sync queue, tag/collection cache, enrichments, AI bookkeeping, and the
+  // pull watermark — so stale queued mutations can never re-upload the
+  // just-deleted data. If the local clear fails the cloud is already empty and
+  // the RPC is idempotent, so the explicit recovery is to run the reset again.
+  const resetLibrary = useCallback(async (): Promise<ResetLibraryResult> => {
+    if (syncInFlight.current) {
+      return { ok: false, reason: 'busy' };
+    }
+    if (!auth.session) {
+      return { ok: false, reason: 'auth' };
+    }
+    // Take the sync-in-flight slot so a background sync can't upload or pull
+    // mid-wipe; syncNow calls made meanwhile no-op onto syncPendingRef.
+    syncInFlight.current = true;
+    setIsResettingLibrary(true);
+    try {
+      try {
+        // Refresh a token that expired while the app stayed open, mirroring
+        // syncNow — otherwise the RPC would 401 against a stale bearer.
+        const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+        await createSyncApi(session).resetLibrary();
+      } catch (error) {
+        recordLog('warn', `library reset: remote wipe failed: ${String(error)}`);
+        return {
+          ok: false,
+          reason: 'remote',
+          message: error instanceof Error ? error.message : undefined,
+        };
+      }
+      recordLog('warn', 'library reset: remote wipe succeeded; clearing local state');
+      try {
+        await ensureRepositoryReady();
+        await repository.clearAllData();
+        // Reset the pull watermark so the next sync does a clean full pull of
+        // the now-empty account instead of trusting a stale window.
+        await repository.setMeta(LAST_PULLED_AT_KEY, '');
+      } catch (error) {
+        logStorageError('library reset local clear', error);
+        return { ok: false, reason: 'local' };
+      }
+      // In-memory mirrors last, after the durable writes, so a kill in between
+      // re-reads the already-cleared repository on the next launch. The apply*
+      // helpers also persist their (now empty) meta blobs.
+      deletedIds.current.clear();
+      idAliases.current.clear();
+      aiRetryState.current = {};
+      aiServerQueued.current.clear();
+      pendingAiTrigger.current.clear();
+      aiTriggerAttempted.current.clear();
+      void persistAiRetryState();
+      void persistAiServerQueued();
+      void persistPendingAiTrigger();
+      syncAiRetryIds();
+      syncAiServerQueuedIds();
+      applyUnseenSuggestions(new Set());
+      applyTagOps([]);
+      applyTagData(EMPTY_TAG_DATA);
+      setBookmarks([]);
+      setQueue([]);
+      setEnrichments([]);
+      setLastPulledAt(null);
+      return { ok: true };
+    } finally {
+      syncInFlight.current = false;
+      setIsResettingLibrary(false);
+    }
+  }, [
+    auth,
+    applyTagData,
+    applyTagOps,
+    applyUnseenSuggestions,
+    persistAiRetryState,
+    persistAiServerQueued,
+    persistPendingAiTrigger,
+    syncAiRetryIds,
+    syncAiServerQueuedIds,
+  ]);
+
   // Push queued tag ops to the server when online: ensure tags exist, reconcile
   // the optimistic local tag id to the server one, and drop the op on success.
   // Failures stay queued for the next sync.
@@ -4081,6 +4187,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       trashBookmark,
       restoreBookmark,
       emptyTrash,
+      resetLibrary,
+      isResettingLibrary,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,
@@ -4132,6 +4240,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       trashBookmark,
       restoreBookmark,
       emptyTrash,
+      resetLibrary,
+      isResettingLibrary,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,

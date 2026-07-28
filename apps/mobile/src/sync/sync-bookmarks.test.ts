@@ -95,6 +95,9 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
     deleteEnrichment: async () => {},
     listTagData: async () => ({ tags: [], bookmarkTags: [], collections: [] }),
     replaceTagData: async () => {},
+    clearAllData: async () => {
+      calls.push('clearAllData');
+    },
   };
   return { calls, repository };
 }

@@ -66,3 +66,68 @@ test('a saved bookmark survives a reload (re-init does not re-seed over it)', as
   assert.equal(reloaded.length, 1, 'bookmark should survive the reload');
   assert.equal(reloaded[0].id, 'local-1');
 });
+
+test('clearAllData wipes library data but keeps meta (and never re-seeds)', async () => {
+  await repository.init([]);
+  await repository.insertBookmark(makeBookmark('local-1'));
+  await repository.enqueue({
+    local_id: 'local-1',
+    remote_id: null,
+    operation: 'create',
+    payload: { url: 'https://example.com' },
+    sync_status: 'pending',
+    retry_count: 0,
+    last_error: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+  await repository.upsertEnrichments([
+    {
+      id: 'enr-1',
+      bookmark_id: 'local-1',
+      user_id: 'u',
+      summary: null,
+      topics: [],
+      suggested_tags: [],
+      suggested_collection_id: null,
+      suggested_collection_name: null,
+      model: null,
+      status: 'complete',
+      confidence: null,
+      degraded: false,
+      degraded_reason: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+  ]);
+  await repository.replaceTagData({
+    tags: [
+      { id: 't1', user_id: 'u', name: 'tag', slug: 'tag', source: 'user', created_at: '2026' },
+    ],
+    bookmarkTags: [
+      { bookmark_id: 'local-1', tag_id: 't1', source: 'user', confidence: null, created_at: '2026' },
+    ],
+    collections: [],
+  });
+  await repository.setMeta('some-key', 'kept');
+
+  await repository.clearAllData();
+
+  assert.equal((await repository.listBookmarks()).length, 0);
+  assert.equal((await repository.listQueue()).length, 0);
+  assert.equal((await repository.listEnrichments()).length, 0);
+  const tagData = await repository.listTagData();
+  assert.equal(tagData.tags.length, 0);
+  assert.equal(tagData.bookmarkTags.length, 0);
+  // Meta is deliberately untouched — the store owns resetting its own keys.
+  assert.equal(await repository.getMeta('some-key'), 'kept');
+
+  // The seeded marker must survive the wipe: a re-init after a library reset
+  // (e.g. the next app launch) must come up empty, not re-seed sample data.
+  await repository.init([makeBookmark('seed-1')]);
+  assert.equal(
+    (await repository.listBookmarks()).length,
+    0,
+    'a post-reset init must not re-seed',
+  );
+});

@@ -51,4 +51,12 @@ export interface BookmarkRepository {
   /** Local cache of tags/links/collections; replaced wholesale by pull sync. */
   listTagData(): Promise<TagData>;
   replaceTagData(data: TagData): Promise<void>;
+  /**
+   * Wipe all locally-stored library data at once: bookmarks, the sync queue,
+   * cached enrichments, and tag/link/collection data. Meta keys are left
+   * untouched — the caller (the store's library reset) owns resetting the meta
+   * it manages (watermark, pending tag ops, AI bookkeeping), and the seeded
+   * flag must survive so a reset never re-seeds sample data.
+   */
+  clearAllData(): Promise<void>;
 }

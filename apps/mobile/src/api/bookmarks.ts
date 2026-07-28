@@ -1070,6 +1070,21 @@ export class BookmarkApi {
     );
   }
 
+  /**
+   * Server-side library reset (issue #600): one authenticated RPC that deletes
+   * every row the current user owns, set-wise (bookmarks, tags, links,
+   * collections, enrichments, pending enrichment queue, push tokens, API
+   * keys). Returns per-table deleted-row counts. The caller owns clearing
+   * local state afterwards — this only touches the cloud.
+   */
+  async resetLibrary(): Promise<Record<string, number>> {
+    return this.client.request<Record<string, number>>('/rest/v1/rpc/reset_user_library', {
+      method: 'POST',
+      accessToken: this.session.access_token,
+      body: {},
+    });
+  }
+
   private async getLatestEnrichment(bookmarkId: string): Promise<AIEnrichment | null> {
     const rows = await this.client.request<RemoteAIEnrichment[]>(
       appendSearchParams(

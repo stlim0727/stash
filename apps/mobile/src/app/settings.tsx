@@ -56,6 +56,7 @@ import {
 import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import { getPreference, setPreference } from '@/storage/preferences';
+import { ResetLibraryDialog } from '@/ui/ResetLibraryDialog';
 import { deliverExport } from '@/share/export-data';
 import { pickImportFile } from '@/share/import-data';
 import { useBookmarks } from '@/store/bookmarks';
@@ -129,6 +130,8 @@ export default function SettingsScreen() {
     getTagsForBookmark,
     getEnrichment,
     importBookmarks,
+    resetLibrary,
+    isResettingLibrary,
     aiSuggestionsMode,
     setAiSuggestionsMode,
   } = useBookmarks();
@@ -304,6 +307,37 @@ export default function SettingsScreen() {
     } finally {
       setImporting(false);
     }
+  };
+
+  // Library reset (issue #600): a destructive, online-only, type-to-confirm
+  // flow. The store owns ordering (remote wipe first, local clear only after
+  // it succeeds); this screen owns the confirmation gate and result surfacing.
+  // While it runs, export/import/sync controls are disabled (see the rows and
+  // canSync below).
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  const runReset = async () => {
+    if (isResettingLibrary) {
+      return;
+    }
+    setResetError(null);
+    const result = await resetLibrary();
+    if (result.ok) {
+      setResetDialogOpen(false);
+      Alert.alert(t('settings.reset.successTitle'), t('settings.reset.successBody'));
+      return;
+    }
+    const bodyKey = (
+      {
+        busy: 'settings.reset.failedBusy',
+        auth: 'settings.reset.failedAuth',
+        remote: 'settings.reset.failedRemote',
+        local: 'settings.reset.failedLocal',
+      } as const
+    )[result.reason];
+    // Keep the dialog open with the failure inline so retry keeps its context.
+    setResetError(result.message ? `${t(bodyKey)}\n${result.message}` : t(bodyKey));
   };
 
   // Developer mode hides diagnostics behind an opt-in so the everyday screen
@@ -570,7 +604,7 @@ export default function SettingsScreen() {
   ).length;
   const cloudAvailable = auth.isSignedIn; // anonymous OR authenticated session
   const hasPending = waiting > 0;
-  const canSync = cloudAvailable && hasPending && !isSyncing;
+  const canSync = cloudAvailable && hasPending && !isSyncing && !isResettingLibrary;
 
   const syncSummary = isSyncing
     ? t('settings.sync.syncing', { count: waiting })
@@ -854,7 +888,9 @@ export default function SettingsScreen() {
           }
           right={exporting ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
           onPress={
-            exporting || totalBookmarks === 0 ? undefined : () => setExportSheetOpen(true)
+            exporting || isResettingLibrary || totalBookmarks === 0
+              ? undefined
+              : () => setExportSheetOpen(true)
           }
         />
         <Row
@@ -863,9 +899,36 @@ export default function SettingsScreen() {
           icon="enter-outline"
           label={t('settings.import.label')}
           value={importing ? t('settings.import.importing') : t('settings.import.value')}
-          last
           right={importing ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
-          onPress={importing ? undefined : () => setImportSheetOpen(true)}
+          onPress={importing || isResettingLibrary ? undefined : () => setImportSheetOpen(true)}
+        />
+        {/* Destructive library reset (issue #600): online-only, type-to-confirm.
+            Disabled without a usable session — the wipe is a cloud RPC. */}
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="nuclear-outline"
+          label={t('settings.reset.label')}
+          value={
+            isResettingLibrary
+              ? t('settings.reset.resetting')
+              : auth.isSignedIn
+                ? t('settings.reset.value')
+                : t('settings.reset.signInRequired')
+          }
+          last
+          disabled={!auth.isSignedIn}
+          right={
+            isResettingLibrary ? <ActivityIndicator color={palette.textSecondary} /> : undefined
+          }
+          onPress={
+            !auth.isSignedIn || isResettingLibrary || importing || exporting
+              ? undefined
+              : () => {
+                  setResetError(null);
+                  setResetDialogOpen(true);
+                }
+          }
         />
       </Group>
 
@@ -1007,6 +1070,14 @@ export default function SettingsScreen() {
             onPress: () => void runImport('csv'),
           },
         ]}
+      />
+
+      <ResetLibraryDialog
+        visible={resetDialogOpen}
+        busy={isResettingLibrary}
+        error={resetError}
+        onConfirm={() => void runReset()}
+        onClose={() => setResetDialogOpen(false)}
       />
 
       <ActionSheet

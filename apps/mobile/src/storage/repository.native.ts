@@ -321,6 +321,17 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   async replaceTagData(data: TagData): Promise<void> {
     await this.connection.run((db) => db.withTransactionAsync(() => writeTagData(db, data)));
   }
+
+  async clearAllData(): Promise<void> {
+    await this.connection.run((db) =>
+      db.withTransactionAsync(async () => {
+        await db.runAsync('DELETE FROM bookmarks');
+        await db.runAsync('DELETE FROM local_pending_bookmarks');
+        await db.runAsync('DELETE FROM enrichments');
+        await db.runAsync('DELETE FROM tag_data');
+      }),
+    );
+  }
 }
 
 export const repository: BookmarkRepository = new SqliteBookmarkRepository();
