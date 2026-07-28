@@ -302,6 +302,7 @@ function fakeRepository(): BookmarkRepository {
     deleteEnrichment: async () => {},
     listTagData: async () => ({ tags: [], bookmarkTags: [], collections: [] }),
     replaceTagData: async () => {},
+    clearAllData: async () => {},
   };
 }
 

@@ -52,6 +52,22 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         .filter((b) => b.id === previousId || b.id !== bookmark.id)
         .map((b) => (b.id === previousId ? bookmark : b));
     },
+    completeCreateSyncBatch: async (completions) => {
+      for (const { previousId, bookmark, entry } of completions) {
+        const stored = queue.find((queued) => queued.local_id === entry.local_id);
+        if (
+          !stored ||
+          stored.operation !== entry.operation ||
+          stored.updated_at !== entry.updated_at
+        ) {
+          continue;
+        }
+        bookmarks = bookmarks
+          .filter((b) => b.id === previousId || b.id !== bookmark.id)
+          .map((b) => (b.id === previousId ? bookmark : b));
+        queue = queue.filter((queued) => queued.local_id !== entry.local_id);
+      }
+    },
     deleteBookmark: async (id) => {
       bookmarks = bookmarks.filter((b) => b.id !== id);
     },
@@ -80,6 +96,12 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
     listTagData: async () => tagData,
     replaceTagData: async (data) => {
       tagData = data;
+    },
+    clearAllData: async () => {
+      bookmarks = [];
+      queue = [];
+      enrichments = [];
+      tagData = { tags: [], bookmarkTags: [], collections: [] };
     },
   };
 

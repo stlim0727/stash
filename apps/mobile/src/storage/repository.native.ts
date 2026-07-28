@@ -5,7 +5,7 @@ import { noteSqliteOpenFailure } from '@/storage/diagnostics';
 import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
-import type { BookmarkRepository, TagData } from '@/storage/types';
+import type { BookmarkRepository, CreateSyncCompletion, TagData } from '@/storage/types';
 
 interface BookmarkRow {
   id: string;
@@ -219,6 +219,34 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     );
   }
 
+  async completeCreateSyncBatch(completions: CreateSyncCompletion[]): Promise<void> {
+    if (completions.length === 0) {
+      return;
+    }
+    await this.connection.run((db) =>
+      db.withTransactionAsync(async () => {
+        for (const { previousId, bookmark, entry } of completions) {
+          const stored = await db.getFirstAsync<QueueRow>(
+            'SELECT * FROM local_pending_bookmarks WHERE local_id = ?',
+            [entry.local_id],
+          );
+          if (
+            !stored ||
+            stored.operation !== entry.operation ||
+            stored.updated_at !== entry.updated_at
+          ) {
+            continue;
+          }
+          await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
+          await writeBookmark(db, bookmark);
+          await db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [
+            entry.local_id,
+          ]);
+        }
+      }),
+    );
+  }
+
   async deleteBookmark(id: string): Promise<void> {
     await this.connection.run((db) => db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]));
   }
@@ -320,6 +348,17 @@ class SqliteBookmarkRepository implements BookmarkRepository {
 
   async replaceTagData(data: TagData): Promise<void> {
     await this.connection.run((db) => db.withTransactionAsync(() => writeTagData(db, data)));
+  }
+
+  async clearAllData(): Promise<void> {
+    await this.connection.run((db) =>
+      db.withTransactionAsync(async () => {
+        await db.runAsync('DELETE FROM bookmarks');
+        await db.runAsync('DELETE FROM local_pending_bookmarks');
+        await db.runAsync('DELETE FROM enrichments');
+        await db.runAsync('DELETE FROM tag_data');
+      }),
+    );
   }
 }
 

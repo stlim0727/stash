@@ -95,6 +95,9 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
     deleteEnrichment: async () => {},
     listTagData: async () => ({ tags: [], bookmarkTags: [], collections: [] }),
     replaceTagData: async () => {},
+    clearAllData: async () => {
+      calls.push('clearAllData');
+    },
   };
   return { calls, repository };
 }
@@ -213,7 +216,7 @@ test('bulk create: uploads latest titles and replaces local rows with returned r
       ? makeBookmark({ id, title: 'fresh title', notes: 'fresh notes' })
       : makeBookmark({ id, url: 'https://example.com/b' });
 
-  const results = await syncCreateQueueEntryBatch(api, repository, [first, second], latest);
+  const results = await syncCreateQueueEntryBatch(api, [first, second], latest);
 
   assert.deepEqual(sent[0], [
     {
@@ -235,18 +238,14 @@ test('bulk create: uploads latest titles and replaces local rows with returned r
   assert.equal(results[0]?.bookmarkReplacement?.bookmark.id, '00000000-0000-4000-8000-000000000101');
   assert.equal(results[0]?.uploadedPayload?.title, 'fresh title');
   assert.equal(results[1]?.entry.remote_id, '00000000-0000-4000-8000-000000000102');
-  assert.ok(calls.includes('updateQueueEntry:local-a:synced'));
-  assert.ok(calls.includes('replaceBookmark:local-a->00000000-0000-4000-8000-000000000101'));
-  assert.ok(calls.includes('updateQueueEntry:local-b:synced'));
-  assert.ok(calls.includes('replaceBookmark:local-b->00000000-0000-4000-8000-000000000102'));
+  assert.equal(calls.length, 0);
 });
 
 test('bulk create: rejects non-create queue entries', async () => {
-  const { repository } = fakeRepository();
   const update = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
 
   await assert.rejects(
-    () => syncCreateQueueEntryBatch(fakeApi(), repository, [update], () => undefined),
+    () => syncCreateQueueEntryBatch(fakeApi(), [update], () => undefined),
     /only accepts create/,
   );
 });
@@ -269,7 +268,6 @@ test('bulk create eligibility excludes legacy URL-less creates without client_id
 });
 
 test('bulk create rejects unkeyed entries before calling the API', async () => {
-  const { repository } = fakeRepository();
   let called = false;
   const api = fakeApi({
     createBookmarks: async () => {
@@ -282,7 +280,6 @@ test('bulk create rejects unkeyed entries before calling the API', async () => {
     () =>
       syncCreateQueueEntryBatch(
         api,
-        repository,
         [makeCreateEntry({ payload: { shared_text: 'legacy note' } })],
         () => undefined,
       ),

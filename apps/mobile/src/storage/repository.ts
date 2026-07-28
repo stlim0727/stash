@@ -1,5 +1,5 @@
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
-import type { BookmarkRepository, TagData } from '@/storage/types';
+import type { BookmarkRepository, CreateSyncCompletion, TagData } from '@/storage/types';
 
 /**
  * Web/dev fallback store. Uses localStorage when available so bookmarks
@@ -112,6 +112,29 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(BOOKMARKS_KEY, this.bookmarks);
   }
 
+  async completeCreateSyncBatch(completions: CreateSyncCompletion[]): Promise<void> {
+    const applied = completions.filter((completion) => {
+      const stored = this.queue.find((entry) => entry.local_id === completion.entry.local_id);
+      return (
+        stored &&
+        stored.operation === completion.entry.operation &&
+        stored.updated_at === completion.entry.updated_at
+      );
+    });
+    if (applied.length === 0) {
+      return;
+    }
+    for (const { previousId, bookmark } of applied) {
+      this.bookmarks = this.bookmarks
+        .filter((existing) => existing.id === previousId || existing.id !== bookmark.id)
+        .map((existing) => (existing.id === previousId ? bookmark : existing));
+    }
+    const completedIds = new Set(applied.map((completion) => completion.entry.local_id));
+    this.queue = this.queue.filter((entry) => !completedIds.has(entry.local_id));
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+    this.write(QUEUE_KEY, this.queue);
+  }
+
   async deleteBookmark(id: string): Promise<void> {
     this.bookmarks = this.bookmarks.filter((existing) => existing.id !== id);
     this.write(BOOKMARKS_KEY, this.bookmarks);
@@ -168,6 +191,17 @@ class WebBookmarkRepository implements BookmarkRepository {
 
   async replaceTagData(data: TagData): Promise<void> {
     this.tagData = data;
+    this.write(TAG_DATA_KEY, this.tagData);
+  }
+
+  async clearAllData(): Promise<void> {
+    this.bookmarks = [];
+    this.queue = [];
+    this.enrichments = [];
+    this.tagData = EMPTY_TAG_DATA;
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+    this.write(QUEUE_KEY, this.queue);
+    this.write(ENRICHMENTS_KEY, this.enrichments);
     this.write(TAG_DATA_KEY, this.tagData);
   }
 }
