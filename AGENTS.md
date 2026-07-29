@@ -457,7 +457,16 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   afterward) `syncNow`'s "synced leftover" id-swap reconciliation, which
   looked sequential (a `for` loop) but never awaited each call before firing
   the next — grep for `Promise.all` **and** un-awaited calls inside `for`
-  loops before adding a new bulk write path.
+  loops before adding a new bulk write path. **Fourth occurrence, found via
+  STASH-3Y's own new diagnostics**: `store/bookmarks.tsx`'s bulk-create
+  reconcile follow-up (`applyBulkCreateChunkResults`'s `followUpUpdates`/
+  `deletedMidFlightIds` persist, itself added earlier this same
+  investigation) fired `repository.updateBookmark`/`deleteBookmark` per
+  reconciled entry via an un-awaited `for` loop — up to a chunk's worth
+  (`BULK_CREATE_SYNC_CHUNK_SIZE` = 50) of simultaneous calls per chunk, a
+  strong match for a real report showing severe contention (`maxDepth: 20`,
+  `waitCount: 101`) and zero completed reconcile diagnostics all session.
+  Fixed the same way as the prior three: each loop now awaits sequentially.
 - **Historical (pre-#611/#612), for context if this ever resurfaces**: back
   when a create renamed a bookmark's local-\* id onto a server UUID, two
   synced-bookmark self-heal passes in `store/bookmarks.tsx`'s bootstrap

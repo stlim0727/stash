@@ -3774,11 +3774,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // landed, so `deleteBookmark` saw it as never-synced and skipped
           // enqueuing a remote delete. This row is now confirmed to exist
           // remotely under `update.id` (this sync just created/updated it),
-          // so finish that cleanup here instead of resurrecting it.
+          // so finish that cleanup here instead of resurrecting it. The
+          // actual persist runs sequentially, below, once all of this
+          // chunk's completions are known (STASH-3B/3N precedent) — firing
+          // it inline here would stack up to a chunk's worth of simultaneous
+          // native calls onto the single serialized SQLite connection.
           if (deletedIds.current.has(lookupId) || deletedIds.current.has(update.id)) {
-            ensureRepositoryReady()
-              .then(() => repository.deleteBookmark(update.id))
-              .catch((error) => logStorageError('post-delete sync cleanup', error));
             deletedMidFlightIds.push(update.id);
             continue;
           }
@@ -3845,20 +3846,48 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         for (const id of deletedMidFlightIds) {
           enqueueMutation(id, 'delete');
         }
+        if (deletedMidFlightIds.length > 0) {
+          // Sequential on purpose (Sentry STASH-3B precedent, applied here
+          // after STASH-3N — see the identical fix on the orphan-entries
+          // re-enqueue above): a chunk with many mid-flight deletes fired via
+          // Promise.all/un-awaited-loop would otherwise stack that many
+          // simultaneous native calls onto the single serialized SQLite
+          // connection, which is exactly the contention STASH-3Y's
+          // diagnostics later caught this same reconcile code causing.
+          ensureRepositoryReady()
+            .then(async () => {
+              for (const id of deletedMidFlightIds) {
+                await repository.deleteBookmark(id);
+              }
+            })
+            .catch((error) => logStorageError('post-delete sync cleanup', error));
+        }
         for (const bookmark of followUpUpdates) {
+          enqueueMutation(bookmark.id, 'update');
+        }
+        if (followUpUpdates.length > 0) {
           // completeCreateSyncBatch already wrote the pre-await snapshot
           // durably; if a concurrent edit is what made this reconcile
           // necessary, that edit only lives in-memory until this write
-          // lands. Without it, exiting before the queued 'update' below
+          // lands. Without it, exiting before the queued 'update' above
           // actually syncs would reload the stale row on restart — and the
           // 'update' queue entry carries no field snapshot of its own (it
           // derives its payload from whatever bookmark is loaded at sync
           // time), so the edit would be permanently lost, not just delayed
-          // (caught in PR review).
+          // (caught in PR review). Sequential, not fired per-entry
+          // concurrently (STASH-3B/3N precedent): a chunk that reconciles
+          // many entries at once would otherwise stack that many
+          // simultaneous native calls onto the single serialized SQLite
+          // connection — STASH-3Y's own diagnostics (added this session)
+          // caught exactly this: severe sqlite tail-wait contention with
+          // zero completed create-sync batches all session.
           ensureRepositoryReady()
-            .then(() => repository.updateBookmark(bookmark))
+            .then(async () => {
+              for (const bookmark of followUpUpdates) {
+                await repository.updateBookmark(bookmark);
+              }
+            })
             .catch((error) => logStorageError('post-sync reconcile persist', error));
-          enqueueMutation(bookmark.id, 'update');
         }
 
         if (rekeyedIds.size > 0) {

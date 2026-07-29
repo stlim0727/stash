@@ -1211,6 +1211,85 @@ test('an edit made while a bulk-create durable persist is still in flight is not
   fakeRepo.repository.completeCreateSyncBatch = originalComplete;
 });
 
+test('a bulk chunk reconciling many entries at once persists them sequentially, not concurrently (STASH-3Y)', async () => {
+  // Historical bug class (STASH-3B, twice under STASH-3N, documented in
+  // AGENTS.md): fanning out onto the single serialized SQLite connection —
+  // via Promise.all OR an un-awaited for loop — stacks up simultaneous
+  // native calls and shows up as "sqlite tail wait" depth climbing into the
+  // tens. The reconcile follow-up persist (bookmarks.tsx's followUpUpdates
+  // loop) used to fire repository.updateBookmark for every reconciled entry
+  // in a chunk without awaiting the previous call, which is exactly that
+  // shape. This proves at most one updateBookmark call is ever in flight at
+  // a time.
+  const ids = [
+    '7e64cf1e-0000-4000-8000-000000000501',
+    '7e64cf1e-0000-4000-8000-000000000502',
+    '7e64cf1e-0000-4000-8000-000000000503',
+  ];
+  const now = '2026-06-13T00:00:00.000Z';
+  fakeRepo.__reset(
+    ids.map((id) =>
+      makeStoredBookmark({
+        id,
+        url: `https://example.com/${id}`,
+        // Non-null site_name is enough to trip createNeedsReconcileUpdate
+        // unconditionally (CreateBookmarkInput has no field for it at all).
+        site_name: 'Example Site',
+        sync_status: 'pending',
+        // 'complete' (not 'pending') keeps the auto AI-enrichment trigger
+        // from firing — that path has its own independent updateBookmark
+        // call and would otherwise pollute the concurrency measurement below
+        // with an unrelated source of overlap.
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const id of ids) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const updateCalls: string[] = [];
+  const originalUpdateBookmark = fakeRepo.repository.updateBookmark.bind(fakeRepo.repository);
+  fakeRepo.repository.updateBookmark = async (bookmark) => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    updateCalls.push(bookmark.id);
+    // A real native SQLite call actually takes time — without this, two
+    // fire-and-forget calls started back-to-back could both resolve within
+    // the same microtask turn and never be observed overlapping.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    inFlight -= 1;
+    return originalUpdateBookmark(bookmark);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  // Checked the instant all three ids have been seen at least once — a
+  // separate, later sync cycle (the reconciled entries' own queued 'update'
+  // operation eventually syncing) also calls repository.updateBookmark, and
+  // that's a legitimate, independent source of calls this test isn't about.
+  await waitFor(() => expect(new Set(updateCalls).size).toBeGreaterThanOrEqual(ids.length));
+  expect(maxInFlight).toBe(1);
+
+  fakeRepo.repository.updateBookmark = originalUpdateBookmark;
+  // Drain any of the instrumented calls still in flight so their delayed
+  // writes can't land after a later test's fakeRepo.__reset.
+  await waitFor(() => expect(inFlight).toBe(0));
+});
+
 test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {
   // Reproduces the reported bug: the server dedupes a create against an
   // EXISTING different row (same canonical URL) and returns that row's id
