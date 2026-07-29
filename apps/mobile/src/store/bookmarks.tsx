@@ -3894,38 +3894,41 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           rekeyBookmarkIdentity(rekeyedIds);
         }
 
-        // Persisted BEFORE the follow-up loops below (not after), same
-        // reason as rekeyBookmarkIdentity above: completeCreateSyncBatch
-        // already marked every one of these creates synced and removed its
-        // create queue entry, so if the app exits while a later entry's
-        // reconcile write is still in flight, there is no other path left to
-        // recreate a missed durable AI-trigger marker on restart — a
-        // successfully created bookmark would then permanently miss its
-        // automatic AI suggestions (caught in PR review). Only the marker
-        // is persisted here; actual dispatch stays gated on enrichment
-        // settling, same as before. Adds every id to the ref first (cheap,
-        // synchronous) and persists ONCE, awaited — calling
-        // markPendingAiTrigger per id instead would fire that many
-        // independent, un-awaited setMeta writes onto the single serialized
-        // SQLite actor, recreating the exact fan-out contention this PR
-        // exists to fix (caught in PR review).
-        if (pendingAiIds.length > 0) {
-          for (const id of pendingAiIds) {
-            pendingAiTrigger.current.add(id);
-          }
-          await persistPendingAiTrigger();
-        }
-
-        // Covers both follow-up loops below: the queue has no
-        // pending/syncing entries for this chunk's ids between
+        // Covers the AI-marker persist below AND both follow-up loops: the
+        // queue has no pending/syncing entries for this chunk's ids between
         // completedLocalIds being filtered out (above) and their
         // replacement 'update'/'delete' mutations being enqueued (inside
         // these loops) — a window that now spans real, sequential SQLite
-        // writes. The 400ms AI-dispatch interval (see below) checks this
-        // flag so it doesn't mistake that gap for "sync settled" and start
-        // firing AI requests during it (caught in PR review).
+        // writes, INCLUDING the awaited marker-persist write immediately
+        // below. The 400ms AI-dispatch interval (see below) checks this
+        // flag so it doesn't mistake any part of that gap for "sync
+        // settled" and start firing AI requests during it — incremented
+        // before the marker persist, not just before the two loops, since
+        // that write can itself outlast one dispatch tick (caught in PR
+        // review).
         bulkReconcileInFlight.current += 1;
         try {
+          // Persisted BEFORE the follow-up loops below (not after), same
+          // reason as rekeyBookmarkIdentity above: completeCreateSyncBatch
+          // already marked every one of these creates synced and removed its
+          // create queue entry, so if the app exits while a later entry's
+          // reconcile write is still in flight, there is no other path left
+          // to recreate a missed durable AI-trigger marker on restart — a
+          // successfully created bookmark would then permanently miss its
+          // automatic AI suggestions (caught in PR review). Only the marker
+          // is persisted here; actual dispatch stays gated on enrichment
+          // settling, same as before. Adds every id to the ref first (cheap,
+          // synchronous) and persists ONCE, awaited — calling
+          // markPendingAiTrigger per id instead would fire that many
+          // independent, un-awaited setMeta writes onto the single serialized
+          // SQLite actor, recreating the exact fan-out contention this PR
+          // exists to fix (caught in PR review).
+          if (pendingAiIds.length > 0) {
+            for (const id of pendingAiIds) {
+              pendingAiTrigger.current.add(id);
+            }
+            await persistPendingAiTrigger();
+          }
           if (deletedMidFlightIds.length > 0) {
             // Sequential on purpose (STASH-3B/3N precedent, see
             // docs/architecture/sqlite-write-contention.md): a chunk with many

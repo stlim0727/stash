@@ -1985,6 +1985,78 @@ test('AI dispatch stays suppressed while a bulk chunk reconcile follow-up is sti
   fakeRepo.repository.updateBookmark = originalUpdateBookmark;
 });
 
+test('AI dispatch stays suppressed during the coalesced AI-marker write itself, not just the loops after it (STASH-3Y)', async () => {
+  // bulkReconcileInFlight used to increment AFTER the awaited AI-marker
+  // persist, not before it — so during that specific write (which can
+  // itself outlast one 400ms dispatch tick), the flag was still 0 and the
+  // queue already had nothing pending/syncing for this chunk, making the
+  // dispatch interval think sync had settled (caught in PR review). Fixed
+  // by incrementing the flag before the marker persist, not just before
+  // the two follow-up loops.
+  const id = '7e64cf1e-0000-4000-8000-000000000663';
+  const fillerId = '7e64cf1e-0000-4000-8000-000000000664';
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    [id, fillerId].map((bookmarkId) =>
+      makeStoredBookmark({
+        id: bookmarkId,
+        url: `https://example.com/${bookmarkId}`,
+        sync_status: 'pending',
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const bookmarkId of [id, fillerId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: bookmarkId,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: bookmarkId, url: `https://example.com/${bookmarkId}`, client_id: bookmarkId },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseWrite: () => void = () => {};
+  const writeGate = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  let writeEntered: () => void = () => {};
+  const writeEnteredPromise = new Promise<void>((resolve) => {
+    writeEntered = resolve;
+  });
+  let gated = false;
+  const originalSetMeta = fakeRepo.repository.setMeta.bind(fakeRepo.repository);
+  fakeRepo.repository.setMeta = async (key, value) => {
+    if (key === 'pending_ai_trigger' && !gated) {
+      gated = true;
+      writeEntered();
+      await writeGate;
+    }
+    return originalSetMeta(key, value);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await writeEnteredPromise;
+
+  // Still gated on the AI-marker write itself, well past one 400ms dispatch
+  // tick: no AI request must have fired yet.
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  expect(apiMock.__spies.requestEnrichment).not.toHaveBeenCalled();
+
+  releaseWrite();
+
+  await waitFor(() =>
+    expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(id, expect.anything(), 'en'),
+  );
+
+  fakeRepo.repository.setMeta = originalSetMeta;
+});
+
 test('a bookmark deleted mid-flight during a bulk create is persisted locally before its remote-delete mutation is queued (STASH-3Y)', async () => {
   // Ordering regression: queueing all of a chunk's remote-delete mutations
   // before any of the durable local deletes land means a crash between the
