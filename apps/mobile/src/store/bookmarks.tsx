@@ -3845,7 +3845,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ` (reconcile ${followUpUpdates.length}, deletedMidFlight ${deletedMidFlightIds.length},` +
             ` reasons ${JSON.stringify(reconcileReasonTally)})`,
         );
-        recordReconcileChunk(completedLocalIds.size, followUpUpdates.length, reconcileReasonTally);
+        // `results.length` (not `completedLocalIds.size`, which tracks a
+        // narrower "needs the in-memory queue filtered" set and keeps missing
+        // edge cases — deleted-mid-flight, queue-only, row-raced-away) is the
+        // one count that's unconditionally correct here: every result
+        // syncCreateQueueEntryBatch returns already represents a create that
+        // succeeded remotely (see the comment on completedLocalIds.add above).
+        recordReconcileChunk(results.length, followUpUpdates.length, reconcileReasonTally);
 
         for (const id of deletedMidFlightIds) {
           enqueueMutation(id, 'delete');
