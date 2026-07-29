@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-26 (android-apk.yml smart version allocation for blank dispatches).
+Last updated: 2026-07-29 (removed the now-dead bookmark id-swap machinery, #612, the follow-up to the id-stabilization refactor in #611).
 
 ## Successor Agent Orientation
 
@@ -141,15 +141,24 @@ These are "do not break" rules, not just implementation notes.
   `api/bookmarks.ts`'s `createBody.id`) instead of letting Postgres assign one
   — so a create's response always echoes the SAME id the client already has.
   This replaced an earlier "local-\* placeholder → server-assigned UUID" model
-  whose local→remote id-swap (`swapBookmarkId`, `idAliases`,
-  `planLeftoverReconciliation`, `reconcileStrandedSyncedDuplicates`) was the
-  root of an entire class of bugs (STASH-3B/3N/3P). That swap machinery still
-  exists in the codebase (removing it is a deliberately separate follow-up —
-  see the PR that shipped this), but it's now always a same-id no-op for
-  anything created going forward; it only still does real work for rows that
-  predate this change. `hasRemoteIdentity` (id-SHAPE check: real UUID vs.
-  `local-…`/`bookmark-…`) is consequently also DOWNGRADED to a migration/seed-
-  data check — it no longer means "has this synced" (every id looks like a
+  whose local→remote id-swap (`swapBookmarkId`, `planLeftoverReconciliation`,
+  `reconcileStrandedSyncedDuplicates`, the `syncQueueEntry` legacy id-shape
+  guard) was the root of an entire class of bugs (STASH-3B/3N/3P). **That
+  swap machinery has since been removed entirely** (#612, a deliberately
+  separate follow-up to the id-stabilization PR, #611) — accepting the edge
+  case that a device already stuck with a stuck pre-#611 `local-*` bookmark
+  loses its self-heal path. `EntrySyncResult.bookmarkReplacement` (the
+  `{previousId, bookmark}` rename signal) is now `bookmarkUpdate?: Bookmark`
+  (fields change, never the id), and `completeCreateSyncBatch` does a plain
+  in-place update instead of a DELETE+INSERT rename.
+  `resolveAliasedId`/`idAliases` and `repository.replaceBookmark` are the
+  **one exception, kept on purpose**: anonymous→real account carry-over
+  (`sync/account-transition.ts`) still mints a genuinely new id when
+  rehoming a bookmark into a different account, independent of create-sync,
+  so that id-change path (and the alias map background tasks resolve
+  through) is still live. `hasRemoteIdentity` (id-SHAPE check: real UUID vs.
+  `local-…`/`bookmark-…`) is consequently also DOWNGRADED to a seed-data
+  check only — it no longer means "has this synced" (every id looks like a
   real UUID now, synced or not). For "has this bookmark ever been confirmed
   synced" — which several self-heal/account-transition/tag/enrichment gates
   need, including telling a never-synced row apart from one that's merely
@@ -409,22 +418,27 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   looked sequential (a `for` loop) but never awaited each call before firing
   the next — grep for `Promise.all` **and** un-awaited calls inside `for`
   loops before adding a new bulk write path.
-- The two synced-bookmark self-heal passes in `store/bookmarks.tsx`'s
-  bootstrap effect each cover a different half of "a create's local→remote
-  id swap didn't finish before the app died," and neither notices the other's
-  gap: `reconcileOrphanedQueueEntries` skips any bookmark already marked
-  `sync_status: 'synced'` (assumes nothing left to drive), and
-  `planLeftoverReconciliation` is driven by iterating the QUEUE — a
-  synced-leftover entry removed before its id swap durably landed (or never
-  created) leaves nothing to iterate. A local-id row stuck in exactly that
-  state — `sync_status: 'synced'`, no queue entry, an already-synced remote-id
-  twin with the same canonical URL sitting right next to it — was invisible
-  to both passes and survived as a permanent duplicate Inbox card that
-  reappeared every relaunch (Sentry STASH-3P, "561 -> 781 -> 970" after a
-  561-bookmark import). `reconcileStrandedSyncedDuplicates` in
-  `sync/sync-bookmarks.ts` is the third self-heal pass, covering that specific
-  gap — a bootstrap-time canonical-URL scan across bookmark rows themselves
-  rather than the queue.
+- **Historical (pre-#611/#612), for context if this ever resurfaces**: back
+  when a create renamed a bookmark's local-\* id onto a server UUID, two
+  synced-bookmark self-heal passes in `store/bookmarks.tsx`'s bootstrap
+  effect each covered a different half of "the rename didn't finish before
+  the app died," and neither noticed the other's gap: `reconcileOrphanedQueueEntries`
+  skips any bookmark already marked `sync_status: 'synced'` (assumes nothing
+  left to drive), and the now-removed `planLeftoverReconciliation` was driven
+  by iterating the QUEUE — a synced-leftover entry removed before its id swap
+  durably landed (or never created) left nothing to iterate. A local-id row
+  stuck in exactly that state — `sync_status: 'synced'`, no queue entry, an
+  already-synced remote-id twin with the same canonical URL sitting right
+  next to it — was invisible to both passes and survived as a permanent
+  duplicate Inbox card that reappeared every relaunch (Sentry STASH-3P,
+  "561 -> 781 -> 970" after a 561-bookmark import). The now-removed
+  `reconcileStrandedSyncedDuplicates` in `sync/sync-bookmarks.ts` was the
+  third self-heal pass added to cover that specific gap. All three id-rename
+  concepts (the rename itself, and the self-heal passes built around it) are
+  now gone — see the stable-id entry above — since #611 stopped bookmarks
+  from ever being renamed in the first place, making the whole gap moot for
+  anything created since. `reconcileOrphanedQueueEntries` is the one pass
+  still live, now generalized around `ever_synced` rather than id shape.
 - On web (RN-web/CSS stacking rules), a sibling with **any** explicit
   `position` + positive `zIndex` paints above **all** `zIndex:auto`/unset
   siblings in the same stacking context, regardless of DOM/mount order — so
