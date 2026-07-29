@@ -3586,10 +3586,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             continue;
           }
 
-          if (!result.removeEntry) {
-            continue;
-          }
-
+          // Every result syncCreateQueueEntryBatch returns is a completed
+          // create — it never emits a "retry later" state per entry the way
+          // syncQueueEntry does (a batch failure throws instead, caught by
+          // this call's try/catch above), so it never sets removeEntry.
+          // Gating on that field here (as this used to) silently skipped
+          // every bulk-created entry: the queue entry was never cleared, the
+          // bookmark was never marked synced, and nothing was ever persisted
+          // — the exact cause of the reported "sync stuck re-uploading the
+          // same batch forever" bug (Sentry STASH-3V/3X and others).
           completedLocalIds.add(entry.local_id);
 
           if (!result.bookmarkUpdate) {

@@ -98,6 +98,9 @@ jest.mock('@/api/bookmarks', () => {
       created_at: '2026-06-13T00:00:00.000Z',
     })),
   );
+  // A create's follow-up reconcile update (e.g. once metadata settles); the
+  // return value is unused by the caller.
+  const updateBookmark = jest.fn(async () => undefined);
   // Reconfigurable so a test can let the pull keep a seeded row in state
   // (the default empty list otherwise diffs it away as a remote deletion).
   const listBookmarkIds = jest.fn(async () => [] as string[]);
@@ -106,6 +109,18 @@ jest.mock('@/api/bookmarks', () => {
   const createBookmark = jest.fn(async () => ({
     bookmark_id: '7e64cf1e-0000-4000-8000-0000000000aa',
   }));
+  // Bulk create upload (2+ pending creates go through this path instead of
+  // createBookmark). Defaults to echoing each input's own id back as a fresh
+  // 'created' row, matching what a real create-under-its-own-id response
+  // looks like.
+  const createBookmarks = jest.fn(
+    async (inputs: Array<{ id?: string }>) =>
+      inputs.map((input) => ({
+        bookmark_id: input.id ?? '00000000-0000-4000-8000-000000000000',
+        status: 'created' as const,
+        metadata_status: 'pending' as const,
+      })),
+  );
   // Pull's enrichment feed. Spied so a test can simulate another device
   // refreshing AI suggestions (a row arriving via pull rather than a local tap).
   const listEnrichmentsUpdatedSince = jest.fn(async () => [] as unknown[]);
@@ -118,6 +133,8 @@ jest.mock('@/api/bookmarks', () => {
       addTags,
       listBookmarkIds,
       createBookmark,
+      createBookmarks,
+      updateBookmark,
       listEnrichmentsUpdatedSince,
       enqueuePendingEnrichment,
     },
@@ -125,6 +142,8 @@ jest.mock('@/api/bookmarks', () => {
       requestEnrichment,
       addTags,
       createBookmark,
+      createBookmarks,
+      updateBookmark,
       listBookmarksUpdatedSince: empty,
       listBookmarkIds,
       listEnrichmentsUpdatedSince,
@@ -149,6 +168,8 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
     addTags: jest.Mock;
     listBookmarkIds: jest.Mock;
     createBookmark: jest.Mock;
+    createBookmarks: jest.Mock;
+    updateBookmark: jest.Mock;
     listEnrichmentsUpdatedSince: jest.Mock;
     enqueuePendingEnrichment: jest.Mock;
   };
@@ -462,6 +483,50 @@ test('a freshly captured bookmark gets AI suggestions automatically once it sync
     ),
   );
   await waitFor(() => expect(store.current!.getEnrichment(bookmarkId)).toBeDefined());
+});
+
+test('a bulk create sync (2+ pending creates) actually clears the queue and marks bookmarks synced (Sentry STASH-3V/3X)', async () => {
+  // Reproduces the reported "sync stuck re-uploading the same 561/59 items
+  // forever" bug: applyBulkCreateChunkResults gated clearing the queue on
+  // result.removeEntry, but syncCreateQueueEntryBatch NEVER sets that field —
+  // every one of its results represents a completed create (a batch failure
+  // throws instead of returning a per-entry retry state). With the gate in
+  // place, a successful bulk upload silently did nothing: the queue entries
+  // stayed 'pending', the bookmarks never flipped to 'synced', and the
+  // background auto-sync effect (which re-fires whenever the queue still has
+  // pending work) immediately re-ran the exact same upload forever.
+  fakeRepo.__reset([]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  const ids: string[] = [];
+  await act(async () => {
+    for (const url of ['example.com/bulk-a', 'example.com/bulk-b']) {
+      const result = store.current!.addBookmark({ url });
+      if (result.status !== 'invalid') {
+        ids.push(result.bookmark.id);
+      }
+    }
+  });
+  expect(ids).toHaveLength(2);
+  apiMock.__spies.listBookmarkIds.mockResolvedValue(ids);
+
+  await waitFor(() => expect(apiMock.__spies.createBookmarks).toHaveBeenCalled());
+  // The queue must actually drain — not just "eventually", but settle to
+  // empty, proving the sync loop terminates instead of re-uploading forever.
+  await waitFor(() => expect(store.current!.queue).toHaveLength(0));
+  for (const id of ids) {
+    expect(store.current!.getBookmark(id)?.sync_status).toBe('synced');
+  }
+
+  // Durable storage must reflect it too, or a reload resurrects the same
+  // "still pending" state and the loop resumes on next launch.
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+  for (const id of ids) {
+    const stored = fakeRepo.__bookmarks().find((b) => b.id === id);
+    expect(stored?.sync_status).toBe('synced');
+  }
 });
 
 test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {
