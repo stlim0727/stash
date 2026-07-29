@@ -227,8 +227,6 @@ export async function syncCreateQueueEntryBatch(
       Boolean(output.bookmark_id) &&
       output.bookmark_id !== entry.local_id;
     if (localBookmark) {
-      const isDuplicateSwap =
-        output.status === 'duplicate' && Boolean(output.bookmark_id) && output.bookmark_id !== entry.local_id;
       const syncedBookmark: Bookmark = {
         ...localBookmark,
         id: isDuplicateSwap ? output.bookmark_id : localBookmark.id,

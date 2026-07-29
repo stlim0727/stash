@@ -529,6 +529,50 @@ test('a bulk create sync (2+ pending creates) actually clears the queue and mark
   }
 });
 
+test('a bulk create sync failure records retry state instead of silently resetting to pending', async () => {
+  // A bulk-endpoint failure must behave like any other sync failure: mark the
+  // entry 'failed' with an incremented retry_count and last_error, so it's
+  // visible to the user and eligible for health escalation (see
+  // crossedHealthEscalationThreshold) — not just silently reset back to
+  // 'pending' with no record anything went wrong.
+  fakeRepo.__reset([]);
+  apiMock.__spies.createBookmarks.mockRejectedValueOnce(new Error('network down'));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  const ids: string[] = [];
+  await act(async () => {
+    for (const url of ['example.com/bulk-fail-a', 'example.com/bulk-fail-b']) {
+      const result = store.current!.addBookmark({ url });
+      if (result.status !== 'invalid') {
+        ids.push(result.bookmark.id);
+      }
+    }
+  });
+  expect(ids).toHaveLength(2);
+
+  await waitFor(() => expect(apiMock.__spies.createBookmarks).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(store.current!.queue.every((entry) => entry.sync_status === 'failed')).toBe(true),
+  );
+  for (const entry of store.current!.queue) {
+    expect(entry.retry_count).toBe(1);
+    expect(entry.last_error).toBe('network down');
+  }
+  for (const id of ids) {
+    expect(store.current!.getBookmark(id)?.sync_status).toBe('failed');
+  }
+
+  // Durable storage must reflect the failure too.
+  await waitFor(() =>
+    expect(fakeRepo.__queue().every((entry) => entry.sync_status === 'failed')).toBe(true),
+  );
+  for (const id of ids) {
+    expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.sync_status).toBe('failed');
+  }
+});
+
 test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {
   // Reproduces the reported bug: the server dedupes a create against an
   // EXISTING different row (same canonical URL) and returns that row's id

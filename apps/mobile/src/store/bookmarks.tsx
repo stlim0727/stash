@@ -3641,6 +3641,37 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        // Persist durably BEFORE reflecting completion in memory. If this
+        // throws, the in-memory queue must stay untouched (entries still
+        // 'syncing', which the auto-sync effect retries the same as
+        // 'pending') — otherwise the current session would show an empty
+        // queue and stop retrying while the durable queue still has these
+        // entries pending, until the next app restart reloads the real state.
+        await ensureRepositoryReady();
+        try {
+          if (repository.completeCreateSyncBatch) {
+            await repository.completeCreateSyncBatch(completions);
+          } else {
+            await Promise.all(
+              completions.flatMap(({ bookmark, entry, originalLocalId }) => {
+                const isSwap = Boolean(originalLocalId) && originalLocalId !== bookmark.id;
+                return [
+                  ...(isSwap ? [repository.deleteBookmark(originalLocalId!)] : []),
+                  // insertBookmark (not updateBookmark) for a swap: the
+                  // destination id is new to this device, and updateBookmark
+                  // only replaces a row already stored under that id (see
+                  // syncQueueEntry's identical fix in sync-bookmarks.ts).
+                  isSwap ? repository.insertBookmark(bookmark) : repository.updateBookmark(bookmark),
+                  removeQueueEntryIfNotSuperseded(repository, entry),
+                ];
+              }),
+            );
+          }
+        } catch (error) {
+          logStorageError('bulk create sync completion', error);
+          return;
+        }
+
         mutationsPushed = true;
         bookmarksRef.current = nextBookmarks;
         setBookmarks(nextBookmarks);
@@ -3652,26 +3683,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // way account rehoming does, or it silently never uploads, parked
           // on the now-dead original id.
           rekeyBookmarkIdentity(rekeyedIds);
-        }
-
-        await ensureRepositoryReady();
-        if (repository.completeCreateSyncBatch) {
-          await repository.completeCreateSyncBatch(completions);
-        } else {
-          await Promise.all(
-            completions.flatMap(({ bookmark, entry, originalLocalId }) => {
-              const isSwap = Boolean(originalLocalId) && originalLocalId !== bookmark.id;
-              return [
-                ...(isSwap ? [repository.deleteBookmark(originalLocalId!)] : []),
-                // insertBookmark (not updateBookmark) for a swap: the
-                // destination id is new to this device, and updateBookmark
-                // only replaces a row already stored under that id (see
-                // syncQueueEntry's identical fix in sync-bookmarks.ts).
-                isSwap ? repository.insertBookmark(bookmark) : repository.updateBookmark(bookmark),
-                removeQueueEntryIfNotSuperseded(repository, entry),
-              ];
-            }),
-          );
         }
 
         for (const { id } of followUpUpdates) {
@@ -3715,19 +3726,67 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               bulkSyncedLocalIds.add(entry.local_id);
             }
           } catch (error) {
-            recordLog(
-              'warn',
-              `bulk create sync failed (${
-                error instanceof Error ? error.message : String(error)
-              }); preserving bulk mode for next retry`,
-            );
+            // Only this chunk failed — mark just its entries 'failed' (with
+            // retry accounting, like any other sync failure) and stop trying
+            // further chunks this run, since a bulk-endpoint failure likely
+            // affects them too. Entries in later, never-attempted chunks are
+            // untouched (still 'pending') and picked up by the next pass —
+            // no separate "preserve bulk mode" bookkeeping needed: a 'failed'
+            // entry is still bulk-eligible (isSyncable), so it naturally
+            // retries via bulk again next time.
+            const message = error instanceof Error ? error.message : String(error);
+            const failedAt = new Date().toISOString();
+            recordLog('warn', `bulk create sync failed for a chunk of ${chunk.length} (${message})`);
+
+            const failedEntries = new Map<string, LocalPendingBookmark>();
+            for (const entry of chunk) {
+              const failedEntry: LocalPendingBookmark = {
+                ...entry,
+                sync_status: 'failed',
+                retry_count: entry.retry_count + 1,
+                last_error: message,
+                updated_at: failedAt,
+              };
+              failedEntries.set(entry.local_id, failedEntry);
+              if (crossedHealthEscalationThreshold(entry.retry_count, failedEntry.retry_count)) {
+                reportSyncQueueHealthEscalation({
+                  operation: failedEntry.operation,
+                  retryCount: failedEntry.retry_count,
+                  lastError: failedEntry.last_error,
+                });
+              }
+            }
+
+            try {
+              await ensureRepositoryReady();
+              for (const entry of chunk) {
+                const stored = (await repository.listQueue()).find(
+                  (queued) => queued.local_id === entry.local_id,
+                );
+                if (!stored || stored.updated_at !== entry.updated_at) {
+                  continue;
+                }
+                await repository.updateQueueEntry(failedEntries.get(entry.local_id)!);
+                const bookmark = getLatestBookmark(entry.local_id);
+                if (bookmark && bookmark.sync_status !== 'failed') {
+                  await repository.updateBookmark({ ...bookmark, sync_status: 'failed' });
+                }
+              }
+            } catch (persistError) {
+              logStorageError('bulk create failure persist', persistError);
+            }
+
             setQueue((current) =>
-              current.map((queued) => {
-                const original = chunk.find((entry) => entry.local_id === queued.local_id);
-                return original ? { ...queued, sync_status: original.sync_status } : queued;
-              }),
+              current.map((queued) => failedEntries.get(queued.local_id) ?? queued),
             );
-            for (const entry of bulkCreateEntries) {
+            setBookmarks((current) =>
+              (current ?? []).map((bookmark) =>
+                failedEntries.has(bookmark.id) && bookmark.sync_status !== 'failed'
+                  ? { ...bookmark, sync_status: 'failed' }
+                  : bookmark,
+              ),
+            );
+            for (const entry of chunk) {
               bulkSyncedLocalIds.add(entry.local_id);
             }
             break;
