@@ -116,7 +116,11 @@ import {
   syncCreateQueueEntryBatch,
   syncQueueEntry,
 } from '@/sync/sync-bookmarks';
-import { recordReconcileChunk, recordSingleCreateCompletion } from '@/sync/reconcile-diagnostics';
+import {
+  recordCreateCompleted,
+  recordReconcileChunk,
+  recordReconcileNeeded,
+} from '@/sync/reconcile-diagnostics';
 
 export type AddBookmarkResult =
   | {
@@ -3447,6 +3451,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           });
         }
 
+        if (result.uploadedPayload !== undefined) {
+          // STASH-3Y diagnostics: `uploadedPayload` being defined is
+          // unconditional proof this create already succeeded remotely
+          // (sync-bookmarks.ts only sets it after a successful
+          // api.createBookmark call) — record it here, before any of the
+          // branching below (deleted-mid-flight, no local row to merge)
+          // that would otherwise skip it. Whether it also needed a
+          // reconcile follow-up is recorded separately, later, only once
+          // that's actually determined — see recordReconcileNeeded.
+          recordCreateCompleted();
+        }
+
         // Deleted while a create/update was in flight: don't resurrect it.
         // Undo the rows syncQueueEntry just persisted and best-effort delete
         // the remote copy so the user's delete wins end to end.
@@ -3554,13 +3570,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // resurrect on other devices.
             if (createUploaded) {
               // STASH-3Y diagnostics: same reconcile path as the bulk chunk
-              // loop below, just one entry at a time (single-create fallback).
-              // Recorded for every completion (not just reconciled ones) so
-              // entriesCompleted/entriesReconciled stay comparable.
+              // loop below, just one entry at a time (single-create
+              // fallback). Completion itself was already recorded
+              // unconditionally near the top of this function — this only
+              // records *why*, once reconcile is confirmed needed.
               const payload = result.uploadedPayload;
-              const needsReconcile = createNeedsReconcileUpdate(merged, payload);
-              const reasons: Record<string, number> = {};
-              if (needsReconcile) {
+              if (createNeedsReconcileUpdate(merged, payload)) {
+                const reasons: Record<string, number> = {};
                 if (merged.deleted_at !== null) reasons.deleted_at = 1;
                 if (merged.is_archived) reasons.is_archived = 1;
                 if (merged.collection_id !== null) reasons.collection_id = 1;
@@ -3571,9 +3587,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 if (merged.site_name !== null) reasons.site_name = 1;
                 if (merged.favicon_url !== null) reasons.favicon_url = 1;
                 if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
-              }
-              recordSingleCreateCompletion(needsReconcile, reasons);
-              if (needsReconcile) {
+                recordReconcileNeeded(reasons);
                 recordLog(
                   'info',
                   `single create reconcile: metadata_status=${merged.metadata_status} ` +
@@ -3592,20 +3606,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               markPendingAiTrigger(merged.id);
             }
             mutationsPushed = true;
-          } else if (result.uploadedPayload !== undefined) {
-            // STASH-3Y diagnostics: the create completed (uploadedPayload is
-            // set) but the local row raced away before this merge — nothing
-            // to reconcile/enqueue against, but it must still count as a
-            // completion or entriesCompleted undercounts exactly the
-            // mid-flight-race sessions this diagnostic exists to explain.
-            recordSingleCreateCompletion(false, {});
           }
-        } else if (result.uploadedPayload !== undefined) {
-          // STASH-3Y diagnostics: syncQueueEntry returns a successful create
-          // with no `bookmarkUpdate` at all when the local bookmark was
-          // already gone before the upload settled (sync-bookmarks.ts) —
-          // same accounting gap as the branch above, different cause.
-          recordSingleCreateCompletion(false, {});
         }
         return true;
       };

@@ -3,8 +3,9 @@ import { test } from 'node:test';
 
 import {
   getReconcileDiagnostics,
+  recordCreateCompleted,
   recordReconcileChunk,
-  recordSingleCreateCompletion,
+  recordReconcileNeeded,
   resetReconcileDiagnostics,
 } from './reconcile-diagnostics.ts';
 
@@ -26,10 +27,11 @@ test('recordReconcileChunk accumulates counts and reason tallies across calls', 
   assert.deepEqual(snapshot!.reasonTally, { metadata_status: 17, site_name: 3, title: 1 });
 });
 
-test('recordSingleCreateCompletion counts entries without counting as a bulk chunk', () => {
+test('recordCreateCompleted counts entries without counting as a bulk chunk', () => {
   resetReconcileDiagnostics();
-  recordSingleCreateCompletion(false, {});
-  recordSingleCreateCompletion(true, { site_name: 1 });
+  recordCreateCompleted();
+  recordCreateCompleted();
+  recordReconcileNeeded({ site_name: 1 });
 
   const snapshot = getReconcileDiagnostics();
   assert.ok(snapshot);
@@ -41,11 +43,22 @@ test('recordSingleCreateCompletion counts entries without counting as a bulk chu
 
 test('a pristine single create (no reconcile needed) still counts toward entriesCompleted', () => {
   resetReconcileDiagnostics();
-  recordSingleCreateCompletion(false, {});
+  recordCreateCompleted();
   const snapshot = getReconcileDiagnostics();
   assert.ok(snapshot);
   assert.equal(snapshot!.entriesCompleted, 1);
   assert.equal(snapshot!.entriesReconciled, 0);
+});
+
+test('recordReconcileNeeded can be recorded independently of recordCreateCompleted (the whole point: completion is knowable before reconcile-need is)', () => {
+  resetReconcileDiagnostics();
+  recordCreateCompleted(); // completion known immediately
+  // ... later, once determined, separately:
+  recordReconcileNeeded({ title: 1 });
+
+  const snapshot = getReconcileDiagnostics()!;
+  assert.equal(snapshot.entriesCompleted, 1);
+  assert.equal(snapshot.entriesReconciled, 1);
 });
 
 test('getReconcileDiagnostics returns a fresh copy each call (no shared mutable reference)', () => {

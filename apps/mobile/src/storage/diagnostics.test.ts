@@ -33,3 +33,24 @@ test('noteSqliteQueueDepth updates maxDepth without touching maxWaitMs/waitCount
   noteSqliteQueueDepth(1);
   assert.equal(getStorageDiagnostics()!.sqliteContention!.maxDepth, after.maxDepth);
 });
+
+test('noteSqliteQueueDepth does not bump updatedAt when it does not advance the max', async () => {
+  noteSqliteQueueDepth(20);
+  const before = getStorageDiagnostics()!.sqliteContention!;
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  noteSqliteQueueDepth(1); // well below the current max — must be a true no-op
+  const after = getStorageDiagnostics()!.sqliteContention!;
+  assert.equal(after.updatedAt, before.updatedAt);
+});
+
+test('noteSqliteTailWait discards an implausibly long wait (background-suspension artifact, not real contention)', () => {
+  noteSqliteTailWait(500, 2);
+  const before = getStorageDiagnostics()!.sqliteContention!;
+
+  noteSqliteTailWait(5 * 60_000, 99); // e.g. the app was backgrounded mid-wait
+  const after = getStorageDiagnostics()!.sqliteContention!;
+  assert.equal(after.maxWaitMs, before.maxWaitMs);
+  assert.equal(after.maxDepth, before.maxDepth);
+  assert.equal(after.waitCount, before.waitCount);
+});

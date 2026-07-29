@@ -41,7 +41,15 @@ const state: Omit<ReconcileDiagnostics, 'updatedAt'> & { updatedAt: string | nul
   updatedAt: null,
 };
 
-function recordEntries(completed: number, reconciled: number, reasonCounts: Record<string, number>): void {
+/** A completed bulk-create chunk (`applyBulkCreateChunkResults`) — `completed`
+ *  and `reconciled` are both known at once for a whole chunk, so this stays a
+ *  single call. */
+export function recordReconcileChunk(
+  completed: number,
+  reconciled: number,
+  reasonCounts: Record<string, number>,
+): void {
+  state.chunksProcessed += 1;
   state.entriesCompleted += completed;
   state.entriesReconciled += reconciled;
   for (const [reason, count] of Object.entries(reasonCounts)) {
@@ -50,24 +58,29 @@ function recordEntries(completed: number, reconciled: number, reasonCounts: Reco
   state.updatedAt = new Date().toISOString();
 }
 
-/** A completed bulk-create chunk (`applyBulkCreateChunkResults`). */
-export function recordReconcileChunk(
-  completed: number,
-  reconciled: number,
-  reasonCounts: Record<string, number>,
-): void {
-  state.chunksProcessed += 1;
-  recordEntries(completed, reconciled, reasonCounts);
+/**
+ * A single create completed via the non-bulk fallback path. Deliberately
+ * split from "was it reconciled" (see `recordReconcileNeeded`): whether a
+ * create succeeded is knowable the instant `uploadedPayload` is defined,
+ * before any of the downstream branching (deleted-mid-flight, no local row
+ * to merge, etc.) that determines whether reconciliation is even possible to
+ * check. Call this once, unconditionally, as soon as completion is known;
+ * call `recordReconcileNeeded` separately, later, only if it turns out one
+ * was actually needed. Never increments `chunksProcessed` (it isn't one).
+ */
+export function recordCreateCompleted(): void {
+  state.entriesCompleted += 1;
+  state.updatedAt = new Date().toISOString();
 }
 
-/** A single create completed via the non-bulk fallback path — counts toward
- *  `entriesCompleted`/`entriesReconciled` like a bulk chunk's entries would,
- *  but never increments `chunksProcessed` (it isn't one). */
-export function recordSingleCreateCompletion(
-  needsReconcile: boolean,
-  reasonCounts: Record<string, number>,
-): void {
-  recordEntries(1, needsReconcile ? 1 : 0, reasonCounts);
+/** A create (already counted via `recordCreateCompleted`) needed a
+ *  `createNeedsReconcileUpdate` follow-up — record why. */
+export function recordReconcileNeeded(reasonCounts: Record<string, number>): void {
+  state.entriesReconciled += 1;
+  for (const [reason, count] of Object.entries(reasonCounts)) {
+    state.reasonTally[reason] = (state.reasonTally[reason] ?? 0) + count;
+  }
+  state.updatedAt = new Date().toISOString();
 }
 
 export function getReconcileDiagnostics(): ReconcileDiagnostics | undefined {

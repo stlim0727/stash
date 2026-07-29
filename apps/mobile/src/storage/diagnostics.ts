@@ -61,7 +61,22 @@ export function noteSqliteOpenFailure(phase: string, error: unknown): void {
   };
 }
 
+/**
+ * Above this, a measured wait is more likely the device having been
+ * backgrounded/suspended mid-wait (wall-clock time keeps advancing while the
+ * JS thread is paused, and `closeCurrent()` in particular is queued right at
+ * the background transition — see `sqlite-app-lifecycle.ts`) than genuine
+ * SQLite contention: every real contention report seen so far tops out
+ * around 1-2s. Discarding waits above this avoids a single background/resume
+ * cycle permanently poisoning `maxWaitMs` with an hours-long bogus value that
+ * would drown out the real, small-scale signal this diagnostic exists for.
+ */
+const MAX_PLAUSIBLE_TAIL_WAIT_MS = 30_000;
+
 export function noteSqliteTailWait(waitMs: number, depth: number): void {
+  if (waitMs > MAX_PLAUSIBLE_TAIL_WAIT_MS) {
+    return;
+  }
   const prev = diagnostics.sqliteContention;
   diagnostics.sqliteContention = {
     maxWaitMs: Math.max(prev?.maxWaitMs ?? 0, waitMs),
@@ -79,12 +94,20 @@ export function noteSqliteTailWait(waitMs: number, depth: number): void {
  * a report filed *during* the stall would otherwise show no contention at
  * all despite the queue visibly growing. Wait time itself can't be known
  * this early (it's still unbounded), only depth.
+ *
+ * A no-op (including no `updatedAt` bump) when `depth` doesn't exceed the
+ * already-recorded maximum — a routine depth-2 enqueue right before a report
+ * is filed must not make an hours-old severe-contention maximum look
+ * contemporaneous with that report.
  */
 export function noteSqliteQueueDepth(depth: number): void {
   const prev = diagnostics.sqliteContention;
+  if (prev && depth <= prev.maxDepth) {
+    return;
+  }
   diagnostics.sqliteContention = {
     maxWaitMs: prev?.maxWaitMs ?? 0,
-    maxDepth: Math.max(prev?.maxDepth ?? 0, depth),
+    maxDepth: depth,
     waitCount: prev?.waitCount ?? 0,
     updatedAt: new Date().toISOString(),
   };
