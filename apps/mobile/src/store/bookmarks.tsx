@@ -86,7 +86,7 @@ import { registerForForegroundState } from '@/storage/sqlite-app-lifecycle';
 import { repository } from '@/storage/repository';
 import { copyImageToLibrary } from '@/storage/image-store';
 import type { EnrichmentMetadataHint } from '@/api/bookmarks';
-import type { CreateSyncCompletion, TagData } from '@/storage/types';
+import type { CreateSyncCompletion, CreateSyncFailure, TagData } from '@/storage/types';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { useRealtimeSync } from '@/supabase/realtime';
 import { SupabaseRequestError } from '@/supabase/client';
@@ -402,6 +402,9 @@ const AI_RETRY_STATE_KEY = 'ai_suggestion_retry';
  *  `isAiSuggestionServerQueued`. */
 const AI_SERVER_QUEUED_KEY = 'ai_server_queued';
 
+const URL_TOO_LONG_BATCH_ERROR_TEXT = 'exceeds btree version';
+const BULK_CREATE_RETRYABLE_ERROR_MESSAGE = 'Bulk create sync failed; will retry in bulk mode.';
+
 interface AiRetryState {
   /** When the first attempt (of the current, unexhausted streak) failed. */
   firstAttemptAt: string;
@@ -442,6 +445,17 @@ const AI_RETRY_CHECK_INTERVAL_MS = 5 * 60_000;
  *  aborted the ART runtime. Low enough to keep a 500-item burst harmless, high
  *  enough that interactive saves never queue behind each other in practice. */
 const ENRICHMENT_FETCH_CONCURRENCY = 4;
+
+function bulkCreateFailureMessage(entry: LocalPendingBookmark, message: string): string {
+  if (!message.includes(URL_TOO_LONG_BATCH_ERROR_TEXT)) {
+    return message;
+  }
+  const url = entry.payload.url;
+  if (typeof url === 'string' && isUrlTooLong(canonicalizeUrl(url))) {
+    return message;
+  }
+  return BULK_CREATE_RETRYABLE_ERROR_MESSAGE;
+}
 
 /** Parse the persisted AI-retry bookkeeping map, tolerating absent/corrupt
  *  values (mirrors `parseIdSet`/`parseTagOps` for the store's other durable
@@ -3723,7 +3737,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     ...entry,
                     sync_status: 'failed' as const,
                     retry_count: attempted ? entry.retry_count + 1 : entry.retry_count,
-                    last_error: message,
+                    last_error: bulkCreateFailureMessage(entry, message),
                     updated_at: failedAt,
                   },
                 ];
@@ -3751,6 +3765,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 });
               }
             }
+            const failures: CreateSyncFailure[] = [...failedBulkEntries.values()].map((entry) => ({
+              entry,
+              originalUpdatedAt: bulkEntryById.get(entry.local_id)?.updated_at ?? entry.updated_at,
+            }));
             setQueue((current) =>
               current.map((queued) => {
                 const failed = failedBulkEntries.get(queued.local_id);
@@ -3763,29 +3781,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   : queued;
               }),
             );
-            const persistedFailedIds = new Set<string>();
-            for (const failed of failedBulkEntries.values()) {
-              const stored = (await repository.listQueue()).find(
-                (queued) => queued.local_id === failed.local_id,
-              );
-              if (
-                !stored ||
-                stored.operation !== failed.operation ||
-                stored.updated_at !== bulkEntryById.get(failed.local_id)?.updated_at
-              ) {
-                continue;
-              }
-              await repository.updateQueueEntry(failed);
-              const latest = await repository.getBookmark(failed.local_id);
-              if (latest && latest.sync_status !== 'failed') {
-                await repository.updateBookmark({ ...latest, sync_status: 'failed' });
-              }
-              persistedFailedIds.add(failed.local_id);
-            }
+            const persistedFailedIds = new Set(
+              repository.failCreateSyncBatch ? await repository.failCreateSyncBatch(failures) : [],
+            );
             setBookmarks((current) =>
               (current ?? []).map((bookmark) =>
                 persistedFailedIds.has(bookmark.id) && bookmark.sync_status !== 'failed'
-                  ? { ...bookmark, sync_status: 'failed' }
+                  ? {
+                      ...bookmark,
+                      sync_status: 'failed',
+                      ever_synced:
+                        bookmark.sync_status === 'synced' ? true : bookmark.ever_synced,
+                    }
                   : bookmark,
               ),
             );

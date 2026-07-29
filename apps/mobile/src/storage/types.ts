@@ -27,6 +27,11 @@ export interface CreateSyncCompletion {
   originalLocalId?: string;
 }
 
+export interface CreateSyncFailure {
+  entry: LocalPendingBookmark;
+  originalUpdatedAt: string;
+}
+
 /**
  * Durable local storage contract for bookmarks and the offline sync queue.
  *
@@ -57,6 +62,13 @@ export interface BookmarkRepository {
    * CreateSyncCompletion.originalLocalId).
    */
   completeCreateSyncBatch?(completions: CreateSyncCompletion[]): Promise<void>;
+  /**
+   * Conditionally persist failed bulk-create rows and their bookmark status.
+   * Each row is applied only if the stored queue operation and updated_at still
+   * match the attempted entry, so a newer edit/delete wins atomically.
+   * Returns the local ids that were actually updated.
+   */
+  failCreateSyncBatch?(failures: CreateSyncFailure[]): Promise<string[]>;
   /**
    * Atomically insert a batch of imported bookmarks and their pending create queue
    * entries in a single transaction (Sentry STASH-3S / STASH-3T).

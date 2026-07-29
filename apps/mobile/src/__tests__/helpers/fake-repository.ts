@@ -78,6 +78,31 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         queue = queue.filter((queued) => queued.local_id !== entry.local_id);
       }
     },
+    failCreateSyncBatch: async (failures) => {
+      const applied: string[] = [];
+      for (const { entry, originalUpdatedAt } of failures) {
+        const stored = queue.find((queued) => queued.local_id === entry.local_id);
+        if (
+          !stored ||
+          stored.operation !== entry.operation ||
+          stored.updated_at !== originalUpdatedAt
+        ) {
+          continue;
+        }
+        queue = queue.map((queued) => (queued.local_id === entry.local_id ? entry : queued));
+        bookmarks = bookmarks.map((bookmark) =>
+          bookmark.id === entry.local_id
+            ? {
+                ...bookmark,
+                sync_status: 'failed',
+                ever_synced: bookmark.sync_status === 'synced' ? true : bookmark.ever_synced,
+              }
+            : bookmark,
+        );
+        applied.push(entry.local_id);
+      }
+      return applied;
+    },
     insertImportBatch: async (importedBookmarks, importedEntries) => {
       for (let i = 0; i < importedBookmarks.length; i += 1) {
         await repository.insertBookmark(importedBookmarks[i]);

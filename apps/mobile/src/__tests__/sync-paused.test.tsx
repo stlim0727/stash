@@ -155,7 +155,8 @@ test('bulk create failure records retry state and avoids immediate per-entry fal
     makeStoredBookmark({
       id: `7e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
       url: `https://example.com/bulk-${index + 1}`,
-      sync_status: 'pending',
+      sync_status: index === 0 ? 'synced' : 'pending',
+      ever_synced: undefined,
       metadata_status: 'complete',
     }),
   );
@@ -173,7 +174,9 @@ test('bulk create failure records retry state and avoids immediate per-entry fal
       updated_at: row.updated_at,
     });
   }
-  apiMock.__createBookmarksMock.mockRejectedValue(new Error('network down'));
+  apiMock.__createBookmarksMock.mockRejectedValue(
+    new Error('index row size 2888 exceeds btree version 4 maximum 2704'),
+  );
   const { result } = await renderReadyStore();
 
   expect(apiMock.__createBookmarksMock).toHaveBeenCalled();
@@ -185,17 +188,22 @@ test('bulk create failure records retry state and avoids immediate per-entry fal
   for (const entry of fakeRepo.__queue().slice(0, BULK_CREATE_SYNC_CHUNK_SIZE)) {
     expect(entry).toMatchObject({
       sync_status: 'failed',
-      last_error: 'network down',
     });
+    expect(entry.last_error).not.toContain('exceeds btree version');
     expect(entry.retry_count).toBeGreaterThan(0);
   }
   expect(fakeRepo.__queue()[BULK_CREATE_SYNC_CHUNK_SIZE]).toMatchObject({
     sync_status: 'failed',
     retry_count: 0,
-    last_error: 'network down',
   });
+  expect(fakeRepo.__queue()[BULK_CREATE_SYNC_CHUNK_SIZE]?.last_error).not.toContain(
+    'exceeds btree version',
+  );
   expect(result.current.queue.every((entry) => entry.sync_status === 'failed')).toBe(true);
   expect(result.current.inbox.every((bookmark) => bookmark.sync_status === 'failed')).toBe(true);
+  expect(result.current.inbox.find((bookmark) => bookmark.id === rows[0]!.id)?.ever_synced).toBe(
+    true,
+  );
 });
 
 test('pausing sync keeps a newly queued create local until unpaused', async () => {

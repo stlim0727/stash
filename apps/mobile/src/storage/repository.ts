@@ -1,5 +1,10 @@
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
-import type { BookmarkRepository, CreateSyncCompletion, TagData } from '@/storage/types';
+import type {
+  BookmarkRepository,
+  CreateSyncCompletion,
+  CreateSyncFailure,
+  TagData,
+} from '@/storage/types';
 
 /**
  * Web/dev fallback store. Uses localStorage when available so bookmarks
@@ -148,6 +153,38 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.queue = this.queue.filter((entry) => !completedIds.has(entry.local_id));
     this.write(BOOKMARKS_KEY, this.bookmarks);
     this.write(QUEUE_KEY, this.queue);
+  }
+
+  async failCreateSyncBatch(failures: CreateSyncFailure[]): Promise<string[]> {
+    const applied: string[] = [];
+    for (const { entry, originalUpdatedAt } of failures) {
+      const stored = this.queue.find((queued) => queued.local_id === entry.local_id);
+      if (
+        !stored ||
+        stored.operation !== entry.operation ||
+        stored.updated_at !== originalUpdatedAt
+      ) {
+        continue;
+      }
+      this.queue = this.queue.map((queued) =>
+        queued.local_id === entry.local_id ? entry : queued,
+      );
+      this.bookmarks = this.bookmarks.map((bookmark) =>
+        bookmark.id === entry.local_id
+          ? {
+              ...bookmark,
+              sync_status: 'failed',
+              ever_synced: bookmark.sync_status === 'synced' ? true : bookmark.ever_synced,
+            }
+          : bookmark,
+      );
+      applied.push(entry.local_id);
+    }
+    if (applied.length > 0) {
+      this.write(BOOKMARKS_KEY, this.bookmarks);
+      this.write(QUEUE_KEY, this.queue);
+    }
+    return applied;
   }
 
   async insertImportBatch(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void> {

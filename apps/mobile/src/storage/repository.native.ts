@@ -5,7 +5,12 @@ import { noteSqliteOpenFailure } from '@/storage/diagnostics';
 import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
-import type { BookmarkRepository, CreateSyncCompletion, TagData } from '@/storage/types';
+import type {
+  BookmarkRepository,
+  CreateSyncCompletion,
+  CreateSyncFailure,
+  TagData,
+} from '@/storage/types';
 
 interface BookmarkRow {
   id: string;
@@ -249,6 +254,62 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         }
       }),
     );
+  }
+
+  async failCreateSyncBatch(failures: CreateSyncFailure[]): Promise<string[]> {
+    if (failures.length === 0) {
+      return [];
+    }
+    const applied: string[] = [];
+    await this.connection.run((db) =>
+      db.withTransactionAsync(async () => {
+        for (const { entry, originalUpdatedAt } of failures) {
+          const stored = await db.getFirstAsync<QueueRow>(
+            'SELECT * FROM local_pending_bookmarks WHERE local_id = ?',
+            [entry.local_id],
+          );
+          if (
+            !stored ||
+            stored.operation !== entry.operation ||
+            stored.updated_at !== originalUpdatedAt
+          ) {
+            continue;
+          }
+          await db.runAsync(
+            `UPDATE local_pending_bookmarks
+             SET remote_id = ?, operation = ?, payload = ?, sync_status = ?, retry_count = ?, last_error = ?, created_at = ?, updated_at = ?
+             WHERE local_id = ?`,
+            [
+              entry.remote_id,
+              entry.operation,
+              JSON.stringify(entry.payload),
+              entry.sync_status,
+              entry.retry_count,
+              entry.last_error,
+              entry.created_at,
+              entry.updated_at,
+              entry.local_id,
+            ],
+          );
+          const bookmarkRow = await db.getFirstAsync<BookmarkRow>(
+            'SELECT * FROM bookmarks WHERE id = ?',
+            [entry.local_id],
+          );
+          if (bookmarkRow) {
+            const bookmark = JSON.parse(bookmarkRow.data) as Bookmark;
+            if (bookmark.sync_status !== 'failed' || bookmark.ever_synced !== true) {
+              await writeBookmark(db, {
+                ...bookmark,
+                sync_status: 'failed',
+                ever_synced: bookmark.sync_status === 'synced' ? true : bookmark.ever_synced,
+              });
+            }
+          }
+          applied.push(entry.local_id);
+        }
+      }),
+    );
+    return applied;
   }
 
   async insertImportBatch(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void> {
