@@ -103,6 +103,7 @@ jest.mock('@/domain/enrichment', () => ({
 }));
 
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
+import { BULK_CREATE_SYNC_CHUNK_SIZE } from '@/sync/sync-bookmarks';
 import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
@@ -150,53 +151,49 @@ beforeEach(() => {
 });
 
 test('bulk create failure records retry state and avoids immediate per-entry fallback', async () => {
-  const first = makeStoredBookmark({
-    id: '7e64cf1e-0000-4000-8000-00000000c001',
-    url: 'https://example.com/bulk-a',
-    sync_status: 'pending',
-    metadata_status: 'complete',
-  });
-  const second = makeStoredBookmark({
-    id: '7e64cf1e-0000-4000-8000-00000000c002',
-    url: 'https://example.com/bulk-b',
-    sync_status: 'pending',
-    metadata_status: 'complete',
-  });
-  fakeRepo.__reset([first, second]);
-  await fakeRepo.repository.enqueue({
-    local_id: first.id,
-    remote_id: null,
-    operation: 'create',
-    payload: { id: first.id, url: first.url!, client_id: first.id },
-    sync_status: 'pending',
-    retry_count: 0,
-    last_error: null,
-    created_at: first.created_at,
-    updated_at: first.updated_at,
-  });
-  await fakeRepo.repository.enqueue({
-    local_id: second.id,
-    remote_id: null,
-    operation: 'create',
-    payload: { id: second.id, url: second.url!, client_id: second.id },
-    sync_status: 'pending',
-    retry_count: 0,
-    last_error: null,
-    created_at: second.created_at,
-    updated_at: second.updated_at,
-  });
+  const rows = Array.from({ length: BULK_CREATE_SYNC_CHUNK_SIZE + 1 }, (_, index) =>
+    makeStoredBookmark({
+      id: `7e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/bulk-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
   apiMock.__createBookmarksMock.mockRejectedValue(new Error('network down'));
   const { result } = await renderReadyStore();
 
   expect(apiMock.__createBookmarksMock).toHaveBeenCalled();
   expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
-  for (const entry of fakeRepo.__queue()) {
+  expect(fakeRepo.__queue()).toHaveLength(rows.length);
+  expect(result.current.queue).toHaveLength(rows.length);
+  expect(result.current.inbox).toHaveLength(rows.length);
+
+  for (const entry of fakeRepo.__queue().slice(0, BULK_CREATE_SYNC_CHUNK_SIZE)) {
     expect(entry).toMatchObject({
       sync_status: 'failed',
       last_error: 'network down',
     });
     expect(entry.retry_count).toBeGreaterThan(0);
   }
+  expect(fakeRepo.__queue()[BULK_CREATE_SYNC_CHUNK_SIZE]).toMatchObject({
+    sync_status: 'failed',
+    retry_count: 0,
+    last_error: 'network down',
+  });
   expect(result.current.queue.every((entry) => entry.sync_status === 'failed')).toBe(true);
   expect(result.current.inbox.every((bookmark) => bookmark.sync_status === 'failed')).toBe(true);
 });

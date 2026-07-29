@@ -3712,27 +3712,35 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             const failedAt = new Date().toISOString();
+            const bulkEntryById = new Map(bulkCreateEntries.map((entry) => [entry.local_id, entry]));
+            const attemptedById = new Map(chunk.map((entry) => [entry.local_id, entry]));
             const failedBulkEntries = new Map(
-              bulkCreateEntries.map((entry) => [
-                entry.local_id,
-                {
-                  ...entry,
-                  sync_status: 'failed' as const,
-                  retry_count: entry.retry_count + 1,
-                  last_error: message,
-                  updated_at: failedAt,
-                },
-              ]),
+              bulkCreateEntries.map((entry) => {
+                const attempted = attemptedById.has(entry.local_id);
+                return [
+                  entry.local_id,
+                  {
+                    ...entry,
+                    sync_status: 'failed' as const,
+                    retry_count: attempted ? entry.retry_count + 1 : entry.retry_count,
+                    last_error: message,
+                    updated_at: failedAt,
+                  },
+                ];
+              }),
             );
             recordLog(
               'warn',
               `bulk create sync failed (${message}); preserving bulk mode for next retry`,
             );
             for (const failed of failedBulkEntries.values()) {
+              const attempted = attemptedById.get(failed.local_id);
+              if (!attempted) {
+                continue;
+              }
               if (
                 crossedHealthEscalationThreshold(
-                  bulkCreateEntries.find((entry) => entry.local_id === failed.local_id)
-                    ?.retry_count ?? 0,
+                  attempted.retry_count,
                   failed.retry_count,
                 )
               ) {
@@ -3743,21 +3751,45 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 });
               }
             }
-            const failedIds = new Set(failedBulkEntries.keys());
             setQueue((current) =>
-              current.map((queued) => failedBulkEntries.get(queued.local_id) ?? queued),
+              current.map((queued) => {
+                const failed = failedBulkEntries.get(queued.local_id);
+                const original = bulkEntryById.get(queued.local_id);
+                return failed &&
+                  original &&
+                  queued.operation === original.operation &&
+                  queued.updated_at === original.updated_at
+                  ? failed
+                  : queued;
+              }),
             );
+            const persistedFailedIds = new Set<string>();
+            for (const failed of failedBulkEntries.values()) {
+              const stored = (await repository.listQueue()).find(
+                (queued) => queued.local_id === failed.local_id,
+              );
+              if (
+                !stored ||
+                stored.operation !== failed.operation ||
+                stored.updated_at !== bulkEntryById.get(failed.local_id)?.updated_at
+              ) {
+                continue;
+              }
+              await repository.updateQueueEntry(failed);
+              const latest = await repository.getBookmark(failed.local_id);
+              if (latest && latest.sync_status !== 'failed') {
+                await repository.updateBookmark({ ...latest, sync_status: 'failed' });
+              }
+              persistedFailedIds.add(failed.local_id);
+            }
             setBookmarks((current) =>
               (current ?? []).map((bookmark) =>
-                failedIds.has(bookmark.id) && bookmark.sync_status !== 'failed'
+                persistedFailedIds.has(bookmark.id) && bookmark.sync_status !== 'failed'
                   ? { ...bookmark, sync_status: 'failed' }
                   : bookmark,
               ),
             );
-            await Promise.all(
-              [...failedBulkEntries.values()].map((failed) => repository.updateQueueEntry(failed)),
-            );
-            for (const entry of failedBulkEntries.values()) {
+            for (const entry of bulkCreateEntries) {
               bulkSyncedLocalIds.add(entry.local_id);
             }
             break;
