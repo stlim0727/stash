@@ -625,6 +625,75 @@ test('a bulk create failure keeps untried later chunks out of the single-entry f
   expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
 });
 
+test('a bulk chunk failure with a row-specific permanent error isolates just the offending row', async () => {
+  // A bulk request fails as a whole even when only ONE row in the chunk
+  // actually has a problem (a legacy too-long URL trips Postgres's btree
+  // index-row limit — see isRowSpecificPermanentSyncErrorText). Regression:
+  // blindly copying that shared batch error text onto every entry in the
+  // chunk made isPermanentlyUnsyncableUrl treat ALL of them as permanently
+  // unsyncable, silently excluding the other, perfectly valid entry from
+  // sync forever instead of isolating the real offender.
+  const goodId = '7e64cf1e-0000-4000-8000-000000000101';
+  const badId = '7e64cf1e-0000-4000-8000-000000000102';
+  const rows = [
+    makeStoredBookmark({
+      id: goodId,
+      url: 'https://example.com/good',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+    makeStoredBookmark({
+      id: badId,
+      url: 'https://example.com/bad',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  ];
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  apiMock.__spies.createBookmarks.mockRejectedValueOnce(
+    new Error(
+      'index row size 3000 exceeds btree version 4 maximum 2704 for index "bookmarks_url_hash_idx"',
+    ),
+  );
+  apiMock.__spies.createBookmark
+    .mockImplementationOnce(async (input: { id?: string }) => ({ bookmark_id: input.id }))
+    .mockImplementationOnce(async () => {
+      throw new Error(
+        'index row size 3000 exceeds btree version 4 maximum 2704 for index "bookmarks_url_hash_idx"',
+      );
+    });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  // The good entry must sync via the per-entry fallback rather than get
+  // stuck 'failed' with the batch's row-specific error attributed to it.
+  await waitFor(() => expect(store.current!.getBookmark(goodId)?.sync_status).toBe('synced'));
+  expect(store.current!.queue.some((entry) => entry.local_id === goodId)).toBe(false);
+
+  // The genuinely bad entry fails on its own, individually-attributed
+  // attempt — proving isolation actually happened rather than both entries
+  // sharing one undifferentiated batch failure.
+  await waitFor(() => expect(store.current!.getBookmark(badId)?.sync_status).toBe('failed'));
+  const badQueueEntry = store.current!.queue.find((entry) => entry.local_id === badId);
+  expect(badQueueEntry?.last_error).toContain('exceeds btree version');
+
+  expect(apiMock.__spies.createBookmark).toHaveBeenCalledTimes(2);
+});
+
 test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {
   // Reproduces the reported bug: the server dedupes a create against an
   // EXISTING different row (same canonical URL) and returns that row's id

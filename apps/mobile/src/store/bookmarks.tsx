@@ -108,6 +108,7 @@ import {
   crossedHealthEscalationThreshold,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
+  isRowSpecificPermanentSyncErrorText,
   isSyncable,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
@@ -3735,69 +3736,95 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // entry is still bulk-eligible (isSyncable), so it naturally
             // retries via bulk again next time.
             const message = error instanceof Error ? error.message : String(error);
-            const failedAt = new Date().toISOString();
-            recordLog('warn', `bulk create sync failed for a chunk of ${chunk.length} (${message})`);
+            // A batch request fails as a whole even when only ONE row in it
+            // is actually bad (e.g. a legacy too-long URL) — the error text
+            // is a fact about that one row, not the other 49. Copying it onto
+            // every entry would make `isPermanentlyUnsyncableUrl` wrongly
+            // exclude the rest of the chunk from sync forever (caught in PR
+            // review). Instead, leave this chunk's entries untouched here and
+            // let them fall through to the per-entry loop below, which will
+            // isolate the real offender by getting each row's own error.
+            const isRowSpecificError = isRowSpecificPermanentSyncErrorText(message);
 
-            const failedEntries = new Map<string, LocalPendingBookmark>();
-            for (const entry of chunk) {
-              const failedEntry: LocalPendingBookmark = {
-                ...entry,
-                sync_status: 'failed',
-                retry_count: entry.retry_count + 1,
-                last_error: message,
-                updated_at: failedAt,
-              };
-              failedEntries.set(entry.local_id, failedEntry);
-              if (crossedHealthEscalationThreshold(entry.retry_count, failedEntry.retry_count)) {
-                reportSyncQueueHealthEscalation({
-                  operation: failedEntry.operation,
-                  retryCount: failedEntry.retry_count,
-                  lastError: failedEntry.last_error,
-                });
-              }
-            }
+            if (!isRowSpecificError) {
+              const failedAt = new Date().toISOString();
+              recordLog('warn', `bulk create sync failed for a chunk of ${chunk.length} (${message})`);
 
-            try {
-              await ensureRepositoryReady();
-              // One listQueue() read for the whole chunk, not one per entry —
-              // the native backend does a full ordered SELECT + deserialize
-              // of every queued payload on each call, so calling it per-entry
-              // scans the whole queue up to 50 times over for one failure.
-              const storedByLocalId = new Map(
-                (await repository.listQueue()).map((queued) => [queued.local_id, queued]),
-              );
+              const failedEntries = new Map<string, LocalPendingBookmark>();
               for (const entry of chunk) {
-                const stored = storedByLocalId.get(entry.local_id);
-                if (!stored || stored.updated_at !== entry.updated_at) {
-                  continue;
-                }
-                await repository.updateQueueEntry(failedEntries.get(entry.local_id)!);
-                const bookmark = getLatestBookmark(entry.local_id);
-                if (bookmark && bookmark.sync_status !== 'failed') {
-                  await repository.updateBookmark({ ...bookmark, sync_status: 'failed' });
+                const failedEntry: LocalPendingBookmark = {
+                  ...entry,
+                  sync_status: 'failed',
+                  retry_count: entry.retry_count + 1,
+                  last_error: message,
+                  updated_at: failedAt,
+                };
+                failedEntries.set(entry.local_id, failedEntry);
+                if (crossedHealthEscalationThreshold(entry.retry_count, failedEntry.retry_count)) {
+                  reportSyncQueueHealthEscalation({
+                    operation: failedEntry.operation,
+                    retryCount: failedEntry.retry_count,
+                    lastError: failedEntry.last_error,
+                  });
                 }
               }
-            } catch (persistError) {
-              logStorageError('bulk create failure persist', persistError);
+
+              try {
+                await ensureRepositoryReady();
+                // One listQueue() read for the whole chunk, not one per entry —
+                // the native backend does a full ordered SELECT + deserialize
+                // of every queued payload on each call, so calling it per-entry
+                // scans the whole queue up to 50 times over for one failure.
+                const storedByLocalId = new Map(
+                  (await repository.listQueue()).map((queued) => [queued.local_id, queued]),
+                );
+                for (const entry of chunk) {
+                  const stored = storedByLocalId.get(entry.local_id);
+                  if (!stored || stored.updated_at !== entry.updated_at) {
+                    continue;
+                  }
+                  await repository.updateQueueEntry(failedEntries.get(entry.local_id)!);
+                  const bookmark = getLatestBookmark(entry.local_id);
+                  if (bookmark && bookmark.sync_status !== 'failed') {
+                    await repository.updateBookmark({ ...bookmark, sync_status: 'failed' });
+                  }
+                }
+              } catch (persistError) {
+                logStorageError('bulk create failure persist', persistError);
+              }
+
+              setQueue((current) =>
+                current.map((queued) => failedEntries.get(queued.local_id) ?? queued),
+              );
+              setBookmarks((current) =>
+                (current ?? []).map((bookmark) =>
+                  failedEntries.has(bookmark.id) && bookmark.sync_status !== 'failed'
+                    ? { ...bookmark, sync_status: 'failed' }
+                    : bookmark,
+                ),
+              );
+            } else {
+              recordLog(
+                'warn',
+                `bulk create sync failed for a chunk of ${chunk.length} with a row-specific ` +
+                  `error (${message}); falling back to per-entry sync to isolate the offending row`,
+              );
             }
 
-            setQueue((current) =>
-              current.map((queued) => failedEntries.get(queued.local_id) ?? queued),
-            );
-            setBookmarks((current) =>
-              (current ?? []).map((bookmark) =>
-                failedEntries.has(bookmark.id) && bookmark.sync_status !== 'failed'
-                  ? { ...bookmark, sync_status: 'failed' }
-                  : bookmark,
-              ),
-            );
-            // Keep every remaining bulk-eligible entry (not just this failed
-            // chunk) out of the per-entry fallback loop below — otherwise a
+            // Keep every remaining bulk-eligible entry from OTHER, untried
+            // chunks out of the per-entry fallback loop below — otherwise a
             // bulk-endpoint outage during a 561-item import falls through to
             // hundreds of sequential single-create requests in this same run
             // instead of waiting for the next bulk retry. Untried entries stay
             // 'pending' (untouched) and are still bulk-eligible next pass.
+            // This chunk's own entries are excluded from that protection only
+            // when the failure was row-specific, so the per-entry loop can
+            // isolate the real offender instead of every entry in the chunk
+            // being misclassified together.
             for (const entry of bulkCreateEntries) {
+              if (isRowSpecificError && chunkIds.has(entry.local_id)) {
+                continue;
+              }
               bulkSyncedLocalIds.add(entry.local_id);
             }
             break;
