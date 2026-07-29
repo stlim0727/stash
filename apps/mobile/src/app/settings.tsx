@@ -746,7 +746,7 @@ export default function SettingsScreen() {
         <Row
           styles={styles}
           palette={palette}
-          icon="sync"
+          icon={syncPaused ? 'pause-circle-outline' : 'sync'}
           label={t('settings.sync.label')}
           value={syncSummary}
           last

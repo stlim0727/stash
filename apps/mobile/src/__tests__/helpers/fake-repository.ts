@@ -78,6 +78,12 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         queue = queue.filter((queued) => queued.local_id !== entry.local_id);
       }
     },
+    insertImportBatch: async (importedBookmarks, importedEntries) => {
+      for (let i = 0; i < importedBookmarks.length; i += 1) {
+        await repository.insertBookmark(importedBookmarks[i]);
+        await repository.enqueue(importedEntries[i]);
+      }
+    },
     deleteBookmark: async (id) => {
       bookmarks = bookmarks.filter((b) => b.id !== id);
     },

@@ -227,6 +227,8 @@ export async function syncCreateQueueEntryBatch(
       Boolean(output.bookmark_id) &&
       output.bookmark_id !== entry.local_id;
     if (localBookmark) {
+      const isDuplicateSwap =
+        output.status === 'duplicate' && Boolean(output.bookmark_id) && output.bookmark_id !== entry.local_id;
       const syncedBookmark: Bookmark = {
         ...localBookmark,
         id: isDuplicateSwap ? output.bookmark_id : localBookmark.id,
@@ -243,7 +245,11 @@ export async function syncCreateQueueEntryBatch(
       continue;
     }
 
-    results.push({ entry: syncedEntry, uploadedPayload: uploadedPayloads[index] });
+    results.push({
+      entry: syncedEntry,
+      uploadedPayload: uploadedPayloads[index],
+      originalLocalId: output.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+    });
   }
 
   return results;
@@ -389,11 +395,9 @@ export async function syncQueueEntry(
     // (status: 'duplicate'; see STASH-3Q and EntrySyncResult.originalLocalId).
     // In that case the local row must adopt the EXISTING row's id, or the
     // next pull fetches that existing row separately and the library doubles.
-    const isDuplicateSwap =
-      result.status === 'duplicate' &&
-      Boolean(result.bookmark_id) &&
-      result.bookmark_id !== entry.local_id;
     if (localBookmark) {
+      const isDuplicateSwap =
+        result.status === 'duplicate' && Boolean(result.bookmark_id) && result.bookmark_id !== entry.local_id;
       const syncedBookmark: Bookmark = {
         ...localBookmark,
         id: isDuplicateSwap ? result.bookmark_id : localBookmark.id,
@@ -419,7 +423,11 @@ export async function syncQueueEntry(
       };
     }
 
-    return { entry: syncedEntry, uploadedPayload: payload };
+    return {
+      entry: syncedEntry,
+      uploadedPayload: payload,
+      originalLocalId: result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+    };
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
     const localBookmark = getBookmark(entry.local_id);
