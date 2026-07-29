@@ -219,6 +219,46 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
     expect(fakeRepo.__bookmarks()).toHaveLength(3);
   });
 
+  test('tracks inbox counter stability and pending queue counter reduction during chunked bulk sync', async () => {
+    const { result } = await renderReadyStore();
+
+    // Pause sync so we can verify exact counter counts before and during upload
+    await act(async () => {
+      result.current.setSyncPaused(true);
+    });
+
+    // Import 60 unique items
+    const importItems = Array.from({ length: 60 }, (_, i) => ({
+      url: `https://example.com/counter-item-${i}`,
+      title: `Counter Item ${i}`,
+      notes: null,
+      tags: [],
+      collection: null,
+    }));
+
+    await act(async () => {
+      result.current.importBookmarks(importItems);
+    });
+
+    // Inbox counter jumps immediately to +60
+    expect(result.current.inbox).toHaveLength(60);
+    // Queue (pending counter) is 60
+    expect(result.current.queue).toHaveLength(60);
+
+    // Unpause sync to trigger upload
+    await act(async () => {
+      result.current.setSyncPaused(false);
+    });
+
+    // Wait for sync to settle completely
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), { timeout: 5000 });
+
+    // Inbox counter stays exactly 60 (no fluctuations or duplicates)
+    expect(result.current.inbox).toHaveLength(60);
+    expect(result.current.inbox.every((b) => b.sync_status === 'synced')).toBe(true);
+  });
+
   test('resetLibrary refuses during active local import or sync, and cleanly clears state when idle', async () => {
     const { result } = await renderReadyStore();
 
