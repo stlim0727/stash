@@ -223,7 +223,9 @@ export async function syncCreateQueueEntryBatch(
     // EntrySyncResult.originalLocalId / STASH-3Q) — the one remaining case a
     // bookmark's id changes after capture, alongside account rehoming.
     const isDuplicateSwap =
-      output.status === 'duplicate' && output.bookmark_id !== entry.local_id;
+      output.status === 'duplicate' &&
+      Boolean(output.bookmark_id) &&
+      output.bookmark_id !== entry.local_id;
     if (localBookmark) {
       const syncedBookmark: Bookmark = {
         ...localBookmark,
@@ -387,7 +389,10 @@ export async function syncQueueEntry(
     // (status: 'duplicate'; see STASH-3Q and EntrySyncResult.originalLocalId).
     // In that case the local row must adopt the EXISTING row's id, or the
     // next pull fetches that existing row separately and the library doubles.
-    const isDuplicateSwap = result.status === 'duplicate' && result.bookmark_id !== entry.local_id;
+    const isDuplicateSwap =
+      result.status === 'duplicate' &&
+      Boolean(result.bookmark_id) &&
+      result.bookmark_id !== entry.local_id;
     if (localBookmark) {
       const syncedBookmark: Bookmark = {
         ...localBookmark,
