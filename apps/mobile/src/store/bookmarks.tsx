@@ -3710,19 +3710,54 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               bulkSyncedLocalIds.add(entry.local_id);
             }
           } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const failedAt = new Date().toISOString();
+            const failedBulkEntries = new Map(
+              bulkCreateEntries.map((entry) => [
+                entry.local_id,
+                {
+                  ...entry,
+                  sync_status: 'failed' as const,
+                  retry_count: entry.retry_count + 1,
+                  last_error: message,
+                  updated_at: failedAt,
+                },
+              ]),
+            );
             recordLog(
               'warn',
-              `bulk create sync failed (${
-                error instanceof Error ? error.message : String(error)
-              }); preserving bulk mode for next retry`,
+              `bulk create sync failed (${message}); preserving bulk mode for next retry`,
             );
+            for (const failed of failedBulkEntries.values()) {
+              if (
+                crossedHealthEscalationThreshold(
+                  bulkCreateEntries.find((entry) => entry.local_id === failed.local_id)
+                    ?.retry_count ?? 0,
+                  failed.retry_count,
+                )
+              ) {
+                reportSyncQueueHealthEscalation({
+                  operation: failed.operation,
+                  retryCount: failed.retry_count,
+                  lastError: failed.last_error,
+                });
+              }
+            }
+            const failedIds = new Set(failedBulkEntries.keys());
             setQueue((current) =>
-              current.map((queued) => {
-                const original = chunk.find((entry) => entry.local_id === queued.local_id);
-                return original ? { ...queued, sync_status: original.sync_status } : queued;
-              }),
+              current.map((queued) => failedBulkEntries.get(queued.local_id) ?? queued),
             );
-            for (const entry of bulkCreateEntries) {
+            setBookmarks((current) =>
+              (current ?? []).map((bookmark) =>
+                failedIds.has(bookmark.id) && bookmark.sync_status !== 'failed'
+                  ? { ...bookmark, sync_status: 'failed' }
+                  : bookmark,
+              ),
+            );
+            await Promise.all(
+              [...failedBulkEntries.values()].map((failed) => repository.updateQueueEntry(failed)),
+            );
+            for (const entry of failedBulkEntries.values()) {
               bulkSyncedLocalIds.add(entry.local_id);
             }
             break;

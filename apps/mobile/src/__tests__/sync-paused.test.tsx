@@ -55,6 +55,13 @@ jest.mock('@/api/bookmarks', () => {
   const createBookmark = jest.fn(async () => ({
     bookmark_id: '1a2b3c4d-0000-4000-8000-00000000abcd',
   }));
+  const createBookmarks = jest.fn(async (inputs: unknown[]) =>
+    inputs.map((_, index) => ({
+      bookmark_id: `1a2b3c4d-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      status: 'created',
+      metadata_status: 'pending',
+    })),
+  );
   const listBookmarksUpdatedSince = jest.fn(async () => []);
   const addTags = jest.fn(async (input: { tags: string[] }) =>
     input.tags.map((name) => ({ id: `tag-${name}`, name, slug: name })),
@@ -68,6 +75,7 @@ jest.mock('@/api/bookmarks', () => {
   let remoteIds: string[] = [];
   return {
     __createBookmarkMock: createBookmark,
+    __createBookmarksMock: createBookmarks,
     __listBookmarksUpdatedSinceMock: listBookmarksUpdatedSince,
     __addTagsMock: addTags,
     __removeTagsMock: removeTags,
@@ -82,6 +90,7 @@ jest.mock('@/api/bookmarks', () => {
       listBookmarkTags: empty,
       listCollections: empty,
       createBookmark,
+      createBookmarks,
       addTags,
       removeTags,
       resetLibrary,
@@ -99,6 +108,7 @@ import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-re
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 const apiMock = jest.requireMock('@/api/bookmarks') as {
   __createBookmarkMock: jest.Mock;
+  __createBookmarksMock: jest.Mock;
   __listBookmarksUpdatedSinceMock: jest.Mock;
   __addTagsMock: jest.Mock;
   __removeTagsMock: jest.Mock;
@@ -124,11 +134,71 @@ async function renderReadyStore() {
 beforeEach(() => {
   fakeRepo.__reset([]);
   apiMock.__createBookmarkMock.mockClear();
+  apiMock.__createBookmarksMock.mockReset();
+  apiMock.__createBookmarksMock.mockImplementation(async (inputs: unknown[]) =>
+    inputs.map((_, index) => ({
+      bookmark_id: `1a2b3c4d-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      status: 'created',
+      metadata_status: 'pending',
+    })),
+  );
   apiMock.__listBookmarksUpdatedSinceMock.mockClear();
   apiMock.__addTagsMock.mockClear();
   apiMock.__removeTagsMock.mockClear();
   apiMock.__setRemoteIds([]);
   authMock.__setAuth({ status: 'authenticated', session: mockRealSession, userId: 'real-user' });
+});
+
+test('bulk create failure records retry state and avoids immediate per-entry fallback', async () => {
+  const first = makeStoredBookmark({
+    id: '7e64cf1e-0000-4000-8000-00000000c001',
+    url: 'https://example.com/bulk-a',
+    sync_status: 'pending',
+    metadata_status: 'complete',
+  });
+  const second = makeStoredBookmark({
+    id: '7e64cf1e-0000-4000-8000-00000000c002',
+    url: 'https://example.com/bulk-b',
+    sync_status: 'pending',
+    metadata_status: 'complete',
+  });
+  fakeRepo.__reset([first, second]);
+  await fakeRepo.repository.enqueue({
+    local_id: first.id,
+    remote_id: null,
+    operation: 'create',
+    payload: { id: first.id, url: first.url!, client_id: first.id },
+    sync_status: 'pending',
+    retry_count: 0,
+    last_error: null,
+    created_at: first.created_at,
+    updated_at: first.updated_at,
+  });
+  await fakeRepo.repository.enqueue({
+    local_id: second.id,
+    remote_id: null,
+    operation: 'create',
+    payload: { id: second.id, url: second.url!, client_id: second.id },
+    sync_status: 'pending',
+    retry_count: 0,
+    last_error: null,
+    created_at: second.created_at,
+    updated_at: second.updated_at,
+  });
+  apiMock.__createBookmarksMock.mockRejectedValue(new Error('network down'));
+  const { result } = await renderReadyStore();
+
+  expect(apiMock.__createBookmarksMock).toHaveBeenCalled();
+  expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  for (const entry of fakeRepo.__queue()) {
+    expect(entry).toMatchObject({
+      sync_status: 'failed',
+      last_error: 'network down',
+    });
+    expect(entry.retry_count).toBeGreaterThan(0);
+  }
+  expect(result.current.queue.every((entry) => entry.sync_status === 'failed')).toBe(true);
+  expect(result.current.inbox.every((bookmark) => bookmark.sync_status === 'failed')).toBe(true);
 });
 
 test('pausing sync keeps a newly queued create local until unpaused', async () => {
