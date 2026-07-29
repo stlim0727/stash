@@ -227,8 +227,6 @@ export async function syncCreateQueueEntryBatch(
       Boolean(output.bookmark_id) &&
       output.bookmark_id !== entry.local_id;
     if (localBookmark) {
-      const isDuplicateSwap =
-        output.status === 'duplicate' && Boolean(output.bookmark_id) && output.bookmark_id !== entry.local_id;
       const syncedBookmark: Bookmark = {
         ...localBookmark,
         id: isDuplicateSwap ? output.bookmark_id : localBookmark.id,
@@ -532,6 +530,18 @@ export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
 // retried the moment the app updates, with no further doomed request needed.
 const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
 
+/** A bulk-chunk request fails as a whole even when only one row in it is
+ *  actually bad (e.g. one legacy too-long URL), so the caller can't blindly
+ *  copy that shared error message onto every entry in the chunk — this text
+ *  is a row-specific fact, not a chunk-wide one. Exported so the bulk-create
+ *  failure handler can detect it BEFORE attributing an error to any entry,
+ *  and fall back to per-entry sync to isolate which row actually caused it
+ *  instead of misclassifying the rest of the chunk as permanently unsyncable
+ *  too (caught in PR review). */
+export function isRowSpecificPermanentSyncErrorText(message: string): boolean {
+  return message.includes(URL_TOO_LONG_ERROR_TEXT);
+}
+
 /** Exported so the caller can DRAIN these from the visible queue (see
  *  `syncNow`'s "permanently unsyncable" cleanup) — merely excluding them from
  *  `isSyncable` stops the doomed retries but leaves the row sitting as
@@ -542,7 +552,7 @@ export function isPermanentlyUnsyncableUrl(entry: LocalPendingBookmark): boolean
   return (
     entry.sync_status === 'failed' &&
     typeof entry.last_error === 'string' &&
-    entry.last_error.includes(URL_TOO_LONG_ERROR_TEXT)
+    isRowSpecificPermanentSyncErrorText(entry.last_error)
   );
 }
 

@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-29 (Fixes STASH-3Q: a create-sync duplicate hit now adopts the existing row's id).
+Last updated: 2026-07-29 (root-caused and fixed the bulk-create sync path never clearing the queue — see Known Traps).
 
 ## Successor Agent Orientation
 
@@ -380,6 +380,15 @@ only, debug-signed, standalone, and includes build provenance in Settings.
 
 ## Known Traps
 
+- **`applyBulkCreateChunkResults` (`store/bookmarks.tsx`) must never gate
+  queue-clearing on `EntrySyncResult.removeEntry`** — `syncCreateQueueEntryBatch`
+  never sets it (every result it returns is already a completed create; a
+  batch failure throws instead of returning a per-entry retry state). Gating
+  on it silently no-oped every bulk sync, the root cause of a whole day's
+  flood of "561 import stuck/duplicated" Sentry reports (STASH-3H through
+  3X). Fixed in #621; full postmortem and the lesson about trusting a pure
+  function's unit tests over its caller's actual behavior live in
+  `docs/architecture/sync-pause-import-reset.md`.
 - Supabase migrations can be applied without deploying Edge Functions. Changes
   under `supabase/functions` require a manual
   `supabase functions deploy <name>`; deleted source does not remove a deployed

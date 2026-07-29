@@ -87,3 +87,28 @@ bugs below) let them race each other.
   failing). The fix — using `syncInFlight` alone, never `isSyncing`, for
   that check — is called out explicitly in the scenario table above so it
   doesn't get "simplified" back into the hang.
+- **STASH-3H/3E/3F/3Q/3R/3S/3T/3V/3X (one root cause, many-looking symptoms)**:
+  a whole day's flood of "561 bookmark import stuck / duplicated" reports
+  traced back to one bug in `applyBulkCreateChunkResults`: it gated clearing
+  the queue / marking bookmarks synced on `result.removeEntry`, but
+  `syncCreateQueueEntryBatch` (`sync/sync-bookmarks.ts`) never sets that
+  field — every result it returns is already a completed create (a batch
+  failure throws for the whole call instead of returning a per-entry retry
+  state, unlike `syncQueueEntry`'s update/delete paths, which genuinely need
+  `removeEntry`). A successful bulk upload of 2+ pending creates was a
+  silent no-op: the queue stayed `pending` forever, so the auto-sync effect
+  immediately re-ran the same upload again — forever, roughly once a
+  second, visible in Sentry as endless `pull: ... remoteRows=N` /
+  `sync: uploading N pending create(s)` pairs. Predates this whole
+  incident's day — present since bulk sync shipped in #602 — and went
+  unnoticed because zero store-level tests ever mocked bulk `createBookmarks`
+  (every existing sync test only exercised the single-entry `syncQueueEntry`
+  path). Fixed in #621, which also: reorders `applyBulkCreateChunkResults`
+  to persist durably before touching in-memory state (a durable-write
+  failure must never clear the in-memory queue ahead of confirmation); gives
+  a failed bulk chunk proper retry accounting (`sync_status: 'failed'`,
+  incremented `retry_count`/`last_error`, health-escalation check) instead of
+  silently resetting to its prior status; and keeps every not-yet-tried
+  bulk-eligible entry out of the per-entry fallback loop when a chunk fails,
+  so an endpoint outage during a 561-item import can't cascade into hundreds
+  of sequential single-create requests in the same run.

@@ -98,6 +98,9 @@ jest.mock('@/api/bookmarks', () => {
       created_at: '2026-06-13T00:00:00.000Z',
     })),
   );
+  // A create's follow-up reconcile update (e.g. once metadata settles); the
+  // return value is unused by the caller.
+  const updateBookmark = jest.fn(async () => undefined);
   // Reconfigurable so a test can let the pull keep a seeded row in state
   // (the default empty list otherwise diffs it away as a remote deletion).
   const listBookmarkIds = jest.fn(async () => [] as string[]);
@@ -106,6 +109,18 @@ jest.mock('@/api/bookmarks', () => {
   const createBookmark = jest.fn(async () => ({
     bookmark_id: '7e64cf1e-0000-4000-8000-0000000000aa',
   }));
+  // Bulk create upload (2+ pending creates go through this path instead of
+  // createBookmark). Defaults to echoing each input's own id back as a fresh
+  // 'created' row, matching what a real create-under-its-own-id response
+  // looks like.
+  const createBookmarks = jest.fn(
+    async (inputs: Array<{ id?: string }>) =>
+      inputs.map((input) => ({
+        bookmark_id: input.id ?? '00000000-0000-4000-8000-000000000000',
+        status: 'created' as const,
+        metadata_status: 'pending' as const,
+      })),
+  );
   // Pull's enrichment feed. Spied so a test can simulate another device
   // refreshing AI suggestions (a row arriving via pull rather than a local tap).
   const listEnrichmentsUpdatedSince = jest.fn(async () => [] as unknown[]);
@@ -118,6 +133,8 @@ jest.mock('@/api/bookmarks', () => {
       addTags,
       listBookmarkIds,
       createBookmark,
+      createBookmarks,
+      updateBookmark,
       listEnrichmentsUpdatedSince,
       enqueuePendingEnrichment,
     },
@@ -125,6 +142,8 @@ jest.mock('@/api/bookmarks', () => {
       requestEnrichment,
       addTags,
       createBookmark,
+      createBookmarks,
+      updateBookmark,
       listBookmarksUpdatedSince: empty,
       listBookmarkIds,
       listEnrichmentsUpdatedSince,
@@ -139,6 +158,7 @@ jest.mock('@/api/bookmarks', () => {
 import { AI_RATE_LIMITED, BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { SupabaseRequestError } from '@/supabase/client';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { BULK_CREATE_SYNC_CHUNK_SIZE } from '@/sync/sync-bookmarks';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
@@ -149,6 +169,8 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
     addTags: jest.Mock;
     listBookmarkIds: jest.Mock;
     createBookmark: jest.Mock;
+    createBookmarks: jest.Mock;
+    updateBookmark: jest.Mock;
     listEnrichmentsUpdatedSince: jest.Mock;
     enqueuePendingEnrichment: jest.Mock;
   };
@@ -462,6 +484,338 @@ test('a freshly captured bookmark gets AI suggestions automatically once it sync
     ),
   );
   await waitFor(() => expect(store.current!.getEnrichment(bookmarkId)).toBeDefined());
+});
+
+test('a bulk create sync (2+ pending creates) actually clears the queue and marks bookmarks synced (Sentry STASH-3V/3X)', async () => {
+  // Reproduces the reported "sync stuck re-uploading the same 561/59 items
+  // forever" bug: applyBulkCreateChunkResults gated clearing the queue on
+  // result.removeEntry, but syncCreateQueueEntryBatch NEVER sets that field —
+  // every one of its results represents a completed create (a batch failure
+  // throws instead of returning a per-entry retry state). With the gate in
+  // place, a successful bulk upload silently did nothing: the queue entries
+  // stayed 'pending', the bookmarks never flipped to 'synced', and the
+  // background auto-sync effect (which re-fires whenever the queue still has
+  // pending work) immediately re-ran the exact same upload forever.
+  fakeRepo.__reset([]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  const ids: string[] = [];
+  await act(async () => {
+    for (const url of ['example.com/bulk-a', 'example.com/bulk-b']) {
+      const result = store.current!.addBookmark({ url });
+      if (result.status !== 'invalid') {
+        ids.push(result.bookmark.id);
+      }
+    }
+  });
+  expect(ids).toHaveLength(2);
+  apiMock.__spies.listBookmarkIds.mockResolvedValue(ids);
+
+  await waitFor(() => expect(apiMock.__spies.createBookmarks).toHaveBeenCalled());
+  // The queue must actually drain — not just "eventually", but settle to
+  // empty, proving the sync loop terminates instead of re-uploading forever.
+  await waitFor(() => expect(store.current!.queue).toHaveLength(0));
+  for (const id of ids) {
+    expect(store.current!.getBookmark(id)?.sync_status).toBe('synced');
+  }
+
+  // Durable storage must reflect it too, or a reload resurrects the same
+  // "still pending" state and the loop resumes on next launch.
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+  for (const id of ids) {
+    const stored = fakeRepo.__bookmarks().find((b) => b.id === id);
+    expect(stored?.sync_status).toBe('synced');
+  }
+});
+
+test('a bulk create sync failure records retry state instead of silently resetting to pending', async () => {
+  // A bulk-endpoint failure must behave like any other sync failure: mark the
+  // entry 'failed' with an incremented retry_count and last_error, so it's
+  // visible to the user and eligible for health escalation (see
+  // crossedHealthEscalationThreshold) — not just silently reset back to
+  // 'pending' with no record anything went wrong.
+  fakeRepo.__reset([]);
+  apiMock.__spies.createBookmarks.mockRejectedValueOnce(new Error('network down'));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  const ids: string[] = [];
+  await act(async () => {
+    for (const url of ['example.com/bulk-fail-a', 'example.com/bulk-fail-b']) {
+      const result = store.current!.addBookmark({ url });
+      if (result.status !== 'invalid') {
+        ids.push(result.bookmark.id);
+      }
+    }
+  });
+  expect(ids).toHaveLength(2);
+
+  await waitFor(() => expect(apiMock.__spies.createBookmarks).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(store.current!.queue.every((entry) => entry.sync_status === 'failed')).toBe(true),
+  );
+  for (const entry of store.current!.queue) {
+    expect(entry.retry_count).toBe(1);
+    expect(entry.last_error).toBe('network down');
+  }
+  for (const id of ids) {
+    expect(store.current!.getBookmark(id)?.sync_status).toBe('failed');
+  }
+
+  // Durable storage must reflect the failure too.
+  await waitFor(() =>
+    expect(fakeRepo.__queue().every((entry) => entry.sync_status === 'failed')).toBe(true),
+  );
+  for (const id of ids) {
+    expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.sync_status).toBe('failed');
+  }
+});
+
+test('a bulk create failure keeps untried later chunks out of the single-entry fallback', async () => {
+  // BULK_CREATE_SYNC_CHUNK_SIZE + 1 entries span two chunks. The first
+  // chunk's bulk request fails; the second chunk is never even attempted
+  // this run. Regression: marking only the failed chunk (not every
+  // bulk-eligible entry) as "handled" let the per-entry loop below fall
+  // through and fire single createBookmark requests for the untried
+  // chunk — hundreds of sequential requests during a real outage instead of
+  // waiting for the next bulk retry.
+  const rows = Array.from({ length: BULK_CREATE_SYNC_CHUNK_SIZE + 1 }, (_, index) =>
+    makeStoredBookmark({
+      id: `7e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/bulk-many-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  // Fails exactly once, so the queue eventually quiesces (the retry
+  // succeeds) instead of retrying forever — the test only needs to prove
+  // createBookmark (singular) is never called along the way, not pin down
+  // every intermediate per-entry status across however many auto-triggered
+  // passes it takes to settle.
+  apiMock.__spies.createBookmarks.mockRejectedValueOnce(new Error('network down'));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() =>
+    expect(
+      store.current!.queue.every(
+        (entry) => entry.sync_status !== 'pending' && entry.sync_status !== 'syncing',
+      ),
+    ).toBe(true),
+  );
+
+  expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
+});
+
+test('a bulk chunk failure with a row-specific permanent error isolates just the offending row', async () => {
+  // A bulk request fails as a whole even when only ONE row in the chunk
+  // actually has a problem (a legacy too-long URL trips Postgres's btree
+  // index-row limit — see isRowSpecificPermanentSyncErrorText). Regression:
+  // blindly copying that shared batch error text onto every entry in the
+  // chunk made isPermanentlyUnsyncableUrl treat ALL of them as permanently
+  // unsyncable, silently excluding the other, perfectly valid entry from
+  // sync forever instead of isolating the real offender.
+  const goodId = '7e64cf1e-0000-4000-8000-000000000101';
+  const badId = '7e64cf1e-0000-4000-8000-000000000102';
+  const rows = [
+    makeStoredBookmark({
+      id: goodId,
+      url: 'https://example.com/good',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+    makeStoredBookmark({
+      id: badId,
+      url: 'https://example.com/bad',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  ];
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  apiMock.__spies.createBookmarks.mockRejectedValueOnce(
+    new Error(
+      'index row size 3000 exceeds btree version 4 maximum 2704 for index "bookmarks_url_hash_idx"',
+    ),
+  );
+  apiMock.__spies.createBookmark
+    .mockImplementationOnce(async (input: { id?: string }) => ({ bookmark_id: input.id }))
+    .mockImplementationOnce(async () => {
+      throw new Error(
+        'index row size 3000 exceeds btree version 4 maximum 2704 for index "bookmarks_url_hash_idx"',
+      );
+    });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  // The good entry must sync via the per-entry fallback rather than get
+  // stuck 'failed' with the batch's row-specific error attributed to it.
+  await waitFor(() => expect(store.current!.getBookmark(goodId)?.sync_status).toBe('synced'));
+  expect(store.current!.queue.some((entry) => entry.local_id === goodId)).toBe(false);
+
+  // The genuinely bad entry fails on its own, individually-attributed
+  // attempt — proving isolation actually happened rather than both entries
+  // sharing one undifferentiated batch failure.
+  await waitFor(() => expect(store.current!.getBookmark(badId)?.sync_status).toBe('failed'));
+  const badQueueEntry = store.current!.queue.find((entry) => entry.local_id === badId);
+  expect(badQueueEntry?.last_error).toContain('exceeds btree version');
+
+  expect(apiMock.__spies.createBookmark).toHaveBeenCalledTimes(2);
+});
+
+test('a bulk create success with no matching local bookmark still durably clears its queue entry', async () => {
+  // A create's queue entry can outlive its own bookmark if the bookmark's
+  // durable write failed independently (or was never persisted) —
+  // syncCreateQueueEntryBatch still returns a completed result for it (no
+  // bookmarkUpdate, since there's no local row to merge onto), but
+  // applyBulkCreateChunkResults used to only durably clear queue rows that
+  // had a bookmark completion alongside them, silently orphaning this entry
+  // so it lingers forever and gets re-uploaded after every restart.
+  fakeRepo.__reset([]);
+  const orphanIdA = '7e64cf1e-0000-4000-8000-000000000201';
+  const orphanIdB = '7e64cf1e-0000-4000-8000-000000000202';
+  const now = '2026-06-12T00:00:00.000Z';
+  for (const id of [orphanIdA, orphanIdB]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/orphan-${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() => expect(apiMock.__spies.createBookmarks).toHaveBeenCalled());
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+  expect(store.current!.queue).toHaveLength(0);
+});
+
+test('a bookmark permanently deleted while its bulk-create durable persist is still in flight is not resurrected', async () => {
+  // applyBulkCreateChunkResults computes its in-memory merge from a snapshot
+  // taken before completeCreateSyncBatch's own await. Regression: blindly
+  // writing that stale snapshot back once the await resolved would resurrect
+  // a bookmark permanently deleted DURING that window — and since the
+  // delete ran before this row's sync_status flip landed, deleteBookmark
+  // would have seen it as never-synced and skipped enqueuing a remote
+  // delete, leaving the row this batch just created stranded in the cloud.
+  const survivorId = '7e64cf1e-0000-4000-8000-000000000301';
+  const deletedMidFlightId = '7e64cf1e-0000-4000-8000-000000000302';
+  const now = '2026-06-12T00:00:00.000Z';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: survivorId,
+      url: 'https://example.com/survivor',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+    makeStoredBookmark({
+      id: deletedMidFlightId,
+      url: 'https://example.com/deleted-mid-flight',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  ]);
+  for (const id of [survivorId, deletedMidFlightId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseCompletion: () => void = () => {};
+  const completionGate = new Promise<void>((resolve) => {
+    releaseCompletion = resolve;
+  });
+  let completionEntered: () => void = () => {};
+  const completionEnteredPromise = new Promise<void>((resolve) => {
+    completionEntered = resolve;
+  });
+  const originalComplete = fakeRepo.repository.completeCreateSyncBatch!.bind(fakeRepo.repository);
+  fakeRepo.repository.completeCreateSyncBatch = async (completions) => {
+    // Signals that applyBulkCreateChunkResults' pre-await snapshot has
+    // already been captured (this is only called after that loop runs) —
+    // waiting on the createBookmarks mock instead would be too early: a
+    // jest.fn() records a call synchronously before its returned promise
+    // even resolves, so the delete could land before the snapshot exists.
+    completionEntered();
+    await completionGate;
+    return originalComplete(completions);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await completionEnteredPromise;
+
+  await act(async () => {
+    store.current!.deleteBookmark(deletedMidFlightId);
+  });
+  expect(store.current!.getBookmark(deletedMidFlightId)).toBeUndefined();
+
+  releaseCompletion();
+
+  await waitFor(() => expect(store.current!.getBookmark(survivorId)?.sync_status).toBe('synced'));
+
+  // Must stay gone — not resurrected by the stale pre-delete snapshot the
+  // completion step captured.
+  expect(store.current!.getBookmark(deletedMidFlightId)).toBeUndefined();
+  expect(fakeRepo.__bookmarks().find((b) => b.id === deletedMidFlightId)).toBeUndefined();
+
+  // The row this batch just created for it must not be left stranded in the
+  // cloud: a remote delete must have been enqueued for cleanup.
+  await waitFor(() =>
+    expect(
+      store.current!.queue.some(
+        (entry) => entry.local_id === deletedMidFlightId && entry.operation === 'delete',
+      ),
+    ).toBe(true),
+  );
+
+  fakeRepo.repository.completeCreateSyncBatch = originalComplete;
 });
 
 test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {
