@@ -462,11 +462,13 @@ export async function syncQueueEntry(
  * `CreateBookmarkInput` has no fields for them at all, so if client-side
  * enrichment fills them in before this row's own create upload completes,
  * the create request can never carry them — this reconcile check is the
- * only path that pushes them to the server. `metadata_status` itself is
- * deliberately NOT checked: it also flips away from `pending` on a failed
- * or skipped enrichment attempt, where none of the three fields above are
- * actually populated, and reconciling then just adds a no-op `update` to
- * the queue (this was the actual source of the STASH-3Y bounce/churn).
+ * only path that pushes them to the server. `metadata_status` is checked
+ * too, even though it can flip on its own with no content fields populated
+ * (a failed or skipped enrichment): `supabase/migrations/
+ * 20260621000000_ai_enrich_server_trigger.sql` only dispatches the
+ * server-side AI-enrichment backstop on a transition out of `pending`, so a
+ * text note (no URL, nothing to fetch) still needs that transition pushed
+ * or it never gets suggestions unless the app happens to come back.
  */
 export function createNeedsReconcileUpdate(
   persisted: Bookmark,
@@ -479,6 +481,7 @@ export function createNeedsReconcileUpdate(
     persisted.title !== (uploadedPayload?.title ?? null) ||
     persisted.notes !== (uploadedPayload?.notes ?? null) ||
     persisted.description !== (uploadedPayload?.shared_text ?? null) ||
+    persisted.metadata_status !== 'pending' ||
     persisted.site_name !== null ||
     persisted.favicon_url !== null ||
     persisted.preview_image_url !== null
