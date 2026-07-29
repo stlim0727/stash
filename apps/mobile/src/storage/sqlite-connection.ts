@@ -1,5 +1,5 @@
 import { recordLog } from '@/observability/log-buffer';
-import { noteSqliteTailWait } from '@/storage/diagnostics';
+import { noteSqliteQueueDepth, noteSqliteTailWait } from '@/storage/diagnostics';
 
 export interface SqliteConnectionOptions {
   /** Max time a liveness probe may run before the handle is treated as dead. */
@@ -211,6 +211,12 @@ export class SqliteConnection<DB> {
     // prime freeze suspect (Sentry STASH-C/H). Record only a non-trivial wait so
     // the steady state stays silent; coarse numbers only, never bookmark content.
     this.pending += 1;
+    if (this.pending > 1) {
+      // Eager: depth is known now, even if this unit ends up stuck behind a
+      // long-running or wedged one and its own wait is never measured (see
+      // noteSqliteQueueDepth).
+      noteSqliteQueueDepth(this.pending);
+    }
     const enqueuedAt = Date.now();
     const instrumented = () => {
       const waitMs = Date.now() - enqueuedAt;

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { getStorageDiagnostics, noteSqliteTailWait } from './diagnostics.ts';
+import { getStorageDiagnostics, noteSqliteQueueDepth, noteSqliteTailWait } from './diagnostics.ts';
 
 test('getStorageDiagnostics is undefined until something is recorded', () => {
   assert.equal(getStorageDiagnostics(), undefined);
@@ -17,4 +17,19 @@ test('noteSqliteTailWait tracks running max wait/depth and a running count', () 
   assert.equal(diagnostics!.sqliteContention!.maxWaitMs, 1200);
   assert.equal(diagnostics!.sqliteContention!.maxDepth, 5);
   assert.equal(diagnostics!.sqliteContention!.waitCount, 3);
+});
+
+test('noteSqliteQueueDepth updates maxDepth without touching maxWaitMs/waitCount', () => {
+  noteSqliteTailWait(1200, 5);
+  const before = getStorageDiagnostics()!.sqliteContention!;
+
+  noteSqliteQueueDepth(before.maxDepth + 4);
+  const after = getStorageDiagnostics()!.sqliteContention!;
+  assert.equal(after.maxDepth, before.maxDepth + 4);
+  assert.equal(after.maxWaitMs, before.maxWaitMs); // unchanged
+  assert.equal(after.waitCount, before.waitCount); // unchanged
+
+  // A lower depth than already observed must not regress the running max.
+  noteSqliteQueueDepth(1);
+  assert.equal(getStorageDiagnostics()!.sqliteContention!.maxDepth, after.maxDepth);
 });

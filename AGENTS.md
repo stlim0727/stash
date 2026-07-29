@@ -431,10 +431,13 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   are attached to a captured exception's session, not to a user-typed feedback
   submission. Don't spend a round-trip checking `get_sentry_resource`
   (`resourceType: breadcrumbs`) for one of these; it 404s. The `context.logs`/
-  `context.storage`/`context.shareAttempt` fields in the report body are the
-  only evidence, and the first two are in-memory-only (reset on app restart),
-  so verify they actually date from the failure before trusting them as proof
-  of what happened.
+  `context.storage`/`context.syncReconcile`/`context.shareAttempt` fields in
+  the report body are the only evidence, and all but `shareAttempt` are
+  in-memory-only (reset on app restart) — `syncReconcile`
+  (`src/sync/reconcile-diagnostics.ts`) is a cumulative-since-launch
+  create-sync reconcile summary, `storage.sqliteContention` a matching
+  cumulative SQLite tail-wait summary — so verify they actually date from the
+  failure before trusting them as proof of what happened.
 - A bulk import running before the initial load/first cloud pull settles
   durably re-creates every existing bookmark as a fresh duplicate (dedup
   reads an incomplete in-memory snapshot) — this reproduced twice in

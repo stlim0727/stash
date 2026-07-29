@@ -3827,12 +3827,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setQueue((current) => current.filter((queued) => !completedLocalIds.has(queued.local_id)));
         recordLog(
           'info',
-          `bulk create chunk: ${completions.length} completed, queue ${queueLenBeforeChunk} -> ` +
+          `bulk create chunk: ${completedLocalIds.size} completed, queue ${queueLenBeforeChunk} -> ` +
             `~${queueLenBeforeChunk - completedLocalIds.size + followUpUpdates.length + deletedMidFlightIds.length}` +
             ` (reconcile ${followUpUpdates.length}, deletedMidFlight ${deletedMidFlightIds.length},` +
             ` reasons ${JSON.stringify(reconcileReasonTally)})`,
         );
-        recordReconcileChunk(completions.length, followUpUpdates.length, reconcileReasonTally);
+        recordReconcileChunk(completedLocalIds.size, followUpUpdates.length, reconcileReasonTally);
 
         for (const id of deletedMidFlightIds) {
           enqueueMutation(id, 'delete');

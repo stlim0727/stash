@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { clearLogEntries, getLogEntries } from '@/observability/log-buffer';
+import { getStorageDiagnostics } from '@/storage/diagnostics';
 import { SqliteConnection } from '@/storage/sqlite-connection';
 
 /** A fake native handle whose liveness is controllable. */
@@ -355,6 +356,33 @@ test('run serializes operations — they never overlap', async () => {
   await Promise.all([op(1), op(2), op(3), op(4)]);
   assert.equal(maxActive, 1); // never more than one in flight
   assert.deepEqual(order, [1, 2, 3, 4]); // FIFO, matching submission order
+});
+
+test('queue depth is recorded eagerly at enqueue time, even before a blocking op settles', async () => {
+  // STASH-3Y diagnostics regression test: a report filed *during* an active
+  // stall must still show contention — depth can't wait for the blocking
+  // op to finish, since everything queued behind it never gets that far
+  // while it's stuck (see noteSqliteQueueDepth).
+  const { connection } = makeConnection();
+  let releaseFirst!: () => void;
+  const blocker = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+
+  const first = connection.run(async () => {
+    await blocker;
+  });
+  const second = connection.run(async () => undefined);
+  const third = connection.run(async () => undefined);
+
+  // Neither second nor third has started (first still holds the tail), yet
+  // the depth must already be visible.
+  const diagnosticsSnapshot = getStorageDiagnostics();
+  assert.ok(diagnosticsSnapshot?.sqliteContention);
+  assert.ok(diagnosticsSnapshot!.sqliteContention!.maxDepth >= 3);
+
+  releaseFirst();
+  await Promise.all([first, second, third]);
 });
 
 test('closeCurrent releases the handle and the next op reopens', async () => {

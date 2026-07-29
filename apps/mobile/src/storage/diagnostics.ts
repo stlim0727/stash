@@ -71,6 +71,25 @@ export function noteSqliteTailWait(waitMs: number, depth: number): void {
   };
 }
 
+/**
+ * Eagerly records queue depth at enqueue time, before the unit of work has
+ * even started waiting — unlike `noteSqliteTailWait`, whose measurement only
+ * lands once a unit finally starts running. Under a genuine stall (one op
+ * wedged or very slow), everything queued behind it never gets that far, so
+ * a report filed *during* the stall would otherwise show no contention at
+ * all despite the queue visibly growing. Wait time itself can't be known
+ * this early (it's still unbounded), only depth.
+ */
+export function noteSqliteQueueDepth(depth: number): void {
+  const prev = diagnostics.sqliteContention;
+  diagnostics.sqliteContention = {
+    maxWaitMs: prev?.maxWaitMs ?? 0,
+    maxDepth: Math.max(prev?.maxDepth ?? 0, depth),
+    waitCount: prev?.waitCount ?? 0,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function getStorageDiagnostics(): StorageDiagnostics | undefined {
   if (!diagnostics.sqlitePreflight && !diagnostics.sqliteOpen && !diagnostics.sqliteContention) {
     return undefined;
