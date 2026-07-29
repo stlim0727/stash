@@ -53,7 +53,7 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         .map((b) => (b.id === previousId ? bookmark : b));
     },
     completeCreateSyncBatch: async (completions) => {
-      for (const { previousId, bookmark, entry } of completions) {
+      for (const { bookmark, entry } of completions) {
         const stored = queue.find((queued) => queued.local_id === entry.local_id);
         if (
           !stored ||
@@ -62,9 +62,7 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         ) {
           continue;
         }
-        bookmarks = bookmarks
-          .filter((b) => b.id === previousId || b.id !== bookmark.id)
-          .map((b) => (b.id === previousId ? bookmark : b));
+        bookmarks = bookmarks.map((b) => (b.id === bookmark.id ? bookmark : b));
         queue = queue.filter((queued) => queued.local_id !== entry.local_id);
       }
     },

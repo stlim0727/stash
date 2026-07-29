@@ -9,7 +9,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 
-import { resolveAliasedId, swapBookmarkId } from '@/domain/bookmark-id-swap';
+import { resolveAliasedId } from '@/domain/bookmark-id-swap';
 import { mockUserId } from '@/domain/mock-data';
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from '@/domain/urls';
 import { createConcurrencyLimiter } from '@/domain/concurrency';
@@ -108,9 +108,7 @@ import {
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
-  planLeftoverReconciliation,
   reconcileOrphanedQueueEntries,
-  reconcileStrandedSyncedDuplicates,
   removeQueueEntryIfNotSuperseded,
   syncCreateQueueEntryBatch,
   syncQueueEntry,
@@ -1378,14 +1376,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   // Re-key this account's AI-suggestion bookkeeping (aiRetryState,
   // pendingAiTrigger, aiTriggerAttempted) from an old bookmark id onto its
-  // new one — mirrors rekeyPendingTagOps's purpose for tag state. This is the
-  // ONE place every bookmark-id swap in this file must call: the anon→real
-  // carry-over rehome, the create-upload local→remote swap (including a
-  // rehomed bookmark's SECOND swap, intermediate-local→new-account-remote,
-  // since that's the exact same code path), and the synced-leftover
-  // crash-recovery reconciliation. Without this, a re-keyed bookmark silently
-  // loses retry eligibility and its stale old-id entry becomes an orphan that
-  // fires against an id that no longer exists.
+  // new one — mirrors rekeyPendingTagOps's purpose for tag state. The only
+  // caller is the anon→real carry-over rehome (a bookmark's id is otherwise
+  // stable for life once captured — see makeBookmarkId). Without this, a
+  // re-keyed bookmark silently loses retry eligibility and its stale old-id
+  // entry becomes an orphan that fires against an id that no longer exists.
   //
   // aiTriggerAttempted is deliberately NOT carried onto newId — only removed
   // from oldId. It's a session-only in-memory "already fired this launch"
@@ -1395,8 +1390,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // in-flight request still keyed to oldId targets a row/account that no
   // longer exists under this identity and just fails benignly, while newId
   // typically gets a brand-new `markPendingAiTrigger` call immediately after
-  // this swap (see the create-upload handling below) — carrying the "already
-  // attempted" flag onto that fresh identity made the deferred-trigger effect
+  // the rehome — carrying the "already attempted" flag onto that fresh
+  // identity made the deferred-trigger effect
   // (`aiTriggerAttempted.current.has(id)`) skip it forever this session, so
   // the re-keyed bookmark silently never got AI suggestions until an app
   // restart cleared the in-memory set.
@@ -1732,29 +1727,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   await repository.enqueue(entry);
                 }
               })().catch((error) => logStorageError('orphan re-enqueue', error));
-            }
-            // Self-heal a different kind of straggler: a local-id row already
-            // marked 'synced', with no queue entry left to reference it (the
-            // orphan self-heal above skips anything already 'synced'), that
-            // duplicates an already-synced remote-id twin. Nothing else ever
-            // notices this — it would otherwise survive as a permanent
-            // duplicate Inbox card that reappears every relaunch (Sentry
-            // STASH-3P).
-            const strandedDuplicates = reconcileStrandedSyncedDuplicates(migratedBookmarks);
-            if (strandedDuplicates.length > 0) {
-              setBookmarks((current) => {
-                let next = current ?? [];
-                for (const { localId, keep } of strandedDuplicates) {
-                  next = swapBookmarkId(next, localId, keep);
-                }
-                return next;
-              });
-              // Sequential for the same reason as the orphan re-enqueue above.
-              (async () => {
-                for (const { localId, keep } of strandedDuplicates) {
-                  await repository.replaceBookmark(localId, keep);
-                }
-              })().catch((error) => logStorageError('stranded duplicate reconcile', error));
             }
             setEnrichments(storedEnrichments);
             // One-time cleanup: purge blank-named tags/collections (and orphaned
@@ -3408,62 +3380,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     let mutationsPushed = false;
     try {
       await ensureRepositoryReady();
-      // Drain terminal 'synced' leftovers a prior run persisted but never
-      // removed, so they don't linger forever in the visible queue. A create
-      // marks its queue row 'synced' (with the new remote_id) BEFORE swapping
-      // the local bookmark from its local-* id to that remote id; if the app
-      // was killed between those two writes, the local row is still under the
-      // old id. Finish that swap before dropping the row — otherwise the only
-      // record of the remote id is deleted and the local-* bookmark is stranded
-      // as a permanent duplicate of the remote row once the pull brings it down.
-      const syncedLeftovers = queue.filter((entry) => entry.sync_status === 'synced');
-      if (syncedLeftovers.length > 0) {
-        const swaps = planLeftoverReconciliation(syncedLeftovers, bookmarksRef.current ?? []);
-        for (const { localId, reconciled } of swaps) {
-          // Remember the old→new id so a screen still holding the local id (a
-          // Detail opened right after a share) resolves the live row via
-          // getBookmark instead of flashing "not found".
-          if (localId !== reconciled.id) {
-            idAliases.current.set(localId, reconciled.id);
-            // This is a bookmark-id swap like any other (see
-            // remapAiRetryIdentity) — without it, a bookmark whose crash-safe
-            // reconciliation lands here silently loses its retry eligibility,
-            // parked on the now-dead local id.
-            remapAiRetryIdentity(new Map([[localId, reconciled.id]]));
-          }
-          // Collapse onto the remote id: if the pull already brought this
-          // bookmark down under its UUID, a plain map would leave two entries
-          // sharing that id (a duplicate Inbox card that storage doesn't have,
-          // so it clears on the next cold start). swapBookmarkId folds the
-          // lingering local-* row into the existing remote twin instead.
-          setBookmarks((current) => swapBookmarkId(current ?? [], localId, reconciled));
-        }
-        setQueue((current) => current.filter((entry) => entry.sync_status !== 'synced'));
-        // Sequential on purpose (Sentry STASH-3B/3N precedent): firing one
-        // repository call per leftover without awaiting the previous one
-        // (whether via Promise.all or an un-awaited call inside a for loop)
-        // stacks dozens of concurrent native SQLite calls on the single
-        // serialized connection under a large backlog. Fire-and-forget
-        // relative to syncNow's own progress (upload/pull must not wait on
-        // this), but internally one call at a time; each item keeps its own
-        // catch so one failure doesn't stop the rest.
-        void (async () => {
-          for (const { localId, reconciled } of swaps) {
-            try {
-              await repository.replaceBookmark(localId, reconciled);
-            } catch (error) {
-              logStorageError('synced leftover reconcile', error);
-            }
-          }
-          for (const entry of syncedLeftovers) {
-            try {
-              await repository.removeQueueEntry(entry.local_id);
-            } catch (error) {
-              logStorageError('synced leftover cleanup', error);
-            }
-          }
-        })();
-      }
       // Re-ensure the session so a token that expired while the app stayed
       // open is refreshed before we sync; otherwise every entry would fail
       // against a stale bearer token until restart.
@@ -3479,7 +3395,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Undo the rows syncQueueEntry just persisted and best-effort delete
         // the remote copy so the user's delete wins end to end.
         if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
-          const replacementId = result.bookmarkReplacement?.bookmark.id;
+          const replacementId = result.bookmarkUpdate?.id;
           ensureRepositoryReady()
             .then(() =>
               Promise.all([
@@ -3513,71 +3429,41 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (result.removedBookmarkId) {
           // The row was deleted on another device while this device's
           // queued edit could never land (see sync-bookmarks.ts). Drop it
-          // from in-memory state too ??the repository row is already gone.
+          // from in-memory state too — the repository row is already gone.
           const removedId = result.removedBookmarkId;
           setBookmarks((current) => (current ?? []).filter((bookmark) => bookmark.id !== removedId));
         }
-        if (result.bookmarkReplacement) {
-          const { previousId, bookmark: replacement } = result.bookmarkReplacement;
-          // The replacement was built from a snapshot taken before the upload.
+        if (result.bookmarkUpdate) {
+          const update = result.bookmarkUpdate;
+          // The update was built from a snapshot taken before the upload.
           // Enrichment may have completed in the meantime, so apply only the
-          // sync-owned fields (identity + status) onto the LATEST row instead
-          // of writing the stale snapshot back.
+          // sync-owned fields (status) onto the LATEST row instead of writing
+          // the stale snapshot back.
           //
-          // Compute `merged` from the ref SYNCHRONOUSLY ??never from inside the
+          // Compute `merged` from the ref SYNCHRONOUSLY — never from inside the
           // setBookmarks updater. A functional updater doesn't run until React's
           // next render, so reading a variable it assigns right after the call
           // sees the pre-update value (null). That silently skipped this whole
           // block, so neither the metadata-reconciliation update nor the AI
           // auto-trigger ever fired after a create synced.
-          const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === previousId);
+          const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === update.id);
           const merged: Bookmark | null = latest
             ? {
                 ...latest,
-                id: replacement.id,
-                sync_status: replacement.sync_status,
-                updated_at: replacement.updated_at,
+                sync_status: update.sync_status,
+                ever_synced: update.ever_synced,
+                updated_at: update.updated_at,
               }
             : null;
           if (merged) {
-            // Collapse onto the remote id (see swapBookmarkId): a pull that
-            // already inserted this bookmark under its UUID would otherwise
-            // coexist with the just-renamed local-* row as a same-id duplicate.
-            setBookmarks((current) => swapBookmarkId(current ?? [], previousId, merged));
-            // replaceBookmark (not update) so a concurrent enrichment persist
-            // that resurrected the old local-ID row gets cleaned up too.
-            const persisted: Bookmark = merged;
+            setBookmarks((current) =>
+              (current ?? []).map((bookmark) => (bookmark.id === merged.id ? merged : bookmark)),
+            );
             ensureRepositoryReady()
-              .then(() => repository.replaceBookmark(previousId, persisted))
+              .then(() => repository.updateBookmark(merged))
               .catch((error) => logStorageError('post-sync merge', error));
-            // The bookmark row just changed local?뭨emote id. Tag state (pending
-            // ops + optimistic links) is keyed by bookmark id, so re-key it onto
-            // the new remote id ??otherwise any tag op queued before this sync
-            // (a carried-over op from account re-home, or a tag added while the
-            // create was uploading) stays parked on a dead local id that
-            // syncTagOps skips via hasSyncedOnce, and never uploads.
-            if (previousId !== persisted.id) {
-              // Remember the old?뭤ew id so a screen still holding the old id
-              // (e.g. a Detail opened right after a share) resolves the live
-              // row through getBookmark instead of flashing "not found".
-              idAliases.current.set(previousId, persisted.id);
-              const idMap = new Map([[previousId, persisted.id]]);
-              applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
-              const links = tagDataRef.current.bookmarkTags.map((link) =>
-                link.bookmark_id === previousId ? { ...link, bookmark_id: persisted.id } : link,
-              );
-              applyTagData({ ...tagDataRef.current, bookmarkTags: links });
-              // The re-keyed op now targets a remote id; kick the uploader.
-              void syncTagOps();
-              // AI-suggestion retry bookkeeping is keyed by bookmark id too
-              // (mirrors the tag-state re-key above). Without this, a
-              // bookmark already re-keyed once by an anonymous?뭨eal rehome
-              // silently loses its retry eligibility the moment its create
-              // upload swaps it onto its final server id ??the marker stays
-              // parked on the now-dead intermediate local id.
-              remapAiRetryIdentity(idMap);
-            }
-            // `uploadedPayload` is set IFF a create just uploaded ??whether
+
+            // `uploadedPayload` is set IFF a create just uploaded — whether
             // the entry began as a `create` or was promoted from an orphaned
             // `update` (a bookmark whose create never reached the server). Use
             // it, not `entry.operation`, so a promoted create reconciles and
@@ -3585,22 +3471,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             const createUploaded = result.uploadedPayload !== undefined;
             // The create payload only carries url/title/notes, and the remote
             // row defaults to no generated metadata + pending status + active.
-            // If the local row has since diverged ??archived, filed into a
+            // If the local row has since diverged — archived, filed into a
             // collection, edited, enriched, or TRASHED while the create was
-            // uploading ??reconcile with a follow-up update so those changes
+            // uploading — reconcile with a follow-up update so those changes
             // reach the cloud. Without the `deleted_at` arm, a bookmark trashed
             // before it had a remote id would stay live in the cloud and
             // resurrect on other devices.
-            if (createUploaded && createNeedsReconcileUpdate(persisted, result.uploadedPayload)) {
-              enqueueMutation(persisted.id, 'update');
+            if (createUploaded && createNeedsReconcileUpdate(merged, result.uploadedPayload)) {
+              enqueueMutation(merged.id, 'update');
             }
             // A brand-new bookmark just gained a remote identity: queue AI
-            // suggestions for it. We DON'T fire immediately ??the background
+            // suggestions for it. We DON'T fire immediately — the background
             // OpenGraph fetch may still be in flight, and enriching against a
             // bare URL yields nothing. The effect below fires once this
             // bookmark's metadata enrichment has settled.
             if (createUploaded) {
-              markPendingAiTrigger(persisted.id);
+              markPendingAiTrigger(merged.id);
             }
             mutationsPushed = true;
           }
@@ -3613,7 +3499,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ) => {
         const completedLocalIds = new Set<string>();
         const completions: CreateSyncCompletion[] = [];
-        const idMap = new Map<string, string>();
         type UploadedPayload = NonNullable<typeof results[number]['uploadedPayload']>;
         const followUpUpdates: Array<{ id: string; payload: UploadedPayload }> = [];
         const pendingAiIds: string[] = [];
@@ -3624,7 +3509,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           const result = results[resultIndex]!;
 
           if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
-            const replacementId = result.bookmarkReplacement?.bookmark.id;
+            const replacementId = result.bookmarkUpdate?.id;
             ensureRepositoryReady()
               .then(() =>
                 Promise.all([
@@ -3645,28 +3530,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
           completedLocalIds.add(entry.local_id);
 
-          if (!result.bookmarkReplacement) {
+          if (!result.bookmarkUpdate) {
             continue;
           }
 
-          const { previousId, bookmark: replacement } = result.bookmarkReplacement;
-          const latest = nextBookmarks.find((bookmark) => bookmark.id === previousId);
+          const update = result.bookmarkUpdate;
+          const latest = nextBookmarks.find((bookmark) => bookmark.id === update.id);
           if (!latest) {
             continue;
           }
           const merged: Bookmark = {
             ...latest,
-            id: replacement.id,
-            sync_status: replacement.sync_status,
-            updated_at: replacement.updated_at,
+            sync_status: update.sync_status,
+            ever_synced: update.ever_synced,
+            updated_at: update.updated_at,
           };
-          nextBookmarks = swapBookmarkId(nextBookmarks, previousId, merged);
-          completions.push({ previousId, bookmark: merged, entry });
-
-          if (previousId !== merged.id) {
-            idAliases.current.set(previousId, merged.id);
-            idMap.set(previousId, merged.id);
-          }
+          nextBookmarks = nextBookmarks.map((bookmark) =>
+            bookmark.id === merged.id ? merged : bookmark,
+          );
+          completions.push({ bookmark: merged, entry });
 
           if (result.uploadedPayload !== undefined) {
             if (createNeedsReconcileUpdate(merged, result.uploadedPayload)) {
@@ -3685,24 +3567,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setBookmarks(nextBookmarks);
         setQueue((current) => current.filter((queued) => !completedLocalIds.has(queued.local_id)));
 
-        if (idMap.size > 0) {
-          applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
-          const links = tagDataRef.current.bookmarkTags.map((link) => {
-            const nextBookmarkId = idMap.get(link.bookmark_id);
-            return nextBookmarkId ? { ...link, bookmark_id: nextBookmarkId } : link;
-          });
-          applyTagData({ ...tagDataRef.current, bookmarkTags: links });
-          void syncTagOps();
-          remapAiRetryIdentity(idMap);
-        }
-
         await ensureRepositoryReady();
         if (repository.completeCreateSyncBatch) {
           await repository.completeCreateSyncBatch(completions);
         } else {
           await Promise.all(
-            completions.flatMap(({ previousId, bookmark, entry }) => [
-              repository.replaceBookmark(previousId, bookmark),
+            completions.flatMap(({ bookmark, entry }) => [
+              repository.updateBookmark(bookmark),
               removeQueueEntryIfNotSuperseded(repository, entry),
             ]),
           );
@@ -3791,156 +3662,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ),
           );
 
-          const result = await syncQueueEntry(
-            api,
-            repository,
-            entry,
-            getLatestBookmark,
-            // A still-local update/delete is only safe to DEFER (vs. settle) when
-            // a not-yet-synced create for the same local id is still queued to
-            // re-key it. Reading the live ref (not the `syncable` snapshot) so a
-            // create enqueued mid-run still counts.
-            (localId) =>
-              queueRef.current.some(
-                (queued) =>
-                  queued.local_id === localId &&
-                  queued.operation === 'create' &&
-                  queued.sync_status !== 'synced',
-              ),
-          );
-
-          // Deleted while a create/update was in flight: don't resurrect it.
-          // Undo the rows syncQueueEntry just persisted and best-effort delete
-          // the remote copy so the user's delete wins end to end.
-          if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
-            const replacementId = result.bookmarkReplacement?.bookmark.id;
-            ensureRepositoryReady()
-              .then(() =>
-                Promise.all([
-                  replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
-                  // Superseded-aware: a durable delete entry enqueued for this
-                  // bookmark while we were uploading must NOT be removed here.
-                  removeQueueEntryIfNotSuperseded(repository, entry),
-                ]),
-              )
-              .catch((error) => logStorageError('post-delete sync cleanup', error));
-            if (result.entry.remote_id && result.entry.remote_id !== entry.local_id) {
-              // The upload created a remote row for a bookmark the user already
-              // deleted. Enqueue a durable delete (not a best-effort request) so
-              // the removal survives app exit and request failures; the next
-              // sync pass processes it.
-              enqueueMutation(result.entry.remote_id, 'delete');
-            }
-            continue;
-          }
-
-          setQueue((current) =>
-            result.removeEntry
-              ? current.filter((queued) => queued.local_id !== entry.local_id)
-              : current.map((queued) =>
-                  queued.local_id === entry.local_id ? result.entry : queued,
-                ),
-          );
-          if (result.removeEntry) {
-            mutationsPushed = true;
-          }
-          if (result.removedBookmarkId) {
-            // The row was deleted on another device while this device's
-            // queued edit could never land (see sync-bookmarks.ts). Drop it
-            // from in-memory state too — the repository row is already gone.
-            const removedId = result.removedBookmarkId;
-            setBookmarks((current) => (current ?? []).filter((bookmark) => bookmark.id !== removedId));
-          }
-          if (result.bookmarkReplacement) {
-            const { previousId, bookmark: replacement } = result.bookmarkReplacement;
-            // The replacement was built from a snapshot taken before the upload.
-            // Enrichment may have completed in the meantime, so apply only the
-            // sync-owned fields (identity + status) onto the LATEST row instead
-            // of writing the stale snapshot back.
-            //
-            // Compute `merged` from the ref SYNCHRONOUSLY — never from inside the
-            // setBookmarks updater. A functional updater doesn't run until React's
-            // next render, so reading a variable it assigns right after the call
-            // sees the pre-update value (null). That silently skipped this whole
-            // block, so neither the metadata-reconciliation update nor the AI
-            // auto-trigger ever fired after a create synced.
-            const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === previousId);
-            const merged: Bookmark | null = latest
-              ? {
-                  ...latest,
-                  id: replacement.id,
-                  sync_status: replacement.sync_status,
-                  updated_at: replacement.updated_at,
-                }
-              : null;
-            if (merged) {
-              // Collapse onto the remote id (see swapBookmarkId): a pull that
-              // already inserted this bookmark under its UUID would otherwise
-              // coexist with the just-renamed local-* row as a same-id duplicate.
-              setBookmarks((current) => swapBookmarkId(current ?? [], previousId, merged));
-              // replaceBookmark (not update) so a concurrent enrichment persist
-              // that resurrected the old local-ID row gets cleaned up too.
-              const persisted: Bookmark = merged;
-              ensureRepositoryReady()
-                .then(() => repository.replaceBookmark(previousId, persisted))
-                .catch((error) => logStorageError('post-sync merge', error));
-              // The bookmark row just changed local→remote id. Tag state (pending
-              // ops + optimistic links) is keyed by bookmark id, so re-key it onto
-              // the new remote id — otherwise any tag op queued before this sync
-              // (a carried-over op from account re-home, or a tag added while the
-              // create was uploading) stays parked on a dead local id that
-              // syncTagOps skips via hasSyncedOnce, and never uploads.
-              if (previousId !== persisted.id) {
-                // Remember the old→new id so a screen still holding the old id
-                // (e.g. a Detail opened right after a share) resolves the live
-                // row through getBookmark instead of flashing "not found".
-                idAliases.current.set(previousId, persisted.id);
-                const idMap = new Map([[previousId, persisted.id]]);
-                applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
-                const links = tagDataRef.current.bookmarkTags.map((link) =>
-                  link.bookmark_id === previousId
-                    ? { ...link, bookmark_id: persisted.id }
-                    : link,
-                );
-                applyTagData({ ...tagDataRef.current, bookmarkTags: links });
-                // The re-keyed op now targets a remote id; kick the uploader.
-                void syncTagOps();
-                // AI-suggestion retry bookkeeping is keyed by bookmark id too
-                // (mirrors the tag-state re-key above). Without this, a
-                // bookmark already re-keyed once by an anonymous→real rehome
-                // silently loses its retry eligibility the moment its create
-                // upload swaps it onto its final server id — the marker stays
-                // parked on the now-dead intermediate local id.
-                remapAiRetryIdentity(idMap);
-              }
-              // `uploadedPayload` is set IFF a create just uploaded — whether
-              // the entry began as a `create` or was promoted from an orphaned
-              // `update` (a bookmark whose create never reached the server). Use
-              // it, not `entry.operation`, so a promoted create reconciles and
-              // AI-triggers too: the loop's `entry.operation` is still 'update'.
-              const createUploaded = result.uploadedPayload !== undefined;
-              // The create payload only carries url/title/notes, and the remote
-              // row defaults to no generated metadata + pending status + active.
-              // If the local row has since diverged — archived, filed into a
-              // collection, edited, enriched, or TRASHED while the create was
-              // uploading — reconcile with a follow-up update so those changes
-              // reach the cloud. Without the `deleted_at` arm, a bookmark trashed
-              // before it had a remote id would stay live in the cloud and
-              // resurrect on other devices.
-              if (createUploaded && createNeedsReconcileUpdate(persisted, result.uploadedPayload)) {
-                enqueueMutation(persisted.id, 'update');
-              }
-              // A brand-new bookmark just gained a remote identity: queue AI
-              // suggestions for it. We DON'T fire immediately — the background
-              // OpenGraph fetch may still be in flight, and enriching against a
-              // bare URL yields nothing. The effect below fires once this
-              // bookmark's metadata enrichment has settled.
-              if (createUploaded) {
-                markPendingAiTrigger(persisted.id);
-              }
-              mutationsPushed = true;
-            }
-          }
+          const result = await syncQueueEntry(api, repository, entry, getLatestBookmark);
+          await applySyncEntryResult(entry, result);
         } catch (error) {
           logStorageError('sync entry', error);
           const failed: LocalPendingBookmark = {

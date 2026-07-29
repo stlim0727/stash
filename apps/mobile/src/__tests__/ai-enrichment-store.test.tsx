@@ -434,64 +434,34 @@ test('a freshly captured bookmark gets AI suggestions automatically once it sync
   // The core "auto-suggest on receive" promise: capture a bookmark, and once it
   // syncs and its metadata settles, suggestions should appear on their own —
   // the user should NOT have to tap "Suggest with AI". This drives the full real
-  // path (addBookmark → create upload → remote-id swap → deferred trigger).
+  // path (addBookmark → create upload → deferred trigger), all under the
+  // bookmark's own stable id (no rename on sync — see makeBookmarkId).
   fakeRepo.__reset([]);
-  // The synced row must survive the pull's deletion diff (which would otherwise
-  // treat an id it can't see remotely as a remote deletion).
-  apiMock.__spies.listBookmarkIds.mockResolvedValue([REMOTE_ID]);
 
   const store = renderStore();
   await waitFor(() => expect(store.current?.isLoading).toBe(false));
 
+  let bookmarkId = '';
   await act(async () => {
-    store.current!.addBookmark({ url: 'example.com/auto-suggest' });
+    const result = store.current!.addBookmark({ url: 'example.com/auto-suggest' });
+    if (result.status !== 'invalid') {
+      bookmarkId = result.bookmark.id;
+    }
   });
+  // The synced row must survive the pull's deletion diff (which would otherwise
+  // treat an id it can't see remotely as a remote deletion).
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([bookmarkId]);
 
-  // The create uploads and the local row adopts the remote id...
   await waitFor(() => expect(apiMock.__spies.createBookmark).toHaveBeenCalled());
   // ...and the AI enrichment fires for it WITHOUT any manual requestAiEnrichment.
   await waitFor(() =>
     expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
-      REMOTE_ID,
+      bookmarkId,
       expect.anything(),
       'en',
     ),
   );
-  await waitFor(() => expect(store.current!.getEnrichment(REMOTE_ID)).toBeDefined());
-});
-
-test('getBookmark still resolves a bookmark by its pre-sync local id after the create swaps it onto the remote id', async () => {
-  // Regression: share a link, open its Detail immediately (navigated with the
-  // local id), and moments later its create syncs — swapping the row's id from
-  // local-* to the remote UUID. A Detail screen still holding the local id used
-  // to read "this bookmark could not be found" until you backed out and
-  // re-entered. getBookmark must follow the id alias so the live row resolves.
-  fakeRepo.__reset([]);
-  apiMock.__spies.listBookmarkIds.mockResolvedValue([REMOTE_ID]);
-
-  const store = renderStore();
-  await waitFor(() => expect(store.current?.isLoading).toBe(false));
-
-  let localId = '';
-  await act(async () => {
-    const result = store.current!.addBookmark({ url: 'example.com/shared-then-opened' });
-    if (result.status !== 'invalid') {
-      localId = result.bookmark.id;
-    }
-  });
-  // Every bookmark gets a real UUID id at capture time now (no more local-*
-  // placeholder), but this mock still returns a different, fixed REMOTE_ID —
-  // modeling the (now-impossible-in-production, but still-exercised-by-this-
-  // mock) case where the create response doesn't echo the sent id.
-  expect(localId).not.toBe(REMOTE_ID);
-
-  // The create uploads and the row adopts the remote id.
-  await waitFor(() => expect(apiMock.__spies.createBookmark).toHaveBeenCalled());
-  await waitFor(() => expect(store.current!.getBookmark(REMOTE_ID)?.id).toBe(REMOTE_ID));
-
-  // The still-open Detail's stale local id now resolves to the same live row
-  // instead of "not found".
-  expect(store.current!.getBookmark(localId)?.id).toBe(REMOTE_ID);
+  await waitFor(() => expect(store.current!.getEnrichment(bookmarkId)).toBeDefined());
 });
 
 test('re-hydrates a persisted deferred AI trigger and fires it after a restart', async () => {
@@ -1095,82 +1065,18 @@ test('a failed manual attempt arms the same retry marker as an auto failure', as
   expect(persisted[SYNCED_ID].attemptCount).toBe(1);
 });
 
-test('a synced create-leftover reconciliation keeps its AI-retry marker through the id swap', async () => {
-  // Mirrors duplicate-id-swap.test.tsx's crash-recovery scenario: a create
-  // uploaded (the queue entry is marked 'synced' with the new remote id) but
-  // the app was killed before the local->remote id swap. syncNow's first step
-  // reconciles that leftover — this is a bookmark-id swap like any other, so
-  // it must carry the retry marker onto the reconciled id too.
-  const LOCAL_ID = 'local-ai-retry-leftover';
-  const localTwin = makeStoredBookmark({
-    id: LOCAL_ID,
-    url: 'https://example.com/leftover-retry',
-    url_hash: 'https://example.com/leftover-retry',
-    sync_status: 'pending',
-  });
-  fakeRepo.__reset([localTwin]);
-  await fakeRepo.repository.setMeta(
-    'ai_suggestion_retry',
-    JSON.stringify({
-      [LOCAL_ID]: {
-        firstAttemptAt: '2026-06-01T00:00:00.000Z',
-        lastAttemptAt: '2026-06-01T00:00:00.000Z',
-        attemptCount: 1,
-      },
-    }),
-  );
-  apiMock.__spies.listBookmarkIds.mockResolvedValue([REMOTE_ID]);
-  await fakeRepo.repository.enqueue({
-    local_id: LOCAL_ID,
-    remote_id: REMOTE_ID,
-    operation: 'create',
-    payload: { url: 'https://example.com/leftover-retry' },
-    sync_status: 'synced',
-    retry_count: 0,
-    last_error: null,
-    created_at: '2026-06-12T00:00:00.000Z',
-    updated_at: '2026-06-12T00:00:00.000Z',
-  });
-
-  const store = renderStore();
-  await waitFor(() => expect(store.current?.isLoading).toBe(false));
-
-  await act(async () => {
-    await store.current!.syncNow();
-  });
-
-  // The leftover reconciliation collapsed the local-* row onto REMOTE_ID...
-  await waitFor(() => expect(store.current!.getBookmark(REMOTE_ID)?.id).toBe(REMOTE_ID));
-  // ...and the retry marker followed it there instead of being stranded on
-  // the now-dead local id.
-  expect(store.current!.isAiSuggestionPostponed(REMOTE_ID)).toBe(true);
-  expect(store.current!.isAiSuggestionPostponed(LOCAL_ID)).toBe(false);
-});
-
-test("a rehomed bookmark's create-upload swap still fires a fresh auto AI trigger, even though its old id already fired this session", async () => {
+test("a rehomed bookmark still fires a fresh auto AI trigger under its new id, even though its old id already fired this session", async () => {
   // Regression for the aiTriggerAttempted-carry-forward bug: aiTriggerAttempted
   // is a session-only in-memory "already fired" dedupe set. The bug carried it
-  // forward across every id swap, so a bookmark whose OLD id had already fired
-  // once this session silently never got its fresh auto-trigger fired again
-  // under its FINAL id — denying AI suggestions until an app restart. This
-  // proves the actual behavior (a fresh requestEnrichment call for the new id)
-  // fires, not just that the bookkeeping key moved.
+  // forward across the rehome id swap, so a bookmark whose OLD id had already
+  // fired once this session silently never got its fresh auto-trigger fired
+  // again under its NEW (rehomed) id — denying AI suggestions until an app
+  // restart. This proves the actual behavior (a fresh requestEnrichment call
+  // for the new id) fires, not just that the bookkeeping key moved.
   const ANON_REMOTE_ID = '3c3c3c3c-0000-4000-8000-000000000003';
   fakeRepo.__reset([makeStoredBookmark({ id: ANON_REMOTE_ID, metadata_status: 'complete' })]);
   await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([ANON_REMOTE_ID]));
   apiMock.__spies.listBookmarkIds.mockResolvedValue([ANON_REMOTE_ID]);
-
-  // Gate the rehomed row's re-issued create so the second swap doesn't
-  // complete within the same act() as the rehome, letting the test observe
-  // the intermediate rehomed-local-id state.
-  let releaseCreate!: () => void;
-  const createGate = new Promise<void>((resolve) => {
-    releaseCreate = resolve;
-  });
-  apiMock.__spies.createBookmark.mockImplementationOnce(async () => {
-    await createGate;
-    return { bookmark_id: REMOTE_ID };
-  });
 
   function wrapper({ children }: { children: ReactNode }) {
     return <BookmarksProvider>{children}</BookmarksProvider>;
@@ -1182,7 +1088,7 @@ test("a rehomed bookmark's create-upload swap still fires a fresh auto AI trigge
   // During the anonymous session, the deferred-trigger effect fires the
   // bookmark's first-ever auto attempt for ANON_REMOTE_ID — marking it
   // "already attempted this session", the exact in-memory state the bug used
-  // to carry forward onto every subsequent id this bookmark takes on.
+  // to carry forward onto the rehomed id.
   await waitFor(() =>
     expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
       ANON_REMOTE_ID,
@@ -1192,7 +1098,7 @@ test("a rehomed bookmark's create-upload swap still fires a fresh auto AI trigge
   );
 
   // Sign in to a different (real) account: the anon bookmark carries over,
-  // re-homed onto a fresh local id (the FIRST swap).
+  // re-homed onto a fresh id.
   const realUser: { id: string; is_anonymous?: boolean } = {
     id: 'real-user',
     is_anonymous: false,
@@ -1202,37 +1108,20 @@ test("a rehomed bookmark's create-upload swap still fires a fresh auto AI trigge
     rerender(undefined);
   });
 
-  let rehomedLocalId = '';
+  let rehomedId = '';
   await waitFor(() => {
     const row = result.current.inbox.find((b) => b.id !== ANON_REMOTE_ID);
     expect(row).toBeDefined();
-    rehomedLocalId = row!.id;
+    rehomedId = row!.id;
   });
-  // Every bookmark gets a real UUID id at capture/rehome time now (no more
-  // local-* placeholder), but this mock's create response still returns a
-  // different, fixed REMOTE_ID rather than echoing the rehomed id, so the
-  // (now-impossible-in-production) intermediate-id swap this test exercises
-  // still meaningfully happens.
-  expect(rehomedLocalId).not.toBe(REMOTE_ID);
-
-  // Let the rehomed row's create upload complete: this swaps its id a SECOND
-  // time, from the intermediate local id onto the new account's
-  // server-assigned remote id.
-  apiMock.__spies.listBookmarkIds.mockResolvedValue([REMOTE_ID]);
-  await act(async () => {
-    releaseCreate();
-    await Promise.resolve();
-  });
-
-  await waitFor(() => expect(result.current.getBookmark(REMOTE_ID)?.id).toBe(REMOTE_ID));
 
   // The bug would have carried ANON_REMOTE_ID's "already fired" flag all the
-  // way onto REMOTE_ID, so the deferred-trigger effect would silently skip
-  // firing for it. The fix drops the flag at every swap instead of moving it,
-  // so a fresh auto trigger actually fires for the bookmark's final identity.
+  // way onto the rehomed id, so the deferred-trigger effect would silently
+  // skip firing for it. The fix drops the flag at the swap instead of moving
+  // it, so a fresh auto trigger actually fires for the bookmark's new identity.
   await waitFor(() =>
     expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
-      REMOTE_ID,
+      rehomedId,
       expect.anything(),
       'en',
     ),
@@ -1454,12 +1343,11 @@ test('permanently deleting a bookmark while its AI request is in flight does not
   expect(fakeRepo.__meta('ai_suggestion_retry')).toBeNull();
 });
 
-test('an anon→real carried-over bookmark keeps its retry marker through both id swaps (rehome, then its create upload)', async () => {
-  // The rehome swap (anon remote id → new local id) already re-keys the retry
-  // marker. That carried-over row then goes through the NORMAL create-upload
-  // flow once its re-issued create syncs — swapping its local id onto the
-  // account's server-assigned remote id a SECOND time. Both swaps must
-  // preserve the marker.
+test('an anon→real carried-over bookmark keeps its retry marker through the rehome id swap', async () => {
+  // The rehome swap (anon id → new id) must re-key the retry marker onto the
+  // new id — a bookmark's id is otherwise stable for life once captured (see
+  // makeBookmarkId), so rehoming is the only id swap this bookmark ever goes
+  // through.
   const ANON_REMOTE_ID = '2b2b2b2b-0000-4000-8000-000000000002';
   fakeRepo.__reset([makeStoredBookmark({ id: ANON_REMOTE_ID, sync_status: 'synced' })]);
   await fakeRepo.repository.setMeta(
@@ -1474,20 +1362,6 @@ test('an anon→real carried-over bookmark keeps its retry marker through both i
   );
   apiMock.__spies.listBookmarkIds.mockResolvedValue([ANON_REMOTE_ID]);
 
-  // Gate the rehomed row's re-issued create so the background-sync effect
-  // (which auto-fires as soon as the rehome enqueues a pending entry) stalls
-  // BEFORE the second swap, letting the test observe the intermediate
-  // rehomed-local-id state instead of both swaps completing back-to-back
-  // within the same act().
-  let releaseCreate!: () => void;
-  const createGate = new Promise<void>((resolve) => {
-    releaseCreate = resolve;
-  });
-  apiMock.__spies.createBookmark.mockImplementationOnce(async () => {
-    await createGate;
-    return { bookmark_id: REMOTE_ID };
-  });
-
   function wrapper({ children }: { children: ReactNode }) {
     return <BookmarksProvider>{children}</BookmarksProvider>;
   }
@@ -1497,7 +1371,7 @@ test('an anon→real carried-over bookmark keeps its retry marker through both i
   expect(result.current.isAiSuggestionPostponed(ANON_REMOTE_ID)).toBe(true);
 
   // Sign in to a different (real) account: the anon bookmark carries over,
-  // re-homed onto a fresh local id (the FIRST swap).
+  // re-homed onto a fresh id.
   const realUser: { id: string; is_anonymous?: boolean } = {
     id: 'real-user',
     is_anonymous: false,
@@ -1507,37 +1381,16 @@ test('an anon→real carried-over bookmark keeps its retry marker through both i
     rerender(undefined);
   });
 
-  let rehomedLocalId = '';
+  let rehomedId = '';
   await waitFor(() => {
     const row = result.current.inbox.find((b) => b.id !== ANON_REMOTE_ID);
     expect(row).toBeDefined();
-    rehomedLocalId = row!.id;
+    rehomedId = row!.id;
   });
-  // Every bookmark gets a real UUID id at capture/rehome time now (no more
-  // local-* placeholder), but this mock's create response still returns a
-  // different, fixed REMOTE_ID rather than echoing the rehomed id, so the
-  // (now-impossible-in-production) intermediate-id swap this test exercises
-  // still meaningfully happens.
-  expect(rehomedLocalId).not.toBe(REMOTE_ID);
 
-  // The retry marker followed the rehome swap onto the new local id.
-  expect(result.current.isAiSuggestionPostponed(rehomedLocalId)).toBe(true);
+  // The retry marker followed the rehome swap onto the new id.
+  expect(result.current.isAiSuggestionPostponed(rehomedId)).toBe(true);
   expect(result.current.isAiSuggestionPostponed(ANON_REMOTE_ID)).toBe(false);
-
-  // Let the rehomed row's create upload complete: this swaps its id a SECOND
-  // time, from the intermediate local id onto the new account's
-  // server-assigned remote id.
-  apiMock.__spies.listBookmarkIds.mockResolvedValue([REMOTE_ID]);
-  await act(async () => {
-    releaseCreate();
-    await Promise.resolve();
-  });
-
-  await waitFor(() => expect(result.current.getBookmark(REMOTE_ID)?.id).toBe(REMOTE_ID));
-  // The retry marker must have followed this SECOND swap too — not stranded
-  // on the now-dead intermediate local id.
-  expect(result.current.isAiSuggestionPostponed(REMOTE_ID)).toBe(true);
-  expect(result.current.isAiSuggestionPostponed(rehomedLocalId)).toBe(false);
 });
 
 test('a relaunch inside the backoff window does not bypass backoff via the deferred first-trigger effect', async () => {

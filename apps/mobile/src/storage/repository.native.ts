@@ -225,7 +225,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     }
     await this.connection.run((db) =>
       db.withTransactionAsync(async () => {
-        for (const { previousId, bookmark, entry } of completions) {
+        for (const { bookmark, entry } of completions) {
           const stored = await db.getFirstAsync<QueueRow>(
             'SELECT * FROM local_pending_bookmarks WHERE local_id = ?',
             [entry.local_id],
@@ -237,7 +237,6 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           ) {
             continue;
           }
-          await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
           await writeBookmark(db, bookmark);
           await db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [
             entry.local_id,
