@@ -675,6 +675,12 @@ test('a bulk create failure marks untried later chunks failed too, so the auto-s
   await waitFor(() =>
     expect(store.current!.queue.every((entry) => entry.sync_status === 'failed')).toBe(true),
   );
+  // The queue can already read all-'failed' while syncNow's own pull/tag-sync
+  // tail is still finishing. Returning here would let that leftover work race
+  // the next test's shared API mocks (caught in PR review — running the full
+  // file failed a later test intermittently). Wait for the whole run to
+  // settle before this test ends.
+  await waitFor(() => expect(store.current!.isSyncing).toBe(false));
 
   const untriedRowId = rows[BULK_CREATE_SYNC_CHUNK_SIZE]!.id;
   const attemptedEntries = store.current!.queue.filter((entry) => entry.local_id !== untriedRowId);
@@ -695,6 +701,76 @@ test('a bulk create failure marks untried later chunks failed too, so the auto-s
   );
   expect(callsForTheseRows).toHaveLength(1);
   expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
+});
+
+test('a bulk create failure does not revert an earlier, already-succeeded chunk back to failed', async () => {
+  // Regression: marking every entry NOT in the failing chunk as 'failed'
+  // (rather than only entries strictly after it) also caught earlier chunks
+  // that already succeeded and had their queue entries cleared this same
+  // run. Their bookmarks had no queue entry left to retry, yet got flipped
+  // back to sync_status: 'failed' anyway — a false failure report that only
+  // another sync pass or a restart would repair.
+  const chunkCount = 2;
+  const rows = Array.from({ length: chunkCount * BULK_CREATE_SYNC_CHUNK_SIZE + 1 }, (_, index) =>
+    makeStoredBookmark({
+      id: `9e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/bulk-multi-chunk-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  // First chunk succeeds (mirrors the default echo-id-back behavior); the
+  // second chunk hits a persistent outage. The third (untried) chunk is a
+  // single row and is never attempted.
+  apiMock.__spies.createBookmarks
+    .mockImplementationOnce(async (inputs: Array<{ id?: string }>) =>
+      inputs.map((input) => ({
+        bookmark_id: input.id ?? '00000000-0000-4000-8000-000000000000',
+        status: 'created' as const,
+        metadata_status: 'pending' as const,
+      })),
+    )
+    .mockRejectedValue(new Error('network down'));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  const firstChunkIds = rows.slice(0, BULK_CREATE_SYNC_CHUNK_SIZE).map((row) => row.id);
+  await waitFor(() =>
+    expect(
+      firstChunkIds.every((id) => store.current!.getBookmark(id)?.sync_status === 'synced'),
+    ).toBe(true),
+  );
+  await waitFor(() => expect(store.current!.isSyncing).toBe(false));
+
+  // The first chunk must stay synced — no queue entry left to retry, so
+  // reverting its bookmarks to 'failed' would be a false report.
+  for (const id of firstChunkIds) {
+    expect(store.current!.getBookmark(id)?.sync_status).toBe('synced');
+    expect(store.current!.queue.some((entry) => entry.local_id === id)).toBe(false);
+  }
+
+  // The second chunk (the one that actually failed) is correctly 'failed'.
+  const secondChunkIds = rows
+    .slice(BULK_CREATE_SYNC_CHUNK_SIZE, 2 * BULK_CREATE_SYNC_CHUNK_SIZE)
+    .map((row) => row.id);
+  for (const id of secondChunkIds) {
+    expect(store.current!.getBookmark(id)?.sync_status).toBe('failed');
+  }
 });
 
 test('a bulk chunk failure with a row-specific permanent error isolates just the offending row', async () => {

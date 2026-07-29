@@ -3835,9 +3835,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // trigger (a save, app foreground, manual Sync now), exactly
               // like every other failed entry already does (caught in PR
               // review).
-              const untriedEntries = bulkCreateEntries.filter(
-                (entry) => !chunkIds.has(entry.local_id),
-              );
+              // Only entries strictly AFTER this chunk are untried — anything
+              // before `index` already succeeded in an earlier iteration of
+              // this same loop (a prior failure would have `break`ed out
+              // already) and was cleared from the queue. Filtering the whole
+              // of `bulkCreateEntries` by "not in this chunk" wrongly
+              // included those already-completed entries too, flipping their
+              // bookmarks back to 'failed' below even though they have no
+              // queue entry left to retry (caught in PR review).
+              const untriedEntries = bulkCreateEntries.slice(index + chunk.length);
 
               const failedEntries = new Map<string, LocalPendingBookmark>();
               for (const entry of chunk) {
