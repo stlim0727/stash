@@ -259,6 +259,39 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
     expect(result.current.inbox.every((b) => b.sync_status === 'synced')).toBe(true);
   });
 
+  test('reproduces STASH-3Y / STASH-41 counter bouncing: background metadata resolution during bulk create sync does NOT enqueue update operations', async () => {
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.setSyncPaused(true);
+    });
+
+    await act(async () => {
+      result.current.importBookmarks([
+        { url: 'https://example.com/meta-1', title: 'Meta 1', notes: null, tags: [], collection: null },
+        { url: 'https://example.com/meta-2', title: 'Meta 2', notes: null, tags: [], collection: null },
+      ]);
+    });
+
+    // Simulate background metadata resolution (site_name, metadata_status: 'complete')
+    const item1 = result.current.inbox.find((b) => b.url === 'https://example.com/meta-1')!;
+    await fakeRepo.repository.updateBookmark({
+      ...item1,
+      site_name: 'Example Site',
+      metadata_status: 'complete',
+    });
+
+    // Resume sync
+    await act(async () => {
+      result.current.setSyncPaused(false);
+    });
+
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
+
+    // Queue must settle cleanly to 0 (metadata resolution must not bounce queue entries or enqueue updates)
+    expect(result.current.queue).toHaveLength(0);
+  });
+
   test('resetLibrary refuses during active local import or sync, and cleanly clears state when idle', async () => {
     const { result } = await renderReadyStore();
 
