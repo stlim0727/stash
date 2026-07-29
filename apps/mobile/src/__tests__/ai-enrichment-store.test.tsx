@@ -1664,6 +1664,65 @@ test('a bulk chunk persists its AI-trigger markers with one coalesced write, not
   fakeRepo.repository.setMeta = originalSetMeta;
 });
 
+test('a transient failure persisting the coalesced AI-trigger marker is retried, not silently accepted (STASH-3Y)', async () => {
+  // persistPendingAiTrigger catches its own repository.setMeta failure
+  // internally and resolves anyway, so awaiting it can never observe a
+  // failure — a transient failure would silently "succeed" on the first
+  // attempt, and since the successful creates are already durably
+  // dequeued, exiting before some later unrelated marker write happens to
+  // rewrite the meta value would leave every id from this chunk without a
+  // restart trigger (caught in PR review). The chunk now calls
+  // repository.setMeta directly, wrapped in retryStorageWrite, so a
+  // transient failure is actually retried rather than accepted.
+  const id = '7e64cf1e-0000-4000-8000-000000000665';
+  const fillerId = '7e64cf1e-0000-4000-8000-000000000666';
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    [id, fillerId].map((bookmarkId) =>
+      makeStoredBookmark({
+        id: bookmarkId,
+        url: `https://example.com/${bookmarkId}`,
+        sync_status: 'pending',
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const bookmarkId of [id, fillerId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: bookmarkId,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: bookmarkId, url: `https://example.com/${bookmarkId}`, client_id: bookmarkId },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let failuresLeft = 1;
+  const originalSetMeta = fakeRepo.repository.setMeta.bind(fakeRepo.repository);
+  fakeRepo.repository.setMeta = async (key, value) => {
+    if (key === 'pending_ai_trigger' && failuresLeft > 0) {
+      failuresLeft -= 1;
+      throw new Error('simulated transient storage failure');
+    }
+    return originalSetMeta(key, value);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() => {
+    const pending = JSON.parse(fakeRepo.__meta('pending_ai_trigger') ?? '[]') as string[];
+    expect(pending).toEqual(expect.arrayContaining([id, fillerId]));
+  });
+  expect(failuresLeft).toBe(0);
+
+  fakeRepo.repository.setMeta = originalSetMeta;
+});
+
 test('a bookmark permanently deleted while its own reconcile write is in flight does not have that delete superseded (STASH-3Y)', async () => {
   // A narrower variant of the earlier "deleted while an EARLIER entry's
   // write is in flight" case: here the SAME bookmark is deleted while its

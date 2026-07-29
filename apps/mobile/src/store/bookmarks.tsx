@@ -2440,6 +2440,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     setBookmarks((current) =>
       current === null ? current : current.map((bookmark) => (bookmark.id === id ? updated : bookmark)),
     );
+    // Keep the ref itself current immediately, not just via the `useEffect`
+    // that mirrors it from `bookmarks` after the next render — same
+    // rationale as applyBookmarkUpdate's identical line above: a bulk-create
+    // reconcile pass reading bookmarksRef.current concurrently must see this
+    // access timestamp, not a stale pre-access snapshot it would otherwise
+    // write back and silently clobber (caught in PR review).
+    bookmarksRef.current = bookmarksRef.current!.map((bookmark) =>
+      bookmark.id === id ? updated : bookmark,
+    );
     ensureRepositoryReady()
       .then(() => repository.updateBookmark(updated))
       .catch((error) => logStorageError('bookmark access', error));
@@ -3922,12 +3931,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // markPendingAiTrigger per id instead would fire that many
           // independent, un-awaited setMeta writes onto the single serialized
           // SQLite actor, recreating the exact fan-out contention this PR
-          // exists to fix (caught in PR review).
+          // exists to fix (caught in PR review). Calls repository.setMeta
+          // directly (not persistPendingAiTrigger, which swallows its own
+          // failure and resolves anyway) wrapped in retryStorageWrite, so a
+          // failed write here is actually retried and visibly logged on
+          // total failure, instead of silently "succeeding" on the first
+          // attempt (caught in PR review).
           if (pendingAiIds.length > 0) {
             for (const id of pendingAiIds) {
               pendingAiTrigger.current.add(id);
             }
-            await persistPendingAiTrigger();
+            try {
+              await retryStorageWrite(async () => {
+                await ensureRepositoryReady();
+                await repository.setMeta(
+                  PENDING_AI_TRIGGER_KEY,
+                  JSON.stringify([...pendingAiTrigger.current]),
+                );
+              });
+            } catch (error) {
+              logStorageError('ai trigger queue', error);
+            }
           }
           if (deletedMidFlightIds.length > 0) {
             // Sequential on purpose (STASH-3B/3N precedent, see
@@ -3998,7 +4022,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // anything (caught in PR review).
             for (const bookmark of followUpUpdates) {
               try {
-                if (!bookmarksRef.current?.some((b) => b.id === bookmark.id)) {
+                // deletedIds.current (set synchronously by deleteBookmark) is
+                // checked in addition to bookmarksRef.current, not instead of
+                // it — deleteBookmark's setBookmarks call only reaches
+                // bookmarksRef.current via a separate effect after React
+                // commits, so a delete landing right before this check could
+                // still show the row as present there if that effect hasn't
+                // flushed yet (caught in PR review). bookmarksRef.current
+                // itself stays the read source for the write below: writers
+                // like applyBookmarkUpdate deliberately keep it synchronously
+                // current (see its own comment) specifically so a later
+                // reconcile pass here doesn't clobber a fresh edit — reading
+                // durable storage directly instead would race that same
+                // writer's own fire-and-forget persist and can read BEFORE
+                // it lands, which is a worse version of the same problem.
+                const isGone = () =>
+                  deletedIds.current.has(bookmark.id) ||
+                  !bookmarksRef.current?.some((b) => b.id === bookmark.id);
+                if (isGone()) {
                   // No longer present — permanently deleted since this chunk
                   // started. Falling back to the stale pre-delete snapshot
                   // would resurrect it (writing it back via updateBookmark)
@@ -4019,6 +4060,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 // burn the remaining retry attempts on a row that will never
                 // come back.
                 await retryStorageWrite(() => {
+                  if (deletedIds.current.has(bookmark.id)) {
+                    return Promise.resolve();
+                  }
                   const latest = bookmarksRef.current?.find((b) => b.id === bookmark.id);
                   return latest ? repository.updateBookmark(latest) : Promise.resolve();
                 });
@@ -4030,7 +4074,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 // resurrect the row exactly like the stale-snapshot case above
                 // — just from a race inside this write instead of before it
                 // started (caught in PR review).
-                if (!bookmarksRef.current?.some((b) => b.id === bookmark.id)) {
+                if (isGone()) {
                   continue;
                 }
                 enqueueMutation(bookmark.id, 'update');
