@@ -42,8 +42,17 @@ import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { usePalette } from '@/theme';
 
 /** Most recent log lines, formatted for the diagnostics payload. */
-function recentLogLines(limit = 80): string[] {
-  return getLogEntries()
+function recentLogLines(limit = 150): string[] {
+  // Cap sqlite tail-wait entries at 5 so a burst on app foreground doesn't
+  // consume the entire window and hide sync/pull/enrich logs.
+  let tailWaitCount = 0;
+  const filtered = getLogEntries().filter((entry) => {
+    if (entry.message.startsWith('sqlite tail wait')) {
+      return ++tailWaitCount <= 5;
+    }
+    return true;
+  });
+  return filtered
     .slice(-limit)
     .map((entry) => `${entry.t} [${entry.level}] ${entry.message}`);
 }
