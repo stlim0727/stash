@@ -1213,19 +1213,25 @@ test('an edit made while a bulk-create durable persist is still in flight is not
 
 test('a bulk chunk reconciling many entries at once persists them sequentially, not concurrently (STASH-3Y)', async () => {
   // Historical bug class (STASH-3B, twice under STASH-3N, documented in
-  // AGENTS.md): fanning out onto the single serialized SQLite connection —
-  // via Promise.all OR an un-awaited for loop — stacks up simultaneous
-  // native calls and shows up as "sqlite tail wait" depth climbing into the
-  // tens. The reconcile follow-up persist (bookmarks.tsx's followUpUpdates
-  // loop) used to fire repository.updateBookmark for every reconciled entry
-  // in a chunk without awaiting the previous call, which is exactly that
-  // shape. This proves at most one updateBookmark call is ever in flight at
-  // a time.
-  const ids = [
-    '7e64cf1e-0000-4000-8000-000000000501',
-    '7e64cf1e-0000-4000-8000-000000000502',
-    '7e64cf1e-0000-4000-8000-000000000503',
-  ];
+  // docs/architecture/sqlite-write-contention.md): fanning out onto the
+  // single serialized SQLite connection — via Promise.all OR an un-awaited
+  // for loop — stacks up simultaneous native calls and shows up as "sqlite
+  // tail wait" depth climbing into the tens. The reconcile follow-up persist
+  // (bookmarks.tsx's followUpUpdates loop) used to fire
+  // repository.updateBookmark for every reconciled entry in a chunk without
+  // awaiting the previous call, which is exactly that shape. This proves at
+  // most one updateBookmark call is ever in flight at a time.
+  //
+  // Spans BULK_CREATE_SYNC_CHUNK_SIZE + 2 entries (two chunks), not just one:
+  // the first fix only made each chunk's own follow-up loop sequential
+  // internally — the outer per-chunk loop still didn't await that loop
+  // before starting the next chunk, so two chunks' follow-up persists could
+  // still overlap with EACH OTHER (caught in PR review; a single-chunk test
+  // can't detect this).
+  const ids = Array.from(
+    { length: BULK_CREATE_SYNC_CHUNK_SIZE + 2 },
+    (_, index) => `7e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+  );
   const now = '2026-06-13T00:00:00.000Z';
   fakeRepo.__reset(
     ids.map((id) =>
@@ -1277,17 +1283,188 @@ test('a bulk chunk reconciling many entries at once persists them sequentially, 
   const store = renderStore();
   await waitFor(() => expect(store.current?.isLoading).toBe(false));
 
-  // Checked the instant all three ids have been seen at least once — a
-  // separate, later sync cycle (the reconciled entries' own queued 'update'
-  // operation eventually syncing) also calls repository.updateBookmark, and
-  // that's a legitimate, independent source of calls this test isn't about.
-  await waitFor(() => expect(new Set(updateCalls).size).toBeGreaterThanOrEqual(ids.length));
+  // Checked the instant all ids have been seen at least once — a separate,
+  // later sync cycle (the reconciled entries' own queued 'update' operation
+  // eventually syncing) also calls repository.updateBookmark, and that's a
+  // legitimate, independent source of calls this test isn't about. Two
+  // chunks' worth of 10ms-delayed sequential writes take real wall-clock
+  // time, hence the longer timeout.
+  await waitFor(() => expect(new Set(updateCalls).size).toBeGreaterThanOrEqual(ids.length), {
+    timeout: 5000,
+  });
   expect(maxInFlight).toBe(1);
 
   fakeRepo.repository.updateBookmark = originalUpdateBookmark;
   // Drain any of the instrumented calls still in flight so their delayed
   // writes can't land after a later test's fakeRepo.__reset.
-  await waitFor(() => expect(inFlight).toBe(0));
+  await waitFor(() => expect(inFlight).toBe(0), { timeout: 5000 });
+});
+
+test('an edit landing on a later entry while an earlier entry in the same reconcile chunk is still being persisted is not clobbered (STASH-3Y)', async () => {
+  // Sequentializing the followUpUpdates persist (the fix above) means these
+  // writes now take real wall-clock time in sequence, which widens the
+  // window for this race: entry 2's write was still built from the snapshot
+  // captured when the whole chunk started, so an edit to entry 2 landing
+  // while entry 1's write is still in flight would be silently overwritten
+  // once the loop got to entry 2, using stale (pre-edit) data (caught in PR
+  // review). Fixed by re-reading each row from bookmarksRef.current
+  // immediately before its own write.
+  const firstId = '7e64cf1e-0000-4000-8000-000000000601';
+  const secondId = '7e64cf1e-0000-4000-8000-000000000602';
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    [firstId, secondId].map((id) =>
+      makeStoredBookmark({
+        id,
+        url: `https://example.com/${id}`,
+        site_name: 'Example Site',
+        sync_status: 'pending',
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const id of [firstId, secondId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseFirstWrite: () => void = () => {};
+  const firstWriteGate = new Promise<void>((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  let firstWriteEntered: () => void = () => {};
+  const firstWriteEnteredPromise = new Promise<void>((resolve) => {
+    firstWriteEntered = resolve;
+  });
+  let firstIdGated = false;
+  const originalUpdateBookmark = fakeRepo.repository.updateBookmark.bind(fakeRepo.repository);
+  fakeRepo.repository.updateBookmark = async (bookmark) => {
+    if (bookmark.id === firstId && !firstIdGated) {
+      firstIdGated = true;
+      firstWriteEntered();
+      await firstWriteGate;
+    }
+    return originalUpdateBookmark(bookmark);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await firstWriteEnteredPromise;
+
+  // secondId's persist (the second iteration of the followUpUpdates loop)
+  // hasn't run yet — firstId's write is still gated. Edit secondId now.
+  await act(async () => {
+    store.current!.updateBookmarkFields(secondId, { title: 'Edited mid-reconcile' });
+  });
+  releaseFirstWrite();
+
+  await waitFor(() =>
+    expect(fakeRepo.__bookmarks().find((b) => b.id === secondId)?.title).toBe(
+      'Edited mid-reconcile',
+    ),
+  );
+
+  fakeRepo.repository.updateBookmark = originalUpdateBookmark;
+});
+
+test('a bookmark deleted mid-flight during a bulk create is persisted locally before its remote-delete mutation is queued (STASH-3Y)', async () => {
+  // Ordering regression: queueing all of a chunk's remote-delete mutations
+  // before any of the durable local deletes land means a crash between the
+  // two leaves a 'delete' queue entry whose local row was never actually
+  // removed — that entry's eventual sync only deletes the remote row and
+  // itself, leaving the local row resurrected indefinitely (caught in PR
+  // review). Each id's local delete must land before its own mutation is
+  // queued.
+  const survivorId = '7e64cf1e-0000-4000-8000-000000000701';
+  const deletedMidFlightId = '7e64cf1e-0000-4000-8000-000000000702';
+  const now = '2026-06-15T00:00:00.000Z';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: survivorId,
+      url: 'https://example.com/survivor-2',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+    makeStoredBookmark({
+      id: deletedMidFlightId,
+      url: 'https://example.com/deleted-mid-flight-2',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  ]);
+  for (const id of [survivorId, deletedMidFlightId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseCompletion: () => void = () => {};
+  const completionGate = new Promise<void>((resolve) => {
+    releaseCompletion = resolve;
+  });
+  let completionEntered: () => void = () => {};
+  const completionEnteredPromise = new Promise<void>((resolve) => {
+    completionEntered = resolve;
+  });
+  const originalComplete = fakeRepo.repository.completeCreateSyncBatch!.bind(fakeRepo.repository);
+  fakeRepo.repository.completeCreateSyncBatch = async (completions) => {
+    completionEntered();
+    await completionGate;
+    return originalComplete(completions);
+  };
+
+  let deletedWhileAlreadyQueued = false;
+  const originalDeleteBookmark = fakeRepo.repository.deleteBookmark.bind(fakeRepo.repository);
+  fakeRepo.repository.deleteBookmark = async (id) => {
+    if (
+      id === deletedMidFlightId &&
+      fakeRepo
+        .__queue()
+        .some((entry) => entry.local_id === id && entry.operation === 'delete')
+    ) {
+      deletedWhileAlreadyQueued = true;
+    }
+    return originalDeleteBookmark(id);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await completionEnteredPromise;
+
+  await act(async () => {
+    store.current!.deleteBookmark(deletedMidFlightId);
+  });
+  releaseCompletion();
+
+  await waitFor(() =>
+    expect(
+      fakeRepo
+        .__queue()
+        .some((entry) => entry.local_id === deletedMidFlightId && entry.operation === 'delete'),
+    ).toBe(true),
+  );
+
+  expect(deletedWhileAlreadyQueued).toBe(false);
+
+  fakeRepo.repository.completeCreateSyncBatch = originalComplete;
+  fakeRepo.repository.deleteBookmark = originalDeleteBookmark;
 });
 
 test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {

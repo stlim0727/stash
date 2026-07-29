@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-29 (root-caused and fixed the bulk-create sync path never clearing the queue — see Known Traps).
+Last updated: 2026-07-29 (root-caused and fixed the bulk-create sync path never clearing the queue, and the STASH-3Y reconcile follow-up's SQLite fan-out — see Known Traps).
 
 ## Successor Agent Orientation
 
@@ -447,26 +447,15 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   it). Both guards, plus how "Pause sync" fits in, are one connected model —
   see `docs/architecture/sync-pause-import-reset.md` before changing any of
   the four busy-state flags it documents.
-- Fan out to the single-connection SQLite actor (`src/storage/sqlite-connection.ts`)
-  with `Promise.all` instead of a sequential loop, and a large backlog turns
-  into dozens of simultaneous native calls piling up behind one serialized
-  queue — "sqlite tail wait (depth N)" climbing into the tens, with
-  multi-second stalls, is the tell. Already fixed once for bulk import
-  (STASH-3B) and twice more under STASH-3N — the startup orphaned-queue-entry
-  reconciliation, and (found by grepping for the same pattern right
-  afterward) `syncNow`'s "synced leftover" id-swap reconciliation, which
-  looked sequential (a `for` loop) but never awaited each call before firing
-  the next — grep for `Promise.all` **and** un-awaited calls inside `for`
-  loops before adding a new bulk write path. **Fourth occurrence, found via
-  STASH-3Y's own new diagnostics**: `store/bookmarks.tsx`'s bulk-create
-  reconcile follow-up (`applyBulkCreateChunkResults`'s `followUpUpdates`/
-  `deletedMidFlightIds` persist, itself added earlier this same
-  investigation) fired `repository.updateBookmark`/`deleteBookmark` per
-  reconciled entry via an un-awaited `for` loop — up to a chunk's worth
-  (`BULK_CREATE_SYNC_CHUNK_SIZE` = 50) of simultaneous calls per chunk, a
-  strong match for a real report showing severe contention (`maxDepth: 20`,
-  `waitCount: 101`) and zero completed reconcile diagnostics all session.
-  Fixed the same way as the prior three: each loop now awaits sequentially.
+- Fanning multiple calls out onto the single-connection SQLite actor
+  (`src/storage/sqlite-connection.ts`) — via `Promise.all`, or a `for` loop
+  that never awaits each call before firing the next — stacks dozens of
+  simultaneous native calls behind one serialized queue ("sqlite tail wait
+  (depth N)" climbing into the tens is the tell). Recurred four times
+  (STASH-3B, twice under STASH-3N, STASH-3Y); grep for that shape before
+  adding any new bulk write path. See
+  `docs/architecture/sqlite-write-contention.md` for the full history and
+  each fix.
 - **Historical (pre-#611/#612), for context if this ever resurfaces**: back
   when a create renamed a bookmark's local-\* id onto a server UUID, two
   synced-bookmark self-heal passes in `store/bookmarks.tsx`'s bootstrap
