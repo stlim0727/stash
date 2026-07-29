@@ -213,6 +213,17 @@ beforeEach(() => {
   apiMock.__spies.listBookmarkIds.mockReset();
   apiMock.__spies.listBookmarkIds.mockResolvedValue([]);
   apiMock.__spies.createBookmark.mockClear();
+  // Reset (not just clear) — a test that overrides this with a persistent
+  // (non-Once) mock implementation would otherwise leak it forward into
+  // every later test in this file.
+  apiMock.__spies.createBookmarks.mockReset();
+  apiMock.__spies.createBookmarks.mockImplementation(async (inputs: Array<{ id?: string }>) =>
+    inputs.map((input) => ({
+      bookmark_id: input.id ?? '00000000-0000-4000-8000-000000000000',
+      status: 'created' as const,
+      metadata_status: 'pending' as const,
+    })),
+  );
   apiMock.__spies.listEnrichmentsUpdatedSince.mockReset();
   apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValue([]);
   apiMock.__spies.enqueuePendingEnrichment.mockClear();
@@ -625,6 +636,67 @@ test('a bulk create failure keeps untried later chunks out of the single-entry f
   expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
 });
 
+test('a bulk create failure marks untried later chunks failed too, so the auto-sync effect cannot immediately retrigger', async () => {
+  // Regression: leaving untried later-chunk entries 'pending' after the
+  // first chunk failed satisfied the auto-sync effect's retrigger condition
+  // (any 'pending'/'syncing' entry) — the instant this run ended it called
+  // syncNow() again, and that call retried the SAME already-failed first
+  // chunk first, recreating a continuous retry loop for the duration of a
+  // real outage instead of waiting for the next natural trigger (a save,
+  // app foreground, manual Sync now), unlike every other failed entry.
+  const rows = Array.from({ length: BULK_CREATE_SYNC_CHUNK_SIZE + 1 }, (_, index) =>
+    makeStoredBookmark({
+      id: `8e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/bulk-outage-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  // A persistent outage — every bulk attempt fails, not just the first.
+  apiMock.__spies.createBookmarks.mockRejectedValue(new Error('network down'));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() =>
+    expect(store.current!.queue.every((entry) => entry.sync_status === 'failed')).toBe(true),
+  );
+
+  const untriedRowId = rows[BULK_CREATE_SYNC_CHUNK_SIZE]!.id;
+  const attemptedEntries = store.current!.queue.filter((entry) => entry.local_id !== untriedRowId);
+  const untriedEntry = store.current!.queue.find((entry) => entry.local_id === untriedRowId);
+  expect(attemptedEntries).toHaveLength(BULK_CREATE_SYNC_CHUNK_SIZE);
+  expect(attemptedEntries.every((entry) => entry.retry_count === 1)).toBe(true);
+  // Never actually attempted, so its retry_count must stay unchanged.
+  expect(untriedEntry?.retry_count).toBe(0);
+
+  // Direct proof there was no hot loop: the bulk endpoint was hit exactly
+  // once this whole run for THIS test's rows, not repeatedly for the
+  // duration of the outage. Scoped to calls containing this test's own row
+  // ids (rather than a blanket call count on the shared mock) so it isn't
+  // thrown off by an unrelated prior test's own in-flight retry timer still
+  // settling in the background.
+  const callsForTheseRows = apiMock.__spies.createBookmarks.mock.calls.filter(
+    ([inputs]: [Array<{ id?: string }>]) => inputs.some((input) => input.id === rows[0]!.id),
+  );
+  expect(callsForTheseRows).toHaveLength(1);
+  expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
+});
+
 test('a bulk chunk failure with a row-specific permanent error isolates just the offending row', async () => {
   // A bulk request fails as a whole even when only ONE row in the chunk
   // actually has a problem (a legacy too-long URL trips Postgres's btree
@@ -811,6 +883,105 @@ test('a bookmark permanently deleted while its bulk-create durable persist is st
     expect(
       store.current!.queue.some(
         (entry) => entry.local_id === deletedMidFlightId && entry.operation === 'delete',
+      ),
+    ).toBe(true),
+  );
+
+  fakeRepo.repository.completeCreateSyncBatch = originalComplete;
+});
+
+test('an edit made while a bulk-create durable persist is still in flight is not silently dropped', async () => {
+  // followUpUpdates/the reconcile check used to be computed from the
+  // pre-await snapshot in the first loop. An edit landing while
+  // completeCreateSyncBatch is awaiting doesn't enqueue its own update
+  // (hasSyncedOnce is still false — the row isn't confirmed synced yet), so
+  // that reconcile check was the ONLY remaining path that could push it;
+  // checking the stale snapshot missed the edit entirely, silently dropping
+  // it (and leaving the row vulnerable to a later pull overwriting it with
+  // the older uploaded values).
+  const editedId = '7e64cf1e-0000-4000-8000-000000000401';
+  const otherId = '7e64cf1e-0000-4000-8000-000000000402';
+  const now = '2026-06-12T00:00:00.000Z';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: editedId,
+      url: 'https://example.com/edited-mid-flight',
+      title: 'Original title',
+      notes: null,
+      collection_id: null,
+      is_archived: false,
+      deleted_at: null,
+      sync_status: 'pending',
+      metadata_status: 'pending',
+    }),
+    makeStoredBookmark({
+      id: otherId,
+      url: 'https://example.com/other',
+      title: 'Other title',
+      notes: null,
+      collection_id: null,
+      is_archived: false,
+      deleted_at: null,
+      sync_status: 'pending',
+      metadata_status: 'pending',
+    }),
+  ]);
+  for (const id of [editedId, otherId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseCompletion: () => void = () => {};
+  const completionGate = new Promise<void>((resolve) => {
+    releaseCompletion = resolve;
+  });
+  let completionEntered: () => void = () => {};
+  const completionEnteredPromise = new Promise<void>((resolve) => {
+    completionEntered = resolve;
+  });
+  const originalComplete = fakeRepo.repository.completeCreateSyncBatch!.bind(fakeRepo.repository);
+  fakeRepo.repository.completeCreateSyncBatch = async (completions) => {
+    completionEntered();
+    await completionGate;
+    return originalComplete(completions);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await completionEnteredPromise;
+
+  await act(async () => {
+    store.current!.updateBookmarkFields(editedId, { title: 'Edited during sync' });
+  });
+  expect(store.current!.getBookmark(editedId)?.title).toBe('Edited during sync');
+
+  releaseCompletion();
+
+  await waitFor(() => expect(store.current!.getBookmark(otherId)?.sync_status).toBe('synced'));
+
+  // The edit must survive the sync completion, not get clobbered by the
+  // stale pre-edit snapshot.
+  expect(store.current!.getBookmark(editedId)?.title).toBe('Edited during sync');
+
+  // And it must actually reach the server: a follow-up update mutation has
+  // to be enqueued (since the edit's own enqueue was skipped — the row
+  // wasn't confirmed synced yet at edit time) and processed. Checked via the
+  // API call itself, not the queue: a successful update syncs and clears its
+  // queue entry quickly, so asserting on transient queue contents would be
+  // racy.
+  await waitFor(() =>
+    expect(
+      apiMock.__spies.updateBookmark.mock.calls.some(
+        ([id, payload]) => id === editedId && payload.title === 'Edited during sync',
       ),
     ).toBe(true),
   );
