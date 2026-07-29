@@ -8,6 +8,7 @@ import {
   isSyncable,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
+  reconcileStrandedSyncedDuplicates,
   syncCreateQueueEntryBatch,
   syncQueueEntry,
 } from './sync-bookmarks.ts';
@@ -1049,6 +1050,32 @@ test('reconcileOrphanedQueueEntries leaves synced and already-queued bookmarks a
 
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.local_id, 'local-orphan');
+});
+
+test('reconcileStrandedSyncedDuplicates folds a stranded synced local-id row onto its remote twin (Sentry STASH-3P)', () => {
+  const url = 'https://example.com/stranded';
+  const stranded = makeBookmark({ id: 'local-stranded', url, url_hash: url, sync_status: 'synced' });
+  const twin = makeBookmark({ id: REMOTE_ID, url, url_hash: url, sync_status: 'synced' });
+
+  const swaps = reconcileStrandedSyncedDuplicates([stranded, twin]);
+
+  assert.equal(swaps.length, 1);
+  assert.equal(swaps[0]?.localId, 'local-stranded');
+  assert.equal(swaps[0]?.keep.id, REMOTE_ID);
+});
+
+test('reconcileStrandedSyncedDuplicates leaves a stranded row alone when no remote twin exists yet', () => {
+  const stranded = makeBookmark({ id: 'local-stranded', sync_status: 'synced' });
+
+  assert.deepEqual(reconcileStrandedSyncedDuplicates([stranded]), []);
+});
+
+test('reconcileStrandedSyncedDuplicates ignores a not-yet-synced local row and a remote-id row on its own', () => {
+  const url = 'https://example.com/normal';
+  const pendingLocal = makeBookmark({ id: 'local-pending', url, url_hash: url, sync_status: 'pending' });
+  const remoteOnly = makeBookmark({ id: REMOTE_ID, url: 'https://example.com/other', sync_status: 'synced' });
+
+  assert.deepEqual(reconcileStrandedSyncedDuplicates([pendingLocal, remoteOnly]), []);
 });
 
 test('makeMutationEntry targets the bookmark with a pending status', () => {
