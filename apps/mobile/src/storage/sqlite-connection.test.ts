@@ -89,6 +89,10 @@ function makeConnection(opts?: {
   reopenAlertThreshold?: number;
   reopenAlertWindowMs?: number;
   now?: () => number;
+  registerForegroundState?: (handler: {
+    onBackground?: () => void;
+    onForeground?: () => void;
+  }) => () => void;
 }) {
   let opens = 0;
   const opened: FakeDb[] = [];
@@ -383,6 +387,68 @@ test('queue depth is recorded eagerly at enqueue time, even before a blocking op
 
   releaseFirst();
   await Promise.all([first, second, third]);
+});
+
+test('a wait spanning a background/foreground transition is excluded from maxWaitMs (long or short)', async () => {
+  // A duration-based cutoff can't tell a genuine long stall apart from a
+  // short background blip — both just look like "a long wait" by elapsed
+  // time. The fix keys off actual transitions instead, so this must exclude
+  // the wait regardless of how long it turns out to be. Fake clock (matching
+  // this file's existing pattern) so the wait exceeds the log threshold
+  // without a real delay.
+  let handlers: { onBackground?: () => void; onForeground?: () => void } = {};
+  let clock = 0;
+  const { connection } = makeConnection({
+    now: () => (clock += 300),
+    registerForegroundState: (h) => {
+      handlers = h;
+      return () => {};
+    },
+  });
+
+  let releaseBlocker!: () => void;
+  const blocker = new Promise<void>((resolve) => {
+    releaseBlocker = resolve;
+  });
+  const first = connection.run(async () => {
+    await blocker;
+  });
+  // Queued behind the blocker — its wait will span the transition below.
+  const second = connection.run(async () => undefined);
+
+  handlers.onBackground?.();
+  handlers.onForeground?.();
+
+  releaseBlocker();
+  await Promise.all([first, second]);
+
+  // Both ops were enqueued (and their waits measured) around the same
+  // transition — neither should have landed in the cumulative diagnostic.
+  const diagnosticsSnapshot = getStorageDiagnostics();
+  assert.equal(diagnosticsSnapshot?.sqliteContention?.waitCount ?? 0, 0);
+});
+
+test('a wait with no background/foreground transition is still recorded normally', async () => {
+  let clock = 0;
+  const { connection } = makeConnection({
+    now: () => (clock += 300),
+    registerForegroundState: () => () => {}, // registered but never fired
+  });
+
+  let releaseBlocker!: () => void;
+  const blocker = new Promise<void>((resolve) => {
+    releaseBlocker = resolve;
+  });
+  const first = connection.run(async () => {
+    await blocker;
+  });
+  const second = connection.run(async () => undefined);
+
+  releaseBlocker();
+  await Promise.all([first, second]);
+
+  const diagnosticsSnapshot = getStorageDiagnostics();
+  assert.ok((diagnosticsSnapshot?.sqliteContention?.waitCount ?? 0) >= 1);
 });
 
 test('closeCurrent releases the handle and the next op reopens', async () => {

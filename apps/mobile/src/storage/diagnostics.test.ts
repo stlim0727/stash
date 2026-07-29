@@ -43,14 +43,3 @@ test('noteSqliteQueueDepth does not bump updatedAt when it does not advance the 
   const after = getStorageDiagnostics()!.sqliteContention!;
   assert.equal(after.updatedAt, before.updatedAt);
 });
-
-test('noteSqliteTailWait discards an implausibly long wait (background-suspension artifact, not real contention)', () => {
-  noteSqliteTailWait(500, 2);
-  const before = getStorageDiagnostics()!.sqliteContention!;
-
-  noteSqliteTailWait(5 * 60_000, 99); // e.g. the app was backgrounded mid-wait
-  const after = getStorageDiagnostics()!.sqliteContention!;
-  assert.equal(after.maxWaitMs, before.maxWaitMs);
-  assert.equal(after.maxDepth, before.maxDepth);
-  assert.equal(after.waitCount, before.waitCount);
-});

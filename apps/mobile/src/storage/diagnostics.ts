@@ -62,21 +62,15 @@ export function noteSqliteOpenFailure(phase: string, error: unknown): void {
 }
 
 /**
- * Above this, a measured wait is more likely the device having been
- * backgrounded/suspended mid-wait (wall-clock time keeps advancing while the
- * JS thread is paused, and `closeCurrent()` in particular is queued right at
- * the background transition — see `sqlite-app-lifecycle.ts`) than genuine
- * SQLite contention: every real contention report seen so far tops out
- * around 1-2s. Discarding waits above this avoids a single background/resume
- * cycle permanently poisoning `maxWaitMs` with an hours-long bogus value that
- * would drown out the real, small-scale signal this diagnostic exists for.
+ * The caller (`sqlite-connection.ts`) is expected to skip calling this
+ * entirely when a background/foreground transition happened while the unit
+ * of work was queued — a duration-based cutoff can't tell a genuine long
+ * stall apart from a short background blip (a real multi-minute freeze and a
+ * multi-minute background both just look like "a long wait"), so the
+ * distinction is made by counting actual AppState transitions instead of
+ * guessing from elapsed time.
  */
-const MAX_PLAUSIBLE_TAIL_WAIT_MS = 30_000;
-
 export function noteSqliteTailWait(waitMs: number, depth: number): void {
-  if (waitMs > MAX_PLAUSIBLE_TAIL_WAIT_MS) {
-    return;
-  }
   const prev = diagnostics.sqliteContention;
   diagnostics.sqliteContention = {
     maxWaitMs: Math.max(prev?.maxWaitMs ?? 0, waitMs),
