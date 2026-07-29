@@ -2309,7 +2309,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             }
             if (repository.insertImportBatch) {
               await repository.insertImportBatch(newBookmarks, newEntries);
-              if (resetEpoch.current === epochAtStart) {
                 const ENRICH_BATCH_SIZE = 10;
                 for (let i = 0; i < newBookmarks.length; i += ENRICH_BATCH_SIZE) {
                   if (resetEpoch.current !== epochAtStart) {
@@ -2323,7 +2322,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     await new Promise((resolve) => setTimeout(resolve, 50));
                   }
                 }
-              }
             } else {
               for (let i = 0; i < newBookmarks.length; i += 1) {
                 if (resetEpoch.current !== epochAtStart) {
