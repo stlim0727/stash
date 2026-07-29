@@ -124,16 +124,24 @@ class WebBookmarkRepository implements BookmarkRepository {
     if (applied.length === 0) {
       return;
     }
-    for (const { bookmark, entry } of applied) {
-      if (entry.local_id !== bookmark.id) {
-        this.bookmarks = this.bookmarks.filter(
-          (existing) => existing.id !== entry.local_id && existing.id !== bookmark.id,
-        );
-        this.bookmarks.push(bookmark);
-      } else {
-        this.bookmarks = this.bookmarks.map((existing) =>
-          existing.id === bookmark.id ? bookmark : existing,
-        );
+    for (const { bookmark, originalLocalId } of applied) {
+      // Drop the phantom row under the original id (a create resolved as a
+      // duplicate of an existing different row never actually created one —
+      // see CreateSyncCompletion.originalLocalId), then upsert in place,
+      // collapsing onto an existing row already at the destination id (e.g.
+      // one a pull already inserted) instead of leaving a duplicate.
+      let replaced = false;
+      this.bookmarks = this.bookmarks
+        .filter((existing) => existing.id !== originalLocalId)
+        .map((existing) => {
+          if (existing.id === bookmark.id) {
+            replaced = true;
+            return bookmark;
+          }
+          return existing;
+        });
+      if (!replaced) {
+        this.bookmarks = [bookmark, ...this.bookmarks];
       }
     }
     const completedIds = new Set(applied.map((completion) => completion.entry.local_id));

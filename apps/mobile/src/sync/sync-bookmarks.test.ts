@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   createNeedsReconcileUpdate,
+  crossedHealthEscalationThreshold,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
   isSyncable,
@@ -67,7 +68,9 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
     init: async () => {},
     listBookmarks: async () => [],
     getBookmark: async () => null,
-    insertBookmark: async () => {},
+    insertBookmark: async (bookmark) => {
+      calls.push(`insertBookmark:${bookmark.id}:${bookmark.sync_status}`);
+    },
     updateBookmark: async (bookmark) => {
       calls.push(`updateBookmark:${bookmark.id}:${bookmark.sync_status}`);
     },
@@ -133,6 +136,77 @@ test('create: bookmark stays under its own id and turns synced', async () => {
   assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
   assert.equal(result.bookmarkUpdate?.ever_synced, true);
   assert.ok(calls.includes('updateBookmark:local-abc:synced'));
+});
+
+test('create: a server-side duplicate adopts the EXISTING row\'s id (Sentry STASH-3Q)', async () => {
+  // The server dedupes a create against an existing different row (same
+  // canonical URL) and returns THAT row's id, not the one the client sent.
+  // Keeping the local row under its own id here is the STASH-3Q bug: the row
+  // gets marked synced under an id Postgres has no row for, and the next
+  // pull fetches the real existing row separately, doubling the library.
+  const { calls, repository } = fakeRepository();
+  const existingId = '00000000-0000-4000-8000-0000000000ee';
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: existingId,
+      status: 'duplicate',
+      metadata_status: 'complete',
+    }),
+  });
+  const bookmark = makeBookmark();
+
+  const result = await syncQueueEntry(api, repository, makeCreateEntry(), () => bookmark);
+
+  assert.equal(result.bookmarkUpdate?.id, existingId);
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+  assert.equal(result.originalLocalId, 'local-abc');
+  // The phantom row under the original id must be removed, not just left
+  // alongside the row now living under the existing id.
+  assert.ok(calls.includes('deleteBookmark:local-abc'));
+  // insertBookmark (not updateBookmark) — the existing row's id is new to
+  // THIS device, and updateBookmark only replaces a row already stored under
+  // that id (a strict replace, not an upsert, on the web backend).
+  assert.ok(calls.includes(`insertBookmark:${existingId}:synced`));
+});
+
+test('create: a duplicate that resolves to the SAME id is not treated as a swap', async () => {
+  // A retried create can land a duplicate hit against the row itself (e.g.
+  // the previous attempt's insert actually landed, and this retry's lookup
+  // finds it) — same id, so there is nothing to swap or delete.
+  const { calls, repository } = fakeRepository();
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: 'local-abc',
+      status: 'duplicate',
+      metadata_status: 'complete',
+    }),
+  });
+  const bookmark = makeBookmark();
+
+  const result = await syncQueueEntry(api, repository, makeCreateEntry(), () => bookmark);
+
+  assert.equal(result.bookmarkUpdate?.id, 'local-abc');
+  assert.equal(result.originalLocalId, undefined);
+  assert.ok(!calls.some((call) => call.startsWith('deleteBookmark:')));
+});
+
+test('bulk create: a server-side duplicate adopts the existing row\'s id too (Sentry STASH-3Q)', async () => {
+  const existingId = '00000000-0000-4000-8000-0000000000ee';
+  const entry = makeCreateEntry({
+    local_id: 'local-dup',
+    payload: { url: 'https://example.com/a', client_id: '11111111-1111-4111-8111-111111111111' },
+  });
+  const api = fakeApi({
+    createBookmarks: async () => [
+      { bookmark_id: existingId, status: 'duplicate', metadata_status: 'complete' },
+    ],
+  });
+  const local = makeBookmark({ id: 'local-dup' });
+
+  const [result] = await syncCreateQueueEntryBatch(api, [entry], () => local);
+
+  assert.equal(result?.bookmarkUpdate?.id, existingId);
+  assert.equal(result?.originalLocalId, 'local-dup');
 });
 
 test('create: uploads the LATEST title/notes, not the payload captured at save', async () => {
@@ -838,4 +912,20 @@ test('isSyncable still retries a pending/syncing entry regardless of a stale las
 
 test('isSyncable excludes a synced entry as before', () => {
   assert.equal(isSyncable(makeCreateEntry({ sync_status: 'synced' })), false);
+});
+
+test('crossedHealthEscalationThreshold fires exactly at the crossing (2 -> 3)', () => {
+  assert.equal(crossedHealthEscalationThreshold(2, 3), true);
+});
+
+test('crossedHealthEscalationThreshold does not fire before the threshold (1 -> 2)', () => {
+  assert.equal(crossedHealthEscalationThreshold(1, 2), false);
+});
+
+test('crossedHealthEscalationThreshold does not re-fire on retries past the threshold (5 -> 6)', () => {
+  assert.equal(crossedHealthEscalationThreshold(5, 6), false);
+});
+
+test('crossedHealthEscalationThreshold fires on a jump straight past the threshold (0 -> 4)', () => {
+  assert.equal(crossedHealthEscalationThreshold(0, 4), true);
 });

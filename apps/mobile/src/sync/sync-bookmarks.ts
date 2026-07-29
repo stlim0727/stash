@@ -12,7 +12,8 @@ export interface EntrySyncResult {
   entry: LocalPendingBookmark;
   /** Present when the local bookmark row's fields changed (sync_status,
    *  ever_synced, etc.) and the caller needs to persist/reflect them. Applied
-   *  by id — a bookmark's id never changes once captured (see makeBookmarkId). */
+   *  by id — a bookmark's id never changes once captured (see makeBookmarkId),
+   *  EXCEPT the one case `originalLocalId` below covers. */
   bookmarkUpdate?: Bookmark;
   /** True when the entry's work is finished and it can leave the queue. */
   removeEntry?: boolean;
@@ -21,7 +22,15 @@ export interface EntrySyncResult {
   /** Present when the local bookmark row was removed (deleted on another
    *  device while this device had a queued edit for it — see below). */
   removedBookmarkId?: string;
-  /** Present when a create matched a server-side duplicate with a different ID. */
+  /**
+   * Present when a create's own id could not be used because the server
+   * deduped it against an EXISTING different row (`status: 'duplicate'`) —
+   * see STASH-3Q. `bookmarkUpdate.id` is the existing row's id in this case,
+   * different from the entry's `local_id` (carried here as `originalLocalId`
+   * so the caller can find the in-memory row, re-key tag/AI-retry state onto
+   * the new id the same way account rehoming does, and delete the phantom
+   * local-id row that was never actually created server-side).
+   */
   originalLocalId?: string;
 }
 
@@ -49,6 +58,32 @@ function isBookmarkGoneRemotely(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Sync failed.';
+}
+
+/**
+ * Retry count at which a stuck queue entry's health gets escalated (see
+ * `crossedHealthEscalationThreshold` and its caller in store/bookmarks.tsx),
+ * so a systemic sync problem — an API outage, a schema mismatch affecting
+ * every upload — surfaces to the team without waiting for an in-app feedback
+ * report. Deliberately low: 3 failed attempts already means automatic retry
+ * alone hasn't resolved it.
+ */
+export const SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD = 3;
+
+/**
+ * True exactly when a failed attempt just crossed the escalation threshold —
+ * the previous retry_count was below it, the new one is at/above it. Fires
+ * once per entry at the crossing, not again on every retry past it (an entry
+ * stuck at attempt 40 shouldn't re-escalate 37 more times).
+ */
+export function crossedHealthEscalationThreshold(
+  previousRetryCount: number,
+  nextRetryCount: number,
+): boolean {
+  return (
+    previousRetryCount < SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD &&
+    nextRetryCount >= SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD
+  );
 }
 
 /**
@@ -183,6 +218,14 @@ export async function syncCreateQueueEntryBatch(
     };
 
     const localBookmark = getBookmark(entry.local_id);
+    // A duplicate-status result means the server matched this create against
+    // an EXISTING different row instead of using the id the client sent (see
+    // EntrySyncResult.originalLocalId / STASH-3Q) — the one remaining case a
+    // bookmark's id changes after capture, alongside account rehoming.
+    const isDuplicateSwap =
+      output.status === 'duplicate' &&
+      Boolean(output.bookmark_id) &&
+      output.bookmark_id !== entry.local_id;
     if (localBookmark) {
       const isDuplicateSwap =
         output.status === 'duplicate' && Boolean(output.bookmark_id) && output.bookmark_id !== entry.local_id;
@@ -346,6 +389,12 @@ export async function syncQueueEntry(
     await repository.updateQueueEntry(syncedEntry);
 
     const localBookmark = getBookmark(entry.local_id);
+    // result.bookmark_id normally equals localBookmark.id — the client sent
+    // that id explicitly (see makeBookmarkId/CreateBookmarkInput.id) — EXCEPT
+    // when the server deduped this create against an existing different row
+    // (status: 'duplicate'; see STASH-3Q and EntrySyncResult.originalLocalId).
+    // In that case the local row must adopt the EXISTING row's id, or the
+    // next pull fetches that existing row separately and the library doubles.
     if (localBookmark) {
       const isDuplicateSwap =
         result.status === 'duplicate' && Boolean(result.bookmark_id) && result.bookmark_id !== entry.local_id;
@@ -356,7 +405,16 @@ export async function syncQueueEntry(
         ever_synced: true,
         updated_at: now,
       };
-      await repository.updateBookmark(syncedBookmark);
+      if (isDuplicateSwap) {
+        // insertBookmark (not updateBookmark), since the existing row's id is
+        // new to THIS device — updateBookmark only replaces a row already
+        // stored under that id (a strict replace, not an upsert, on the
+        // web/localStorage backend) and would silently no-op here.
+        await repository.deleteBookmark(localBookmark.id);
+        await repository.insertBookmark(syncedBookmark);
+      } else {
+        await repository.updateBookmark(syncedBookmark);
+      }
       return {
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,

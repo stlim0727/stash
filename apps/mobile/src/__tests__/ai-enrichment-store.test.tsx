@@ -464,6 +464,53 @@ test('a freshly captured bookmark gets AI suggestions automatically once it sync
   await waitFor(() => expect(store.current!.getEnrichment(bookmarkId)).toBeDefined());
 });
 
+test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {
+  // Reproduces the reported bug: the server dedupes a create against an
+  // EXISTING different row (same canonical URL) and returns that row's id
+  // instead of the one the client sent. Keeping the local row under its own
+  // id here used to leave a phantom "synced" row under an id Postgres has no
+  // record of, so the next pull fetched the real existing row separately and
+  // the library doubled.
+  fakeRepo.__reset([]);
+  const existingId = '00000000-0000-4000-8000-0000000000ee';
+  apiMock.__spies.createBookmark.mockImplementationOnce(async () => ({
+    bookmark_id: existingId,
+    status: 'duplicate',
+  }));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  let bookmarkId = '';
+  await act(async () => {
+    const result = store.current!.addBookmark({ url: 'example.com/already-exists' });
+    if (result.status !== 'invalid') {
+      bookmarkId = result.bookmark.id;
+    }
+  });
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([existingId]);
+
+  await waitFor(() => expect(apiMock.__spies.createBookmark).toHaveBeenCalled());
+  await waitFor(() => expect(store.current!.getBookmark(existingId)?.sync_status).toBe('synced'));
+
+  // Exactly one card, under the existing id — not two.
+  const matching = store.current!.inbox.filter((b) => b.url === 'https://example.com/already-exists');
+  expect(matching).toHaveLength(1);
+  expect(matching[0]?.id).toBe(existingId);
+  // The phantom original id is gone from the visible library, but still
+  // resolves to the live row via the alias map (same UX guarantee as a
+  // rehome) instead of reading as "not found".
+  expect(store.current!.inbox.some((b) => b.id === bookmarkId)).toBe(false);
+  expect(store.current!.getBookmark(bookmarkId)?.id).toBe(existingId);
+
+  // Durably too: the phantom row under the original id must not linger in
+  // storage, or a reload resurrects the duplicate.
+  await waitFor(() => expect(fakeRepo.__bookmarks().some((b) => b.id === bookmarkId)).toBe(false));
+  const stored = fakeRepo.__bookmarks().filter((b) => b.url === 'https://example.com/already-exists');
+  expect(stored).toHaveLength(1);
+  expect(stored[0]?.id).toBe(existingId);
+});
+
 test('re-hydrates a persisted deferred AI trigger and fires it after a restart', async () => {
   // Simulates: a create synced, then the app was killed during the metadata
   // fetch window. The marker was persisted; metadata is settled on relaunch.

@@ -641,7 +641,7 @@ export default function SettingsScreen() {
 
   const syncSummary = syncPaused
     ? hasPending
-      ? `${t('settings.sync.paused')} (${t('settings.sync.waiting', { count: waiting })})`
+      ? t('settings.sync.pausedWaiting', { count: waiting })
       : t('settings.sync.paused')
     : isSyncing
       ? t('settings.sync.syncing', { count: waiting })
@@ -735,7 +735,14 @@ export default function SettingsScreen() {
           )}
         </View>
 
-        {/* Sync — status-led single row: status, remaining count, pause/resume, and manual refresh inline */}
+        {/* Sync — one status-led row: label/value carry the state (incl. the
+            waiting count, even while paused), and the trailing controls are
+            the actions — tap-to-sync-now when there's queued work, and a
+            pause/resume toggle (Sentry STASH-3K follow-up: a safety valve for
+            right after a large import — while paused, nothing uploads or
+            pulls, giving time to delete unwanted rows before they ever reach
+            the network; a still-local, never-synced delete drops out of the
+            queue for free, see deleteBookmark). */}
         <Row
           styles={styles}
           palette={palette}
@@ -744,44 +751,39 @@ export default function SettingsScreen() {
           value={syncSummary}
           last
           right={
-            cloudAvailable ? (
-              <View style={styles.syncActionsRight}>
+            <View style={styles.syncActions}>
+              {isSyncing ? (
+                <ActivityIndicator color={palette.textSecondary} />
+              ) : canSync ? (
                 <Pressable
-                  onPress={() => setSyncPaused(!syncPaused)}
-                  hitSlop={8}
                   accessibilityRole="button"
-                  accessibilityLabel={
-                    syncPaused
-                      ? t('settings.syncPaused.off')
-                      : t('settings.syncPaused.label')
-                  }
-                  disabled={isResettingLibrary}
-                  style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
+                  accessibilityLabel={t('settings.sync.label')}
+                  hitSlop={8}
+                  onPress={() => void syncNow()}
+                  style={({ pressed }) => [styles.syncIconButton, pressed && { opacity: 0.6 }]}
                 >
-                  <Ionicons
-                    name={syncPaused ? 'play-circle-outline' : 'pause-circle-outline'}
-                    size={22}
-                    color={syncPaused ? palette.accent : palette.textSecondary}
-                  />
+                  <Ionicons name="refresh" size={18} color={palette.accent} />
                 </Pressable>
-
-                {isSyncing ? (
-                  <ActivityIndicator color={palette.textSecondary} />
-                ) : canSync ? (
-                  <Pressable
-                    onPress={() => void syncNow()}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('settings.sync.label')}
-                    style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
-                  >
-                    <Ionicons name="refresh" size={20} color={palette.accent} />
-                  </Pressable>
-                ) : !syncPaused ? (
-                  <Ionicons name="checkmark-circle" size={20} color={palette.success} />
-                ) : null}
-              </View>
-            ) : undefined
+              ) : cloudAvailable && !syncPaused ? (
+                <Ionicons name="checkmark-circle" size={20} color={palette.success} />
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={
+                  syncPaused ? t('settings.sync.resumeButton') : t('settings.sync.pauseButton')
+                }
+                disabled={isResettingLibrary}
+                hitSlop={8}
+                onPress={() => setSyncPaused(!syncPaused)}
+                style={({ pressed }) => [styles.syncIconButton, pressed && { opacity: 0.6 }]}
+              >
+                <Ionicons
+                  name={syncPaused ? 'play-circle' : 'pause-circle-outline'}
+                  size={20}
+                  color={syncPaused ? palette.accent : palette.textSecondary}
+                />
+              </Pressable>
+            </View>
           }
         />
       </Card>
@@ -1044,7 +1046,6 @@ export default function SettingsScreen() {
               }
             />
           </Group>
-
         </>
       ) : null}
 
@@ -1489,6 +1490,14 @@ const makeStyles = (palette: AppPalette) =>
       fontSize: 13,
       color: palette.textSecondary,
     },
+    syncActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+    },
+    syncIconButton: {
+      padding: 4,
+    },
     divider: {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: palette.border,
@@ -1528,11 +1537,6 @@ const makeStyles = (palette: AppPalette) =>
       textTransform: 'uppercase',
       letterSpacing: 0.5,
       marginLeft: 4,
-    },
-    syncActionsRight: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 10,
     },
     buildLine: {
       alignItems: 'center',

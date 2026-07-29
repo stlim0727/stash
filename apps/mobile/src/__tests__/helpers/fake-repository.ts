@@ -53,7 +53,7 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         .map((b) => (b.id === previousId ? bookmark : b));
     },
     completeCreateSyncBatch: async (completions) => {
-      for (const { bookmark, entry } of completions) {
+      for (const { bookmark, entry, originalLocalId } of completions) {
         const stored = queue.find((queued) => queued.local_id === entry.local_id);
         if (
           !stored ||
@@ -62,7 +62,19 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         ) {
           continue;
         }
-        bookmarks = bookmarks.map((b) => (b.id === bookmark.id ? bookmark : b));
+        let replaced = false;
+        bookmarks = bookmarks
+          .filter((b) => b.id !== originalLocalId)
+          .map((b) => {
+            if (b.id === bookmark.id) {
+              replaced = true;
+              return bookmark;
+            }
+            return b;
+          });
+        if (!replaced) {
+          bookmarks = [bookmark, ...bookmarks];
+        }
         queue = queue.filter((queued) => queued.local_id !== entry.local_id);
       }
     },

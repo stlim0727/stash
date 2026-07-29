@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-26 (android-apk.yml smart version allocation for blank dispatches).
+Last updated: 2026-07-29 (Fixes STASH-3Q: a create-sync duplicate hit now adopts the existing row's id).
 
 ## Successor Agent Orientation
 
@@ -135,21 +135,31 @@ These are "do not break" rules, not just implementation notes.
   they don't all check each other the same way on purpose — see
   `docs/architecture/sync-pause-import-reset.md` for the full interaction
   matrix before touching any of the four.
-- **Bookmark ids are stable from capture, never renamed.** `makeBookmarkId()`
+- **Bookmark ids are stable from capture, never renamed — EXCEPT a server-side
+  duplicate hit (STASH-3Q) and account rehoming, both below.** `makeBookmarkId()`
   (`store/bookmarks.tsx`) mints a real UUID at creation time, and it's sent
   to the server as the row's own primary key (`CreateBookmarkInput.id` →
   `api/bookmarks.ts`'s `createBody.id`) instead of letting Postgres assign one
-  — so a create's response always echoes the SAME id the client already has.
+  — so a FRESH create's response echoes the SAME id the client already has.
   This replaced an earlier "local-\* placeholder → server-assigned UUID" model
-  whose local→remote id-swap (`swapBookmarkId`, `idAliases`,
-  `planLeftoverReconciliation`, `reconcileStrandedSyncedDuplicates`) was the
-  root of an entire class of bugs (STASH-3B/3N/3P). That swap machinery still
-  exists in the codebase (removing it is a deliberately separate follow-up —
-  see the PR that shipped this), but it's now always a same-id no-op for
-  anything created going forward; it only still does real work for rows that
-  predate this change. `hasRemoteIdentity` (id-SHAPE check: real UUID vs.
-  `local-…`/`bookmark-…`) is consequently also DOWNGRADED to a migration/seed-
-  data check — it no longer means "has this synced" (every id looks like a
+  whose local→remote id-swap (`swapBookmarkId`, `planLeftoverReconciliation`,
+  `reconcileStrandedSyncedDuplicates`, the `syncQueueEntry` legacy id-shape
+  guard) was the root of an entire class of bugs (STASH-3B/3N/3P). **That
+  swap machinery has since been removed entirely** (#612, a deliberately
+  separate follow-up to the id-stabilization PR, #611) — accepting the edge
+  case that a device already stuck with a stuck pre-#611 `local-*` bookmark
+  loses its self-heal path. `EntrySyncResult.bookmarkReplacement` (the
+  `{previousId, bookmark}` rename signal) is now `bookmarkUpdate?: Bookmark`
+  (fields change, never the id), and `completeCreateSyncBatch` does a plain
+  in-place update instead of a DELETE+INSERT rename.
+  `resolveAliasedId`/`idAliases` and `repository.replaceBookmark` are the
+  **one exception, kept on purpose**: anonymous→real account carry-over
+  (`sync/account-transition.ts`) still mints a genuinely new id when
+  rehoming a bookmark into a different account, independent of create-sync,
+  so that id-change path (and the alias map background tasks resolve
+  through) is still live. `hasRemoteIdentity` (id-SHAPE check: real UUID vs.
+  `local-…`/`bookmark-…`) is consequently also DOWNGRADED to a seed-data
+  check only — it no longer means "has this synced" (every id looks like a
   real UUID now, synced or not). For "has this bookmark ever been confirmed
   synced" — which several self-heal/account-transition/tag/enrichment gates
   need, including telling a never-synced row apart from one that's merely
@@ -165,6 +175,33 @@ These are "do not break" rules, not just implementation notes.
   the same update (see `applyBookmarkUpdate`) — skipping this silently makes
   the row indistinguishable from a fresh, never-synced create the next time
   anything checks `hasSyncedOnce`.
+- **STASH-3Q: a create that resolves as a server-side duplicate MUST adopt the
+  EXISTING row's id, not keep its own.** `api/bookmarks.ts`'s `createBookmark`
+  dedupes on canonical URL (or `client_id` for URL-less notes) and returns
+  `{ bookmark_id: existing.id, status: 'duplicate' }` — a genuinely different
+  id than the one the client sent, unlike a fresh insert. Missing this (the
+  #611/#612 "ids never change" assumption held for fresh inserts, but nobody
+  re-audited the pre-existing dedupe branch against it) marks the local row
+  synced under an id Postgres has no row for; the next pull then fetches the
+  real existing row separately and the library doubles ("561 -> 1047").
+  `EntrySyncResult.originalLocalId`/`CreateSyncCompletion.originalLocalId`
+  (`sync/sync-bookmarks.ts`, `storage/types.ts`) carry the old id so the
+  caller (`rekeyBookmarkIdentity` in `store/bookmarks.tsx`) can re-key
+  tag/AI-retry state and `idAliases` the exact same way account rehoming
+  does — this is the ONE other case (besides rehoming) a bookmark's id ever
+  changes post-capture, so both must call the same re-key helper. **Storage
+  gotcha the fix itself tripped over**: adopting a brand-new-to-this-device
+  id must use `insertBookmark`, not `updateBookmark` — the web/localStorage
+  backend's `updateBookmark` only replaces a row already stored under that id
+  (not an upsert, unlike native's SQLite `INSERT OR REPLACE`), so it silently
+  no-ops for an id this device never wrote before.
+- **A sync-queue entry stuck failing escalates to Sentry automatically once,
+  at 3 retries** — `crossedHealthEscalationThreshold` (`sync/sync-bookmarks.ts`)
+  is checked in `applySyncEntryResult` (`store/bookmarks.tsx`) and reports via
+  `reportSyncQueueHealthEscalation` (`observability/sentry.ts`) so a systemic
+  sync problem (API outage, schema drift) surfaces without an in-app feedback
+  report. Fires once per entry at the crossing, not on every retry past it —
+  don't add a second ad hoc report for the same condition elsewhere.
 
 ### Metadata
 
@@ -409,22 +446,27 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   looked sequential (a `for` loop) but never awaited each call before firing
   the next — grep for `Promise.all` **and** un-awaited calls inside `for`
   loops before adding a new bulk write path.
-- The two synced-bookmark self-heal passes in `store/bookmarks.tsx`'s
-  bootstrap effect each cover a different half of "a create's local→remote
-  id swap didn't finish before the app died," and neither notices the other's
-  gap: `reconcileOrphanedQueueEntries` skips any bookmark already marked
-  `sync_status: 'synced'` (assumes nothing left to drive), and
-  `planLeftoverReconciliation` is driven by iterating the QUEUE — a
-  synced-leftover entry removed before its id swap durably landed (or never
-  created) leaves nothing to iterate. A local-id row stuck in exactly that
-  state — `sync_status: 'synced'`, no queue entry, an already-synced remote-id
-  twin with the same canonical URL sitting right next to it — was invisible
-  to both passes and survived as a permanent duplicate Inbox card that
-  reappeared every relaunch (Sentry STASH-3P, "561 -> 781 -> 970" after a
-  561-bookmark import). `reconcileStrandedSyncedDuplicates` in
-  `sync/sync-bookmarks.ts` is the third self-heal pass, covering that specific
-  gap — a bootstrap-time canonical-URL scan across bookmark rows themselves
-  rather than the queue.
+- **Historical (pre-#611/#612), for context if this ever resurfaces**: back
+  when a create renamed a bookmark's local-\* id onto a server UUID, two
+  synced-bookmark self-heal passes in `store/bookmarks.tsx`'s bootstrap
+  effect each covered a different half of "the rename didn't finish before
+  the app died," and neither noticed the other's gap: `reconcileOrphanedQueueEntries`
+  skips any bookmark already marked `sync_status: 'synced'` (assumes nothing
+  left to drive), and the now-removed `planLeftoverReconciliation` was driven
+  by iterating the QUEUE — a synced-leftover entry removed before its id swap
+  durably landed (or never created) left nothing to iterate. A local-id row
+  stuck in exactly that state — `sync_status: 'synced'`, no queue entry, an
+  already-synced remote-id twin with the same canonical URL sitting right
+  next to it — was invisible to both passes and survived as a permanent
+  duplicate Inbox card that reappeared every relaunch (Sentry STASH-3P,
+  "561 -> 781 -> 970" after a 561-bookmark import). The now-removed
+  `reconcileStrandedSyncedDuplicates` in `sync/sync-bookmarks.ts` was the
+  third self-heal pass added to cover that specific gap. All three id-rename
+  concepts (the rename itself, and the self-heal passes built around it) are
+  now gone — see the stable-id entry above — since #611 stopped bookmarks
+  from ever being renamed in the first place, making the whole gap moot for
+  anything created since. `reconcileOrphanedQueueEntries` is the one pass
+  still live, now generalized around `ever_synced` rather than id shape.
 - On web (RN-web/CSS stacking rules), a sibling with **any** explicit
   `position` + positive `zIndex` paints above **all** `zIndex:auto`/unset
   siblings in the same stacking context, regardless of DOM/mount order — so
@@ -503,7 +545,6 @@ only, debug-signed, standalone, and includes build provenance in Settings.
 - Encrypt local bookmark storage for production builds; see
   `docs/architecture/local-data-encryption.md`.
 - Add image bookmark cloud upload with Supabase Storage.
-- Add sync-queue health escalation when retry counts cross a threshold.
 - Library-level AI organizing ("Tidy Up" / consolidate tags) is deferred; the
   spec and productization direction live in `docs/design/library-organizing.md`.
   Grade any candidate model with `scripts/tag-merge-eval` before shipping.
