@@ -205,6 +205,37 @@ async function renderReady() {
   return store;
 }
 
+// Mount fires the auto-sync effect and the sign-in-pull effect (keyed off
+// `lastSyncedUserId.current` starting null) in the same commit whenever the
+// queue is non-empty — one of them always defers via syncPendingRef and
+// re-fires syncNow() ~50ms later, regardless of any fix's correctness. A
+// fixed-length wait for that alone races real wall-clock time (flaky when
+// the whole test:components suite loads the machine, since the real
+// scheduled timer can fire later than its nominal delay) — this instead
+// polls until `isSyncing` is false AND the given call count hasn't changed
+// for a stability window, so it adapts to however long that actually takes.
+async function waitUntilSyncQuiescent(
+  store: { current: Store | null },
+  getCallCount: () => number,
+  { stableForMs = 300, pollMs = 30, timeoutMs = 5000 } = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  let lastCount = getCallCount();
+  let lastChangeAt = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const count = getCallCount();
+    if (count !== lastCount || store.current?.isSyncing) {
+      lastCount = count;
+      lastChangeAt = Date.now();
+      continue;
+    }
+    if (Date.now() - lastChangeAt >= stableForMs) {
+      return;
+    }
+  }
+}
+
 beforeEach(() => {
   mockAuthSession = mockSession;
   mockForegroundHandlers = [];
@@ -213,6 +244,17 @@ beforeEach(() => {
   apiMock.__spies.listBookmarkIds.mockReset();
   apiMock.__spies.listBookmarkIds.mockResolvedValue([]);
   apiMock.__spies.createBookmark.mockClear();
+  // Reset (not just clear) — a test that overrides this with a persistent
+  // (non-Once) mock implementation would otherwise leak it forward into
+  // every later test in this file.
+  apiMock.__spies.createBookmarks.mockReset();
+  apiMock.__spies.createBookmarks.mockImplementation(async (inputs: Array<{ id?: string }>) =>
+    inputs.map((input) => ({
+      bookmark_id: input.id ?? '00000000-0000-4000-8000-000000000000',
+      status: 'created' as const,
+      metadata_status: 'pending' as const,
+    })),
+  );
   apiMock.__spies.listEnrichmentsUpdatedSince.mockReset();
   apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValue([]);
   apiMock.__spies.enqueuePendingEnrichment.mockClear();
@@ -625,6 +667,245 @@ test('a bulk create failure keeps untried later chunks out of the single-entry f
   expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
 });
 
+test('a bulk create failure marks untried later chunks failed too, so the auto-sync effect cannot immediately retrigger', async () => {
+  // Regression: leaving untried later-chunk entries 'pending' after the
+  // first chunk failed satisfied the auto-sync effect's retrigger condition
+  // (any 'pending'/'syncing' entry) — the instant this run ended it called
+  // syncNow() again, and that call retried the SAME already-failed first
+  // chunk first, recreating a continuous retry loop for the duration of a
+  // real outage instead of waiting for the next natural trigger (a save,
+  // app foreground, manual Sync now), unlike every other failed entry.
+  const rows = Array.from({ length: BULK_CREATE_SYNC_CHUNK_SIZE + 1 }, (_, index) =>
+    makeStoredBookmark({
+      id: `8e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/bulk-outage-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  // A persistent outage — every bulk attempt fails, not just the first.
+  apiMock.__spies.createBookmarks.mockRejectedValue(new Error('network down'));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() =>
+    expect(store.current!.queue.every((entry) => entry.sync_status === 'failed')).toBe(true),
+  );
+
+  // Some other mount-time effect's own syncNow() attempt can overlap this
+  // run and defer via syncPendingRef, firing one (or occasionally more)
+  // legitimate follow-up retry later regardless of this fix's correctness.
+  // A fixed-length wait for that races real wall-clock time (flaky when the
+  // whole test:components suite loads the machine — the real scheduled
+  // timer can fire later than its nominal delay), so poll until the call
+  // count for these rows AND isSyncing both stop changing instead of
+  // guessing a bound. This also ensures any such retry lands within this
+  // test rather than leaking into the next one's shared mock queue.
+  const countCallsForTheseRows = () =>
+    apiMock.__spies.createBookmarks.mock.calls.filter(([inputs]: [Array<{ id?: string }>]) =>
+      inputs.some((input) => input.id === rows[0]!.id),
+    ).length;
+  await waitUntilSyncQuiescent(store, countCallsForTheseRows);
+
+  const untriedRowId = rows[BULK_CREATE_SYNC_CHUNK_SIZE]!.id;
+  const attemptedEntries = store.current!.queue.filter((entry) => entry.local_id !== untriedRowId);
+  const untriedEntry = store.current!.queue.find((entry) => entry.local_id === untriedRowId);
+  expect(attemptedEntries).toHaveLength(BULK_CREATE_SYNC_CHUNK_SIZE);
+  // >= 1, not exactly 1: a legitimate overlap-triggered retry (see above)
+  // would re-attempt this same chunk and increment retry_count again — the
+  // invariant that matters is that it happened at least once, not an exact
+  // count.
+  expect(attemptedEntries.every((entry) => entry.retry_count >= 1)).toBe(true);
+  // Never attempted this run (or any repeat of it), so its retry_count must
+  // stay unchanged regardless of how many times chunk 1 above retries.
+  expect(untriedEntry?.retry_count).toBe(0);
+  expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
+});
+
+test('a bulk create failure does not revert an earlier, already-succeeded chunk back to failed', async () => {
+  // Regression: marking every entry NOT in the failing chunk as 'failed'
+  // (rather than only entries strictly after it) also caught earlier chunks
+  // that already succeeded and had their queue entries cleared this same
+  // run. Their bookmarks had no queue entry left to retry, yet got flipped
+  // back to sync_status: 'failed' anyway — a false failure report that only
+  // another sync pass or a restart would repair.
+  const chunkCount = 2;
+  const rows = Array.from({ length: chunkCount * BULK_CREATE_SYNC_CHUNK_SIZE + 1 }, (_, index) =>
+    makeStoredBookmark({
+      id: `9e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/bulk-multi-chunk-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  // First chunk succeeds (mirrors the default echo-id-back behavior); the
+  // second chunk hits a persistent outage. The third (untried) chunk is a
+  // single row and is never attempted.
+  apiMock.__spies.createBookmarks
+    .mockImplementationOnce(async (inputs: Array<{ id?: string }>) =>
+      inputs.map((input) => ({
+        bookmark_id: input.id ?? '00000000-0000-4000-8000-000000000000',
+        status: 'created' as const,
+        metadata_status: 'pending' as const,
+      })),
+    )
+    .mockRejectedValue(new Error('network down'));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  const firstChunkIds = rows.slice(0, BULK_CREATE_SYNC_CHUNK_SIZE).map((row) => row.id);
+  await waitFor(() =>
+    expect(
+      firstChunkIds.every((id) => store.current!.getBookmark(id)?.sync_status === 'synced'),
+    ).toBe(true),
+  );
+  await waitFor(() => expect(store.current!.isSyncing).toBe(false));
+
+  // The first chunk must stay synced — no queue entry left to retry, so
+  // reverting its bookmarks to 'failed' would be a false report.
+  for (const id of firstChunkIds) {
+    expect(store.current!.getBookmark(id)?.sync_status).toBe('synced');
+    expect(store.current!.queue.some((entry) => entry.local_id === id)).toBe(false);
+  }
+
+  // The second chunk (the one that actually failed) is correctly 'failed'.
+  const secondChunkIds = rows
+    .slice(BULK_CREATE_SYNC_CHUNK_SIZE, 2 * BULK_CREATE_SYNC_CHUNK_SIZE)
+    .map((row) => row.id);
+  for (const id of secondChunkIds) {
+    expect(store.current!.getBookmark(id)?.sync_status).toBe('failed');
+  }
+
+  // Drain any deferred follow-up retry (see waitUntilSyncQuiescent) before
+  // ending, or it fires during the NEXT test and consumes its shared mock
+  // queue instead of this one's own (caught in PR review).
+  await waitUntilSyncQuiescent(store, () => apiMock.__spies.createBookmarks.mock.calls.length);
+});
+
+test('a bookmark permanently deleted mid-persist in an untried chunk is not resurrected as failed', async () => {
+  // Regression: the "mark untried entries failed too" persist loop checks
+  // each entry against a single listQueue() snapshot taken once up front
+  // (a deliberate perf fix — see the earlier "read the queue once" review
+  // comment). A permanent delete of a never-synced bookmark in a LATER,
+  // untried chunk that lands after that snapshot but before the loop
+  // reaches it wouldn't show up in the snapshot, so the stored/updated_at
+  // check alone can't catch it — writing the 'failed' state back would
+  // resurrect the durable queue row deleteBookmark just removed.
+  const chunkSize = BULK_CREATE_SYNC_CHUNK_SIZE;
+  const rows = Array.from({ length: chunkSize + 2 }, (_, index) =>
+    makeStoredBookmark({
+      id: `ae64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/deleted-during-persist-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  // The whole first chunk fails; the last 2 rows are untried.
+  apiMock.__spies.createBookmarks.mockRejectedValue(new Error('network down'));
+  const deletedUntriedId = rows[chunkSize]!.id;
+  const survivorUntriedId = rows[chunkSize + 1]!.id;
+
+  // Gate the persist loop's first durable write (the first chunk-1 entry —
+  // processed before any untried entry) so the delete below lands squarely
+  // between the listQueue() snapshot and the loop reaching the untried entry.
+  let releaseGate: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  let gateEnteredResolve: () => void = () => {};
+  const gateEntered = new Promise<void>((resolve) => {
+    gateEnteredResolve = resolve;
+  });
+  const originalUpdateQueueEntry = fakeRepo.repository.updateQueueEntry.bind(fakeRepo.repository);
+  fakeRepo.repository.updateQueueEntry = async (entry) => {
+    if (entry.local_id === rows[0]!.id) {
+      gateEnteredResolve();
+      await gate;
+    }
+    return originalUpdateQueueEntry(entry);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await gateEntered;
+
+  await act(async () => {
+    store.current!.deleteBookmark(deletedUntriedId);
+  });
+
+  releaseGate();
+
+  await waitFor(() =>
+    expect(
+      store.current!.queue.every(
+        (entry) => entry.sync_status !== 'pending' && entry.sync_status !== 'syncing',
+      ),
+    ).toBe(true),
+  );
+  await waitFor(() => expect(store.current!.isSyncing).toBe(false));
+
+  // Must stay gone — not resurrected by the untried-entry failure marking.
+  expect(store.current!.getBookmark(deletedUntriedId)).toBeUndefined();
+  await waitFor(() =>
+    expect(fakeRepo.__queue().some((entry) => entry.local_id === deletedUntriedId)).toBe(false),
+  );
+  expect(fakeRepo.__bookmarks().some((bookmark) => bookmark.id === deletedUntriedId)).toBe(false);
+
+  // The other untried entry (not deleted) is still correctly marked failed.
+  expect(store.current!.getBookmark(survivorUntriedId)?.sync_status).toBe('failed');
+
+  fakeRepo.repository.updateQueueEntry = originalUpdateQueueEntry;
+
+  // Drain any deferred follow-up retry (see waitUntilSyncQuiescent) before
+  // ending, or it fires during the NEXT test and consumes its shared mock
+  // queue instead of this one's own (caught in PR review).
+  await waitUntilSyncQuiescent(store, () => apiMock.__spies.createBookmarks.mock.calls.length);
+});
+
 test('a bulk chunk failure with a row-specific permanent error isolates just the offending row', async () => {
   // A bulk request fails as a whole even when only ONE row in the chunk
   // actually has a problem (a legacy too-long URL trips Postgres's btree
@@ -811,6 +1092,118 @@ test('a bookmark permanently deleted while its bulk-create durable persist is st
     expect(
       store.current!.queue.some(
         (entry) => entry.local_id === deletedMidFlightId && entry.operation === 'delete',
+      ),
+    ).toBe(true),
+  );
+
+  fakeRepo.repository.completeCreateSyncBatch = originalComplete;
+});
+
+test('an edit made while a bulk-create durable persist is still in flight is not silently dropped', async () => {
+  // followUpUpdates/the reconcile check used to be computed from the
+  // pre-await snapshot in the first loop. An edit landing while
+  // completeCreateSyncBatch is awaiting doesn't enqueue its own update
+  // (hasSyncedOnce is still false — the row isn't confirmed synced yet), so
+  // that reconcile check was the ONLY remaining path that could push it;
+  // checking the stale snapshot missed the edit entirely, silently dropping
+  // it (and leaving the row vulnerable to a later pull overwriting it with
+  // the older uploaded values).
+  const editedId = '7e64cf1e-0000-4000-8000-000000000401';
+  const otherId = '7e64cf1e-0000-4000-8000-000000000402';
+  const now = '2026-06-12T00:00:00.000Z';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: editedId,
+      url: 'https://example.com/edited-mid-flight',
+      title: 'Original title',
+      notes: null,
+      collection_id: null,
+      is_archived: false,
+      deleted_at: null,
+      sync_status: 'pending',
+      metadata_status: 'pending',
+    }),
+    makeStoredBookmark({
+      id: otherId,
+      url: 'https://example.com/other',
+      title: 'Other title',
+      notes: null,
+      collection_id: null,
+      is_archived: false,
+      deleted_at: null,
+      sync_status: 'pending',
+      metadata_status: 'pending',
+    }),
+  ]);
+  for (const id of [editedId, otherId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseCompletion: () => void = () => {};
+  const completionGate = new Promise<void>((resolve) => {
+    releaseCompletion = resolve;
+  });
+  let completionEntered: () => void = () => {};
+  const completionEnteredPromise = new Promise<void>((resolve) => {
+    completionEntered = resolve;
+  });
+  const originalComplete = fakeRepo.repository.completeCreateSyncBatch!.bind(fakeRepo.repository);
+  fakeRepo.repository.completeCreateSyncBatch = async (completions) => {
+    completionEntered();
+    await completionGate;
+    return originalComplete(completions);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await completionEnteredPromise;
+
+  await act(async () => {
+    store.current!.updateBookmarkFields(editedId, { title: 'Edited during sync' });
+  });
+  expect(store.current!.getBookmark(editedId)?.title).toBe('Edited during sync');
+
+  releaseCompletion();
+
+  await waitFor(() => expect(store.current!.getBookmark(otherId)?.sync_status).toBe('synced'));
+
+  // The edit must survive the sync completion, not get clobbered by the
+  // stale pre-edit snapshot.
+  expect(store.current!.getBookmark(editedId)?.title).toBe('Edited during sync');
+
+  // The edit must also be durably persisted as part of THIS reconcile step,
+  // not only reach the server once the follow-up 'update' sync eventually
+  // runs. completeCreateSyncBatch already wrote the pre-edit snapshot
+  // durably; without a fresh durable write here, exiting the app before
+  // that follow-up sync fires would reload the stale (pre-edit) row on
+  // restart — the 'update' queue entry carries no field snapshot of its
+  // own, so the edit would be gone for good, not just delayed.
+  await waitFor(() =>
+    expect(fakeRepo.__bookmarks().find((b) => b.id === editedId)?.title).toBe(
+      'Edited during sync',
+    ),
+  );
+
+  // And it must actually reach the server: a follow-up update mutation has
+  // to be enqueued (since the edit's own enqueue was skipped — the row
+  // wasn't confirmed synced yet at edit time) and processed. Checked via the
+  // API call itself, not the queue: a successful update syncs and clears its
+  // queue entry quickly, so asserting on transient queue contents would be
+  // racy.
+  await waitFor(() =>
+    expect(
+      apiMock.__spies.updateBookmark.mock.calls.some(
+        ([id, payload]) => id === editedId && payload.title === 'Edited during sync',
       ),
     ).toBe(true),
   );
