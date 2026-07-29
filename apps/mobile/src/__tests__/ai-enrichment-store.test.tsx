@@ -694,6 +694,130 @@ test('a bulk chunk failure with a row-specific permanent error isolates just the
   expect(apiMock.__spies.createBookmark).toHaveBeenCalledTimes(2);
 });
 
+test('a bulk create success with no matching local bookmark still durably clears its queue entry', async () => {
+  // A create's queue entry can outlive its own bookmark if the bookmark's
+  // durable write failed independently (or was never persisted) —
+  // syncCreateQueueEntryBatch still returns a completed result for it (no
+  // bookmarkUpdate, since there's no local row to merge onto), but
+  // applyBulkCreateChunkResults used to only durably clear queue rows that
+  // had a bookmark completion alongside them, silently orphaning this entry
+  // so it lingers forever and gets re-uploaded after every restart.
+  fakeRepo.__reset([]);
+  const orphanIdA = '7e64cf1e-0000-4000-8000-000000000201';
+  const orphanIdB = '7e64cf1e-0000-4000-8000-000000000202';
+  const now = '2026-06-12T00:00:00.000Z';
+  for (const id of [orphanIdA, orphanIdB]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/orphan-${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() => expect(apiMock.__spies.createBookmarks).toHaveBeenCalled());
+  await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+  expect(store.current!.queue).toHaveLength(0);
+});
+
+test('a bookmark permanently deleted while its bulk-create durable persist is still in flight is not resurrected', async () => {
+  // applyBulkCreateChunkResults computes its in-memory merge from a snapshot
+  // taken before completeCreateSyncBatch's own await. Regression: blindly
+  // writing that stale snapshot back once the await resolved would resurrect
+  // a bookmark permanently deleted DURING that window — and since the
+  // delete ran before this row's sync_status flip landed, deleteBookmark
+  // would have seen it as never-synced and skipped enqueuing a remote
+  // delete, leaving the row this batch just created stranded in the cloud.
+  const survivorId = '7e64cf1e-0000-4000-8000-000000000301';
+  const deletedMidFlightId = '7e64cf1e-0000-4000-8000-000000000302';
+  const now = '2026-06-12T00:00:00.000Z';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: survivorId,
+      url: 'https://example.com/survivor',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+    makeStoredBookmark({
+      id: deletedMidFlightId,
+      url: 'https://example.com/deleted-mid-flight',
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  ]);
+  for (const id of [survivorId, deletedMidFlightId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseCompletion: () => void = () => {};
+  const completionGate = new Promise<void>((resolve) => {
+    releaseCompletion = resolve;
+  });
+  let completionEntered: () => void = () => {};
+  const completionEnteredPromise = new Promise<void>((resolve) => {
+    completionEntered = resolve;
+  });
+  const originalComplete = fakeRepo.repository.completeCreateSyncBatch!.bind(fakeRepo.repository);
+  fakeRepo.repository.completeCreateSyncBatch = async (completions) => {
+    // Signals that applyBulkCreateChunkResults' pre-await snapshot has
+    // already been captured (this is only called after that loop runs) —
+    // waiting on the createBookmarks mock instead would be too early: a
+    // jest.fn() records a call synchronously before its returned promise
+    // even resolves, so the delete could land before the snapshot exists.
+    completionEntered();
+    await completionGate;
+    return originalComplete(completions);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await completionEnteredPromise;
+
+  await act(async () => {
+    store.current!.deleteBookmark(deletedMidFlightId);
+  });
+  expect(store.current!.getBookmark(deletedMidFlightId)).toBeUndefined();
+
+  releaseCompletion();
+
+  await waitFor(() => expect(store.current!.getBookmark(survivorId)?.sync_status).toBe('synced'));
+
+  // Must stay gone — not resurrected by the stale pre-delete snapshot the
+  // completion step captured.
+  expect(store.current!.getBookmark(deletedMidFlightId)).toBeUndefined();
+  expect(fakeRepo.__bookmarks().find((b) => b.id === deletedMidFlightId)).toBeUndefined();
+
+  // The row this batch just created for it must not be left stranded in the
+  // cloud: a remote delete must have been enqueued for cleanup.
+  await waitFor(() =>
+    expect(
+      store.current!.queue.some(
+        (entry) => entry.local_id === deletedMidFlightId && entry.operation === 'delete',
+      ),
+    ).toBe(true),
+  );
+
+  fakeRepo.repository.completeCreateSyncBatch = originalComplete;
+});
+
 test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {
   // Reproduces the reported bug: the server dedupes a create against an
   // EXISTING different row (same canonical URL) and returns that row's id

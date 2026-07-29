@@ -3561,11 +3561,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ) => {
         const completedLocalIds = new Set<string>();
         const completions: CreateSyncCompletion[] = [];
+        const queueOnlyEntries: LocalPendingBookmark[] = [];
         type UploadedPayload = NonNullable<typeof results[number]['uploadedPayload']>;
         const followUpUpdates: Array<{ id: string; payload: UploadedPayload }> = [];
         const pendingAiIds: string[] = [];
         const rekeyedIds = new Map<string, string>();
-        let nextBookmarks = bookmarksRef.current ?? [];
+        const preUploadSnapshot = bookmarksRef.current ?? [];
 
         for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
           const entry = chunk[resultIndex]!;
@@ -3599,12 +3600,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           completedLocalIds.add(entry.local_id);
 
           if (!result.bookmarkUpdate) {
+            // A create can succeed with no local bookmark to update — e.g.
+            // the bookmark's own durable write failed independently earlier.
+            // Its queue row has no bookmark to merge, but it must still be
+            // cleared durably below, or it lingers unchanged and gets
+            // re-uploaded after the next restart.
+            queueOnlyEntries.push(entry);
             continue;
           }
 
           const update = result.bookmarkUpdate;
           const lookupId = result.originalLocalId ?? update.id;
-          const latest = nextBookmarks.find((bookmark) => bookmark.id === lookupId);
+          const latest = preUploadSnapshot.find((bookmark) => bookmark.id === lookupId);
           if (!latest) {
             continue;
           }
@@ -3615,12 +3622,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ever_synced: update.ever_synced,
             updated_at: update.updated_at,
           };
-          // Collapse onto the destination id (see applySyncEntryResult) so a
-          // pull that already inserted this bookmark under the existing row's
-          // id doesn't end up sharing that id with a second entry.
-          nextBookmarks = nextBookmarks
-            .filter((bookmark) => bookmark.id === lookupId || bookmark.id !== merged.id)
-            .map((bookmark) => (bookmark.id === lookupId ? merged : bookmark));
           completions.push({
             bookmark: merged,
             entry,
@@ -3668,15 +3669,70 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               }),
             );
           }
+          await Promise.all(
+            queueOnlyEntries.map((entry) => removeQueueEntryIfNotSuperseded(repository, entry)),
+          );
         } catch (error) {
           logStorageError('bulk create sync completion', error);
           return;
         }
 
         mutationsPushed = true;
+
+        // Re-derive the in-memory merge from the CURRENT bookmarks, not the
+        // pre-upload snapshot above — the user may have edited, trashed, or
+        // permanently deleted one of these rows while this chunk's network
+        // round-trip and the durable persist above were in flight, and that
+        // newer state must win over the stale snapshot (mirrors
+        // applySyncEntryResult's identical discipline for the single-entry
+        // path — see its "computed synchronously from the ref" comment).
+        let nextBookmarks = bookmarksRef.current ?? [];
+        // Collected rather than enqueued inline: enqueueMutation's own
+        // setQueue call would otherwise run BEFORE the completedLocalIds
+        // cleanup below and get wiped out by it (that filter doesn't
+        // distinguish a freshly re-added delete entry from the original
+        // completed create entry it's meant to clear).
+        const deletedMidFlightIds: string[] = [];
+        for (const { bookmark: update, originalLocalId } of completions) {
+          const lookupId = originalLocalId ?? update.id;
+          // Deleted while the upload/durable-persist was in flight: the
+          // user's delete may have run before this row's sync_status flip
+          // landed, so `deleteBookmark` saw it as never-synced and skipped
+          // enqueuing a remote delete. This row is now confirmed to exist
+          // remotely under `update.id` (this sync just created/updated it),
+          // so finish that cleanup here instead of resurrecting it.
+          if (deletedIds.current.has(lookupId) || deletedIds.current.has(update.id)) {
+            ensureRepositoryReady()
+              .then(() => repository.deleteBookmark(update.id))
+              .catch((error) => logStorageError('post-delete sync cleanup', error));
+            deletedMidFlightIds.push(update.id);
+            continue;
+          }
+          const latest = nextBookmarks.find((bookmark) => bookmark.id === lookupId);
+          if (!latest) {
+            continue;
+          }
+          const merged: Bookmark = {
+            ...latest,
+            id: update.id,
+            sync_status: update.sync_status,
+            ever_synced: update.ever_synced,
+            updated_at: update.updated_at,
+          };
+          // Collapse onto the destination id (see applySyncEntryResult) so a
+          // pull that already inserted this bookmark under the existing row's
+          // id doesn't end up sharing that id with a second entry.
+          nextBookmarks = nextBookmarks
+            .filter((bookmark) => bookmark.id === lookupId || bookmark.id !== merged.id)
+            .map((bookmark) => (bookmark.id === lookupId ? merged : bookmark));
+        }
         bookmarksRef.current = nextBookmarks;
         setBookmarks(nextBookmarks);
         setQueue((current) => current.filter((queued) => !completedLocalIds.has(queued.local_id)));
+
+        for (const id of deletedMidFlightIds) {
+          enqueueMutation(id, 'delete');
+        }
 
         if (rekeyedIds.size > 0) {
           // A create in this chunk resolved as a duplicate of an existing
@@ -3686,10 +3742,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           rekeyBookmarkIdentity(rekeyedIds);
         }
 
+        // followUpUpdates/pendingAiIds were queued in the FIRST loop, before
+        // any of these ids could be known to be deleted mid-flight — skip
+        // them here or a reconcile update / AI trigger for a since-deleted
+        // bookmark would overwrite the delete mutation just enqueued above.
+        const deletedMidFlightIdSet = new Set(deletedMidFlightIds);
         for (const { id } of followUpUpdates) {
+          if (deletedMidFlightIdSet.has(id)) {
+            continue;
+          }
           enqueueMutation(id, 'update');
         }
         for (const id of pendingAiIds) {
+          if (deletedMidFlightIdSet.has(id)) {
+            continue;
+          }
           markPendingAiTrigger(id);
         }
       };
@@ -3760,13 +3827,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   updated_at: failedAt,
                 };
                 failedEntries.set(entry.local_id, failedEntry);
-                if (crossedHealthEscalationThreshold(entry.retry_count, failedEntry.retry_count)) {
-                  reportSyncQueueHealthEscalation({
-                    operation: failedEntry.operation,
-                    retryCount: failedEntry.retry_count,
-                    lastError: failedEntry.last_error,
-                  });
-                }
               }
 
               try {
@@ -3783,10 +3843,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   if (!stored || stored.updated_at !== entry.updated_at) {
                     continue;
                   }
-                  await repository.updateQueueEntry(failedEntries.get(entry.local_id)!);
+                  const failedEntry = failedEntries.get(entry.local_id)!;
+                  await repository.updateQueueEntry(failedEntry);
                   const bookmark = getLatestBookmark(entry.local_id);
                   if (bookmark && bookmark.sync_status !== 'failed') {
                     await repository.updateBookmark({ ...bookmark, sync_status: 'failed' });
+                  }
+                  // Escalate only once the incremented retry_count has
+                  // actually landed durably — otherwise a storage failure (or
+                  // an entry superseded by a newer edit, see the stored/
+                  // updated_at check above) would leave the persisted
+                  // retry_count unchanged, and the next real failure would
+                  // report the exact same crossing a second time.
+                  if (crossedHealthEscalationThreshold(entry.retry_count, failedEntry.retry_count)) {
+                    reportSyncQueueHealthEscalation({
+                      operation: failedEntry.operation,
+                      retryCount: failedEntry.retry_count,
+                      lastError: failedEntry.last_error,
+                    });
                   }
                 }
               } catch (persistError) {
