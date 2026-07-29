@@ -479,7 +479,11 @@ test('getBookmark still resolves a bookmark by its pre-sync local id after the c
       localId = result.bookmark.id;
     }
   });
-  expect(localId).toMatch(/^local-/);
+  // Every bookmark gets a real UUID id at capture time now (no more local-*
+  // placeholder), but this mock still returns a different, fixed REMOTE_ID —
+  // modeling the (now-impossible-in-production, but still-exercised-by-this-
+  // mock) case where the create response doesn't echo the sent id.
+  expect(localId).not.toBe(REMOTE_ID);
 
   // The create uploads and the row adopts the remote id.
   await waitFor(() => expect(apiMock.__spies.createBookmark).toHaveBeenCalled());
@@ -1204,7 +1208,12 @@ test("a rehomed bookmark's create-upload swap still fires a fresh auto AI trigge
     expect(row).toBeDefined();
     rehomedLocalId = row!.id;
   });
-  expect(rehomedLocalId).toMatch(/^local-/);
+  // Every bookmark gets a real UUID id at capture/rehome time now (no more
+  // local-* placeholder), but this mock's create response still returns a
+  // different, fixed REMOTE_ID rather than echoing the rehomed id, so the
+  // (now-impossible-in-production) intermediate-id swap this test exercises
+  // still meaningfully happens.
+  expect(rehomedLocalId).not.toBe(REMOTE_ID);
 
   // Let the rehomed row's create upload complete: this swaps its id a SECOND
   // time, from the intermediate local id onto the new account's
@@ -1504,7 +1513,12 @@ test('an anon→real carried-over bookmark keeps its retry marker through both i
     expect(row).toBeDefined();
     rehomedLocalId = row!.id;
   });
-  expect(rehomedLocalId).toMatch(/^local-/);
+  // Every bookmark gets a real UUID id at capture/rehome time now (no more
+  // local-* placeholder), but this mock's create response still returns a
+  // different, fixed REMOTE_ID rather than echoing the rehomed id, so the
+  // (now-impossible-in-production) intermediate-id swap this test exercises
+  // still meaningfully happens.
+  expect(rehomedLocalId).not.toBe(REMOTE_ID);
 
   // The retry marker followed the rehome swap onto the new local id.
   expect(result.current.isAiSuggestionPostponed(rehomedLocalId)).toBe(true);

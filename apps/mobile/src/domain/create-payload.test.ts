@@ -33,9 +33,10 @@ function bookmark(overrides: Partial<Bookmark> = {}): Bookmark {
 
 test('rebuilds a URL bookmark payload from its row', () => {
   const payload = createPayloadFromBookmark(
-    bookmark({ url: 'https://example.com/x', title: 'T', notes: 'N' }),
+    bookmark({ id: 'b1', url: 'https://example.com/x', title: 'T', notes: 'N' }),
   );
   assert.deepEqual(payload, {
+    id: 'b1',
     url: 'https://example.com/x',
     title: 'T',
     notes: 'N',
@@ -45,9 +46,10 @@ test('rebuilds a URL bookmark payload from its row', () => {
 
 test('carries a text note body back as shared_text (not url)', () => {
   const payload = createPayloadFromBookmark(
-    bookmark({ url: null, content_type: 'text', description: 'a thought', title: 'Note' }),
+    bookmark({ id: 'b1', url: null, content_type: 'text', description: 'a thought', title: 'Note' }),
   );
   assert.deepEqual(payload, {
+    id: 'b1',
     title: 'Note',
     notes: undefined,
     shared_text: 'a thought',

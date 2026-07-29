@@ -81,6 +81,20 @@ export interface Bookmark {
   /** Local-only field while the bookmark lives on device. */
   sync_status: SyncStatus;
   /**
+   * Local-only, permanent record that this row has been confirmed synced to
+   * the cloud at least once — set the first time `sync_status` becomes
+   * `'synced'` (a create upload succeeding, or a pulled remote row) and never
+   * cleared. Needed because `sync_status` alone can't tell "never synced yet"
+   * apart from "was synced, now pending again because of a later edit" — both
+   * read `'pending'`. Several self-heal/account-transition checks need that
+   * distinction (e.g. deciding whether an orphaned queue entry should be
+   * rebuilt as a `create` or an `update`) and would otherwise wrongly treat a
+   * previously-synced row as brand new, or vice versa. Absent on rows synced
+   * before this field existed; those are still correctly read as synced by
+   * `sync_status` alone while they stay in that state. Never sent to the cloud.
+   */
+  ever_synced?: boolean;
+  /**
    * Local-only durable on-device URI of a captured image (content_type
    * 'image'). Set when an image is shared into the app; never sent to the
    * cloud. Cloud upload of the binary (and the synced `image_path` it will map
@@ -155,6 +169,15 @@ export interface AIEnrichment {
 
 /** Input shape for createBookmark per docs/api/bookmarks.md. */
 export interface CreateBookmarkInput {
+  /**
+   * The bookmark's own permanent id (see {@link Bookmark.id}), generated
+   * client-side at capture time and sent as the row's primary key so the
+   * server never has to hand back a different one for the client to adopt —
+   * there is no local→remote id swap. Optional only because some callers of
+   * this type (e.g. duplicate-lookup helpers) don't need it; every real
+   * creation site sets it.
+   */
+  id?: string;
   url?: string;
   title?: string;
   description?: string;

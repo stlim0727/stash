@@ -232,7 +232,12 @@ test('logout drops a pending EDIT to a synced row AND its update queue entry, pr
   // Cloud row that was synced then EDITED (now pending with a queued update keyed
   // to the real account's UUID) + a never-synced local capture.
   fakeRepo.__reset([
-    makeStoredBookmark({ id: REMOTE_EDITED_ID, sync_status: 'pending', title: 'edited locally' }),
+    makeStoredBookmark({
+      id: REMOTE_EDITED_ID,
+      sync_status: 'pending',
+      ever_synced: true,
+      title: 'edited locally',
+    }),
     makeStoredBookmark({
       id: LOCAL_CREATE_ID,
       sync_status: 'pending',

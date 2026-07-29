@@ -184,6 +184,7 @@ export async function syncCreateQueueEntryBatch(
         ...localBookmark,
         id: output.bookmark_id,
         sync_status: 'synced',
+        ever_synced: true,
         updated_at: now,
       };
       results.push({
@@ -228,6 +229,14 @@ export async function syncQueueEntry(
   // (`local-…`) or seeded (`bookmark-…`) id, sending the op would push a
   // non-UUID into a Postgres `uuid` column and the server 400s ("invalid input
   // syntax for type uuid"), wedging the entry in a retry loop (issue #237).
+  // Going forward every bookmark gets a real UUID id at capture time (see
+  // `makeBookmarkId`), and `enqueueMutation`/`reconcileOrphanedQueueEntries`
+  // both already refuse to build an update/delete entry for a bookmark that
+  // isn't confirmed synced (`hasSyncedOnce`/`ever_synced`) — so for anything
+  // created after that shipped, this id-shape check always passes and the
+  // branch below never fires. It stays as a defensive backstop for pre-
+  // migration data: a leftover queue entry from an old app version can still
+  // carry a genuine `local-…`/`bookmark-…` id.
   //
   // What to do depends on whether reconciliation is genuinely coming. A pending
   // `create` for the same local id WILL re-key this entry onto the remote id
@@ -347,7 +356,12 @@ export async function syncQueueEntry(
       }
       await removeQueueEntryIfNotSuperseded(repository, entry);
       if (bookmark.sync_status !== 'synced') {
-        const syncedBookmark: Bookmark = { ...bookmark, sync_status: 'synced', updated_at: now };
+        const syncedBookmark: Bookmark = {
+          ...bookmark,
+          sync_status: 'synced',
+          ever_synced: true,
+          updated_at: now,
+        };
         await repository.updateBookmark(syncedBookmark);
         return {
           entry: { ...entry, sync_status: 'synced', updated_at: now },
@@ -414,6 +428,7 @@ export async function syncQueueEntry(
         ...localBookmark,
         id: result.bookmark_id,
         sync_status: 'synced',
+        ever_synced: true,
         updated_at: now,
       };
       await repository.replaceBookmark(localBookmark.id, syncedBookmark);
@@ -497,10 +512,18 @@ export function makeMutationEntry(
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * True once a bookmark's id refers to a remote row rather than a device-local
- * one. Remote IDs are Supabase-generated UUIDs; device-local IDs (`local-…`)
- * and seeded sample IDs (`bookmark-…`) are not, and must never be targeted by
- * remote mutations.
+ * True when a bookmark id has the shape of a Supabase-generated UUID rather
+ * than a device-local (`local-…`) or seeded sample (`bookmark-…`) one.
+ *
+ * IMPORTANT: this is a MIGRATION-ERA check now, not a "has this synced" proxy.
+ * Every bookmark gets a real UUID id at CAPTURE time (see `makeBookmarkId` in
+ * store/bookmarks.tsx) and keeps that same id for its whole life — id shape no
+ * longer distinguishes "never synced" from "synced" for anything created after
+ * that shipped. Use `sync_status === 'synced' || ever_synced` for that instead
+ * (see `Bookmark.ever_synced`). The one remaining legitimate use is detecting
+ * a genuinely OLD-style local-id row left over from before this change
+ * (`reconcileStrandedSyncedDuplicates`), where the shape really does mean
+ * "device-local, pre-migration placeholder."
  */
 export function hasRemoteIdentity(bookmarkId: string): boolean {
   return UUID_PATTERN.test(bookmarkId);
@@ -649,7 +672,17 @@ export function reconcileOrphanedQueueEntries(
     if (bookmark.sync_status === 'synced' || queuedIds.has(bookmark.id)) {
       continue;
     }
-    if (hasRemoteIdentity(bookmark.id)) {
+    // Was this row EVER confirmed synced (ever_synced), even though it now
+    // reads `pending` again because of a later edit whose own queue entry
+    // never persisted? Rebuild it as an `update`. A genuinely new, never-
+    // synced row (ever_synced unset) falls through to the `create` path below
+    // instead — deliberately conservative: an `update`/`delete` against a row
+    // that was never actually created remotely 404s and can get the local row
+    // wrongly treated as "deleted on another device" (see isBookmarkGoneRemotely
+    // in syncQueueEntry), which would silently destroy a fresh, unsynced
+    // capture. The reverse mistake (re-`create`-ing an already-synced row) is
+    // safe: the server's url_hash dedup resolves it as a duplicate.
+    if (bookmark.ever_synced) {
       entries.push(makeMutationEntry(bookmark.id, 'update'));
       continue;
     }

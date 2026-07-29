@@ -171,7 +171,7 @@ function requirePayload(input: CreateBookmarkInput): { url: string | null; conte
 }
 
 function remoteToBookmark(row: RemoteBookmark): Bookmark {
-  return { ...row, sync_status: 'synced' };
+  return { ...row, sync_status: 'synced', ever_synced: true };
 }
 
 function enrichmentFromRemote(row: RemoteAIEnrichment): AIEnrichment {
@@ -272,6 +272,10 @@ export class BookmarkApi {
     }
 
     const createBody = {
+      // The client's own permanent id for this bookmark (see CreateBookmarkInput.id).
+      // Sent explicitly so Postgres uses it as the primary key instead of
+      // generating a new one — the local row never has to adopt a different id.
+      id: input.id,
       user_id: this.session.user.id,
       url: payload.url,
       canonical_url: null,
@@ -354,6 +358,9 @@ export class BookmarkApi {
         urlHash,
         clientId,
         body: {
+          // See createBookmark's createBody: sent explicitly so Postgres uses
+          // it as the primary key instead of generating a new one.
+          id: input.id,
           user_id: this.session.user.id,
           url: payload.url,
           canonical_url: null,
