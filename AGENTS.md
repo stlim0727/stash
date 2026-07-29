@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-29 (removed the now-dead bookmark id-swap machinery, #612, the follow-up to the id-stabilization refactor in #611).
+Last updated: 2026-07-29 (added sync-queue retry-health escalation to Sentry).
 
 ## Successor Agent Orientation
 
@@ -174,6 +174,13 @@ These are "do not break" rules, not just implementation notes.
   the same update (see `applyBookmarkUpdate`) — skipping this silently makes
   the row indistinguishable from a fresh, never-synced create the next time
   anything checks `hasSyncedOnce`.
+- **A sync-queue entry stuck failing escalates to Sentry automatically once,
+  at 3 retries** — `crossedHealthEscalationThreshold` (`sync/sync-bookmarks.ts`)
+  is checked in `applySyncEntryResult` (`store/bookmarks.tsx`) and reports via
+  `reportSyncQueueHealthEscalation` (`observability/sentry.ts`) so a systemic
+  sync problem (API outage, schema drift) surfaces without an in-app feedback
+  report. Fires once per entry at the crossing, not on every retry past it —
+  don't add a second ad hoc report for the same condition elsewhere.
 
 ### Metadata
 
@@ -517,7 +524,6 @@ only, debug-signed, standalone, and includes build provenance in Settings.
 - Encrypt local bookmark storage for production builds; see
   `docs/architecture/local-data-encryption.md`.
 - Add image bookmark cloud upload with Supabase Storage.
-- Add sync-queue health escalation when retry counts cross a threshold.
 - Library-level AI organizing ("Tidy Up" / consolidate tags) is deferred; the
   spec and productization direction live in `docs/design/library-organizing.md`.
   Grade any candidate model with `scripts/tag-merge-eval` before shipping.

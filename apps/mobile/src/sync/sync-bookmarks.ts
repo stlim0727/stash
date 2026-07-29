@@ -50,6 +50,32 @@ function errorMessage(error: unknown): string {
 }
 
 /**
+ * Retry count at which a stuck queue entry's health gets escalated (see
+ * `crossedHealthEscalationThreshold` and its caller in store/bookmarks.tsx),
+ * so a systemic sync problem — an API outage, a schema mismatch affecting
+ * every upload — surfaces to the team without waiting for an in-app feedback
+ * report. Deliberately low: 3 failed attempts already means automatic retry
+ * alone hasn't resolved it.
+ */
+export const SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD = 3;
+
+/**
+ * True exactly when a failed attempt just crossed the escalation threshold —
+ * the previous retry_count was below it, the new one is at/above it. Fires
+ * once per entry at the crossing, not again on every retry past it (an entry
+ * stuck at attempt 40 shouldn't re-escalate 37 more times).
+ */
+export function crossedHealthEscalationThreshold(
+  previousRetryCount: number,
+  nextRetryCount: number,
+): boolean {
+  return (
+    previousRetryCount < SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD &&
+    nextRetryCount >= SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD
+  );
+}
+
+/**
  * Removes a finished entry's queue row — unless a newer mutation (e.g. a
  * durable delete enqueued while this entry was in flight) has replaced the
  * row at the same key, in which case that newer work must survive.

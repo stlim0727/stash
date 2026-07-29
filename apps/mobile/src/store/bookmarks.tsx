@@ -81,6 +81,7 @@ import { useI18n } from '@/i18n';
 import { recordLog } from '@/observability/log-buffer';
 import { armHydrationWatchdog } from '@/observability/hydration-watchdog';
 import { armLoopStallWatchdog } from '@/observability/loop-stall-watchdog';
+import { reportSyncQueueHealthEscalation } from '@/observability/sentry';
 import { registerForForegroundState } from '@/storage/sqlite-app-lifecycle';
 import { repository } from '@/storage/repository';
 import { copyImageToLibrary } from '@/storage/image-store';
@@ -104,6 +105,7 @@ import {
   BULK_CREATE_SYNC_CHUNK_SIZE,
   createNeedsReconcileUpdate,
   createSyncApi,
+  crossedHealthEscalationThreshold,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
   isSyncable,
@@ -3391,6 +3393,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         entry: LocalPendingBookmark,
         result: Awaited<ReturnType<typeof syncQueueEntry>>,
       ): Promise<boolean> => {
+        if (crossedHealthEscalationThreshold(entry.retry_count, result.entry.retry_count)) {
+          reportSyncQueueHealthEscalation({
+            operation: entry.operation,
+            retryCount: result.entry.retry_count,
+            lastError: result.entry.last_error,
+          });
+        }
+
         // Deleted while a create/update was in flight: don't resurrect it.
         // Undo the rows syncQueueEntry just persisted and best-effort delete
         // the remote copy so the user's delete wins end to end.

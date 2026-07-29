@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   createNeedsReconcileUpdate,
+  crossedHealthEscalationThreshold,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
   isSyncable,
@@ -838,4 +839,20 @@ test('isSyncable still retries a pending/syncing entry regardless of a stale las
 
 test('isSyncable excludes a synced entry as before', () => {
   assert.equal(isSyncable(makeCreateEntry({ sync_status: 'synced' })), false);
+});
+
+test('crossedHealthEscalationThreshold fires exactly at the crossing (2 -> 3)', () => {
+  assert.equal(crossedHealthEscalationThreshold(2, 3), true);
+});
+
+test('crossedHealthEscalationThreshold does not fire before the threshold (1 -> 2)', () => {
+  assert.equal(crossedHealthEscalationThreshold(1, 2), false);
+});
+
+test('crossedHealthEscalationThreshold does not re-fire on retries past the threshold (5 -> 6)', () => {
+  assert.equal(crossedHealthEscalationThreshold(5, 6), false);
+});
+
+test('crossedHealthEscalationThreshold fires on a jump straight past the threshold (0 -> 4)', () => {
+  assert.equal(crossedHealthEscalationThreshold(0, 4), true);
 });
