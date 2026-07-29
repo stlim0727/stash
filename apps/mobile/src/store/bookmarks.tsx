@@ -3592,7 +3592,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               markPendingAiTrigger(merged.id);
             }
             mutationsPushed = true;
+          } else if (result.uploadedPayload !== undefined) {
+            // STASH-3Y diagnostics: the create completed (uploadedPayload is
+            // set) but the local row raced away before this merge — nothing
+            // to reconcile/enqueue against, but it must still count as a
+            // completion or entriesCompleted undercounts exactly the
+            // mid-flight-race sessions this diagnostic exists to explain.
+            recordSingleCreateCompletion(false, {});
           }
+        } else if (result.uploadedPayload !== undefined) {
+          // STASH-3Y diagnostics: syncQueueEntry returns a successful create
+          // with no `bookmarkUpdate` at all when the local bookmark was
+          // already gone before the upload settled (sync-bookmarks.ts) —
+          // same accounting gap as the branch above, different cause.
+          recordSingleCreateCompletion(false, {});
         }
         return true;
       };
