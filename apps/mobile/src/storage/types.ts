@@ -17,6 +17,14 @@ export interface TagData {
 export interface CreateSyncCompletion {
   bookmark: Bookmark;
   entry: LocalPendingBookmark;
+  /**
+   * Present when this create resolved as a server-side duplicate of an
+   * existing different row (STASH-3Q): `bookmark.id` is that existing row's
+   * id, and this is the id the local row was captured under (never actually
+   * created server-side) — the caller must delete that phantom row as part
+   * of the same atomic batch, or it lingers as a permanent duplicate.
+   */
+  originalLocalId?: string;
 }
 
 /**
@@ -44,7 +52,9 @@ export interface BookmarkRepository {
   /**
    * Atomically finish a bulk create chunk: each bookmark's updated fields
    * (sync_status, ever_synced, etc.) and its completed create queue row are
-   * persisted together.
+   * persisted together, along with deleting the phantom old-id row for any
+   * completion whose create resolved as a server-side duplicate (see
+   * CreateSyncCompletion.originalLocalId).
    */
   completeCreateSyncBatch?(completions: CreateSyncCompletion[]): Promise<void>;
   deleteBookmark(id: string): Promise<void>;
