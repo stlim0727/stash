@@ -675,11 +675,6 @@ test('a bulk create failure marks untried later chunks failed too, so the auto-s
   await waitFor(() =>
     expect(store.current!.queue.every((entry) => entry.sync_status === 'failed')).toBe(true),
   );
-  // The queue can already read all-'failed' while syncNow's own pull/tag-sync
-  // tail is still finishing. Returning here would let that leftover work race
-  // the next test's shared API mocks (caught in PR review — running the full
-  // file failed a later test intermittently). Wait for the whole run to
-  // settle before this test ends.
   await waitFor(() => expect(store.current!.isSyncing).toBe(false));
 
   const untriedRowId = rows[BULK_CREATE_SYNC_CHUNK_SIZE]!.id;
@@ -695,12 +690,26 @@ test('a bulk create failure marks untried later chunks failed too, so the auto-s
   // duration of the outage. Scoped to calls containing this test's own row
   // ids (rather than a blanket call count on the shared mock) so it isn't
   // thrown off by an unrelated prior test's own in-flight retry timer still
-  // settling in the background.
+  // settling in the background. Asserted BEFORE the drain below, since that
+  // drain can itself add one more (legitimate, harmless) call.
   const callsForTheseRows = apiMock.__spies.createBookmarks.mock.calls.filter(
     ([inputs]: [Array<{ id?: string }>]) => inputs.some((input) => input.id === rows[0]!.id),
   );
   expect(callsForTheseRows).toHaveLength(1);
   expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
+
+  // syncNow's finally block can schedule one more run 50ms later if some
+  // other mount-time effect's own syncNow() attempt overlapped this one and
+  // deferred via syncPendingRef — isSyncing already reads false in that gap,
+  // before the scheduled retry has actually fired. Left undrained, that
+  // delayed retry survives past this test ending and consumes the NEXT
+  // test's shared mock queue instead of this one's own (caught in PR
+  // review — this test's still-mounted provider was found to fire during
+  // the following test and corrupt its mockImplementationOnce sequence).
+  // Draining it here means it lands on THIS test's own (already exhausted,
+  // harmless) mock instead.
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  await waitFor(() => expect(store.current!.isSyncing).toBe(false));
 });
 
 test('a bulk create failure does not revert an earlier, already-succeeded chunk back to failed', async () => {
