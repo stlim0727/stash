@@ -1456,12 +1456,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (bookmark.metadata_status !== 'pending' || enriching.current.has(bookmark.id)) {
       return;
     }
+    const epochAtStart = resetEpoch.current;
     enriching.current.add(bookmark.id);
     // `enriching` (the dedupe guard) is set synchronously above; the fetch
     // itself waits for a limiter slot so bulk passes stay bounded.
     void enrichmentSlots.current(async () => {
       try {
         const { patch, metadata_status } = await enrichBookmark(bookmark);
+        if (resetEpoch.current !== epochAtStart) {
+          return; // library was reset while fetch was in flight
+        }
         // A `create` that synced while the fetch was in flight re-keys the row
         // from its local id onto its remote UUID (see the create-sync swap). If
         // the enriched fields are written against the now-dead local id they are
