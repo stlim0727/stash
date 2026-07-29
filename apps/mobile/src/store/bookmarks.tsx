@@ -3903,9 +3903,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // successfully created bookmark would then permanently miss its
         // automatic AI suggestions (caught in PR review). Only the marker
         // is persisted here; actual dispatch stays gated on enrichment
-        // settling, same as before.
-        for (const id of pendingAiIds) {
-          markPendingAiTrigger(id);
+        // settling, same as before. Adds every id to the ref first (cheap,
+        // synchronous) and persists ONCE, awaited — calling
+        // markPendingAiTrigger per id instead would fire that many
+        // independent, un-awaited setMeta writes onto the single serialized
+        // SQLite actor, recreating the exact fan-out contention this PR
+        // exists to fix (caught in PR review).
+        if (pendingAiIds.length > 0) {
+          for (const id of pendingAiIds) {
+            pendingAiTrigger.current.add(id);
+          }
+          await persistPendingAiTrigger();
         }
 
         // Covers both follow-up loops below: the queue has no

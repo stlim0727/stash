@@ -1605,6 +1605,65 @@ test('pending AI-trigger markers are persisted before the reconcile write loops,
   fakeRepo.repository.updateBookmark = originalUpdateBookmark;
 });
 
+test('a bulk chunk persists its AI-trigger markers with one coalesced write, not one per entry (STASH-3Y)', async () => {
+  // markPendingAiTrigger's own persistPendingAiTrigger() call is
+  // fire-and-forget. Calling it once per completed entry in a chunk (as the
+  // loop used to) fires that many independent, un-awaited setMeta writes
+  // for the SAME meta key onto the single serialized SQLite actor —
+  // recreating the exact fan-out contention this PR exists to fix (caught
+  // in PR review). Every id is added to the ref first (cheap, synchronous)
+  // and persisted with a single awaited write instead.
+  const ids = Array.from(
+    { length: 5 },
+    (_, index) => `7e64cf1e-0000-4000-8000-00000000067${index}`,
+  );
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    ids.map((id) =>
+      makeStoredBookmark({
+        id,
+        url: `https://example.com/${id}`,
+        sync_status: 'pending',
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const id of ids) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let pendingAiTriggerWrites = 0;
+  const originalSetMeta = fakeRepo.repository.setMeta.bind(fakeRepo.repository);
+  fakeRepo.repository.setMeta = async (key, value) => {
+    if (key === 'pending_ai_trigger') {
+      pendingAiTriggerWrites += 1;
+    }
+    return originalSetMeta(key, value);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() => {
+    const pending = JSON.parse(fakeRepo.__meta('pending_ai_trigger') ?? '[]') as string[];
+    expect(ids.every((id) => pending.includes(id))).toBe(true);
+  });
+
+  expect(pendingAiTriggerWrites).toBe(1);
+
+  fakeRepo.repository.setMeta = originalSetMeta;
+});
+
 test('a bookmark permanently deleted while its own reconcile write is in flight does not have that delete superseded (STASH-3Y)', async () => {
   // A narrower variant of the earlier "deleted while an EARLIER entry's
   // write is in flight" case: here the SAME bookmark is deleted while its
