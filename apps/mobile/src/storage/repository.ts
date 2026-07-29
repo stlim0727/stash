@@ -124,10 +124,10 @@ class WebBookmarkRepository implements BookmarkRepository {
     if (applied.length === 0) {
       return;
     }
-    for (const { previousId, bookmark } of applied) {
-      this.bookmarks = this.bookmarks
-        .filter((existing) => existing.id === previousId || existing.id !== bookmark.id)
-        .map((existing) => (existing.id === previousId ? bookmark : existing));
+    for (const { bookmark } of applied) {
+      this.bookmarks = this.bookmarks.map((existing) =>
+        existing.id === bookmark.id ? bookmark : existing,
+      );
     }
     const completedIds = new Set(applied.map((completion) => completion.entry.local_id));
     this.queue = this.queue.filter((entry) => !completedIds.has(entry.local_id));

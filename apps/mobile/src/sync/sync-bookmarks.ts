@@ -10,8 +10,10 @@ import type { SupabaseAuthSession } from '@/supabase/types';
 
 export interface EntrySyncResult {
   entry: LocalPendingBookmark;
-  /** Present when the local bookmark row was rewritten (local ID -> remote ID). */
-  bookmarkReplacement?: { previousId: string; bookmark: Bookmark };
+  /** Present when the local bookmark row's fields changed (sync_status,
+   *  ever_synced, etc.) and the caller needs to persist/reflect them. Applied
+   *  by id — a bookmark's id never changes once captured (see makeBookmarkId). */
+  bookmarkUpdate?: Bookmark;
   /** True when the entry's work is finished and it can leave the queue. */
   removeEntry?: boolean;
   /** For creates: what was actually sent, so callers can reconcile later edits. */
@@ -182,14 +184,13 @@ export async function syncCreateQueueEntryBatch(
     if (localBookmark) {
       const syncedBookmark: Bookmark = {
         ...localBookmark,
-        id: output.bookmark_id,
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
       };
       results.push({
         entry: syncedEntry,
-        bookmarkReplacement: { previousId: localBookmark.id, bookmark: syncedBookmark },
+        bookmarkUpdate: syncedBookmark,
         uploadedPayload: uploadedPayloads[index],
       });
       continue;
@@ -210,102 +211,14 @@ export async function syncCreateQueueEntryBatch(
  *
  * `getBookmark` must return the LATEST local row — not a snapshot — so
  * concurrent enrichment or edits are never overwritten by stale data.
- *
- * `hasPendingCreate(localId)` reports whether a not-yet-synced `create` entry
- * for the same local id is still in the queue. It decides what to do with an
- * `update`/`delete` that still targets a device-local id (see the guard below).
  */
 export async function syncQueueEntry(
   api: BookmarkApi,
   repository: BookmarkRepository,
   entry: LocalPendingBookmark,
   getBookmark: (id: string) => Bookmark | undefined,
-  hasPendingCreate: (localId: string) => boolean = () => false,
 ): Promise<EntrySyncResult> {
   const now = new Date().toISOString();
-
-  // Final guard before anything leaves the device: an `update`/`delete` must
-  // target a row that exists remotely. If its id is still a device-local
-  // (`local-…`) or seeded (`bookmark-…`) id, sending the op would push a
-  // non-UUID into a Postgres `uuid` column and the server 400s ("invalid input
-  // syntax for type uuid"), wedging the entry in a retry loop (issue #237).
-  // Going forward every bookmark gets a real UUID id at capture time (see
-  // `makeBookmarkId`), and `enqueueMutation`/`reconcileOrphanedQueueEntries`
-  // both already refuse to build an update/delete entry for a bookmark that
-  // isn't confirmed synced (`hasSyncedOnce`/`ever_synced`) — so for anything
-  // created after that shipped, this id-shape check always passes and the
-  // branch below never fires. It stays as a defensive backstop for pre-
-  // migration data: a leftover queue entry from an old app version can still
-  // carry a genuine `local-…`/`bookmark-…` id.
-  //
-  // What to do depends on whether reconciliation is genuinely coming. A pending
-  // `create` for the same local id WILL re-key this entry onto the remote id
-  // once it lands, so DEFER (leave it pending, untouched) and let it ride behind
-  // that create. But if there is no such create — an orphaned mutation whose
-  // create already settled, can never succeed, or was never enqueued — nothing
-  // will ever re-key it. Returning it `pending` then hot-loops the auto-sync
-  // effect (which re-fires on any `pending` entry), so resolve it instead:
-  //   - delete: the row never reached the server (its id is still local) and the
-  //     local delete already happened, so there is nothing to delete remotely —
-  //     remove the queue entry so it leaves cleanly.
-  //   - update: the bookmark's `create` never reached the server, yet an `update`
-  //     needs a remote row to target — so it can NEVER succeed and just re-fails
-  //     every pass, stranding the bookmark as "sync failed" forever (visible in
-  //     the queue with a climbing retry count). The local row still exists, so
-  //     RECOVER by promoting this entry to a `create`: rebuild the create payload
-  //     from the row and fall through to the create path below, which uploads it
-  //     (idempotent on URL — a duplicate reuses the existing row), re-keys the
-  //     bookmark onto its new remote id, and lets the caller reconcile any
-  //     diverged fields. Only when the row is gone, or can't be expressed as a
-  //     create (no URL and no text), is there nothing to upload — settle then.
-  if (entry.operation !== 'create') {
-    // Mirror exactly what each branch sends to the server: `update` targets
-    // `local_id`, `delete` targets `remote_id ?? local_id`.
-    const targetId =
-      entry.operation === 'delete' ? entry.remote_id ?? entry.local_id : entry.local_id;
-    if (!hasRemoteIdentity(targetId)) {
-      if (hasPendingCreate(entry.local_id)) {
-        // Reconcilable: a create is coming to swap this onto its remote id.
-        return { entry: { ...entry, sync_status: 'pending' } };
-      }
-      if (entry.operation === 'delete') {
-        // Nothing exists remotely; the local delete already ran. Settle.
-        await removeQueueEntryIfNotSuperseded(repository, entry);
-        return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
-      }
-      // Orphaned update — promote to a create so the bookmark can finally reach
-      // the server (see the comment above for why a bare update can't).
-      const localRow = getBookmark(entry.local_id);
-      if (!localRow) {
-        // The row is gone locally; there is nothing left to update or create.
-        await removeQueueEntryIfNotSuperseded(repository, entry);
-        return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
-      }
-      const rebuiltPayload = createPayloadFromBookmark(localRow);
-      if (!isUploadableCreate(rebuiltPayload)) {
-        // No URL and no text body: a create can't carry it. Settle as `failed`
-        // (does NOT re-fire the auto-sync loop) so it stops hot-looping while
-        // still retrying on the next save or a manual Sync.
-        return {
-          entry: await failEntry(
-            repository,
-            entry,
-            new Error('Cannot sync: bookmark has no remote identity yet.'),
-            now,
-          ),
-        };
-      }
-      // Rewrite this entry into a `create` and let the create path below run it.
-      // Keeps the same local_id key so the queue row is replaced, not duplicated.
-      entry = {
-        ...entry,
-        operation: 'create',
-        payload: rebuiltPayload,
-        sync_status: 'pending',
-        last_error: null,
-      };
-    }
-  }
 
   if (entry.operation === 'update') {
     const bookmark = getBookmark(entry.local_id);
@@ -365,7 +278,7 @@ export async function syncQueueEntry(
         await repository.updateBookmark(syncedBookmark);
         return {
           entry: { ...entry, sync_status: 'synced', updated_at: now },
-          bookmarkReplacement: { previousId: bookmark.id, bookmark: syncedBookmark },
+          bookmarkUpdate: syncedBookmark,
           removeEntry: true,
         };
       }
@@ -424,17 +337,18 @@ export async function syncQueueEntry(
 
     const localBookmark = getBookmark(entry.local_id);
     if (localBookmark) {
+      // result.bookmark_id always equals localBookmark.id now — the client
+      // sent that id explicitly (see makeBookmarkId/CreateBookmarkInput.id).
       const syncedBookmark: Bookmark = {
         ...localBookmark,
-        id: result.bookmark_id,
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
       };
-      await repository.replaceBookmark(localBookmark.id, syncedBookmark);
+      await repository.updateBookmark(syncedBookmark);
       return {
         entry: syncedEntry,
-        bookmarkReplacement: { previousId: localBookmark.id, bookmark: syncedBookmark },
+        bookmarkUpdate: syncedBookmark,
         uploadedPayload: payload,
       };
     }
@@ -448,7 +362,7 @@ export async function syncQueueEntry(
       await repository.updateBookmark(failedBookmark);
       return {
         entry: failedEntry,
-        bookmarkReplacement: { previousId: localBookmark.id, bookmark: failedBookmark },
+        bookmarkUpdate: failedBookmark,
       };
     }
 
@@ -515,15 +429,14 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * True when a bookmark id has the shape of a Supabase-generated UUID rather
  * than a device-local (`local-…`) or seeded sample (`bookmark-…`) one.
  *
- * IMPORTANT: this is a MIGRATION-ERA check now, not a "has this synced" proxy.
- * Every bookmark gets a real UUID id at CAPTURE time (see `makeBookmarkId` in
- * store/bookmarks.tsx) and keeps that same id for its whole life — id shape no
- * longer distinguishes "never synced" from "synced" for anything created after
- * that shipped. Use `sync_status === 'synced' || ever_synced` for that instead
- * (see `Bookmark.ever_synced`). The one remaining legitimate use is detecting
- * a genuinely OLD-style local-id row left over from before this change
- * (`reconcileStrandedSyncedDuplicates`), where the shape really does mean
- * "device-local, pre-migration placeholder."
+ * IMPORTANT: this is NOT a "has this synced" proxy. Every bookmark gets a real
+ * UUID id at CAPTURE time (see `makeBookmarkId` in store/bookmarks.tsx) and
+ * keeps that same id for its whole life — id shape doesn't distinguish "never
+ * synced" from "synced." Use `sync_status === 'synced' || ever_synced` for
+ * that instead (see `Bookmark.ever_synced`). The remaining legitimate use is
+ * excluding seeded sample rows, which are marked `sync_status: 'synced'`
+ * locally (so the orphan self-heal never tries to upload them) without ever
+ * being a real cloud row.
  */
 export function hasRemoteIdentity(bookmarkId: string): boolean {
   return UUID_PATTERN.test(bookmarkId);
@@ -588,79 +501,6 @@ export function isSyncable(entry: LocalPendingBookmark): boolean {
  * URL (or shared text, which this app doesn't capture), so enqueuing one would
  * just swap "sync pending" for a permanently failed entry.
  */
-/** A local→remote identity swap computed for a synced-leftover queue entry. */
-export interface LeftoverSwap {
-  localId: string;
-  reconciled: Bookmark;
-}
-
-/**
- * Identifies synced queue leftovers that still need a local-ID → remote-ID
- * swap on the bookmark row. A `create` marks its queue entry `synced` (with
- * the new remote_id) BEFORE swapping the local bookmark ID; if the app was
- * killed between those writes the queue entry survives but the bookmark is
- * still under the old local-* id. This pure planner finds those stragglers —
- * the caller applies the swaps and removes the queue entries.
- */
-export function planLeftoverReconciliation(
-  leftovers: LocalPendingBookmark[],
-  bookmarks: Bookmark[],
-): LeftoverSwap[] {
-  const swaps: LeftoverSwap[] = [];
-  for (const leftover of leftovers) {
-    const remoteId = leftover.remote_id;
-    if (!remoteId || remoteId === leftover.local_id) continue; // update/delete leftover, or already reconciled
-    const localRow = bookmarks.find((b) => b.id === leftover.local_id);
-    if (!localRow) continue; // swap already completed — row is under the remote id
-    swaps.push({ localId: leftover.local_id, reconciled: { ...localRow, id: remoteId, sync_status: 'synced' } });
-  }
-  return swaps;
-}
-
-/** A stray local-id row already marked synced, with no queue entry left to
- *  drive it, that duplicates an already-synced remote-id twin. */
-export interface StrandedDuplicate {
-  localId: string;
-  keep: Bookmark;
-}
-
-/**
- * Finds local-id bookmark rows marked `sync_status: 'synced'` that duplicate
- * an already-synced remote-id row sharing the same canonical URL. This is a
- * gap neither existing self-heal covers: `reconcileOrphanedQueueEntries`
- * skips anything already `'synced'` (nothing left to drive), and
- * `planLeftoverReconciliation` is driven by iterating the QUEUE — if this
- * row's synced-leftover queue entry was removed before the id swap durably
- * landed (or never created at all), there is nothing left to iterate. Left
- * alone, the row survives as a permanent duplicate Inbox card that reappears
- * on every relaunch (Sentry STASH-3P). The caller applies the swaps (folding
- * the stray row onto `keep`, e.g. via `swapBookmarkId`) and persists them.
- */
-export function reconcileStrandedSyncedDuplicates(bookmarks: Bookmark[]): StrandedDuplicate[] {
-  const dedupeKey = (bookmark: Bookmark): string | null =>
-    bookmark.url ? canonicalizeUrl(bookmark.url) : bookmark.url_hash;
-  const swaps: StrandedDuplicate[] = [];
-  for (const bookmark of bookmarks) {
-    if (hasRemoteIdentity(bookmark.id) || bookmark.sync_status !== 'synced') {
-      continue;
-    }
-    const key = dedupeKey(bookmark);
-    if (!key) {
-      continue;
-    }
-    const twin = bookmarks.find(
-      (candidate) =>
-        candidate.id !== bookmark.id &&
-        hasRemoteIdentity(candidate.id) &&
-        dedupeKey(candidate) === key,
-    );
-    if (twin) {
-      swaps.push({ localId: bookmark.id, keep: twin });
-    }
-  }
-  return swaps;
-}
-
 export function reconcileOrphanedQueueEntries(
   bookmarks: Bookmark[],
   queue: LocalPendingBookmark[],

@@ -8,11 +8,9 @@ import {
   isSyncable,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
-  reconcileStrandedSyncedDuplicates,
   syncCreateQueueEntryBatch,
   syncQueueEntry,
 } from './sync-bookmarks.ts';
-import { rekeyPendingTagOps, type PendingTagOp } from '@/domain/pending-tags';
 import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
@@ -123,7 +121,7 @@ function fakeApi(overrides: Partial<Record<keyof BookmarkApi, unknown>> = {}): B
   } as unknown as BookmarkApi;
 }
 
-test('create: bookmark adopts the remote ID and synced status', async () => {
+test('create: bookmark stays under its own id and turns synced', async () => {
   const { calls, repository } = fakeRepository();
   const bookmark = makeBookmark();
 
@@ -131,9 +129,10 @@ test('create: bookmark adopts the remote ID and synced status', async () => {
 
   assert.equal(result.entry.sync_status, 'synced');
   assert.equal(result.entry.remote_id, '00000000-0000-4000-8000-000000000001');
-  assert.equal(result.bookmarkReplacement?.previousId, 'local-abc');
-  assert.equal(result.bookmarkReplacement?.bookmark.id, '00000000-0000-4000-8000-000000000001');
-  assert.ok(calls.includes('replaceBookmark:local-abc->00000000-0000-4000-8000-000000000001'));
+  assert.equal(result.bookmarkUpdate?.id, 'local-abc');
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+  assert.equal(result.bookmarkUpdate?.ever_synced, true);
+  assert.ok(calls.includes('updateBookmark:local-abc:synced'));
 });
 
 test('create: uploads the LATEST title/notes, not the payload captured at save', async () => {
@@ -235,8 +234,8 @@ test('bulk create: uploads latest titles and replaces local rows with returned r
   ]);
   assert.equal(results.length, 2);
   assert.equal(results[0]?.entry.remote_id, '00000000-0000-4000-8000-000000000101');
-  assert.equal(results[0]?.bookmarkReplacement?.previousId, 'local-a');
-  assert.equal(results[0]?.bookmarkReplacement?.bookmark.id, '00000000-0000-4000-8000-000000000101');
+  assert.equal(results[0]?.bookmarkUpdate?.id, 'local-a');
+  assert.equal(results[0]?.bookmarkUpdate?.sync_status, 'synced');
   assert.equal(results[0]?.uploadedPayload?.title, 'fresh title');
   assert.equal(results[1]?.entry.remote_id, '00000000-0000-4000-8000-000000000102');
   assert.equal(calls.length, 0);
@@ -302,7 +301,7 @@ test('create: failure stays retryable with the error recorded', async () => {
   assert.equal(result.entry.sync_status, 'failed');
   assert.equal(result.entry.retry_count, 1);
   assert.equal(result.entry.last_error, 'network down');
-  assert.equal(result.bookmarkReplacement?.bookmark.sync_status, 'failed');
+  assert.equal(result.bookmarkUpdate?.sync_status, 'failed');
 });
 
 test('update: sends the LATEST user-editable fields and leaves the queue', async () => {
@@ -344,7 +343,7 @@ test('update: sends the LATEST user-editable fields and leaves the queue', async
       metadata_status: 'complete',
     },
   ]);
-  assert.equal(result.bookmarkReplacement?.bookmark.sync_status, 'synced');
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
   assert.ok(calls.includes('removeQueueEntry:00000000-0000-4000-8000-000000000001'));
 });
 
@@ -565,218 +564,6 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.entry.last_error, 'timeout');
 });
 
-// A `hasPendingCreate` predicate that says "yes, a create for this id is still
-// queued" — the reconcilable case. The default (omitted) predicate is "no".
-const createPending = () => true;
-
-test('update: a local-id target with a pending create is DEFERRED, never sent (issue #237)', async () => {
-  // A follow-up update enqueued for a bookmark whose `create` has NOT yet
-  // completed its local→remote id swap. Sending `local-…` to the Postgres `uuid`
-  // column 400s ("invalid input syntax for type uuid") and wedges the entry. With
-  // a create still queued to re-key it, defer (left pending, untouched).
-  const { calls, repository } = fakeRepository();
-  let apiCalled = false;
-  const api = fakeApi({
-    updateBookmark: async () => {
-      apiCalled = true;
-      return makeBookmark();
-    },
-  });
-  const localId = 'local-mquc351g-wzpsqbby';
-  const entry = makeMutationEntry(localId, 'update');
-
-  const result = await syncQueueEntry(
-    api,
-    repository,
-    entry,
-    () => makeBookmark({ id: localId }),
-    createPending,
-  );
-
-  assert.equal(apiCalled, false, 'the local id must never reach the server');
-  assert.equal(result.removeEntry, undefined, 'entry stays queued to retry later');
-  assert.equal(result.entry.sync_status, 'pending', 'deferred, not failed');
-  assert.equal(result.entry.retry_count, 0, 'a deferral is not a failure');
-  assert.equal(result.entry.last_error, null);
-  assert.deepEqual(calls, [], 'no queue/bookmark writes on a deferral');
-});
-
-test('delete: a local-id target with a pending create is DEFERRED, never sent (issue #237)', async () => {
-  const { calls, repository } = fakeRepository();
-  let apiCalled = false;
-  const api = fakeApi({
-    deleteBookmark: async () => {
-      apiCalled = true;
-    },
-  });
-  const localId = 'local-mquc351g-wzpsqbby';
-  // remote_id falls back to local_id when the create never swapped it.
-  const entry: LocalPendingBookmark = { ...makeMutationEntry(localId, 'delete'), remote_id: localId };
-
-  const result = await syncQueueEntry(api, repository, entry, () => undefined, createPending);
-
-  assert.equal(apiCalled, false, 'the local id must never reach the server');
-  assert.equal(result.removeEntry, undefined, 'entry stays queued to retry later');
-  assert.equal(result.entry.sync_status, 'pending', 'deferred, not failed');
-  assert.deepEqual(calls, []);
-});
-
-test('update: a seeded (bookmark-…) target with a pending create is DEFERRED too', async () => {
-  const { repository } = fakeRepository();
-  let apiCalled = false;
-  const api = fakeApi({
-    updateBookmark: async () => {
-      apiCalled = true;
-      return makeBookmark();
-    },
-  });
-  const entry = makeMutationEntry('bookmark-seed-1', 'update');
-
-  const result = await syncQueueEntry(
-    api,
-    repository,
-    entry,
-    () => makeBookmark({ id: 'bookmark-seed-1' }),
-    createPending,
-  );
-
-  assert.equal(apiCalled, false);
-  assert.equal(result.entry.sync_status, 'pending');
-});
-
-test('update: an ORPHANED local-id target (no pending create) is PROMOTED to a create and uploaded', async () => {
-  // No create will ever re-key this entry, so a bare `update` can never target a
-  // remote row — it would just re-fail every pass, stranding the bookmark as
-  // "sync failed" forever. The row still exists locally, so promote to a create:
-  // upload it (idempotent on URL), adopt the remote id, and leave the queue.
-  const { calls, repository } = fakeRepository();
-  let updateCalled = false;
-  let createdPayload: unknown = null;
-  const api = fakeApi({
-    updateBookmark: async () => {
-      updateCalled = true;
-      return makeBookmark();
-    },
-    createBookmark: async (payload: unknown) => {
-      createdPayload = payload;
-      return {
-        bookmark_id: '00000000-0000-4000-8000-000000000099',
-        status: 'created',
-        metadata_status: 'pending',
-      };
-    },
-  });
-  const localId = 'local-mquc351g-wzpsqbby';
-  const entry = makeMutationEntry(localId, 'update');
-
-  // Default predicate => no pending create => orphaned.
-  const result = await syncQueueEntry(api, repository, entry, () =>
-    makeBookmark({ id: localId, url: 'https://example.com/a' }),
-  );
-
-  assert.equal(updateCalled, false, 'a local id must never be sent as an update');
-  assert.equal(result.entry.sync_status, 'synced', 'promoted create settled the entry');
-  assert.equal(result.entry.operation, 'create', 'the entry was promoted to a create');
-  assert.equal(result.entry.remote_id, '00000000-0000-4000-8000-000000000099');
-  assert.equal(
-    result.bookmarkReplacement?.bookmark.id,
-    '00000000-0000-4000-8000-000000000099',
-    'the local row is re-keyed onto the remote id',
-  );
-  assert.ok(result.uploadedPayload, 'uploadedPayload signals a create ran, so the caller reconciles');
-  assert.equal((createdPayload as { url?: string })?.url, 'https://example.com/a');
-  assert.ok(
-    calls.includes('replaceBookmark:local-mquc351g-wzpsqbby->00000000-0000-4000-8000-000000000099'),
-  );
-});
-
-test('update: an ORPHANED local-id target promoted to a create that fails writes its failure to the queue', async () => {
-  const localId = 'local-mquc351g-wzpsqbby';
-  const entry = makeMutationEntry(localId, 'update');
-  const { calls, repository } = fakeRepository([entry]);
-
-  const api = fakeApi({
-    createBookmark: async () => {
-      throw new Error('API create failed');
-    },
-  });
-
-  const result = await syncQueueEntry(api, repository, entry, () =>
-    makeBookmark({ id: localId, url: 'https://example.com/a' }),
-  );
-
-  assert.equal(result.removeEntry, undefined);
-  assert.equal(result.entry.sync_status, 'failed');
-  assert.equal(result.entry.operation, 'create');
-  assert.equal(result.entry.retry_count, 1);
-  assert.equal(result.entry.last_error, 'API create failed');
-
-  // It must successfully save it back to the database queue
-  assert.ok(calls.includes(`updateQueueEntry:${localId}:failed`));
-});
-
-test('update: an ORPHANED local-id target with no URL or text SETTLES failed (cannot become a create)', async () => {
-  // A row a create can't carry (no URL, no body) can never reach the server, so
-  // promotion is impossible. Settle `failed` (does NOT re-fire the auto-sync
-  // loop) so it stops hot-looping while still retrying on a later save / Sync.
-  const { repository } = fakeRepository();
-  let apiCalled = false;
-  const api = fakeApi({
-    createBookmark: async () => {
-      apiCalled = true;
-      throw new Error('should not be called');
-    },
-  });
-  const localId = 'local-mquc351g-wzpsqbby';
-  const entry = makeMutationEntry(localId, 'update');
-
-  const result = await syncQueueEntry(api, repository, entry, () =>
-    makeBookmark({ id: localId, url: null, description: null, content_type: 'text' }),
-  );
-
-  assert.equal(apiCalled, false, 'nothing uploadable, so no create is attempted');
-  assert.equal(result.entry.sync_status, 'failed', 'settled failed, NOT pending');
-  assert.equal(result.entry.retry_count, 1);
-  assert.match(result.entry.last_error ?? '', /no remote identity/i);
-});
-
-test('update: an ORPHANED local-id target whose row is gone leaves the queue cleanly', async () => {
-  // The local row was deleted, so there is nothing to update or create. Settle
-  // by removing the queue entry rather than failing it forever.
-  const { calls, repository } = fakeRepository();
-  const localId = 'local-mquc351g-wzpsqbby';
-  const entry = makeMutationEntry(localId, 'update');
-
-  const result = await syncQueueEntry(fakeApi(), repository, entry, () => undefined);
-
-  assert.equal(result.removeEntry, true);
-  assert.equal(result.entry.sync_status, 'synced');
-  assert.ok(calls.includes('removeQueueEntry:local-mquc351g-wzpsqbby'));
-});
-
-test('delete: an ORPHANED local-id target (no pending create) is REMOVED, no remote delete (issue #237)', async () => {
-  // The row never reached the server (its id is still local) and the local
-  // delete already happened — there is nothing to delete remotely, so the entry
-  // settles cleanly by leaving the queue.
-  const { calls, repository } = fakeRepository();
-  let apiCalled = false;
-  const api = fakeApi({
-    deleteBookmark: async () => {
-      apiCalled = true;
-    },
-  });
-  const localId = 'local-mquc351g-wzpsqbby';
-  const entry: LocalPendingBookmark = { ...makeMutationEntry(localId, 'delete'), remote_id: localId };
-
-  // Default predicate => no pending create => orphaned.
-  const result = await syncQueueEntry(api, repository, entry, () => undefined);
-
-  assert.equal(apiCalled, false, 'no remote delete must be attempted');
-  assert.equal(result.removeEntry, true, 'entry settles by leaving the queue');
-  assert.equal(result.entry.sync_status, 'synced');
-  assert.ok(calls.includes(`removeQueueEntry:${localId}`));
-});
-
 test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up', () => {
   // The remote row mirrors exactly what the create payload sent: same title/notes,
   // active, no metadata, no collection. Nothing diverged, so no follow-up update.
@@ -862,7 +649,7 @@ test('create→sync round-trip: a trashed-before-remote-id create lands deleted_
   // Pass 1: the create. The create payload omits deleted_at, so the freshly
   // minted cloud row is ACTIVE — this is the bug's starting condition.
   const created = await syncQueueEntry(api, repository, makeCreateEntry(), () => trashedLocal);
-  const persisted = created.bookmarkReplacement?.bookmark;
+  const persisted = created.bookmarkUpdate;
   assert.ok(persisted);
   assert.equal(persisted.deleted_at, '2026-06-24T00:00:00.000Z');
   assert.equal('deleted_at' in (createReceived[0] as object), false);
@@ -872,60 +659,15 @@ test('create→sync round-trip: a trashed-before-remote-id create lands deleted_
   assert.equal(createNeedsReconcileUpdate(persisted, created.uploadedPayload), true);
   const followUp = makeMutationEntry(persisted.id, 'update');
 
-  // Pass 2: process that update against the (still trashed) remote-id row.
-  const remoteRow = makeBookmark({ id: '00000000-0000-4000-8000-000000000001', deleted_at: '2026-06-24T00:00:00.000Z' });
+  // Pass 2: process that update against the (still trashed) row, under its
+  // own stable id.
+  const remoteRow = makeBookmark({ id: persisted.id, deleted_at: '2026-06-24T00:00:00.000Z' });
   await syncQueueEntry(api, repository, followUp, () => remoteRow);
 
   // The cloud row is now trashed: api.updateBookmark received deleted_at for it.
   assert.equal(updateReceived.length, 1);
-  assert.equal(updateReceived[0]?.[0], '00000000-0000-4000-8000-000000000001');
+  assert.equal(updateReceived[0]?.[0], persisted.id);
   assert.equal(updateReceived[0]?.[1]?.deleted_at, '2026-06-24T00:00:00.000Z');
-});
-
-test('create-sync tag re-key: a tag op parked on the local id moves to the remote id and becomes uploadable', async () => {
-  // Models the store's post-create reconcile (#2 fix). A tag op (carried over
-  // from account re-home, or added before the create synced) is queued against
-  // the local id. syncTagOps skips non-remote ids via hasRemoteIdentity, so
-  // without re-keying it would never upload. Drive the create, then apply the
-  // exact {previousId -> remote id} re-key the store performs.
-  const { repository } = fakeRepository();
-  const local = makeBookmark({ id: 'local-abc', sync_status: 'pending' });
-  // A real Supabase UUID so the re-keyed op passes the hasRemoteIdentity gate.
-  const remoteUuid = '7e64cf1e-0000-4000-8000-000000000001';
-  const api = fakeApi({
-    createBookmark: async () => ({
-      bookmark_id: remoteUuid,
-      status: 'created',
-      metadata_status: 'pending',
-    }),
-  });
-
-  const result = await syncQueueEntry(api, repository, makeCreateEntry(), () => local);
-  const previousId = result.bookmarkReplacement?.previousId;
-  const remoteId = result.bookmarkReplacement?.bookmark.id;
-  assert.equal(previousId, 'local-abc');
-  assert.equal(remoteId, remoteUuid);
-
-  // The tag op was queued against the local id — not yet uploadable.
-  let tagOps: PendingTagOp[] = [
-    {
-      id: 'op-1',
-      bookmark_id: 'local-abc',
-      tag_name: 'design',
-      op: 'add',
-      source: 'user',
-      confidence: null,
-      created_at: '2026-06-12T00:00:00.000Z',
-    },
-  ];
-  assert.equal(hasRemoteIdentity(tagOps[0]!.bookmark_id), false);
-
-  // The reconcile re-keys it onto the new remote id…
-  tagOps = rekeyPendingTagOps(tagOps, new Map([[previousId!, remoteId!]]));
-
-  // …so it now targets a remote row and syncTagOps will actually upload it.
-  assert.equal(tagOps[0]?.bookmark_id, remoteUuid);
-  assert.equal(hasRemoteIdentity(tagOps[0]!.bookmark_id), true);
 });
 
 test('hasRemoteIdentity accepts only Supabase UUIDs', () => {
@@ -1054,32 +796,6 @@ test('reconcileOrphanedQueueEntries leaves synced and already-queued bookmarks a
 
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.local_id, 'local-orphan');
-});
-
-test('reconcileStrandedSyncedDuplicates folds a stranded synced local-id row onto its remote twin (Sentry STASH-3P)', () => {
-  const url = 'https://example.com/stranded';
-  const stranded = makeBookmark({ id: 'local-stranded', url, url_hash: url, sync_status: 'synced' });
-  const twin = makeBookmark({ id: REMOTE_ID, url, url_hash: url, sync_status: 'synced' });
-
-  const swaps = reconcileStrandedSyncedDuplicates([stranded, twin]);
-
-  assert.equal(swaps.length, 1);
-  assert.equal(swaps[0]?.localId, 'local-stranded');
-  assert.equal(swaps[0]?.keep.id, REMOTE_ID);
-});
-
-test('reconcileStrandedSyncedDuplicates leaves a stranded row alone when no remote twin exists yet', () => {
-  const stranded = makeBookmark({ id: 'local-stranded', sync_status: 'synced' });
-
-  assert.deepEqual(reconcileStrandedSyncedDuplicates([stranded]), []);
-});
-
-test('reconcileStrandedSyncedDuplicates ignores a not-yet-synced local row and a remote-id row on its own', () => {
-  const url = 'https://example.com/normal';
-  const pendingLocal = makeBookmark({ id: 'local-pending', url, url_hash: url, sync_status: 'pending' });
-  const remoteOnly = makeBookmark({ id: REMOTE_ID, url: 'https://example.com/other', sync_status: 'synced' });
-
-  assert.deepEqual(reconcileStrandedSyncedDuplicates([pendingLocal, remoteOnly]), []);
 });
 
 test('makeMutationEntry targets the bookmark with a pending status', () => {
