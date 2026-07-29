@@ -3,8 +3,8 @@ import { test } from 'node:test';
 
 import {
   getReconcileDiagnostics,
+  recordBulkChunkStarted,
   recordCreateCompleted,
-  recordReconcileChunk,
   recordReconcileNeeded,
   resetReconcileDiagnostics,
 } from './reconcile-diagnostics.ts';
@@ -14,17 +14,33 @@ test('getReconcileDiagnostics returns undefined before anything is recorded', ()
   assert.equal(getReconcileDiagnostics(), undefined);
 });
 
-test('recordReconcileChunk accumulates counts and reason tallies across calls', () => {
+test('recordBulkChunkStarted counts a chunk and its entries, reconcile tracked separately per entry', () => {
   resetReconcileDiagnostics();
-  recordReconcileChunk(50, 12, { metadata_status: 12, site_name: 3 });
-  recordReconcileChunk(50, 5, { metadata_status: 5, title: 1 });
+  recordBulkChunkStarted(50);
+  recordReconcileNeeded({ metadata_status: 1, site_name: 1 });
+  recordReconcileNeeded({ metadata_status: 1 });
+  recordBulkChunkStarted(50);
+  recordReconcileNeeded({ metadata_status: 1, title: 1 });
 
   const snapshot = getReconcileDiagnostics();
   assert.ok(snapshot);
   assert.equal(snapshot!.chunksProcessed, 2);
   assert.equal(snapshot!.entriesCompleted, 100);
-  assert.equal(snapshot!.entriesReconciled, 17);
-  assert.deepEqual(snapshot!.reasonTally, { metadata_status: 17, site_name: 3, title: 1 });
+  assert.equal(snapshot!.entriesReconciled, 3);
+  assert.deepEqual(snapshot!.reasonTally, { metadata_status: 3, site_name: 1, title: 1 });
+});
+
+test('recordBulkChunkStarted counts every entry the chunk started with, even if every one is later skipped by downstream branching', () => {
+  // This is the whole point: a chunk where every result hits an early
+  // `continue` (deleted-mid-flight etc.) must still count as completed —
+  // recordBulkChunkStarted is called with results.length before any of
+  // that branching runs, not derived from what survives it.
+  resetReconcileDiagnostics();
+  recordBulkChunkStarted(12);
+  const snapshot = getReconcileDiagnostics();
+  assert.ok(snapshot);
+  assert.equal(snapshot!.entriesCompleted, 12);
+  assert.equal(snapshot!.entriesReconciled, 0);
 });
 
 test('recordCreateCompleted counts entries without counting as a bulk chunk', () => {
@@ -63,7 +79,8 @@ test('recordReconcileNeeded can be recorded independently of recordCreateComplet
 
 test('getReconcileDiagnostics returns a fresh copy each call (no shared mutable reference)', () => {
   resetReconcileDiagnostics();
-  recordReconcileChunk(1, 1, { title: 1 });
+  recordBulkChunkStarted(1);
+  recordReconcileNeeded({ title: 1 });
   const first = getReconcileDiagnostics()!;
   first.reasonTally.title = 999;
   const second = getReconcileDiagnostics()!;
@@ -72,7 +89,7 @@ test('getReconcileDiagnostics returns a fresh copy each call (no shared mutable 
 
 test('updatedAt reflects the last recorded event, not when the snapshot was read', async () => {
   resetReconcileDiagnostics();
-  recordReconcileChunk(1, 0, {});
+  recordBulkChunkStarted(1);
   const recordedAt = getReconcileDiagnostics()!.updatedAt;
   await new Promise((resolve) => setTimeout(resolve, 5));
   // Reading again well after the event must not bump the timestamp.

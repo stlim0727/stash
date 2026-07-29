@@ -117,8 +117,8 @@ import {
   syncQueueEntry,
 } from '@/sync/sync-bookmarks';
 import {
+  recordBulkChunkStarted,
   recordCreateCompleted,
-  recordReconcileChunk,
   recordReconcileNeeded,
 } from '@/sync/reconcile-diagnostics';
 
@@ -3614,6 +3614,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         chunk: LocalPendingBookmark[],
         results: Awaited<ReturnType<typeof syncCreateQueueEntryBatch>>,
       ) => {
+        if (results.length > 0) {
+          // STASH-3Y diagnostics: recorded unconditionally, before any of the
+          // per-entry branching below (deleted-mid-flight, no local row to
+          // merge) that can make the *rest* of this function skip an entry,
+          // or even return early if the whole chunk hits one of those. Every
+          // result syncCreateQueueEntryBatch returns already represents a
+          // create that succeeded remotely (see the comment on
+          // completedLocalIds.add below).
+          recordBulkChunkStarted(results.length);
+        }
         const completedLocalIds = new Set<string>();
         const completions: CreateSyncCompletion[] = [];
         const queueOnlyEntries: LocalPendingBookmark[] = [];
@@ -3802,35 +3812,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // values (caught in PR review).
             if (createNeedsReconcileUpdate(merged, uploadedPayload)) {
               followUpUpdates.push(merged);
-              if (merged.deleted_at !== null) {
-                reconcileReasonTally.deleted_at = (reconcileReasonTally.deleted_at ?? 0) + 1;
-              }
-              if (merged.is_archived) {
-                reconcileReasonTally.is_archived = (reconcileReasonTally.is_archived ?? 0) + 1;
-              }
-              if (merged.collection_id !== null) {
-                reconcileReasonTally.collection_id = (reconcileReasonTally.collection_id ?? 0) + 1;
-              }
-              if (merged.title !== (uploadedPayload.title ?? null)) {
-                reconcileReasonTally.title = (reconcileReasonTally.title ?? 0) + 1;
-              }
-              if (merged.notes !== (uploadedPayload.notes ?? null)) {
-                reconcileReasonTally.notes = (reconcileReasonTally.notes ?? 0) + 1;
-              }
-              if (merged.description !== (uploadedPayload.shared_text ?? null)) {
-                reconcileReasonTally.description = (reconcileReasonTally.description ?? 0) + 1;
-              }
-              if (merged.metadata_status !== 'pending') {
-                reconcileReasonTally.metadata_status = (reconcileReasonTally.metadata_status ?? 0) + 1;
-              }
-              if (merged.site_name !== null) {
-                reconcileReasonTally.site_name = (reconcileReasonTally.site_name ?? 0) + 1;
-              }
-              if (merged.favicon_url !== null) {
-                reconcileReasonTally.favicon_url = (reconcileReasonTally.favicon_url ?? 0) + 1;
-              }
-              if (merged.preview_image_url !== null) {
-                reconcileReasonTally.preview_image_url = (reconcileReasonTally.preview_image_url ?? 0) + 1;
+              const reasons: Record<string, number> = {};
+              if (merged.deleted_at !== null) reasons.deleted_at = 1;
+              if (merged.is_archived) reasons.is_archived = 1;
+              if (merged.collection_id !== null) reasons.collection_id = 1;
+              if (merged.title !== (uploadedPayload.title ?? null)) reasons.title = 1;
+              if (merged.notes !== (uploadedPayload.notes ?? null)) reasons.notes = 1;
+              if (merged.description !== (uploadedPayload.shared_text ?? null)) reasons.description = 1;
+              if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
+              if (merged.site_name !== null) reasons.site_name = 1;
+              if (merged.favicon_url !== null) reasons.favicon_url = 1;
+              if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
+              recordReconcileNeeded(reasons);
+              for (const [reason, count] of Object.entries(reasons)) {
+                reconcileReasonTally[reason] = (reconcileReasonTally[reason] ?? 0) + count;
               }
             }
             pendingAiIds.push(merged.id);
@@ -3846,13 +3841,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ` (reconcile ${followUpUpdates.length}, deletedMidFlight ${deletedMidFlightIds.length},` +
             ` reasons ${JSON.stringify(reconcileReasonTally)})`,
         );
-        // `results.length` (not `completedLocalIds.size`, which tracks a
-        // narrower "needs the in-memory queue filtered" set and keeps missing
-        // edge cases — deleted-mid-flight, queue-only, row-raced-away) is the
-        // one count that's unconditionally correct here: every result
-        // syncCreateQueueEntryBatch returns already represents a create that
-        // succeeded remotely (see the comment on completedLocalIds.add above).
-        recordReconcileChunk(results.length, followUpUpdates.length, reconcileReasonTally);
 
         for (const id of deletedMidFlightIds) {
           enqueueMutation(id, 'delete');

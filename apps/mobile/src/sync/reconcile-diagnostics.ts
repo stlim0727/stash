@@ -41,20 +41,19 @@ const state: Omit<ReconcileDiagnostics, 'updatedAt'> & { updatedAt: string | nul
   updatedAt: null,
 };
 
-/** A completed bulk-create chunk (`applyBulkCreateChunkResults`) — `completed`
- *  and `reconciled` are both known at once for a whole chunk, so this stays a
- *  single call. */
-export function recordReconcileChunk(
-  completed: number,
-  reconciled: number,
-  reasonCounts: Record<string, number>,
-): void {
+/**
+ * A completed bulk-create chunk (`applyBulkCreateChunkResults`) — `count` is
+ * `results.length`, the number of creates the batch call returned. Every
+ * result it returns already represents a create that succeeded remotely,
+ * regardless of what each entry's own downstream branching does with it
+ * (deleted-mid-flight, no local row to merge, etc. can all still make the
+ * *rest* of the function skip an entry) — so call this once, unconditionally,
+ * before any of that branching runs. Reconcile-need is recorded separately,
+ * per entry, once actually determined — see `recordReconcileNeeded`.
+ */
+export function recordBulkChunkStarted(count: number): void {
   state.chunksProcessed += 1;
-  state.entriesCompleted += completed;
-  state.entriesReconciled += reconciled;
-  for (const [reason, count] of Object.entries(reasonCounts)) {
-    state.reasonTally[reason] = (state.reasonTally[reason] ?? 0) + count;
-  }
+  state.entriesCompleted += count;
   state.updatedAt = new Date().toISOString();
 }
 
@@ -73,8 +72,9 @@ export function recordCreateCompleted(): void {
   state.updatedAt = new Date().toISOString();
 }
 
-/** A create (already counted via `recordCreateCompleted`) needed a
- *  `createNeedsReconcileUpdate` follow-up — record why. */
+/** A create (already counted via `recordCreateCompleted`/
+ *  `recordBulkChunkStarted`) needed a `createNeedsReconcileUpdate`
+ *  follow-up — record why. Used by both the bulk and single-create paths. */
 export function recordReconcileNeeded(reasonCounts: Record<string, number>): void {
   state.entriesReconciled += 1;
   for (const [reason, count] of Object.entries(reasonCounts)) {
