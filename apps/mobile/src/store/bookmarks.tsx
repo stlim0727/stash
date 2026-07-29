@@ -2300,18 +2300,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         };
         ensureRepositoryReady()
           .then(async () => {
-            // Sequential on purpose (Sentry STASH-3B): a 500+ item import via
-            // Promise.all meant ~1000 simultaneous pending native SQLite calls.
-            // newBookmarks/newEntries are parallel arrays (pushed together above).
             const epochAtStart = resetEpoch.current;
-            for (let i = 0; i < newBookmarks.length; i += 1) {
-              if (resetEpoch.current !== epochAtStart) {
-                recordLog('warn', 'import: loop aborted by library reset');
-                break;
+            if (resetEpoch.current !== epochAtStart) {
+              recordLog('warn', 'import: loop aborted by library reset');
+              return;
+            }
+            if (repository.insertImportBatch) {
+              await repository.insertImportBatch(newBookmarks, newEntries);
+              if (resetEpoch.current === epochAtStart) {
+                for (const bookmark of newBookmarks) {
+                  releaseAndEnrich(bookmark);
+                }
               }
-              await repository.insertBookmark(newBookmarks[i]);
-              await repository.enqueue(newEntries[i]);
-              releaseAndEnrich(newBookmarks[i]);
+            } else {
+              for (let i = 0; i < newBookmarks.length; i += 1) {
+                if (resetEpoch.current !== epochAtStart) {
+                  recordLog('warn', 'import: loop aborted by library reset');
+                  break;
+                }
+                await repository.insertBookmark(newBookmarks[i]);
+                await repository.enqueue(newEntries[i]);
+                releaseAndEnrich(newBookmarks[i]);
+              }
             }
           })
           .catch((error) => logStorageError('imported bookmarks', error))
@@ -3609,9 +3619,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           } catch (error) {
             recordLog(
               'warn',
-              `bulk create sync failed; falling back to single-entry sync (${
+              `bulk create sync failed (${
                 error instanceof Error ? error.message : String(error)
-              })`,
+              }); preserving bulk mode for next retry`,
             );
             setQueue((current) =>
               current.map((queued) => {
@@ -3619,6 +3629,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 return original ? { ...queued, sync_status: original.sync_status } : queued;
               }),
             );
+            for (const entry of bulkCreateEntries) {
+              bulkSyncedLocalIds.add(entry.local_id);
+            }
+            break;
           }
         }
       }

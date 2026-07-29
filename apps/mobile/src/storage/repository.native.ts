@@ -249,6 +249,20 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     );
   }
 
+  async insertImportBatch(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void> {
+    if (bookmarks.length === 0) {
+      return;
+    }
+    await this.connection.run((db) =>
+      db.withTransactionAsync(async () => {
+        for (let i = 0; i < bookmarks.length; i += 1) {
+          await writeBookmark(db, bookmarks[i]);
+          await enqueueOp(db, entries[i]);
+        }
+      }),
+    );
+  }
+
   async deleteBookmark(id: string): Promise<void> {
     await this.connection.run((db) => db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]));
   }

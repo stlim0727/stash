@@ -44,9 +44,16 @@ export interface BookmarkRepository {
   /**
    * Atomically finish a bulk create chunk: each bookmark's updated fields
    * (sync_status, ever_synced, etc.) and its completed create queue row are
-   * persisted together.
+   * persisted together, along with deleting the phantom old-id row for any
+   * completion whose create resolved as a server-side duplicate (see
+   * CreateSyncCompletion.originalLocalId).
    */
   completeCreateSyncBatch?(completions: CreateSyncCompletion[]): Promise<void>;
+  /**
+   * Atomically insert a batch of imported bookmarks and their pending create queue
+   * entries in a single transaction (Sentry STASH-3S / STASH-3T).
+   */
+  insertImportBatch?(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void>;
   deleteBookmark(id: string): Promise<void>;
   listQueue(): Promise<LocalPendingBookmark[]>;
   enqueue(entry: LocalPendingBookmark): Promise<void>;
