@@ -55,10 +55,15 @@ export interface AccountTransitionPlan {
 
 /**
  * Rows that can be CARRIED OVER (re-homed) from a previous ANONYMOUS account:
- * a real remote identity (Supabase UUID) and already `synced`. Device-local/seed
- * rows are never touched — they have no remote identity and belong to no account
- * yet. The remote-identity check also makes a transition self-idempotent: once
- * re-homed (now a local id), a row no longer matches.
+ * confirmed synced to that account's cloud. Device-local/seed rows are never
+ * touched — they belong to no account yet. Seed/sample rows are marked
+ * `sync_status: 'synced'` locally too (so the orphan self-heal never tries to
+ * upload them), even though their `bookmark-…` id was never a real cloud row —
+ * `hasRemoteIdentity` filters those out; every genuine bookmark (old-scheme or
+ * new) has a real UUID id regardless of sync state, so this never excludes a
+ * legitimately synced row. `synced` also makes a transition self-idempotent:
+ * once re-homed (now `pending` under a freshly-minted id), a row no longer
+ * matches.
  *
  * Re-home is deliberately `synced`-only: a not-yet-synced row has no confirmed
  * cloud copy under the anon account, and its create entry is still in the queue,
@@ -72,25 +77,35 @@ function cloudOwnedRows(localBookmarks: Bookmark[]): Bookmark[] {
 
 /**
  * Rows owned by the previously-signed-in CLOUD account that must be DROPPED on a
- * real-account departure (logout, or a real A→real B switch): every row with a
- * remote identity (Supabase UUID), REGARDLESS of sync_status.
+ * real-account departure (logout, or a real A→real B switch): every row EVER
+ * confirmed synced to that account's cloud (`Bookmark.ever_synced`), REGARDLESS
+ * of current sync_status.
  *
  * Crucially this includes rows the account edited or deleted after they were
  * synced — those flip to `sync_status: 'pending'` with an `update`/`delete` queue
- * entry keyed to the account's remote UUID. The original synced-only filter KEPT
+ * entry keyed to the account's remote UUID. `sync_status` alone can't tell that
+ * case apart from a fresh, never-synced local create — both read `'pending'` —
+ * which is exactly what `ever_synced` records. A synced-only filter would KEEP
  * those rows (and their queue entries), so the next minted account's sync would
  * fire the update/delete under a different identity against a UUID it doesn't
- * own (RLS/404 → the edit silently stranded). Dropping by remote identity, plus
+ * own (RLS/404 → the edit silently stranded). Dropping these rows, plus
  * removing the matching queue entries (`dropQueue`), closes that data-loss hole.
  *
- * Capture is sacred: never-synced LOCAL creates have local-* ids (no remote
- * identity), so they are NOT matched here and survive to upload under the next
- * account. Discarding an unsynced EDIT to a cloud bookmark is the deliberate
- * trade-off: the bookmark itself is safe in that account's cloud, and keeping
- * the queued op would strand it under a different identity, so we drop the op.
+ * Capture is sacred: never-synced LOCAL creates (`ever_synced` unset, not
+ * `synced`) are NOT matched here and survive to upload under the next account.
+ * Discarding an unsynced EDIT to a cloud bookmark is the deliberate trade-off:
+ * the bookmark itself is safe in that account's cloud, and keeping the queued
+ * op would strand it under a different identity, so we drop the op.
+ *
+ * `hasRemoteIdentity` excludes seed/sample rows the same way `cloudOwnedRows`
+ * does — see its comment.
  */
 function cloudRemoteRows(localBookmarks: Bookmark[]): Bookmark[] {
-  return localBookmarks.filter((bookmark) => hasRemoteIdentity(bookmark.id));
+  return localBookmarks.filter(
+    (bookmark) =>
+      hasRemoteIdentity(bookmark.id) &&
+      (bookmark.sync_status === 'synced' || bookmark.ever_synced === true),
+  );
 }
 
 /**
@@ -185,7 +200,7 @@ export async function applyAccountTransition(
   repository: BookmarkRepository,
   setBookmarks: (updater: (prev: Bookmark[] | null) => Bookmark[] | null) => void,
   setQueue: (updater: (prev: LocalPendingBookmark[]) => LocalPendingBookmark[]) => void,
-  makeLocalId: () => string,
+  makeBookmarkId: () => string,
   ensureRepositoryReady: () => Promise<void>,
   /**
    * Tag state (pending tag ops + optimistic tag links) is keyed by bookmark id,
@@ -209,20 +224,30 @@ export async function applyAccountTransition(
   if (plan.rehome.length > 0) {
     const now = new Date().toISOString();
     const rehomedById = new Map<string, Bookmark>();
-    /** old bookmark id -> new local id, for re-keying tag state below. */
+    /** old bookmark id -> new bookmark id, for re-keying tag state below. */
     const idMap = new Map<string, string>();
     const newEntries: LocalPendingBookmark[] = [];
     for (const old of plan.rehome) {
-      const newId = makeLocalId();
+      const newId = makeBookmarkId();
       idMap.set(old.id, newId);
-      rehomedById.set(old.id, { ...old, id: newId, sync_status: 'pending', updated_at: now });
+      // ever_synced resets: the new id has never synced under this account,
+      // regardless of whether the old row (under the old id) ever had.
+      rehomedById.set(old.id, {
+        ...old,
+        id: newId,
+        sync_status: 'pending',
+        ever_synced: false,
+        updated_at: now,
+      });
       newEntries.push({
         local_id: newId,
         remote_id: null,
         operation: 'create',
         // Rebuild from the stored row, carrying a text note's body back as
-        // shared_text so URL-less notes still upload to the new account.
-        payload: createPayloadFromBookmark(old),
+        // shared_text so URL-less notes still upload to the new account, under
+        // the freshly-minted id so the create uploads with a stable identity
+        // from the start (see createPayloadFromBookmark).
+        payload: { ...createPayloadFromBookmark(old), id: newId },
         sync_status: 'pending',
         retry_count: 0,
         last_error: null,

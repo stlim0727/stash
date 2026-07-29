@@ -533,18 +533,13 @@ function parseIdSet(raw: string | null): Set<string> {
 
 const BookmarksContext = createContext<BookmarksContextValue | null>(null);
 
-function makeLocalId() {
-  return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
 /**
- * A UUID-format capture id for {@link Bookmark.client_id}. Prefers the platform
- * crypto when present (web, modern Hermes, the Node test runner) and otherwise
- * falls back to a Math.random v4 — this is a server-side dedupe key, not a
- * secret, so it only needs to be unique, not cryptographically strong. The
- * cloud `bookmarks.client_id` column is `uuid`, so the format must be valid.
+ * A UUID v4. Prefers the platform crypto when present (web, modern Hermes, the
+ * Node test runner) and otherwise falls back to a Math.random-based v4 — these
+ * are dedupe/identity keys, not secrets, so they only need to be unique, not
+ * cryptographically strong.
  */
-function makeClientId(): string {
+function makeUuid(): string {
   const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
   if (cryptoObj?.randomUUID) {
     return cryptoObj.randomUUID();
@@ -554,6 +549,27 @@ function makeClientId(): string {
     const value = char === 'x' ? rand : (rand & 0x3) | 0x8;
     return value.toString(16);
   });
+}
+
+/**
+ * A bookmark's permanent id, minted once at capture time. Sent to the server
+ * as the row's own primary key (see CreateBookmarkInput.id / api/bookmarks.ts)
+ * so a create never has to hand back a different id for the client to adopt —
+ * there is no local→remote id swap. Same UUID format `client_id` already used
+ * (and still uses, as a separate idempotency key — see createPayloadFromBookmark),
+ * so a bookmark's own id and its capture id are indistinguishable in shape;
+ * they're kept as two separate fields on purpose, not merged.
+ */
+function makeBookmarkId(): string {
+  return makeUuid();
+}
+
+/**
+ * A UUID-format capture id for {@link Bookmark.client_id}. The cloud
+ * `bookmarks.client_id` column is `uuid`, so the format must be valid.
+ */
+function makeClientId(): string {
+  return makeUuid();
 }
 
 /**
@@ -902,6 +918,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .catch((error) => logStorageError('tag ops', error));
   }, []);
 
+  // True once a bookmark's create has been confirmed synced at least once —
+  // even if it currently reads `sync_status: 'pending'` again because of a
+  // later, still-uploading edit (see Bookmark.ever_synced). The gate every
+  // write path needs before it's safe to also send a remote update/delete/tag
+  // mutation for a bookmark.
+  const hasSyncedOnce = useCallback((bookmarkId: string): boolean => {
+    const bookmark = bookmarksRef.current?.find((b) => b.id === bookmarkId);
+    if (!bookmark) {
+      return false;
+    }
+    // Seed/sample rows are marked sync_status: 'synced' locally too (so the
+    // orphan self-heal never tries to upload them), even though their
+    // bookmark-* id was never a real cloud row. hasRemoteIdentity excludes
+    // those; every genuine bookmark (old-scheme or new) has a real UUID id
+    // regardless of sync state, so this never excludes a legitimately synced one.
+    return hasRemoteIdentity(bookmark.id) && (bookmark.sync_status === 'synced' || bookmark.ever_synced === true);
+  }, []);
+
   // Queue a remote mutation for a bookmark that already exists on the server.
   // One entry per bookmark: a newer mutation supersedes an older one.
   const enqueueMutation = useCallback((bookmarkId: string, operation: 'update' | 'delete') => {
@@ -916,7 +950,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // show as sync-pending, and queue an update mutation for synced bookmarks.
   const applyBookmarkUpdate = useCallback(
     (id: string, patch: Partial<Bookmark>) => {
-      const syncsRemotely = hasRemoteIdentity(id);
+      const syncsRemotely = hasSyncedOnce(id);
       setBookmarks((current) => {
         if (current === null) {
           return current;
@@ -929,6 +963,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ...bookmark,
             ...patch,
             sync_status: syncsRemotely ? 'pending' : bookmark.sync_status,
+            // Stamp it the first time this row is confirmed synced (see
+            // Bookmark.ever_synced) — without this, flipping sync_status back
+            // to 'pending' here would be indistinguishable from a fresh,
+            // never-synced create the next time anything checks hasSyncedOnce.
+            ever_synced: syncsRemotely ? true : bookmark.ever_synced,
             updated_at: new Date().toISOString(),
           };
         });
@@ -940,6 +979,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           ...existing,
           ...patch,
           sync_status: syncsRemotely ? 'pending' : existing.sync_status,
+          ever_synced: syncsRemotely ? true : existing.ever_synced,
           updated_at: new Date().toISOString(),
         };
         // Keep the ref itself current immediately, not just via the `useEffect`
@@ -958,7 +998,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [enqueueMutation],
+    [enqueueMutation, hasSyncedOnce],
   );
 
   // Suggestion review/dismissal helpers
@@ -1473,7 +1513,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             : {
                 ...source,
                 id: currentId,
-                sync_status: hasRemoteIdentity(currentId) ? 'synced' : source.sync_status,
+                sync_status: hasSyncedOnce(currentId) ? 'synced' : source.sync_status,
               };
         // Fill only generated fields that are still empty, so a user-authored
         // title is never overwritten by generated metadata.
@@ -1514,14 +1554,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Push the freshly fetched metadata to the cloud so other devices see
         // it on their next pull. Only for already-synced bookmarks: a local
         // bookmark's create upload already sends its latest fields.
-        if (hasRemoteIdentity(updated.id)) {
+        if (hasSyncedOnce(updated.id)) {
           enqueueMutation(updated.id, 'update');
         }
       } finally {
         enriching.current.delete(bookmark.id);
       }
     });
-  }, [enqueueMutation]);
+  }, [enqueueMutation, hasSyncedOnce]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1642,6 +1682,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     ],
                     // Queue for sync to remote DB
                     sync_status: 'pending',
+                    ever_synced: true,
                     updated_at: new Date().toISOString(),
                   };
                   ensureRepositoryReady()
@@ -1899,7 +1940,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // has actually landed on disk.
       if (image) {
         const now = new Date().toISOString();
-        const id = makeLocalId();
+        const id = makeBookmarkId();
         const fileName = localImageFileName(id, image);
         const imageBookmark: Bookmark = {
           id,
@@ -1972,7 +2013,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // dedupes against its own first attempt instead of inserting a twin.
         const noteClientId = makeClientId();
         const note: Bookmark = {
-          id: makeLocalId(),
+          id: makeBookmarkId(),
           user_id: mockUserId,
           url: null,
           canonical_url: null,
@@ -2005,6 +2046,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           remote_id: null,
           operation: 'create',
           payload: {
+            id: note.id,
             title: note.title ?? undefined,
             notes: note.notes ?? undefined,
             shared_text: text,
@@ -2073,7 +2115,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
       const clientId = makeClientId();
       const bookmark: Bookmark = {
-        id: makeLocalId(),
+        id: makeBookmarkId(),
         user_id: mockUserId,
         url: normalized,
         canonical_url: null,
@@ -2107,6 +2149,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         remote_id: null,
         operation: 'create',
         payload: {
+          id: bookmark.id,
           url: normalized,
           title: bookmark.title ?? undefined,
           notes: bookmark.notes ?? undefined,
@@ -2212,7 +2255,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         seen.add(dedupeKey);
 
-        const id = makeLocalId();
+        const id = makeBookmarkId();
         const clientId = makeClientId();
         const title = item.title?.trim() ? item.title.trim() : null;
         const notes = item.notes?.trim() ? item.notes.trim() : null;
@@ -2246,6 +2289,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           remote_id: null,
           operation: 'create',
           payload: {
+            id,
             url: normalized,
             title: title ?? undefined,
             notes: notes ?? undefined,
@@ -2446,11 +2490,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           nextPatch.preview_image_url = patch.preview_image_url;
         }
         const latest = bookmarksRef.current?.find((item) => item.id === id) ?? bookmark;
-        const syncsRemotely = hasRemoteIdentity(id);
+        const syncsRemotely = hasSyncedOnce(id);
         const updated: Bookmark = {
           ...latest,
           ...nextPatch,
           sync_status: syncsRemotely ? 'pending' : latest.sync_status,
+          ever_synced: syncsRemotely ? true : latest.ever_synced,
           updated_at: new Date().toISOString(),
         };
         setBookmarks((current) =>
@@ -2502,7 +2547,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         });
       }
     },
-    [enqueueMutation, previewRefreshingIds],
+    [enqueueMutation, previewRefreshingIds, hasSyncedOnce],
   );
 
   const deleteBookmark = useCallback(
@@ -2517,7 +2562,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Same rationale as above: a permanently-gone row has nothing left to
       // wait for from the server-side overflow queue either.
       clearAiServerQueued(id);
-      if (hasRemoteIdentity(id)) {
+      if (hasSyncedOnce(id)) {
         // The row exists remotely: replace any queued work with a durable
         // delete mutation so the removal reaches Supabase even after restart.
         ensureRepositoryReady()
@@ -2532,7 +2577,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .then(() => Promise.all([repository.deleteBookmark(id), repository.removeQueueEntry(id)]))
         .catch((error) => logStorageError('delete bookmark', error));
     },
-    [enqueueMutation, clearAiRetry, syncAiRetryIds, clearAiServerQueued],
+    [enqueueMutation, clearAiRetry, syncAiRetryIds, clearAiServerQueued, hasSyncedOnce],
   );
 
   const emptyTrash = useCallback(() => {
@@ -2662,7 +2707,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const api = createSyncApi(auth.session);
     for (const op of ops) {
       // The bookmark must exist remotely before its tags can be linked.
-      if (!hasRemoteIdentity(op.bookmark_id)) {
+      if (!hasSyncedOnce(op.bookmark_id)) {
         continue;
       }
       try {
@@ -2692,13 +2737,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       broadcastSyncNudgeRef.current?.();
     }
     return mutationsPushed;
-  }, [auth.session, applyTagData, applyTagOps]);
+  }, [auth.session, applyTagData, applyTagOps, hasSyncedOnce]);
 
   // Local-first: apply the tag immediately and queue the upload. Works offline
   // and the moment a bookmark has synced; the queued op uploads on the next sync.
   const addTagsToBookmark = useCallback(
     async (bookmarkId: string, names: string[]): Promise<string | null> => {
-      if (!hasRemoteIdentity(bookmarkId)) {
+      if (!hasSyncedOnce(bookmarkId)) {
         return 'Tags can be added once this bookmark has synced.';
       }
       const cleaned = names.map((name) => name.trim()).filter((name) => name.length > 0);
@@ -2711,7 +2756,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       let nextOps = pendingTagOpsRef.current;
       for (const name of cleaned) {
         const op: PendingTagOp = {
-          id: makeLocalId(),
+          id: makeUuid(),
           bookmark_id: bookmarkId,
           tag_name: name,
           op: 'add',
@@ -2727,16 +2772,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncTagOps();
       return null;
     },
-    [auth.userId, applyTagData, applyTagOps, syncTagOps],
+    [auth.userId, applyTagData, applyTagOps, syncTagOps, hasSyncedOnce],
   );
 
   const removeTagFromBookmark = useCallback(
     async (bookmarkId: string, tagName: string): Promise<string | null> => {
-      if (!hasRemoteIdentity(bookmarkId)) {
+      if (!hasSyncedOnce(bookmarkId)) {
         return 'Seeded sample tags cannot be edited.';
       }
       const op: PendingTagOp = {
-        id: makeLocalId(),
+        id: makeUuid(),
         bookmark_id: bookmarkId,
         tag_name: tagName,
         op: 'remove',
@@ -2749,7 +2794,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncTagOps();
       return null;
     },
-    [auth.userId, applyTagData, applyTagOps, syncTagOps],
+    [auth.userId, applyTagData, applyTagOps, syncTagOps, hasSyncedOnce],
   );
 
   // Ask the backend to (re)generate AI suggestions for a synced bookmark. The
@@ -2765,16 +2810,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (!auth.session) {
         return 'AI suggestions need the cloud — Supabase is not available right now.';
       }
-      if (!hasRemoteIdentity(bookmarkId)) {
-        return 'AI suggestions are available once this bookmark has synced.';
-      }
       // The id may come from a queued dispatch (the stagger drain, a retry
       // check) that outlived its bookmark — deleted, or wiped by a library
       // reset. Don't fetch suggestions for a row that no longer exists
-      // locally; report success so stale trigger markers get cleaned up.
-      // (Aliased old ids are local-* and already rejected above.)
+      // locally; report success so stale trigger markers get cleaned up. Must
+      // run BEFORE hasSyncedOnce: that check can't tell "gone" from "never
+      // synced" (both read as "no bookmark found"), and this one needs to win.
       if (!bookmarksRef.current?.some((item) => item.id === bookmarkId)) {
         return null;
+      }
+      if (!hasSyncedOnce(bookmarkId)) {
+        return 'AI suggestions are available once this bookmark has synced.';
       }
       if (aiEnriching.current.has(bookmarkId)) {
         return null;
@@ -3045,6 +3091,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       clearPendingAiTrigger,
       markAiServerQueued,
       clearAiServerQueued,
+      hasSyncedOnce,
     ],
   );
   useEffect(() => {
@@ -3098,7 +3145,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // provenance and confidence are preserved (vs. user-typed tags).
   const acceptSuggestedTags = useCallback(
     async (bookmarkId: string, suggestions: SuggestedTag[]): Promise<string | null> => {
-      if (!hasRemoteIdentity(bookmarkId)) {
+      if (!hasSyncedOnce(bookmarkId)) {
         return 'Tags can be added once this bookmark has synced.';
       }
       const valid = suggestions.filter((suggestion) => suggestion.name.trim().length > 0);
@@ -3111,7 +3158,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       let nextOps = pendingTagOpsRef.current;
       for (const suggestion of valid) {
         const op: PendingTagOp = {
-          id: makeLocalId(),
+          id: makeUuid(),
           bookmark_id: bookmarkId,
           tag_name: suggestion.name,
           op: 'add',
@@ -3133,7 +3180,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncTagOps();
       return null;
     },
-    [auth.userId, applyTagData, applyTagOps, markSuggestionsReviewed, syncTagOps],
+    [auth.userId, applyTagData, applyTagOps, markSuggestionsReviewed, syncTagOps, hasSyncedOnce],
   );
 
   const assignCollection = useCallback(
@@ -3250,7 +3297,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           repository,
           setBookmarks,
           setQueue,
-          makeLocalId,
+          makeBookmarkId,
           ensureRepositoryReady,
           {
             rehome: (idMap) => {
@@ -3508,7 +3555,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // the new remote id ??otherwise any tag op queued before this sync
             // (a carried-over op from account re-home, or a tag added while the
             // create was uploading) stays parked on a dead local id that
-            // syncTagOps skips via hasRemoteIdentity, and never uploads.
+            // syncTagOps skips via hasSyncedOnce, and never uploads.
             if (previousId !== persisted.id) {
               // Remember the old?뭤ew id so a screen still holding the old id
               // (e.g. a Detail opened right after a share) resolves the live
@@ -3842,7 +3889,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // the new remote id — otherwise any tag op queued before this sync
               // (a carried-over op from account re-home, or a tag added while the
               // create was uploading) stays parked on a dead local id that
-              // syncTagOps skips via hasRemoteIdentity, and never uploads.
+              // syncTagOps skips via hasSyncedOnce, and never uploads.
               if (previousId !== persisted.id) {
                 // Remember the old→new id so a screen still holding the old id
                 // (e.g. a Detail opened right after a share) resolves the live
@@ -4552,7 +4599,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           repository,
           setBookmarks,
           setQueue,
-          makeLocalId,
+          makeBookmarkId,
           ensureRepositoryReady,
           {
             drop: (ids) => {
