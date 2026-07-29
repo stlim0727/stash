@@ -69,14 +69,23 @@ export function noteSqliteOpenFailure(phase: string, error: unknown): void {
  * multi-minute background both just look like "a long wait"), so the
  * distinction is made by counting actual AppState transitions instead of
  * guessing from elapsed time.
+ *
+ * `waitCount` increments on every call (it's a running tally, not a
+ * maximum), but `updatedAt` only advances when `maxWaitMs` or `maxDepth`
+ * actually does — a routine 300ms wait long after an hours-old 10s one must
+ * not make that old severe event look contemporaneous with a report filed
+ * around the routine one.
  */
 export function noteSqliteTailWait(waitMs: number, depth: number): void {
   const prev = diagnostics.sqliteContention;
+  const maxWaitMs = Math.max(prev?.maxWaitMs ?? 0, waitMs);
+  const maxDepth = Math.max(prev?.maxDepth ?? 0, depth);
+  const advancedMax = !prev || maxWaitMs > prev.maxWaitMs || maxDepth > prev.maxDepth;
   diagnostics.sqliteContention = {
-    maxWaitMs: Math.max(prev?.maxWaitMs ?? 0, waitMs),
-    maxDepth: Math.max(prev?.maxDepth ?? 0, depth),
+    maxWaitMs,
+    maxDepth,
     waitCount: (prev?.waitCount ?? 0) + 1,
-    updatedAt: new Date().toISOString(),
+    updatedAt: advancedMax ? new Date().toISOString() : prev!.updatedAt,
   };
 }
 

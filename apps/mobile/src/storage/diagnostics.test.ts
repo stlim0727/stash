@@ -43,3 +43,18 @@ test('noteSqliteQueueDepth does not bump updatedAt when it does not advance the 
   const after = getStorageDiagnostics()!.sqliteContention!;
   assert.equal(after.updatedAt, before.updatedAt);
 });
+
+test('noteSqliteTailWait bumps waitCount but not updatedAt when neither maximum advances', async () => {
+  noteSqliteTailWait(10_000, 5); // sets a severe maximum
+  const severe = getStorageDiagnostics()!.sqliteContention!;
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  // A routine wait long after, below both existing maxima — must count
+  // toward waitCount but not make the old severe max look contemporaneous.
+  noteSqliteTailWait(300, 2);
+  const after = getStorageDiagnostics()!.sqliteContention!;
+  assert.equal(after.maxWaitMs, severe.maxWaitMs);
+  assert.equal(after.maxDepth, severe.maxDepth);
+  assert.equal(after.waitCount, severe.waitCount + 1);
+  assert.equal(after.updatedAt, severe.updatedAt);
+});
