@@ -116,7 +116,7 @@ import {
   syncCreateQueueEntryBatch,
   syncQueueEntry,
 } from '@/sync/sync-bookmarks';
-import { recordReconcileChunk } from '@/sync/reconcile-diagnostics';
+import { recordReconcileChunk, recordSingleCreateCompletion } from '@/sync/reconcile-diagnostics';
 
 export type AddBookmarkResult =
   | {
@@ -3552,29 +3552,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // reach the cloud. Without the `deleted_at` arm, a bookmark trashed
             // before it had a remote id would stay live in the cloud and
             // resurrect on other devices.
-            if (createUploaded && createNeedsReconcileUpdate(merged, result.uploadedPayload)) {
+            if (createUploaded) {
               // STASH-3Y diagnostics: same reconcile path as the bulk chunk
               // loop below, just one entry at a time (single-create fallback).
+              // Recorded for every completion (not just reconciled ones) so
+              // entriesCompleted/entriesReconciled stay comparable.
               const payload = result.uploadedPayload;
+              const needsReconcile = createNeedsReconcileUpdate(merged, payload);
               const reasons: Record<string, number> = {};
-              if (merged.deleted_at !== null) reasons.deleted_at = 1;
-              if (merged.is_archived) reasons.is_archived = 1;
-              if (merged.collection_id !== null) reasons.collection_id = 1;
-              if (merged.title !== (payload?.title ?? null)) reasons.title = 1;
-              if (merged.notes !== (payload?.notes ?? null)) reasons.notes = 1;
-              if (merged.description !== (payload?.shared_text ?? null)) reasons.description = 1;
-              if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
-              if (merged.site_name !== null) reasons.site_name = 1;
-              if (merged.favicon_url !== null) reasons.favicon_url = 1;
-              if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
-              recordLog(
-                'info',
-                `single create reconcile: metadata_status=${merged.metadata_status} ` +
-                  `site_name=${merged.site_name !== null} favicon_url=${merged.favicon_url !== null} ` +
-                  `preview_image_url=${merged.preview_image_url !== null}`,
-              );
-              recordReconcileChunk(1, 1, reasons);
-              enqueueMutation(merged.id, 'update');
+              if (needsReconcile) {
+                if (merged.deleted_at !== null) reasons.deleted_at = 1;
+                if (merged.is_archived) reasons.is_archived = 1;
+                if (merged.collection_id !== null) reasons.collection_id = 1;
+                if (merged.title !== (payload?.title ?? null)) reasons.title = 1;
+                if (merged.notes !== (payload?.notes ?? null)) reasons.notes = 1;
+                if (merged.description !== (payload?.shared_text ?? null)) reasons.description = 1;
+                if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
+                if (merged.site_name !== null) reasons.site_name = 1;
+                if (merged.favicon_url !== null) reasons.favicon_url = 1;
+                if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
+              }
+              recordSingleCreateCompletion(needsReconcile, reasons);
+              if (needsReconcile) {
+                recordLog(
+                  'info',
+                  `single create reconcile: metadata_status=${merged.metadata_status} ` +
+                    `site_name=${merged.site_name !== null} favicon_url=${merged.favicon_url !== null} ` +
+                    `preview_image_url=${merged.preview_image_url !== null}`,
+                );
+                enqueueMutation(merged.id, 'update');
+              }
             }
             // A brand-new bookmark just gained a remote identity: queue AI
             // suggestions for it. We DON'T fire immediately — the background

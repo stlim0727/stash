@@ -17,7 +17,8 @@
  */
 
 export interface ReconcileDiagnostics {
-  /** Bulk create chunks processed this session. */
+  /** Bulk create chunks processed this session (the single-create fallback
+   *  path does not count here — see `recordSingleCreateCompletion`). */
   chunksProcessed: number;
   /** Total create-sync completions seen (bulk chunks + single-create fallback). */
   entriesCompleted: number;
@@ -26,37 +27,59 @@ export interface ReconcileDiagnostics {
   /** Cumulative count of which field(s) tripped the check — a completion can
    *  count toward more than one reason, so these don't sum to `entriesReconciled`. */
   reasonTally: Record<string, number>;
+  /** When the last event was recorded (not when this snapshot was read) —
+   *  so a report filed long after the last sync activity doesn't make stale
+   *  data look freshly updated. */
   updatedAt: string;
 }
 
-const state: Omit<ReconcileDiagnostics, 'updatedAt'> = {
+const state: Omit<ReconcileDiagnostics, 'updatedAt'> & { updatedAt: string | null } = {
   chunksProcessed: 0,
   entriesCompleted: 0,
   entriesReconciled: 0,
   reasonTally: {},
+  updatedAt: null,
 };
 
+function recordEntries(completed: number, reconciled: number, reasonCounts: Record<string, number>): void {
+  state.entriesCompleted += completed;
+  state.entriesReconciled += reconciled;
+  for (const [reason, count] of Object.entries(reasonCounts)) {
+    state.reasonTally[reason] = (state.reasonTally[reason] ?? 0) + count;
+  }
+  state.updatedAt = new Date().toISOString();
+}
+
+/** A completed bulk-create chunk (`applyBulkCreateChunkResults`). */
 export function recordReconcileChunk(
   completed: number,
   reconciled: number,
   reasonCounts: Record<string, number>,
 ): void {
   state.chunksProcessed += 1;
-  state.entriesCompleted += completed;
-  state.entriesReconciled += reconciled;
-  for (const [reason, count] of Object.entries(reasonCounts)) {
-    state.reasonTally[reason] = (state.reasonTally[reason] ?? 0) + count;
-  }
+  recordEntries(completed, reconciled, reasonCounts);
+}
+
+/** A single create completed via the non-bulk fallback path — counts toward
+ *  `entriesCompleted`/`entriesReconciled` like a bulk chunk's entries would,
+ *  but never increments `chunksProcessed` (it isn't one). */
+export function recordSingleCreateCompletion(
+  needsReconcile: boolean,
+  reasonCounts: Record<string, number>,
+): void {
+  recordEntries(1, needsReconcile ? 1 : 0, reasonCounts);
 }
 
 export function getReconcileDiagnostics(): ReconcileDiagnostics | undefined {
-  if (state.chunksProcessed === 0) {
+  if (state.updatedAt === null) {
     return undefined;
   }
   return {
-    ...state,
+    chunksProcessed: state.chunksProcessed,
+    entriesCompleted: state.entriesCompleted,
+    entriesReconciled: state.entriesReconciled,
     reasonTally: { ...state.reasonTally },
-    updatedAt: new Date().toISOString(),
+    updatedAt: state.updatedAt,
   };
 }
 
@@ -66,4 +89,5 @@ export function resetReconcileDiagnostics(): void {
   state.entriesCompleted = 0;
   state.entriesReconciled = 0;
   state.reasonTally = {};
+  state.updatedAt = null;
 }
