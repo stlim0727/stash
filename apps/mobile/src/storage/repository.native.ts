@@ -237,6 +237,9 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           ) {
             continue;
           }
+          if (entry.local_id !== bookmark.id) {
+            await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [entry.local_id]);
+          }
           await writeBookmark(db, bookmark);
           await db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [
             entry.local_id,

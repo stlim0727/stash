@@ -21,6 +21,8 @@ export interface EntrySyncResult {
   /** Present when the local bookmark row was removed (deleted on another
    *  device while this device had a queued edit for it — see below). */
   removedBookmarkId?: string;
+  /** Present when a create matched a server-side duplicate with a different ID. */
+  originalLocalId?: string;
 }
 
 export const BULK_CREATE_SYNC_CHUNK_SIZE = 50;
@@ -182,8 +184,11 @@ export async function syncCreateQueueEntryBatch(
 
     const localBookmark = getBookmark(entry.local_id);
     if (localBookmark) {
+      const isDuplicateSwap =
+        output.status === 'duplicate' && Boolean(output.bookmark_id) && output.bookmark_id !== entry.local_id;
       const syncedBookmark: Bookmark = {
         ...localBookmark,
+        id: isDuplicateSwap ? output.bookmark_id : localBookmark.id,
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
@@ -192,11 +197,16 @@ export async function syncCreateQueueEntryBatch(
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: uploadedPayloads[index],
+        originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
       });
       continue;
     }
 
-    results.push({ entry: syncedEntry, uploadedPayload: uploadedPayloads[index] });
+    results.push({
+      entry: syncedEntry,
+      uploadedPayload: uploadedPayloads[index],
+      originalLocalId: output.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+    });
   }
 
   return results;
@@ -337,10 +347,11 @@ export async function syncQueueEntry(
 
     const localBookmark = getBookmark(entry.local_id);
     if (localBookmark) {
-      // result.bookmark_id always equals localBookmark.id now — the client
-      // sent that id explicitly (see makeBookmarkId/CreateBookmarkInput.id).
+      const isDuplicateSwap =
+        result.status === 'duplicate' && Boolean(result.bookmark_id) && result.bookmark_id !== entry.local_id;
       const syncedBookmark: Bookmark = {
         ...localBookmark,
+        id: isDuplicateSwap ? result.bookmark_id : localBookmark.id,
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
@@ -350,10 +361,15 @@ export async function syncQueueEntry(
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: payload,
+        originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
       };
     }
 
-    return { entry: syncedEntry, uploadedPayload: payload };
+    return {
+      entry: syncedEntry,
+      uploadedPayload: payload,
+      originalLocalId: result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+    };
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
     const localBookmark = getBookmark(entry.local_id);

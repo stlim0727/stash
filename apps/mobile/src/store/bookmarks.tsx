@@ -2303,7 +2303,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // Sequential on purpose (Sentry STASH-3B): a 500+ item import via
             // Promise.all meant ~1000 simultaneous pending native SQLite calls.
             // newBookmarks/newEntries are parallel arrays (pushed together above).
+            const epochAtStart = resetEpoch.current;
             for (let i = 0; i < newBookmarks.length; i += 1) {
+              if (resetEpoch.current !== epochAtStart) {
+                recordLog('warn', 'import: loop aborted by library reset');
+                break;
+              }
               await repository.insertBookmark(newBookmarks[i]);
               await repository.enqueue(newEntries[i]);
               releaseAndEnrich(newBookmarks[i]);
@@ -3435,21 +3440,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         if (result.bookmarkUpdate) {
           const update = result.bookmarkUpdate;
-          // The update was built from a snapshot taken before the upload.
-          // Enrichment may have completed in the meantime, so apply only the
-          // sync-owned fields (status) onto the LATEST row instead of writing
-          // the stale snapshot back.
-          //
-          // Compute `merged` from the ref SYNCHRONOUSLY — never from inside the
-          // setBookmarks updater. A functional updater doesn't run until React's
-          // next render, so reading a variable it assigns right after the call
-          // sees the pre-update value (null). That silently skipped this whole
-          // block, so neither the metadata-reconciliation update nor the AI
-          // auto-trigger ever fired after a create synced.
-          const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === update.id);
+          const lookupId = result.originalLocalId ?? update.id;
+          const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === lookupId);
           const merged: Bookmark | null = latest
             ? {
                 ...latest,
+                id: update.id,
                 sync_status: update.sync_status,
                 ever_synced: update.ever_synced,
                 updated_at: update.updated_at,
@@ -3457,34 +3453,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             : null;
           if (merged) {
             setBookmarks((current) =>
-              (current ?? []).map((bookmark) => (bookmark.id === merged.id ? merged : bookmark)),
+              (current ?? [])
+                .filter((bookmark) => bookmark.id === lookupId || bookmark.id !== merged.id)
+                .map((bookmark) => (bookmark.id === lookupId ? merged : bookmark)),
             );
             ensureRepositoryReady()
-              .then(() => repository.updateBookmark(merged))
+              .then(async () => {
+                if (result.originalLocalId && result.originalLocalId !== merged.id) {
+                  await repository.deleteBookmark(result.originalLocalId);
+                }
+                await repository.updateBookmark(merged);
+              })
               .catch((error) => logStorageError('post-sync merge', error));
 
-            // `uploadedPayload` is set IFF a create just uploaded — whether
-            // the entry began as a `create` or was promoted from an orphaned
-            // `update` (a bookmark whose create never reached the server). Use
-            // it, not `entry.operation`, so a promoted create reconciles and
-            // AI-triggers too: the loop's `entry.operation` is still 'update'.
             const createUploaded = result.uploadedPayload !== undefined;
-            // The create payload only carries url/title/notes, and the remote
-            // row defaults to no generated metadata + pending status + active.
-            // If the local row has since diverged — archived, filed into a
-            // collection, edited, enriched, or TRASHED while the create was
-            // uploading — reconcile with a follow-up update so those changes
-            // reach the cloud. Without the `deleted_at` arm, a bookmark trashed
-            // before it had a remote id would stay live in the cloud and
-            // resurrect on other devices.
             if (createUploaded && createNeedsReconcileUpdate(merged, result.uploadedPayload)) {
               enqueueMutation(merged.id, 'update');
             }
-            // A brand-new bookmark just gained a remote identity: queue AI
-            // suggestions for it. We DON'T fire immediately — the background
-            // OpenGraph fetch may still be in flight, and enriching against a
-            // bare URL yields nothing. The effect below fires once this
-            // bookmark's metadata enrichment has settled.
             if (createUploaded) {
               markPendingAiTrigger(merged.id);
             }
@@ -3535,19 +3520,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           }
 
           const update = result.bookmarkUpdate;
-          const latest = nextBookmarks.find((bookmark) => bookmark.id === update.id);
+          const lookupId = result.originalLocalId ?? update.id;
+          const latest = nextBookmarks.find((bookmark) => bookmark.id === lookupId);
           if (!latest) {
             continue;
           }
           const merged: Bookmark = {
             ...latest,
+            id: update.id,
             sync_status: update.sync_status,
             ever_synced: update.ever_synced,
             updated_at: update.updated_at,
           };
-          nextBookmarks = nextBookmarks.map((bookmark) =>
-            bookmark.id === merged.id ? merged : bookmark,
-          );
+          nextBookmarks = nextBookmarks
+            .filter((bookmark) => bookmark.id === lookupId || bookmark.id !== merged.id)
+            .map((bookmark) => (bookmark.id === lookupId ? merged : bookmark));
           completions.push({ bookmark: merged, entry });
 
           if (result.uploadedPayload !== undefined) {
