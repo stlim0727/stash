@@ -1376,6 +1376,159 @@ test('an edit landing on a later entry while an earlier entry in the same reconc
   fakeRepo.repository.updateBookmark = originalUpdateBookmark;
 });
 
+test('a bookmark permanently deleted while an earlier entry in the same reconcile chunk is still being persisted is not resurrected (STASH-3Y)', async () => {
+  // A second, more serious variant of the same widened race: if the LATER
+  // entry is permanently deleted (not just edited) while an earlier entry's
+  // write is in flight, re-reading bookmarksRef.current finds nothing (the
+  // row was removed, not merely changed). Falling back to the stale
+  // pre-delete snapshot would resurrect it via updateBookmark's upsert, and
+  // the 'update' mutation queued right after would supersede the delete's
+  // own queued mutation — silently undoing the user's delete end to end
+  // (caught in PR review). Fixed by treating a missing row as "already
+  // handled by the delete flow" and skipping it entirely.
+  const firstId = '7e64cf1e-0000-4000-8000-000000000611';
+  const secondId = '7e64cf1e-0000-4000-8000-000000000612';
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    [firstId, secondId].map((id) =>
+      makeStoredBookmark({
+        id,
+        url: `https://example.com/${id}`,
+        site_name: 'Example Site',
+        sync_status: 'pending',
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const id of [firstId, secondId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseFirstWrite: () => void = () => {};
+  const firstWriteGate = new Promise<void>((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  let firstWriteEntered: () => void = () => {};
+  const firstWriteEnteredPromise = new Promise<void>((resolve) => {
+    firstWriteEntered = resolve;
+  });
+  let firstIdGated = false;
+  const originalUpdateBookmark = fakeRepo.repository.updateBookmark.bind(fakeRepo.repository);
+  fakeRepo.repository.updateBookmark = async (bookmark) => {
+    if (bookmark.id === firstId && !firstIdGated) {
+      firstIdGated = true;
+      firstWriteEntered();
+      await firstWriteGate;
+    }
+    return originalUpdateBookmark(bookmark);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await firstWriteEnteredPromise;
+
+  // secondId's persist (the second iteration of the followUpUpdates loop)
+  // hasn't run yet — firstId's write is still gated. Permanently delete
+  // secondId now.
+  await act(async () => {
+    store.current!.deleteBookmark(secondId);
+  });
+  expect(store.current!.getBookmark(secondId)).toBeUndefined();
+  releaseFirstWrite();
+
+  // Must actually reach the server as a delete, not get superseded by a
+  // resurrecting 'update'.
+  await waitFor(() =>
+    expect(
+      fakeRepo
+        .__queue()
+        .some((entry) => entry.local_id === secondId && entry.operation === 'delete'),
+    ).toBe(true),
+  );
+
+  expect(store.current!.getBookmark(secondId)).toBeUndefined();
+  expect(fakeRepo.__bookmarks().find((b) => b.id === secondId)).toBeUndefined();
+  expect(
+    fakeRepo.__queue().some((entry) => entry.local_id === secondId && entry.operation === 'update'),
+  ).toBe(false);
+
+  fakeRepo.repository.updateBookmark = originalUpdateBookmark;
+});
+
+test('a storage failure reconciling one entry does not block the rest of the chunk from being persisted and queued (STASH-3Y)', async () => {
+  // The whole followUpUpdates loop used to run inside a single try/catch:
+  // completeCreateSyncBatch had already durably persisted and dequeued every
+  // entry in the chunk, so a storage hiccup on ONE entry's follow-up write
+  // aborted the loop and silently cost every LATER entry both its durable
+  // reconcile write and its update queue entry — with no other path left to
+  // recover them (caught in PR review). Each entry is now isolated in its
+  // own try/catch.
+  const failingId = '7e64cf1e-0000-4000-8000-000000000621';
+  const okId = '7e64cf1e-0000-4000-8000-000000000622';
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    [failingId, okId].map((id) =>
+      makeStoredBookmark({
+        id,
+        url: `https://example.com/${id}`,
+        site_name: 'Example Site',
+        sync_status: 'pending',
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const id of [failingId, okId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  const originalUpdateBookmark = fakeRepo.repository.updateBookmark.bind(fakeRepo.repository);
+  fakeRepo.repository.updateBookmark = async (bookmark) => {
+    if (bookmark.id === failingId) {
+      throw new Error('simulated storage failure');
+    }
+    return originalUpdateBookmark(bookmark);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  // okId — ordered AFTER failingId in the chunk — must still get its
+  // durable write and reach the server via its own update mutation despite
+  // failingId's failure. Checked via the API call itself, not transient
+  // queue contents: a successful update syncs and clears its queue entry
+  // quickly, so asserting on the queue would be racy (see the identical
+  // rationale on the "edit made while a bulk-create durable persist" test
+  // above).
+  await waitFor(() =>
+    expect(fakeRepo.__bookmarks().find((b) => b.id === okId)?.metadata_status).toBe('complete'),
+  );
+  await waitFor(() =>
+    expect(apiMock.__spies.updateBookmark.mock.calls.some(([id]) => id === okId)).toBe(true),
+  );
+
+  fakeRepo.repository.updateBookmark = originalUpdateBookmark;
+});
+
 test('a bookmark deleted mid-flight during a bulk create is persisted locally before its remote-delete mutation is queued (STASH-3Y)', async () => {
   // Ordering regression: queueing all of a chunk's remote-delete mutations
   // before any of the durable local deletes land means a crash between the

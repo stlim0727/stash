@@ -3843,6 +3843,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ` reasons ${JSON.stringify(reconcileReasonTally)})`,
         );
 
+        if (rekeyedIds.size > 0) {
+          // A create in this chunk resolved as a duplicate of an existing
+          // different row (STASH-3Q) — re-key tag/AI-retry state the same
+          // way account rehoming does, or it silently never uploads, parked
+          // on the now-dead original id. Installed BEFORE the follow-up
+          // persist loops below (not after) — those loops now await real
+          // SQLite writes in sequence, and an in-flight metadata enrichment
+          // or an open Detail route still holding the original id needs the
+          // alias resolvable for that whole window, not just once this
+          // chunk's persistence finally settles (caught in PR review).
+          rekeyBookmarkIdentity(rekeyedIds);
+        }
+
         if (deletedMidFlightIds.length > 0) {
           // Sequential on purpose (STASH-3B/3N precedent, see
           // docs/architecture/sqlite-write-contention.md): a chunk with many
@@ -3855,15 +3868,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // resurrects it once that entry finishes syncing (caught in PR
           // review). Awaited here, not fire-and-forget, so the outer
           // per-chunk loop above can't start the next chunk's own persist
-          // chain concurrently with this one.
-          try {
-            await ensureRepositoryReady();
-            for (const id of deletedMidFlightIds) {
+          // chain concurrently with this one. Each id isolated in its own
+          // try/catch — completeCreateSyncBatch already durably persisted
+          // and dequeued every one of these, so a storage failure on one
+          // must not also cost the rest of the chunk their delete (caught in
+          // PR review).
+          for (const id of deletedMidFlightIds) {
+            try {
+              await ensureRepositoryReady();
               await repository.deleteBookmark(id);
               enqueueMutation(id, 'delete');
+            } catch (error) {
+              logStorageError('post-delete sync cleanup', error);
             }
-          } catch (error) {
-            logStorageError('post-delete sync cleanup', error);
           }
         }
         if (followUpUpdates.length > 0) {
@@ -3890,25 +3907,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // (not after), for the same crash-ordering reason as the
           // mid-flight-delete loop above. Awaited here, not fire-and-forget,
           // so the outer per-chunk loop above can't start the next chunk's
-          // own persist chain concurrently with this one.
-          try {
-            await ensureRepositoryReady();
-            for (const bookmark of followUpUpdates) {
-              const current = bookmarksRef.current?.find((b) => b.id === bookmark.id) ?? bookmark;
+          // own persist chain concurrently with this one. Each entry
+          // isolated in its own try/catch, same reason as the mid-flight
+          // delete loop above.
+          for (const bookmark of followUpUpdates) {
+            try {
+              const current = bookmarksRef.current?.find((b) => b.id === bookmark.id);
+              if (!current) {
+                // No longer present — permanently deleted since this chunk
+                // started. Falling back to the stale pre-delete snapshot
+                // would resurrect it (writing it back via updateBookmark)
+                // and the 'update' mutation below would supersede the
+                // delete's own queued mutation, silently undoing the user's
+                // delete (caught in PR review). The delete flow already owns
+                // this row's remote-delete cleanup — nothing to reconcile.
+                continue;
+              }
+              await ensureRepositoryReady();
               await repository.updateBookmark(current);
               enqueueMutation(bookmark.id, 'update');
+            } catch (error) {
+              logStorageError('post-sync reconcile persist', error);
             }
-          } catch (error) {
-            logStorageError('post-sync reconcile persist', error);
           }
-        }
-
-        if (rekeyedIds.size > 0) {
-          // A create in this chunk resolved as a duplicate of an existing
-          // different row (STASH-3Q) — re-key tag/AI-retry state the same
-          // way account rehoming does, or it silently never uploads, parked
-          // on the now-dead original id.
-          rekeyBookmarkIdentity(rekeyedIds);
         }
 
         for (const id of pendingAiIds) {
