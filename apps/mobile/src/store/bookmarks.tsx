@@ -108,6 +108,7 @@ import {
   crossedHealthEscalationThreshold,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
+  isRowSpecificPermanentSyncErrorText,
   isSyncable,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
@@ -3572,11 +3573,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ) => {
         const completedLocalIds = new Set<string>();
         const completions: CreateSyncCompletion[] = [];
+        const queueOnlyEntries: LocalPendingBookmark[] = [];
         type UploadedPayload = NonNullable<typeof results[number]['uploadedPayload']>;
-        const followUpUpdates: Array<{ id: string; payload: UploadedPayload }> = [];
-        const pendingAiIds: string[] = [];
+        // Keyed by lookupId (originalLocalId ?? update.id) rather than pushed
+        // alongside `merged` in this first loop — the reconcile check that
+        // consumes this needs to run against the FRESHEST row, after the
+        // durable await below, not this pre-await snapshot (see there).
+        const uploadedPayloadByLookupId = new Map<string, UploadedPayload>();
         const rekeyedIds = new Map<string, string>();
-        let nextBookmarks = bookmarksRef.current ?? [];
+        const preUploadSnapshot = bookmarksRef.current ?? [];
 
         for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
           const entry = chunk[resultIndex]!;
@@ -3598,18 +3603,125 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             continue;
           }
 
-          if (!result.removeEntry) {
-            continue;
-          }
-
+          // Every result syncCreateQueueEntryBatch returns is a completed
+          // create — it never emits a "retry later" state per entry the way
+          // syncQueueEntry does (a batch failure throws instead, caught by
+          // this call's try/catch above), so it never sets removeEntry.
+          // Gating on that field here (as this used to) silently skipped
+          // every bulk-created entry: the queue entry was never cleared, the
+          // bookmark was never marked synced, and nothing was ever persisted
+          // — the exact cause of the reported "sync stuck re-uploading the
+          // same batch forever" bug (Sentry STASH-3V/3X and others).
           completedLocalIds.add(entry.local_id);
 
           if (!result.bookmarkUpdate) {
+            // A create can succeed with no local bookmark to update — e.g.
+            // the bookmark's own durable write failed independently earlier.
+            // Its queue row has no bookmark to merge, but it must still be
+            // cleared durably below, or it lingers unchanged and gets
+            // re-uploaded after the next restart.
+            queueOnlyEntries.push(entry);
             continue;
           }
 
           const update = result.bookmarkUpdate;
           const lookupId = result.originalLocalId ?? update.id;
+          const latest = preUploadSnapshot.find((bookmark) => bookmark.id === lookupId);
+          if (!latest) {
+            continue;
+          }
+          const merged: Bookmark = {
+            ...latest,
+            id: update.id,
+            sync_status: update.sync_status,
+            ever_synced: update.ever_synced,
+            updated_at: update.updated_at,
+          };
+          completions.push({
+            bookmark: merged,
+            entry,
+            originalLocalId: result.originalLocalId,
+          });
+          if (result.originalLocalId && result.originalLocalId !== merged.id) {
+            rekeyedIds.set(result.originalLocalId, merged.id);
+          }
+
+          if (result.uploadedPayload !== undefined) {
+            uploadedPayloadByLookupId.set(lookupId, result.uploadedPayload);
+          }
+        }
+
+        if (completedLocalIds.size === 0) {
+          return;
+        }
+
+        // Persist durably BEFORE reflecting completion in memory. If this
+        // throws, the in-memory queue must stay untouched (entries still
+        // 'syncing', which the auto-sync effect retries the same as
+        // 'pending') — otherwise the current session would show an empty
+        // queue and stop retrying while the durable queue still has these
+        // entries pending, until the next app restart reloads the real state.
+        await ensureRepositoryReady();
+        try {
+          if (repository.completeCreateSyncBatch) {
+            await repository.completeCreateSyncBatch(completions);
+          } else {
+            await Promise.all(
+              completions.flatMap(({ bookmark, entry, originalLocalId }) => {
+                const isSwap = Boolean(originalLocalId) && originalLocalId !== bookmark.id;
+                return [
+                  ...(isSwap ? [repository.deleteBookmark(originalLocalId!)] : []),
+                  // insertBookmark (not updateBookmark) for a swap: the
+                  // destination id is new to this device, and updateBookmark
+                  // only replaces a row already stored under that id (see
+                  // syncQueueEntry's identical fix in sync-bookmarks.ts).
+                  isSwap ? repository.insertBookmark(bookmark) : repository.updateBookmark(bookmark),
+                  removeQueueEntryIfNotSuperseded(repository, entry),
+                ];
+              }),
+            );
+          }
+          await Promise.all(
+            queueOnlyEntries.map((entry) => removeQueueEntryIfNotSuperseded(repository, entry)),
+          );
+        } catch (error) {
+          logStorageError('bulk create sync completion', error);
+          return;
+        }
+
+        mutationsPushed = true;
+
+        // Re-derive the in-memory merge from the CURRENT bookmarks, not the
+        // pre-upload snapshot above — the user may have edited, trashed, or
+        // permanently deleted one of these rows while this chunk's network
+        // round-trip and the durable persist above were in flight, and that
+        // newer state must win over the stale snapshot (mirrors
+        // applySyncEntryResult's identical discipline for the single-entry
+        // path — see its "computed synchronously from the ref" comment).
+        let nextBookmarks = bookmarksRef.current ?? [];
+        // Collected rather than enqueued/triggered inline: enqueueMutation's
+        // own setQueue call would otherwise run BEFORE the completedLocalIds
+        // cleanup below and get wiped out by it (that filter doesn't
+        // distinguish a freshly re-added delete/update entry from the
+        // original completed create entry it's meant to clear).
+        const deletedMidFlightIds: string[] = [];
+        const followUpUpdates: Bookmark[] = [];
+        const pendingAiIds: string[] = [];
+        for (const { bookmark: update, originalLocalId } of completions) {
+          const lookupId = originalLocalId ?? update.id;
+          // Deleted while the upload/durable-persist was in flight: the
+          // user's delete may have run before this row's sync_status flip
+          // landed, so `deleteBookmark` saw it as never-synced and skipped
+          // enqueuing a remote delete. This row is now confirmed to exist
+          // remotely under `update.id` (this sync just created/updated it),
+          // so finish that cleanup here instead of resurrecting it.
+          if (deletedIds.current.has(lookupId) || deletedIds.current.has(update.id)) {
+            ensureRepositoryReady()
+              .then(() => repository.deleteBookmark(update.id))
+              .catch((error) => logStorageError('post-delete sync cleanup', error));
+            deletedMidFlightIds.push(update.id);
+            continue;
+          }
           const latest = nextBookmarks.find((bookmark) => bookmark.id === lookupId);
           if (!latest) {
             continue;
@@ -3627,31 +3739,45 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           nextBookmarks = nextBookmarks
             .filter((bookmark) => bookmark.id === lookupId || bookmark.id !== merged.id)
             .map((bookmark) => (bookmark.id === lookupId ? merged : bookmark));
-          completions.push({
-            bookmark: merged,
-            entry,
-            originalLocalId: result.originalLocalId,
-          });
-          if (result.originalLocalId && result.originalLocalId !== merged.id) {
-            rekeyedIds.set(result.originalLocalId, merged.id);
-          }
 
-          if (result.uploadedPayload !== undefined) {
-            if (createNeedsReconcileUpdate(merged, result.uploadedPayload)) {
-              followUpUpdates.push({ id: merged.id, payload: result.uploadedPayload });
+          const uploadedPayload = uploadedPayloadByLookupId.get(lookupId);
+          if (uploadedPayload !== undefined) {
+            // Checked against `merged` (the FRESH row, just recomputed
+            // above) rather than the pre-await snapshot — an edit made while
+            // completeCreateSyncBatch was awaiting wouldn't enqueue its own
+            // update (hasSyncedOnce was still false at edit time), so this
+            // reconcile check is the only remaining path that can push it;
+            // checking the stale snapshot would silently drop it, and a
+            // later pull could then overwrite it with the older uploaded
+            // values (caught in PR review).
+            if (createNeedsReconcileUpdate(merged, uploadedPayload)) {
+              followUpUpdates.push(merged);
             }
             pendingAiIds.push(merged.id);
           }
         }
-
-        if (completedLocalIds.size === 0) {
-          return;
-        }
-
-        mutationsPushed = true;
         bookmarksRef.current = nextBookmarks;
         setBookmarks(nextBookmarks);
         setQueue((current) => current.filter((queued) => !completedLocalIds.has(queued.local_id)));
+
+        for (const id of deletedMidFlightIds) {
+          enqueueMutation(id, 'delete');
+        }
+        for (const bookmark of followUpUpdates) {
+          // completeCreateSyncBatch already wrote the pre-await snapshot
+          // durably; if a concurrent edit is what made this reconcile
+          // necessary, that edit only lives in-memory until this write
+          // lands. Without it, exiting before the queued 'update' below
+          // actually syncs would reload the stale row on restart — and the
+          // 'update' queue entry carries no field snapshot of its own (it
+          // derives its payload from whatever bookmark is loaded at sync
+          // time), so the edit would be permanently lost, not just delayed
+          // (caught in PR review).
+          ensureRepositoryReady()
+            .then(() => repository.updateBookmark(bookmark))
+            .catch((error) => logStorageError('post-sync reconcile persist', error));
+          enqueueMutation(bookmark.id, 'update');
+        }
 
         if (rekeyedIds.size > 0) {
           // A create in this chunk resolved as a duplicate of an existing
@@ -3661,29 +3787,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           rekeyBookmarkIdentity(rekeyedIds);
         }
 
-        await ensureRepositoryReady();
-        if (repository.completeCreateSyncBatch) {
-          await repository.completeCreateSyncBatch(completions);
-        } else {
-          await Promise.all(
-            completions.flatMap(({ bookmark, entry, originalLocalId }) => {
-              const isSwap = Boolean(originalLocalId) && originalLocalId !== bookmark.id;
-              return [
-                ...(isSwap ? [repository.deleteBookmark(originalLocalId!)] : []),
-                // insertBookmark (not updateBookmark) for a swap: the
-                // destination id is new to this device, and updateBookmark
-                // only replaces a row already stored under that id (see
-                // syncQueueEntry's identical fix in sync-bookmarks.ts).
-                isSwap ? repository.insertBookmark(bookmark) : repository.updateBookmark(bookmark),
-                removeQueueEntryIfNotSuperseded(repository, entry),
-              ];
-            }),
-          );
-        }
-
-        for (const { id } of followUpUpdates) {
-          enqueueMutation(id, 'update');
-        }
         for (const id of pendingAiIds) {
           markPendingAiTrigger(id);
         }
@@ -3722,19 +3825,153 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               bulkSyncedLocalIds.add(entry.local_id);
             }
           } catch (error) {
-            recordLog(
-              'warn',
-              `bulk create sync failed (${
-                error instanceof Error ? error.message : String(error)
-              }); preserving bulk mode for next retry`,
-            );
-            setQueue((current) =>
-              current.map((queued) => {
-                const original = chunk.find((entry) => entry.local_id === queued.local_id);
-                return original ? { ...queued, sync_status: original.sync_status } : queued;
-              }),
-            );
+            // Only this chunk failed — mark just its entries 'failed' (with
+            // retry accounting, like any other sync failure) and stop trying
+            // further chunks this run, since a bulk-endpoint failure likely
+            // affects them too. Entries in later, never-attempted chunks are
+            // untouched (still 'pending') and picked up by the next pass —
+            // no separate "preserve bulk mode" bookkeeping needed: a 'failed'
+            // entry is still bulk-eligible (isSyncable), so it naturally
+            // retries via bulk again next time.
+            const message = error instanceof Error ? error.message : String(error);
+            // A batch request fails as a whole even when only ONE row in it
+            // is actually bad (e.g. a legacy too-long URL) — the error text
+            // is a fact about that one row, not the other 49. Copying it onto
+            // every entry would make `isPermanentlyUnsyncableUrl` wrongly
+            // exclude the rest of the chunk from sync forever (caught in PR
+            // review). Instead, leave this chunk's entries untouched here and
+            // let them fall through to the per-entry loop below, which will
+            // isolate the real offender by getting each row's own error.
+            const isRowSpecificError = isRowSpecificPermanentSyncErrorText(message);
+
+            if (!isRowSpecificError) {
+              const failedAt = new Date().toISOString();
+              recordLog('warn', `bulk create sync failed for a chunk of ${chunk.length} (${message})`);
+
+              // Every other remaining, untried bulk-eligible entry is marked
+              // 'failed' too (retry_count left UNCHANGED, since it was never
+              // actually attempted) rather than left 'pending'. Leaving them
+              // 'pending' satisfies the auto-sync effect's retrigger
+              // condition, so the instant this run ends it calls syncNow()
+              // again — and that call tries THIS SAME already-failed chunk
+              // first, recreating a continuous retry loop for the duration
+              // of a real outage instead of waiting for the next natural
+              // trigger (a save, app foreground, manual Sync now), exactly
+              // like every other failed entry already does (caught in PR
+              // review).
+              // Only entries strictly AFTER this chunk are untried — anything
+              // before `index` already succeeded in an earlier iteration of
+              // this same loop (a prior failure would have `break`ed out
+              // already) and was cleared from the queue. Filtering the whole
+              // of `bulkCreateEntries` by "not in this chunk" wrongly
+              // included those already-completed entries too, flipping their
+              // bookmarks back to 'failed' below even though they have no
+              // queue entry left to retry (caught in PR review).
+              const untriedEntries = bulkCreateEntries.slice(index + chunk.length);
+
+              const failedEntries = new Map<string, LocalPendingBookmark>();
+              for (const entry of chunk) {
+                failedEntries.set(entry.local_id, {
+                  ...entry,
+                  sync_status: 'failed',
+                  retry_count: entry.retry_count + 1,
+                  last_error: message,
+                  updated_at: failedAt,
+                });
+              }
+              for (const entry of untriedEntries) {
+                failedEntries.set(entry.local_id, {
+                  ...entry,
+                  sync_status: 'failed',
+                  last_error: 'Not attempted: an earlier chunk in this bulk sync failed.',
+                  updated_at: failedAt,
+                });
+              }
+
+              try {
+                await ensureRepositoryReady();
+                // One listQueue() read for the whole batch, not one per entry —
+                // the native backend does a full ordered SELECT + deserialize
+                // of every queued payload on each call, so calling it per-entry
+                // scans the whole queue up to hundreds of times over for one
+                // failure.
+                const storedByLocalId = new Map(
+                  (await repository.listQueue()).map((queued) => [queued.local_id, queued]),
+                );
+                for (const entry of [...chunk, ...untriedEntries]) {
+                  // The listQueue() snapshot above is taken once for the
+                  // whole batch, so a permanent delete that lands on a
+                  // later (untried) entry AFTER the snapshot but BEFORE this
+                  // iteration reaches it wouldn't show up in `stored` —
+                  // writing this failed state back would resurrect the
+                  // durable queue row deleteBookmark just removed. Checked
+                  // against the live ref (never stale), not the snapshot.
+                  if (deletedIds.current.has(entry.local_id)) {
+                    continue;
+                  }
+                  const stored = storedByLocalId.get(entry.local_id);
+                  if (!stored || stored.updated_at !== entry.updated_at) {
+                    continue;
+                  }
+                  const failedEntry = failedEntries.get(entry.local_id)!;
+                  await repository.updateQueueEntry(failedEntry);
+                  // Escalate immediately once the retry_count has landed
+                  // durably — untouched (untried) entries always compare
+                  // equal here and never cross the threshold, so this is
+                  // naturally a no-op for them. Reported right after the
+                  // queue write (not after the cosmetic bookmark write
+                  // below), or a bookmark-write failure would jump to the
+                  // outer catch and permanently lose this entry's one-time
+                  // escalation even though its retry_count already persisted
+                  // (caught in PR review).
+                  if (crossedHealthEscalationThreshold(entry.retry_count, failedEntry.retry_count)) {
+                    reportSyncQueueHealthEscalation({
+                      operation: failedEntry.operation,
+                      retryCount: failedEntry.retry_count,
+                      lastError: failedEntry.last_error,
+                    });
+                  }
+                  const bookmark = getLatestBookmark(entry.local_id);
+                  if (bookmark && bookmark.sync_status !== 'failed') {
+                    await repository.updateBookmark({ ...bookmark, sync_status: 'failed' });
+                  }
+                }
+              } catch (persistError) {
+                logStorageError('bulk create failure persist', persistError);
+              }
+
+              setQueue((current) =>
+                current.map((queued) => failedEntries.get(queued.local_id) ?? queued),
+              );
+              setBookmarks((current) =>
+                (current ?? []).map((bookmark) =>
+                  failedEntries.has(bookmark.id) && bookmark.sync_status !== 'failed'
+                    ? { ...bookmark, sync_status: 'failed' }
+                    : bookmark,
+                ),
+              );
+            } else {
+              recordLog(
+                'warn',
+                `bulk create sync failed for a chunk of ${chunk.length} with a row-specific ` +
+                  `error (${message}); falling back to per-entry sync to isolate the offending row`,
+              );
+            }
+
+            // Keep every remaining bulk-eligible entry from OTHER, untried
+            // chunks out of the per-entry fallback loop below — otherwise a
+            // bulk-endpoint outage during a 561-item import falls through to
+            // hundreds of sequential single-create requests in this same run
+            // instead of waiting for the next bulk retry (they're now marked
+            // 'failed' above, same as this chunk, rather than left 'pending').
+            // This chunk's own entries are excluded from that protection only
+            // when the failure was row-specific, so the per-entry loop can
+            // isolate the real offender instead of every entry in the chunk
+            // being misclassified together.
             for (const entry of bulkCreateEntries) {
+              if (isRowSpecificError && chunkIds.has(entry.local_id)) {
+                continue;
+              }
               bulkSyncedLocalIds.add(entry.local_id);
             }
             break;
