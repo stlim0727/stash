@@ -257,7 +257,22 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       db.withTransactionAsync(async () => {
         for (let i = 0; i < bookmarks.length; i += 1) {
           await writeBookmark(db, bookmarks[i]);
-          await enqueueOp(db, entries[i]);
+          await db.runAsync(
+            `INSERT OR REPLACE INTO local_pending_bookmarks
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              entries[i].local_id,
+              entries[i].remote_id,
+              entries[i].operation,
+              JSON.stringify(entries[i].payload),
+              entries[i].sync_status,
+              entries[i].retry_count,
+              entries[i].last_error,
+              entries[i].created_at,
+              entries[i].updated_at,
+            ],
+          );
         }
       }),
     );

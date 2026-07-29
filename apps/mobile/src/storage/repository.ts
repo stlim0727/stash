@@ -138,8 +138,8 @@ class WebBookmarkRepository implements BookmarkRepository {
     }
     const completedIds = new Set(applied.map((completion) => completion.entry.local_id));
     this.queue = this.queue.filter((entry) => !completedIds.has(entry.local_id));
-    this.persistBookmarks();
-    this.persistQueue();
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+    this.write(QUEUE_KEY, this.queue);
   }
 
   async insertImportBatch(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void> {
@@ -152,8 +152,8 @@ class WebBookmarkRepository implements BookmarkRepository {
     const existingQueueIds = new Set(this.queue.map((q) => q.local_id));
     const newQueueEntries = entries.filter((e) => !existingQueueIds.has(e.local_id));
     this.queue = [...this.queue, ...newQueueEntries];
-    this.persistBookmarks();
-    this.persistQueue();
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+    this.write(QUEUE_KEY, this.queue);
   }
 
   async deleteBookmark(id: string): Promise<void> {
