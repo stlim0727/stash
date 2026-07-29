@@ -3693,7 +3693,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // distinguish a freshly re-added delete/update entry from the
         // original completed create entry it's meant to clear).
         const deletedMidFlightIds: string[] = [];
-        const followUpUpdateIds: string[] = [];
+        const followUpUpdates: Bookmark[] = [];
         const pendingAiIds: string[] = [];
         for (const { bookmark: update, originalLocalId } of completions) {
           const lookupId = originalLocalId ?? update.id;
@@ -3739,7 +3739,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // later pull could then overwrite it with the older uploaded
             // values (caught in PR review).
             if (createNeedsReconcileUpdate(merged, uploadedPayload)) {
-              followUpUpdateIds.push(merged.id);
+              followUpUpdates.push(merged);
             }
             pendingAiIds.push(merged.id);
           }
@@ -3751,8 +3751,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         for (const id of deletedMidFlightIds) {
           enqueueMutation(id, 'delete');
         }
-        for (const id of followUpUpdateIds) {
-          enqueueMutation(id, 'update');
+        for (const bookmark of followUpUpdates) {
+          // completeCreateSyncBatch already wrote the pre-await snapshot
+          // durably; if a concurrent edit is what made this reconcile
+          // necessary, that edit only lives in-memory until this write
+          // lands. Without it, exiting before the queued 'update' below
+          // actually syncs would reload the stale row on restart — and the
+          // 'update' queue entry carries no field snapshot of its own (it
+          // derives its payload from whatever bookmark is loaded at sync
+          // time), so the edit would be permanently lost, not just delayed
+          // (caught in PR review).
+          ensureRepositoryReady()
+            .then(() => repository.updateBookmark(bookmark))
+            .catch((error) => logStorageError('post-sync reconcile persist', error));
+          enqueueMutation(bookmark.id, 'update');
         }
 
         if (rekeyedIds.size > 0) {
