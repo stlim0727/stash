@@ -782,6 +782,95 @@ test('a bulk create failure does not revert an earlier, already-succeeded chunk 
   }
 });
 
+test('a bookmark permanently deleted mid-persist in an untried chunk is not resurrected as failed', async () => {
+  // Regression: the "mark untried entries failed too" persist loop checks
+  // each entry against a single listQueue() snapshot taken once up front
+  // (a deliberate perf fix — see the earlier "read the queue once" review
+  // comment). A permanent delete of a never-synced bookmark in a LATER,
+  // untried chunk that lands after that snapshot but before the loop
+  // reaches it wouldn't show up in the snapshot, so the stored/updated_at
+  // check alone can't catch it — writing the 'failed' state back would
+  // resurrect the durable queue row deleteBookmark just removed.
+  const chunkSize = BULK_CREATE_SYNC_CHUNK_SIZE;
+  const rows = Array.from({ length: chunkSize + 2 }, (_, index) =>
+    makeStoredBookmark({
+      id: `ae64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/deleted-during-persist-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  // The whole first chunk fails; the last 2 rows are untried.
+  apiMock.__spies.createBookmarks.mockRejectedValue(new Error('network down'));
+  const deletedUntriedId = rows[chunkSize]!.id;
+  const survivorUntriedId = rows[chunkSize + 1]!.id;
+
+  // Gate the persist loop's first durable write (the first chunk-1 entry —
+  // processed before any untried entry) so the delete below lands squarely
+  // between the listQueue() snapshot and the loop reaching the untried entry.
+  let releaseGate: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  let gateEnteredResolve: () => void = () => {};
+  const gateEntered = new Promise<void>((resolve) => {
+    gateEnteredResolve = resolve;
+  });
+  const originalUpdateQueueEntry = fakeRepo.repository.updateQueueEntry.bind(fakeRepo.repository);
+  fakeRepo.repository.updateQueueEntry = async (entry) => {
+    if (entry.local_id === rows[0]!.id) {
+      gateEnteredResolve();
+      await gate;
+    }
+    return originalUpdateQueueEntry(entry);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await gateEntered;
+
+  await act(async () => {
+    store.current!.deleteBookmark(deletedUntriedId);
+  });
+
+  releaseGate();
+
+  await waitFor(() =>
+    expect(
+      store.current!.queue.every(
+        (entry) => entry.sync_status !== 'pending' && entry.sync_status !== 'syncing',
+      ),
+    ).toBe(true),
+  );
+  await waitFor(() => expect(store.current!.isSyncing).toBe(false));
+
+  // Must stay gone — not resurrected by the untried-entry failure marking.
+  expect(store.current!.getBookmark(deletedUntriedId)).toBeUndefined();
+  await waitFor(() =>
+    expect(fakeRepo.__queue().some((entry) => entry.local_id === deletedUntriedId)).toBe(false),
+  );
+  expect(fakeRepo.__bookmarks().some((bookmark) => bookmark.id === deletedUntriedId)).toBe(false);
+
+  // The other untried entry (not deleted) is still correctly marked failed.
+  expect(store.current!.getBookmark(survivorUntriedId)?.sync_status).toBe('failed');
+
+  fakeRepo.repository.updateQueueEntry = originalUpdateQueueEntry;
+});
+
 test('a bulk chunk failure with a row-specific permanent error isolates just the offending row', async () => {
   // A bulk request fails as a whole even when only ONE row in the chunk
   // actually has a problem (a legacy too-long URL trips Postgres's btree

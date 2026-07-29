@@ -3875,6 +3875,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   (await repository.listQueue()).map((queued) => [queued.local_id, queued]),
                 );
                 for (const entry of [...chunk, ...untriedEntries]) {
+                  // The listQueue() snapshot above is taken once for the
+                  // whole batch, so a permanent delete that lands on a
+                  // later (untried) entry AFTER the snapshot but BEFORE this
+                  // iteration reaches it wouldn't show up in `stored` —
+                  // writing this failed state back would resurrect the
+                  // durable queue row deleteBookmark just removed. Checked
+                  // against the live ref (never stale), not the snapshot.
+                  if (deletedIds.current.has(entry.local_id)) {
+                    continue;
+                  }
                   const stored = storedByLocalId.get(entry.local_id);
                   if (!stored || stored.updated_at !== entry.updated_at) {
                     continue;
