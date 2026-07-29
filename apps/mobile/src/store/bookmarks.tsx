@@ -3759,10 +3759,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
             try {
               await ensureRepositoryReady();
+              // One listQueue() read for the whole chunk, not one per entry —
+              // the native backend does a full ordered SELECT + deserialize
+              // of every queued payload on each call, so calling it per-entry
+              // scans the whole queue up to 50 times over for one failure.
+              const storedByLocalId = new Map(
+                (await repository.listQueue()).map((queued) => [queued.local_id, queued]),
+              );
               for (const entry of chunk) {
-                const stored = (await repository.listQueue()).find(
-                  (queued) => queued.local_id === entry.local_id,
-                );
+                const stored = storedByLocalId.get(entry.local_id);
                 if (!stored || stored.updated_at !== entry.updated_at) {
                   continue;
                 }
@@ -3786,7 +3791,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   : bookmark,
               ),
             );
-            for (const entry of chunk) {
+            // Keep every remaining bulk-eligible entry (not just this failed
+            // chunk) out of the per-entry fallback loop below — otherwise a
+            // bulk-endpoint outage during a 561-item import falls through to
+            // hundreds of sequential single-create requests in this same run
+            // instead of waiting for the next bulk retry. Untried entries stay
+            // 'pending' (untouched) and are still bulk-eligible next pass.
+            for (const entry of bulkCreateEntries) {
               bulkSyncedLocalIds.add(entry.local_id);
             }
             break;

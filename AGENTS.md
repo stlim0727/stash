@@ -380,35 +380,15 @@ only, debug-signed, standalone, and includes build provenance in Settings.
 
 ## Known Traps
 
-- **The root cause behind a whole day's flood of "561 bookmark import stuck /
-  duplicated" Sentry reports (STASH-3H/3E/3F/3Q/3R/3S/3T/3V/3X and more) was
-  one bug in `applyBulkCreateChunkResults` (`store/bookmarks.tsx`): it gated
-  clearing the queue / marking bookmarks synced on `result.removeEntry`, but
-  `syncCreateQueueEntryBatch` (`sync/sync-bookmarks.ts`) NEVER sets that
-  field — every result it returns represents a completed create (a batch
-  failure throws for the whole call instead of returning a per-entry retry
-  state, unlike `syncQueueEntry`'s update/delete paths, which genuinely do
-  need `removeEntry` to distinguish "done" from "requeue"). With the gate in
-  place, a successful bulk upload of 2+ pending creates was a silent no-op:
-  the queue entries stayed `pending` forever, so the background auto-sync
-  effect (which re-fires whenever the queue still has pending work)
-  immediately re-ran the exact same upload again — forever, at roughly
-  once-per-second, visible in Sentry logs as endless
-  `pull: ... remoteRows=N` / `sync: uploading N pending create(s)` pairs.
-  This predates the whole day's session (present since bulk sync shipped in
-  #602) and was never caught because **zero store-level tests ever mocked
-  `createBookmarks` (bulk, plural)** — every existing sync test exercised the
-  single-entry `syncQueueEntry` path only, so this dead code path shipped
-  silently through #611/#612/#617/#618/#619 without anyone noticing. Fixed by
-  simply removing the `removeEntry` gate (every bulk-create result is
-  unconditionally complete); regression-tested by asserting the queue
-  actually reaches length 0 after a 2+-item bulk sync, not just checking the
-  pure function's return shape. **The lesson**: when a bug class keeps
-  recurring across multiple "fixes" that each look individually correct
-  (STASH-3B/3N/3P/3Q all *were* real, valid fixes for real, narrower bugs),
-  check test coverage for the actual END-TO-END path before trusting that
-  the class is resolved — a passing unit test for a pure function proves
-  nothing about whether its caller uses the result correctly.
+- **`applyBulkCreateChunkResults` (`store/bookmarks.tsx`) must never gate
+  queue-clearing on `EntrySyncResult.removeEntry`** — `syncCreateQueueEntryBatch`
+  never sets it (every result it returns is already a completed create; a
+  batch failure throws instead of returning a per-entry retry state). Gating
+  on it silently no-oped every bulk sync, the root cause of a whole day's
+  flood of "561 import stuck/duplicated" Sentry reports (STASH-3H through
+  3X). Fixed in #621; full postmortem and the lesson about trusting a pure
+  function's unit tests over its caller's actual behavior live in
+  `docs/architecture/sync-pause-import-reset.md`.
 - Supabase migrations can be applied without deploying Edge Functions. Changes
   under `supabase/functions` require a manual
   `supabase functions deploy <name>`; deleted source does not remove a deployed

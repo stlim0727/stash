@@ -158,6 +158,7 @@ jest.mock('@/api/bookmarks', () => {
 import { AI_RATE_LIMITED, BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { SupabaseRequestError } from '@/supabase/client';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
+import { BULK_CREATE_SYNC_CHUNK_SIZE } from '@/sync/sync-bookmarks';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
@@ -571,6 +572,57 @@ test('a bulk create sync failure records retry state instead of silently resetti
   for (const id of ids) {
     expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.sync_status).toBe('failed');
   }
+});
+
+test('a bulk create failure keeps untried later chunks out of the single-entry fallback', async () => {
+  // BULK_CREATE_SYNC_CHUNK_SIZE + 1 entries span two chunks. The first
+  // chunk's bulk request fails; the second chunk is never even attempted
+  // this run. Regression: marking only the failed chunk (not every
+  // bulk-eligible entry) as "handled" let the per-entry loop below fall
+  // through and fire single createBookmark requests for the untried
+  // chunk — hundreds of sequential requests during a real outage instead of
+  // waiting for the next bulk retry.
+  const rows = Array.from({ length: BULK_CREATE_SYNC_CHUNK_SIZE + 1 }, (_, index) =>
+    makeStoredBookmark({
+      id: `7e64cf1e-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      url: `https://example.com/bulk-many-${index + 1}`,
+      sync_status: 'pending',
+      metadata_status: 'complete',
+    }),
+  );
+  fakeRepo.__reset(rows);
+  for (const row of rows) {
+    await fakeRepo.repository.enqueue({
+      local_id: row.id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: row.id, url: row.url!, client_id: row.id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    });
+  }
+  // Fails exactly once, so the queue eventually quiesces (the retry
+  // succeeds) instead of retrying forever — the test only needs to prove
+  // createBookmark (singular) is never called along the way, not pin down
+  // every intermediate per-entry status across however many auto-triggered
+  // passes it takes to settle.
+  apiMock.__spies.createBookmarks.mockRejectedValueOnce(new Error('network down'));
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  await waitFor(() =>
+    expect(
+      store.current!.queue.every(
+        (entry) => entry.sync_status !== 'pending' && entry.sync_status !== 'syncing',
+      ),
+    ).toBe(true),
+  );
+
+  expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
 });
 
 test('a create that resolves as a server-side duplicate adopts the existing row, no doubled card (Sentry STASH-3Q)', async () => {
