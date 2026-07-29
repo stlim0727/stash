@@ -3552,6 +3552,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // before it had a remote id would stay live in the cloud and
             // resurrect on other devices.
             if (createUploaded && createNeedsReconcileUpdate(merged, result.uploadedPayload)) {
+              // STASH-3Y diagnostics: same reconcile path as the bulk chunk
+              // loop below, just one entry at a time (single-create fallback).
+              recordLog(
+                'info',
+                `single create reconcile: metadata_status=${merged.metadata_status} ` +
+                  `site_name=${merged.site_name !== null} favicon_url=${merged.favicon_url !== null} ` +
+                  `preview_image_url=${merged.preview_image_url !== null}`,
+              );
               enqueueMutation(merged.id, 'update');
             }
             // A brand-new bookmark just gained a remote identity: queue AI
@@ -3707,6 +3715,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const deletedMidFlightIds: string[] = [];
         const followUpUpdates: Bookmark[] = [];
         const pendingAiIds: string[] = [];
+        // STASH-3Y diagnostics: which field(s) triggered createNeedsReconcileUpdate,
+        // tallied (not per-row — this chunk can run hundreds of times in one
+        // bulk import) so a future report shows WHY the queue grew back after
+        // a chunk finished, instead of guessing again. Remove once STASH-3Y's
+        // actual cause is confirmed and fixed.
+        const reconcileReasonTally: Record<string, number> = {};
+        const queueLenBeforeChunk = queueRef.current.length;
         for (const { bookmark: update, originalLocalId } of completions) {
           const lookupId = originalLocalId ?? update.id;
           // Deleted while the upload/durable-persist was in flight: the
@@ -3752,6 +3767,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // values (caught in PR review).
             if (createNeedsReconcileUpdate(merged, uploadedPayload)) {
               followUpUpdates.push(merged);
+              if (merged.deleted_at !== null) {
+                reconcileReasonTally.deleted_at = (reconcileReasonTally.deleted_at ?? 0) + 1;
+              }
+              if (merged.is_archived) {
+                reconcileReasonTally.is_archived = (reconcileReasonTally.is_archived ?? 0) + 1;
+              }
+              if (merged.collection_id !== null) {
+                reconcileReasonTally.collection_id = (reconcileReasonTally.collection_id ?? 0) + 1;
+              }
+              if (merged.title !== (uploadedPayload.title ?? null)) {
+                reconcileReasonTally.title = (reconcileReasonTally.title ?? 0) + 1;
+              }
+              if (merged.notes !== (uploadedPayload.notes ?? null)) {
+                reconcileReasonTally.notes = (reconcileReasonTally.notes ?? 0) + 1;
+              }
+              if (merged.description !== (uploadedPayload.shared_text ?? null)) {
+                reconcileReasonTally.description = (reconcileReasonTally.description ?? 0) + 1;
+              }
+              if (merged.metadata_status !== 'pending') {
+                reconcileReasonTally.metadata_status = (reconcileReasonTally.metadata_status ?? 0) + 1;
+              }
+              if (merged.site_name !== null) {
+                reconcileReasonTally.site_name = (reconcileReasonTally.site_name ?? 0) + 1;
+              }
+              if (merged.favicon_url !== null) {
+                reconcileReasonTally.favicon_url = (reconcileReasonTally.favicon_url ?? 0) + 1;
+              }
+              if (merged.preview_image_url !== null) {
+                reconcileReasonTally.preview_image_url = (reconcileReasonTally.preview_image_url ?? 0) + 1;
+              }
             }
             pendingAiIds.push(merged.id);
           }
@@ -3759,6 +3804,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         bookmarksRef.current = nextBookmarks;
         setBookmarks(nextBookmarks);
         setQueue((current) => current.filter((queued) => !completedLocalIds.has(queued.local_id)));
+        recordLog(
+          'info',
+          `bulk create chunk: ${completions.length} completed, queue ${queueLenBeforeChunk} -> ` +
+            `~${queueLenBeforeChunk - completedLocalIds.size + followUpUpdates.length + deletedMidFlightIds.length}` +
+            ` (reconcile ${followUpUpdates.length}, deletedMidFlight ${deletedMidFlightIds.length},` +
+            ` reasons ${JSON.stringify(reconcileReasonTally)})`,
+        );
 
         for (const id of deletedMidFlightIds) {
           enqueueMutation(id, 'delete');
