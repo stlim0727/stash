@@ -1761,6 +1761,171 @@ test('a transient storage failure reconciling an entry is retried rather than ab
   fakeRepo.repository.updateBookmark = originalUpdateBookmark;
 });
 
+test('a bookmark deleted during the reconcile write retry delay is not resurrected by a later retry attempt (STASH-3Y)', async () => {
+  // The reconcile write's first attempt closed over a single `current`
+  // snapshot resolved once, before calling retryStorageWrite — every retry
+  // reused that same stale snapshot. If the row was permanently deleted
+  // during the retry delay, a later retry would still write the stale
+  // (pre-delete) snapshot back via updateBookmark's upsert, resurrecting a
+  // row the user already deleted (caught in PR review). Fixed by
+  // re-resolving the current row from bookmarksRef.current inside every
+  // retry attempt, no-oping if it's gone rather than writing stale data.
+  const id = '7e64cf1e-0000-4000-8000-000000000651';
+  const fillerId = '7e64cf1e-0000-4000-8000-000000000652';
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    [id, fillerId].map((bookmarkId) =>
+      makeStoredBookmark({
+        id: bookmarkId,
+        url: `https://example.com/${bookmarkId}`,
+        site_name: 'Example Site',
+        sync_status: 'pending',
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const bookmarkId of [id, fillerId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: bookmarkId,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: bookmarkId, url: `https://example.com/${bookmarkId}`, client_id: bookmarkId },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let firstAttemptFailed: () => void = () => {};
+  const firstAttemptFailedPromise = new Promise<void>((resolve) => {
+    firstAttemptFailed = resolve;
+  });
+  let originalCallsForId = 0;
+  let calls = 0;
+  const originalUpdateBookmark = fakeRepo.repository.updateBookmark.bind(fakeRepo.repository);
+  fakeRepo.repository.updateBookmark = async (bookmark) => {
+    if (bookmark.id === id) {
+      calls += 1;
+      if (calls === 1) {
+        firstAttemptFailed();
+        throw new Error('simulated transient storage failure');
+      }
+      originalCallsForId += 1;
+    }
+    return originalUpdateBookmark(bookmark);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await firstAttemptFailedPromise;
+
+  // The first attempt just failed; the retry is scheduled ~50ms out.
+  // Permanently delete `id` right now, inside that delay.
+  await act(async () => {
+    store.current!.deleteBookmark(id);
+  });
+  expect(store.current!.getBookmark(id)).toBeUndefined();
+
+  // Durable proof the retry loop has moved on (to fillerId) — by which
+  // point `id`'s retry attempt(s) have already run and made their decision.
+  await waitFor(() =>
+    expect(apiMock.__spies.updateBookmark.mock.calls.some(([callId]) => callId === fillerId)).toBe(
+      true,
+    ),
+  );
+
+  // The retry must never have actually written `id` back — it was gone by
+  // the time any retry ran, so the fixed code no-ops instead of upserting
+  // the stale pre-delete snapshot.
+  expect(originalCallsForId).toBe(0);
+  expect(fakeRepo.__bookmarks().find((b) => b.id === id)).toBeUndefined();
+  expect(
+    fakeRepo.__queue().some((entry) => entry.local_id === id && entry.operation === 'update'),
+  ).toBe(false);
+
+  fakeRepo.repository.updateBookmark = originalUpdateBookmark;
+});
+
+test('AI dispatch stays suppressed while a bulk chunk reconcile follow-up is still in flight (STASH-3Y)', async () => {
+  // The completed-create entries are removed from the queue before the
+  // reconcile follow-up's replacement 'update' mutations are enqueued — a
+  // gap that now spans real, sequential SQLite writes. The AI-dispatch
+  // interval (400ms) only checks the queue for pending/syncing entries, so
+  // it could observe that gap as "sync settled" and start firing AI
+  // requests while reconciliation is still blocked — adding exactly the
+  // storage/network load this fix is meant to relieve (caught in PR
+  // review). Fixed with an explicit bulkReconcileInFlight flag the interval
+  // also checks.
+  const id = '7e64cf1e-0000-4000-8000-000000000661';
+  const fillerId = '7e64cf1e-0000-4000-8000-000000000662';
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    [id, fillerId].map((bookmarkId) =>
+      makeStoredBookmark({
+        id: bookmarkId,
+        url: `https://example.com/${bookmarkId}`,
+        site_name: 'Example Site',
+        sync_status: 'pending',
+        // 'complete' (already fetched) so the deferred AI-trigger effect
+        // doesn't wait on a background metadata fetch first — it's
+        // eligible to dispatch the instant the create completes.
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const bookmarkId of [id, fillerId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: bookmarkId,
+      remote_id: null,
+      operation: 'create',
+      payload: { id: bookmarkId, url: `https://example.com/${bookmarkId}`, client_id: bookmarkId },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseWrite: () => void = () => {};
+  const writeGate = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  let writeEntered: () => void = () => {};
+  const writeEnteredPromise = new Promise<void>((resolve) => {
+    writeEntered = resolve;
+  });
+  let gated = false;
+  const originalUpdateBookmark = fakeRepo.repository.updateBookmark.bind(fakeRepo.repository);
+  fakeRepo.repository.updateBookmark = async (bookmark) => {
+    if (bookmark.id === id && !gated) {
+      gated = true;
+      writeEntered();
+      await writeGate;
+    }
+    return originalUpdateBookmark(bookmark);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await writeEnteredPromise;
+
+  // Still gated, well past one 400ms dispatch tick: no AI request must have
+  // fired yet.
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  expect(apiMock.__spies.requestEnrichment).not.toHaveBeenCalled();
+
+  releaseWrite();
+
+  await waitFor(() =>
+    expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(id, expect.anything(), 'en'),
+  );
+
+  fakeRepo.repository.updateBookmark = originalUpdateBookmark;
+});
+
 test('a bookmark deleted mid-flight during a bulk create is persisted locally before its remote-delete mutation is queued (STASH-3Y)', async () => {
   // Ordering regression: queueing all of a chunk's remote-delete mutations
   // before any of the durable local deletes land means a crash between the
@@ -1844,6 +2009,22 @@ test('a bookmark deleted mid-flight during a bulk create is persisted locally be
         .__queue()
         .some((entry) => entry.local_id === deletedMidFlightId && entry.operation === 'delete'),
     ).toBe(true),
+  );
+
+  // Drain the follow-up delete's own sync attempt before restoring the
+  // mocked methods — this entry was added after the active sync's own
+  // queue snapshot, so a later auto-sync pass drains it; api.deleteBookmark
+  // isn't mocked in this file, so that attempt throws and settles to
+  // 'failed' quickly. Without waiting for that, the provider could still be
+  // mid-attempt when the next test resets the shared fake repository,
+  // mutating that fresh fixture (caught in PR review).
+  await waitFor(() =>
+    expect(
+      fakeRepo
+        .__queue()
+        .find((entry) => entry.local_id === deletedMidFlightId && entry.operation === 'delete')
+        ?.sync_status,
+    ).toBe('failed'),
   );
 
   expect(deletedWhileAlreadyQueued).toBe(false);

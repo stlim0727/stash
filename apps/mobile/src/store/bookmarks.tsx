@@ -727,6 +727,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
   const localCreateFlushesInFlight = useRef(0);
+  // A bulk-create chunk's reconcile follow-up (deletedMidFlightIds/
+  // followUpUpdates in applyBulkCreateChunkResults) removes the chunk's
+  // completed 'create' entries from the queue before its own sequential
+  // writes finish and re-add their replacement 'update'/'delete' entries —
+  // those writes now genuinely await real SQLite calls, so that gap can
+  // outlast the AI-dispatch interval's 400ms tick. Without this flag, that
+  // interval would see a queue with nothing pending/syncing and wrongly
+  // conclude sync had settled, firing AI requests during the exact SQLite
+  // stall this file's STASH-3Y fix is meant to relieve (caught in PR
+  // review).
+  const bulkReconcileInFlight = useRef(0);
   // See SYNC_PAUSED_KEY above. The ref is read inside syncNow (the hot path);
   // the state exists only so Settings can display/toggle the current choice.
   const syncPausedRef = useRef(false);
@@ -3897,104 +3908,128 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           markPendingAiTrigger(id);
         }
 
-        if (deletedMidFlightIds.length > 0) {
-          // Sequential on purpose (STASH-3B/3N precedent, see
-          // docs/architecture/sqlite-write-contention.md): a chunk with many
-          // mid-flight deletes fired concurrently would stack that many
-          // simultaneous native calls onto the single serialized SQLite
-          // connection. Each id's local row is deleted durably BEFORE its
-          // remote-delete mutation is queued (not after) — queueing first
-          // and a crash before the local delete lands would leave a 'delete'
-          // queue entry whose row was never actually removed locally, which
-          // resurrects it once that entry finishes syncing (caught in PR
-          // review). Awaited here, not fire-and-forget, so the outer
-          // per-chunk loop above can't start the next chunk's own persist
-          // chain concurrently with this one. Each id isolated in its own
-          // try/catch — completeCreateSyncBatch already durably persisted
-          // and dequeued every one of these, so a storage failure on one
-          // must not also cost the rest of the chunk their delete (caught in
-          // PR review). Retried (retryStorageWrite) rather than given up on
-          // after a single failure: nothing else will ever retry this
-          // specific delete once completeCreateSyncBatch has dequeued the
-          // create, and enqueueing the remote delete without the local row
-          // actually gone would be premature — the remote copy would be
-          // deleted while the local row silently survives and resurrects on
-          // restart (caught in PR review).
-          for (const id of deletedMidFlightIds) {
-            try {
-              await ensureRepositoryReady();
-              await retryStorageWrite(() => repository.deleteBookmark(id));
-              enqueueMutation(id, 'delete');
-            } catch (error) {
-              logStorageError('post-delete sync cleanup', error);
+        // Covers both follow-up loops below: the queue has no
+        // pending/syncing entries for this chunk's ids between
+        // completedLocalIds being filtered out (above) and their
+        // replacement 'update'/'delete' mutations being enqueued (inside
+        // these loops) — a window that now spans real, sequential SQLite
+        // writes. The 400ms AI-dispatch interval (see below) checks this
+        // flag so it doesn't mistake that gap for "sync settled" and start
+        // firing AI requests during it (caught in PR review).
+        bulkReconcileInFlight.current += 1;
+        try {
+          if (deletedMidFlightIds.length > 0) {
+            // Sequential on purpose (STASH-3B/3N precedent, see
+            // docs/architecture/sqlite-write-contention.md): a chunk with many
+            // mid-flight deletes fired concurrently would stack that many
+            // simultaneous native calls onto the single serialized SQLite
+            // connection. Each id's local row is deleted durably BEFORE its
+            // remote-delete mutation is queued (not after) — queueing first
+            // and a crash before the local delete lands would leave a 'delete'
+            // queue entry whose row was never actually removed locally, which
+            // resurrects it once that entry finishes syncing (caught in PR
+            // review). Awaited here, not fire-and-forget, so the outer
+            // per-chunk loop above can't start the next chunk's own persist
+            // chain concurrently with this one. Each id isolated in its own
+            // try/catch — completeCreateSyncBatch already durably persisted
+            // and dequeued every one of these, so a storage failure on one
+            // must not also cost the rest of the chunk their delete (caught in
+            // PR review). Retried (retryStorageWrite) rather than given up on
+            // after a single failure: nothing else will ever retry this
+            // specific delete once completeCreateSyncBatch has dequeued the
+            // create, and enqueueing the remote delete without the local row
+            // actually gone would be premature — the remote copy would be
+            // deleted while the local row silently survives and resurrects on
+            // restart (caught in PR review).
+            for (const id of deletedMidFlightIds) {
+              try {
+                await ensureRepositoryReady();
+                await retryStorageWrite(() => repository.deleteBookmark(id));
+                enqueueMutation(id, 'delete');
+              } catch (error) {
+                logStorageError('post-delete sync cleanup', error);
+              }
             }
           }
-        }
-        if (followUpUpdates.length > 0) {
-          // completeCreateSyncBatch already wrote the pre-await snapshot
-          // durably; if a concurrent edit is what made this reconcile
-          // necessary, that edit only lives in-memory until this write
-          // lands. Without it, exiting before the queued 'update' below
-          // actually syncs would reload the stale row on restart — and the
-          // 'update' queue entry carries no field snapshot of its own (it
-          // derives its payload from whatever bookmark is loaded at sync
-          // time), so the edit would be permanently lost, not just delayed
-          // (caught in PR review). Sequential, not fired per-entry
-          // concurrently (STASH-3B/3N precedent, see
-          // docs/architecture/sqlite-write-contention.md) — a chunk that
-          // reconciles many entries at once would otherwise stack that many
-          // simultaneous native calls onto the single serialized SQLite
-          // connection. Re-reads each row from bookmarksRef.current right
-          // before its own write (not the snapshot captured when this chunk
-          // started) — these writes now take real wall-clock time in
-          // sequence, so a later entry's row may have been edited again
-          // while an earlier entry's write was still in flight, and writing
-          // the stale snapshot would clobber that edit (caught in PR
-          // review). Persisted durably before its own mutation is queued
-          // (not after), for the same crash-ordering reason as the
-          // mid-flight-delete loop above. Awaited here, not fire-and-forget,
-          // so the outer per-chunk loop above can't start the next chunk's
-          // own persist chain concurrently with this one. Each entry
-          // isolated in its own try/catch, same reason as the mid-flight
-          // delete loop above. Retried (retryStorageWrite) rather than given
-          // up on after a single failure — nothing else will ever retry
-          // this specific reconcile write once completeCreateSyncBatch has
-          // already dequeued the create, and enqueueing the 'update'
-          // mutation without it landing would just push the stale
-          // pre-reconcile row (the update mutation carries no field
-          // snapshot of its own — see above) rather than recovering
-          // anything (caught in PR review).
-          for (const bookmark of followUpUpdates) {
-            try {
-              const current = bookmarksRef.current?.find((b) => b.id === bookmark.id);
-              if (!current) {
-                // No longer present — permanently deleted since this chunk
-                // started. Falling back to the stale pre-delete snapshot
-                // would resurrect it (writing it back via updateBookmark)
-                // and the 'update' mutation below would supersede the
-                // delete's own queued mutation, silently undoing the user's
-                // delete (caught in PR review). The delete flow already owns
-                // this row's remote-delete cleanup — nothing to reconcile.
-                continue;
+          if (followUpUpdates.length > 0) {
+            // completeCreateSyncBatch already wrote the pre-await snapshot
+            // durably; if a concurrent edit is what made this reconcile
+            // necessary, that edit only lives in-memory until this write
+            // lands. Without it, exiting before the queued 'update' below
+            // actually syncs would reload the stale row on restart — and the
+            // 'update' queue entry carries no field snapshot of its own (it
+            // derives its payload from whatever bookmark is loaded at sync
+            // time), so the edit would be permanently lost, not just delayed
+            // (caught in PR review). Sequential, not fired per-entry
+            // concurrently (STASH-3B/3N precedent, see
+            // docs/architecture/sqlite-write-contention.md) — a chunk that
+            // reconciles many entries at once would otherwise stack that many
+            // simultaneous native calls onto the single serialized SQLite
+            // connection. Re-reads each row from bookmarksRef.current right
+            // before its own write (not the snapshot captured when this chunk
+            // started) — these writes now take real wall-clock time in
+            // sequence, so a later entry's row may have been edited again
+            // while an earlier entry's write was still in flight, and writing
+            // the stale snapshot would clobber that edit (caught in PR
+            // review). Persisted durably before its own mutation is queued
+            // (not after), for the same crash-ordering reason as the
+            // mid-flight-delete loop above. Awaited here, not fire-and-forget,
+            // so the outer per-chunk loop above can't start the next chunk's
+            // own persist chain concurrently with this one. Each entry
+            // isolated in its own try/catch, same reason as the mid-flight
+            // delete loop above. Retried (retryStorageWrite) rather than given
+            // up on after a single failure — nothing else will ever retry
+            // this specific reconcile write once completeCreateSyncBatch has
+            // already dequeued the create, and enqueueing the 'update'
+            // mutation without it landing would just push the stale
+            // pre-reconcile row (the update mutation carries no field
+            // snapshot of its own — see above) rather than recovering
+            // anything (caught in PR review).
+            for (const bookmark of followUpUpdates) {
+              try {
+                if (!bookmarksRef.current?.some((b) => b.id === bookmark.id)) {
+                  // No longer present — permanently deleted since this chunk
+                  // started. Falling back to the stale pre-delete snapshot
+                  // would resurrect it (writing it back via updateBookmark)
+                  // and the 'update' mutation below would supersede the
+                  // delete's own queued mutation, silently undoing the user's
+                  // delete (caught in PR review). The delete flow already owns
+                  // this row's remote-delete cleanup — nothing to reconcile.
+                  continue;
+                }
+                await ensureRepositoryReady();
+                // Re-reads bookmarksRef.current inside EVERY retry attempt,
+                // not once before calling retryStorageWrite — an ordinary edit
+                // (or the row being deleted) landing during a retry's delay
+                // must not be overwritten by a snapshot captured before that
+                // attempt even started (caught in PR review). A row that's
+                // gone by the time a retry runs no-ops rather than throwing —
+                // there's nothing left to write, and throwing would just
+                // burn the remaining retry attempts on a row that will never
+                // come back.
+                await retryStorageWrite(() => {
+                  const latest = bookmarksRef.current?.find((b) => b.id === bookmark.id);
+                  return latest ? repository.updateBookmark(latest) : Promise.resolve();
+                });
+                // Recheck AFTER the (possibly long, now-retried) write: the
+                // user may have permanently deleted this same bookmark WHILE
+                // it was in flight. deleteBookmark already queued its own
+                // 'delete' mutation for it; unconditionally enqueueing
+                // 'update' here would supersede that queued delete and
+                // resurrect the row exactly like the stale-snapshot case above
+                // — just from a race inside this write instead of before it
+                // started (caught in PR review).
+                if (!bookmarksRef.current?.some((b) => b.id === bookmark.id)) {
+                  continue;
+                }
+                enqueueMutation(bookmark.id, 'update');
+              } catch (error) {
+                logStorageError('post-sync reconcile persist', error);
               }
-              await ensureRepositoryReady();
-              await retryStorageWrite(() => repository.updateBookmark(current));
-              // Recheck AFTER the (possibly long, now-retried) write: the
-              // user may have permanently deleted this same bookmark WHILE
-              // it was in flight. deleteBookmark already queued its own
-              // 'delete' mutation for it; unconditionally enqueueing
-              // 'update' here would supersede that queued delete and
-              // resurrect the row exactly like the stale-snapshot case above
-              // — just from a race inside this write instead of before it
-              // started (caught in PR review).
-              if (!bookmarksRef.current?.some((b) => b.id === bookmark.id)) {
-                continue;
-              }
-              enqueueMutation(bookmark.id, 'update');
-            } catch (error) {
-              logStorageError('post-sync reconcile persist', error);
             }
           }
+        } finally {
+          bulkReconcileInFlight.current -= 1;
         }
       };
       const bulkSyncedLocalIds = new Set<string>();
@@ -4660,6 +4695,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         )
       ) {
         return; // let bookmark sync settle before starting AI work for freshly-created rows
+      }
+      if (bulkReconcileInFlight.current > 0) {
+        // A bulk-create chunk's reconcile follow-up can leave the queue
+        // with nothing pending/syncing for a window that outlasts this
+        // interval's own tick (its writes now genuinely await SQLite calls
+        // in sequence) — without this, that gap looks like "sync settled"
+        // and this would start firing AI requests during the exact SQLite
+        // stall the STASH-3Y fix is meant to relieve (caught in PR review).
+        return;
       }
       const { queue, id } = dequeueAiEnrichmentDispatch(aiDispatchQueueRef.current);
       aiDispatchQueueRef.current = queue;
