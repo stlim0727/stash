@@ -1529,6 +1529,74 @@ test('a storage failure reconciling one entry does not block the rest of the chu
   fakeRepo.repository.updateBookmark = originalUpdateBookmark;
 });
 
+test('pending AI-trigger markers are persisted before the reconcile write loops, not after (STASH-3Y)', async () => {
+  // completeCreateSyncBatch already marked every create in this chunk synced
+  // and removed its create queue entry — if the app exits while a LATER
+  // entry's reconcile write is still awaited, there is no remaining path to
+  // recreate a missed durable AI-trigger marker on restart, permanently
+  // costing that bookmark its automatic AI suggestions (caught in PR
+  // review). Both ids' markers must already be durably persisted while the
+  // first entry's reconcile write is still gated (not yet resolved).
+  const firstId = '7e64cf1e-0000-4000-8000-000000000631';
+  const secondId = '7e64cf1e-0000-4000-8000-000000000632';
+  const now = '2026-06-14T00:00:00.000Z';
+  fakeRepo.__reset(
+    [firstId, secondId].map((id) =>
+      makeStoredBookmark({
+        id,
+        url: `https://example.com/${id}`,
+        site_name: 'Example Site',
+        sync_status: 'pending',
+        metadata_status: 'complete',
+      }),
+    ),
+  );
+  for (const id of [firstId, secondId]) {
+    await fakeRepo.repository.enqueue({
+      local_id: id,
+      remote_id: null,
+      operation: 'create',
+      payload: { id, url: `https://example.com/${id}`, client_id: id },
+      sync_status: 'pending',
+      retry_count: 0,
+      last_error: null,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  let releaseFirstWrite: () => void = () => {};
+  const firstWriteGate = new Promise<void>((resolve) => {
+    releaseFirstWrite = resolve;
+  });
+  let firstWriteEntered: () => void = () => {};
+  const firstWriteEnteredPromise = new Promise<void>((resolve) => {
+    firstWriteEntered = resolve;
+  });
+  let firstIdGated = false;
+  const originalUpdateBookmark = fakeRepo.repository.updateBookmark.bind(fakeRepo.repository);
+  fakeRepo.repository.updateBookmark = async (bookmark) => {
+    if (bookmark.id === firstId && !firstIdGated) {
+      firstIdGated = true;
+      firstWriteEntered();
+      await firstWriteGate;
+    }
+    return originalUpdateBookmark(bookmark);
+  };
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await firstWriteEnteredPromise;
+
+  // Still gated — the reconcile write loop hasn't resolved for either entry
+  // yet — but both markers must already be durably persisted.
+  const pending = JSON.parse(fakeRepo.__meta('pending_ai_trigger') ?? '[]') as string[];
+  expect(pending).toEqual(expect.arrayContaining([firstId, secondId]));
+
+  releaseFirstWrite();
+  fakeRepo.repository.updateBookmark = originalUpdateBookmark;
+});
+
 test('a bookmark deleted mid-flight during a bulk create is persisted locally before its remote-delete mutation is queued (STASH-3Y)', async () => {
   // Ordering regression: queueing all of a chunk's remote-delete mutations
   // before any of the durable local deletes land means a crash between the

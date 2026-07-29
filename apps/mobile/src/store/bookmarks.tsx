@@ -3856,6 +3856,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           rekeyBookmarkIdentity(rekeyedIds);
         }
 
+        // Persisted BEFORE the follow-up loops below (not after), same
+        // reason as rekeyBookmarkIdentity above: completeCreateSyncBatch
+        // already marked every one of these creates synced and removed its
+        // create queue entry, so if the app exits while a later entry's
+        // reconcile write is still in flight, there is no other path left to
+        // recreate a missed durable AI-trigger marker on restart — a
+        // successfully created bookmark would then permanently miss its
+        // automatic AI suggestions (caught in PR review). Only the marker
+        // is persisted here; actual dispatch stays gated on enrichment
+        // settling, same as before.
+        for (const id of pendingAiIds) {
+          markPendingAiTrigger(id);
+        }
+
         if (deletedMidFlightIds.length > 0) {
           // Sequential on purpose (STASH-3B/3N precedent, see
           // docs/architecture/sqlite-write-contention.md): a chunk with many
@@ -3930,10 +3944,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               logStorageError('post-sync reconcile persist', error);
             }
           }
-        }
-
-        for (const id of pendingAiIds) {
-          markPendingAiTrigger(id);
         }
       };
       const bulkSyncedLocalIds = new Set<string>();
