@@ -116,6 +116,11 @@ import {
   syncCreateQueueEntryBatch,
   syncQueueEntry,
 } from '@/sync/sync-bookmarks';
+import {
+  recordBulkChunkStarted,
+  recordCreateCompleted,
+  recordReconcileNeeded,
+} from '@/sync/reconcile-diagnostics';
 
 export type AddBookmarkResult =
   | {
@@ -3446,6 +3451,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           });
         }
 
+        if (result.uploadedPayload !== undefined) {
+          // STASH-3Y diagnostics: `uploadedPayload` being defined is
+          // unconditional proof this create already succeeded remotely
+          // (sync-bookmarks.ts only sets it after a successful
+          // api.createBookmark call) — record it here, before any of the
+          // branching below (deleted-mid-flight, no local row to merge)
+          // that would otherwise skip it. Whether it also needed a
+          // reconcile follow-up is recorded separately, later, only once
+          // that's actually determined — see recordReconcileNeeded.
+          recordCreateCompleted();
+        }
+
         // Deleted while a create/update was in flight: don't resurrect it.
         // Undo the rows syncQueueEntry just persisted and best-effort delete
         // the remote copy so the user's delete wins end to end.
@@ -3551,16 +3568,34 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // reach the cloud. Without the `deleted_at` arm, a bookmark trashed
             // before it had a remote id would stay live in the cloud and
             // resurrect on other devices.
-            if (createUploaded && createNeedsReconcileUpdate(merged, result.uploadedPayload)) {
+            if (createUploaded) {
               // STASH-3Y diagnostics: same reconcile path as the bulk chunk
-              // loop below, just one entry at a time (single-create fallback).
-              recordLog(
-                'info',
-                `single create reconcile: metadata_status=${merged.metadata_status} ` +
-                  `site_name=${merged.site_name !== null} favicon_url=${merged.favicon_url !== null} ` +
-                  `preview_image_url=${merged.preview_image_url !== null}`,
-              );
-              enqueueMutation(merged.id, 'update');
+              // loop below, just one entry at a time (single-create
+              // fallback). Completion itself was already recorded
+              // unconditionally near the top of this function — this only
+              // records *why*, once reconcile is confirmed needed.
+              const payload = result.uploadedPayload;
+              if (createNeedsReconcileUpdate(merged, payload)) {
+                const reasons: Record<string, number> = {};
+                if (merged.deleted_at !== null) reasons.deleted_at = 1;
+                if (merged.is_archived) reasons.is_archived = 1;
+                if (merged.collection_id !== null) reasons.collection_id = 1;
+                if (merged.title !== (payload?.title ?? null)) reasons.title = 1;
+                if (merged.notes !== (payload?.notes ?? null)) reasons.notes = 1;
+                if (merged.description !== (payload?.shared_text ?? null)) reasons.description = 1;
+                if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
+                if (merged.site_name !== null) reasons.site_name = 1;
+                if (merged.favicon_url !== null) reasons.favicon_url = 1;
+                if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
+                recordReconcileNeeded(reasons);
+                recordLog(
+                  'info',
+                  `single create reconcile: metadata_status=${merged.metadata_status} ` +
+                    `site_name=${merged.site_name !== null} favicon_url=${merged.favicon_url !== null} ` +
+                    `preview_image_url=${merged.preview_image_url !== null}`,
+                );
+                enqueueMutation(merged.id, 'update');
+              }
             }
             // A brand-new bookmark just gained a remote identity: queue AI
             // suggestions for it. We DON'T fire immediately — the background
@@ -3579,6 +3614,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         chunk: LocalPendingBookmark[],
         results: Awaited<ReturnType<typeof syncCreateQueueEntryBatch>>,
       ) => {
+        if (results.length > 0) {
+          // STASH-3Y diagnostics: recorded unconditionally, before any of the
+          // per-entry branching below (deleted-mid-flight, no local row to
+          // merge) that can make the *rest* of this function skip an entry,
+          // or even return early if the whole chunk hits one of those. Every
+          // result syncCreateQueueEntryBatch returns already represents a
+          // create that succeeded remotely (see the comment on
+          // completedLocalIds.add below).
+          recordBulkChunkStarted(results.length);
+        }
         const completedLocalIds = new Set<string>();
         const completions: CreateSyncCompletion[] = [];
         const queueOnlyEntries: LocalPendingBookmark[] = [];
@@ -3767,35 +3812,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // values (caught in PR review).
             if (createNeedsReconcileUpdate(merged, uploadedPayload)) {
               followUpUpdates.push(merged);
-              if (merged.deleted_at !== null) {
-                reconcileReasonTally.deleted_at = (reconcileReasonTally.deleted_at ?? 0) + 1;
-              }
-              if (merged.is_archived) {
-                reconcileReasonTally.is_archived = (reconcileReasonTally.is_archived ?? 0) + 1;
-              }
-              if (merged.collection_id !== null) {
-                reconcileReasonTally.collection_id = (reconcileReasonTally.collection_id ?? 0) + 1;
-              }
-              if (merged.title !== (uploadedPayload.title ?? null)) {
-                reconcileReasonTally.title = (reconcileReasonTally.title ?? 0) + 1;
-              }
-              if (merged.notes !== (uploadedPayload.notes ?? null)) {
-                reconcileReasonTally.notes = (reconcileReasonTally.notes ?? 0) + 1;
-              }
-              if (merged.description !== (uploadedPayload.shared_text ?? null)) {
-                reconcileReasonTally.description = (reconcileReasonTally.description ?? 0) + 1;
-              }
-              if (merged.metadata_status !== 'pending') {
-                reconcileReasonTally.metadata_status = (reconcileReasonTally.metadata_status ?? 0) + 1;
-              }
-              if (merged.site_name !== null) {
-                reconcileReasonTally.site_name = (reconcileReasonTally.site_name ?? 0) + 1;
-              }
-              if (merged.favicon_url !== null) {
-                reconcileReasonTally.favicon_url = (reconcileReasonTally.favicon_url ?? 0) + 1;
-              }
-              if (merged.preview_image_url !== null) {
-                reconcileReasonTally.preview_image_url = (reconcileReasonTally.preview_image_url ?? 0) + 1;
+              const reasons: Record<string, number> = {};
+              if (merged.deleted_at !== null) reasons.deleted_at = 1;
+              if (merged.is_archived) reasons.is_archived = 1;
+              if (merged.collection_id !== null) reasons.collection_id = 1;
+              if (merged.title !== (uploadedPayload.title ?? null)) reasons.title = 1;
+              if (merged.notes !== (uploadedPayload.notes ?? null)) reasons.notes = 1;
+              if (merged.description !== (uploadedPayload.shared_text ?? null)) reasons.description = 1;
+              if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
+              if (merged.site_name !== null) reasons.site_name = 1;
+              if (merged.favicon_url !== null) reasons.favicon_url = 1;
+              if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
+              recordReconcileNeeded(reasons);
+              for (const [reason, count] of Object.entries(reasons)) {
+                reconcileReasonTally[reason] = (reconcileReasonTally[reason] ?? 0) + count;
               }
             }
             pendingAiIds.push(merged.id);
@@ -3806,7 +3836,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setQueue((current) => current.filter((queued) => !completedLocalIds.has(queued.local_id)));
         recordLog(
           'info',
-          `bulk create chunk: ${completions.length} completed, queue ${queueLenBeforeChunk} -> ` +
+          `bulk create chunk: ${completedLocalIds.size} completed, queue ${queueLenBeforeChunk} -> ` +
             `~${queueLenBeforeChunk - completedLocalIds.size + followUpUpdates.length + deletedMidFlightIds.length}` +
             ` (reconcile ${followUpUpdates.length}, deletedMidFlight ${deletedMidFlightIds.length},` +
             ` reasons ${JSON.stringify(reconcileReasonTally)})`,

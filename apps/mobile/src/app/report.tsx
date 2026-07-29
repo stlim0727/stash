@@ -32,6 +32,7 @@ import {
 } from '@/feedback/screenshot-session';
 import { getShareDiagnostics, hydrateNativeShareDebugLog } from '@/share/share-diagnostics';
 import { getStorageDiagnostics } from '@/storage/diagnostics';
+import { getReconcileDiagnostics } from '@/sync/reconcile-diagnostics';
 import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
 import { useT } from '@/i18n';
 import { Button } from '@/ui/Button';
@@ -180,6 +181,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         build: buildLabel,
         logs: recentLogLines(),
         storage: getStorageDiagnostics(),
+        syncReconcile: getReconcileDiagnostics(),
         shareAttempt: getShareDiagnostics(),
         screenshot: includeScreenshot ? screenshot : null,
       }),

@@ -1,4 +1,6 @@
 import { recordLog } from '@/observability/log-buffer';
+import { noteSqliteQueueDepth, noteSqliteTailWait } from '@/storage/diagnostics';
+import { registerForForegroundState } from '@/storage/sqlite-app-lifecycle';
 
 export interface SqliteConnectionOptions {
   /** Max time a liveness probe may run before the handle is treated as dead. */
@@ -31,6 +33,13 @@ export interface SqliteConnectionOptions {
   reopenAlertWindowMs?: number;
   /** Clock for reopen-cadence tracking; injectable for tests. Defaults to Date.now. */
   now?: () => number;
+  /**
+   * Foreground/background transition source, for tail-wait diagnostics (see
+   * `backgroundTransitions`). Injectable for tests — the real
+   * `registerForForegroundState` is a no-op without a DOM/AppState, so a test
+   * needs a fake to actually fire a transition. Defaults to the real one.
+   */
+  registerForegroundState?: typeof registerForForegroundState;
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 2000;
@@ -132,6 +141,23 @@ export class SqliteConnection<DB> {
   private readonly reopenAlertThreshold: number;
   private readonly reopenAlertWindowMs: number;
   private readonly now: () => number;
+  // Bumped on every background AND foreground transition (see
+  // registerForForegroundState below) — a wait spanning a change in this
+  // counter overlapped an app suspension, so its wall-clock duration reflects
+  // how long the app was backgrounded, not real SQLite contention. Duration
+  // alone can't distinguish the two (a genuine multi-minute stall and a
+  // multi-minute background both just look like "a long wait"), so this
+  // counts actual transitions instead of guessing from elapsed time.
+  private backgroundTransitions = 0;
+  private readonly registerForegroundState: typeof registerForForegroundState;
+  // Registered lazily, on first `serialize()`, not in the constructor: this
+  // class is constructed at module scope by more than one consumer
+  // (repository.native.ts, session-storage.native.ts), so registering here
+  // would fire at *import* time — before a test's own module-scoped mock
+  // setup for `sqlite-app-lifecycle` has necessarily run yet (caught by a
+  // jest-lane failure in review: the mock's backing array was still `undefined`
+  // at that point).
+  private foregroundStateRegistered = false;
 
   constructor(
     private readonly opener: () => Promise<DB>,
@@ -147,6 +173,7 @@ export class SqliteConnection<DB> {
     this.reopenAlertThreshold = options.reopenAlertThreshold ?? DEFAULT_REOPEN_ALERT_THRESHOLD;
     this.reopenAlertWindowMs = options.reopenAlertWindowMs ?? DEFAULT_REOPEN_ALERT_WINDOW_MS;
     this.now = options.now ?? Date.now;
+    this.registerForegroundState = options.registerForegroundState ?? registerForForegroundState;
   }
 
   /** Resolve to a live handle, reopening transparently if the current one died. */
@@ -205,16 +232,46 @@ export class SqliteConnection<DB> {
 
   /** Chain a task onto the serialization tail so units of work never overlap. */
   private serialize<T>(task: () => Promise<T>): Promise<T> {
+    if (!this.foregroundStateRegistered) {
+      this.foregroundStateRegistered = true;
+      // Never unregistered — this connection lives for the app's session,
+      // same as repository.native.ts's registerForBackgroundClose.
+      this.registerForegroundState({
+        onBackground: () => {
+          this.backgroundTransitions += 1;
+        },
+        onForeground: () => {
+          this.backgroundTransitions += 1;
+        },
+      });
+    }
     // Measure head-of-line blocking: every unit waits behind whatever already
     // owns the tail, and a share→foreground reopen burst stacking here is the
     // prime freeze suspect (Sentry STASH-C/H). Record only a non-trivial wait so
     // the steady state stays silent; coarse numbers only, never bookmark content.
     this.pending += 1;
-    const enqueuedAt = Date.now();
+    if (this.pending > 1) {
+      // Eager: depth is known now, even if this unit ends up stuck behind a
+      // long-running or wedged one and its own wait is never measured (see
+      // noteSqliteQueueDepth).
+      noteSqliteQueueDepth(this.pending);
+    }
+    const enqueuedAt = this.now();
+    const transitionsAtEnqueue = this.backgroundTransitions;
     const instrumented = () => {
-      const waitMs = Date.now() - enqueuedAt;
+      const waitMs = this.now() - enqueuedAt;
       if (waitMs >= TAIL_WAIT_LOG_MS) {
         recordLog('info', `sqlite tail wait ${waitMs}ms (depth ${this.pending})`);
+        // Also a small persistent cumulative summary (STASH-3Y investigation)
+        // so max contention survives even if this log line itself later gets
+        // rotated out of the 300-entry ring buffer by further noise. Skipped
+        // if a background/foreground transition happened while this was
+        // queued — the wall-clock duration then reflects how long the app
+        // was suspended, not real contention, regardless of whether that
+        // duration happens to be short or long.
+        if (this.backgroundTransitions === transitionsAtEnqueue) {
+          noteSqliteTailWait(waitMs, this.pending);
+        }
       }
       return task();
     };
