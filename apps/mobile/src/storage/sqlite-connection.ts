@@ -1,4 +1,5 @@
 import { recordLog } from '@/observability/log-buffer';
+import { noteSqliteTailWait } from '@/storage/diagnostics';
 
 export interface SqliteConnectionOptions {
   /** Max time a liveness probe may run before the handle is treated as dead. */
@@ -215,6 +216,10 @@ export class SqliteConnection<DB> {
       const waitMs = Date.now() - enqueuedAt;
       if (waitMs >= TAIL_WAIT_LOG_MS) {
         recordLog('info', `sqlite tail wait ${waitMs}ms (depth ${this.pending})`);
+        // Also a small persistent cumulative summary (STASH-3Y investigation)
+        // so max contention survives even if this log line itself later gets
+        // rotated out of the 300-entry ring buffer by further noise.
+        noteSqliteTailWait(waitMs, this.pending);
       }
       return task();
     };
