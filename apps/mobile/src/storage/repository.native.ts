@@ -225,7 +225,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     }
     await this.connection.run((db) =>
       db.withTransactionAsync(async () => {
-        for (const { bookmark, entry } of completions) {
+        for (const { bookmark, entry, originalLocalId } of completions) {
           const stored = await db.getFirstAsync<QueueRow>(
             'SELECT * FROM local_pending_bookmarks WHERE local_id = ?',
             [entry.local_id],
@@ -236,6 +236,11 @@ class SqliteBookmarkRepository implements BookmarkRepository {
             stored.updated_at !== entry.updated_at
           ) {
             continue;
+          }
+          if (originalLocalId && originalLocalId !== bookmark.id) {
+            // The phantom row under the original id was never actually
+            // created server-side (a duplicate-status create — STASH-3Q).
+            await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [originalLocalId]);
           }
           await writeBookmark(db, bookmark);
           await db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [

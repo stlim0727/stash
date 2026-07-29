@@ -12,7 +12,8 @@ export interface EntrySyncResult {
   entry: LocalPendingBookmark;
   /** Present when the local bookmark row's fields changed (sync_status,
    *  ever_synced, etc.) and the caller needs to persist/reflect them. Applied
-   *  by id — a bookmark's id never changes once captured (see makeBookmarkId). */
+   *  by id — a bookmark's id never changes once captured (see makeBookmarkId),
+   *  EXCEPT the one case `originalLocalId` below covers. */
   bookmarkUpdate?: Bookmark;
   /** True when the entry's work is finished and it can leave the queue. */
   removeEntry?: boolean;
@@ -21,6 +22,16 @@ export interface EntrySyncResult {
   /** Present when the local bookmark row was removed (deleted on another
    *  device while this device had a queued edit for it — see below). */
   removedBookmarkId?: string;
+  /**
+   * Present when a create's own id could not be used because the server
+   * deduped it against an EXISTING different row (`status: 'duplicate'`) —
+   * see STASH-3Q. `bookmarkUpdate.id` is the existing row's id in this case,
+   * different from the entry's `local_id` (carried here as `originalLocalId`
+   * so the caller can find the in-memory row, re-key tag/AI-retry state onto
+   * the new id the same way account rehoming does, and delete the phantom
+   * local-id row that was never actually created server-side).
+   */
+  originalLocalId?: string;
 }
 
 export const BULK_CREATE_SYNC_CHUNK_SIZE = 50;
@@ -207,9 +218,18 @@ export async function syncCreateQueueEntryBatch(
     };
 
     const localBookmark = getBookmark(entry.local_id);
+    // A duplicate-status result means the server matched this create against
+    // an EXISTING different row instead of using the id the client sent (see
+    // EntrySyncResult.originalLocalId / STASH-3Q) — the one remaining case a
+    // bookmark's id changes after capture, alongside account rehoming.
+    const isDuplicateSwap =
+      output.status === 'duplicate' &&
+      Boolean(output.bookmark_id) &&
+      output.bookmark_id !== entry.local_id;
     if (localBookmark) {
       const syncedBookmark: Bookmark = {
         ...localBookmark,
+        id: isDuplicateSwap ? output.bookmark_id : localBookmark.id,
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
@@ -218,6 +238,7 @@ export async function syncCreateQueueEntryBatch(
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: uploadedPayloads[index],
+        originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
       });
       continue;
     }
@@ -362,20 +383,39 @@ export async function syncQueueEntry(
     await repository.updateQueueEntry(syncedEntry);
 
     const localBookmark = getBookmark(entry.local_id);
+    // result.bookmark_id normally equals localBookmark.id — the client sent
+    // that id explicitly (see makeBookmarkId/CreateBookmarkInput.id) — EXCEPT
+    // when the server deduped this create against an existing different row
+    // (status: 'duplicate'; see STASH-3Q and EntrySyncResult.originalLocalId).
+    // In that case the local row must adopt the EXISTING row's id, or the
+    // next pull fetches that existing row separately and the library doubles.
+    const isDuplicateSwap =
+      result.status === 'duplicate' &&
+      Boolean(result.bookmark_id) &&
+      result.bookmark_id !== entry.local_id;
     if (localBookmark) {
-      // result.bookmark_id always equals localBookmark.id now — the client
-      // sent that id explicitly (see makeBookmarkId/CreateBookmarkInput.id).
       const syncedBookmark: Bookmark = {
         ...localBookmark,
+        id: isDuplicateSwap ? result.bookmark_id : localBookmark.id,
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
       };
-      await repository.updateBookmark(syncedBookmark);
+      if (isDuplicateSwap) {
+        // insertBookmark (not updateBookmark), since the existing row's id is
+        // new to THIS device — updateBookmark only replaces a row already
+        // stored under that id (a strict replace, not an upsert, on the
+        // web/localStorage backend) and would silently no-op here.
+        await repository.deleteBookmark(localBookmark.id);
+        await repository.insertBookmark(syncedBookmark);
+      } else {
+        await repository.updateBookmark(syncedBookmark);
+      }
       return {
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: payload,
+        originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
       };
     }
 

@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-29 (added sync-queue retry-health escalation to Sentry).
+Last updated: 2026-07-29 (Fixes STASH-3Q: a create-sync duplicate hit now adopts the existing row's id).
 
 ## Successor Agent Orientation
 
@@ -135,11 +135,12 @@ These are "do not break" rules, not just implementation notes.
   they don't all check each other the same way on purpose — see
   `docs/architecture/sync-pause-import-reset.md` for the full interaction
   matrix before touching any of the four.
-- **Bookmark ids are stable from capture, never renamed.** `makeBookmarkId()`
+- **Bookmark ids are stable from capture, never renamed — EXCEPT a server-side
+  duplicate hit (STASH-3Q) and account rehoming, both below.** `makeBookmarkId()`
   (`store/bookmarks.tsx`) mints a real UUID at creation time, and it's sent
   to the server as the row's own primary key (`CreateBookmarkInput.id` →
   `api/bookmarks.ts`'s `createBody.id`) instead of letting Postgres assign one
-  — so a create's response always echoes the SAME id the client already has.
+  — so a FRESH create's response echoes the SAME id the client already has.
   This replaced an earlier "local-\* placeholder → server-assigned UUID" model
   whose local→remote id-swap (`swapBookmarkId`, `planLeftoverReconciliation`,
   `reconcileStrandedSyncedDuplicates`, the `syncQueueEntry` legacy id-shape
@@ -174,6 +175,26 @@ These are "do not break" rules, not just implementation notes.
   the same update (see `applyBookmarkUpdate`) — skipping this silently makes
   the row indistinguishable from a fresh, never-synced create the next time
   anything checks `hasSyncedOnce`.
+- **STASH-3Q: a create that resolves as a server-side duplicate MUST adopt the
+  EXISTING row's id, not keep its own.** `api/bookmarks.ts`'s `createBookmark`
+  dedupes on canonical URL (or `client_id` for URL-less notes) and returns
+  `{ bookmark_id: existing.id, status: 'duplicate' }` — a genuinely different
+  id than the one the client sent, unlike a fresh insert. Missing this (the
+  #611/#612 "ids never change" assumption held for fresh inserts, but nobody
+  re-audited the pre-existing dedupe branch against it) marks the local row
+  synced under an id Postgres has no row for; the next pull then fetches the
+  real existing row separately and the library doubles ("561 -> 1047").
+  `EntrySyncResult.originalLocalId`/`CreateSyncCompletion.originalLocalId`
+  (`sync/sync-bookmarks.ts`, `storage/types.ts`) carry the old id so the
+  caller (`rekeyBookmarkIdentity` in `store/bookmarks.tsx`) can re-key
+  tag/AI-retry state and `idAliases` the exact same way account rehoming
+  does — this is the ONE other case (besides rehoming) a bookmark's id ever
+  changes post-capture, so both must call the same re-key helper. **Storage
+  gotcha the fix itself tripped over**: adopting a brand-new-to-this-device
+  id must use `insertBookmark`, not `updateBookmark` — the web/localStorage
+  backend's `updateBookmark` only replaces a row already stored under that id
+  (not an upsert, unlike native's SQLite `INSERT OR REPLACE`), so it silently
+  no-ops for an id this device never wrote before.
 - **A sync-queue entry stuck failing escalates to Sentry automatically once,
   at 3 retries** — `crossedHealthEscalationThreshold` (`sync/sync-bookmarks.ts`)
   is checked in `applySyncEntryResult` (`store/bookmarks.tsx`) and reports via
