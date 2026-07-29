@@ -459,6 +459,16 @@ export async function syncQueueEntry(
  * clause covers text notes, whose body uploads as `shared_text` and lands in
  * the remote row's `description`: if the user edited the note before the create
  * ran, the body diverged and must be re-pushed too.
+ *
+ * `site_name`/`favicon_url`/`preview_image_url` also need their own checks:
+ * `CreateBookmarkInput` has no fields for them at all, so if client-side
+ * enrichment fills them in before this row's own create upload completes,
+ * the create request can never carry them — this reconcile check is the
+ * only path that pushes them to the server. `metadata_status` itself is
+ * deliberately NOT checked: it also flips away from `pending` on a failed
+ * or skipped enrichment attempt, where none of the three fields above are
+ * actually populated, and reconciling then just adds a no-op `update` to
+ * the queue (this was the actual source of the STASH-3Y bounce/churn).
  */
 export function createNeedsReconcileUpdate(
   persisted: Bookmark,
@@ -470,7 +480,10 @@ export function createNeedsReconcileUpdate(
     persisted.collection_id !== null ||
     persisted.title !== (uploadedPayload?.title ?? null) ||
     persisted.notes !== (uploadedPayload?.notes ?? null) ||
-    persisted.description !== (uploadedPayload?.shared_text ?? null)
+    persisted.description !== (uploadedPayload?.shared_text ?? null) ||
+    persisted.site_name !== null ||
+    persisted.favicon_url !== null ||
+    persisted.preview_image_url !== null
   );
 }
 

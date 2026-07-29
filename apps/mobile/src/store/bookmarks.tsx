@@ -1552,6 +1552,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         } catch (error) {
           logStorageError('metadata enrichment', error);
         }
+        if (resetEpoch.current !== epochAtStart) {
+          // A reset can land behind this write on native, where storage work
+          // is serialized on a single actor tail — the write above may have
+          // already landed against freshly-cleared storage. Don't compound
+          // that by also queuing a sync mutation for a bookmark that should
+          // no longer exist.
+          return;
+        }
         // Push the freshly fetched metadata to the cloud so other devices see
         // it on their next pull. Only for already-synced bookmarks: a local
         // bookmark's create upload already sends its latest fields.
