@@ -15,8 +15,13 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
   // dedupes against it instead of inserting a duplicate (the failure mode text
   // notes are most exposed to, having no url_hash key).
   const clientId = bookmark.client_id ?? undefined;
+  // The bookmark's own id is its permanent identity from the moment it was
+  // created (see makeBookmarkId) — resending it here is what lets a rebuilt
+  // create for an already-existing row stay keyed to the SAME row instead of
+  // minting a second one server-side.
   if (bookmark.url) {
     return {
+      id: bookmark.id,
       url: bookmark.url,
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
@@ -24,6 +29,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
     };
   }
   return {
+    id: bookmark.id,
     title: bookmark.title ?? undefined,
     notes: bookmark.notes ?? undefined,
     shared_text: bookmark.description ?? undefined,

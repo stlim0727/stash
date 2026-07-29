@@ -980,6 +980,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded local bookmark', () =>
   assert.equal(entries[0]?.operation, 'create');
   assert.equal(entries[0]?.sync_status, 'pending');
   assert.deepEqual(entries[0]?.payload, {
+    id: 'local-abc',
     url: 'https://example.com/a',
     title: 'Stranded',
     notes: 'keep me',
@@ -988,7 +989,9 @@ test('reconcileOrphanedQueueEntries re-creates a stranded local bookmark', () =>
 });
 
 test('reconcileOrphanedQueueEntries re-queues an update for a stranded synced-id bookmark', () => {
-  const orphan = makeBookmark({ id: REMOTE_ID, sync_status: 'pending' });
+  // ever_synced (not id shape) is what marks this row as previously synced —
+  // see Bookmark.ever_synced.
+  const orphan = makeBookmark({ id: REMOTE_ID, sync_status: 'pending', ever_synced: true });
 
   const entries = reconcileOrphanedQueueEntries([orphan], []);
 
@@ -1031,6 +1034,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its
   // The rebuilt create carries the row's client_id so re-enqueuing a note that
   // actually reached the cloud resolves to a duplicate instead of a second row.
   assert.deepEqual(entries[0]?.payload, {
+    id: 'local-note',
     title: 'Reminder',
     notes: undefined,
     shared_text: '내일 3시에 회의 있습니다',

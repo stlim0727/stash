@@ -41,13 +41,13 @@ import { ProposedSummary } from '@/ui/ProposedSummary';
 import { collectionMatchKey } from '@/domain/collection-match';
 import { hashtagSuggestions } from '@/domain/hashtags';
 import { AI_RATE_LIMITED, useBookmarks } from '@/store/bookmarks';
-import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 import { trackBreadcrumb } from '@/observability/sentry';
 import {
   acceptSuggestionBundle,
   dismissSuggestionBundle,
   recordFolderSuggestionActedOn,
 } from '@/domain/suggestion-actions';
+import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
@@ -260,7 +260,11 @@ export default function BookmarkDetailScreen({
   const tags = getTagsForBookmark(bookmark.id);
   const collection = getCollection(bookmark.collection_id);
   const enrichment = getEnrichment(bookmark.id);
-  const canOrganizeRemotely = hasRemoteIdentity(bookmark.id);
+  // hasRemoteIdentity excludes seed/sample rows, which are marked
+  // sync_status: 'synced' locally too even though their bookmark-* id was
+  // never a real cloud row (see hasSyncedOnce in store/bookmarks.tsx).
+  const canOrganizeRemotely =
+    hasRemoteIdentity(bookmark.id) && (bookmark.sync_status === 'synced' || bookmark.ever_synced === true);
   // Any enrichment in flight (auto-trigger or manual) → show the ambient
   // "filling in" skeleton. The manual-only flag drives the explicit button
   // state, so the auto-trigger never makes the section look like a blocking

@@ -135,6 +135,36 @@ These are "do not break" rules, not just implementation notes.
   they don't all check each other the same way on purpose — see
   `docs/architecture/sync-pause-import-reset.md` for the full interaction
   matrix before touching any of the four.
+- **Bookmark ids are stable from capture, never renamed.** `makeBookmarkId()`
+  (`store/bookmarks.tsx`) mints a real UUID at creation time, and it's sent
+  to the server as the row's own primary key (`CreateBookmarkInput.id` →
+  `api/bookmarks.ts`'s `createBody.id`) instead of letting Postgres assign one
+  — so a create's response always echoes the SAME id the client already has.
+  This replaced an earlier "local-\* placeholder → server-assigned UUID" model
+  whose local→remote id-swap (`swapBookmarkId`, `idAliases`,
+  `planLeftoverReconciliation`, `reconcileStrandedSyncedDuplicates`) was the
+  root of an entire class of bugs (STASH-3B/3N/3P). That swap machinery still
+  exists in the codebase (removing it is a deliberately separate follow-up —
+  see the PR that shipped this), but it's now always a same-id no-op for
+  anything created going forward; it only still does real work for rows that
+  predate this change. `hasRemoteIdentity` (id-SHAPE check: real UUID vs.
+  `local-…`/`bookmark-…`) is consequently also DOWNGRADED to a migration/seed-
+  data check — it no longer means "has this synced" (every id looks like a
+  real UUID now, synced or not). For "has this bookmark ever been confirmed
+  synced" — which several self-heal/account-transition/tag/enrichment gates
+  need, including telling a never-synced row apart from one that's merely
+  `pending` again because of a later, still-uploading edit — use
+  `Bookmark.ever_synced` (set once at the first confirmed sync, in
+  `sync-bookmarks.ts` and `remoteToBookmark`, never cleared) alongside
+  `sync_status === 'synced'`, combined with `hasRemoteIdentity` to still
+  exclude seed/sample rows (which are marked `sync_status: 'synced'` locally
+  without ever being a real cloud row). `store/bookmarks.tsx`'s `hasSyncedOnce`
+  is the canonical helper for this combined check — reuse it rather than
+  re-deriving the logic. **Any code path that flips a bookmark's
+  `sync_status` away from `'synced'` must also stamp `ever_synced: true`** in
+  the same update (see `applyBookmarkUpdate`) — skipping this silently makes
+  the row indistinguishable from a fresh, never-synced create the next time
+  anything checks `hasSyncedOnce`.
 
 ### Metadata
 

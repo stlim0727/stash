@@ -71,8 +71,11 @@ export async function pullRemoteChanges(
   const userChanged =
     currentUser != null && previousUserId != null && previousUserId !== currentUser.id;
   const initialLocals = getLocalBookmarks();
-  const initialLocalCloudRowCount = initialLocals.filter((bookmark) =>
-    hasRemoteIdentity(bookmark.id),
+  // hasRemoteIdentity excludes seed/sample rows, which are marked
+  // sync_status: 'synced' locally too even though they were never a real
+  // cloud row (see hasSyncedOnce in store/bookmarks.tsx).
+  const initialLocalCloudRowCount = initialLocals.filter(
+    (bookmark) => hasRemoteIdentity(bookmark.id) && bookmark.sync_status === 'synced',
   ).length;
   const hasLocalCloudRows = initialLocalCloudRowCount > 0;
   // STASH-22: stale sync metadata can survive an upgrade/session-recovery path

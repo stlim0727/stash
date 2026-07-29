@@ -120,7 +120,7 @@ test('real A→real B also drops pending-edit cloud rows (and their queued ops)'
     { id: 'B', isAnonymous: false },
     [
       bookmark({ id: REMOTE_A, sync_status: 'synced' }),
-      bookmark({ id: REMOTE_B, sync_status: 'pending' }), // edited-after-sync
+      bookmark({ id: REMOTE_B, sync_status: 'pending', ever_synced: true }), // edited-after-sync
       bookmark({ id: 'local-keep', sync_status: 'pending' }), // never-synced local create
     ],
   );
@@ -164,7 +164,7 @@ test('planLogoutCacheClear leaves never-synced LOCAL captures in place but drops
     // A previously-synced cloud row the account then EDITED: now `pending` with a
     // remote UUID and an update op keyed to the departing account. Must be dropped
     // (op would 404 under the next identity), even though it isn't `synced`.
-    bookmark({ id: REMOTE_B, sync_status: 'pending' }),
+    bookmark({ id: REMOTE_B, sync_status: 'pending', ever_synced: true }),
     bookmark({ id: 'bookmark-seed-1', sync_status: 'synced' }), // seed (no remote identity) — keep
   ]);
   // Both cloud-identity rows drop; the local create and the seed survive.
@@ -229,7 +229,7 @@ test('applyAccountTransition (logout) drops a pending EDIT row AND its update qu
   // the departing account's UUID. local-create has never reached any cloud.
   const rows = [
     bookmark({ id: REMOTE_A, sync_status: 'synced' }),
-    bookmark({ id: REMOTE_B, sync_status: 'pending' }),
+    bookmark({ id: REMOTE_B, sync_status: 'pending', ever_synced: true }),
     bookmark({ id: 'local-create-1', sync_status: 'pending' }),
   ];
   const plan = planLogoutCacheClear(rows);
