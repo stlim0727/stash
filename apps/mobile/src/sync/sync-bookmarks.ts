@@ -239,6 +239,7 @@ export async function syncCreateQueueEntryBatch(
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: uploadedPayloads[index],
         originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
+        removeEntry: true,
       });
       continue;
     }
@@ -247,6 +248,7 @@ export async function syncCreateQueueEntryBatch(
       entry: syncedEntry,
       uploadedPayload: uploadedPayloads[index],
       originalLocalId: output.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+      removeEntry: true,
     });
   }
 
