@@ -1457,12 +1457,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (bookmark.metadata_status !== 'pending' || enriching.current.has(bookmark.id)) {
       return;
     }
+    const epochAtStart = resetEpoch.current;
     enriching.current.add(bookmark.id);
     // `enriching` (the dedupe guard) is set synchronously above; the fetch
     // itself waits for a limiter slot so bulk passes stay bounded.
     void enrichmentSlots.current(async () => {
       try {
         const { patch, metadata_status } = await enrichBookmark(bookmark);
+        if (resetEpoch.current !== epochAtStart) {
+          return; // library was reset while fetch was in flight
+        }
         // A `create` that synced while the fetch was in flight re-keys the row
         // from its local id onto its remote UUID (see the create-sync swap). If
         // the enriched fields are written against the now-dead local id they are
@@ -1548,6 +1552,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           await repository.updateBookmark(updated);
         } catch (error) {
           logStorageError('metadata enrichment', error);
+        }
+        if (resetEpoch.current !== epochAtStart) {
+          // A reset can land behind this write on native, where storage work
+          // is serialized on a single actor tail — the write above may have
+          // already landed against freshly-cleared storage. Don't compound
+          // that by also queuing a sync mutation for a bookmark that should
+          // no longer exist.
+          return;
         }
         // Push the freshly fetched metadata to the cloud so other devices see
         // it on their next pull. Only for already-synced bookmarks: a local

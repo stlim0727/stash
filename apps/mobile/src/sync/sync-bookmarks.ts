@@ -457,6 +457,18 @@ export async function syncQueueEntry(
  * clause covers text notes, whose body uploads as `shared_text` and lands in
  * the remote row's `description`: if the user edited the note before the create
  * ran, the body diverged and must be re-pushed too.
+ *
+ * `site_name`/`favicon_url`/`preview_image_url` also need their own checks:
+ * `CreateBookmarkInput` has no fields for them at all, so if client-side
+ * enrichment fills them in before this row's own create upload completes,
+ * the create request can never carry them — this reconcile check is the
+ * only path that pushes them to the server. `metadata_status` is checked
+ * too, even though it can flip on its own with no content fields populated
+ * (a failed or skipped enrichment): `supabase/migrations/
+ * 20260621000000_ai_enrich_server_trigger.sql` only dispatches the
+ * server-side AI-enrichment backstop on a transition out of `pending`, so a
+ * text note (no URL, nothing to fetch) still needs that transition pushed
+ * or it never gets suggestions unless the app happens to come back.
  */
 export function createNeedsReconcileUpdate(
   persisted: Bookmark,
