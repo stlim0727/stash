@@ -640,7 +640,9 @@ export default function SettingsScreen() {
   const canSync = cloudAvailable && hasPending && !isSyncing && !isResettingLibrary && !syncPaused;
 
   const syncSummary = syncPaused
-    ? t('settings.sync.paused')
+    ? hasPending
+      ? `${t('settings.sync.paused')} (${t('settings.sync.waiting', { count: waiting })})`
+      : t('settings.sync.paused')
     : isSyncing
       ? t('settings.sync.syncing', { count: waiting })
       : !cloudAvailable
@@ -733,46 +735,53 @@ export default function SettingsScreen() {
           )}
         </View>
 
-        {/* Sync — status-led: the right glyph is the state. Tappable only when
-            there is queued work to upload; otherwise a static checkmark. */}
+        {/* Sync — status-led single row: status, remaining count, pause/resume, and manual refresh inline */}
         <Row
           styles={styles}
           palette={palette}
-          icon="sync"
+          icon={syncPaused ? 'pause-circle-outline' : 'sync'}
           label={t('settings.sync.label')}
           value={syncSummary}
-          onPress={canSync ? () => void syncNow() : undefined}
-          right={
-            isSyncing ? (
-              <ActivityIndicator color={palette.textSecondary} />
-            ) : canSync ? (
-              <Ionicons name="refresh" size={18} color={palette.accent} />
-            ) : cloudAvailable && !syncPaused ? (
-              <Ionicons name="checkmark-circle" size={20} color={palette.success} />
-            ) : undefined
-          }
-        />
-        {/* Pause sync (Sentry STASH-3K follow-up): a safety valve for right
-            after a large import — while on, nothing uploads or pulls, giving
-            time to delete unwanted rows before they ever reach the network
-            (a still-local, never-synced delete drops out of the queue for
-            free; see deleteBookmark). */}
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="pause-circle-outline"
-          label={t('settings.syncPaused.label')}
-          value={syncPaused ? t('settings.syncPaused.on') : t('settings.syncPaused.off')}
           last
           right={
-            <Switch
-              accessibilityLabel={t('settings.syncPaused.label')}
-              value={syncPaused}
-              disabled={isResettingLibrary}
-              onValueChange={setSyncPaused}
-              trackColor={{ true: palette.accent, false: palette.border }}
-              thumbColor="#ffffff"
-            />
+            cloudAvailable ? (
+              <View style={styles.syncActionsRight}>
+                <Pressable
+                  onPress={() => setSyncPaused(!syncPaused)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    syncPaused
+                      ? t('settings.syncPaused.off')
+                      : t('settings.syncPaused.label')
+                  }
+                  disabled={isResettingLibrary}
+                  style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
+                >
+                  <Ionicons
+                    name={syncPaused ? 'play-circle-outline' : 'pause-circle-outline'}
+                    size={22}
+                    color={syncPaused ? palette.accent : palette.textSecondary}
+                  />
+                </Pressable>
+
+                {isSyncing ? (
+                  <ActivityIndicator color={palette.textSecondary} />
+                ) : canSync ? (
+                  <Pressable
+                    onPress={() => void syncNow()}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('settings.sync.label')}
+                    style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}
+                  >
+                    <Ionicons name="refresh" size={20} color={palette.accent} />
+                  </Pressable>
+                ) : !syncPaused ? (
+                  <Ionicons name="checkmark-circle" size={20} color={palette.success} />
+                ) : null}
+              </View>
+            ) : undefined
           }
         />
       </Card>
@@ -1036,35 +1045,6 @@ export default function SettingsScreen() {
             />
           </Group>
 
-          {queue.length === 0 ? (
-            <View style={styles.section}>
-              <Text style={styles.sectionLabel}>{t('settings.queue.title')}</Text>
-              <Text style={styles.emptyQueue}>{t('settings.queue.empty')}</Text>
-            </View>
-          ) : (
-            <Group styles={styles} title={t('settings.queue.title')}>
-              {queue.map((entry, index) => (
-                <View
-                  key={entry.local_id}
-                  style={[styles.queueRow, index < queue.length - 1 && styles.divider]}
-                >
-                  <Text style={styles.queueTitle} numberOfLines={1}>
-                    {entry.payload.url ?? entry.payload.shared_text ?? entry.local_id}
-                  </Text>
-                  <Text style={styles.queueMeta}>
-                    {t('settings.queue.meta', {
-                      operation: entry.operation,
-                      status: entry.sync_status,
-                      retries: entry.retry_count,
-                    })}
-                    {entry.last_error
-                      ? `\n${t('settings.queue.lastError', { error: entry.last_error })}`
-                      : ''}
-                  </Text>
-                </View>
-              ))}
-            </Group>
-          )}
         </>
       ) : null}
 
@@ -1549,19 +1529,10 @@ const makeStyles = (palette: AppPalette) =>
       letterSpacing: 0.5,
       marginLeft: 4,
     },
-    queueRow: {
-      paddingHorizontal: 14,
-      paddingVertical: 12,
-      gap: 3,
-    },
-    queueTitle: {
-      fontSize: 14,
-      fontWeight: '600',
-      color: palette.text,
-    },
-    queueMeta: {
-      fontSize: 12,
-      color: palette.textSecondary,
+    syncActionsRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
     },
     buildLine: {
       alignItems: 'center',
@@ -1572,11 +1543,6 @@ const makeStyles = (palette: AppPalette) =>
       fontSize: 11,
       color: palette.textSecondary,
       opacity: 0.7,
-    },
-    emptyQueue: {
-      fontSize: 14,
-      color: palette.textSecondary,
-      marginLeft: 4,
     },
     footnote: {
       fontSize: 13,
