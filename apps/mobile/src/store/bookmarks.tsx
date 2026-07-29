@@ -985,6 +985,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const enqueueMutation = useCallback((bookmarkId: string, operation: 'update' | 'delete') => {
     const entry = makeMutationEntry(bookmarkId, operation);
     setQueue((current) => [...current.filter((queued) => queued.local_id !== bookmarkId), entry]);
+    // Keep the ref itself current immediately, not just via the `useEffect`
+    // that mirrors it from `queue` after the next render (same rationale as
+    // applyBookmarkUpdate/markBookmarkAccessed's identical bookmarksRef
+    // lines): the AI-dispatch interval reads queueRef.current directly to
+    // decide whether sync has settled, and a bulk-chunk reconcile pass can
+    // drop its own "still reconciling" flag in the same synchronous turn as
+    // this call — without this, that interval could see a stale queue with
+    // nothing pending and wrongly start AI work (caught in PR review).
+    queueRef.current = [
+      ...queueRef.current.filter((queued) => queued.local_id !== bookmarkId),
+      entry,
+    ];
     ensureRepositoryReady()
       .then(() => repository.enqueue(entry))
       .catch((error) => logStorageError(`${operation} mutation enqueue`, error));
