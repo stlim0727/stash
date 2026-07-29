@@ -625,6 +625,33 @@ function logStorageError(operation: string, error: unknown) {
   console.warn(`[stash] failed to persist ${operation}; state remains in memory`, error);
 }
 
+/**
+ * A handful of the bulk-create reconcile follow-up's local writes have
+ * nothing else that will ever retry them once completeCreateSyncBatch has
+ * already marked the underlying create synced and dequeued it (see the
+ * mid-flight-delete and reconcile-update loops in
+ * `applyBulkCreateChunkResults`) — a single transient failure there would
+ * otherwise be unrecoverable for the rest of the session (caught in PR
+ * review). Bounded, short-delay retry for that specific case; not a general
+ * storage-retry utility.
+ */
+async function retryStorageWrite<T>(op: () => Promise<T>): Promise<T> {
+  const attempts = 3;
+  const delayMs = 50;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await op();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
 // Single shared init so background writes can never race ahead of table
 // creation/seeding, even for saves made before the startup load finishes.
 let repositoryReady: Promise<void> | null = null;
@@ -3886,11 +3913,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // try/catch — completeCreateSyncBatch already durably persisted
           // and dequeued every one of these, so a storage failure on one
           // must not also cost the rest of the chunk their delete (caught in
-          // PR review).
+          // PR review). Retried (retryStorageWrite) rather than given up on
+          // after a single failure: nothing else will ever retry this
+          // specific delete once completeCreateSyncBatch has dequeued the
+          // create, and enqueueing the remote delete without the local row
+          // actually gone would be premature — the remote copy would be
+          // deleted while the local row silently survives and resurrects on
+          // restart (caught in PR review).
           for (const id of deletedMidFlightIds) {
             try {
               await ensureRepositoryReady();
-              await repository.deleteBookmark(id);
+              await retryStorageWrite(() => repository.deleteBookmark(id));
               enqueueMutation(id, 'delete');
             } catch (error) {
               logStorageError('post-delete sync cleanup', error);
@@ -3923,7 +3956,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // so the outer per-chunk loop above can't start the next chunk's
           // own persist chain concurrently with this one. Each entry
           // isolated in its own try/catch, same reason as the mid-flight
-          // delete loop above.
+          // delete loop above. Retried (retryStorageWrite) rather than given
+          // up on after a single failure — nothing else will ever retry
+          // this specific reconcile write once completeCreateSyncBatch has
+          // already dequeued the create, and enqueueing the 'update'
+          // mutation without it landing would just push the stale
+          // pre-reconcile row (the update mutation carries no field
+          // snapshot of its own — see above) rather than recovering
+          // anything (caught in PR review).
           for (const bookmark of followUpUpdates) {
             try {
               const current = bookmarksRef.current?.find((b) => b.id === bookmark.id);
@@ -3938,7 +3978,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 continue;
               }
               await ensureRepositoryReady();
-              await repository.updateBookmark(current);
+              await retryStorageWrite(() => repository.updateBookmark(current));
+              // Recheck AFTER the (possibly long, now-retried) write: the
+              // user may have permanently deleted this same bookmark WHILE
+              // it was in flight. deleteBookmark already queued its own
+              // 'delete' mutation for it; unconditionally enqueueing
+              // 'update' here would supersede that queued delete and
+              // resurrect the row exactly like the stale-snapshot case above
+              // — just from a race inside this write instead of before it
+              // started (caught in PR review).
+              if (!bookmarksRef.current?.some((b) => b.id === bookmark.id)) {
+                continue;
+              }
               enqueueMutation(bookmark.id, 'update');
             } catch (error) {
               logStorageError('post-sync reconcile persist', error);
