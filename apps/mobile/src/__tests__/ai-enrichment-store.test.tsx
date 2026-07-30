@@ -1238,9 +1238,9 @@ test('a bulk chunk reconciling many entries at once persists them sequentially, 
       makeStoredBookmark({
         id,
         url: `https://example.com/${id}`,
-        // Non-null site_name is enough to trip createNeedsReconcileUpdate
+        // User-edited collection_id trips createNeedsReconcileUpdate
         // unconditionally (CreateBookmarkInput has no field for it at all).
-        site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         // 'complete' (not 'pending') keeps the auto AI-enrichment trigger
         // from firing — that path has its own independent updateBookmark
