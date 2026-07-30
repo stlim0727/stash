@@ -2457,16 +2457,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // sees `bookmarksRef.current`, which is incomplete while the initial
       // local load hasn't landed (bookmarksRef.current still null) or while
       // the account's first cloud pull is still bringing down previously-
-      // synced rows (isSyncing true covers this window too, since the pull-
-      // on-first-ready effect fires essentially immediately after load).
+      // synced rows (isSyncingState true covers this window too, since the
+      // pull-on-first-ready effect fires essentially immediately after load).
       // Importing during either window can't recognize already-existing
       // rows and durably re-creates every one of them as a fresh duplicate —
       // this is the exact "561 -> 1122" doubling reported twice. Refuse
       // outright rather than risk it; the caller asks the user to retry.
-      if (bookmarksRef.current === null || isSyncing) {
+      if (bookmarksRef.current === null || isSyncingState) {
         recordLog(
           "warn",
-          `import: refused (not ready) items=${items.length} loaded=${bookmarksRef.current !== null} isSyncing=${isSyncing}`,
+          `import: refused (not ready) items=${items.length} loaded=${bookmarksRef.current !== null} isSyncing=${isSyncingState}`,
         );
         return { imported: 0, duplicates: 0, skipped: 0, notReady: true };
       }
@@ -2652,7 +2652,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       );
       return { imported, duplicates, skipped };
     },
-    [loadedBookmarks, enrichInBackground, isSyncing],
+    [loadedBookmarks, enrichInBackground, isSyncingState],
   );
 
   // Record that the user just opened a bookmark (viewed its Detail or opened its
@@ -5441,18 +5441,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    // Determine if there is any create entry in the queue that is still waiting
-    // for background metadata enrichment to resolve.
-    const hasPendingMetadataCreate = queue.some((entry) => {
-      if (entry.operation !== "create") {
-        return false;
-      }
-      const bookmark = bookmarksRef.current?.find(
-        (b) => b.id === entry.local_id,
-      );
-      return bookmark && bookmark.metadata_status === "pending";
-    });
-
     const isSyncNeeded =
       !isSyncingState &&
       bookmarks !== null &&
@@ -5470,10 +5458,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return false;
         }
         if (entry.operation === "create") {
-          // Defer the trigger check for ALL creates in the queue if any create
-          // is still waiting on metadata. This coordinates/batches them so they
-          // accumulate and fire in a single bulk sync pass once all settle.
-          if (hasPendingMetadataCreate) {
+          // Defer only this create while its metadata fetch is still in flight.
+          // Other ready creates can start the debounce window and syncNow will
+          // still filter any pending-metadata rows before upload.
+          const bookmark = bookmarksRef.current?.find(
+            (b) => b.id === entry.local_id,
+          );
+          if (bookmark && bookmark.metadata_status === "pending") {
             return false;
           }
         }
@@ -5652,7 +5643,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const diagnosticStats = useMemo(() => {
     const list = bookmarks ?? [];
     const syncTodo = queue.filter((entry) => isSyncable(entry)).length;
-    const syncDone = list.filter((b) => hasSyncedOnce(b.id)).length;
+    const syncDone = list.filter((b) => isBookmarkSyncedOnce(b)).length;
 
     // A bookmark is "syncing twice" if it has already synced once but has a pending update mutation in the queue.
     const syncingTwiceIds = new Set(
@@ -5661,7 +5652,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .map((entry) => entry.local_id),
     );
     const syncingTwice = list.filter(
-      (b) => hasSyncedOnce(b.id) && syncingTwiceIds.has(b.id),
+      (b) => isBookmarkSyncedOnce(b) && syncingTwiceIds.has(b.id),
     ).length;
     const syncedOnce = Math.max(0, syncDone - syncingTwice);
 
