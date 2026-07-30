@@ -1616,9 +1616,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // no longer exist.
           return;
         }
-        // Push the freshly fetched metadata to the local storage. OpenGraph metadata
-        // is local display data (site_name, favicon_url, preview_image_url), so it
-        // does not enqueue a cloud sync mutation.
+        // Push the freshly fetched metadata to the cloud so other devices see
+        // it on their next pull. Only for already-synced bookmarks: a local
+        // bookmark's create upload already sends its latest fields.
+        if (hasSyncedOnce(updated.id)) {
+          enqueueMutation(updated.id, 'update');
+        }
       } finally {
         enriching.current.delete(bookmark.id);
       }
@@ -3639,17 +3642,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 if (merged.title !== (payload?.title ?? null)) reasons.title = 1;
                 if (merged.notes !== (payload?.notes ?? null)) reasons.notes = 1;
                 if (merged.description !== (payload?.shared_text ?? null)) reasons.description = 1;
-                if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
-                if (merged.site_name !== null) reasons.site_name = 1;
-                if (merged.favicon_url !== null) reasons.favicon_url = 1;
-                if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
                 recordReconcileNeeded(reasons);
-                recordLog(
-                  'info',
-                  `single create reconcile: metadata_status=${merged.metadata_status} ` +
-                    `site_name=${merged.site_name !== null} favicon_url=${merged.favicon_url !== null} ` +
-                    `preview_image_url=${merged.preview_image_url !== null}`,
-                );
+                recordLog('info', `single create reconcile: ${JSON.stringify(reasons)}`);
                 enqueueMutation(merged.id, 'update');
               }
             }
