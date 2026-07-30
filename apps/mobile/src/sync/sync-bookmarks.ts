@@ -174,13 +174,27 @@ function createUploadPayload(
   getBookmark: (id: string) => Bookmark | undefined,
 ): CreateBookmarkInput {
   const latestAtUpload = getBookmark(entry.local_id);
-  return latestAtUpload
-    ? {
-        ...entry.payload,
-        title: latestAtUpload.title ?? undefined,
-        notes: latestAtUpload.notes ?? undefined,
-      }
-    : entry.payload;
+  if (!latestAtUpload) {
+    return entry.payload;
+  }
+  const payload: CreateBookmarkInput = {
+    ...entry.payload,
+    title: latestAtUpload.title ?? undefined,
+    notes: latestAtUpload.notes ?? undefined,
+  };
+  if (latestAtUpload.site_name !== null) {
+    payload.site_name = latestAtUpload.site_name;
+  }
+  if (latestAtUpload.favicon_url !== null) {
+    payload.favicon_url = latestAtUpload.favicon_url;
+  }
+  if (latestAtUpload.preview_image_url !== null) {
+    payload.preview_image_url = latestAtUpload.preview_image_url;
+  }
+  if (latestAtUpload.metadata_status !== 'pending') {
+    payload.metadata_status = latestAtUpload.metadata_status;
+  }
+  return payload;
 }
 
 export async function syncCreateQueueEntryBatch(

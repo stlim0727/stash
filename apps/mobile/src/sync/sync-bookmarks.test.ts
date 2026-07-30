@@ -261,6 +261,33 @@ test('create: uploads the LATEST title/notes, not the payload captured at save',
   assert.equal(result.uploadedPayload?.title, 'Edited title');
 });
 
+test('create: uploads generated metadata that settled before create upload', async () => {
+  const { repository } = fakeRepository();
+  const sent: Array<Record<string, unknown>> = [];
+  const api = fakeApi({
+    createBookmark: async (input: Record<string, unknown>) => {
+      sent.push(input);
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'complete' };
+    },
+  });
+  const enrichedBeforeUpload = makeBookmark({
+    title: 'Fetched title',
+    site_name: 'Example',
+    favicon_url: 'https://example.com/favicon.ico',
+    preview_image_url: 'https://example.com/preview.png',
+    metadata_status: 'complete',
+  });
+
+  const result = await syncQueueEntry(api, repository, makeCreateEntry(), () => enrichedBeforeUpload);
+
+  assert.equal(sent[0]?.title, 'Fetched title');
+  assert.equal(sent[0]?.site_name, 'Example');
+  assert.equal(sent[0]?.favicon_url, 'https://example.com/favicon.ico');
+  assert.equal(sent[0]?.preview_image_url, 'https://example.com/preview.png');
+  assert.equal(sent[0]?.metadata_status, 'complete');
+  assert.equal(result.uploadedPayload?.metadata_status, 'complete');
+});
+
 test('create: forwards the payload client_id so a retried text note stays idempotent', async () => {
   const { repository } = fakeRepository();
   const sent: Array<{ client_id?: string }> = [];
