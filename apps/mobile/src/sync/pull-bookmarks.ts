@@ -105,6 +105,10 @@ export async function pullRemoteChanges(
     );
   }
 
+  recordLog(
+    'info',
+    `pull: starting since=${since ? 'set' : 'null'} initialLocal=${initialLocals.length} initialLocalCloud=${initialLocalCloudRowCount}`,
+  );
   const [remoteRows, remoteIds, enrichments, tags, bookmarkTags, collections] = await Promise.all([
     api.listBookmarksUpdatedSince(since),
     api.listBookmarkIds(),
