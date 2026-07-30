@@ -6,23 +6,23 @@ import {
   useMemo,
   useRef,
   useState,
-} from 'react';
-import type { ReactNode } from 'react';
+} from "react";
+import type { ReactNode } from "react";
 
-import { resolveAliasedId } from '@/domain/bookmark-id-swap';
-import { mockUserId } from '@/domain/mock-data';
-import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from '@/domain/urls';
-import { createConcurrencyLimiter } from '@/domain/concurrency';
-import { enrichBookmark } from '@/domain/enrichment';
-import { isTransientNetworkError } from '@/domain/network-errors';
-import { planTitleBackfill } from '@/domain/title-backfill';
-import type { TitleBackfillPatch } from '@/domain/title-backfill';
+import { resolveAliasedId } from "@/domain/bookmark-id-swap";
+import { mockUserId } from "@/domain/mock-data";
+import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
+import { createConcurrencyLimiter } from "@/domain/concurrency";
+import { enrichBookmark } from "@/domain/enrichment";
+import { isTransientNetworkError } from "@/domain/network-errors";
+import { planTitleBackfill } from "@/domain/title-backfill";
+import type { TitleBackfillPatch } from "@/domain/title-backfill";
 import {
   imageTitleFromFileName,
   localImageFileName,
   type SharedImage,
-} from '@/domain/image-share';
-import type { ImportItem } from '@/domain/import';
+} from "@/domain/image-share";
+import type { ImportItem } from "@/domain/import";
 import type {
   AIEnrichment,
   Bookmark,
@@ -31,9 +31,9 @@ import type {
   LocalPendingBookmark,
   SuggestedTag,
   Tag,
-} from '@/domain/types';
-import { sanitizeTagData } from '@/domain/tag-data';
-import { normalizeTag } from '@/domain/tag-input';
+} from "@/domain/types";
+import { sanitizeTagData } from "@/domain/tag-data";
+import { normalizeTag } from "@/domain/tag-input";
 import {
   addDismissedFolderToken,
   addReviewedNames,
@@ -45,15 +45,15 @@ import {
   reviewedNamesFor,
   reviewedSummaryTokensFor,
   suggestedFolderTokens,
-} from '@/domain/ai-suggestions';
-import { acceptSuggestionBundle } from '@/domain/suggestion-actions';
+} from "@/domain/ai-suggestions";
+import { acceptSuggestionBundle } from "@/domain/suggestion-actions";
 import {
   AI_SUGGESTIONS_MODE_PREF_KEY,
   DEFAULT_AI_SUGGESTIONS_MODE,
   parseAiSuggestionsMode,
   serializeAiSuggestionsMode,
   type AiSuggestionsMode,
-} from '@/domain/ai-suggestions-pref';
+} from "@/domain/ai-suggestions-pref";
 import {
   AI_ENRICHMENT_BURST_TOAST_MIN,
   AI_ENRICHMENT_DISPATCH_STAGGER_MS,
@@ -64,9 +64,9 @@ import {
   isBurstComplete,
   recordAiEnrichmentDispatchSettled,
   type AiEnrichmentBurstQueue,
-} from '@/domain/ai-enrichment-burst';
-import { parseStringSetMap } from '@/domain/string-set-map';
-import type { StringSetMap } from '@/domain/string-set-map';
+} from "@/domain/ai-enrichment-burst";
+import { parseStringSetMap } from "@/domain/string-set-map";
+import type { StringSetMap } from "@/domain/string-set-map";
 import {
   applyPendingTagOps,
   applyTagOp,
@@ -76,31 +76,31 @@ import {
   reconcileSyncedAdd,
   rekeyPendingTagOps,
   type PendingTagOp,
-} from '@/domain/pending-tags';
-import { useI18n } from '@/i18n';
-import { recordLog } from '@/observability/log-buffer';
-import { armHydrationWatchdog } from '@/observability/hydration-watchdog';
-import { armLoopStallWatchdog } from '@/observability/loop-stall-watchdog';
-import { reportSyncQueueHealthEscalation } from '@/observability/sentry';
-import { registerForForegroundState } from '@/storage/sqlite-app-lifecycle';
-import { repository } from '@/storage/repository';
-import { copyImageToLibrary } from '@/storage/image-store';
-import type { EnrichmentMetadataHint } from '@/api/bookmarks';
-import type { CreateSyncCompletion, TagData } from '@/storage/types';
-import { useSupabaseAuth } from '@/supabase/auth-provider';
-import { useRealtimeSync } from '@/supabase/realtime';
-import { SupabaseRequestError } from '@/supabase/client';
+} from "@/domain/pending-tags";
+import { useI18n } from "@/i18n";
+import { recordLog } from "@/observability/log-buffer";
+import { armHydrationWatchdog } from "@/observability/hydration-watchdog";
+import { armLoopStallWatchdog } from "@/observability/loop-stall-watchdog";
+import { reportSyncQueueHealthEscalation } from "@/observability/sentry";
+import { registerForForegroundState } from "@/storage/sqlite-app-lifecycle";
+import { repository } from "@/storage/repository";
+import { copyImageToLibrary } from "@/storage/image-store";
+import type { EnrichmentMetadataHint } from "@/api/bookmarks";
+import type { CreateSyncCompletion, TagData } from "@/storage/types";
+import { useSupabaseAuth } from "@/supabase/auth-provider";
+import { useRealtimeSync } from "@/supabase/realtime";
+import { SupabaseRequestError } from "@/supabase/client";
 import {
   applyAccountTransition,
   planAccountTransition,
   planLogoutCacheClear,
-} from '@/sync/account-transition';
+} from "@/sync/account-transition";
 import {
   LAST_PULLED_AT_KEY,
   SYNCED_USER_ANON_KEY,
   SYNCED_USER_ID_KEY,
   pullRemoteChanges,
-} from '@/sync/pull-bookmarks';
+} from "@/sync/pull-bookmarks";
 import {
   BULK_CREATE_SYNC_CHUNK_SIZE,
   createNeedsReconcileUpdate,
@@ -115,16 +115,16 @@ import {
   removeQueueEntryIfNotSuperseded,
   syncCreateQueueEntryBatch,
   syncQueueEntry,
-} from '@/sync/sync-bookmarks';
+} from "@/sync/sync-bookmarks";
 import {
   recordBulkChunkStarted,
   recordCreateCompleted,
   recordReconcileNeeded,
-} from '@/sync/reconcile-diagnostics';
+} from "@/sync/reconcile-diagnostics";
 
 export type AddBookmarkResult =
   | {
-      status: 'created' | 'duplicate';
+      status: "created" | "duplicate";
       bookmark: Bookmark;
       /**
        * Resolves once the optimistic save has been flushed to durable storage:
@@ -138,13 +138,13 @@ export type AddBookmarkResult =
       persisted: Promise<boolean>;
     }
   | {
-      status: 'invalid';
+      status: "invalid";
       error: string;
       /** Coarse, i18n-free reason code for the UI layer to pick a localized
        *  message when the raw `error` string (English-only, matching this
        *  store's existing i18n-free convention) isn't specific enough — e.g.
        *  a toast-only caller that doesn't display `error` directly. */
-      reason?: 'too_long';
+      reason?: "too_long";
     };
 
 /** Outcome of a full library reset (issue #600). */
@@ -158,7 +158,11 @@ export type ResetLibraryResult =
    *   the cloud is already empty, so the explicit recovery is to retry the
    *   reset (the RPC is idempotent) until the local clear lands.
    */
-  | { ok: false; reason: 'busy' | 'auth' | 'remote' | 'local'; message?: string };
+  | {
+      ok: false;
+      reason: "busy" | "auth" | "remote" | "local";
+      message?: string;
+    };
 
 /** Outcome counts from re-ingesting an imported file. */
 export interface ImportSummary {
@@ -228,7 +232,10 @@ interface BookmarksContextValue {
   /** True while a library reset is running — disable import/sync/reset UI. */
   isResettingLibrary: boolean;
   /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
-  updateBookmarkFields: (id: string, fields: { title?: string; notes?: string }) => void;
+  updateBookmarkFields: (
+    id: string,
+    fields: { title?: string; notes?: string },
+  ) => void;
   /**
    * Record that the user opened a bookmark (viewed Detail or opened its link),
    * setting its local-only `last_accessed_at`. Powers the "Recently opened"
@@ -252,16 +259,22 @@ interface BookmarksContextValue {
   /** The user's cloud collections (assignable; refreshed by pull sync). */
   collections: Collection[];
   /** Add tags to a synced bookmark. Resolves to an error message, or null. */
-  addTagsToBookmark: (bookmarkId: string, names: string[]) => Promise<string | null>;
+  addTagsToBookmark: (
+    bookmarkId: string,
+    names: string[],
+  ) => Promise<string | null>;
   /** Remove a tag from a synced bookmark. Resolves to an error message, or null. */
-  removeTagFromBookmark: (bookmarkId: string, tagName: string) => Promise<string | null>;
+  removeTagFromBookmark: (
+    bookmarkId: string,
+    tagName: string,
+  ) => Promise<string | null>;
   /** Generate AI suggestions for a synced bookmark. Resolves to an error, or
    *  null. `source` defaults to 'manual' (an explicit user tap); the deferred
    *  post-capture auto-trigger passes 'auto' so the UI can stay silent for work
    *  the user never asked to wait on. */
   requestAiEnrichment: (
     bookmarkId: string,
-    source?: 'auto' | 'manual',
+    source?: "auto" | "manual",
   ) => Promise<string | null>;
   /** The user's AI-suggestions mode (STASH #573): 'off' skips the automatic
    *  enrichment trigger entirely (manual "Suggest with AI" still works),
@@ -318,7 +331,10 @@ interface BookmarksContextValue {
    *  shows its own real-time feedback regardless of this). */
   hadPriorEnrichmentAttempt: (bookmarkId: string) => boolean;
   /** Accept AI-suggested tags (linked with source 'ai'). Resolves to an error, or null. */
-  acceptSuggestedTags: (bookmarkId: string, suggestions: SuggestedTag[]) => Promise<string | null>;
+  acceptSuggestedTags: (
+    bookmarkId: string,
+    suggestions: SuggestedTag[],
+  ) => Promise<string | null>;
   /**
    * Suggestion names the user has already reviewed (accepted or dismissed) for
    * a bookmark, lowercased. Pass to `pendingSuggestions` so the "✨" badge
@@ -338,7 +354,10 @@ interface BookmarksContextValue {
   getDismissedFolderSuggestions: (bookmarkId: string) => Set<string>;
   /** Record a folder suggestion (by `suggestedFolderToken`) as dismissed for a
    *  bookmark (durable). */
-  dismissFolderSuggestion: (bookmarkId: string, tokens: string | string[]) => void;
+  dismissFolderSuggestion: (
+    bookmarkId: string,
+    tokens: string | string[],
+  ) => void;
   /** Forget a bookmark's dismissed folder suggestions so a manual AI re-run can
    *  re-surface one. Background sync never clears them. */
   clearDismissedFolderSuggestions: (bookmarkId: string) => void;
@@ -371,7 +390,20 @@ interface BookmarksContextValue {
   /** Move a bookmark into a collection (or out, with null). Local-first. */
   assignCollection: (bookmarkId: string, collectionId: string | null) => void;
   /** Create a cloud collection. Resolves to the collection or an error message. */
-  createCollection: (name: string) => Promise<{ collection?: Collection; error?: string }>;
+  createCollection: (
+    name: string,
+  ) => Promise<{ collection?: Collection; error?: string }>;
+  /** Real-time diagnostic statistics for active pipelines (developer mode). */
+  diagnosticStats: {
+    sync: {
+      todo: number;
+      done: number;
+      syncedOnce: number;
+      syncingTwice: number;
+    };
+    metadata: { todo: number; done: number };
+    ai: { todo: number; done: number };
+  };
 }
 
 const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
@@ -380,12 +412,12 @@ const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
 const EMPTY_TAGS: Tag[] = [];
 
 /** Durable key for the local-first tag operation queue (JSON in meta). */
-const PENDING_TAG_OPS_KEY = 'pending_tag_ops';
+const PENDING_TAG_OPS_KEY = "pending_tag_ops";
 
 /** Durable key (JSON id array in meta) for bookmarks awaiting their first auto
  *  AI enrichment. Persisted so a kill during the metadata-fetch window doesn't
  *  drop the auto-trigger — the marker is re-hydrated and fired on next launch. */
-const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
+const PENDING_AI_TRIGGER_KEY = "pending_ai_trigger";
 
 /** Durable key (JSON `{ [bookmarkId]: AiRetryState }` in meta) for bookmarks
  *  with a failed AI-enrichment attempt (auto OR manual) that wrote no
@@ -394,7 +426,7 @@ const PENDING_AI_TRIGGER_KEY = 'pending_ai_trigger';
  *  the attempt cap (`AI_RETRY_MAX_ATTEMPTS`) is exhausted. Purely local
  *  bookkeeping, parallel to `PENDING_AI_TRIGGER_KEY`: it never touches the
  *  bookmark row, `updated_at`, or the sync queue. */
-const AI_RETRY_STATE_KEY = 'ai_suggestion_retry';
+const AI_RETRY_STATE_KEY = "ai_suggestion_retry";
 
 /** Durable key (JSON id array in meta) for bookmarks CONFIRMED accepted into
  *  the server-side `pending_ai_enrichment` overflow queue after a 429
@@ -406,7 +438,7 @@ const AI_RETRY_STATE_KEY = 'ai_suggestion_retry';
  *  is only ever set on a CONFIRMED enqueue and only ever clears once a real
  *  enrichment lands or the bookmark is discarded — see
  *  `isAiSuggestionServerQueued`. */
-const AI_SERVER_QUEUED_KEY = 'ai_server_queued';
+const AI_SERVER_QUEUED_KEY = "ai_server_queued";
 
 interface AiRetryState {
   /** When the first attempt (of the current, unexhausted streak) failed. */
@@ -458,17 +490,19 @@ function parseAiRetryState(raw: string | null): Record<string, AiRetryState> {
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {};
     }
     const result: Record<string, AiRetryState> = {};
-    for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+    for (const [id, value] of Object.entries(
+      parsed as Record<string, unknown>,
+    )) {
       if (
         value &&
-        typeof value === 'object' &&
-        typeof (value as AiRetryState).firstAttemptAt === 'string' &&
-        typeof (value as AiRetryState).lastAttemptAt === 'string' &&
-        typeof (value as AiRetryState).attemptCount === 'number'
+        typeof value === "object" &&
+        typeof (value as AiRetryState).firstAttemptAt === "string" &&
+        typeof (value as AiRetryState).lastAttemptAt === "string" &&
+        typeof (value as AiRetryState).attemptCount === "number"
       ) {
         result[id] = value as AiRetryState;
       }
@@ -482,7 +516,7 @@ function parseAiRetryState(raw: string | null): Record<string, AiRetryState> {
 /** Durable key (JSON `{ [bookmarkId]: string[] }` in meta) for AI suggestion
  *  names the user has reviewed (accepted or dismissed). Drives the "✨" badge so
  *  it reflects *unreviewed* suggestions rather than merely *un-applied* ones. */
-const REVIEWED_SUGGESTIONS_KEY = 'reviewed_ai_suggestions';
+const REVIEWED_SUGGESTIONS_KEY = "reviewed_ai_suggestions";
 
 /** Durable key (JSON `{ [bookmarkId]: string[] }` in meta) for the folder
  *  (collection) suggestions the user has dismissed on a bookmark's Detail, keyed
@@ -490,7 +524,7 @@ const REVIEWED_SUGGESTIONS_KEY = 'reviewed_ai_suggestions';
  *  folder chip stays gone when the user re-enters Detail or relaunches — a later
  *  enrichment proposing a *different* folder yields a different token and still
  *  re-surfaces. */
-const DISMISSED_FOLDERS_KEY = 'dismissed_folder_suggestions';
+const DISMISSED_FOLDERS_KEY = "dismissed_folder_suggestions";
 
 /** Durable key (JSON `{ [bookmarkId]: string[] }` in meta) for the AI summaries
  *  the user has reviewed (used as a note or dismissed) on a bookmark's Detail,
@@ -498,7 +532,7 @@ const DISMISSED_FOLDERS_KEY = 'dismissed_folder_suggestions';
  *  acted on stays gone when they re-enter Detail or relaunch — a later
  *  enrichment producing a *different* summary yields a different token and still
  *  re-surfaces. */
-const REVIEWED_SUMMARIES_KEY = 'reviewed_ai_summaries';
+const REVIEWED_SUMMARIES_KEY = "reviewed_ai_summaries";
 
 /** Durable key (JSON id array in meta) for bookmarks whose AI suggestions
  *  arrived while the user wasn't looking — a background auto-enrichment, a
@@ -508,20 +542,20 @@ const REVIEWED_SUMMARIES_KEY = 'reviewed_ai_summaries';
  *  cleared once the user witnesses it (opens its Detail, or visits Review).
  *  Persisted so a suggestion that landed in a session the user never returned to
  *  still announces itself on the next launch. */
-const UNSEEN_SUGGESTIONS_KEY = 'unseen_ai_suggestions';
+const UNSEEN_SUGGESTIONS_KEY = "unseen_ai_suggestions";
 
 /** Manual "pause sync" safety valve (Sentry STASH-3K follow-up): while on,
  *  syncNow no-ops entirely (no upload, no pull) so a bulk import can be
  *  reviewed — and unwanted rows deleted — before anything reaches the
  *  network. Persisted so it survives leaving the app mid-review. */
-const SYNC_PAUSED_KEY = 'pref.sync.paused';
+const SYNC_PAUSED_KEY = "pref.sync.paused";
 
 /** Opaque sentinel `requestAiEnrichment` returns when the AI endpoint rate-limits
  *  (HTTP 429). The store is i18n-free, so it can't localize the message itself;
  *  the Detail screen maps this to a translated string. Any non-UI caller (the
  *  deferred auto-trigger) only checks for a non-null error, so the value is
  *  inert there. */
-export const AI_RATE_LIMITED = 'ai-rate-limited';
+export const AI_RATE_LIMITED = "ai-rate-limited";
 
 function parseIdSet(raw: string | null): Set<string> {
   if (!raw) {
@@ -530,7 +564,7 @@ function parseIdSet(raw: string | null): Set<string> {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed)
-      ? new Set(parsed.filter((id): id is string => typeof id === 'string'))
+      ? new Set(parsed.filter((id): id is string => typeof id === "string"))
       : new Set();
   } catch {
     return new Set();
@@ -546,13 +580,14 @@ const BookmarksContext = createContext<BookmarksContextValue | null>(null);
  * cryptographically strong.
  */
 function makeUuid(): string {
-  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } })
+    .crypto;
   if (cryptoObj?.randomUUID) {
     return cryptoObj.randomUUID();
   }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
     const rand = (Math.random() * 16) | 0;
-    const value = char === 'x' ? rand : (rand & 0x3) | 0x8;
+    const value = char === "x" ? rand : (rand & 0x3) | 0x8;
     return value.toString(16);
   });
 }
@@ -586,7 +621,9 @@ function makeClientId(): string {
  * dedupes against a fresh save instead of creating the duplicate this is meant
  * to prevent. Falls back to the stored hash when the row has no URL.
  */
-function currentDedupeKey(bookmark: Pick<Bookmark, 'url' | 'url_hash'>): string | null {
+function currentDedupeKey(
+  bookmark: Pick<Bookmark, "url" | "url_hash">,
+): string | null {
   return bookmark.url ? canonicalizeUrl(bookmark.url) : bookmark.url_hash;
 }
 
@@ -596,7 +633,9 @@ function currentDedupeKey(bookmark: Pick<Bookmark, 'url' | 'url_hash'>): string 
  * URL that is sitting in Trash folds into the trashed row and leaves it hidden,
  * so it never comes back. Mirrors the server-side active-URL predicate.
  */
-function isActiveBookmark(bookmark: Pick<Bookmark, 'deleted_at' | 'is_archived'>): boolean {
+function isActiveBookmark(
+  bookmark: Pick<Bookmark, "deleted_at" | "is_archived">,
+): boolean {
   return !bookmark.deleted_at && !bookmark.is_archived;
 }
 
@@ -611,9 +650,9 @@ function parseTagOps(raw: string | null): PendingTagOp[] {
       ? parsed.filter(
           (op): op is PendingTagOp =>
             !!op &&
-            typeof op.bookmark_id === 'string' &&
-            typeof op.tag_name === 'string' &&
-            (op.op === 'add' || op.op === 'remove'),
+            typeof op.bookmark_id === "string" &&
+            typeof op.tag_name === "string" &&
+            (op.op === "add" || op.op === "remove"),
         )
       : [];
   } catch {
@@ -622,7 +661,10 @@ function parseTagOps(raw: string | null): PendingTagOp[] {
 }
 
 function logStorageError(operation: string, error: unknown) {
-  console.warn(`[stash] failed to persist ${operation}; state remains in memory`, error);
+  console.warn(
+    `[stash] failed to persist ${operation}; state remains in memory`,
+    error,
+  );
 }
 
 /**
@@ -716,7 +758,11 @@ function usePersistedStringSetMap(metaKey: string) {
 }
 
 /** Append items from `loaded` that aren't already present (by key). */
-function mergeById<T>(current: T[], loaded: T[], key: (item: T) => string): T[] {
+function mergeById<T>(
+  current: T[],
+  loaded: T[],
+  key: (item: T) => string,
+): T[] {
   const seen = new Set(current.map(key));
   return [...current, ...loaded.filter((item) => !seen.has(key(item)))];
 }
@@ -758,7 +804,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Bookmark ids whose AI suggestions arrived unwitnessed (drives the Inbox
   // banner). The ref mirrors state so the arrival paths (auto enrichment, pull)
   // can read-modify-write synchronously across back-to-back updates.
-  const [unseenSuggestionIds, setUnseenSuggestionIds] = useState<ReadonlySet<string>>(new Set());
+  const [unseenSuggestionIds, setUnseenSuggestionIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
   const unseenSuggestionIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -779,7 +827,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // bookmark import — or the startup backfill re-firing those still-pending
   // rows after a relaunch — used to launch one fetch per bookmark
   // simultaneously, and the native resource exhaustion SIGABRT-crashed the app.
-  const enrichmentSlots = useRef(createConcurrencyLimiter(ENRICHMENT_FETCH_CONCURRENCY));
+  const enrichmentSlots = useRef(
+    createConcurrencyLimiter(ENRICHMENT_FETCH_CONCURRENCY),
+  );
   // Bookmark IDs with an AI enrichment request in flight, so an auto-trigger
   // and a manual "Suggest with AI" tap never fire duplicate requests.
   const aiEnriching = useRef(new Set<string>());
@@ -810,15 +860,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // flip) and is set/cleared from places with no equivalent "same frame" flip
   // to align with.
   const aiServerQueued = useRef<Set<string>>(new Set());
-  const [aiServerQueuedIds, setAiServerQueuedIds] = useState<ReadonlySet<string>>(new Set());
+  const [aiServerQueuedIds, setAiServerQueuedIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
   // Reactive mirror of `aiEnriching` so the UI can show an ambient "filling in"
   // placeholder while a request (auto-triggered or manual) is in flight.
-  const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(new Set());
+  const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   // Subset of `enrichingIds` started by an explicit user action, so the UI can
   // give direct button feedback for a manual tap while keeping the auto-trigger
   // silent (it should just fill suggestions in, not look like a blocking wait).
-  const [manualEnrichingIds, setManualEnrichingIds] = useState<ReadonlySet<string>>(new Set());
-  const [previewRefreshingIds, setPreviewRefreshingIds] = useState<ReadonlySet<string>>(new Set());
+  const [manualEnrichingIds, setManualEnrichingIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  const [previewRefreshingIds, setPreviewRefreshingIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
   // Tombstones for deleted local bookmarks. The sync loop iterates over a
   // snapshot, so a delete that lands mid-run must be visible to it — both
   // before uploading an entry and before applying an upload's result.
@@ -858,7 +916,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const requestAiEnrichmentRef = useRef<
     | ((
         bookmarkId: string,
-        source?: 'auto' | 'manual',
+        source?: "auto" | "manual",
         overrideMetadata?: EnrichmentMetadataHint,
       ) => Promise<string | null>)
     | null
@@ -876,16 +934,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // callbacks/effects so a live Settings change takes effect immediately
   // without needing every effect to depend on the reactive value; `aiSuggestionsMode`
   // state exists only so Settings can display the current choice.
-  const aiSuggestionsModeRef = useRef<AiSuggestionsMode>(DEFAULT_AI_SUGGESTIONS_MODE);
-  const [aiSuggestionsMode, setAiSuggestionsModeState] = useState<AiSuggestionsMode>(
+  const aiSuggestionsModeRef = useRef<AiSuggestionsMode>(
     DEFAULT_AI_SUGGESTIONS_MODE,
   );
+  const [aiSuggestionsMode, setAiSuggestionsModeState] =
+    useState<AiSuggestionsMode>(DEFAULT_AI_SUGGESTIONS_MODE);
   // Staggered dispatch queue for automatic AI-enrichment triggers (STASH #574
   // Phase 1) — see `domain/ai-enrichment-burst.ts`. Only the two background
   // "trigger for a batch of ids" call sites route through this; the single-
   // bookmark preview-refresh follow-up trigger fires immediately as before,
   // since it's a direct continuation of a user-initiated action, not a burst.
-  const aiDispatchQueueRef = useRef<AiEnrichmentBurstQueue>(EMPTY_AI_ENRICHMENT_BURST_QUEUE);
+  const aiDispatchQueueRef = useRef<AiEnrichmentBurstQueue>(
+    EMPTY_AI_ENRICHMENT_BURST_QUEUE,
+  );
   const aiDispatchInFlight = useRef(false);
   // Bumped by resetLibrary once the remote wipe succeeds. requestAiEnrichment
   // snapshots it at entry and discards its settle paths (enrichment write /
@@ -915,8 +976,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     syncPausedRef.current = paused;
     setSyncPausedState(paused);
     ensureRepositoryReady()
-      .then(() => repository.setMeta(SYNC_PAUSED_KEY, paused ? 'true' : 'false'))
-      .catch((error) => logStorageError('sync paused pref', error));
+      .then(() =>
+        repository.setMeta(SYNC_PAUSED_KEY, paused ? "true" : "false"),
+      )
+      .catch((error) => logStorageError("sync paused pref", error));
     if (!paused) {
       // Consume any "pending" signal a blocked attempt left while paused —
       // the direct call below already satisfies it. Left alone, the run's
@@ -934,8 +997,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     aiSuggestionsModeRef.current = mode;
     setAiSuggestionsModeState(mode);
     ensureRepositoryReady()
-      .then(() => repository.setMeta(AI_SUGGESTIONS_MODE_PREF_KEY, serializeAiSuggestionsMode(mode)))
-      .catch((error) => logStorageError('ai suggestions mode', error));
+      .then(() =>
+        repository.setMeta(
+          AI_SUGGESTIONS_MODE_PREF_KEY,
+          serializeAiSuggestionsMode(mode),
+        ),
+      )
+      .catch((error) => logStorageError("ai suggestions mode", error));
   }, []);
 
   // STASH #574 Phase 1: dismiss the "N bookmarks summarized & tagged" toast
@@ -951,7 +1019,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     setTagData(next);
     ensureRepositoryReady()
       .then(() => repository.replaceTagData(next))
-      .catch((error) => logStorageError('tag data', error));
+      .catch((error) => logStorageError("tag data", error));
   }, []);
 
   // Persist the local-first tag-op queue (ref updated synchronously).
@@ -960,7 +1028,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     setPendingTagOps(next);
     ensureRepositoryReady()
       .then(() => repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)))
-      .catch((error) => logStorageError('tag ops', error));
+      .catch((error) => logStorageError("tag ops", error));
   }, []);
 
   // True once a bookmark's create has been confirmed synced at least once —
@@ -978,30 +1046,41 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // bookmark-* id was never a real cloud row. hasRemoteIdentity excludes
     // those; every genuine bookmark (old-scheme or new) has a real UUID id
     // regardless of sync state, so this never excludes a legitimately synced one.
-    return hasRemoteIdentity(bookmark.id) && (bookmark.sync_status === 'synced' || bookmark.ever_synced === true);
+    return (
+      hasRemoteIdentity(bookmark.id) &&
+      (bookmark.sync_status === "synced" || bookmark.ever_synced === true)
+    );
   }, []);
 
   // Queue a remote mutation for a bookmark that already exists on the server.
   // One entry per bookmark: a newer mutation supersedes an older one.
-  const enqueueMutation = useCallback((bookmarkId: string, operation: 'update' | 'delete') => {
-    const entry = makeMutationEntry(bookmarkId, operation);
-    setQueue((current) => [...current.filter((queued) => queued.local_id !== bookmarkId), entry]);
-    // Keep the ref itself current immediately, not just via the `useEffect`
-    // that mirrors it from `queue` after the next render (same rationale as
-    // applyBookmarkUpdate/markBookmarkAccessed's identical bookmarksRef
-    // lines): the AI-dispatch interval reads queueRef.current directly to
-    // decide whether sync has settled, and a bulk-chunk reconcile pass can
-    // drop its own "still reconciling" flag in the same synchronous turn as
-    // this call — without this, that interval could see a stale queue with
-    // nothing pending and wrongly start AI work (caught in PR review).
-    queueRef.current = [
-      ...queueRef.current.filter((queued) => queued.local_id !== bookmarkId),
-      entry,
-    ];
-    ensureRepositoryReady()
-      .then(() => repository.enqueue(entry))
-      .catch((error) => logStorageError(`${operation} mutation enqueue`, error));
-  }, []);
+  const enqueueMutation = useCallback(
+    (bookmarkId: string, operation: "update" | "delete") => {
+      const entry = makeMutationEntry(bookmarkId, operation);
+      setQueue((current) => [
+        ...current.filter((queued) => queued.local_id !== bookmarkId),
+        entry,
+      ]);
+      // Keep the ref itself current immediately, not just via the `useEffect`
+      // that mirrors it from `queue` after the next render (same rationale as
+      // applyBookmarkUpdate/markBookmarkAccessed's identical bookmarksRef
+      // lines): the AI-dispatch interval reads queueRef.current directly to
+      // decide whether sync has settled, and a bulk-chunk reconcile pass can
+      // drop its own "still reconciling" flag in the same synchronous turn as
+      // this call — without this, that interval could see a stale queue with
+      // nothing pending and wrongly start AI work (caught in PR review).
+      queueRef.current = [
+        ...queueRef.current.filter((queued) => queued.local_id !== bookmarkId),
+        entry,
+      ];
+      ensureRepositoryReady()
+        .then(() => repository.enqueue(entry))
+        .catch((error) =>
+          logStorageError(`${operation} mutation enqueue`, error),
+        );
+    },
+    [],
+  );
 
   // Local-first edit of user-editable fields: apply + persist immediately,
   // show as sync-pending, and queue an update mutation for synced bookmarks.
@@ -1019,7 +1098,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return {
             ...bookmark,
             ...patch,
-            sync_status: syncsRemotely ? 'pending' : bookmark.sync_status,
+            sync_status: syncsRemotely ? "pending" : bookmark.sync_status,
             // Stamp it the first time this row is confirmed synced (see
             // Bookmark.ever_synced) — without this, flipping sync_status back
             // to 'pending' here would be indistinguishable from a fresh,
@@ -1035,7 +1114,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const next: Bookmark = {
           ...existing,
           ...patch,
-          sync_status: syncsRemotely ? 'pending' : existing.sync_status,
+          sync_status: syncsRemotely ? "pending" : existing.sync_status,
           ever_synced: syncsRemotely ? true : existing.ever_synced,
           updated_at: new Date().toISOString(),
         };
@@ -1046,12 +1125,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // snapshot, and the second persisted write clobbers the repository row
         // with a `next` that's missing the first call's patch, silently losing
         // it on disk even though the rendered state looks correct.
-        bookmarksRef.current = bookmarksRef.current!.map((b) => (b.id === id ? next : b));
+        bookmarksRef.current = bookmarksRef.current!.map((b) =>
+          b.id === id ? next : b,
+        );
         ensureRepositoryReady()
           .then(() => repository.updateBookmark(next))
-          .catch((error) => logStorageError('bookmark update', error));
+          .catch((error) => logStorageError("bookmark update", error));
         if (syncsRemotely) {
-          enqueueMutation(id, 'update');
+          enqueueMutation(id, "update");
         }
       }
     },
@@ -1062,7 +1143,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const getReviewedSuggestions = useCallback(
     (bookmarkId: string) => {
       const bookmark = bookmarks?.find((b) => b.id === bookmarkId);
-      return new Set((bookmark?.dismissed_suggested_tags ?? []).map((name) => name.toLowerCase()));
+      return new Set(
+        (bookmark?.dismissed_suggested_tags ?? []).map((name) =>
+          name.toLowerCase(),
+        ),
+      );
     },
     [bookmarks],
   );
@@ -1071,8 +1156,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (bookmarkId: string, names: string[]) => {
       const bookmark = bookmarksRef.current?.find((b) => b.id === bookmarkId);
       const trimmedNames = names.map((n) => n.trim().toLowerCase());
-      const updatedTags = [...new Set([...(bookmark?.dismissed_suggested_tags ?? []), ...trimmedNames])];
-      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_tags: updatedTags });
+      const updatedTags = [
+        ...new Set([
+          ...(bookmark?.dismissed_suggested_tags ?? []),
+          ...trimmedNames,
+        ]),
+      ];
+      applyBookmarkUpdate(bookmarkId, {
+        dismissed_suggested_tags: updatedTags,
+      });
     },
     [applyBookmarkUpdate],
   );
@@ -1096,8 +1188,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (bookmarkId: string, tokens: string | string[]) => {
       const bookmark = bookmarksRef.current?.find((b) => b.id === bookmarkId);
       const tokenList = Array.isArray(tokens) ? tokens : [tokens];
-      const updatedFolders = [...new Set([...(bookmark?.dismissed_suggested_folders ?? []), ...tokenList])];
-      applyBookmarkUpdate(bookmarkId, { dismissed_suggested_folders: updatedFolders });
+      const updatedFolders = [
+        ...new Set([
+          ...(bookmark?.dismissed_suggested_folders ?? []),
+          ...tokenList,
+        ]),
+      ];
+      applyBookmarkUpdate(bookmarkId, {
+        dismissed_suggested_folders: updatedFolders,
+      });
     },
     [applyBookmarkUpdate],
   );
@@ -1120,8 +1219,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const markSummaryReviewed = useCallback(
     (bookmarkId: string, token: string) => {
       const bookmark = bookmarksRef.current?.find((b) => b.id === bookmarkId);
-      const updatedSummaries = [...new Set([...(bookmark?.reviewed_summary_tokens ?? []), token])];
-      applyBookmarkUpdate(bookmarkId, { reviewed_summary_tokens: updatedSummaries });
+      const updatedSummaries = [
+        ...new Set([...(bookmark?.reviewed_summary_tokens ?? []), token]),
+      ];
+      applyBookmarkUpdate(bookmarkId, {
+        reviewed_summary_tokens: updatedSummaries,
+      });
     },
     [applyBookmarkUpdate],
   );
@@ -1139,8 +1242,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     unseenSuggestionIdsRef.current = next;
     setUnseenSuggestionIds(next);
     ensureRepositoryReady()
-      .then(() => repository.setMeta(UNSEEN_SUGGESTIONS_KEY, JSON.stringify([...next])))
-      .catch((error) => logStorageError('unseen suggestions', error));
+      .then(() =>
+        repository.setMeta(UNSEEN_SUGGESTIONS_KEY, JSON.stringify([...next])),
+      )
+      .catch((error) => logStorageError("unseen suggestions", error));
   }, []);
 
   // The bookmark's currently-applied tag names, lowercased — read off the ref so
@@ -1149,10 +1254,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const appliedTagNamesRef = useCallback((bookmarkId: string): Set<string> => {
     const data = tagDataRef.current;
     const linkedIds = new Set(
-      data.bookmarkTags.filter((link) => link.bookmark_id === bookmarkId).map((l) => l.tag_id),
+      data.bookmarkTags
+        .filter((link) => link.bookmark_id === bookmarkId)
+        .map((l) => l.tag_id),
     );
     return new Set(
-      data.tags.filter((tag) => linkedIds.has(tag.id)).map((tag) => tag.name.toLowerCase()),
+      data.tags
+        .filter((tag) => linkedIds.has(tag.id))
+        .map((tag) => tag.name.toLowerCase()),
     );
   }, []);
 
@@ -1170,8 +1279,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       const bookmark = bookmarksRef.current?.find((item) => item.id === id);
       const applied = appliedTagNamesRef(id);
-      const reviewed = new Set((bookmark?.dismissed_suggested_tags ?? []).map((name) => name.toLowerCase()));
-      const dismissedFolderTokens = new Set(bookmark?.dismissed_suggested_folders ?? []);
+      const reviewed = new Set(
+        (bookmark?.dismissed_suggested_tags ?? []).map((name) =>
+          name.toLowerCase(),
+        ),
+      );
+      const dismissedFolderTokens = new Set(
+        bookmark?.dismissed_suggested_folders ?? [],
+      );
       // Honor durable folder dismissals so a folder the user already waved off
       // (on any screen) doesn't re-raise the "new AI suggestions" banner when its
       // enrichment is re-pulled or re-run.
@@ -1184,12 +1299,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         ) !== null;
       const hasSummary =
         pendingSummary(
-          bookmark?.metadata_status ?? 'complete',
+          bookmark?.metadata_status ?? "complete",
           enrichment,
           new Set(bookmark?.reviewed_summary_tokens ?? []),
           bookmark?.title,
         ) !== null;
-      if (pendingSuggestions(enrichment, applied, reviewed).length === 0 && !hasFolder && !hasSummary) {
+      if (
+        pendingSuggestions(enrichment, applied, reviewed).length === 0 &&
+        !hasFolder &&
+        !hasSummary
+      ) {
         return;
       }
       const next = new Set(unseenSuggestionIdsRef.current);
@@ -1226,8 +1345,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const persistPendingAiTrigger = useCallback((): Promise<void> => {
     const ids = [...pendingAiTrigger.current];
     return ensureRepositoryReady()
-      .then(() => repository.setMeta(PENDING_AI_TRIGGER_KEY, JSON.stringify(ids)))
-      .catch((error) => logStorageError('ai trigger queue', error));
+      .then(() =>
+        repository.setMeta(PENDING_AI_TRIGGER_KEY, JSON.stringify(ids)),
+      )
+      .catch((error) => logStorageError("ai trigger queue", error));
   }, []);
   const markPendingAiTrigger = useCallback(
     (id: string) => {
@@ -1253,7 +1374,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // other caller goes through persistAiRetryState, which keeps swallowing.
   const writeAiRetryState = useCallback((): Promise<void> => {
     return ensureRepositoryReady().then(() =>
-      repository.setMeta(AI_RETRY_STATE_KEY, JSON.stringify(aiRetryState.current)),
+      repository.setMeta(
+        AI_RETRY_STATE_KEY,
+        JSON.stringify(aiRetryState.current),
+      ),
     );
   }, []);
 
@@ -1264,7 +1388,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Returns the write's promise for the same reason persistPendingAiTrigger
   // does.
   const persistAiRetryState = useCallback((): Promise<void> => {
-    return writeAiRetryState().catch((error) => logStorageError('ai retry state', error));
+    return writeAiRetryState().catch((error) =>
+      logStorageError("ai retry state", error),
+    );
   }, [writeAiRetryState]);
 
   // Refresh the reactive mirror of aiRetryState's keys. Called once per
@@ -1299,7 +1425,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (deletedIds.current.has(bookmarkId)) {
         return Promise.resolve(true);
       }
-      const forBookmark = bookmarksRef.current?.find((item) => item.id === bookmarkId);
+      const forBookmark = bookmarksRef.current?.find(
+        (item) => item.id === bookmarkId,
+      );
       if (forBookmark?.deleted_at) {
         return Promise.resolve(true);
       }
@@ -1320,7 +1448,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return writeAiRetryState().then(
         () => true,
         (error) => {
-          logStorageError('ai retry state', error);
+          logStorageError("ai retry state", error);
           return false;
         },
       );
@@ -1350,7 +1478,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const ids = [...aiServerQueued.current];
     return ensureRepositoryReady()
       .then(() => repository.setMeta(AI_SERVER_QUEUED_KEY, JSON.stringify(ids)))
-      .catch((error) => logStorageError('ai server-queued', error));
+      .catch((error) => logStorageError("ai server-queued", error));
   }, []);
 
   // Refresh the reactive mirror of aiServerQueued's members.
@@ -1509,125 +1637,141 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Fire-and-forget metadata enrichment. Runs off the save path so capture is
   // never blocked, only fills generated fields, and a failure just records a
   // failed status — it never affects bookmark creation.
-  const enrichInBackground = useCallback((bookmark: Bookmark) => {
-    if (bookmark.metadata_status !== 'pending' || enriching.current.has(bookmark.id)) {
-      return;
-    }
-    const epochAtStart = resetEpoch.current;
-    enriching.current.add(bookmark.id);
-    // `enriching` (the dedupe guard) is set synchronously above; the fetch
-    // itself waits for a limiter slot so bulk passes stay bounded.
-    void enrichmentSlots.current(async () => {
-      try {
-        const { patch, metadata_status } = await enrichBookmark(bookmark);
-        if (resetEpoch.current !== epochAtStart) {
-          return; // library was reset while fetch was in flight
-        }
-        // A `create` that synced while the fetch was in flight re-keys the row
-        // from its local id onto its remote UUID (see the create-sync swap). If
-        // the enriched fields are written against the now-dead local id they are
-        // dropped from state, and the row is stranded `metadata_status:'pending'`
-        // — a later re-enrichment then fills the title from the bare URL slug
-        // (e.g. a YouTube video id, which reads like a random string), which is
-        // exactly the "preview turned into an encrypted-looking URL" report.
-        //
-        // Resolve the row's CURRENT id by walking the id-alias chain to its end.
-        // The alias map is a ref updated synchronously at the swap, so — unlike
-        // the bookmarks ref, which lags a render behind the state swap — it never
-        // points at a stale id. We then merge onto the freshest row we can find
-        // (preferring the remote row, then the pre-swap local row, then the
-        // snapshot the fetch was invoked with) but always write under the resolved
-        // id, so the update lands even while the bookmarks ref is catching up.
-        const currentId = resolveAliasedId(bookmark.id, idAliases.current);
-        if (currentId !== bookmark.id) {
-          // Diagnostic: the row was re-keyed (its create synced, or a
-          // leftover/account re-home reconciled it) while this fetch was in
-          // flight — the exact condition that used to drop the enriched title.
-          // Logging it confirms whether the race actually fires in the wild.
-          recordLog(
-            'info',
-            `enrich: bookmark re-keyed ${bookmark.id} -> ${currentId} mid-fetch; applying metadata to current id`,
-          );
-        }
-        if (deletedIds.current.has(bookmark.id) || deletedIds.current.has(currentId)) {
-          return; // deleted while the fetch was in flight
-        }
-        const rows = bookmarksRef.current;
-        const source =
-          rows?.find((item) => item.id === currentId) ??
-          rows?.find((item) => item.id === bookmark.id) ??
-          bookmark;
-        // Reconstruct the row under `currentId` when we only found it under its
-        // pre-swap id (the bookmarks ref lagging the alias). Reaching this branch
-        // means an alias re-keyed the row — which happens only once its `create`
-        // synced (or a leftover/account re-home reconciled it), so the row is
-        // 'synced' on the server. Force that here rather than carrying the stale
-        // snapshot's `sync_status: 'pending'` forward, which would otherwise
-        // revert a successfully-created bookmark to pending and, if its follow-up
-        // update never lands, strand it as pending/failed.
-        const latest: Bookmark =
-          source.id === currentId
-            ? source
-            : {
-                ...source,
-                id: currentId,
-                sync_status: hasSyncedOnce(currentId) ? 'synced' : source.sync_status,
-              };
-        // Fill only generated fields that are still empty, so a user-authored
-        // title is never overwritten by generated metadata.
-        const safePatch: Partial<Bookmark> = {};
-        if (patch.title !== undefined && latest.title === null) {
-          safePatch.title = patch.title;
-          // Carry the title's provenance alongside it, so a generated fallback
-          // title is recorded as such (and a real fetched title as not-derived).
-          safePatch.title_is_derived = patch.title_is_derived;
-        }
-        if (patch.site_name !== undefined && latest.site_name === null) {
-          safePatch.site_name = patch.site_name;
-        }
-        if (patch.favicon_url !== undefined && latest.favicon_url === null) {
-          safePatch.favicon_url = patch.favicon_url;
-        }
-        if (patch.preview_image_url !== undefined && latest.preview_image_url === null) {
-          safePatch.preview_image_url = patch.preview_image_url;
-        }
-        const updated: Bookmark = {
-          ...latest,
-          ...safePatch,
-          metadata_status,
-          updated_at: new Date().toISOString(),
-        };
-
-        setBookmarks((current) =>
-          current === null
-            ? current
-            : current.map((item) => (item.id === updated.id ? updated : item)),
-        );
-        try {
-          await ensureRepositoryReady();
-          await repository.updateBookmark(updated);
-        } catch (error) {
-          logStorageError('metadata enrichment', error);
-        }
-        if (resetEpoch.current !== epochAtStart) {
-          // A reset can land behind this write on native, where storage work
-          // is serialized on a single actor tail — the write above may have
-          // already landed against freshly-cleared storage. Don't compound
-          // that by also queuing a sync mutation for a bookmark that should
-          // no longer exist.
-          return;
-        }
-        // Push the freshly fetched metadata to the cloud so other devices see
-        // it on their next pull. Only for already-synced bookmarks: a local
-        // bookmark's create upload already sends its latest fields.
-        if (hasSyncedOnce(updated.id)) {
-          enqueueMutation(updated.id, 'update');
-        }
-      } finally {
-        enriching.current.delete(bookmark.id);
+  const enrichInBackground = useCallback(
+    (bookmark: Bookmark) => {
+      if (
+        bookmark.metadata_status !== "pending" ||
+        enriching.current.has(bookmark.id)
+      ) {
+        return;
       }
-    });
-  }, [enqueueMutation, hasSyncedOnce]);
+      const epochAtStart = resetEpoch.current;
+      enriching.current.add(bookmark.id);
+      // `enriching` (the dedupe guard) is set synchronously above; the fetch
+      // itself waits for a limiter slot so bulk passes stay bounded.
+      void enrichmentSlots.current(async () => {
+        try {
+          const { patch, metadata_status } = await enrichBookmark(bookmark);
+          if (resetEpoch.current !== epochAtStart) {
+            return; // library was reset while fetch was in flight
+          }
+          // A `create` that synced while the fetch was in flight re-keys the row
+          // from its local id onto its remote UUID (see the create-sync swap). If
+          // the enriched fields are written against the now-dead local id they are
+          // dropped from state, and the row is stranded `metadata_status:'pending'`
+          // — a later re-enrichment then fills the title from the bare URL slug
+          // (e.g. a YouTube video id, which reads like a random string), which is
+          // exactly the "preview turned into an encrypted-looking URL" report.
+          //
+          // Resolve the row's CURRENT id by walking the id-alias chain to its end.
+          // The alias map is a ref updated synchronously at the swap, so — unlike
+          // the bookmarks ref, which lags a render behind the state swap — it never
+          // points at a stale id. We then merge onto the freshest row we can find
+          // (preferring the remote row, then the pre-swap local row, then the
+          // snapshot the fetch was invoked with) but always write under the resolved
+          // id, so the update lands even while the bookmarks ref is catching up.
+          const currentId = resolveAliasedId(bookmark.id, idAliases.current);
+          if (currentId !== bookmark.id) {
+            // Diagnostic: the row was re-keyed (its create synced, or a
+            // leftover/account re-home reconciled it) while this fetch was in
+            // flight — the exact condition that used to drop the enriched title.
+            // Logging it confirms whether the race actually fires in the wild.
+            recordLog(
+              "info",
+              `enrich: bookmark re-keyed ${bookmark.id} -> ${currentId} mid-fetch; applying metadata to current id`,
+            );
+          }
+          if (
+            deletedIds.current.has(bookmark.id) ||
+            deletedIds.current.has(currentId)
+          ) {
+            return; // deleted while the fetch was in flight
+          }
+          const rows = bookmarksRef.current;
+          const source =
+            rows?.find((item) => item.id === currentId) ??
+            rows?.find((item) => item.id === bookmark.id) ??
+            bookmark;
+          // Reconstruct the row under `currentId` when we only found it under its
+          // pre-swap id (the bookmarks ref lagging the alias). Reaching this branch
+          // means an alias re-keyed the row — which happens only once its `create`
+          // synced (or a leftover/account re-home reconciled it), so the row is
+          // 'synced' on the server. Force that here rather than carrying the stale
+          // snapshot's `sync_status: 'pending'` forward, which would otherwise
+          // revert a successfully-created bookmark to pending and, if its follow-up
+          // update never lands, strand it as pending/failed.
+          const latest: Bookmark =
+            source.id === currentId
+              ? source
+              : {
+                  ...source,
+                  id: currentId,
+                  sync_status: hasSyncedOnce(currentId)
+                    ? "synced"
+                    : source.sync_status,
+                };
+          // Fill only generated fields that are still empty, so a user-authored
+          // title is never overwritten by generated metadata.
+          const safePatch: Partial<Bookmark> = {};
+          if (patch.title !== undefined && latest.title === null) {
+            safePatch.title = patch.title;
+            // Carry the title's provenance alongside it, so a generated fallback
+            // title is recorded as such (and a real fetched title as not-derived).
+            safePatch.title_is_derived = patch.title_is_derived;
+          }
+          if (patch.site_name !== undefined && latest.site_name === null) {
+            safePatch.site_name = patch.site_name;
+          }
+          if (patch.favicon_url !== undefined && latest.favicon_url === null) {
+            safePatch.favicon_url = patch.favicon_url;
+          }
+          if (
+            patch.preview_image_url !== undefined &&
+            latest.preview_image_url === null
+          ) {
+            safePatch.preview_image_url = patch.preview_image_url;
+          }
+          const updated: Bookmark = {
+            ...latest,
+            ...safePatch,
+            metadata_status,
+            updated_at: new Date().toISOString(),
+          };
+
+          setBookmarks((current) =>
+            current === null
+              ? current
+              : current.map((item) =>
+                  item.id === updated.id ? updated : item,
+                ),
+          );
+          try {
+            await ensureRepositoryReady();
+            await repository.updateBookmark(updated);
+          } catch (error) {
+            logStorageError("metadata enrichment", error);
+          }
+          if (resetEpoch.current !== epochAtStart) {
+            // A reset can land behind this write on native, where storage work
+            // is serialized on a single actor tail — the write above may have
+            // already landed against freshly-cleared storage. Don't compound
+            // that by also queuing a sync mutation for a bookmark that should
+            // no longer exist.
+            return;
+          }
+          // Push the freshly fetched metadata to the cloud so other devices see
+          // it on their next pull. Only for already-synced bookmarks: a local
+          // bookmark's create upload already sends its latest fields.
+          if (hasSyncedOnce(updated.id)) {
+            enqueueMutation(updated.id, "update");
+          }
+        } finally {
+          enriching.current.delete(bookmark.id);
+        }
+      });
+    },
+    [enqueueMutation, hasSyncedOnce],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -1636,7 +1780,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // Inbox stays stuck on its loading state with no crash and no event
     // (Sentry STASH-F). The watchdog makes that stall self-report; `phase`
     // gives the report a coarse, non-identifying hint of how far we got.
-    let phase = 'opening';
+    let phase = "opening";
     const disarmWatchdog = armHydrationWatchdog({ describe: () => phase });
     (async () => {
       // Opening SQLite can fail transiently right after a warm relaunch (the
@@ -1686,13 +1830,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // Re-hydrate the AI-suggestions mode so the auto-trigger gate and
             // auto_accept behavior are correct from the very first render, not
             // just after the user revisits Settings.
-            const storedAiSuggestionsMode = parseAiSuggestionsMode(storedAiSuggestionsModeRaw);
+            const storedAiSuggestionsMode = parseAiSuggestionsMode(
+              storedAiSuggestionsModeRaw,
+            );
             aiSuggestionsModeRef.current = storedAiSuggestionsMode;
             setAiSuggestionsModeState(storedAiSuggestionsMode);
             // Re-hydrate the sync-paused pref so a review left mid-way (app
             // closed before turning it back off) doesn't silently resume
             // uploading on the next launch.
-            const storedSyncPaused = storedSyncPausedRaw === 'true';
+            const storedSyncPaused = storedSyncPausedRaw === "true";
             syncPausedRef.current = storedSyncPaused;
             setSyncPausedState(storedSyncPaused);
             // Re-hydrate deferred AI triggers so a bookmark whose create synced
@@ -1720,68 +1866,106 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
             // One-time migration: migrate legacy local-only metadata to bookmark fields
             const legacyReviewedTags = parseStringSetMap(storedReviewedRaw);
-            const legacyDismissedFolders = parseStringSetMap(storedDismissedFoldersRaw);
-            const legacyReviewedSummaries = parseStringSetMap(storedReviewedSummariesRaw);
+            const legacyDismissedFolders = parseStringSetMap(
+              storedDismissedFoldersRaw,
+            );
+            const legacyReviewedSummaries = parseStringSetMap(
+              storedReviewedSummariesRaw,
+            );
 
             let migratedBookmarks = storedBookmarks;
 
-            if (Object.keys(legacyReviewedTags).length > 0 ||
-                Object.keys(legacyDismissedFolders).length > 0 ||
-                Object.keys(legacyReviewedSummaries).length > 0) {
-
+            if (
+              Object.keys(legacyReviewedTags).length > 0 ||
+              Object.keys(legacyDismissedFolders).length > 0 ||
+              Object.keys(legacyReviewedSummaries).length > 0
+            ) {
               migratedBookmarks = storedBookmarks.map((bookmark) => {
                 const tags = legacyReviewedTags[bookmark.id] ?? [];
                 const folders = legacyDismissedFolders[bookmark.id] ?? [];
                 const summaries = legacyReviewedSummaries[bookmark.id] ?? [];
 
-                if (tags.length > 0 || folders.length > 0 || summaries.length > 0) {
+                if (
+                  tags.length > 0 ||
+                  folders.length > 0 ||
+                  summaries.length > 0
+                ) {
                   const updated: Bookmark = {
                     ...bookmark,
                     dismissed_suggested_tags: [
-                      ...new Set([...(bookmark.dismissed_suggested_tags ?? []), ...tags])
+                      ...new Set([
+                        ...(bookmark.dismissed_suggested_tags ?? []),
+                        ...tags,
+                      ]),
                     ],
                     dismissed_suggested_folders: [
-                      ...new Set([...(bookmark.dismissed_suggested_folders ?? []), ...folders])
+                      ...new Set([
+                        ...(bookmark.dismissed_suggested_folders ?? []),
+                        ...folders,
+                      ]),
                     ],
                     reviewed_summary_tokens: [
-                      ...new Set([...(bookmark.reviewed_summary_tokens ?? []), ...summaries])
+                      ...new Set([
+                        ...(bookmark.reviewed_summary_tokens ?? []),
+                        ...summaries,
+                      ]),
                     ],
                     // Queue for sync to remote DB
-                    sync_status: 'pending',
+                    sync_status: "pending",
                     ever_synced: true,
                     updated_at: new Date().toISOString(),
                   };
                   ensureRepositoryReady()
                     .then(() => repository.updateBookmark(updated))
-                    .catch((error) => logStorageError('migrate legacy suggestion metadata', error));
-                  enqueueMutation(updated.id, 'update');
+                    .catch((error) =>
+                      logStorageError(
+                        "migrate legacy suggestion metadata",
+                        error,
+                      ),
+                    );
+                  enqueueMutation(updated.id, "update");
                   return updated;
                 }
                 return bookmark;
               });
 
               // Clear legacy meta values
-              ensureRepositoryReady().then(async () => {
-                await repository.setMeta(REVIEWED_SUGGESTIONS_KEY, '{}');
-                await repository.setMeta(DISMISSED_FOLDERS_KEY, '{}');
-                await repository.setMeta(REVIEWED_SUMMARIES_KEY, '{}');
-              }).catch((e) => logStorageError('clear legacy suggestion keys', e));
+              ensureRepositoryReady()
+                .then(async () => {
+                  await repository.setMeta(REVIEWED_SUGGESTIONS_KEY, "{}");
+                  await repository.setMeta(DISMISSED_FOLDERS_KEY, "{}");
+                  await repository.setMeta(REVIEWED_SUMMARIES_KEY, "{}");
+                })
+                .catch((e) =>
+                  logStorageError("clear legacy suggestion keys", e),
+                );
             }
             // Merge instead of replace: saves made while loading must survive.
             setBookmarks((current) =>
               current === null
                 ? migratedBookmarks
-                : mergeById(current, migratedBookmarks, (bookmark) => bookmark.id),
+                : mergeById(
+                    current,
+                    migratedBookmarks,
+                    (bookmark) => bookmark.id,
+                  ),
             );
-            setQueue((current) => mergeById(current, storedQueue, (entry) => entry.local_id));
+            setQueue((current) =>
+              mergeById(current, storedQueue, (entry) => entry.local_id),
+            );
             // Self-heal stranded bookmarks: a non-synced row whose queue entry
             // never persisted (storage hiccup, or the app killed between the two
             // writes) has nothing to drive its sync and would show "sync
             // pending" forever. Re-enqueue an upload so the background loop
             // finishes it. Idempotent on the server, so it's safe to repeat.
-            const orphanEntries = reconcileOrphanedQueueEntries(migratedBookmarks, storedQueue);
+            const orphanEntries = reconcileOrphanedQueueEntries(
+              migratedBookmarks,
+              storedQueue,
+            );
             if (orphanEntries.length > 0) {
-              const orphanIds = new Set(orphanEntries.map((entry) => entry.local_id));
+              const orphanIds = new Set(
+                orphanEntries.map((entry) => entry.local_id),
+              );
               setQueue((current) => [
                 ...current.filter((entry) => !orphanIds.has(entry.local_id)),
                 ...orphanEntries,
@@ -1797,23 +1981,30 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 for (const entry of orphanEntries) {
                   await repository.enqueue(entry);
                 }
-              })().catch((error) => logStorageError('orphan re-enqueue', error));
+              })().catch((error) =>
+                logStorageError("orphan re-enqueue", error),
+              );
             }
             setEnrichments(storedEnrichments);
             // One-time cleanup: purge blank-named tags/collections (and orphaned
             // links) a prior version may have stored, so they stop showing as
             // empty Browse chips. Persist the cleaned set back when it changed.
-            const { tagData: cleanTagData, changed } = sanitizeTagData(storedTagData);
+            const { tagData: cleanTagData, changed } =
+              sanitizeTagData(storedTagData);
             if (changed) {
               void repository
                 .replaceTagData(cleanTagData)
-                .catch((error) => logStorageError('blank-tag cleanup', error));
+                .catch((error) => logStorageError("blank-tag cleanup", error));
             }
             // Layer not-yet-synced local tag ops on top of the cached snapshot.
             const storedOps = parseTagOps(storedTagOpsRaw);
             pendingTagOpsRef.current = storedOps;
             setPendingTagOps(storedOps);
-            tagDataRef.current = applyPendingTagOps(cleanTagData, storedOps, mockUserId);
+            tagDataRef.current = applyPendingTagOps(
+              cleanTagData,
+              storedOps,
+              mockUserId,
+            );
             setTagData(tagDataRef.current);
             setLastPulledAt(storedPulledAt);
             setLoadError(false);
@@ -1827,7 +2018,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
             continue;
           }
-          logStorageError('startup load', error);
+          logStorageError("startup load", error);
           setLoadError(true);
           // Don't conjure sample bookmarks on a load failure — surface the empty
           // (errored) state instead of fake content the user never saved.
@@ -1854,7 +2045,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // a frozen-then-resumed app is not misread as a stall.
   useEffect(() => {
     const watchdog = armLoopStallWatchdog({
-      describe: () => `syncing=${syncInFlight.current} queue=${queueRef.current.length}`,
+      describe: () =>
+        `syncing=${syncInFlight.current} queue=${queueRef.current.length}`,
     });
     const unregister = registerForForegroundState({
       onBackground: () => watchdog.pause(),
@@ -1947,7 +2139,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const current = map.get(enrichment.bookmark_id);
       // Newest wins; on a tie keep the first seen (matches the old descending
       // sort + stable-sort + [0], which returned the earliest-indexed of the max).
-      if (!current || enrichment.created_at.localeCompare(current.created_at) > 0) {
+      if (
+        !current ||
+        enrichment.created_at.localeCompare(current.created_at) > 0
+      ) {
         map.set(enrichment.bookmark_id, enrichment);
       }
     }
@@ -1993,12 +2188,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           url_hash: null,
           // A title typed at capture is user-authored; otherwise derive a
           // readable one from the shared filename (may be null → "Untitled").
-          title: title?.trim() ? title.trim() : imageTitleFromFileName(image.fileName),
+          title: title?.trim()
+            ? title.trim()
+            : imageTitleFromFileName(image.fileName),
           title_is_derived: title?.trim() ? false : undefined,
           description: null,
           notes: notes?.trim() ? notes.trim() : null,
           source_app: null,
-          content_type: 'image',
+          content_type: "image",
           preview_image_url: null,
           favicon_url: null,
           site_name: null,
@@ -2009,8 +2206,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           updated_at: now,
           last_saved_at: now,
           // No URL/text to derive metadata from — nothing to enrich.
-          metadata_status: 'skipped',
-          sync_status: 'synced',
+          metadata_status: "skipped",
+          sync_status: "synced",
           // Temporary share URI for the optimistic render; swapped for the
           // durable copy once `copyImageToLibrary` resolves below.
           local_image_uri: image.uri,
@@ -2020,19 +2217,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const persisted = ensureRepositoryReady()
           .then(() => copyImageToLibrary(image.uri, fileName))
           .then((durableUri) => {
-            const stored: Bookmark = { ...imageBookmark, local_image_uri: durableUri };
+            const stored: Bookmark = {
+              ...imageBookmark,
+              local_image_uri: durableUri,
+            };
             setBookmarks((current) =>
-              current === null ? current : current.map((b) => (b.id === id ? stored : b)),
+              current === null
+                ? current
+                : current.map((b) => (b.id === id ? stored : b)),
             );
             return repository.insertBookmark(stored);
           })
           .then(() => true)
           .catch((error) => {
-            logStorageError('new image bookmark', error);
+            logStorageError("new image bookmark", error);
             return false;
           });
 
-        return { status: 'created', bookmark: imageBookmark, persisted };
+        return { status: "created", bookmark: imageBookmark, persisted };
       }
 
       const normalized = url ? normalizeUrl(url) : null;
@@ -2044,8 +2246,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const text = shared_text?.trim() || null;
         if (!text) {
           return {
-            status: 'invalid',
-            error: 'Enter a valid web address, like example.com or https://example.com.',
+            status: "invalid",
+            error:
+              "Enter a valid web address, like example.com or https://example.com.",
           };
         }
 
@@ -2070,7 +2273,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           description: text,
           notes: notes?.trim() ? notes.trim() : null,
           source_app: null,
-          content_type: 'text',
+          content_type: "text",
           preview_image_url: null,
           favicon_url: null,
           site_name: null,
@@ -2080,14 +2283,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           created_at: noteNow,
           updated_at: noteNow,
           last_saved_at: noteNow,
-          metadata_status: 'pending',
-          sync_status: 'pending',
+          metadata_status: "pending",
+          sync_status: "pending",
         };
 
         const noteEntry: LocalPendingBookmark = {
           local_id: note.id,
           remote_id: null,
-          operation: 'create',
+          operation: "create",
           payload: {
             id: note.id,
             title: note.title ?? undefined,
@@ -2095,7 +2298,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             shared_text: text,
             client_id: noteClientId,
           },
-          sync_status: 'pending',
+          sync_status: "pending",
           retry_count: 0,
           last_error: null,
           created_at: noteNow,
@@ -2106,11 +2309,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setQueue((current) => [...current, noteEntry]);
         const persisted = ensureRepositoryReady()
           .then(() =>
-            Promise.all([repository.insertBookmark(note), repository.enqueue(noteEntry)]),
+            Promise.all([
+              repository.insertBookmark(note),
+              repository.enqueue(noteEntry),
+            ]),
           )
           .then(() => true)
           .catch((error) => {
-            logStorageError('new text note', error);
+            logStorageError("new text note", error);
             return false;
           });
 
@@ -2118,7 +2324,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // 'skipped' via the existing, tested enrichment path.
         enrichInBackground(note);
 
-        return { status: 'created', bookmark: note, persisted };
+        return { status: "created", bookmark: note, persisted };
       }
 
       const now = new Date().toISOString();
@@ -2132,28 +2338,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // long canonical URL blows on every retry, forever (Sentry STASH-2V / STASH-2J).
       if (isUrlTooLong(dedupeKey)) {
         return {
-          status: 'invalid',
-          error: 'This web address is too long to save.',
-          reason: 'too_long',
+          status: "invalid",
+          error: "This web address is too long to save.",
+          reason: "too_long",
         };
       }
 
       const existing = loadedBookmarks.find(
-        (bookmark) => isActiveBookmark(bookmark) && currentDedupeKey(bookmark) === dedupeKey,
+        (bookmark) =>
+          isActiveBookmark(bookmark) &&
+          currentDedupeKey(bookmark) === dedupeKey,
       );
       if (existing) {
         const updated = { ...existing, last_saved_at: now };
         setBookmarks((current) =>
-          (current ?? []).map((bookmark) => (bookmark.id === existing.id ? updated : bookmark)),
+          (current ?? []).map((bookmark) =>
+            bookmark.id === existing.id ? updated : bookmark,
+          ),
         );
         const persisted = ensureRepositoryReady()
           .then(() => repository.updateBookmark(updated))
           .then(() => true)
           .catch((error) => {
-            logStorageError('duplicate save', error);
+            logStorageError("duplicate save", error);
             return false;
           });
-        return { status: 'duplicate', bookmark: existing, persisted };
+        return { status: "duplicate", bookmark: existing, persisted };
       }
 
       const clientId = makeClientId();
@@ -2173,7 +2383,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         description: null,
         notes: notes?.trim() ? notes.trim() : null,
         source_app: null,
-        content_type: 'url',
+        content_type: "url",
         preview_image_url: null,
         favicon_url: null,
         site_name: null,
@@ -2183,14 +2393,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         created_at: now,
         updated_at: now,
         last_saved_at: now,
-        metadata_status: 'pending',
-        sync_status: 'pending',
+        metadata_status: "pending",
+        sync_status: "pending",
       };
 
       const queueEntry: LocalPendingBookmark = {
         local_id: bookmark.id,
         remote_id: null,
-        operation: 'create',
+        operation: "create",
         payload: {
           id: bookmark.id,
           url: normalized,
@@ -2198,7 +2408,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           notes: bookmark.notes ?? undefined,
           client_id: clientId,
         },
-        sync_status: 'pending',
+        sync_status: "pending",
         retry_count: 0,
         last_error: null,
         created_at: now,
@@ -2211,18 +2421,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setQueue((current) => [...current, queueEntry]);
       const persisted = ensureRepositoryReady()
         .then(() =>
-          Promise.all([repository.insertBookmark(bookmark), repository.enqueue(queueEntry)]),
+          Promise.all([
+            repository.insertBookmark(bookmark),
+            repository.enqueue(queueEntry),
+          ]),
         )
         .then(() => true)
         .catch((error) => {
-          logStorageError('new bookmark', error);
+          logStorageError("new bookmark", error);
           return false;
         });
 
       // Enrich after the bookmark is already visible and persisted.
       enrichInBackground(bookmark);
 
-      return { status: 'created', bookmark, persisted };
+      return { status: "created", bookmark, persisted };
     },
     [loadedBookmarks, enrichInBackground],
   );
@@ -2245,16 +2458,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // outright rather than risk it; the caller asks the user to retry.
       if (bookmarksRef.current === null || isSyncing) {
         recordLog(
-          'warn',
+          "warn",
           `import: refused (not ready) items=${items.length} loaded=${bookmarksRef.current !== null} isSyncing=${isSyncing}`,
         );
         return { imported: 0, duplicates: 0, skipped: 0, notReady: true };
       }
       const now = new Date().toISOString();
       // Latest committed rows (the ref), so an import right after a save sees it.
-      const activeLocalBookmarks = (bookmarksRef.current ?? loadedBookmarks).filter(
-        (bookmark) => isActiveBookmark(bookmark),
-      );
+      const activeLocalBookmarks = (
+        bookmarksRef.current ?? loadedBookmarks
+      ).filter((bookmark) => isActiveBookmark(bookmark));
       const seen = new Set(
         activeLocalBookmarks
           .map((bookmark) => currentDedupeKey(bookmark))
@@ -2268,7 +2481,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // "dedupe saw everything but let duplicates through anyway" (seenKeys
       // matches the library size but `duplicates` is still ~0 on a re-import).
       recordLog(
-        'info',
+        "info",
         `import: starting items=${items.length} activeLocal=${activeLocalBookmarks.length} seenKeys=${seen.size}`,
       );
       const newBookmarks: Bookmark[] = [];
@@ -2314,7 +2527,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           description: null,
           notes,
           source_app: null,
-          content_type: 'url',
+          content_type: "url",
           preview_image_url: null,
           favicon_url: null,
           site_name: null,
@@ -2324,13 +2537,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           created_at: now,
           updated_at: now,
           last_saved_at: now,
-          metadata_status: 'pending',
-          sync_status: 'pending',
+          metadata_status: "pending",
+          sync_status: "pending",
         });
         newEntries.push({
           local_id: id,
           remote_id: null,
-          operation: 'create',
+          operation: "create",
           payload: {
             id,
             url: normalized,
@@ -2338,7 +2551,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             notes: notes ?? undefined,
             client_id: clientId,
           },
-          sync_status: 'pending',
+          sync_status: "pending",
           retry_count: 0,
           last_error: null,
           created_at: now,
@@ -2373,28 +2586,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           .then(async () => {
             const epochAtStart = resetEpoch.current;
             if (resetEpoch.current !== epochAtStart) {
-              recordLog('warn', 'import: loop aborted by library reset');
+              recordLog("warn", "import: loop aborted by library reset");
               return;
             }
             if (repository.insertImportBatch) {
               await repository.insertImportBatch(newBookmarks, newEntries);
-                const ENRICH_BATCH_SIZE = 10;
-                for (let i = 0; i < newBookmarks.length; i += ENRICH_BATCH_SIZE) {
-                  if (resetEpoch.current !== epochAtStart) {
-                    break;
-                  }
-                  const chunk = newBookmarks.slice(i, i + ENRICH_BATCH_SIZE);
-                  for (const bookmark of chunk) {
-                    releaseAndEnrich(bookmark);
-                  }
-                  if (i + ENRICH_BATCH_SIZE < newBookmarks.length) {
-                    await new Promise((resolve) => setTimeout(resolve, 50));
-                  }
+              const ENRICH_BATCH_SIZE = 10;
+              for (let i = 0; i < newBookmarks.length; i += ENRICH_BATCH_SIZE) {
+                if (resetEpoch.current !== epochAtStart) {
+                  break;
                 }
+                const chunk = newBookmarks.slice(i, i + ENRICH_BATCH_SIZE);
+                for (const bookmark of chunk) {
+                  releaseAndEnrich(bookmark);
+                }
+                if (i + ENRICH_BATCH_SIZE < newBookmarks.length) {
+                  await new Promise((resolve) => setTimeout(resolve, 50));
+                }
+              }
             } else {
               for (let i = 0; i < newBookmarks.length; i += 1) {
                 if (resetEpoch.current !== epochAtStart) {
-                  recordLog('warn', 'import: loop aborted by library reset');
+                  recordLog("warn", "import: loop aborted by library reset");
                   break;
                 }
                 await repository.insertBookmark(newBookmarks[i]);
@@ -2403,7 +2616,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               }
             }
           })
-          .catch((error) => logStorageError('imported bookmarks', error))
+          .catch((error) => logStorageError("imported bookmarks", error))
           .finally(() => {
             localCreateFlushesInFlight.current = Math.max(
               0,
@@ -2415,7 +2628,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             for (const bookmark of newBookmarks) {
               releaseAndEnrich(bookmark);
             }
-            if (localCreateFlushesInFlight.current === 0 && syncPendingRef.current) {
+            if (
+              localCreateFlushesInFlight.current === 0 &&
+              syncPendingRef.current
+            ) {
               setTimeout(() => {
                 void syncNowRef.current?.().catch(() => {});
               }, 50);
@@ -2424,15 +2640,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
 
       recordLog(
-        'info',
+        "info",
         `import: finished items=${items.length} imported=${imported} duplicates=${duplicates} skipped=${skipped}`,
       );
       return { imported, duplicates, skipped };
     },
     [loadedBookmarks, enrichInBackground, isSyncing],
   );
-
-
 
   // Record that the user just opened a bookmark (viewed its Detail or opened its
   // link), powering the "Recently opened" Inbox sort. Deliberately NOT routed
@@ -2445,13 +2659,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // the functional updater isn't guaranteed to run synchronously, so reading a
     // value it assigned would race the durable write below and could skip it,
     // leaving last_accessed_at lost after a reload.
-    const existing = bookmarksRef.current?.find((bookmark) => bookmark.id === id);
+    const existing = bookmarksRef.current?.find(
+      (bookmark) => bookmark.id === id,
+    );
     if (!existing) {
       return;
     }
-    const updated: Bookmark = { ...existing, last_accessed_at: new Date().toISOString() };
+    const updated: Bookmark = {
+      ...existing,
+      last_accessed_at: new Date().toISOString(),
+    };
     setBookmarks((current) =>
-      current === null ? current : current.map((bookmark) => (bookmark.id === id ? updated : bookmark)),
+      current === null
+        ? current
+        : current.map((bookmark) => (bookmark.id === id ? updated : bookmark)),
     );
     // Keep the ref itself current immediately, not just via the `useEffect`
     // that mirrors it from `bookmarks` after the next render — same
@@ -2464,7 +2685,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     );
     ensureRepositoryReady()
       .then(() => repository.updateBookmark(updated))
-      .catch((error) => logStorageError('bookmark access', error));
+      .catch((error) => logStorageError("bookmark access", error));
   }, []);
 
   const trashBookmark = useCallback(
@@ -2496,19 +2717,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const current = enrichmentsRef.current
       .filter((enrichment) => enrichment.bookmark_id === bookmarkId)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
-    if (!current || current.status !== 'complete') {
+    if (!current || current.status !== "complete") {
       return;
     }
-    const stale: AIEnrichment = { ...current, status: 'stale', updated_at: new Date().toISOString() };
-    setEnrichments((rows) => rows.map((row) => (row.id === stale.id ? stale : row)));
+    const stale: AIEnrichment = {
+      ...current,
+      status: "stale",
+      updated_at: new Date().toISOString(),
+    };
+    setEnrichments((rows) =>
+      rows.map((row) => (row.id === stale.id ? stale : row)),
+    );
     ensureRepositoryReady()
       .then(() => repository.upsertEnrichments([stale]))
-      .catch((error) => logStorageError('enrichment staleness', error));
+      .catch((error) => logStorageError("enrichment staleness", error));
   }, []);
 
   const updateBookmarkFields = useCallback(
     (id: string, fields: { title?: string; notes?: string }) => {
-      const before = bookmarksRef.current?.find((bookmark) => bookmark.id === id);
+      const before = bookmarksRef.current?.find(
+        (bookmark) => bookmark.id === id,
+      );
       const patch: Partial<Bookmark> = {};
       if (fields.title !== undefined) {
         patch.title = fields.title.trim() || null;
@@ -2520,7 +2749,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Only stale on a real change to user-editable text; a no-op save (or a
       // collection/archive change, which never routes through here) must not.
       const textChanged =
-        (patch.title !== undefined && patch.title !== (before?.title ?? null)) ||
+        (patch.title !== undefined &&
+          patch.title !== (before?.title ?? null)) ||
         (patch.notes !== undefined && patch.notes !== (before?.notes ?? null));
       applyBookmarkUpdate(id, patch);
       if (textChanged) {
@@ -2537,7 +2767,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     async (id: string): Promise<string | null> => {
       const bookmark = bookmarksRef.current?.find((item) => item.id === id);
       if (!bookmark?.url) {
-        return 'Preview refresh needs a URL bookmark.';
+        return "Preview refresh needs a URL bookmark.";
       }
       if (previewRefreshingIds.has(id)) {
         return null;
@@ -2567,12 +2797,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (patch.preview_image_url !== undefined) {
           nextPatch.preview_image_url = patch.preview_image_url;
         }
-        const latest = bookmarksRef.current?.find((item) => item.id === id) ?? bookmark;
+        const latest =
+          bookmarksRef.current?.find((item) => item.id === id) ?? bookmark;
         const syncsRemotely = hasSyncedOnce(id);
         const updated: Bookmark = {
           ...latest,
           ...nextPatch,
-          sync_status: syncsRemotely ? 'pending' : latest.sync_status,
+          sync_status: syncsRemotely ? "pending" : latest.sync_status,
           ever_synced: syncsRemotely ? true : latest.ever_synced,
           updated_at: new Date().toISOString(),
         };
@@ -2584,36 +2815,43 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         try {
           await ensureRepositoryReady();
           await repository.updateBookmark(updated);
-          if (metadata_status === 'failed') {
+          if (metadata_status === "failed") {
             await repository.deleteEnrichment(id);
-            setEnrichments((current) => current.filter((item) => item.bookmark_id !== id));
+            setEnrichments((current) =>
+              current.filter((item) => item.bookmark_id !== id),
+            );
           }
         } catch (error) {
-          logStorageError('preview refresh', error);
+          logStorageError("preview refresh", error);
         }
         if (syncsRemotely) {
-          enqueueMutation(id, 'update');
+          enqueueMutation(id, "update");
         }
         // STASH #573: 'off' means never auto-trigger AI enrichment. This is a
         // direct continuation of the user's own "refresh preview" tap (not a
         // background batch), so it fires immediately rather than through the
         // staggered burst queue below.
-        if (metadata_status !== 'failed' && aiSuggestionsModeRef.current !== 'off') {
-          void requestAiEnrichmentRef.current?.(id, 'auto', {
-            title: updated.title,
-            description: updated.description,
-            notes: updated.notes,
-            site_name: updated.site_name,
-            content_type: updated.content_type,
-          }).catch(() => {});
+        if (
+          metadata_status !== "failed" &&
+          aiSuggestionsModeRef.current !== "off"
+        ) {
+          void requestAiEnrichmentRef
+            .current?.(id, "auto", {
+              title: updated.title,
+              description: updated.description,
+              notes: updated.notes,
+              site_name: updated.site_name,
+              content_type: updated.content_type,
+            })
+            .catch(() => {});
         }
         return null;
       } catch (error) {
         recordLog(
-          isTransientNetworkError(error) ? 'warn' : 'error',
+          isTransientNetworkError(error) ? "warn" : "error",
           `preview refresh failed: ${error instanceof Error ? error.message : String(error)}`,
         );
-        return 'Could not refresh the preview.';
+        return "Could not refresh the preview.";
       } finally {
         setPreviewRefreshingIds((prev) => {
           if (!prev.has(id)) {
@@ -2632,8 +2870,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       deletedIds.current.add(id);
       const hadSyncedOnce = hasSyncedOnce(id);
-      setBookmarks((current) => (current === null ? current : current.filter((b) => b.id !== id)));
-      bookmarksRef.current = bookmarksRef.current?.filter((bookmark) => bookmark.id !== id) ?? null;
+      setBookmarks((current) =>
+        current === null ? current : current.filter((b) => b.id !== id),
+      );
+      bookmarksRef.current =
+        bookmarksRef.current?.filter((bookmark) => bookmark.id !== id) ?? null;
       // A gone-forever row has nothing left to retry enriching — drop any
       // armed AI-retry marker so a future backoff check doesn't keep firing
       // doomed requests against a deleted bookmark.
@@ -2647,22 +2888,37 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // delete mutation so the removal reaches Supabase even after restart.
         ensureRepositoryReady()
           .then(() => repository.deleteBookmark(id))
-          .catch((error) => logStorageError('delete bookmark', error));
-        enqueueMutation(id, 'delete');
+          .catch((error) => logStorageError("delete bookmark", error));
+        enqueueMutation(id, "delete");
         return;
       }
       // Local-only: drop any pending queue entry so it is never created remotely.
       setQueue((current) => current.filter((entry) => entry.local_id !== id));
-      queueRef.current = queueRef.current.filter((entry) => entry.local_id !== id);
+      queueRef.current = queueRef.current.filter(
+        (entry) => entry.local_id !== id,
+      );
       ensureRepositoryReady()
-        .then(() => Promise.all([repository.deleteBookmark(id), repository.removeQueueEntry(id)]))
-        .catch((error) => logStorageError('delete bookmark', error));
+        .then(() =>
+          Promise.all([
+            repository.deleteBookmark(id),
+            repository.removeQueueEntry(id),
+          ]),
+        )
+        .catch((error) => logStorageError("delete bookmark", error));
     },
-    [enqueueMutation, clearAiRetry, syncAiRetryIds, clearAiServerQueued, hasSyncedOnce],
+    [
+      enqueueMutation,
+      clearAiRetry,
+      syncAiRetryIds,
+      clearAiServerQueued,
+      hasSyncedOnce,
+    ],
   );
 
   const emptyTrash = useCallback(() => {
-    const trashed = (bookmarksRef.current ?? []).filter((b) => b.deleted_at != null);
+    const trashed = (bookmarksRef.current ?? []).filter(
+      (b) => b.deleted_at != null,
+    );
     for (const bookmark of trashed) {
       deleteBookmark(bookmark.id);
     }
@@ -2677,7 +2933,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // the RPC is idempotent, so the explicit recovery is to run the reset again.
   const resetLibrary = useCallback(async (): Promise<ResetLibraryResult> => {
     if (syncInFlight.current) {
-      return { ok: false, reason: 'busy' };
+      return { ok: false, reason: "busy" };
     }
     // An import's sequential durable-write loop (Sentry: user-reported "reset
     // doesn't clear the queue in one shot") uses this separate counter, not
@@ -2686,10 +2942,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // keeps calling insertBookmark/enqueue for its remaining items — silently
     // repopulating the library right after the "clear".
     if (localCreateFlushesInFlight.current > 0) {
-      return { ok: false, reason: 'busy' };
+      return { ok: false, reason: "busy" };
     }
     if (!auth.session) {
-      return { ok: false, reason: 'auth' };
+      return { ok: false, reason: "auth" };
     }
     // Take the sync-in-flight slot so a background sync can't upload or pull
     // mid-wipe; syncNow calls made meanwhile no-op onto syncPendingRef.
@@ -2702,14 +2958,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const session = (await auth.ensureAnonymousSession()) ?? auth.session;
         await createSyncApi(session).resetLibrary();
       } catch (error) {
-        recordLog('warn', `library reset: remote wipe failed: ${String(error)}`);
+        recordLog(
+          "warn",
+          `library reset: remote wipe failed: ${String(error)}`,
+        );
         return {
           ok: false,
-          reason: 'remote',
+          reason: "remote",
           message: error instanceof Error ? error.message : undefined,
         };
       }
-      recordLog('warn', 'library reset: remote wipe succeeded; clearing local state');
+      recordLog(
+        "warn",
+        "library reset: remote wipe succeeded; clearing local state",
+      );
       // Quiesce the AI enrichment pipeline BEFORE clearing storage: drop every
       // queued (not-yet-dispatched) auto-enrichment so the drain interval can't
       // fire requests for just-deleted bookmarks, and bump the epoch so any
@@ -2722,10 +2984,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         await repository.clearAllData();
         // Reset the pull watermark so the next sync does a clean full pull of
         // the now-empty account instead of trusting a stale window.
-        await repository.setMeta(LAST_PULLED_AT_KEY, '');
+        await repository.setMeta(LAST_PULLED_AT_KEY, "");
       } catch (error) {
-        logStorageError('library reset local clear', error);
-        return { ok: false, reason: 'local' };
+        logStorageError("library reset local clear", error);
+        return { ok: false, reason: "local" };
       }
       // In-memory mirrors last, after the durable writes, so a kill in between
       // re-reads the already-cleared repository on the next launch. The apply*
@@ -2792,26 +3054,37 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         continue;
       }
       try {
-        if (op.op === 'add') {
+        if (op.op === "add") {
           const ensured = await api.addTags({
             bookmark_id: op.bookmark_id,
             tags: [op.tag_name],
             source: op.source,
           });
           const serverTag =
-            ensured.find((tag) => normalizeTag(tag.name) === normalizeTag(op.tag_name)) ??
-            ensured[0];
+            ensured.find(
+              (tag) => normalizeTag(tag.name) === normalizeTag(op.tag_name),
+            ) ?? ensured[0];
           if (serverTag) {
-            applyTagData(reconcileSyncedAdd(tagDataRef.current, op.tag_name, serverTag));
+            applyTagData(
+              reconcileSyncedAdd(tagDataRef.current, op.tag_name, serverTag),
+            );
           }
         } else {
-          await api.removeTags({ bookmark_id: op.bookmark_id, tags: [op.tag_name] });
+          await api.removeTags({
+            bookmark_id: op.bookmark_id,
+            tags: [op.tag_name],
+          });
         }
-        applyTagOps(dequeueTagOp(pendingTagOpsRef.current, op.bookmark_id, op.tag_name));
+        applyTagOps(
+          dequeueTagOp(pendingTagOpsRef.current, op.bookmark_id, op.tag_name),
+        );
         mutationsPushed = true;
       } catch (error) {
         // Keep the op queued; the next sync retries it.
-        recordLog('warn', `tag sync failed (${op.op} ${op.tag_name}): ${String(error)}`);
+        recordLog(
+          "warn",
+          `tag sync failed (${op.op} ${op.tag_name}): ${String(error)}`,
+        );
       }
     }
     if (mutationsPushed) {
@@ -2825,11 +3098,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const addTagsToBookmark = useCallback(
     async (bookmarkId: string, names: string[]): Promise<string | null> => {
       if (!hasSyncedOnce(bookmarkId)) {
-        return 'Tags can be added once this bookmark has synced.';
+        return "Tags can be added once this bookmark has synced.";
       }
-      const cleaned = names.map((name) => name.trim()).filter((name) => name.length > 0);
+      const cleaned = names
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0);
       if (cleaned.length === 0) {
-        return 'Enter a tag name.';
+        return "Enter a tag name.";
       }
       const userId = auth.userId ?? mockUserId;
       const now = new Date().toISOString();
@@ -2840,8 +3115,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           id: makeUuid(),
           bookmark_id: bookmarkId,
           tag_name: name,
-          op: 'add',
-          source: 'user',
+          op: "add",
+          source: "user",
           confidence: null,
           created_at: now,
         };
@@ -2859,18 +3134,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const removeTagFromBookmark = useCallback(
     async (bookmarkId: string, tagName: string): Promise<string | null> => {
       if (!hasSyncedOnce(bookmarkId)) {
-        return 'Seeded sample tags cannot be edited.';
+        return "Seeded sample tags cannot be edited.";
       }
       const op: PendingTagOp = {
         id: makeUuid(),
         bookmark_id: bookmarkId,
         tag_name: tagName,
-        op: 'remove',
-        source: 'user',
+        op: "remove",
+        source: "user",
         confidence: null,
         created_at: new Date().toISOString(),
       };
-      applyTagData(applyTagOp(tagDataRef.current, op, auth.userId ?? mockUserId));
+      applyTagData(
+        applyTagOp(tagDataRef.current, op, auth.userId ?? mockUserId),
+      );
       applyTagOps(enqueueTagOp(pendingTagOpsRef.current, op));
       void syncTagOps();
       return null;
@@ -2885,11 +3162,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const requestAiEnrichment = useCallback(
     async (
       bookmarkId: string,
-      source: 'auto' | 'manual' = 'manual',
+      source: "auto" | "manual" = "manual",
       overrideMetadata?: EnrichmentMetadataHint,
     ): Promise<string | null> => {
       if (!auth.session) {
-        return 'AI suggestions need the cloud — Supabase is not available right now.';
+        return "AI suggestions need the cloud — Supabase is not available right now.";
       }
       // The id may come from a queued dispatch (the stagger drain, a retry
       // check) that outlived its bookmark — deleted, or wiped by a library
@@ -2901,7 +3178,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return null;
       }
       if (!hasSyncedOnce(bookmarkId)) {
-        return 'AI suggestions are available once this bookmark has synced.';
+        return "AI suggestions are available once this bookmark has synced.";
       }
       if (aiEnriching.current.has(bookmarkId)) {
         return null;
@@ -2911,7 +3188,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const epochAtStart = resetEpoch.current;
       aiEnriching.current.add(bookmarkId);
       setEnrichingIds((prev) => new Set(prev).add(bookmarkId));
-      if (source === 'manual') {
+      if (source === "manual") {
         setManualEnrichingIds((prev) => new Set(prev).add(bookmarkId));
       }
       try {
@@ -2921,12 +3198,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // the possibly-expired `auth.session`.
         const session = (await auth.ensureAnonymousSession()) ?? auth.session;
         if (!session) {
-          return 'AI suggestions need the cloud — Supabase is not available right now.';
+          return "AI suggestions need the cloud — Supabase is not available right now.";
         }
         // Send the device's freshest metadata: the cloud row can still be a bare
         // URL (on-device OpenGraph enrichment may not have synced yet), and the
         // model would otherwise have nothing to reason about.
-        const latest = bookmarksRef.current?.find((item) => item.id === bookmarkId);
+        const latest = bookmarksRef.current?.find(
+          (item) => item.id === bookmarkId,
+        );
         const metadata: EnrichmentMetadataHint | undefined =
           overrideMetadata ??
           (latest
@@ -2950,7 +3229,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // If the server still rejects the token (rotation / clock skew),
           // force a refresh and retry once before surfacing the error.
           if (error instanceof SupabaseRequestError && error.status === 401) {
-            const refreshed = (await auth.ensureAnonymousSession(true)) ?? session;
+            const refreshed =
+              (await auth.ensureAnonymousSession(true)) ?? session;
             enrichment = await createSyncApi(refreshed).requestEnrichment(
               bookmarkId,
               metadata,
@@ -2975,7 +3255,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           await ensureRepositoryReady();
           await repository.upsertEnrichments([enrichment]);
         } catch (error) {
-          logStorageError('ai enrichment', error);
+          logStorageError("ai enrichment", error);
         }
         // A written enrichment row means this bookmark no longer needs a
         // retry — clear any armed marker from an earlier failed attempt
@@ -2995,11 +3275,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // a failed attempt (which would both discard the fetched enrichment
         // above — it never happened, the write already landed — and wrongly
         // arm a retry for a request that actually succeeded).
-        if (aiSuggestionsModeRef.current === 'auto_accept') {
+        if (aiSuggestionsModeRef.current === "auto_accept") {
           try {
             await autoAcceptEnrichmentRef.current?.(bookmarkId, enrichment);
           } catch (error) {
-            recordLog('warn', `ai-enrich auto_accept failed: ${error instanceof Error ? error.message : String(error)}`);
+            recordLog(
+              "warn",
+              `ai-enrich auto_accept failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
           }
         }
         // A background auto-enrichment lands without the user looking at this
@@ -3008,7 +3291,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // already witnessing it — so it doesn't (and Detail clears the flag).
         // In auto_accept mode this only fires for whatever auto-accept left
         // behind (e.g. a pending summary — auto-accept never touches notes).
-        if (source === 'auto') {
+        if (source === "auto") {
           noteUnseenSuggestions(enrichment);
         }
         return null;
@@ -3017,7 +3300,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // bookmark is gone, so record nothing — no retry marker, no overflow
         // enqueue — or the reset's just-emptied bookkeeping gets repopulated.
         if (resetEpoch.current !== epochAtStart) {
-          return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
+          return error instanceof Error
+            ? error.message
+            : "Could not generate AI suggestions.";
         }
         // Any failure here writes no ai_enrichments row: arm (or re-arm) this
         // bookmark's backoff-scheduled retry marker regardless of source, so a
@@ -3079,7 +3364,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             );
             try {
               createSyncApi(auth.session)
-                .enqueuePendingEnrichment(bookmarkId, localeRef.current ?? undefined)
+                .enqueuePendingEnrichment(
+                  bookmarkId,
+                  localeRef.current ?? undefined,
+                )
                 .then(() => {
                   // CONFIRMED: the server durably accepted this bookmark into
                   // the overflow queue, so the background worker will
@@ -3112,13 +3400,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 })
                 .catch((enqueueError: unknown) => {
                   recordLog(
-                    'warn',
+                    "warn",
                     `pending_ai_enrichment enqueue failed: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)}`,
                   );
                 });
             } catch (enqueueError) {
               recordLog(
-                'warn',
+                "warn",
                 `pending_ai_enrichment enqueue threw: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)}`,
               );
             }
@@ -3132,7 +3420,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // preview-fetch failures already do — otherwise an outage is invisible.
         const detail = error instanceof Error ? error.message : String(error);
         const isHttpError = error instanceof SupabaseRequestError;
-        const status = isHttpError ? ` (HTTP ${error.status})` : '';
+        const status = isHttpError ? ` (HTTP ${error.status})` : "";
         // A raw client-side transport failure (device offline, DNS unresolved)
         // never reached the function — an expected condition, not an outage — so
         // log it as a warn breadcrumb instead of an error that forwards to Sentry
@@ -3140,9 +3428,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // function actually responded with an error status: a genuine server/
         // function failure that stays at 'error' even when its body echoes a
         // transport-looking message (e.g. the function's own upstream fetch failed).
-        const level = !isHttpError && isTransientNetworkError(error) ? 'warn' : 'error';
+        const level =
+          !isHttpError && isTransientNetworkError(error) ? "warn" : "error";
         recordLog(level, `ai-enrich failed${status}: ${detail}`);
-        return error instanceof Error ? error.message : 'Could not generate AI suggestions.';
+        return error instanceof Error
+          ? error.message
+          : "Could not generate AI suggestions.";
       } finally {
         aiEnriching.current.delete(bookmarkId);
         const remove = (prev: ReadonlySet<string>): ReadonlySet<string> => {
@@ -3154,7 +3445,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return next;
         };
         setEnrichingIds(remove);
-        if (source === 'manual') {
+        if (source === "manual") {
           setManualEnrichingIds(remove);
         }
         // Refresh the reactive retry-id mirror in this same synchronous block
@@ -3210,7 +3501,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // True while a bookmark has a failed-attempt marker AND isn't currently
   // retrying — i.e. it's waiting out its backoff, not actively working.
   const isAiSuggestionPostponed = useCallback(
-    (bookmarkId: string): boolean => aiRetryIds.has(bookmarkId) && !enrichingIds.has(bookmarkId),
+    (bookmarkId: string): boolean =>
+      aiRetryIds.has(bookmarkId) && !enrichingIds.has(bookmarkId),
     [aiRetryIds, enrichingIds],
   );
 
@@ -3225,11 +3517,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // Accept AI-suggested tags: ensure + link them with `source: 'ai'` so their
   // provenance and confidence are preserved (vs. user-typed tags).
   const acceptSuggestedTags = useCallback(
-    async (bookmarkId: string, suggestions: SuggestedTag[]): Promise<string | null> => {
+    async (
+      bookmarkId: string,
+      suggestions: SuggestedTag[],
+    ): Promise<string | null> => {
       if (!hasSyncedOnce(bookmarkId)) {
-        return 'Tags can be added once this bookmark has synced.';
+        return "Tags can be added once this bookmark has synced.";
       }
-      const valid = suggestions.filter((suggestion) => suggestion.name.trim().length > 0);
+      const valid = suggestions.filter(
+        (suggestion) => suggestion.name.trim().length > 0,
+      );
       if (valid.length === 0) {
         return null;
       }
@@ -3242,8 +3539,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           id: makeUuid(),
           bookmark_id: bookmarkId,
           tag_name: suggestion.name,
-          op: 'add',
-          source: 'ai',
+          op: "add",
+          source: "ai",
           confidence: suggestion.confidence,
           created_at: now,
         };
@@ -3261,7 +3558,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncTagOps();
       return null;
     },
-    [auth.userId, applyTagData, applyTagOps, markSuggestionsReviewed, syncTagOps, hasSyncedOnce],
+    [
+      auth.userId,
+      applyTagData,
+      applyTagOps,
+      markSuggestionsReviewed,
+      syncTagOps,
+      hasSyncedOnce,
+    ],
   );
 
   const assignCollection = useCallback(
@@ -3271,22 +3575,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const createCollection = useCallback(
-    async (name: string): Promise<{ collection?: Collection; error?: string }> => {
+    async (
+      name: string,
+    ): Promise<{ collection?: Collection; error?: string }> => {
       if (!auth.session) {
-        return { error: 'Collections need the cloud — Supabase is not available right now.' };
+        return {
+          error:
+            "Collections need the cloud — Supabase is not available right now.",
+        };
       }
       if (!name.trim()) {
-        return { error: 'Enter a collection name.' };
+        return { error: "Enter a collection name." };
       }
       try {
         const api = createSyncApi(auth.session);
         const created = await api.createCollection(name);
         const current = tagDataRef.current;
-        applyTagData({ ...current, collections: [...current.collections, created] });
+        applyTagData({
+          ...current,
+          collections: [...current.collections, created],
+        });
         return { collection: created };
       } catch (error) {
         return {
-          error: error instanceof Error ? error.message : 'Could not create the collection.',
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not create the collection.",
         };
       }
     },
@@ -3315,16 +3630,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   //    add, never a move.
   const autoAcceptEnrichment = useCallback(
     async (bookmarkId: string, enrichment: AIEnrichment): Promise<void> => {
-      const bookmark = bookmarksRef.current?.find((item) => item.id === bookmarkId);
+      const bookmark = bookmarksRef.current?.find(
+        (item) => item.id === bookmarkId,
+      );
       if (!bookmark) {
         return; // gone (trashed/deleted) mid-flight — nothing to apply to
       }
       const applied = appliedTagNamesRef(bookmarkId);
       const reviewed = new Set(
-        (bookmark.dismissed_suggested_tags ?? []).map((name) => name.toLowerCase()),
+        (bookmark.dismissed_suggested_tags ?? []).map((name) =>
+          name.toLowerCase(),
+        ),
       );
       const suggestions = pendingSuggestions(enrichment, applied, reviewed);
-      const dismissedFolderTokens = new Set(bookmark.dismissed_suggested_folders ?? []);
+      const dismissedFolderTokens = new Set(
+        bookmark.dismissed_suggested_folders ?? [],
+      );
       const folder = bookmark.collection_id
         ? null // already filed — never auto-relocate, see comment above
         : pendingSuggestedFolder(
@@ -3336,19 +3657,35 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (suggestions.length === 0 && !folder) {
         return;
       }
-      const folderTokens = suggestedFolderTokens(folder, enrichment.suggested_collection_name);
+      const folderTokens = suggestedFolderTokens(
+        folder,
+        enrichment.suggested_collection_name,
+      );
       await acceptSuggestionBundle(
-        { acceptSuggestedTags, addTagsToBookmark, assignCollection, createCollection, dismissFolderSuggestion },
+        {
+          acceptSuggestedTags,
+          addTagsToBookmark,
+          assignCollection,
+          createCollection,
+          dismissFolderSuggestion,
+        },
         {
           bookmarkId,
           aiSuggestions: suggestions,
           folder,
           folderTokens,
-          createCollectionError: 'Could not create the collection.',
+          createCollectionError: "Could not create the collection.",
         },
       );
     },
-    [appliedTagNamesRef, acceptSuggestedTags, addTagsToBookmark, assignCollection, createCollection, dismissFolderSuggestion],
+    [
+      appliedTagNamesRef,
+      acceptSuggestedTags,
+      addTagsToBookmark,
+      assignCollection,
+      createCollection,
+      dismissFolderSuggestion,
+    ],
   );
   useEffect(() => {
     autoAcceptEnrichmentRef.current = autoAcceptEnrichment;
@@ -3390,12 +3727,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // because sync is paused. Idempotent: once reconciled, a plan with nothing
   // left to drop/rehome is a no-op, so calling it twice is harmless.
   const reconcileAccountTransition = useCallback(
-    async (currentUser: { id: string; isAnonymous: boolean }): Promise<void> => {
+    async (currentUser: {
+      id: string;
+      isAnonymous: boolean;
+    }): Promise<void> => {
       try {
         const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
-        const previousAnon = (await repository.getMeta(SYNCED_USER_ANON_KEY)) === 'true';
+        const previousAnon =
+          (await repository.getMeta(SYNCED_USER_ANON_KEY)) === "true";
         const plan = planAccountTransition(
-          previousUserId ? { id: previousUserId, isAnonymous: previousAnon } : null,
+          previousUserId
+            ? { id: previousUserId, isAnonymous: previousAnon }
+            : null,
           currentUser,
           bookmarksRef.current ?? [],
         );
@@ -3414,7 +3757,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // Real A→real B switch: purge A's pending tag ops + links so a
               // later syncTagOps call (now under B's auth) can't upload A's
               // tags as B or surface them in B's UI.
-              applyTagOps(dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids));
+              applyTagOps(
+                dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids),
+              );
               const dropped = new Set(ids);
               const links = tagDataRef.current.bookmarkTags.filter(
                 (link) => !dropped.has(link.bookmark_id),
@@ -3428,7 +3773,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           },
         );
       } catch (error) {
-        logStorageError('account transition', error);
+        logStorageError("account transition", error);
       }
     },
     [applyTagOps, applyTagData, dropAiRetryBookkeeping, rekeyBookmarkIdentity],
@@ -3478,17 +3823,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return false;
     }
     // Upload-then-pull: even with nothing to upload, the pull still runs.
-    const syncable = queue.filter(isSyncable);
+    // Defer creates whose metadata is still fetching, so that metadata rides along with the create payload instead of syncing twice.
+    const syncable = queue.filter((entry) => {
+      if (!isSyncable(entry)) {
+        return false;
+      }
+      if (entry.operation === "create") {
+        const bookmark = bookmarksRef.current?.find(
+          (b) => b.id === entry.local_id,
+        );
+        if (bookmark && bookmark.metadata_status === "pending") {
+          return false; // defer until metadata resolves
+        }
+      }
+      return true;
+    });
     // Sentry STASH-3K/3M: pairs with the import-side logging above. A bulk
     // import that already shows up here with a suspiciously large create
     // count (e.g. matching a prior "561 -> 1122" report) confirms the
     // duplication happened before upload, not during it; a normal count here
     // despite a later doubled server-side total would point at the upload
     // path instead. Gated on size so an everyday small sync doesn't spam it.
-    const pendingCreateCount = syncable.filter((entry) => entry.operation === 'create').length;
+    const pendingCreateCount = syncable.filter(
+      (entry) => entry.operation === "create",
+    ).length;
     if (pendingCreateCount > 10) {
       recordLog(
-        'info',
+        "info",
         `sync: uploading ${pendingCreateCount} pending create(s) (queue total ${queue.length})`,
       );
     }
@@ -3510,7 +3871,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         entry: LocalPendingBookmark,
         result: Awaited<ReturnType<typeof syncQueueEntry>>,
       ): Promise<boolean> => {
-        if (crossedHealthEscalationThreshold(entry.retry_count, result.entry.retry_count)) {
+        if (
+          crossedHealthEscalationThreshold(
+            entry.retry_count,
+            result.entry.retry_count,
+          )
+        ) {
           reportSyncQueueHealthEscalation({
             operation: entry.operation,
             retryCount: result.entry.retry_count,
@@ -3533,24 +3899,34 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Deleted while a create/update was in flight: don't resurrect it.
         // Undo the rows syncQueueEntry just persisted and best-effort delete
         // the remote copy so the user's delete wins end to end.
-        if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
+        if (
+          entry.operation !== "delete" &&
+          deletedIds.current.has(entry.local_id)
+        ) {
           const replacementId = result.bookmarkUpdate?.id;
           ensureRepositoryReady()
             .then(() =>
               Promise.all([
-                replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
+                replacementId
+                  ? repository.deleteBookmark(replacementId)
+                  : Promise.resolve(),
                 // Superseded-aware: a durable delete entry enqueued for this
                 // bookmark while we were uploading must NOT be removed here.
                 removeQueueEntryIfNotSuperseded(repository, entry),
               ]),
             )
-            .catch((error) => logStorageError('post-delete sync cleanup', error));
-          if (result.entry.remote_id && result.entry.remote_id !== entry.local_id) {
+            .catch((error) =>
+              logStorageError("post-delete sync cleanup", error),
+            );
+          if (
+            result.entry.remote_id &&
+            result.entry.remote_id !== entry.local_id
+          ) {
             // The upload created a remote row for a bookmark the user already
             // deleted. Enqueue a durable delete (not a best-effort request) so
             // the removal survives app exit and request failures; the next
             // sync pass processes it.
-            enqueueMutation(result.entry.remote_id, 'delete');
+            enqueueMutation(result.entry.remote_id, "delete");
           }
           return false;
         }
@@ -3572,7 +3948,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // queued edit could never land (see sync-bookmarks.ts). Drop it
           // from in-memory state too — the repository row is already gone.
           const removedId = result.removedBookmarkId;
-          setBookmarks((current) => (current ?? []).filter((bookmark) => bookmark.id !== removedId));
+          setBookmarks((current) =>
+            (current ?? []).filter((bookmark) => bookmark.id !== removedId),
+          );
         }
         if (result.bookmarkUpdate) {
           const update = result.bookmarkUpdate;
@@ -3592,7 +3970,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // sees the pre-update value (null). That silently skipped this whole
           // block, so neither the metadata-reconciliation update nor the AI
           // auto-trigger ever fired after a create synced.
-          const latest = bookmarksRef.current?.find((bookmark) => bookmark.id === lookupId);
+          const latest = bookmarksRef.current?.find(
+            (bookmark) => bookmark.id === lookupId,
+          );
           const merged: Bookmark | null = latest
             ? {
                 ...latest,
@@ -3608,19 +3988,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // coexist with the just-swapped row as a same-id duplicate.
             setBookmarks((current) =>
               (current ?? [])
-                .filter((bookmark) => bookmark.id === lookupId || bookmark.id !== merged.id)
-                .map((bookmark) => (bookmark.id === lookupId ? merged : bookmark)),
+                .filter(
+                  (bookmark) =>
+                    bookmark.id === lookupId || bookmark.id !== merged.id,
+                )
+                .map((bookmark) =>
+                  bookmark.id === lookupId ? merged : bookmark,
+                ),
             );
             ensureRepositoryReady()
               .then(() => repository.updateBookmark(merged))
-              .catch((error) => logStorageError('post-sync merge', error));
+              .catch((error) => logStorageError("post-sync merge", error));
 
-            if (result.originalLocalId && result.originalLocalId !== merged.id) {
+            if (
+              result.originalLocalId &&
+              result.originalLocalId !== merged.id
+            ) {
               // Re-key tag/AI-retry state the same way account rehoming does
               // — otherwise a tag added (or a rehome carried over) in the
               // window before this duplicate-swap silently never uploads,
               // parked on the now-dead original id.
-              rekeyBookmarkIdentity(new Map([[result.originalLocalId, merged.id]]));
+              rekeyBookmarkIdentity(
+                new Map([[result.originalLocalId, merged.id]]),
+              );
             }
 
             // `uploadedPayload` is set IFF a create just uploaded — whether
@@ -3647,19 +4037,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               const titleChangedByUser =
                 pendingUserTitleEdits.current.has(lookupId) ||
                 pendingUserTitleEdits.current.has(merged.id);
-              if (createNeedsReconcileUpdate(merged, payload, { titleChangedByUser })) {
+              const isDuplicateSwap =
+                Boolean(result.originalLocalId) &&
+                result.originalLocalId !== merged.id;
+              if (
+                isDuplicateSwap ||
+                createNeedsReconcileUpdate(merged, payload, {
+                  titleChangedByUser,
+                })
+              ) {
                 const reasons: Record<string, number> = {};
+                if (isDuplicateSwap) reasons.duplicate_swap = 1;
                 if (merged.deleted_at !== null) reasons.deleted_at = 1;
                 if (merged.is_archived) reasons.is_archived = 1;
                 if (merged.collection_id !== null) reasons.collection_id = 1;
-                if (merged.title !== (payload?.title ?? null) && titleChangedByUser) {
+                if (
+                  merged.title !== (payload?.title ?? null) &&
+                  titleChangedByUser
+                ) {
                   reasons.title = 1;
                 }
-                if (merged.notes !== (payload?.notes ?? null)) reasons.notes = 1;
-                if (merged.description !== (payload?.shared_text ?? null)) reasons.description = 1;
+                if (merged.notes !== (payload?.notes ?? null))
+                  reasons.notes = 1;
+                if (merged.description !== (payload?.shared_text ?? null))
+                  reasons.description = 1;
                 recordReconcileNeeded(reasons);
-                recordLog('info', `single create reconcile: ${JSON.stringify(reasons)}`);
-                enqueueMutation(merged.id, 'update');
+                recordLog(
+                  "info",
+                  `single create reconcile: ${JSON.stringify(reasons)}`,
+                );
+                enqueueMutation(merged.id, "update");
               }
               pendingUserTitleEdits.current.delete(lookupId);
               pendingUserTitleEdits.current.delete(merged.id);
@@ -3694,7 +4101,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const completedLocalIds = new Set<string>();
         const completions: CreateSyncCompletion[] = [];
         const queueOnlyEntries: LocalPendingBookmark[] = [];
-        type UploadedPayload = NonNullable<typeof results[number]['uploadedPayload']>;
+        type UploadedPayload = NonNullable<
+          (typeof results)[number]["uploadedPayload"]
+        >;
         // Keyed by lookupId (originalLocalId ?? update.id) rather than pushed
         // alongside `merged` in this first loop — the reconcile check that
         // consumes this needs to run against the FRESHEST row, after the
@@ -3703,22 +4112,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const rekeyedIds = new Map<string, string>();
         const preUploadSnapshot = bookmarksRef.current ?? [];
 
-        for (let resultIndex = 0; resultIndex < results.length; resultIndex += 1) {
+        for (
+          let resultIndex = 0;
+          resultIndex < results.length;
+          resultIndex += 1
+        ) {
           const entry = chunk[resultIndex]!;
           const result = results[resultIndex]!;
 
-          if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
+          if (
+            entry.operation !== "delete" &&
+            deletedIds.current.has(entry.local_id)
+          ) {
             const replacementId = result.bookmarkUpdate?.id;
             ensureRepositoryReady()
               .then(() =>
                 Promise.all([
-                  replacementId ? repository.deleteBookmark(replacementId) : Promise.resolve(),
+                  replacementId
+                    ? repository.deleteBookmark(replacementId)
+                    : Promise.resolve(),
                   removeQueueEntryIfNotSuperseded(repository, entry),
                 ]),
               )
-              .catch((error) => logStorageError('post-delete sync cleanup', error));
-            if (result.entry.remote_id && result.entry.remote_id !== entry.local_id) {
-              enqueueMutation(result.entry.remote_id, 'delete');
+              .catch((error) =>
+                logStorageError("post-delete sync cleanup", error),
+              );
+            if (
+              result.entry.remote_id &&
+              result.entry.remote_id !== entry.local_id
+            ) {
+              enqueueMutation(result.entry.remote_id, "delete");
             }
             continue;
           }
@@ -3746,7 +4169,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
           const update = result.bookmarkUpdate;
           const lookupId = result.originalLocalId ?? update.id;
-          const latest = preUploadSnapshot.find((bookmark) => bookmark.id === lookupId);
+          const latest = preUploadSnapshot.find(
+            (bookmark) => bookmark.id === lookupId,
+          );
           if (!latest) {
             continue;
           }
@@ -3788,24 +4213,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           } else {
             await Promise.all(
               completions.flatMap(({ bookmark, entry, originalLocalId }) => {
-                const isSwap = Boolean(originalLocalId) && originalLocalId !== bookmark.id;
+                const isSwap =
+                  Boolean(originalLocalId) && originalLocalId !== bookmark.id;
                 return [
-                  ...(isSwap ? [repository.deleteBookmark(originalLocalId!)] : []),
+                  ...(isSwap
+                    ? [repository.deleteBookmark(originalLocalId!)]
+                    : []),
                   // insertBookmark (not updateBookmark) for a swap: the
                   // destination id is new to this device, and updateBookmark
                   // only replaces a row already stored under that id (see
                   // syncQueueEntry's identical fix in sync-bookmarks.ts).
-                  isSwap ? repository.insertBookmark(bookmark) : repository.updateBookmark(bookmark),
+                  isSwap
+                    ? repository.insertBookmark(bookmark)
+                    : repository.updateBookmark(bookmark),
                   removeQueueEntryIfNotSuperseded(repository, entry),
                 ];
               }),
             );
           }
           await Promise.all(
-            queueOnlyEntries.map((entry) => removeQueueEntryIfNotSuperseded(repository, entry)),
+            queueOnlyEntries.map((entry) =>
+              removeQueueEntryIfNotSuperseded(repository, entry),
+            ),
           );
         } catch (error) {
-          logStorageError('bulk create sync completion', error);
+          logStorageError("bulk create sync completion", error);
           return;
         }
 
@@ -3846,11 +4278,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // chunk's completions are known (STASH-3B/3N precedent) — firing
           // it inline here would stack up to a chunk's worth of simultaneous
           // native calls onto the single serialized SQLite connection.
-          if (deletedIds.current.has(lookupId) || deletedIds.current.has(update.id)) {
+          if (
+            deletedIds.current.has(lookupId) ||
+            deletedIds.current.has(update.id)
+          ) {
             deletedMidFlightIds.push(update.id);
             continue;
           }
-          const latest = nextBookmarks.find((bookmark) => bookmark.id === lookupId);
+          const latest = nextBookmarks.find(
+            (bookmark) => bookmark.id === lookupId,
+          );
           if (!latest) {
             continue;
           }
@@ -3865,7 +4302,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // pull that already inserted this bookmark under the existing row's
           // id doesn't end up sharing that id with a second entry.
           nextBookmarks = nextBookmarks
-            .filter((bookmark) => bookmark.id === lookupId || bookmark.id !== merged.id)
+            .filter(
+              (bookmark) =>
+                bookmark.id === lookupId || bookmark.id !== merged.id,
+            )
             .map((bookmark) => (bookmark.id === lookupId ? merged : bookmark));
 
           const uploadedPayload = uploadedPayloadByLookupId.get(lookupId);
@@ -3881,20 +4321,34 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             const titleChangedByUser =
               pendingUserTitleEdits.current.has(lookupId) ||
               pendingUserTitleEdits.current.has(merged.id);
-            if (createNeedsReconcileUpdate(merged, uploadedPayload, { titleChangedByUser })) {
+            const isDuplicateSwap =
+              Boolean(originalLocalId) && originalLocalId !== merged.id;
+            if (
+              isDuplicateSwap ||
+              createNeedsReconcileUpdate(merged, uploadedPayload, {
+                titleChangedByUser,
+              })
+            ) {
               followUpUpdates.push(merged);
               const reasons: Record<string, number> = {};
+              if (isDuplicateSwap) reasons.duplicate_swap = 1;
               if (merged.deleted_at !== null) reasons.deleted_at = 1;
               if (merged.is_archived) reasons.is_archived = 1;
               if (merged.collection_id !== null) reasons.collection_id = 1;
-              if (merged.title !== (uploadedPayload.title ?? null) && titleChangedByUser) {
+              if (
+                merged.title !== (uploadedPayload.title ?? null) &&
+                titleChangedByUser
+              ) {
                 reasons.title = 1;
               }
-              if (merged.notes !== (uploadedPayload.notes ?? null)) reasons.notes = 1;
-              if (merged.description !== (uploadedPayload.shared_text ?? null)) reasons.description = 1;
+              if (merged.notes !== (uploadedPayload.notes ?? null))
+                reasons.notes = 1;
+              if (merged.description !== (uploadedPayload.shared_text ?? null))
+                reasons.description = 1;
               recordReconcileNeeded(reasons);
               for (const [reason, count] of Object.entries(reasons)) {
-                reconcileReasonTally[reason] = (reconcileReasonTally[reason] ?? 0) + count;
+                reconcileReasonTally[reason] =
+                  (reconcileReasonTally[reason] ?? 0) + count;
               }
             }
             pendingUserTitleEdits.current.delete(lookupId);
@@ -3904,9 +4358,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         bookmarksRef.current = nextBookmarks;
         setBookmarks(nextBookmarks);
-        setQueue((current) => current.filter((queued) => !completedLocalIds.has(queued.local_id)));
+        setQueue((current) =>
+          current.filter((queued) => !completedLocalIds.has(queued.local_id)),
+        );
         recordLog(
-          'info',
+          "info",
           `bulk create chunk: ${completedLocalIds.size} completed, queue ${queueLenBeforeChunk} -> ` +
             `~${queueLenBeforeChunk - completedLocalIds.size + followUpUpdates.length + deletedMidFlightIds.length}` +
             ` (reconcile ${followUpUpdates.length}, deletedMidFlight ${deletedMidFlightIds.length},` +
@@ -3973,7 +4429,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 );
               });
             } catch (error) {
-              logStorageError('ai trigger queue', error);
+              logStorageError("ai trigger queue", error);
             }
           }
           if (deletedMidFlightIds.length > 0) {
@@ -4003,9 +4459,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               try {
                 await ensureRepositoryReady();
                 await retryStorageWrite(() => repository.deleteBookmark(id));
-                enqueueMutation(id, 'delete');
+                enqueueMutation(id, "delete");
               } catch (error) {
-                logStorageError('post-delete sync cleanup', error);
+                logStorageError("post-delete sync cleanup", error);
               }
             }
           }
@@ -4086,8 +4542,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   if (deletedIds.current.has(bookmark.id)) {
                     return Promise.resolve();
                   }
-                  const latest = bookmarksRef.current?.find((b) => b.id === bookmark.id);
-                  return latest ? repository.updateBookmark(latest) : Promise.resolve();
+                  const latest = bookmarksRef.current?.find(
+                    (b) => b.id === bookmark.id,
+                  );
+                  return latest
+                    ? repository.updateBookmark(latest)
+                    : Promise.resolve();
                 });
                 // Recheck AFTER the (possibly long, now-retried) write: the
                 // user may have permanently deleted this same bookmark WHILE
@@ -4100,9 +4560,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 if (isGone()) {
                   continue;
                 }
-                enqueueMutation(bookmark.id, 'update');
+                enqueueMutation(bookmark.id, "update");
               } catch (error) {
-                logStorageError('post-sync reconcile persist', error);
+                logStorageError("post-sync reconcile persist", error);
               }
             }
           }
@@ -4113,25 +4573,34 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const bulkSyncedLocalIds = new Set<string>();
       const bulkCreateEntries = syncable.filter(
         (entry) =>
-          entry.operation === 'create' &&
+          entry.operation === "create" &&
           !deletedIds.current.has(entry.local_id) &&
           hasBulkCreateResultKey(entry) &&
           isSyncable(entry),
       );
       if (bulkCreateEntries.length > 1) {
-        for (let index = 0; index < bulkCreateEntries.length; index += BULK_CREATE_SYNC_CHUNK_SIZE) {
+        for (
+          let index = 0;
+          index < bulkCreateEntries.length;
+          index += BULK_CREATE_SYNC_CHUNK_SIZE
+        ) {
           // Re-checked every chunk: pausing mid-import must stop the
           // remaining chunks from uploading, not just block the next
           // syncNow call.
           if (syncPausedRef.current) {
             break;
           }
-          const chunk = bulkCreateEntries.slice(index, index + BULK_CREATE_SYNC_CHUNK_SIZE);
+          const chunk = bulkCreateEntries.slice(
+            index,
+            index + BULK_CREATE_SYNC_CHUNK_SIZE,
+          );
           const chunkIds = new Set(chunk.map((entry) => entry.local_id));
           try {
             setQueue((current) =>
               current.map((queued) =>
-                chunkIds.has(queued.local_id) ? { ...queued, sync_status: 'syncing' } : queued,
+                chunkIds.has(queued.local_id)
+                  ? { ...queued, sync_status: "syncing" }
+                  : queued,
               ),
             );
             const results = await syncCreateQueueEntryBatch(
@@ -4152,7 +4621,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // no separate "preserve bulk mode" bookkeeping needed: a 'failed'
             // entry is still bulk-eligible (isSyncable), so it naturally
             // retries via bulk again next time.
-            const message = error instanceof Error ? error.message : String(error);
+            const message =
+              error instanceof Error ? error.message : String(error);
             // A batch request fails as a whole even when only ONE row in it
             // is actually bad (e.g. a legacy too-long URL) — the error text
             // is a fact about that one row, not the other 49. Copying it onto
@@ -4161,11 +4631,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // review). Instead, leave this chunk's entries untouched here and
             // let them fall through to the per-entry loop below, which will
             // isolate the real offender by getting each row's own error.
-            const isRowSpecificError = isRowSpecificPermanentSyncErrorText(message);
+            const isRowSpecificError =
+              isRowSpecificPermanentSyncErrorText(message);
 
             if (!isRowSpecificError) {
               const failedAt = new Date().toISOString();
-              recordLog('warn', `bulk create sync failed for a chunk of ${chunk.length} (${message})`);
+              recordLog(
+                "warn",
+                `bulk create sync failed for a chunk of ${chunk.length} (${message})`,
+              );
 
               // Every other remaining, untried bulk-eligible entry is marked
               // 'failed' too (retry_count left UNCHANGED, since it was never
@@ -4186,13 +4660,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // included those already-completed entries too, flipping their
               // bookmarks back to 'failed' below even though they have no
               // queue entry left to retry (caught in PR review).
-              const untriedEntries = bulkCreateEntries.slice(index + chunk.length);
+              const untriedEntries = bulkCreateEntries.slice(
+                index + chunk.length,
+              );
 
               const failedEntries = new Map<string, LocalPendingBookmark>();
               for (const entry of chunk) {
                 failedEntries.set(entry.local_id, {
                   ...entry,
-                  sync_status: 'failed',
+                  sync_status: "failed",
                   retry_count: entry.retry_count + 1,
                   last_error: message,
                   updated_at: failedAt,
@@ -4201,8 +4677,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               for (const entry of untriedEntries) {
                 failedEntries.set(entry.local_id, {
                   ...entry,
-                  sync_status: 'failed',
-                  last_error: 'Not attempted: an earlier chunk in this bulk sync failed.',
+                  sync_status: "failed",
+                  last_error:
+                    "Not attempted: an earlier chunk in this bulk sync failed.",
                   updated_at: failedAt,
                 });
               }
@@ -4215,7 +4692,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 // scans the whole queue up to hundreds of times over for one
                 // failure.
                 const storedByLocalId = new Map(
-                  (await repository.listQueue()).map((queued) => [queued.local_id, queued]),
+                  (await repository.listQueue()).map((queued) => [
+                    queued.local_id,
+                    queued,
+                  ]),
                 );
                 for (const entry of [...chunk, ...untriedEntries]) {
                   // The listQueue() snapshot above is taken once for the
@@ -4243,7 +4723,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   // outer catch and permanently lose this entry's one-time
                   // escalation even though its retry_count already persisted
                   // (caught in PR review).
-                  if (crossedHealthEscalationThreshold(entry.retry_count, failedEntry.retry_count)) {
+                  if (
+                    crossedHealthEscalationThreshold(
+                      entry.retry_count,
+                      failedEntry.retry_count,
+                    )
+                  ) {
                     reportSyncQueueHealthEscalation({
                       operation: failedEntry.operation,
                       retryCount: failedEntry.retry_count,
@@ -4251,27 +4736,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     });
                   }
                   const bookmark = getLatestBookmark(entry.local_id);
-                  if (bookmark && bookmark.sync_status !== 'failed') {
-                    await repository.updateBookmark({ ...bookmark, sync_status: 'failed' });
+                  if (bookmark && bookmark.sync_status !== "failed") {
+                    await repository.updateBookmark({
+                      ...bookmark,
+                      sync_status: "failed",
+                    });
                   }
                 }
               } catch (persistError) {
-                logStorageError('bulk create failure persist', persistError);
+                logStorageError("bulk create failure persist", persistError);
               }
 
               setQueue((current) =>
-                current.map((queued) => failedEntries.get(queued.local_id) ?? queued),
+                current.map(
+                  (queued) => failedEntries.get(queued.local_id) ?? queued,
+                ),
               );
               setBookmarks((current) =>
                 (current ?? []).map((bookmark) =>
-                  failedEntries.has(bookmark.id) && bookmark.sync_status !== 'failed'
-                    ? { ...bookmark, sync_status: 'failed' }
+                  failedEntries.has(bookmark.id) &&
+                  bookmark.sync_status !== "failed"
+                    ? { ...bookmark, sync_status: "failed" }
                     : bookmark,
                 ),
               );
             } else {
               recordLog(
-                'warn',
+                "warn",
                 `bulk create sync failed for a chunk of ${chunk.length} with a row-specific ` +
                   `error (${message}); falling back to per-entry sync to isolate the offending row`,
               );
@@ -4310,7 +4801,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Deleted while this run was queued up: skip creates/updates for it.
         // Delete entries are exactly how that deletion reaches the server,
         // so they must still run.
-        if (entry.operation !== 'delete' && deletedIds.current.has(entry.local_id)) {
+        if (
+          entry.operation !== "delete" &&
+          deletedIds.current.has(entry.local_id)
+        ) {
           continue;
         }
 
@@ -4320,32 +4814,43 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         try {
           setQueue((current) =>
             current.map((queued) =>
-              queued.local_id === entry.local_id ? { ...queued, sync_status: 'syncing' } : queued,
+              queued.local_id === entry.local_id
+                ? { ...queued, sync_status: "syncing" }
+                : queued,
             ),
           );
 
-          const result = await syncQueueEntry(api, repository, entry, getLatestBookmark);
+          const result = await syncQueueEntry(
+            api,
+            repository,
+            entry,
+            getLatestBookmark,
+          );
           await applySyncEntryResult(entry, result);
         } catch (error) {
-          logStorageError('sync entry', error);
+          logStorageError("sync entry", error);
           const failed: LocalPendingBookmark = {
             ...entry,
-            sync_status: 'failed',
+            sync_status: "failed",
             retry_count: entry.retry_count + 1,
-            last_error: error instanceof Error ? error.message : 'Sync failed.',
+            last_error: error instanceof Error ? error.message : "Sync failed.",
             updated_at: new Date().toISOString(),
           };
           setQueue((current) =>
-            current.map((queued) => (queued.local_id === entry.local_id ? failed : queued)),
+            current.map((queued) =>
+              queued.local_id === entry.local_id ? failed : queued,
+            ),
           );
           ensureRepositoryReady()
             .then(() => repository.updateQueueEntry(failed))
-            .catch((persistError) => logStorageError('sync entry fail-persist', persistError));
+            .catch((persistError) =>
+              logStorageError("sync entry fail-persist", persistError),
+            );
         }
       }
       if (syncable.length > 0) {
         recordLog(
-          syncFailed > 0 ? 'warn' : 'info',
+          syncFailed > 0 ? "warn" : "info",
           `sync: cycle done entries=${syncable.length} failed=${syncFailed}`,
         );
       }
@@ -4379,16 +4884,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             (bookmarkId) =>
               deletedIds.current.has(bookmarkId) ||
               queueRef.current.some(
-                (queued) => queued.local_id === bookmarkId && queued.sync_status !== 'synced',
+                (queued) =>
+                  queued.local_id === bookmarkId &&
+                  queued.sync_status !== "synced",
               ),
             currentUser,
           );
           if (result.upserts.length > 0 || result.deletions.length > 0) {
-            const upsertIds = new Set(result.upserts.map((bookmark) => bookmark.id));
+            const upsertIds = new Set(
+              result.upserts.map((bookmark) => bookmark.id),
+            );
             const removed = new Set(result.deletions);
             setBookmarks((current) => [
               ...(current ?? []).filter(
-                (bookmark) => !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
+                (bookmark) =>
+                  !upsertIds.has(bookmark.id) && !removed.has(bookmark.id),
               ),
               ...result.upserts,
             ]);
@@ -4403,7 +4913,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // flags while the pull's watermark-overlap re-fetch of an *unchanged*
             // row (same timestamp) doesn't re-surface a suggestion already seen.
             const knownById = new Map(
-              enrichmentsRef.current.map((enrichment) => [enrichment.id, enrichment] as const),
+              enrichmentsRef.current.map(
+                (enrichment) => [enrichment.id, enrichment] as const,
+              ),
             );
             let anyRetryCleared = false;
             // STASH #578 Phase 2: extend the burst-completion toast (STASH #574
@@ -4424,7 +4936,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             let workerDrivenCount = 0;
             for (const enrichment of result.enrichments) {
               const known = knownById.get(enrichment.id);
-              const isNewOrNewer = !known || enrichment.updated_at > known.updated_at;
+              const isNewOrNewer =
+                !known || enrichment.updated_at > known.updated_at;
               if (isNewOrNewer) {
                 noteUnseenSuggestions(enrichment);
                 if (!aiEnriching.current.has(enrichment.bookmark_id)) {
@@ -4443,7 +4956,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // gate, that re-delivery would clear a retry marker that a
               // separate, later failed refresh attempt legitimately armed —
               // even though nothing new actually arrived.
-              if (isNewOrNewer && enrichment.bookmark_id in aiRetryState.current) {
+              if (
+                isNewOrNewer &&
+                enrichment.bookmark_id in aiRetryState.current
+              ) {
                 clearAiRetry(enrichment.bookmark_id);
                 anyRetryCleared = true;
               }
@@ -4454,7 +4970,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // watermark-overlap gate as the retry-marker check above, and for
               // the same reason: a stale re-delivery of an already-known,
               // unchanged row must not be mistaken for a fresh arrival.
-              if (isNewOrNewer && aiServerQueued.current.has(enrichment.bookmark_id)) {
+              if (
+                isNewOrNewer &&
+                aiServerQueued.current.has(enrichment.bookmark_id)
+              ) {
                 clearAiServerQueued(enrichment.bookmark_id);
               }
             }
@@ -4466,7 +4985,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // different source of "N bookmarks summarized & tagged" completions.
             if (workerDrivenCount >= AI_ENRICHMENT_BURST_TOAST_MIN) {
               aiBurstTokenSeq.current += 1;
-              setAiEnrichmentBurstToast({ count: workerDrivenCount, token: aiBurstTokenSeq.current });
+              setAiEnrichmentBurstToast({
+                count: workerDrivenCount,
+                token: aiBurstTokenSeq.current,
+              });
             }
             setEnrichments((current) =>
               mergeById(
@@ -4487,11 +5009,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           setTagData(mergedTagData);
           setLastPulledAt(result.pulledAt);
         } catch (error) {
-          logStorageError('pull', error);
+          logStorageError("pull", error);
         }
       }
     } catch (error) {
-      logStorageError('sync run', error);
+      logStorageError("sync run", error);
     } finally {
       syncInFlight.current = false;
       setIsSyncing(false);
@@ -4632,10 +5154,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           count += 1;
         }
         if (count > 0) {
-          recordLog('info', `title-backfill: repaired ${count} URL-derived title(s)`);
+          recordLog(
+            "info",
+            `title-backfill: repaired ${count} URL-derived title(s)`,
+          );
         }
       } catch (error) {
-        logStorageError('title backfill', error);
+        logStorageError("title backfill", error);
       }
     })();
   }, [bookmarks]);
@@ -4648,7 +5173,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return;
     }
     for (const bookmark of bookmarks) {
-      if (bookmark.metadata_status === 'pending') {
+      if (bookmark.metadata_status === "pending") {
         enrichInBackground(bookmark);
       }
     }
@@ -4672,7 +5197,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       bookmarks === null ||
       !auth.session ||
       pendingAiTrigger.current.size === 0 ||
-      aiSuggestionsModeRef.current === 'off'
+      aiSuggestionsModeRef.current === "off"
     ) {
       return;
     }
@@ -4684,12 +5209,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (!bookmark) {
         continue; // not committed under this id yet — wait for a later render
       }
-      if (bookmark.metadata_status === 'pending') {
+      if (bookmark.metadata_status === "pending") {
         continue; // metadata fetch still in flight — fire once it settles
       }
       // Already has suggestions (enriched in a prior session or via the manual
       // action): clear the durable marker without re-requesting.
-      if (enrichmentsRef.current.some((enrichment) => enrichment.bookmark_id === id)) {
+      if (
+        enrichmentsRef.current.some(
+          (enrichment) => enrichment.bookmark_id === id,
+        )
+      ) {
         clearPendingAiTrigger(id);
         continue;
       }
@@ -4713,9 +5242,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // same time (e.g. a multi-share) doesn't fire N ai-enrich requests at
       // once. The drain effect below is what actually calls
       // requestAiEnrichment and clears this marker on success.
-      aiDispatchQueueRef.current = enqueueAiEnrichmentDispatch(aiDispatchQueueRef.current, id);
+      aiDispatchQueueRef.current = enqueueAiEnrichmentDispatch(
+        aiDispatchQueueRef.current,
+        id,
+      );
     }
-  }, [bookmarks, auth.session, aiSuggestionsMode, requestAiEnrichment, clearPendingAiTrigger]);
+  }, [
+    bookmarks,
+    auth.session,
+    aiSuggestionsMode,
+    requestAiEnrichment,
+    clearPendingAiTrigger,
+  ]);
 
   // Backoff-scheduled AI-suggestion retries: re-attempt any bookmark with an
   // armed retry marker (a prior auto OR manual requestAiEnrichment failure)
@@ -4724,12 +5262,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // reactive mirror) so it always sees the latest bookkeeping. STASH #573:
   // no-ops entirely when the mode is 'off'.
   const checkAiRetries = useCallback(() => {
-    if (!auth.session || aiSuggestionsModeRef.current === 'off') {
+    if (!auth.session || aiSuggestionsModeRef.current === "off") {
       return;
     }
     if (
       queueRef.current.some(
-        (entry) => entry.sync_status === 'pending' || entry.sync_status === 'syncing',
+        (entry) =>
+          entry.sync_status === "pending" || entry.sync_status === "syncing",
       )
     ) {
       return;
@@ -4748,7 +5287,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       // STASH #574 Phase 1: queue for staggered dispatch (see the deferred
       // auto AI enrichment effect above for why).
-      aiDispatchQueueRef.current = enqueueAiEnrichmentDispatch(aiDispatchQueueRef.current, id);
+      aiDispatchQueueRef.current = enqueueAiEnrichmentDispatch(
+        aiDispatchQueueRef.current,
+        id,
+      );
     }
   }, [auth.session, requestAiEnrichment]);
 
@@ -4764,7 +5306,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return;
     }
     const interval = setInterval(() => {
-      if (aiSuggestionsModeRef.current === 'off') {
+      if (aiSuggestionsModeRef.current === "off") {
         // Mode flipped off mid-burst: drop whatever's left rather than keep
         // firing requests for a feature the user just turned off.
         aiDispatchQueueRef.current = EMPTY_AI_ENRICHMENT_BURST_QUEUE;
@@ -4775,7 +5317,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       if (
         queueRef.current.some(
-          (entry) => entry.sync_status === 'pending' || entry.sync_status === 'syncing',
+          (entry) =>
+            entry.sync_status === "pending" || entry.sync_status === "syncing",
         )
       ) {
         return; // let bookmark sync settle before starting AI work for freshly-created rows
@@ -4789,13 +5332,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // stall the STASH-3Y fix is meant to relieve (caught in PR review).
         return;
       }
-      const { queue, id } = dequeueAiEnrichmentDispatch(aiDispatchQueueRef.current);
+      const { queue, id } = dequeueAiEnrichmentDispatch(
+        aiDispatchQueueRef.current,
+      );
       aiDispatchQueueRef.current = queue;
       if (!id) {
         return;
       }
       aiDispatchInFlight.current = true;
-      void requestAiEnrichment(id, 'auto')
+      void requestAiEnrichment(id, "auto")
         .then((error) => {
           if (!error) {
             void clearPendingAiTrigger(id);
@@ -4803,13 +5348,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         })
         .finally(() => {
           aiDispatchInFlight.current = false;
-          aiDispatchQueueRef.current = recordAiEnrichmentDispatchSettled(aiDispatchQueueRef.current);
+          aiDispatchQueueRef.current = recordAiEnrichmentDispatchSettled(
+            aiDispatchQueueRef.current,
+          );
           if (isBurstComplete(aiDispatchQueueRef.current)) {
             const completed = aiDispatchQueueRef.current.completedInBurst;
-            aiDispatchQueueRef.current = clearBurstCompletion(aiDispatchQueueRef.current);
+            aiDispatchQueueRef.current = clearBurstCompletion(
+              aiDispatchQueueRef.current,
+            );
             if (completed >= AI_ENRICHMENT_BURST_TOAST_MIN) {
               aiBurstTokenSeq.current += 1;
-              setAiEnrichmentBurstToast({ count: completed, token: aiBurstTokenSeq.current });
+              setAiEnrichmentBurstToast({
+                count: completed,
+                token: aiBurstTokenSeq.current,
+              });
             }
           }
         });
@@ -4874,12 +5426,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (
       !isSyncing &&
       bookmarks !== null &&
-      (auth.status === 'anonymous' || auth.status === 'authenticated') &&
+      (auth.status === "anonymous" || auth.status === "authenticated") &&
       // 'syncing' is included so an entry an interrupted run stranded in-flight
       // is re-driven automatically; failed entries wait for a save / Sync now.
-      queue.some(
-        (entry) => entry.sync_status === 'pending' || entry.sync_status === 'syncing',
-      )
+      queue.some((entry) => {
+        if (
+          entry.sync_status !== "pending" &&
+          entry.sync_status !== "syncing"
+        ) {
+          return false;
+        }
+        if (!isSyncable(entry)) {
+          return false;
+        }
+        if (entry.operation === "create") {
+          const bookmark = bookmarksRef.current?.find(
+            (b) => b.id === entry.local_id,
+          );
+          if (bookmark && bookmark.metadata_status === "pending") {
+            return false; // defer sync trigger until metadata settles
+          }
+        }
+        return true;
+      })
     ) {
       void syncNow();
     }
@@ -4900,14 +5469,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // leave `signed_out`, so a later save (or a recovered network) tries again.
   const lazyMintInFlight = useRef(false);
   useEffect(() => {
-    if (auth.status !== 'signed_out') {
+    if (auth.status !== "signed_out") {
       lazyMintInFlight.current = false;
       return;
     }
     if (
       lazyMintInFlight.current ||
       bookmarks === null ||
-      !queue.some((entry) => entry.sync_status === 'pending' || entry.sync_status === 'syncing')
+      !queue.some(
+        (entry) =>
+          entry.sync_status === "pending" || entry.sync_status === "syncing",
+      )
     ) {
       return;
     }
@@ -4928,7 +5500,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // can retry. We don't re-fire here — the entry is still pending and a
         // later save re-triggers this effect (bounded, no hot loop).
         lazyMintInFlight.current = false;
-        logStorageError('lazy anonymous mint', error);
+        logStorageError("lazy anonymous mint", error);
       });
   }, [auth, bookmarks, queue]);
 
@@ -4946,7 +5518,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       !isSyncing &&
       bookmarks !== null &&
       auth.userId !== null &&
-      (auth.status === 'anonymous' || auth.status === 'authenticated') &&
+      (auth.status === "anonymous" || auth.status === "authenticated") &&
       lastSyncedUserId.current !== auth.userId
     ) {
       // Only claim this user as synced once we can actually start — otherwise a
@@ -4977,7 +5549,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // bookmark is safe in the departing account's cloud, and keeping the op would
   // strand it under the next (different) identity — RLS/404 → silent loss.
   useEffect(() => {
-    if (auth.status !== 'signed_out') {
+    if (auth.status !== "signed_out") {
       // Left the signed_out state (a new session was minted): re-arm so the
       // next logout clears again.
       loggedOutCleared.current = false;
@@ -5005,7 +5577,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             drop: (ids) => {
               // Purge the logged-out account's pending tag ops + links so they
               // can't leak into the next session's UI or upload under it.
-              applyTagOps(dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids));
+              applyTagOps(
+                dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids),
+              );
               const dropped = new Set(ids);
               const links = tagDataRef.current.bookmarkTags.filter(
                 (link) => !dropped.has(link.bookmark_id),
@@ -5021,15 +5595,64 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Reset the synced-user meta + watermark so the next session does a full
         // refresh (planAccountTransition + pullRemoteChanges read these). Empty
         // strings read back as falsy/null in both call sites.
-        await repository.setMeta(SYNCED_USER_ID_KEY, '');
-        await repository.setMeta(SYNCED_USER_ANON_KEY, '');
-        await repository.setMeta(LAST_PULLED_AT_KEY, '');
+        await repository.setMeta(SYNCED_USER_ID_KEY, "");
+        await repository.setMeta(SYNCED_USER_ANON_KEY, "");
+        await repository.setMeta(LAST_PULLED_AT_KEY, "");
         setLastPulledAt(null);
       } catch (error) {
-        logStorageError('logout cache clear', error);
+        logStorageError("logout cache clear", error);
       }
     })();
   }, [auth.status, bookmarks, applyTagOps, applyTagData]);
+
+  const diagnosticStats = useMemo(() => {
+    const list = bookmarks ?? [];
+    const syncTodo = queue.filter(
+      (entry) => entry.sync_status !== "synced",
+    ).length;
+    const syncDone = list.filter(
+      (b) => b.ever_synced || b.sync_status === "synced",
+    ).length;
+
+    // A bookmark is "syncing twice" if it has already synced once but has a pending update mutation in the queue.
+    const syncingTwiceIds = new Set(
+      queue
+        .filter(
+          (entry) =>
+            entry.operation === "update" && entry.sync_status !== "synced",
+        )
+        .map((entry) => entry.local_id),
+    );
+    const syncingTwice = list.filter(
+      (b) =>
+        (b.ever_synced || b.sync_status === "synced") &&
+        syncingTwiceIds.has(b.id),
+    ).length;
+    const syncedOnce = Math.max(0, syncDone - syncingTwice);
+
+    const metadataTodo = list.filter(
+      (b) => b.metadata_status === "pending",
+    ).length;
+    const metadataDone = list.filter(
+      (b) =>
+        b.metadata_status === "complete" || b.metadata_status === "skipped",
+    ).length;
+
+    // AI pending = unique union of bookmarks in the trigger set, the dispatch queue, and the retry set
+    const uniqueAiTodoIds = new Set<string>([
+      ...pendingAiTrigger.current,
+      ...aiDispatchQueueRef.current.pending,
+      ...aiRetryIds,
+    ]);
+    const aiTodo = uniqueAiTodoIds.size;
+    const aiDone = enrichments.length;
+
+    return {
+      sync: { todo: syncTodo, done: syncDone, syncedOnce, syncingTwice },
+      metadata: { todo: metadataTodo, done: metadataDone },
+      ai: { todo: aiTodo, done: aiDone },
+    };
+  }, [bookmarks, queue, enrichments, aiRetryIds, enrichingIds]);
 
   const value = useMemo<BookmarksContextValue>(
     () => ({
@@ -5040,7 +5663,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .sort((a, b) => b.created_at.localeCompare(a.created_at)),
       trash: loadedBookmarks
         .filter((bookmark) => bookmark.deleted_at != null)
-        .sort((a, b) => (b.deleted_at ?? '').localeCompare(a.deleted_at ?? '')),
+        .sort((a, b) => (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "")),
       queue,
       getBookmark,
       getTagsForBookmark,
@@ -5053,6 +5676,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       emptyTrash,
       resetLibrary,
       isResettingLibrary,
+      diagnosticStats,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,
@@ -5108,6 +5732,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       emptyTrash,
       resetLibrary,
       isResettingLibrary,
+      diagnosticStats,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,
@@ -5149,13 +5774,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <BookmarksContext.Provider value={value}>{children}</BookmarksContext.Provider>;
+  return (
+    <BookmarksContext.Provider value={value}>
+      {children}
+    </BookmarksContext.Provider>
+  );
 }
 
 export function useBookmarks() {
   const context = useContext(BookmarksContext);
   if (!context) {
-    throw new Error('useBookmarks must be used within a BookmarksProvider');
+    throw new Error("useBookmarks must be used within a BookmarksProvider");
   }
   return context;
 }
