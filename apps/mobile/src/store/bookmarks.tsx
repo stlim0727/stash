@@ -3489,6 +3489,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     syncInFlight.current = true;
     setIsSyncing(true);
     let mutationsPushed = false;
+    let syncFailed = 0;
     try {
       await ensureRepositoryReady();
       // Re-ensure the session so a token that expired while the app stayed
@@ -4331,6 +4332,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             .then(() => repository.updateQueueEntry(failed))
             .catch((persistError) => logStorageError('sync entry fail-persist', persistError));
         }
+      }
+      if (syncable.length > 0) {
+        recordLog(
+          syncFailed > 0 ? 'warn' : 'info',
+          `sync: cycle done entries=${syncable.length} failed=${syncFailed}`,
+        );
       }
 
       const currentUser = {
