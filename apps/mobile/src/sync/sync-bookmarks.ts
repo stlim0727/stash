@@ -482,11 +482,7 @@ export function createNeedsReconcileUpdate(
     persisted.collection_id !== null ||
     persisted.title !== (uploadedPayload?.title ?? null) ||
     persisted.notes !== (uploadedPayload?.notes ?? null) ||
-    persisted.description !== (uploadedPayload?.shared_text ?? null) ||
-    persisted.metadata_status !== 'pending' ||
-    persisted.site_name !== null ||
-    persisted.favicon_url !== null ||
-    persisted.preview_image_url !== null
+    persisted.description !== (uploadedPayload?.shared_text ?? null)
   );
 }
 

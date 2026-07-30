@@ -3879,10 +3879,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               if (merged.title !== (uploadedPayload.title ?? null)) reasons.title = 1;
               if (merged.notes !== (uploadedPayload.notes ?? null)) reasons.notes = 1;
               if (merged.description !== (uploadedPayload.shared_text ?? null)) reasons.description = 1;
-              if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
-              if (merged.site_name !== null) reasons.site_name = 1;
-              if (merged.favicon_url !== null) reasons.favicon_url = 1;
-              if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
               recordReconcileNeeded(reasons);
               for (const [reason, count] of Object.entries(reasons)) {
                 reconcileReasonTally[reason] = (reconcileReasonTally[reason] ?? 0) + count;
