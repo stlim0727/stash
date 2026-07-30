@@ -385,6 +385,14 @@ export async function syncQueueEntry(
       updated_at: now,
     };
     await repository.updateQueueEntry(syncedEntry);
+    const finishCreate = async (): Promise<boolean> => {
+      try {
+        await removeQueueEntryIfNotSuperseded(repository, syncedEntry);
+        return true;
+      } catch {
+        return false;
+      }
+    };
 
     const localBookmark = getBookmark(entry.local_id);
     // result.bookmark_id normally equals localBookmark.id — the client sent
@@ -413,22 +421,22 @@ export async function syncQueueEntry(
       } else {
         await repository.updateBookmark(syncedBookmark);
       }
-      await removeQueueEntryIfNotSuperseded(repository, syncedEntry);
+      const removeEntry = await finishCreate();
       return {
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: payload,
         originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
-        removeEntry: true,
+        removeEntry,
       };
     }
 
-    await removeQueueEntryIfNotSuperseded(repository, syncedEntry);
+    const removeEntry = await finishCreate();
     return {
       entry: syncedEntry,
       uploadedPayload: payload,
       originalLocalId: result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
-      removeEntry: true,
+      removeEntry,
     };
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
@@ -462,17 +470,18 @@ export async function syncQueueEntry(
  * the remote row's `description`: if the user edited the note before the create
  * ran, the body diverged and must be re-pushed too.
  *
- * Generated metadata fields deliberately do not trigger this predicate:
- * local metadata/title extraction is generated/cosmetic, and treating it as a
- * user edit recreates the bulk-import queue bounce this path avoids.
+ * Generated metadata fields deliberately do not trigger this predicate. Title
+ * reconciliation needs an explicit user-edit signal from the caller because a
+ * fetched page title is stored with `title_is_derived === false` too.
  */
 export function createNeedsReconcileUpdate(
   persisted: Bookmark,
   uploadedPayload: CreateBookmarkInput | undefined,
+  options: { titleChangedByUser?: boolean } = {},
 ): boolean {
   const uploadedTitle = uploadedPayload?.title ?? null;
   const titleNeedsReconcile =
-    persisted.title !== uploadedTitle && persisted.title_is_derived === false;
+    persisted.title !== uploadedTitle && options.titleChangedByUser === true;
   return (
     persisted.deleted_at !== null ||
     persisted.is_archived ||

@@ -727,6 +727,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
   const localCreateFlushesInFlight = useRef(0);
+  const pendingUserTitleEdits = useRef(new Set<string>());
   // A bulk-create chunk's reconcile follow-up (deletedMidFlightIds/
   // followUpUpdates in applyBulkCreateChunkResults) removes the chunk's
   // completed 'create' entries from the queue before its own sequential
@@ -2523,10 +2524,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         (patch.notes !== undefined && patch.notes !== (before?.notes ?? null));
       applyBookmarkUpdate(id, patch);
       if (textChanged) {
+        if (patch.title !== undefined && !hasSyncedOnce(id)) {
+          pendingUserTitleEdits.current.add(id);
+        }
         markEnrichmentStale(id);
       }
     },
-    [applyBookmarkUpdate, markEnrichmentStale],
+    [applyBookmarkUpdate, hasSyncedOnce, markEnrichmentStale],
   );
 
   const refreshBookmarkPreview = useCallback(
@@ -3550,13 +3554,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return false;
         }
 
-        const nextQueue = result.removeEntry
-          ? queueRef.current.filter((queued) => queued.local_id !== entry.local_id)
-          : queueRef.current.map((queued) =>
-              queued.local_id === entry.local_id ? result.entry : queued,
-            );
-        queueRef.current = nextQueue;
-        setQueue(nextQueue);
+        setQueue((current) => {
+          const nextQueue = result.removeEntry
+            ? current.filter((queued) => queued.local_id !== entry.local_id)
+            : current.map((queued) =>
+                queued.local_id === entry.local_id ? result.entry : queued,
+              );
+          queueRef.current = nextQueue;
+          return nextQueue;
+        });
         if (result.removeEntry) {
           mutationsPushed = true;
         }
@@ -3637,12 +3643,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // unconditionally near the top of this function — this only
               // records *why*, once reconcile is confirmed needed.
               const payload = result.uploadedPayload;
-              if (createNeedsReconcileUpdate(merged, payload)) {
+              const titleChangedByUser =
+                pendingUserTitleEdits.current.has(lookupId) ||
+                pendingUserTitleEdits.current.has(merged.id);
+              if (createNeedsReconcileUpdate(merged, payload, { titleChangedByUser })) {
                 const reasons: Record<string, number> = {};
                 if (merged.deleted_at !== null) reasons.deleted_at = 1;
                 if (merged.is_archived) reasons.is_archived = 1;
                 if (merged.collection_id !== null) reasons.collection_id = 1;
-                if (merged.title !== (payload?.title ?? null) && merged.title_is_derived === false) {
+                if (merged.title !== (payload?.title ?? null) && titleChangedByUser) {
                   reasons.title = 1;
                 }
                 if (merged.notes !== (payload?.notes ?? null)) reasons.notes = 1;
@@ -3651,6 +3660,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 recordLog('info', `single create reconcile: ${JSON.stringify(reasons)}`);
                 enqueueMutation(merged.id, 'update');
               }
+              pendingUserTitleEdits.current.delete(lookupId);
+              pendingUserTitleEdits.current.delete(merged.id);
             }
             // A brand-new bookmark just gained a remote identity: queue AI
             // suggestions for it. We DON'T fire immediately — the background
@@ -3866,16 +3877,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // checking the stale snapshot would silently drop it, and a
             // later pull could then overwrite it with the older uploaded
             // values (caught in PR review).
-            if (createNeedsReconcileUpdate(merged, uploadedPayload)) {
+            const titleChangedByUser =
+              pendingUserTitleEdits.current.has(lookupId) ||
+              pendingUserTitleEdits.current.has(merged.id);
+            if (createNeedsReconcileUpdate(merged, uploadedPayload, { titleChangedByUser })) {
               followUpUpdates.push(merged);
               const reasons: Record<string, number> = {};
               if (merged.deleted_at !== null) reasons.deleted_at = 1;
               if (merged.is_archived) reasons.is_archived = 1;
               if (merged.collection_id !== null) reasons.collection_id = 1;
-              if (
-                merged.title !== (uploadedPayload.title ?? null) &&
-                merged.title_is_derived === false
-              ) {
+              if (merged.title !== (uploadedPayload.title ?? null) && titleChangedByUser) {
                 reasons.title = 1;
               }
               if (merged.notes !== (uploadedPayload.notes ?? null)) reasons.notes = 1;
@@ -3885,6 +3896,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 reconcileReasonTally[reason] = (reconcileReasonTally[reason] ?? 0) + count;
               }
             }
+            pendingUserTitleEdits.current.delete(lookupId);
+            pendingUserTitleEdits.current.delete(merged.id);
             pendingAiIds.push(merged.id);
           }
         }

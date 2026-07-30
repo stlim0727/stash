@@ -169,6 +169,32 @@ test('create: a server-side duplicate adopts the EXISTING row\'s id (Sentry STAS
   assert.ok(calls.includes(`insertBookmark:${existingId}:synced`));
 });
 
+test('create: duplicate adoption is not undone when queue removal fails', async () => {
+  const { calls, repository } = fakeRepository();
+  repository.removeQueueEntry = async (id) => {
+    calls.push(`removeQueueEntry:${id}:failed`);
+    throw new Error('queue cleanup failed');
+  };
+  const existingId = '00000000-0000-4000-8000-0000000000ee';
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: existingId,
+      status: 'duplicate',
+      metadata_status: 'complete',
+    }),
+  });
+  const bookmark = makeBookmark();
+
+  const result = await syncQueueEntry(api, repository, makeCreateEntry(), () => bookmark);
+
+  assert.equal(result.bookmarkUpdate?.id, existingId);
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+  assert.equal(result.removeEntry, false);
+  assert.ok(calls.includes('deleteBookmark:local-abc'));
+  assert.ok(calls.includes(`insertBookmark:${existingId}:synced`));
+  assert.ok(!calls.includes('updateBookmark:local-abc:failed'));
+});
+
 test('create: a duplicate that resolves to the SAME id is not treated as a swap', async () => {
   // A retried create can land a duplicate hit against the row itself (e.g.
   // the previous attempt's insert actually landed, and this retry's lookup
@@ -668,6 +694,19 @@ test('createNeedsReconcileUpdate: a generated title filled during create upload 
   assert.equal(needs, false);
 });
 
+test('createNeedsReconcileUpdate: a fetched title filled during create upload needs no follow-up', () => {
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'Fetched page title',
+    title_is_derived: false,
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, {
+    url: 'https://example.com/a',
+  });
+  assert.equal(needs, false);
+});
+
 test('createNeedsReconcileUpdate: a user title edited during create upload needs a follow-up', () => {
   const persisted = makeBookmark({
     id: '00000000-0000-4000-8000-000000000001',
@@ -677,7 +716,7 @@ test('createNeedsReconcileUpdate: a user title edited during create upload needs
   });
   const needs = createNeedsReconcileUpdate(persisted, {
     url: 'https://example.com/a',
-  });
+  }, { titleChangedByUser: true });
   assert.equal(needs, true);
 });
 
