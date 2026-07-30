@@ -1616,12 +1616,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // no longer exist.
           return;
         }
-        // Push the freshly fetched metadata to the cloud so other devices see
-        // it on their next pull. Only for already-synced bookmarks: a local
-        // bookmark's create upload already sends its latest fields.
-        if (hasSyncedOnce(updated.id)) {
-          enqueueMutation(updated.id, 'update');
-        }
+        // Push the freshly fetched metadata to the local storage. OpenGraph metadata
+        // is local display data (site_name, favicon_url, preview_image_url), so it
+        // does not enqueue a cloud sync mutation.
       } finally {
         enriching.current.delete(bookmark.id);
       }
