@@ -122,6 +122,13 @@ import {
   recordReconcileNeeded,
 } from "@/sync/reconcile-diagnostics";
 
+export function isBookmarkSyncedOnce(bookmark: Bookmark): boolean {
+  return (
+    hasRemoteIdentity(bookmark.id) &&
+    (bookmark.sync_status === "synced" || bookmark.ever_synced === true)
+  );
+}
+
 export type AddBookmarkResult =
   | {
       status: "created" | "duplicate";
@@ -809,7 +816,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   >(new Set());
   const unseenSuggestionIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncingState, setIsSyncing] = useState(false);
+  const [isSyncDebounceActive, setIsSyncDebounceActive] = useState(false);
+  const isSyncing = isSyncingState || isSyncDebounceActive;
   const [isResettingLibrary, setIsResettingLibrary] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
@@ -1046,10 +1055,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // bookmark-* id was never a real cloud row. hasRemoteIdentity excludes
     // those; every genuine bookmark (old-scheme or new) has a real UUID id
     // regardless of sync state, so this never excludes a legitimately synced one.
-    return (
-      hasRemoteIdentity(bookmark.id) &&
-      (bookmark.sync_status === "synced" || bookmark.ever_synced === true)
-    );
+    return isBookmarkSyncedOnce(bookmark);
   }, []);
 
   // Queue a remote mutation for a bookmark that already exists on the server.
@@ -5422,6 +5428,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // run, and re-triggering it on every render would hot-loop. The lazy-mint
   // effect below bridges the gap — once it mints an anonymous session, auth
   // flips to `anonymous` and this effect takes over with the queued work.
+  const syncDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
   useEffect(() => {
     // Determine if there is any create entry in the queue that is still waiting
     // for background metadata enrichment to resolve.
@@ -5435,8 +5443,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return bookmark && bookmark.metadata_status === "pending";
     });
 
-    if (
-      !isSyncing &&
+    const isSyncNeeded =
+      !isSyncingState &&
       bookmarks !== null &&
       (auth.status === "anonymous" || auth.status === "authenticated") &&
       // 'syncing' is included so an entry an interrupted run stranded in-flight
@@ -5460,11 +5468,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           }
         }
         return true;
-      })
-    ) {
-      void syncNow();
+      });
+
+    if (isSyncNeeded) {
+      if (!syncDebounceTimerRef.current) {
+        setIsSyncDebounceActive(true);
+        syncDebounceTimerRef.current = setTimeout(() => {
+          syncDebounceTimerRef.current = null;
+          setIsSyncDebounceActive(false);
+          void syncNow();
+        }, 1000);
+      }
+    } else {
+      if (syncDebounceTimerRef.current) {
+        clearTimeout(syncDebounceTimerRef.current);
+        syncDebounceTimerRef.current = null;
+        setIsSyncDebounceActive(false);
+      }
     }
-  }, [bookmarks, auth.status, queue, isSyncing, syncNow]);
+
+    return () => {
+      if (syncDebounceTimerRef.current) {
+        clearTimeout(syncDebounceTimerRef.current);
+        syncDebounceTimerRef.current = null;
+        setIsSyncDebounceActive(false);
+      }
+    };
+  }, [bookmarks, auth.status, queue, isSyncingState, syncNow]);
 
   // Lazy anonymous creation on the first save after logout. With lazy logout,
   // signing out leaves `auth.status === 'signed_out'` and NO session — no
