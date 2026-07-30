@@ -637,7 +637,7 @@ function logStorageError(operation: string, error: unknown) {
  */
 async function retryStorageWrite<T>(op: () => Promise<T>): Promise<T> {
   const attempts = 3;
-  const delayMs = 50;
+  const delayMs = 100;
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -2627,7 +2627,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const deleteBookmark = useCallback(
     (id: string) => {
       deletedIds.current.add(id);
+      const hadSyncedOnce = hasSyncedOnce(id);
       setBookmarks((current) => (current === null ? current : current.filter((b) => b.id !== id)));
+      bookmarksRef.current = bookmarksRef.current?.filter((bookmark) => bookmark.id !== id) ?? null;
       // A gone-forever row has nothing left to retry enriching — drop any
       // armed AI-retry marker so a future backoff check doesn't keep firing
       // doomed requests against a deleted bookmark.
@@ -2636,7 +2638,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Same rationale as above: a permanently-gone row has nothing left to
       // wait for from the server-side overflow queue either.
       clearAiServerQueued(id);
-      if (hasSyncedOnce(id)) {
+      if (hadSyncedOnce) {
         // The row exists remotely: replace any queued work with a durable
         // delete mutation so the removal reaches Supabase even after restart.
         ensureRepositoryReady()
@@ -2647,6 +2649,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       // Local-only: drop any pending queue entry so it is never created remotely.
       setQueue((current) => current.filter((entry) => entry.local_id !== id));
+      queueRef.current = queueRef.current.filter((entry) => entry.local_id !== id);
       ensureRepositoryReady()
         .then(() => Promise.all([repository.deleteBookmark(id), repository.removeQueueEntry(id)]))
         .catch((error) => logStorageError('delete bookmark', error));
@@ -3547,13 +3550,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return false;
         }
 
-        setQueue((current) =>
-          result.removeEntry
-            ? current.filter((queued) => queued.local_id !== entry.local_id)
-            : current.map((queued) =>
-                queued.local_id === entry.local_id ? result.entry : queued,
-              ),
-        );
+        const nextQueue = result.removeEntry
+          ? queueRef.current.filter((queued) => queued.local_id !== entry.local_id)
+          : queueRef.current.map((queued) =>
+              queued.local_id === entry.local_id ? result.entry : queued,
+            );
+        queueRef.current = nextQueue;
+        setQueue(nextQueue);
         if (result.removeEntry) {
           mutationsPushed = true;
         }
@@ -3639,7 +3642,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 if (merged.deleted_at !== null) reasons.deleted_at = 1;
                 if (merged.is_archived) reasons.is_archived = 1;
                 if (merged.collection_id !== null) reasons.collection_id = 1;
-                if (merged.title !== (payload?.title ?? null)) reasons.title = 1;
+                if (merged.title !== (payload?.title ?? null) && merged.title_is_derived === false) {
+                  reasons.title = 1;
+                }
                 if (merged.notes !== (payload?.notes ?? null)) reasons.notes = 1;
                 if (merged.description !== (payload?.shared_text ?? null)) reasons.description = 1;
                 recordReconcileNeeded(reasons);
@@ -3867,7 +3872,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               if (merged.deleted_at !== null) reasons.deleted_at = 1;
               if (merged.is_archived) reasons.is_archived = 1;
               if (merged.collection_id !== null) reasons.collection_id = 1;
-              if (merged.title !== (uploadedPayload.title ?? null)) reasons.title = 1;
+              if (
+                merged.title !== (uploadedPayload.title ?? null) &&
+                merged.title_is_derived === false
+              ) {
+                reasons.title = 1;
+              }
               if (merged.notes !== (uploadedPayload.notes ?? null)) reasons.notes = 1;
               if (merged.description !== (uploadedPayload.shared_text ?? null)) reasons.description = 1;
               recordReconcileNeeded(reasons);

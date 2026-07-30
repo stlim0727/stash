@@ -239,7 +239,6 @@ export async function syncCreateQueueEntryBatch(
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: uploadedPayloads[index],
         originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
-        removeEntry: true,
       });
       continue;
     }
@@ -248,7 +247,6 @@ export async function syncCreateQueueEntryBatch(
       entry: syncedEntry,
       uploadedPayload: uploadedPayloads[index],
       originalLocalId: output.bookmark_id !== entry.local_id ? entry.local_id : undefined,
-      removeEntry: true,
     });
   }
 
@@ -415,18 +413,22 @@ export async function syncQueueEntry(
       } else {
         await repository.updateBookmark(syncedBookmark);
       }
+      await removeQueueEntryIfNotSuperseded(repository, syncedEntry);
       return {
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: payload,
         originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
+        removeEntry: true,
       };
     }
 
+    await removeQueueEntryIfNotSuperseded(repository, syncedEntry);
     return {
       entry: syncedEntry,
       uploadedPayload: payload,
       originalLocalId: result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+      removeEntry: true,
     };
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
@@ -447,11 +449,11 @@ export async function syncQueueEntry(
 /**
  * After a `create` uploads and the local row adopts its remote id, decide
  * whether a follow-up `update` is needed. The create payload only carries
- * url/title/notes, and the freshly-created remote row defaults to no generated
- * metadata, no collection, active (not archived, not trashed), pending status.
- * If the local row diverged while the create was in flight — archived, filed,
- * edited, enriched, or TRASHED — those changes haven't reached the cloud yet,
- * so reconcile them with one follow-up update.
+ * url/title/notes, and the freshly-created remote row defaults to no collection,
+ * active (not archived, not trashed), pending status. If the local row diverged
+ * while the create was in flight because of a user-authored change — archived,
+ * filed, edited, or TRASHED — those changes haven't reached the cloud yet, so
+ * reconcile them with one follow-up update.
  *
  * Critically includes `deleted_at`: a bookmark trashed before it gained a
  * remote id uploads as an active create, so without this the cloud row stays
@@ -460,27 +462,22 @@ export async function syncQueueEntry(
  * the remote row's `description`: if the user edited the note before the create
  * ran, the body diverged and must be re-pushed too.
  *
- * `site_name`/`favicon_url`/`preview_image_url` also need their own checks:
- * `CreateBookmarkInput` has no fields for them at all, so if client-side
- * enrichment fills them in before this row's own create upload completes,
- * the create request can never carry them — this reconcile check is the
- * only path that pushes them to the server. `metadata_status` is checked
- * too, even though it can flip on its own with no content fields populated
- * (a failed or skipped enrichment): `supabase/migrations/
- * 20260621000000_ai_enrich_server_trigger.sql` only dispatches the
- * server-side AI-enrichment backstop on a transition out of `pending`, so a
- * text note (no URL, nothing to fetch) still needs that transition pushed
- * or it never gets suggestions unless the app happens to come back.
+ * Generated metadata fields deliberately do not trigger this predicate:
+ * local metadata/title extraction is generated/cosmetic, and treating it as a
+ * user edit recreates the bulk-import queue bounce this path avoids.
  */
 export function createNeedsReconcileUpdate(
   persisted: Bookmark,
   uploadedPayload: CreateBookmarkInput | undefined,
 ): boolean {
+  const uploadedTitle = uploadedPayload?.title ?? null;
+  const titleNeedsReconcile =
+    persisted.title !== uploadedTitle && persisted.title_is_derived === false;
   return (
     persisted.deleted_at !== null ||
     persisted.is_archived ||
     persisted.collection_id !== null ||
-    persisted.title !== (uploadedPayload?.title ?? null) ||
+    titleNeedsReconcile ||
     persisted.notes !== (uploadedPayload?.notes ?? null) ||
     persisted.description !== (uploadedPayload?.shared_text ?? null)
   );

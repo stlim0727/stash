@@ -655,6 +655,32 @@ test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up
   assert.equal(needs, false);
 });
 
+test('createNeedsReconcileUpdate: a generated title filled during create upload needs no follow-up', () => {
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'OpenGraph title',
+    title_is_derived: true,
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, {
+    url: 'https://example.com/a',
+  });
+  assert.equal(needs, false);
+});
+
+test('createNeedsReconcileUpdate: a user title edited during create upload needs a follow-up', () => {
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'Edited title',
+    title_is_derived: false,
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, {
+    url: 'https://example.com/a',
+  });
+  assert.equal(needs, true);
+});
+
 test('createNeedsReconcileUpdate: a text note whose body was edited before upload needs a follow-up', () => {
   // A text note uploads its body as shared_text; the remote row stores it in
   // description. If the user edited the body before the create ran, the uploaded

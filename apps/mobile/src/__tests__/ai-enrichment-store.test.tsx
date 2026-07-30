@@ -963,7 +963,9 @@ test('a bulk chunk failure with a row-specific permanent error isolates just the
   // The good entry must sync via the per-entry fallback rather than get
   // stuck 'failed' with the batch's row-specific error attributed to it.
   await waitFor(() => expect(store.current!.getBookmark(goodId)?.sync_status).toBe('synced'));
-  expect(store.current!.queue.some((entry) => entry.local_id === goodId)).toBe(false);
+  await waitFor(() =>
+    expect(store.current!.queue.filter((entry) => entry.local_id === goodId)).toEqual([]),
+  );
 
   // The genuinely bad entry fails on its own, individually-attributed
   // attempt — proving isolation actually happened rather than both entries
@@ -1318,6 +1320,7 @@ test('an edit landing on a later entry while an earlier entry in the same reconc
         id,
         url: `https://example.com/${id}`,
         site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         metadata_status: 'complete',
       }),
@@ -1395,6 +1398,7 @@ test('a bookmark permanently deleted while an earlier entry in the same reconcil
         id,
         url: `https://example.com/${id}`,
         site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         metadata_status: 'complete',
       }),
@@ -1482,6 +1486,7 @@ test('a storage failure reconciling one entry does not block the rest of the chu
         id,
         url: `https://example.com/${id}`,
         site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         metadata_status: 'complete',
       }),
@@ -1546,6 +1551,7 @@ test('pending AI-trigger markers are persisted before the reconcile write loops,
         id,
         url: `https://example.com/${id}`,
         site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         metadata_status: 'complete',
       }),
@@ -1751,6 +1757,7 @@ test('a bookmark permanently deleted while its own reconcile write is in flight 
         id: bookmarkId,
         url: `https://example.com/${bookmarkId}`,
         site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         metadata_status: 'complete',
       }),
@@ -1836,6 +1843,7 @@ test('a transient storage failure reconciling an entry is retried rather than ab
         id: bookmarkId,
         url: `https://example.com/${bookmarkId}`,
         site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         metadata_status: 'complete',
       }),
@@ -1897,6 +1905,7 @@ test('a bookmark deleted during the reconcile write retry delay is not resurrect
         id: bookmarkId,
         url: `https://example.com/${bookmarkId}`,
         site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         metadata_status: 'complete',
       }),
@@ -1985,6 +1994,7 @@ test('AI dispatch stays suppressed while a bulk chunk reconcile follow-up is sti
         id: bookmarkId,
         url: `https://example.com/${bookmarkId}`,
         site_name: 'Example Site',
+        collection_id: 'col-1',
         sync_status: 'pending',
         // 'complete' (already fetched) so the deferred AI-trigger effect
         // doesn't wait on a background metadata fetch first — it's
