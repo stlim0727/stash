@@ -184,6 +184,10 @@ export interface CreateBookmarkInput {
   notes?: string;
   source_app?: string;
   shared_text?: string;
+  site_name?: string | null;
+  favicon_url?: string | null;
+  preview_image_url?: string | null;
+  metadata_status?: MetadataStatus;
   /**
    * Stable device-generated capture id (see {@link Bookmark.client_id}). Carried
    * in the queue payload so an interrupted upload's retry reuses the same id and

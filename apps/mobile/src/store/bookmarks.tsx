@@ -637,7 +637,7 @@ function logStorageError(operation: string, error: unknown) {
  */
 async function retryStorageWrite<T>(op: () => Promise<T>): Promise<T> {
   const attempts = 3;
-  const delayMs = 50;
+  const delayMs = 100;
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
@@ -727,6 +727,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
   const localCreateFlushesInFlight = useRef(0);
+  const pendingUserTitleEdits = useRef(new Set<string>());
   // A bulk-create chunk's reconcile follow-up (deletedMidFlightIds/
   // followUpUpdates in applyBulkCreateChunkResults) removes the chunk's
   // completed 'create' entries from the queue before its own sequential
@@ -2523,10 +2524,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         (patch.notes !== undefined && patch.notes !== (before?.notes ?? null));
       applyBookmarkUpdate(id, patch);
       if (textChanged) {
+        if (patch.title !== undefined && !hasSyncedOnce(id)) {
+          pendingUserTitleEdits.current.add(id);
+        }
         markEnrichmentStale(id);
       }
     },
-    [applyBookmarkUpdate, markEnrichmentStale],
+    [applyBookmarkUpdate, hasSyncedOnce, markEnrichmentStale],
   );
 
   const refreshBookmarkPreview = useCallback(
@@ -2627,7 +2631,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const deleteBookmark = useCallback(
     (id: string) => {
       deletedIds.current.add(id);
+      const hadSyncedOnce = hasSyncedOnce(id);
       setBookmarks((current) => (current === null ? current : current.filter((b) => b.id !== id)));
+      bookmarksRef.current = bookmarksRef.current?.filter((bookmark) => bookmark.id !== id) ?? null;
       // A gone-forever row has nothing left to retry enriching — drop any
       // armed AI-retry marker so a future backoff check doesn't keep firing
       // doomed requests against a deleted bookmark.
@@ -2636,7 +2642,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Same rationale as above: a permanently-gone row has nothing left to
       // wait for from the server-side overflow queue either.
       clearAiServerQueued(id);
-      if (hasSyncedOnce(id)) {
+      if (hadSyncedOnce) {
         // The row exists remotely: replace any queued work with a durable
         // delete mutation so the removal reaches Supabase even after restart.
         ensureRepositoryReady()
@@ -2647,6 +2653,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       // Local-only: drop any pending queue entry so it is never created remotely.
       setQueue((current) => current.filter((entry) => entry.local_id !== id));
+      queueRef.current = queueRef.current.filter((entry) => entry.local_id !== id);
       ensureRepositoryReady()
         .then(() => Promise.all([repository.deleteBookmark(id), repository.removeQueueEntry(id)]))
         .catch((error) => logStorageError('delete bookmark', error));
@@ -3548,13 +3555,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return false;
         }
 
-        setQueue((current) =>
-          result.removeEntry
+        setQueue((current) => {
+          const nextQueue = result.removeEntry
             ? current.filter((queued) => queued.local_id !== entry.local_id)
             : current.map((queued) =>
                 queued.local_id === entry.local_id ? result.entry : queued,
-              ),
-        );
+              );
+          queueRef.current = nextQueue;
+          return nextQueue;
+        });
         if (result.removeEntry) {
           mutationsPushed = true;
         }
@@ -3635,27 +3644,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // unconditionally near the top of this function — this only
               // records *why*, once reconcile is confirmed needed.
               const payload = result.uploadedPayload;
-              if (createNeedsReconcileUpdate(merged, payload)) {
+              const titleChangedByUser =
+                pendingUserTitleEdits.current.has(lookupId) ||
+                pendingUserTitleEdits.current.has(merged.id);
+              if (createNeedsReconcileUpdate(merged, payload, { titleChangedByUser })) {
                 const reasons: Record<string, number> = {};
                 if (merged.deleted_at !== null) reasons.deleted_at = 1;
                 if (merged.is_archived) reasons.is_archived = 1;
                 if (merged.collection_id !== null) reasons.collection_id = 1;
-                if (merged.title !== (payload?.title ?? null)) reasons.title = 1;
+                if (merged.title !== (payload?.title ?? null) && titleChangedByUser) {
+                  reasons.title = 1;
+                }
                 if (merged.notes !== (payload?.notes ?? null)) reasons.notes = 1;
                 if (merged.description !== (payload?.shared_text ?? null)) reasons.description = 1;
-                if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
-                if (merged.site_name !== null) reasons.site_name = 1;
-                if (merged.favicon_url !== null) reasons.favicon_url = 1;
-                if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
                 recordReconcileNeeded(reasons);
-                recordLog(
-                  'info',
-                  `single create reconcile: metadata_status=${merged.metadata_status} ` +
-                    `site_name=${merged.site_name !== null} favicon_url=${merged.favicon_url !== null} ` +
-                    `preview_image_url=${merged.preview_image_url !== null}`,
-                );
+                recordLog('info', `single create reconcile: ${JSON.stringify(reasons)}`);
                 enqueueMutation(merged.id, 'update');
               }
+              pendingUserTitleEdits.current.delete(lookupId);
+              pendingUserTitleEdits.current.delete(merged.id);
             }
             // A brand-new bookmark just gained a remote identity: queue AI
             // suggestions for it. We DON'T fire immediately — the background
@@ -3871,24 +3878,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // checking the stale snapshot would silently drop it, and a
             // later pull could then overwrite it with the older uploaded
             // values (caught in PR review).
-            if (createNeedsReconcileUpdate(merged, uploadedPayload)) {
+            const titleChangedByUser =
+              pendingUserTitleEdits.current.has(lookupId) ||
+              pendingUserTitleEdits.current.has(merged.id);
+            if (createNeedsReconcileUpdate(merged, uploadedPayload, { titleChangedByUser })) {
               followUpUpdates.push(merged);
               const reasons: Record<string, number> = {};
               if (merged.deleted_at !== null) reasons.deleted_at = 1;
               if (merged.is_archived) reasons.is_archived = 1;
               if (merged.collection_id !== null) reasons.collection_id = 1;
-              if (merged.title !== (uploadedPayload.title ?? null)) reasons.title = 1;
+              if (merged.title !== (uploadedPayload.title ?? null) && titleChangedByUser) {
+                reasons.title = 1;
+              }
               if (merged.notes !== (uploadedPayload.notes ?? null)) reasons.notes = 1;
               if (merged.description !== (uploadedPayload.shared_text ?? null)) reasons.description = 1;
-              if (merged.metadata_status !== 'pending') reasons.metadata_status = 1;
-              if (merged.site_name !== null) reasons.site_name = 1;
-              if (merged.favicon_url !== null) reasons.favicon_url = 1;
-              if (merged.preview_image_url !== null) reasons.preview_image_url = 1;
               recordReconcileNeeded(reasons);
               for (const [reason, count] of Object.entries(reasons)) {
                 reconcileReasonTally[reason] = (reconcileReasonTally[reason] ?? 0) + count;
               }
             }
+            pendingUserTitleEdits.current.delete(lookupId);
+            pendingUserTitleEdits.current.delete(merged.id);
             pendingAiIds.push(merged.id);
           }
         }

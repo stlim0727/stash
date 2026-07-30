@@ -174,13 +174,27 @@ function createUploadPayload(
   getBookmark: (id: string) => Bookmark | undefined,
 ): CreateBookmarkInput {
   const latestAtUpload = getBookmark(entry.local_id);
-  return latestAtUpload
-    ? {
-        ...entry.payload,
-        title: latestAtUpload.title ?? undefined,
-        notes: latestAtUpload.notes ?? undefined,
-      }
-    : entry.payload;
+  if (!latestAtUpload) {
+    return entry.payload;
+  }
+  const payload: CreateBookmarkInput = {
+    ...entry.payload,
+    title: latestAtUpload.title ?? undefined,
+    notes: latestAtUpload.notes ?? undefined,
+  };
+  if (latestAtUpload.site_name !== null) {
+    payload.site_name = latestAtUpload.site_name;
+  }
+  if (latestAtUpload.favicon_url !== null) {
+    payload.favicon_url = latestAtUpload.favicon_url;
+  }
+  if (latestAtUpload.preview_image_url !== null) {
+    payload.preview_image_url = latestAtUpload.preview_image_url;
+  }
+  if (latestAtUpload.metadata_status !== 'pending') {
+    payload.metadata_status = latestAtUpload.metadata_status;
+  }
+  return payload;
 }
 
 export async function syncCreateQueueEntryBatch(
@@ -387,6 +401,14 @@ export async function syncQueueEntry(
       updated_at: now,
     };
     await repository.updateQueueEntry(syncedEntry);
+    const finishCreate = async (): Promise<boolean> => {
+      try {
+        await removeQueueEntryIfNotSuperseded(repository, syncedEntry);
+        return true;
+      } catch {
+        return false;
+      }
+    };
 
     const localBookmark = getBookmark(entry.local_id);
     // result.bookmark_id normally equals localBookmark.id — the client sent
@@ -415,18 +437,22 @@ export async function syncQueueEntry(
       } else {
         await repository.updateBookmark(syncedBookmark);
       }
+      const removeEntry = await finishCreate();
       return {
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: payload,
         originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
+        removeEntry,
       };
     }
 
+    const removeEntry = await finishCreate();
     return {
       entry: syncedEntry,
       uploadedPayload: payload,
       originalLocalId: result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+      removeEntry,
     };
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
@@ -447,11 +473,11 @@ export async function syncQueueEntry(
 /**
  * After a `create` uploads and the local row adopts its remote id, decide
  * whether a follow-up `update` is needed. The create payload only carries
- * url/title/notes, and the freshly-created remote row defaults to no generated
- * metadata, no collection, active (not archived, not trashed), pending status.
- * If the local row diverged while the create was in flight — archived, filed,
- * edited, enriched, or TRASHED — those changes haven't reached the cloud yet,
- * so reconcile them with one follow-up update.
+ * url/title/notes, and the freshly-created remote row defaults to no collection,
+ * active (not archived, not trashed), pending status. If the local row diverged
+ * while the create was in flight because of a user-authored change — archived,
+ * filed, edited, or TRASHED — those changes haven't reached the cloud yet, so
+ * reconcile them with one follow-up update.
  *
  * Critically includes `deleted_at`: a bookmark trashed before it gained a
  * remote id uploads as an active create, so without this the cloud row stays
@@ -460,33 +486,25 @@ export async function syncQueueEntry(
  * the remote row's `description`: if the user edited the note before the create
  * ran, the body diverged and must be re-pushed too.
  *
- * `site_name`/`favicon_url`/`preview_image_url` also need their own checks:
- * `CreateBookmarkInput` has no fields for them at all, so if client-side
- * enrichment fills them in before this row's own create upload completes,
- * the create request can never carry them — this reconcile check is the
- * only path that pushes them to the server. `metadata_status` is checked
- * too, even though it can flip on its own with no content fields populated
- * (a failed or skipped enrichment): `supabase/migrations/
- * 20260621000000_ai_enrich_server_trigger.sql` only dispatches the
- * server-side AI-enrichment backstop on a transition out of `pending`, so a
- * text note (no URL, nothing to fetch) still needs that transition pushed
- * or it never gets suggestions unless the app happens to come back.
+ * Generated metadata fields deliberately do not trigger this predicate. Title
+ * reconciliation needs an explicit user-edit signal from the caller because a
+ * fetched page title is stored with `title_is_derived === false` too.
  */
 export function createNeedsReconcileUpdate(
   persisted: Bookmark,
   uploadedPayload: CreateBookmarkInput | undefined,
+  options: { titleChangedByUser?: boolean } = {},
 ): boolean {
+  const uploadedTitle = uploadedPayload?.title ?? null;
+  const titleNeedsReconcile =
+    persisted.title !== uploadedTitle && options.titleChangedByUser === true;
   return (
     persisted.deleted_at !== null ||
     persisted.is_archived ||
     persisted.collection_id !== null ||
-    persisted.title !== (uploadedPayload?.title ?? null) ||
+    titleNeedsReconcile ||
     persisted.notes !== (uploadedPayload?.notes ?? null) ||
-    persisted.description !== (uploadedPayload?.shared_text ?? null) ||
-    persisted.metadata_status !== 'pending' ||
-    persisted.site_name !== null ||
-    persisted.favicon_url !== null ||
-    persisted.preview_image_url !== null
+    persisted.description !== (uploadedPayload?.shared_text ?? null)
   );
 }
 

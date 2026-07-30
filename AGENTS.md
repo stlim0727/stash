@@ -330,9 +330,10 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
   human review activity. Ignore routine bot/status comments such as deploy
   preview success messages.
 - When posting manual GitHub comments, PR bodies, or review replies through a
-  user's GitHub credentials, explicitly identify the note as Codex-authored so
-  it is not mistaken for the human account owner. Do not duplicate that label
-  on platform-generated or automatically-triggered Codex comments that already
+  user's GitHub credentials, explicitly identify the note with the agent's actual identity
+  (e.g., Antigravity, Claude, Codex, etc.) so it is clear which AI assistant authored it
+  and is not mistaken for the human account owner. Do not duplicate that label
+  on platform-generated or automatically-triggered bot comments that already
   identify their source.
 - If CI is green and no human review activity appears for 5 minutes, either ask
   the user to merge or merge directly for small, well-tested, low-risk changes.

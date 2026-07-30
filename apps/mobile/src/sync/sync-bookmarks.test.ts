@@ -169,6 +169,32 @@ test('create: a server-side duplicate adopts the EXISTING row\'s id (Sentry STAS
   assert.ok(calls.includes(`insertBookmark:${existingId}:synced`));
 });
 
+test('create: duplicate adoption is not undone when queue removal fails', async () => {
+  const { calls, repository } = fakeRepository();
+  repository.removeQueueEntry = async (id) => {
+    calls.push(`removeQueueEntry:${id}:failed`);
+    throw new Error('queue cleanup failed');
+  };
+  const existingId = '00000000-0000-4000-8000-0000000000ee';
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: existingId,
+      status: 'duplicate',
+      metadata_status: 'complete',
+    }),
+  });
+  const bookmark = makeBookmark();
+
+  const result = await syncQueueEntry(api, repository, makeCreateEntry(), () => bookmark);
+
+  assert.equal(result.bookmarkUpdate?.id, existingId);
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+  assert.equal(result.removeEntry, false);
+  assert.ok(calls.includes('deleteBookmark:local-abc'));
+  assert.ok(calls.includes(`insertBookmark:${existingId}:synced`));
+  assert.ok(!calls.includes('updateBookmark:local-abc:failed'));
+});
+
 test('create: a duplicate that resolves to the SAME id is not treated as a swap', async () => {
   // A retried create can land a duplicate hit against the row itself (e.g.
   // the previous attempt's insert actually landed, and this retry's lookup
@@ -233,6 +259,33 @@ test('create: uploads the LATEST title/notes, not the payload captured at save',
     notes: 'edited notes',
   });
   assert.equal(result.uploadedPayload?.title, 'Edited title');
+});
+
+test('create: uploads generated metadata that settled before create upload', async () => {
+  const { repository } = fakeRepository();
+  const sent: Array<Record<string, unknown>> = [];
+  const api = fakeApi({
+    createBookmark: async (input: Record<string, unknown>) => {
+      sent.push(input);
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'complete' };
+    },
+  });
+  const enrichedBeforeUpload = makeBookmark({
+    title: 'Fetched title',
+    site_name: 'Example',
+    favicon_url: 'https://example.com/favicon.ico',
+    preview_image_url: 'https://example.com/preview.png',
+    metadata_status: 'complete',
+  });
+
+  const result = await syncQueueEntry(api, repository, makeCreateEntry(), () => enrichedBeforeUpload);
+
+  assert.equal(sent[0]?.title, 'Fetched title');
+  assert.equal(sent[0]?.site_name, 'Example');
+  assert.equal(sent[0]?.favicon_url, 'https://example.com/favicon.ico');
+  assert.equal(sent[0]?.preview_image_url, 'https://example.com/preview.png');
+  assert.equal(sent[0]?.metadata_status, 'complete');
+  assert.equal(result.uploadedPayload?.metadata_status, 'complete');
 });
 
 test('create: forwards the payload client_id so a retried text note stays idempotent', async () => {
@@ -653,6 +706,45 @@ test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up
     notes: 'note',
   });
   assert.equal(needs, false);
+});
+
+test('createNeedsReconcileUpdate: a generated title filled during create upload needs no follow-up', () => {
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'OpenGraph title',
+    title_is_derived: true,
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, {
+    url: 'https://example.com/a',
+  });
+  assert.equal(needs, false);
+});
+
+test('createNeedsReconcileUpdate: a fetched title filled during create upload needs no follow-up', () => {
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'Fetched page title',
+    title_is_derived: false,
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, {
+    url: 'https://example.com/a',
+  });
+  assert.equal(needs, false);
+});
+
+test('createNeedsReconcileUpdate: a user title edited during create upload needs a follow-up', () => {
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'Edited title',
+    title_is_derived: false,
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, {
+    url: 'https://example.com/a',
+  }, { titleChangedByUser: true });
+  assert.equal(needs, true);
 });
 
 test('createNeedsReconcileUpdate: a text note whose body was edited before upload needs a follow-up', () => {

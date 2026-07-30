@@ -243,6 +243,10 @@ export class BookmarkApi {
     const description = input.description?.trim() || input.shared_text?.trim() || null;
     const notes = input.notes?.trim() || null;
     const sourceApp = input.source_app?.trim() || null;
+    const siteName = input.site_name?.trim() || null;
+    const faviconUrl = input.favicon_url?.trim() || null;
+    const previewImageUrl = input.preview_image_url?.trim() || null;
+    const metadataStatus = input.metadata_status ?? 'pending';
 
     // Dedupe on the canonical URL (tracking params / fragment stripped), the
     // same key the local store uses, so the server's active-URL unique index
@@ -286,15 +290,15 @@ export class BookmarkApi {
       notes,
       source_app: sourceApp,
       content_type: payload.contentType,
-      preview_image_url: null,
-      favicon_url: null,
-      site_name: null,
+      preview_image_url: previewImageUrl,
+      favicon_url: faviconUrl,
+      site_name: siteName,
       collection_id: null,
       is_archived: false,
       created_at: timestamp,
       updated_at: timestamp,
       last_saved_at: timestamp,
-      metadata_status: 'pending',
+      metadata_status: metadataStatus,
     };
 
     let rows: RemoteBookmark[];
@@ -352,6 +356,10 @@ export class BookmarkApi {
       const description = input.description?.trim() || input.shared_text?.trim() || null;
       const notes = input.notes?.trim() || null;
       const sourceApp = input.source_app?.trim() || null;
+      const siteName = input.site_name?.trim() || null;
+      const faviconUrl = input.favicon_url?.trim() || null;
+      const previewImageUrl = input.preview_image_url?.trim() || null;
+      const metadataStatus = input.metadata_status ?? 'pending';
       const urlHash = payload.url ? canonicalizeUrl(payload.url) : null;
       const clientId = input.client_id ?? null;
       return {
@@ -371,16 +379,16 @@ export class BookmarkApi {
           notes,
           source_app: sourceApp,
           content_type: payload.contentType,
-          preview_image_url: null,
-          favicon_url: null,
-          site_name: null,
+          preview_image_url: previewImageUrl,
+          favicon_url: faviconUrl,
+          site_name: siteName,
           collection_id: null,
           is_archived: false,
           deleted_at: null,
           created_at: timestamp,
           updated_at: timestamp,
           last_saved_at: timestamp,
-          metadata_status: 'pending' as MetadataStatus,
+          metadata_status: metadataStatus,
         },
       };
     });
