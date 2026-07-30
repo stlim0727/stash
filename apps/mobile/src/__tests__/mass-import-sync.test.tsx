@@ -140,6 +140,16 @@ function wrapper({ children }: { children: ReactNode }) {
   return <BookmarksProvider>{children}</BookmarksProvider>;
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function renderReadyStore() {
   const utils = await renderHook(() => useBookmarks(), { wrapper });
   await waitFor(() => expect(utils.result.current.isLoading).toBe(false));
@@ -292,21 +302,93 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
     expect(result.current.queue).toHaveLength(0);
   });
 
-  test('resetLibrary refuses during active local import or sync, and cleanly clears state when idle', async () => {
+  test('resetLibrary refuses while local import flush is active', async () => {
+    const { result } = await renderReadyStore();
+    const originalInsertImportBatch = fakeRepo.repository.insertImportBatch;
+    const flushStarted = deferred();
+    const releaseFlush = deferred();
+
+    fakeRepo.repository.insertImportBatch = jest.fn(async (bookmarks, entries) => {
+      flushStarted.resolve();
+      await releaseFlush.promise;
+      await originalInsertImportBatch?.(bookmarks, entries);
+    });
+
+    try {
+      await act(async () => {
+        result.current.importBookmarks([
+          { url: 'https://example.com/reset-busy-local-1', title: 'R1', notes: null, tags: [], collection: null },
+          { url: 'https://example.com/reset-busy-local-2', title: 'R2', notes: null, tags: [], collection: null },
+        ]);
+      });
+
+      await flushStarted.promise;
+
+      let resetOutcome!: Awaited<ReturnType<typeof result.current.resetLibrary>>;
+      await act(async () => {
+        resetOutcome = await result.current.resetLibrary();
+      });
+
+      expect(resetOutcome).toEqual({ ok: false, reason: 'busy' });
+      expect(apiMock.__resetLibraryMock).not.toHaveBeenCalled();
+    } finally {
+      releaseFlush.resolve();
+      fakeRepo.repository.insertImportBatch = originalInsertImportBatch;
+    }
+
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), { timeout: 5000 });
+  });
+
+  test('resetLibrary refuses while sync upload is active, and cleanly clears state when idle', async () => {
     const { result } = await renderReadyStore();
 
-    // Import items
+    await act(async () => {
+      result.current.setSyncPaused(true);
+    });
+
     await act(async () => {
       result.current.importBookmarks([
-        { url: 'https://example.com/reset-test-1', title: 'R1', notes: null, tags: [], collection: null },
-        { url: 'https://example.com/reset-test-2', title: 'R2', notes: null, tags: [], collection: null },
+        { url: 'https://example.com/reset-busy-sync-1', title: 'R1', notes: null, tags: [], collection: null },
+        { url: 'https://example.com/reset-busy-sync-2', title: 'R2', notes: null, tags: [], collection: null },
       ]);
     });
 
-    // Wait for sync to settle
-    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
+    await waitFor(() => expect(result.current.queue).toHaveLength(2), { timeout: 5000 });
 
-    // Call resetLibrary when idle
+    const originalCreateBookmarks = apiMock.__createBookmarksMock.getMockImplementation();
+    const uploadStarted = deferred();
+    const releaseUpload = deferred();
+    apiMock.__createBookmarksMock.mockImplementationOnce(async (payloads) => {
+      uploadStarted.resolve();
+      await releaseUpload.promise;
+      if (originalCreateBookmarks) {
+        return originalCreateBookmarks(payloads);
+      }
+      return [];
+    });
+
+    try {
+      await act(async () => {
+        result.current.setSyncPaused(false);
+      });
+
+      await uploadStarted.promise;
+
+      let busyOutcome!: Awaited<ReturnType<typeof result.current.resetLibrary>>;
+      await act(async () => {
+        busyOutcome = await result.current.resetLibrary();
+      });
+
+      expect(busyOutcome).toEqual({ ok: false, reason: 'busy' });
+      expect(apiMock.__resetLibraryMock).not.toHaveBeenCalled();
+    } finally {
+      releaseUpload.resolve();
+    }
+
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), { timeout: 5000 });
+
     let resetOutcome!: Awaited<ReturnType<typeof result.current.resetLibrary>>;
     await act(async () => {
       resetOutcome = await result.current.resetLibrary();
