@@ -487,6 +487,7 @@ const AI_RETRY_CHECK_INTERVAL_MS = 5 * 60_000;
  *  aborted the ART runtime. Low enough to keep a 500-item burst harmless, high
  *  enough that interactive saves never queue behind each other in practice. */
 const ENRICHMENT_FETCH_CONCURRENCY = 4;
+const METADATA_SYNC_DEBOUNCE_MS = 250;
 
 /** Parse the persisted AI-retry bookkeeping map, tolerating absent/corrupt
  *  values (mirrors `parseIdSet`/`parseTagOps` for the store's other durable
@@ -5431,6 +5432,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const syncDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    return () => {
+      if (syncDebounceTimerRef.current) {
+        clearTimeout(syncDebounceTimerRef.current);
+        syncDebounceTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     // Determine if there is any create entry in the queue that is still waiting
     // for background metadata enrichment to resolve.
     const hasPendingMetadataCreate = queue.some((entry) => {
@@ -5477,7 +5487,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           syncDebounceTimerRef.current = null;
           setIsSyncDebounceActive(false);
           void syncNow();
-        }, 1000);
+        }, METADATA_SYNC_DEBOUNCE_MS);
       }
     } else {
       if (syncDebounceTimerRef.current) {
@@ -5486,14 +5496,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setIsSyncDebounceActive(false);
       }
     }
-
-    return () => {
-      if (syncDebounceTimerRef.current) {
-        clearTimeout(syncDebounceTimerRef.current);
-        syncDebounceTimerRef.current = null;
-        setIsSyncDebounceActive(false);
-      }
-    };
   }, [bookmarks, auth.status, queue, isSyncingState, syncNow]);
 
   // Lazy anonymous creation on the first save after logout. With lazy logout,
