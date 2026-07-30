@@ -5423,6 +5423,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // effect below bridges the gap — once it mints an anonymous session, auth
   // flips to `anonymous` and this effect takes over with the queued work.
   useEffect(() => {
+    // Determine if there is any create entry in the queue that is still waiting
+    // for background metadata enrichment to resolve.
+    const hasPendingMetadataCreate = queue.some((entry) => {
+      if (entry.operation !== "create") {
+        return false;
+      }
+      const bookmark = bookmarksRef.current?.find(
+        (b) => b.id === entry.local_id,
+      );
+      return bookmark && bookmark.metadata_status === "pending";
+    });
+
     if (
       !isSyncing &&
       bookmarks !== null &&
@@ -5440,11 +5452,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return false;
         }
         if (entry.operation === "create") {
-          const bookmark = bookmarksRef.current?.find(
-            (b) => b.id === entry.local_id,
-          );
-          if (bookmark && bookmark.metadata_status === "pending") {
-            return false; // defer sync trigger until metadata settles
+          // Defer the trigger check for ALL creates in the queue if any create
+          // is still waiting on metadata. This coordinates/batches them so they
+          // accumulate and fire in a single bulk sync pass once all settle.
+          if (hasPendingMetadataCreate) {
+            return false;
           }
         }
         return true;
@@ -5607,26 +5619,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const diagnosticStats = useMemo(() => {
     const list = bookmarks ?? [];
-    const syncTodo = queue.filter(
-      (entry) => entry.sync_status !== "synced",
-    ).length;
-    const syncDone = list.filter(
-      (b) => b.ever_synced || b.sync_status === "synced",
-    ).length;
+    const syncTodo = queue.filter((entry) => isSyncable(entry)).length;
+    const syncDone = list.filter((b) => hasSyncedOnce(b.id)).length;
 
     // A bookmark is "syncing twice" if it has already synced once but has a pending update mutation in the queue.
     const syncingTwiceIds = new Set(
       queue
-        .filter(
-          (entry) =>
-            entry.operation === "update" && entry.sync_status !== "synced",
-        )
+        .filter((entry) => entry.operation === "update" && isSyncable(entry))
         .map((entry) => entry.local_id),
     );
     const syncingTwice = list.filter(
-      (b) =>
-        (b.ever_synced || b.sync_status === "synced") &&
-        syncingTwiceIds.has(b.id),
+      (b) => hasSyncedOnce(b.id) && syncingTwiceIds.has(b.id),
     ).length;
     const syncedOnce = Math.max(0, syncDone - syncingTwice);
 
