@@ -1,7 +1,7 @@
-import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import Constants from "expo-constants";
+import { useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -16,59 +16,65 @@ import {
   View,
   type StyleProp,
   type ViewStyle,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { usePalette } from '@/theme';
-import { BookmarkletButton } from '@/ui/BookmarkletButton';
-import { Button } from '@/ui/Button';
-import { Card } from '@/ui/Card';
-import { ActionSheet } from '@/ui/ActionSheet';
-import { describeBuild, getBuildInfo } from '@/domain/build-info';
+import { usePalette } from "@/theme";
+import { BookmarkletButton } from "@/ui/BookmarkletButton";
+import { Button } from "@/ui/Button";
+import { Card } from "@/ui/Card";
+import { ActionSheet } from "@/ui/ActionSheet";
+import { describeBuild, getBuildInfo } from "@/domain/build-info";
 import {
   DEFAULT_SHARE_BEHAVIOR,
   parseShareBehavior,
   serializeShareBehavior,
   SHARE_BEHAVIOR_PREF_KEY,
   type ShareBehavior,
-} from '@/domain/share-behavior';
-import { AI_SUGGESTIONS_MODES, type AiSuggestionsMode } from '@/domain/ai-suggestions-pref';
+} from "@/domain/share-behavior";
+import {
+  AI_SUGGESTIONS_MODES,
+  type AiSuggestionsMode,
+} from "@/domain/ai-suggestions-pref";
 import {
   exportFilename,
   toCsv,
   toJsonBackup,
   toNetscapeHtml,
   type ExportInput,
-} from '@/domain/export';
-import { parseImport } from '@/domain/import';
+} from "@/domain/export";
+import { parseImport } from "@/domain/import";
 import {
   RECENT_SEARCHES_PREF_KEY,
   parseRecents,
   serializeRecents,
-} from '@/domain/recent-searches';
+} from "@/domain/recent-searches";
 import {
   DEFAULT_PUSH_NOTIFICATIONS_ENABLED,
   LAST_REGISTERED_PUSH_TOKEN_PREF_KEY,
   PUSH_NOTIFICATIONS_PREF_KEY,
   parsePushNotificationsEnabled,
   serializePushNotificationsEnabled,
-} from '@/domain/push-notifications-pref';
-import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from '@/i18n';
-import type { MessageKey } from '@/i18n/messages';
-import { getPreference, setPreference } from '@/storage/preferences';
-import { ResetLibraryDialog } from '@/ui/ResetLibraryDialog';
-import { deliverExport, saveExportToDevice } from '@/share/export-data';
-import { pickImportFile } from '@/share/import-data';
-import { useBookmarks } from '@/store/bookmarks';
-import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
-import { useSupabaseAuth } from '@/supabase/auth-provider';
-import type { OAuthProvider } from '@/supabase/types';
-import { useAnalytics } from '@/analytics/provider';
-import { requestPushPermissionAndToken } from '@/notifications/push-permission';
-import { createDefaultPushTokenWriter } from '@/notifications/push-token-client';
-import { deregisterPushToken, registerPushToken } from '@/notifications/push-token-registration';
+} from "@/domain/push-notifications-pref";
+import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from "@/i18n";
+import type { MessageKey } from "@/i18n/messages";
+import { getPreference, setPreference } from "@/storage/preferences";
+import { ResetLibraryDialog } from "@/ui/ResetLibraryDialog";
+import { deliverExport, saveExportToDevice } from "@/share/export-data";
+import { pickImportFile } from "@/share/import-data";
+import { useBookmarks } from "@/store/bookmarks";
+import { isPermanentlyUnsyncableUrl } from "@/sync/sync-bookmarks";
+import { useSupabaseAuth } from "@/supabase/auth-provider";
+import type { OAuthProvider } from "@/supabase/types";
+import { useAnalytics } from "@/analytics/provider";
+import { requestPushPermissionAndToken } from "@/notifications/push-permission";
+import { createDefaultPushTokenWriter } from "@/notifications/push-token-client";
+import {
+  deregisterPushToken,
+  registerPushToken,
+} from "@/notifications/push-token-registration";
 
-const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
+const DEVELOPER_MODE_PREF_KEY = "settings.developer-mode";
 
 // Web only: Settings is a `transparentModal`, so the Inbox stays mounted behind
 // it. On mobile browsers, dragging the scroll past its end rubber-bands the
@@ -78,7 +84,9 @@ const DEVELOPER_MODE_PREF_KEY = 'settings.developer-mode';
 // `overscrollBehavior` is a web CSS property react-native-web forwards but RN's
 // ViewStyle type doesn't model, hence the cast; it's inert on native.
 const webOverscrollContain: StyleProp<ViewStyle> =
-  Platform.OS === 'web' ? ({ overscrollBehavior: 'contain' } as ViewStyle) : undefined;
+  Platform.OS === "web"
+    ? ({ overscrollBehavior: "contain" } as ViewStyle)
+    : undefined;
 
 type AppPalette = ReturnType<typeof usePalette>;
 
@@ -86,16 +94,26 @@ type AppPalette = ReturnType<typeof usePalette>;
 const AUTH_PROVIDERS: {
   id: OAuthProvider;
   label: string;
-  icon: React.ComponentProps<typeof Ionicons>['name'];
+  icon: React.ComponentProps<typeof Ionicons>["name"];
   a11yKey: MessageKey;
 }[] = [
-  { id: 'google', label: 'Google', icon: 'logo-google', a11yKey: 'account.signInGoogle' },
-  { id: 'apple', label: 'Apple', icon: 'logo-apple', a11yKey: 'account.signInApple' },
+  {
+    id: "google",
+    label: "Google",
+    icon: "logo-google",
+    a11yKey: "account.signInGoogle",
+  },
+  {
+    id: "apple",
+    label: "Apple",
+    icon: "logo-apple",
+    a11yKey: "account.signInApple",
+  },
 ];
 
 /** The language-preference options, in display order, with their label keys. */
 const LANGUAGE_OPTIONS: { value: LocalePreference; labelKey: MessageKey }[] = [
-  { value: 'system', labelKey: 'settings.language.system' },
+  { value: "system", labelKey: "settings.language.system" },
   ...SUPPORTED_LOCALES.map((code) => ({
     value: code,
     labelKey: `settings.language.${code}` as MessageKey,
@@ -104,11 +122,13 @@ const LANGUAGE_OPTIONS: { value: LocalePreference; labelKey: MessageKey }[] = [
 
 /** The AI-suggestions mode options, in display order (least → most automatic),
  *  with their label keys. */
-const AI_SUGGESTIONS_MODE_OPTIONS: { value: AiSuggestionsMode; labelKey: MessageKey }[] =
-  AI_SUGGESTIONS_MODES.map((mode) => ({
-    value: mode,
-    labelKey: `settings.aiSuggestions.${mode}` as MessageKey,
-  }));
+const AI_SUGGESTIONS_MODE_OPTIONS: {
+  value: AiSuggestionsMode;
+  labelKey: MessageKey;
+}[] = AI_SUGGESTIONS_MODES.map((mode) => ({
+  value: mode,
+  labelKey: `settings.aiSuggestions.${mode}` as MessageKey,
+}));
 
 export default function SettingsScreen() {
   const palette = usePalette();
@@ -118,7 +138,12 @@ export default function SettingsScreen() {
   // phones keep the full-screen layout. One width rule, no Platform branch.
   const { width, height } = useWindowDimensions();
   const asSheet = width >= 760;
-  const { t, preference: languagePref, setLocalePreference, formatDate } = useI18n();
+  const {
+    t,
+    preference: languagePref,
+    setLocalePreference,
+    formatDate,
+  } = useI18n();
   const {
     queue,
     isSyncing,
@@ -136,6 +161,7 @@ export default function SettingsScreen() {
     isResettingLibrary,
     aiSuggestionsMode,
     setAiSuggestionsMode,
+    diagnosticStats,
   } = useBookmarks();
   const [aiSuggestionsSheetOpen, setAiSuggestionsSheetOpen] = useState(false);
   const auth = useSupabaseAuth();
@@ -149,8 +175,8 @@ export default function SettingsScreen() {
       .setEnabled(enabled)
       .catch(() =>
         Alert.alert(
-          t('settings.analytics.errorTitle'),
-          t('settings.analytics.errorBody'),
+          t("settings.analytics.errorTitle"),
+          t("settings.analytics.errorBody"),
         ),
       )
       .finally(() => setAnalyticsBusy(false));
@@ -158,15 +184,17 @@ export default function SettingsScreen() {
 
   // Sign in / out happens inline in the account card (no separate screen).
   // `authBusy` disables the auth buttons while a provider flow or sign-out runs.
-  const [authBusy, setAuthBusy] = useState<OAuthProvider | 'signout' | null>(null);
+  const [authBusy, setAuthBusy] = useState<OAuthProvider | "signout" | null>(
+    null,
+  );
   const handleSignIn = async (provider: OAuthProvider) => {
     setAuthBusy(provider);
     try {
       await auth.signIn(provider);
     } catch (error) {
       Alert.alert(
-        t('account.signInFailedTitle'),
-        error instanceof Error ? error.message : t('account.signInFailedBody'),
+        t("account.signInFailedTitle"),
+        error instanceof Error ? error.message : t("account.signInFailedBody"),
       );
     } finally {
       setAuthBusy(null);
@@ -176,7 +204,7 @@ export default function SettingsScreen() {
   // so we reassure that the data is safe in the account before proceeding. Only
   // the destructive confirm actually calls `auth.signOut()`.
   const runSignOut = async () => {
-    setAuthBusy('signout');
+    setAuthBusy("signout");
     try {
       await auth.signOut();
     } finally {
@@ -184,23 +212,26 @@ export default function SettingsScreen() {
     }
   };
   const handleSignOut = () => {
-    if (Platform.OS === 'web') {
+    if (Platform.OS === "web") {
       // Alert.alert has no button support on web, so the confirm dialog never
       // appears and sign-out never fires ("logout does not work"). Fall back to
       // window.confirm like the other destructive confirms on this screen.
-      if (typeof confirm === 'undefined' || confirm(t('settings.account.signOutConfirmBody'))) {
+      if (
+        typeof confirm === "undefined" ||
+        confirm(t("settings.account.signOutConfirmBody"))
+      ) {
         void runSignOut();
       }
       return;
     }
     Alert.alert(
-      t('settings.account.signOutConfirmTitle'),
-      t('settings.account.signOutConfirmBody'),
+      t("settings.account.signOutConfirmTitle"),
+      t("settings.account.signOutConfirmBody"),
       [
-        { text: t('settings.account.signOutCancel'), style: 'cancel' },
+        { text: t("settings.account.signOutCancel"), style: "cancel" },
         {
-          text: t('settings.account.signOutConfirm'),
-          style: 'destructive',
+          text: t("settings.account.signOutConfirm"),
+          style: "destructive",
           onPress: () => void runSignOut(),
         },
       ],
@@ -216,23 +247,26 @@ export default function SettingsScreen() {
   // save to device" sheet is open (null = sheet closed). iOS/web deliver
   // immediately — the iOS share sheet already offers "Save to Files" and the
   // web path is a direct download.
-  const [exportDeliveryKind, setExportDeliveryKind] = useState<'html' | 'json' | 'csv' | null>(
-    null,
-  );
+  const [exportDeliveryKind, setExportDeliveryKind] = useState<
+    "html" | "json" | "csv" | null
+  >(null);
   const [exporting, setExporting] = useState(false);
   const [languageSheetOpen, setLanguageSheetOpen] = useState(false);
   const totalBookmarks = inbox.length;
 
-  const chooseExport = (kind: 'html' | 'json' | 'csv') => {
-    if (Platform.OS === 'android') {
+  const chooseExport = (kind: "html" | "json" | "csv") => {
+    if (Platform.OS === "android") {
       setExportSheetOpen(false);
       setExportDeliveryKind(kind);
       return;
     }
-    void runExport(kind, 'share');
+    void runExport(kind, "share");
   };
 
-  const runExport = async (kind: 'html' | 'json' | 'csv', delivery: 'share' | 'save') => {
+  const runExport = async (
+    kind: "html" | "json" | "csv",
+    delivery: "share" | "save",
+  ) => {
     setExportSheetOpen(false);
     setExportDeliveryKind(null);
     if (exporting) {
@@ -241,8 +275,10 @@ export default function SettingsScreen() {
     setExporting(true);
     try {
       const bookmarks = [...inbox];
-      const tagsByBookmark: ExportInput['tagsByBookmark'] = {};
-      const enrichmentByBookmark: NonNullable<ExportInput['enrichmentByBookmark']> = {};
+      const tagsByBookmark: ExportInput["tagsByBookmark"] = {};
+      const enrichmentByBookmark: NonNullable<
+        ExportInput["enrichmentByBookmark"]
+      > = {};
       for (const bookmark of bookmarks) {
         tagsByBookmark[bookmark.id] = getTagsForBookmark(bookmark.id);
         enrichmentByBookmark[bookmark.id] = getEnrichment(bookmark.id);
@@ -257,29 +293,29 @@ export default function SettingsScreen() {
       };
 
       const file =
-        kind === 'html'
+        kind === "html"
           ? {
-              filename: exportFilename('html', input.exportedAt),
-              mimeType: 'text/html',
+              filename: exportFilename("html", input.exportedAt),
+              mimeType: "text/html",
               contents: toNetscapeHtml(input),
             }
-          : kind === 'csv'
+          : kind === "csv"
             ? {
-                filename: exportFilename('csv', input.exportedAt),
-                mimeType: 'text/csv',
+                filename: exportFilename("csv", input.exportedAt),
+                mimeType: "text/csv",
                 contents: toCsv(input),
               }
             : {
-                filename: exportFilename('json', input.exportedAt),
-                mimeType: 'application/json',
+                filename: exportFilename("json", input.exportedAt),
+                mimeType: "application/json",
                 contents: toJsonBackup(input),
               };
-      if (delivery === 'save') {
+      if (delivery === "save") {
         const saved = await saveExportToDevice(file);
         if (saved) {
           Alert.alert(
-            t('settings.export.savedTitle'),
-            t('settings.export.savedBody', { name: file.filename }),
+            t("settings.export.savedTitle"),
+            t("settings.export.savedBody", { name: file.filename }),
           );
         }
       } else {
@@ -287,8 +323,10 @@ export default function SettingsScreen() {
       }
     } catch (error) {
       Alert.alert(
-        t('settings.export.failedTitle'),
-        error instanceof Error ? error.message : t('settings.export.failedBody'),
+        t("settings.export.failedTitle"),
+        error instanceof Error
+          ? error.message
+          : t("settings.export.failedBody"),
       );
     } finally {
       setExporting(false);
@@ -302,7 +340,7 @@ export default function SettingsScreen() {
   const [importSheetOpen, setImportSheetOpen] = useState(false);
   const [importing, setImporting] = useState(false);
 
-  const runImport = async (kind: 'json' | 'html' | 'csv') => {
+  const runImport = async (kind: "json" | "html" | "csv") => {
     setImportSheetOpen(false);
     if (importing) {
       return;
@@ -317,25 +355,39 @@ export default function SettingsScreen() {
       const summary = importBookmarks(items);
 
       if (summary.notReady) {
-        Alert.alert(t('settings.import.notReadyTitle'), t('settings.import.notReadyBody'));
+        Alert.alert(
+          t("settings.import.notReadyTitle"),
+          t("settings.import.notReadyBody"),
+        );
         return;
       }
-      if (summary.imported === 0 && summary.duplicates === 0 && summary.skipped === 0) {
-        Alert.alert(t('settings.import.nothingTitle'), t('settings.import.nothingBody', { name: picked.name }));
+      if (
+        summary.imported === 0 &&
+        summary.duplicates === 0 &&
+        summary.skipped === 0
+      ) {
+        Alert.alert(
+          t("settings.import.nothingTitle"),
+          t("settings.import.nothingBody", { name: picked.name }),
+        );
         return;
       }
-      const parts = [t('settings.import.added', { count: summary.imported })];
+      const parts = [t("settings.import.added", { count: summary.imported })];
       if (summary.duplicates > 0) {
-        parts.push(t('settings.import.duplicates', { count: summary.duplicates }));
+        parts.push(
+          t("settings.import.duplicates", { count: summary.duplicates }),
+        );
       }
       if (summary.skipped > 0) {
-        parts.push(t('settings.import.skipped', { count: summary.skipped }));
+        parts.push(t("settings.import.skipped", { count: summary.skipped }));
       }
-      Alert.alert(t('settings.import.completeTitle'), parts.join('\n'));
+      Alert.alert(t("settings.import.completeTitle"), parts.join("\n"));
     } catch (error) {
       Alert.alert(
-        t('settings.import.failedTitle'),
-        error instanceof Error ? error.message : t('settings.import.failedBody'),
+        t("settings.import.failedTitle"),
+        error instanceof Error
+          ? error.message
+          : t("settings.import.failedBody"),
       );
     } finally {
       setImporting(false);
@@ -358,19 +410,24 @@ export default function SettingsScreen() {
     const result = await resetLibrary();
     if (result.ok) {
       setResetDialogOpen(false);
-      Alert.alert(t('settings.reset.successTitle'), t('settings.reset.successBody'));
+      Alert.alert(
+        t("settings.reset.successTitle"),
+        t("settings.reset.successBody"),
+      );
       return;
     }
     const bodyKey = (
       {
-        busy: 'settings.reset.failedBusy',
-        auth: 'settings.reset.failedAuth',
-        remote: 'settings.reset.failedRemote',
-        local: 'settings.reset.failedLocal',
+        busy: "settings.reset.failedBusy",
+        auth: "settings.reset.failedAuth",
+        remote: "settings.reset.failedRemote",
+        local: "settings.reset.failedLocal",
       } as const
     )[result.reason];
     // Keep the dialog open with the failure inline so retry keeps its context.
-    setResetError(result.message ? `${t(bodyKey)}\n${result.message}` : t(bodyKey));
+    setResetError(
+      result.message ? `${t(bodyKey)}\n${result.message}` : t(bodyKey),
+    );
   };
 
   // Developer mode hides diagnostics behind an opt-in so the everyday screen
@@ -382,7 +439,7 @@ export default function SettingsScreen() {
     getPreference(DEVELOPER_MODE_PREF_KEY)
       .then((raw) => {
         if (active) {
-          setDeveloperMode(raw === 'true');
+          setDeveloperMode(raw === "true");
         }
       })
       .catch(() => {})
@@ -397,7 +454,10 @@ export default function SettingsScreen() {
     if (!devLoaded.current) {
       return;
     }
-    void setPreference(DEVELOPER_MODE_PREF_KEY, developerMode ? 'true' : 'false').catch(() => {});
+    void setPreference(
+      DEVELOPER_MODE_PREF_KEY,
+      developerMode ? "true" : "false",
+    ).catch(() => {});
   }, [developerMode]);
 
   // Recent-search count drives the "Clear search history" row (label + disabled
@@ -425,23 +485,28 @@ export default function SettingsScreen() {
   // re-reads recents on focus, so returning there shows no recents.
   const clearRecentSearches = () => {
     setRecentCount(0);
-    void setPreference(RECENT_SEARCHES_PREF_KEY, serializeRecents([])).catch(() => {});
+    void setPreference(RECENT_SEARCHES_PREF_KEY, serializeRecents([])).catch(
+      () => {},
+    );
   };
   const confirmClearRecents = () => {
-    if (Platform.OS === 'web') {
-      if (typeof confirm === 'undefined' || confirm(t('settings.search.clearConfirmTitle'))) {
+    if (Platform.OS === "web") {
+      if (
+        typeof confirm === "undefined" ||
+        confirm(t("settings.search.clearConfirmTitle"))
+      ) {
         clearRecentSearches();
       }
       return;
     }
     Alert.alert(
-      t('settings.search.clearConfirmTitle'),
-      t('settings.search.clearConfirmBody'),
+      t("settings.search.clearConfirmTitle"),
+      t("settings.search.clearConfirmBody"),
       [
-        { text: t('common.cancel'), style: 'cancel' },
+        { text: t("common.cancel"), style: "cancel" },
         {
-          text: t('settings.search.clearConfirm'),
-          style: 'destructive',
+          text: t("settings.search.clearConfirm"),
+          style: "destructive",
           onPress: clearRecentSearches,
         },
       ],
@@ -450,7 +515,9 @@ export default function SettingsScreen() {
 
   // What happens after a URL is shared in from another app. Default is a
   // modeless toast (no navigation); opting in lands on the Inbox instead.
-  const [shareBehavior, setShareBehavior] = useState<ShareBehavior>(DEFAULT_SHARE_BEHAVIOR);
+  const [shareBehavior, setShareBehavior] = useState<ShareBehavior>(
+    DEFAULT_SHARE_BEHAVIOR,
+  );
   const shareLoaded = useRef(false);
   useEffect(() => {
     let active = true;
@@ -472,13 +539,14 @@ export default function SettingsScreen() {
     if (!shareLoaded.current) {
       return;
     }
-    void setPreference(SHARE_BEHAVIOR_PREF_KEY, serializeShareBehavior(shareBehavior)).catch(
-      () => {},
-    );
+    void setPreference(
+      SHARE_BEHAVIOR_PREF_KEY,
+      serializeShareBehavior(shareBehavior),
+    ).catch(() => {});
   }, [shareBehavior]);
 
   const insets = useSafeAreaInsets();
-  const isAuthenticated = auth.status === 'authenticated';
+  const isAuthenticated = auth.status === "authenticated";
 
   // Push notification for AI-catchup (STASH #579): "notify once the AI
   // enrichment overflow queue (#578) fully drains for this user." Opt-in
@@ -513,7 +581,8 @@ export default function SettingsScreen() {
   // suggestions back on does NOT require re-flipping this toggle: an
   // already-enabled preference (and its registered token, if any) is left
   // alone rather than force-cleared while suggestions are off.
-  const canUsePushNotifications = isAuthenticated && aiSuggestionsMode !== 'off';
+  const canUsePushNotifications =
+    isAuthenticated && aiSuggestionsMode !== "off";
 
   const handlePushNotificationsChange = (enabled: boolean) => {
     if (pushNotificationsBusy || !canUsePushNotifications) {
@@ -529,7 +598,7 @@ export default function SettingsScreen() {
       try {
         await runPushNotificationsChange(enabled);
       } catch (err) {
-        console.warn('[push-notifications] Toggle handling failed:', err);
+        console.warn("[push-notifications] Toggle handling failed:", err);
         setPushNotificationsEnabled(false);
         await setPreference(
           PUSH_NOTIFICATIONS_PREF_KEY,
@@ -552,7 +621,9 @@ export default function SettingsScreen() {
       // token is harmless (Expo/the worker prune it once it's stale) and
       // this must never block anything (Capture is sacred extends here:
       // nothing about this feature may block or delay unrelated UI).
-      const lastToken = await getPreference(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY).catch(() => null);
+      const lastToken = await getPreference(
+        LAST_REGISTERED_PUSH_TOKEN_PREF_KEY,
+      ).catch(() => null);
       if (lastToken && auth.session) {
         await deregisterPushToken({
           client: createDefaultPushTokenWriter(),
@@ -560,26 +631,28 @@ export default function SettingsScreen() {
           token: lastToken,
         });
       }
-      await setPreference(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY, '').catch(() => {});
+      await setPreference(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY, "").catch(
+        () => {},
+      );
       return;
     }
 
     const outcome = await requestPushPermissionAndToken();
-    if (outcome.outcome !== 'granted') {
+    if (outcome.outcome !== "granted") {
       setPushNotificationsEnabled(false);
       await setPreference(
         PUSH_NOTIFICATIONS_PREF_KEY,
         serializePushNotificationsEnabled(false),
       ).catch(() => {});
-      if (outcome.outcome === 'denied') {
+      if (outcome.outcome === "denied") {
         Alert.alert(
-          t('settings.pushNotifications.deniedTitle'),
-          t('settings.pushNotifications.deniedBody'),
+          t("settings.pushNotifications.deniedTitle"),
+          t("settings.pushNotifications.deniedBody"),
         );
-      } else if (outcome.outcome === 'no_project_id') {
+      } else if (outcome.outcome === "no_project_id") {
         Alert.alert(
-          t('settings.pushNotifications.unavailableTitle'),
-          t('settings.pushNotifications.unavailableBody'),
+          t("settings.pushNotifications.unavailableTitle"),
+          t("settings.pushNotifications.unavailableBody"),
         );
       }
       return;
@@ -605,18 +678,21 @@ export default function SettingsScreen() {
         serializePushNotificationsEnabled(false),
       ).catch(() => {});
       Alert.alert(
-        t('settings.pushNotifications.unavailableTitle'),
-        t('settings.pushNotifications.unavailableBody'),
+        t("settings.pushNotifications.unavailableTitle"),
+        t("settings.pushNotifications.unavailableBody"),
       );
       return;
     }
 
     setPushNotificationsEnabled(true);
     await Promise.all([
-      setPreference(PUSH_NOTIFICATIONS_PREF_KEY, serializePushNotificationsEnabled(true)).catch(
+      setPreference(
+        PUSH_NOTIFICATIONS_PREF_KEY,
+        serializePushNotificationsEnabled(true),
+      ).catch(() => {}),
+      setPreference(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY, outcome.token).catch(
         () => {},
       ),
-      setPreference(LAST_REGISTERED_PUSH_TOKEN_PREF_KEY, outcome.token).catch(() => {}),
     ]);
   };
 
@@ -633,109 +709,124 @@ export default function SettingsScreen() {
   // sync, so it must not count as "waiting" — that would show a stuck
   // syncing/refresh state that can never clear.
   const waiting = queue.filter(
-    (entry) => entry.sync_status !== 'synced' && !isPermanentlyUnsyncableUrl(entry),
+    (entry) =>
+      entry.sync_status !== "synced" && !isPermanentlyUnsyncableUrl(entry),
   ).length;
   const cloudAvailable = auth.isSignedIn; // anonymous OR authenticated session
   const hasPending = waiting > 0;
-  const canSync = cloudAvailable && hasPending && !isSyncing && !isResettingLibrary && !syncPaused;
+  const canSync =
+    cloudAvailable &&
+    hasPending &&
+    !isSyncing &&
+    !isResettingLibrary &&
+    !syncPaused;
 
   const syncSummary = syncPaused
     ? hasPending
-      ? t('settings.sync.pausedWaiting', { count: waiting })
-      : t('settings.sync.paused')
+      ? t("settings.sync.pausedWaiting", { count: waiting })
+      : t("settings.sync.paused")
     : isSyncing
-      ? t('settings.sync.syncing', { count: waiting })
+      ? t("settings.sync.syncing", { count: waiting })
       : !cloudAvailable
-        ? t('settings.sync.localOnly')
+        ? t("settings.sync.localOnly")
         : hasPending
-          ? t('settings.sync.waiting', { count: waiting })
-          : t('settings.sync.allBackedUp');
+          ? t("settings.sync.waiting", { count: waiting })
+          : t("settings.sync.allBackedUp");
 
   const build = getBuildInfo(Constants.expoConfig?.extra);
-  const appVersion = `${Constants.expoConfig?.version ?? '0.0.0'} (Expo SDK ${
-    Constants.expoConfig?.sdkVersion ?? '56'
+  const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
+    Constants.expoConfig?.sdkVersion ?? "56"
   })`;
   // Always-visible footer line so the deployed version/commit is verifiable
   // without opening Developer mode. Appends the commit when one is baked in.
   const buildLine =
-    `Keepory ${Constants.expoConfig?.version ?? '0.0.0'}` +
-    (build.shortSha ? ` · ${build.ref ? `${build.ref} @ ` : ''}${build.shortSha}` : '');
+    `Keepory ${Constants.expoConfig?.version ?? "0.0.0"}` +
+    (build.shortSha
+      ? ` · ${build.ref ? `${build.ref} @ ` : ""}${build.shortSha}`
+      : "");
 
   const content = (
     <ScrollView
       style={[styles.scroll, webOverscrollContain]}
-      contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 24 }]}
+      contentContainerStyle={[
+        styles.container,
+        { paddingBottom: insets.bottom + 24 },
+      ]}
     >
       {/* Account & sync — identity, sign in/out, and sync status in one card.
           The auth control sits beside the identity (sign in with a provider, or
           log out); the sync row below shows backup status. All inline — no
           separate screen. */}
       <View style={styles.section}>
-      <Text style={styles.sectionLabel}>{t('settings.section.account')}</Text>
-      <Card style={styles.account} elevated={false}>
-        <View style={styles.accountHeader}>
-          {isAuthenticated ? (
-            <>
-              <View style={styles.accountText}>
-                <Text style={styles.accountMeta}>{t('settings.account.signedIn')}</Text>
-                <Text style={styles.accountName} numberOfLines={1}>
-                  {auth.email ?? auth.displayName ?? t('settings.account.signedIn')}
-                </Text>
-              </View>
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={authBusy !== null}
-                onPress={handleSignOut}
-              >
-                {t('settings.account.signOut')}
-              </Button>
-            </>
-          ) : auth.status === 'not_configured' ? (
-            <View style={styles.accountText}>
-              <Text style={styles.accountName} numberOfLines={1}>
-                {t('settings.account.cloudUnavailable')}
-              </Text>
-              <Text style={styles.accountMeta} numberOfLines={1}>
-                {t('settings.account.worksOffline')}
-              </Text>
-            </View>
-          ) : (
-            <>
-              <View style={styles.accountText}>
-                <Text style={styles.accountName} numberOfLines={1}>
-                  {t(
-                    auth.status === 'session_expired'
-                      ? 'settings.account.sessionExpired'
-                      : 'settings.account.signIn',
-                  )}
-                </Text>
-                {auth.status === 'session_expired' ? (
-                  <Text style={styles.accountMeta} numberOfLines={2}>
-                    {t('settings.account.sessionExpiredBody')}
+        <Text style={styles.sectionLabel}>{t("settings.section.account")}</Text>
+        <Card style={styles.account} elevated={false}>
+          <View style={styles.accountHeader}>
+            {isAuthenticated ? (
+              <>
+                <View style={styles.accountText}>
+                  <Text style={styles.accountMeta}>
+                    {t("settings.account.signedIn")}
                   </Text>
-                ) : null}
+                  <Text style={styles.accountName} numberOfLines={1}>
+                    {auth.email ??
+                      auth.displayName ??
+                      t("settings.account.signedIn")}
+                  </Text>
+                </View>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={authBusy !== null}
+                  onPress={handleSignOut}
+                >
+                  {t("settings.account.signOut")}
+                </Button>
+              </>
+            ) : auth.status === "not_configured" ? (
+              <View style={styles.accountText}>
+                <Text style={styles.accountName} numberOfLines={1}>
+                  {t("settings.account.cloudUnavailable")}
+                </Text>
+                <Text style={styles.accountMeta} numberOfLines={1}>
+                  {t("settings.account.worksOffline")}
+                </Text>
               </View>
-              <View style={styles.authButtons}>
-                {AUTH_PROVIDERS.map(({ id, label, icon, a11yKey }) => (
-                  <Button
-                    key={id}
-                    variant="ghost"
-                    size="sm"
-                    icon={icon}
-                    accessibilityLabel={t(a11yKey)}
-                    disabled={authBusy !== null}
-                    onPress={() => void handleSignIn(id)}
-                  >
-                    {label}
-                  </Button>
-                ))}
-              </View>
-            </>
-          )}
-        </View>
+            ) : (
+              <>
+                <View style={styles.accountText}>
+                  <Text style={styles.accountName} numberOfLines={1}>
+                    {t(
+                      auth.status === "session_expired"
+                        ? "settings.account.sessionExpired"
+                        : "settings.account.signIn",
+                    )}
+                  </Text>
+                  {auth.status === "session_expired" ? (
+                    <Text style={styles.accountMeta} numberOfLines={2}>
+                      {t("settings.account.sessionExpiredBody")}
+                    </Text>
+                  ) : null}
+                </View>
+                <View style={styles.authButtons}>
+                  {AUTH_PROVIDERS.map(({ id, label, icon, a11yKey }) => (
+                    <Button
+                      key={id}
+                      variant="ghost"
+                      size="sm"
+                      icon={icon}
+                      accessibilityLabel={t(a11yKey)}
+                      disabled={authBusy !== null}
+                      onPress={() => void handleSignIn(id)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </View>
+              </>
+            )}
+          </View>
 
-        {/* Sync — one status-led row: label/value carry the state (incl. the
+          {/* Sync — one status-led row: label/value carry the state (incl. the
             waiting count, even while paused), and the trailing controls are
             the actions — tap-to-sync-now when there's queued work, and a
             pause/resume toggle (Sentry STASH-3K follow-up: a safety valve for
@@ -743,78 +834,90 @@ export default function SettingsScreen() {
             pulls, giving time to delete unwanted rows before they ever reach
             the network; a still-local, never-synced delete drops out of the
             queue for free, see deleteBookmark). */}
-        <Row
-          styles={styles}
-          palette={palette}
-          icon={syncPaused ? 'pause-circle-outline' : 'sync'}
-          label={t('settings.sync.label')}
-          value={syncSummary}
-          last
-          right={
-            <View style={styles.syncActions}>
-              {isSyncing ? (
-                <ActivityIndicator color={palette.textSecondary} />
-              ) : canSync ? (
+          <Row
+            styles={styles}
+            palette={palette}
+            icon={syncPaused ? "pause-circle-outline" : "sync"}
+            label={t("settings.sync.label")}
+            value={syncSummary}
+            last
+            right={
+              <View style={styles.syncActions}>
+                {isSyncing ? (
+                  <ActivityIndicator color={palette.textSecondary} />
+                ) : canSync ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("settings.sync.label")}
+                    hitSlop={8}
+                    onPress={() => void syncNow()}
+                    style={({ pressed }) => [
+                      styles.syncIconButton,
+                      pressed && { opacity: 0.6 },
+                    ]}
+                  >
+                    <Ionicons name="refresh" size={18} color={palette.accent} />
+                  </Pressable>
+                ) : cloudAvailable && !syncPaused ? (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={palette.success}
+                  />
+                ) : null}
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={t('settings.sync.label')}
+                  accessibilityLabel={
+                    syncPaused
+                      ? t("settings.sync.resumeButton")
+                      : t("settings.sync.pauseButton")
+                  }
+                  disabled={isResettingLibrary}
                   hitSlop={8}
-                  onPress={() => void syncNow()}
-                  style={({ pressed }) => [styles.syncIconButton, pressed && { opacity: 0.6 }]}
+                  onPress={() => setSyncPaused(!syncPaused)}
+                  style={({ pressed }) => [
+                    styles.syncIconButton,
+                    pressed && { opacity: 0.6 },
+                  ]}
                 >
-                  <Ionicons name="refresh" size={18} color={palette.accent} />
+                  <Ionicons
+                    name={syncPaused ? "play-circle" : "pause-circle-outline"}
+                    size={20}
+                    color={syncPaused ? palette.accent : palette.textSecondary}
+                  />
                 </Pressable>
-              ) : cloudAvailable && !syncPaused ? (
-                <Ionicons name="checkmark-circle" size={20} color={palette.success} />
-              ) : null}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={
-                  syncPaused ? t('settings.sync.resumeButton') : t('settings.sync.pauseButton')
-                }
-                disabled={isResettingLibrary}
-                hitSlop={8}
-                onPress={() => setSyncPaused(!syncPaused)}
-                style={({ pressed }) => [styles.syncIconButton, pressed && { opacity: 0.6 }]}
-              >
-                <Ionicons
-                  name={syncPaused ? 'play-circle' : 'pause-circle-outline'}
-                  size={20}
-                  color={syncPaused ? palette.accent : palette.textSecondary}
-                />
-              </Pressable>
-            </View>
-          }
-        />
-      </Card>
+              </View>
+            }
+          />
+        </Card>
       </View>
 
       {/* Library — navigation into the user's own content. Reviewing AI
           suggestions now lives on the Inbox (the persistent review banner), not
           here — Settings is for configuration, not a recurring workflow. */}
-      <Group styles={styles} title={t('settings.section.library')}>
+      <Group styles={styles} title={t("settings.section.library")}>
         <Row
           styles={styles}
           palette={palette}
           icon="trash-outline"
-          label={t('settings.trash.label')}
-          value={t('settings.trash.value', { count: trash.length })}
+          label={t("settings.trash.label")}
+          value={t("settings.trash.value", { count: trash.length })}
           last
-          onPress={() => router.push('/trash')}
+          onPress={() => router.push("/trash")}
         />
       </Group>
 
       {/* Preferences — everyday app behaviour: language, share landing, and the
           search-history privacy control. */}
-      <Group styles={styles} title={t('settings.section.preferences')}>
+      <Group styles={styles} title={t("settings.section.preferences")}>
         <Row
           styles={styles}
           palette={palette}
           icon="language-outline"
-          label={t('settings.language.label')}
+          label={t("settings.language.label")}
           value={t(
-            LANGUAGE_OPTIONS.find((option) => option.value === languagePref)?.labelKey ??
-              'settings.language.system',
+            LANGUAGE_OPTIONS.find((option) => option.value === languagePref)
+              ?.labelKey ?? "settings.language.system",
           )}
           onPress={() => setLanguageSheetOpen(true)}
         />
@@ -822,10 +925,11 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="sparkles-outline"
-          label={t('settings.aiSuggestions.label')}
+          label={t("settings.aiSuggestions.label")}
           value={t(
-            AI_SUGGESTIONS_MODE_OPTIONS.find((option) => option.value === aiSuggestionsMode)
-              ?.labelKey ?? 'settings.aiSuggestions.confirm',
+            AI_SUGGESTIONS_MODE_OPTIONS.find(
+              (option) => option.value === aiSuggestionsMode,
+            )?.labelKey ?? "settings.aiSuggestions.confirm",
           )}
           onPress={() => setAiSuggestionsSheetOpen(true)}
         />
@@ -833,22 +937,22 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="notifications-outline"
-          label={t('settings.pushNotifications.label')}
+          label={t("settings.pushNotifications.label")}
           value={
             !isAuthenticated
-              ? t('settings.pushNotifications.signInRequired')
-              : aiSuggestionsMode === 'off'
-                ? t('settings.pushNotifications.aiOff')
+              ? t("settings.pushNotifications.signInRequired")
+              : aiSuggestionsMode === "off"
+                ? t("settings.pushNotifications.aiOff")
                 : pushNotificationsEnabled
-                  ? t('settings.pushNotifications.on')
-                  : t('settings.pushNotifications.off')
+                  ? t("settings.pushNotifications.on")
+                  : t("settings.pushNotifications.off")
           }
           right={
             pushNotificationsBusy ? (
               <ActivityIndicator color={palette.textSecondary} />
             ) : (
               <Switch
-                accessibilityLabel={t('settings.pushNotifications.label')}
+                accessibilityLabel={t("settings.pushNotifications.label")}
                 value={pushNotificationsEnabled}
                 disabled={!canUsePushNotifications}
                 onValueChange={handlePushNotificationsChange}
@@ -862,16 +966,16 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="share-outline"
-          label={t('settings.share.label')}
+          label={t("settings.share.label")}
           value={
-            shareBehavior === 'inbox'
-              ? t('settings.share.inbox')
-              : t('settings.share.toast')
+            shareBehavior === "inbox"
+              ? t("settings.share.inbox")
+              : t("settings.share.toast")
           }
           right={
             <Switch
-              value={shareBehavior === 'inbox'}
-              onValueChange={(on) => setShareBehavior(on ? 'inbox' : 'toast')}
+              value={shareBehavior === "inbox"}
+              onValueChange={(on) => setShareBehavior(on ? "inbox" : "toast")}
               trackColor={{ true: palette.accent, false: palette.border }}
               thumbColor="#ffffff"
             />
@@ -881,11 +985,11 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="analytics-outline"
-          label={t('settings.analytics.label')}
+          label={t("settings.analytics.label")}
           value={
             analytics.enabled
-              ? t('settings.analytics.enabled')
-              : t('settings.analytics.disabled')
+              ? t("settings.analytics.enabled")
+              : t("settings.analytics.disabled")
           }
           right={
             <Switch
@@ -905,13 +1009,13 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="time-outline"
-          label={t('settings.search.clearLabel')}
+          label={t("settings.search.clearLabel")}
           value={
             recentCount > 0
-              ? t('settings.search.clearValue', { count: recentCount })
-              : t('settings.search.clearEmpty')
+              ? t("settings.search.clearValue", { count: recentCount })
+              : t("settings.search.clearEmpty")
           }
-          accessibilityLabel={t('search.clearRecentsA11y')}
+          accessibilityLabel={t("search.clearRecentsA11y")}
           last
           disabled={recentCount === 0}
           onPress={recentCount > 0 ? confirmClearRecents : undefined}
@@ -920,16 +1024,16 @@ export default function SettingsScreen() {
 
       {/* Save from your browser — the desktop bookmarklet (web only). Native
           apps capture via the OS share sheet, so this is meaningless there. */}
-      {Platform.OS === 'web' ? (
+      {Platform.OS === "web" ? (
         <Group
           styles={styles}
-          title={t('settings.section.browser')}
-          footnote={t('settings.bookmarklet.note')}
+          title={t("settings.section.browser")}
+          footnote={t("settings.bookmarklet.note")}
         >
           <View style={styles.bookmarkletRow}>
             <BookmarkletButton
-              label={t('settings.bookmarklet.button')}
-              copiedLabel={t('settings.bookmarklet.copied')}
+              label={t("settings.bookmarklet.button")}
+              copiedLabel={t("settings.bookmarklet.copied")}
               accent={palette.accent}
             />
           </View>
@@ -939,22 +1043,26 @@ export default function SettingsScreen() {
       {/* Your data — export / import / portability. */}
       <Group
         styles={styles}
-        title={t('settings.section.data')}
-        footnote={t('settings.dataNote')}
+        title={t("settings.section.data")}
+        footnote={t("settings.dataNote")}
       >
         <Row
           styles={styles}
           palette={palette}
           icon="download-outline"
-          label={t('settings.export.label')}
+          label={t("settings.export.label")}
           value={
             exporting
-              ? t('settings.export.preparing')
+              ? t("settings.export.preparing")
               : totalBookmarks === 0
-                ? t('settings.export.nothing')
-                : t('settings.export.value')
+                ? t("settings.export.nothing")
+                : t("settings.export.value")
           }
-          right={exporting ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
+          right={
+            exporting ? (
+              <ActivityIndicator color={palette.textSecondary} />
+            ) : undefined
+          }
           onPress={
             exporting || isResettingLibrary || totalBookmarks === 0
               ? undefined
@@ -965,10 +1073,22 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="enter-outline"
-          label={t('settings.import.label')}
-          value={importing ? t('settings.import.importing') : t('settings.import.value')}
-          right={importing ? <ActivityIndicator color={palette.textSecondary} /> : undefined}
-          onPress={importing || isResettingLibrary ? undefined : () => setImportSheetOpen(true)}
+          label={t("settings.import.label")}
+          value={
+            importing
+              ? t("settings.import.importing")
+              : t("settings.import.value")
+          }
+          right={
+            importing ? (
+              <ActivityIndicator color={palette.textSecondary} />
+            ) : undefined
+          }
+          onPress={
+            importing || isResettingLibrary
+              ? undefined
+              : () => setImportSheetOpen(true)
+          }
         />
         {/* Destructive library reset (issue #600): online-only, type-to-confirm.
             Disabled without a usable session — the wipe is a cloud RPC. */}
@@ -976,18 +1096,20 @@ export default function SettingsScreen() {
           styles={styles}
           palette={palette}
           icon="nuclear-outline"
-          label={t('settings.reset.label')}
+          label={t("settings.reset.label")}
           value={
             isResettingLibrary
-              ? t('settings.reset.resetting')
+              ? t("settings.reset.resetting")
               : auth.isSignedIn
-                ? t('settings.reset.value')
-                : t('settings.reset.signInRequired')
+                ? t("settings.reset.value")
+                : t("settings.reset.signInRequired")
           }
           last
           disabled={!auth.isSignedIn}
           right={
-            isResettingLibrary ? <ActivityIndicator color={palette.textSecondary} /> : undefined
+            isResettingLibrary ? (
+              <ActivityIndicator color={palette.textSecondary} />
+            ) : undefined
           }
           onPress={
             !auth.isSignedIn || isResettingLibrary || importing || exporting
@@ -1001,13 +1123,13 @@ export default function SettingsScreen() {
       </Group>
 
       {/* Advanced — developer mode toggle, and the diagnostics it reveals. */}
-      <Group styles={styles} title={t('settings.section.advanced')}>
+      <Group styles={styles} title={t("settings.section.advanced")}>
         <Row
           styles={styles}
           palette={palette}
           icon="construct-outline"
-          label={t('settings.developer.label')}
-          value={t('settings.developer.value')}
+          label={t("settings.developer.label")}
+          value={t("settings.developer.value")}
           last
           right={
             <Switch
@@ -1022,27 +1144,52 @@ export default function SettingsScreen() {
 
       {developerMode ? (
         <>
-          <Group styles={styles} title={t('settings.diagnostics.title')}>
-            <InfoRow styles={styles} label={t('settings.diagnostics.supabaseAuth')} value={auth.status} />
+          <Group styles={styles} title={t("settings.diagnostics.title")}>
             <InfoRow
               styles={styles}
-              label={t('settings.diagnostics.lastPulled')}
+              label={t("settings.diagnostics.supabaseAuth")}
+              value={auth.status}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.diagnostics.lastPulled")}
               value={
                 lastPulledAt
                   ? formatDate(lastPulledAt)
-                  : t('settings.diagnostics.lastPulledNever')
+                  : t("settings.diagnostics.lastPulledNever")
               }
             />
-            <InfoRow styles={styles} label={t('settings.diagnostics.appVersion')} value={appVersion} />
+            <InfoRow
+              styles={styles}
+              label="Pipeline: User Sync (todo / done)"
+              value={`${diagnosticStats.sync.todo} / ${diagnosticStats.sync.done} (1x: ${diagnosticStats.sync.syncedOnce}, 2x: ${diagnosticStats.sync.syncingTwice})`}
+            />
+            <InfoRow
+              styles={styles}
+              label="Pipeline: Metadata (todo / done)"
+              value={`${diagnosticStats.metadata.todo} / ${diagnosticStats.metadata.done}`}
+            />
+            <InfoRow
+              styles={styles}
+              label="Pipeline: AI Suggestions (todo / done)"
+              value={`${diagnosticStats.ai.todo} / ${diagnosticStats.ai.done}`}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.diagnostics.appVersion")}
+              value={appVersion}
+            />
             <Row
               styles={styles}
               palette={palette}
               icon="git-commit-outline"
-              label={t('settings.diagnostics.build')}
+              label={t("settings.diagnostics.build")}
               value={describeBuild(build)}
               last
               onPress={
-                build.commitUrl ? () => void Linking.openURL(build.commitUrl!) : undefined
+                build.commitUrl
+                  ? () => void Linking.openURL(build.commitUrl!)
+                  : undefined
               }
             />
           </Group>
@@ -1050,36 +1197,40 @@ export default function SettingsScreen() {
       ) : null}
 
       <Pressable
-        onPress={build.commitUrl ? () => void Linking.openURL(build.commitUrl!) : undefined}
+        onPress={
+          build.commitUrl
+            ? () => void Linking.openURL(build.commitUrl!)
+            : undefined
+        }
         disabled={!build.commitUrl}
         style={styles.buildLine}
-        accessibilityRole={build.commitUrl ? 'link' : undefined}
+        accessibilityRole={build.commitUrl ? "link" : undefined}
       >
         <Text style={styles.buildLineText}>{buildLine}</Text>
       </Pressable>
 
       <ActionSheet
         visible={exportSheetOpen}
-        title={t('settings.exportSheet.title')}
+        title={t("settings.exportSheet.title")}
         onClose={() => setExportSheetOpen(false)}
         actions={[
           {
-            key: 'html',
-            label: t('settings.exportSheet.html'),
-            icon: 'globe-outline',
-            onPress: () => chooseExport('html'),
+            key: "html",
+            label: t("settings.exportSheet.html"),
+            icon: "globe-outline",
+            onPress: () => chooseExport("html"),
           },
           {
-            key: 'csv',
-            label: t('settings.exportSheet.csv'),
-            icon: 'grid-outline',
-            onPress: () => chooseExport('csv'),
+            key: "csv",
+            label: t("settings.exportSheet.csv"),
+            icon: "grid-outline",
+            onPress: () => chooseExport("csv"),
           },
           {
-            key: 'json',
-            label: t('settings.exportSheet.json'),
-            icon: 'code-slash-outline',
-            onPress: () => chooseExport('json'),
+            key: "json",
+            label: t("settings.exportSheet.json"),
+            icon: "code-slash-outline",
+            onPress: () => chooseExport("json"),
           },
         ]}
       />
@@ -1096,22 +1247,22 @@ export default function SettingsScreen() {
         onClose={() => setExportDeliveryKind(null)}
         actions={[
           {
-            key: 'share',
-            label: t('settings.exportSheet.share'),
-            icon: 'share-outline',
+            key: "share",
+            label: t("settings.exportSheet.share"),
+            icon: "share-outline",
             onPress: () => {
               if (exportDeliveryKind) {
-                void runExport(exportDeliveryKind, 'share');
+                void runExport(exportDeliveryKind, "share");
               }
             },
           },
           {
-            key: 'save',
-            label: t('settings.exportSheet.saveToDevice'),
-            icon: 'download-outline',
+            key: "save",
+            label: t("settings.exportSheet.saveToDevice"),
+            icon: "download-outline",
             onPress: () => {
               if (exportDeliveryKind) {
-                void runExport(exportDeliveryKind, 'save');
+                void runExport(exportDeliveryKind, "save");
               }
             },
           },
@@ -1120,26 +1271,26 @@ export default function SettingsScreen() {
 
       <ActionSheet
         visible={importSheetOpen}
-        title={t('settings.importSheet.title')}
+        title={t("settings.importSheet.title")}
         onClose={() => setImportSheetOpen(false)}
         actions={[
           {
-            key: 'html',
-            label: t('settings.importSheet.html'),
-            icon: 'globe-outline',
-            onPress: () => void runImport('html'),
+            key: "html",
+            label: t("settings.importSheet.html"),
+            icon: "globe-outline",
+            onPress: () => void runImport("html"),
           },
           {
-            key: 'json',
-            label: t('settings.importSheet.json'),
-            icon: 'code-slash-outline',
-            onPress: () => void runImport('json'),
+            key: "json",
+            label: t("settings.importSheet.json"),
+            icon: "code-slash-outline",
+            onPress: () => void runImport("json"),
           },
           {
-            key: 'csv',
-            label: t('settings.importSheet.pocket'),
-            icon: 'bookmark-outline',
-            onPress: () => void runImport('csv'),
+            key: "csv",
+            label: t("settings.importSheet.pocket"),
+            icon: "bookmark-outline",
+            onPress: () => void runImport("csv"),
           },
         ]}
       />
@@ -1154,7 +1305,7 @@ export default function SettingsScreen() {
 
       <ActionSheet
         visible={languageSheetOpen}
-        title={t('settings.language.sheetTitle')}
+        title={t("settings.language.sheetTitle")}
         onClose={() => setLanguageSheetOpen(false)}
         actions={LANGUAGE_OPTIONS.map((option) => ({
           key: option.value,
@@ -1169,7 +1320,7 @@ export default function SettingsScreen() {
 
       <ActionSheet
         visible={aiSuggestionsSheetOpen}
-        title={t('settings.aiSuggestions.sheetTitle')}
+        title={t("settings.aiSuggestions.sheetTitle")}
         onClose={() => setAiSuggestionsSheetOpen(false)}
         actions={AI_SUGGESTIONS_MODE_OPTIONS.map((option) => ({
           key: option.value,
@@ -1188,13 +1339,16 @@ export default function SettingsScreen() {
   // header row (title + close) for both layouts.
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-      <Text style={styles.headerTitle}>{t('nav.settings')}</Text>
+      <Text style={styles.headerTitle}>{t("nav.settings")}</Text>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={t('common.close')}
+        accessibilityLabel={t("common.close")}
         onPress={() => router.back()}
         hitSlop={8}
-        style={({ pressed }) => [styles.headerClose, pressed && { opacity: 0.6 }]}
+        style={({ pressed }) => [
+          styles.headerClose,
+          pressed && { opacity: 0.6 },
+        ]}
       >
         <Ionicons name="close" size={24} color={palette.text} />
       </Pressable>
@@ -1216,7 +1370,7 @@ export default function SettingsScreen() {
           testID="settings-sheet-backdrop"
           style={styles.sheetBackdrop}
           accessibilityRole="button"
-          accessibilityLabel={t('common.close')}
+          accessibilityLabel={t("common.close")}
           onPress={() => router.back()}
         />
         <View style={styles.sheetPanel}>
@@ -1261,7 +1415,7 @@ function Group({
   );
 }
 
-type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
+type IoniconName = React.ComponentProps<typeof Ionicons>["name"];
 
 /** A tappable (or static) settings row: icon · label/value · trailing element. */
 function Row({
@@ -1298,11 +1452,23 @@ function Row({
 
   const content = (
     <>
-      <View style={[styles.iconWrap, accent && { backgroundColor: palette.accentSoft }]}>
-        <Ionicons name={icon} size={18} color={accent ? palette.accentText : palette.text} />
+      <View
+        style={[
+          styles.iconWrap,
+          accent && { backgroundColor: palette.accentSoft },
+        ]}
+      >
+        <Ionicons
+          name={icon}
+          size={18}
+          color={accent ? palette.accentText : palette.text}
+        />
       </View>
       <View style={styles.rowText}>
-        <Text style={[styles.rowLabel, { color: labelColor }]} numberOfLines={1}>
+        <Text
+          style={[styles.rowLabel, { color: labelColor }]}
+          numberOfLines={1}
+        >
           {label}
         </Text>
         {value ? (
@@ -1316,9 +1482,14 @@ function Row({
           <Text style={styles.badgeText}>{badge}</Text>
         </View>
       ) : null}
-      {right ?? (onPress ? (
-        <Ionicons name="chevron-forward" size={18} color={palette.textSecondary} />
-      ) : null)}
+      {right ??
+        (onPress ? (
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={palette.textSecondary}
+          />
+        ) : null)}
     </>
   );
 
@@ -1385,23 +1556,23 @@ const makeStyles = (palette: AppPalette) =>
     },
     sheetOverlay: {
       flex: 1,
-      flexDirection: 'row',
+      flexDirection: "row",
     },
     sheetBackdrop: {
       flex: 1,
-      backgroundColor: 'rgba(0,0,0,0.4)',
+      backgroundColor: "rgba(0,0,0,0.4)",
     },
     sheetPanel: {
-      width: '100%',
+      width: "100%",
       maxWidth: 460,
       backgroundColor: palette.background,
       borderLeftWidth: StyleSheet.hairlineWidth,
       borderColor: palette.border,
     },
     header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
       paddingHorizontal: 16,
       paddingBottom: 12,
       borderBottomWidth: StyleSheet.hairlineWidth,
@@ -1410,7 +1581,7 @@ const makeStyles = (palette: AppPalette) =>
     },
     headerTitle: {
       fontSize: 20,
-      fontWeight: '700',
+      fontWeight: "700",
       color: palette.text,
     },
     headerClose: {
@@ -1423,19 +1594,19 @@ const makeStyles = (palette: AppPalette) =>
     account: {
       paddingHorizontal: 0,
       paddingVertical: 0,
-      overflow: 'hidden',
+      overflow: "hidden",
     },
     accountHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
+      flexDirection: "row",
+      alignItems: "center",
       gap: 12,
       padding: 16,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: palette.border,
     },
     authButtons: {
-      flexDirection: 'row',
-      alignItems: 'center',
+      flexDirection: "row",
+      alignItems: "center",
       gap: 8,
     },
     accountText: {
@@ -1444,7 +1615,7 @@ const makeStyles = (palette: AppPalette) =>
     },
     accountName: {
       fontSize: 17,
-      fontWeight: '700',
+      fontWeight: "700",
       color: palette.text,
     },
     accountMeta: {
@@ -1457,15 +1628,15 @@ const makeStyles = (palette: AppPalette) =>
     group: {
       paddingHorizontal: 0,
       paddingVertical: 0,
-      overflow: 'hidden',
+      overflow: "hidden",
     },
     bookmarkletRow: {
       padding: 16,
-      alignItems: 'flex-start',
+      alignItems: "flex-start",
     },
     row: {
-      flexDirection: 'row',
-      alignItems: 'center',
+      flexDirection: "row",
+      alignItems: "center",
       gap: 12,
       paddingHorizontal: 14,
       paddingVertical: 13,
@@ -1474,8 +1645,8 @@ const makeStyles = (palette: AppPalette) =>
       width: 32,
       height: 32,
       borderRadius: 10,
-      alignItems: 'center',
-      justifyContent: 'center',
+      alignItems: "center",
+      justifyContent: "center",
       backgroundColor: palette.mutedSurface,
     },
     rowText: {
@@ -1484,15 +1655,15 @@ const makeStyles = (palette: AppPalette) =>
     },
     rowLabel: {
       fontSize: 15,
-      fontWeight: '600',
+      fontWeight: "600",
     },
     rowValue: {
       fontSize: 13,
       color: palette.textSecondary,
     },
     syncActions: {
-      flexDirection: 'row',
-      alignItems: 'center',
+      flexDirection: "row",
+      alignItems: "center",
       gap: 4,
     },
     syncIconButton: {
@@ -1507,14 +1678,14 @@ const makeStyles = (palette: AppPalette) =>
       height: 22,
       borderRadius: 11,
       paddingHorizontal: 6,
-      alignItems: 'center',
-      justifyContent: 'center',
+      alignItems: "center",
+      justifyContent: "center",
       backgroundColor: palette.accent,
     },
     badgeText: {
-      color: '#ffffff',
+      color: "#ffffff",
       fontSize: 12,
-      fontWeight: '700',
+      fontWeight: "700",
     },
     infoRow: {
       paddingHorizontal: 14,
@@ -1523,7 +1694,7 @@ const makeStyles = (palette: AppPalette) =>
     },
     infoLabel: {
       fontSize: 13,
-      fontWeight: '600',
+      fontWeight: "600",
       color: palette.text,
     },
     infoValue: {
@@ -1532,14 +1703,14 @@ const makeStyles = (palette: AppPalette) =>
     },
     sectionLabel: {
       fontSize: 13,
-      fontWeight: '600',
+      fontWeight: "600",
       color: palette.textSecondary,
-      textTransform: 'uppercase',
+      textTransform: "uppercase",
       letterSpacing: 0.5,
       marginLeft: 4,
     },
     buildLine: {
-      alignItems: 'center',
+      alignItems: "center",
       paddingTop: 4,
       paddingBottom: 2,
     },

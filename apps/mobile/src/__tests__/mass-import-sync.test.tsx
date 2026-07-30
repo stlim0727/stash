@@ -1,25 +1,25 @@
-import { act, renderHook, waitFor } from '@testing-library/react-native';
-import type { ReactNode } from 'react';
+import { act, renderHook, waitFor } from "@testing-library/react-native";
+import type { ReactNode } from "react";
 
-import type { Bookmark } from '@/domain/types';
+import type { Bookmark } from "@/domain/types";
 
-jest.mock('@/storage/repository', () =>
-  require('./helpers/fake-repository').createFakeRepositoryModule(),
+jest.mock("@/storage/repository", () =>
+  require("./helpers/fake-repository").createFakeRepositoryModule(),
 );
 
 const mockRealSession = {
-  access_token: 'real-token',
-  refresh_token: 'real-refresh',
-  token_type: 'bearer',
+  access_token: "real-token",
+  refresh_token: "real-refresh",
+  token_type: "bearer",
   expires_at: Math.floor(Date.now() / 1000) + 3600,
-  user: { id: 'real-user', is_anonymous: false, email: 'user@example.com' },
+  user: { id: "real-user", is_anonymous: false, email: "user@example.com" },
 };
 
-jest.mock('@/supabase/auth-provider', () => {
+jest.mock("@/supabase/auth-provider", () => {
   let state = {
-    status: 'authenticated' as string,
+    status: "authenticated" as string,
     session: mockRealSession as unknown,
-    userId: 'real-user' as string | null,
+    userId: "real-user" as string | null,
     message: null as string | null,
     ensureAnonymousSession: async () => state.session,
   };
@@ -35,58 +35,68 @@ jest.mock('@/supabase/auth-provider', () => {
 let mockServerDuplicateUrlMap: Record<string, string> = {};
 let mockCreateNetworkErrorOnce = false;
 
-jest.mock('@/api/bookmarks', () => {
+jest.mock("@/api/bookmarks", () => {
   let remoteRows: Array<{ id: string; url: string | null }> = [];
   const listBookmarksUpdatedSince = jest.fn(async () => []);
   const listBookmarkIds = jest.fn(async () => remoteRows.map((r) => r.id));
   const empty = async () => [];
-  const resetLibraryMock = jest.fn(async () => ({ bookmarks: remoteRows.length }));
+  const resetLibraryMock = jest.fn(async () => ({
+    bookmarks: remoteRows.length,
+  }));
 
-  const createBookmarkMock = jest.fn(async (payload: { url?: string | null; id?: string }) => {
-    if (mockCreateNetworkErrorOnce) {
-      mockCreateNetworkErrorOnce = false;
-      throw new Error('Network error during create');
-    }
-    const url = payload.url ?? null;
-    if (url && mockServerDuplicateUrlMap[url]) {
-      return {
-        bookmark_id: mockServerDuplicateUrlMap[url],
-        status: 'duplicate' as const,
-        metadata_status: 'complete' as const,
-      };
-    }
-    const newId = payload.id || 'server-gen-id-' + Math.random().toString(36).substring(2, 9);
-    remoteRows.push({ id: newId, url });
-    return {
-      bookmark_id: newId,
-      status: 'created' as const,
-      metadata_status: 'complete' as const,
-    };
-  });
-
-  const createBookmarksMock = jest.fn(async (payloads: Array<{ url?: string | null; id?: string }>) => {
-    if (mockCreateNetworkErrorOnce) {
-      mockCreateNetworkErrorOnce = false;
-      throw new Error('Network error during bulk create');
-    }
-    return payloads.map((payload) => {
+  const createBookmarkMock = jest.fn(
+    async (payload: { url?: string | null; id?: string }) => {
+      if (mockCreateNetworkErrorOnce) {
+        mockCreateNetworkErrorOnce = false;
+        throw new Error("Network error during create");
+      }
       const url = payload.url ?? null;
       if (url && mockServerDuplicateUrlMap[url]) {
         return {
           bookmark_id: mockServerDuplicateUrlMap[url],
-          status: 'duplicate' as const,
-          metadata_status: 'complete' as const,
+          status: "duplicate" as const,
+          metadata_status: "complete" as const,
         };
       }
-      const newId = payload.id || 'server-gen-id-' + Math.random().toString(36).substring(2, 9);
+      const newId =
+        payload.id ||
+        "server-gen-id-" + Math.random().toString(36).substring(2, 9);
       remoteRows.push({ id: newId, url });
       return {
         bookmark_id: newId,
-        status: 'created' as const,
-        metadata_status: 'complete' as const,
+        status: "created" as const,
+        metadata_status: "complete" as const,
       };
-    });
-  });
+    },
+  );
+
+  const createBookmarksMock = jest.fn(
+    async (payloads: Array<{ url?: string | null; id?: string }>) => {
+      if (mockCreateNetworkErrorOnce) {
+        mockCreateNetworkErrorOnce = false;
+        throw new Error("Network error during bulk create");
+      }
+      return payloads.map((payload) => {
+        const url = payload.url ?? null;
+        if (url && mockServerDuplicateUrlMap[url]) {
+          return {
+            bookmark_id: mockServerDuplicateUrlMap[url],
+            status: "duplicate" as const,
+            metadata_status: "complete" as const,
+          };
+        }
+        const newId =
+          payload.id ||
+          "server-gen-id-" + Math.random().toString(36).substring(2, 9);
+        remoteRows.push({ id: newId, url });
+        return {
+          bookmark_id: newId,
+          status: "created" as const,
+          metadata_status: "complete" as const,
+        };
+      });
+    },
+  );
 
   return {
     __setRemoteRows: (rows: Array<{ id: string; url: string | null }>) => {
@@ -110,21 +120,24 @@ jest.mock('@/api/bookmarks', () => {
       listCollections: empty,
       createBookmark: createBookmarkMock,
       createBookmarks: createBookmarksMock,
-      updateBookmark: async (_id: string, payload: unknown) => payload as Bookmark,
+      updateBookmark: async (_id: string, payload: unknown) =>
+        payload as Bookmark,
       resetLibrary: resetLibraryMock,
     }),
   };
 });
 
-jest.mock('@/domain/enrichment', () => ({
-  enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
+jest.mock("@/domain/enrichment", () => ({
+  enrichBookmark: async () => ({ patch: {}, metadata_status: "complete" }),
 }));
 
-import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
-import { type FakeRepositoryModule } from './helpers/fake-repository';
+import { BookmarksProvider, useBookmarks } from "@/store/bookmarks";
+import { type FakeRepositoryModule } from "./helpers/fake-repository";
 
-const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
-const apiMock = jest.requireMock('@/api/bookmarks') as {
+const fakeRepo = jest.requireMock(
+  "@/storage/repository",
+) as FakeRepositoryModule;
+const apiMock = jest.requireMock("@/api/bookmarks") as {
   __setRemoteRows: (rows: Array<{ id: string; url: string | null }>) => void;
   __setDuplicateMap: (map: Record<string, string>) => void;
   __setNetworkErrorOnce: (val: boolean) => void;
@@ -132,7 +145,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
   __createBookmarksMock: jest.Mock;
   __resetLibraryMock: jest.Mock;
 };
-const authMock = jest.requireMock('@/supabase/auth-provider') as {
+const authMock = jest.requireMock("@/supabase/auth-provider") as {
   __setAuth: (next: Record<string, unknown>) => void;
 };
 
@@ -165,11 +178,15 @@ beforeEach(() => {
   apiMock.__createBookmarkMock.mockClear();
   apiMock.__createBookmarksMock.mockClear();
   apiMock.__resetLibraryMock.mockClear();
-  authMock.__setAuth({ status: 'authenticated', session: mockRealSession, userId: 'real-user' });
+  authMock.__setAuth({
+    status: "authenticated",
+    session: mockRealSession,
+    userId: "real-user",
+  });
 });
 
-describe('Mass Import, Sync & Reset lifecycle', () => {
-  test('mass imports 50 items, dedupes intra-batch, and flushes to local queue without blocking UI', async () => {
+describe("Mass Import, Sync & Reset lifecycle", () => {
+  test("mass imports 50 items, dedupes intra-batch, and flushes to local queue without blocking UI", async () => {
     const { result } = await renderReadyStore();
 
     const importItems = Array.from({ length: 50 }, (_, i) => ({
@@ -194,9 +211,9 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
     expect(fakeRepo.__bookmarks()).toHaveLength(40);
   });
 
-  test('syncs bulk import and adopts server duplicate IDs (STASH-3Q) without duplicating local rows', async () => {
-    const EXISTING_SERVER_ID = '00000000-0000-4000-8000-0000000000ef';
-    const DUP_URL = 'https://example.com/already-on-server';
+  test("syncs bulk import and adopts server duplicate IDs (STASH-3Q) without duplicating local rows", async () => {
+    const EXISTING_SERVER_ID = "00000000-0000-4000-8000-0000000000ef";
+    const DUP_URL = "https://example.com/already-on-server";
 
     // The existing bookmark lives on the server under EXISTING_SERVER_ID
     apiMock.__setDuplicateMap({ [DUP_URL]: EXISTING_SERVER_ID });
@@ -205,9 +222,27 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
     const { result } = await renderReadyStore();
 
     const importItems = [
-      { url: DUP_URL, title: 'Duplicate Item', notes: null, tags: [], collection: null },
-      { url: 'https://example.com/fresh-item-1', title: 'Fresh 1', notes: null, tags: [], collection: null },
-      { url: 'https://example.com/fresh-item-2', title: 'Fresh 2', notes: null, tags: [], collection: null },
+      {
+        url: DUP_URL,
+        title: "Duplicate Item",
+        notes: null,
+        tags: [],
+        collection: null,
+      },
+      {
+        url: "https://example.com/fresh-item-1",
+        title: "Fresh 1",
+        notes: null,
+        tags: [],
+        collection: null,
+      },
+      {
+        url: "https://example.com/fresh-item-2",
+        title: "Fresh 2",
+        notes: null,
+        tags: [],
+        collection: null,
+      },
     ];
 
     await act(async () => {
@@ -215,21 +250,25 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
     });
 
     // Wait for the auto-triggered background sync to settle
-    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
-    await waitFor(() => expect(result.current.queue).toHaveLength(0), { timeout: 5000 });
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 5000,
+    });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), {
+      timeout: 5000,
+    });
 
     // The duplicate item must adopt EXISTING_SERVER_ID locally
     const dupBookmark = result.current.inbox.find((b) => b.url === DUP_URL);
     expect(dupBookmark).toBeDefined();
     expect(dupBookmark?.id).toBe(EXISTING_SERVER_ID);
-    expect(dupBookmark?.sync_status).toBe('synced');
+    expect(dupBookmark?.sync_status).toBe("synced");
 
     // Ensure library total count is exactly 3 (no duplication of duplicate item)
     expect(result.current.inbox).toHaveLength(3);
     expect(fakeRepo.__bookmarks()).toHaveLength(3);
   });
 
-  test('tracks inbox counter stability and pending queue counter reduction during chunked bulk sync', async () => {
+  test("tracks inbox counter stability and pending queue counter reduction during chunked bulk sync", async () => {
     const { result } = await renderReadyStore();
 
     // Pause sync so we can verify exact counter counts before and during upload
@@ -261,15 +300,21 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
     });
 
     // Wait for sync to settle completely
-    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
-    await waitFor(() => expect(result.current.queue).toHaveLength(0), { timeout: 5000 });
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 5000,
+    });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), {
+      timeout: 5000,
+    });
 
     // Inbox counter stays exactly 60 (no fluctuations or duplicates)
     expect(result.current.inbox).toHaveLength(60);
-    expect(result.current.inbox.every((b) => b.sync_status === 'synced')).toBe(true);
+    expect(result.current.inbox.every((b) => b.sync_status === "synced")).toBe(
+      true,
+    );
   });
 
-  test('reproduces STASH-3Y / STASH-41 counter bouncing: background metadata resolution during bulk create sync does NOT enqueue update operations', async () => {
+  test("reproduces STASH-3Y / STASH-41 counter bouncing: background metadata resolution during bulk create sync does NOT enqueue update operations", async () => {
     const { result } = await renderReadyStore();
 
     await act(async () => {
@@ -278,17 +323,31 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
 
     await act(async () => {
       result.current.importBookmarks([
-        { url: 'https://example.com/meta-1', title: 'Meta 1', notes: null, tags: [], collection: null },
-        { url: 'https://example.com/meta-2', title: 'Meta 2', notes: null, tags: [], collection: null },
+        {
+          url: "https://example.com/meta-1",
+          title: "Meta 1",
+          notes: null,
+          tags: [],
+          collection: null,
+        },
+        {
+          url: "https://example.com/meta-2",
+          title: "Meta 2",
+          notes: null,
+          tags: [],
+          collection: null,
+        },
       ]);
     });
 
     // Simulate background metadata resolution (site_name, metadata_status: 'complete')
-    const item1 = result.current.inbox.find((b) => b.url === 'https://example.com/meta-1')!;
+    const item1 = result.current.inbox.find(
+      (b) => b.url === "https://example.com/meta-1",
+    )!;
     await fakeRepo.repository.updateBookmark({
       ...item1,
-      site_name: 'Example Site',
-      metadata_status: 'complete',
+      site_name: "Example Site",
+      metadata_status: "complete",
     });
 
     // Resume sync
@@ -296,51 +355,73 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
       result.current.setSyncPaused(false);
     });
 
-    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 5000,
+    });
 
     // Queue must settle cleanly to 0 (metadata resolution must not bounce queue entries or enqueue updates)
     expect(result.current.queue).toHaveLength(0);
   });
 
-  test('resetLibrary refuses while local import flush is active', async () => {
+  test("resetLibrary refuses while local import flush is active", async () => {
     const { result } = await renderReadyStore();
     const originalInsertImportBatch = fakeRepo.repository.insertImportBatch;
     const flushStarted = deferred();
     const releaseFlush = deferred();
 
-    fakeRepo.repository.insertImportBatch = jest.fn(async (bookmarks, entries) => {
-      flushStarted.resolve();
-      await releaseFlush.promise;
-      await originalInsertImportBatch?.(bookmarks, entries);
-    });
+    fakeRepo.repository.insertImportBatch = jest.fn(
+      async (bookmarks, entries) => {
+        flushStarted.resolve();
+        await releaseFlush.promise;
+        await originalInsertImportBatch?.(bookmarks, entries);
+      },
+    );
 
     try {
       await act(async () => {
         result.current.importBookmarks([
-          { url: 'https://example.com/reset-busy-local-1', title: 'R1', notes: null, tags: [], collection: null },
-          { url: 'https://example.com/reset-busy-local-2', title: 'R2', notes: null, tags: [], collection: null },
+          {
+            url: "https://example.com/reset-busy-local-1",
+            title: "R1",
+            notes: null,
+            tags: [],
+            collection: null,
+          },
+          {
+            url: "https://example.com/reset-busy-local-2",
+            title: "R2",
+            notes: null,
+            tags: [],
+            collection: null,
+          },
         ]);
       });
 
       await flushStarted.promise;
 
-      let resetOutcome!: Awaited<ReturnType<typeof result.current.resetLibrary>>;
+      let resetOutcome!: Awaited<
+        ReturnType<typeof result.current.resetLibrary>
+      >;
       await act(async () => {
         resetOutcome = await result.current.resetLibrary();
       });
 
-      expect(resetOutcome).toEqual({ ok: false, reason: 'busy' });
+      expect(resetOutcome).toEqual({ ok: false, reason: "busy" });
       expect(apiMock.__resetLibraryMock).not.toHaveBeenCalled();
     } finally {
       releaseFlush.resolve();
       fakeRepo.repository.insertImportBatch = originalInsertImportBatch;
     }
 
-    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
-    await waitFor(() => expect(result.current.queue).toHaveLength(0), { timeout: 5000 });
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 5000,
+    });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), {
+      timeout: 5000,
+    });
   });
 
-  test('resetLibrary refuses while sync upload is active, and cleanly clears state when idle', async () => {
+  test("resetLibrary refuses while sync upload is active, and cleanly clears state when idle", async () => {
     const { result } = await renderReadyStore();
 
     await act(async () => {
@@ -349,14 +430,29 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
 
     await act(async () => {
       result.current.importBookmarks([
-        { url: 'https://example.com/reset-busy-sync-1', title: 'R1', notes: null, tags: [], collection: null },
-        { url: 'https://example.com/reset-busy-sync-2', title: 'R2', notes: null, tags: [], collection: null },
+        {
+          url: "https://example.com/reset-busy-sync-1",
+          title: "R1",
+          notes: null,
+          tags: [],
+          collection: null,
+        },
+        {
+          url: "https://example.com/reset-busy-sync-2",
+          title: "R2",
+          notes: null,
+          tags: [],
+          collection: null,
+        },
       ]);
     });
 
-    await waitFor(() => expect(result.current.queue).toHaveLength(2), { timeout: 5000 });
+    await waitFor(() => expect(result.current.queue).toHaveLength(2), {
+      timeout: 5000,
+    });
 
-    const originalCreateBookmarks = apiMock.__createBookmarksMock.getMockImplementation();
+    const originalCreateBookmarks =
+      apiMock.__createBookmarksMock.getMockImplementation();
     const uploadStarted = deferred();
     const releaseUpload = deferred();
     apiMock.__createBookmarksMock.mockImplementationOnce(async (payloads) => {
@@ -380,14 +476,18 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
         busyOutcome = await result.current.resetLibrary();
       });
 
-      expect(busyOutcome).toEqual({ ok: false, reason: 'busy' });
+      expect(busyOutcome).toEqual({ ok: false, reason: "busy" });
       expect(apiMock.__resetLibraryMock).not.toHaveBeenCalled();
     } finally {
       releaseUpload.resolve();
     }
 
-    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
-    await waitFor(() => expect(result.current.queue).toHaveLength(0), { timeout: 5000 });
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 5000,
+    });
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), {
+      timeout: 5000,
+    });
 
     let resetOutcome!: Awaited<ReturnType<typeof result.current.resetLibrary>>;
     await act(async () => {
@@ -401,7 +501,7 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
     expect(apiMock.__resetLibraryMock).toHaveBeenCalledTimes(1);
   });
 
-  test('recovers from transient network error mid-bulk sync without losing pending queue items', async () => {
+  test("recovers from transient network error mid-bulk sync without losing pending queue items", async () => {
     const { result } = await renderReadyStore();
 
     // Set 1 transient network failure for the upcoming sync
@@ -409,17 +509,43 @@ describe('Mass Import, Sync & Reset lifecycle', () => {
 
     await act(async () => {
       result.current.importBookmarks([
-        { url: 'https://example.com/err-1', title: 'E1', notes: null, tags: [], collection: null },
-        { url: 'https://example.com/err-2', title: 'E2', notes: null, tags: [], collection: null },
+        {
+          url: "https://example.com/err-1",
+          title: "E1",
+          notes: null,
+          tags: [],
+          collection: null,
+        },
+        {
+          url: "https://example.com/err-2",
+          title: "E2",
+          notes: null,
+          tags: [],
+          collection: null,
+        },
       ]);
     });
 
-    // Wait for both the initial failing pass and auto-retry pass to settle completely
-    await waitFor(() => expect(result.current.isSyncing).toBe(false), { timeout: 5000 });
-    await waitFor(() => expect(result.current.queue).toHaveLength(0), { timeout: 5000 });
+    // Wait for the initial failing pass to settle completely
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 5000,
+    });
+
+    // Since metadata is already resolved at the time of the first sync run,
+    // the network failure leaves the items failed. Trigger syncNow manually
+    // to drive the retry pass (simulating a reconnect or manual Sync now nudge).
+    await act(async () => {
+      await result.current.syncNow();
+    });
+
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), {
+      timeout: 5000,
+    });
 
     // Both bookmarks recovered and synced successfully
     expect(result.current.inbox).toHaveLength(2);
-    expect(result.current.inbox.every((b) => b.sync_status === 'synced')).toBe(true);
+    expect(result.current.inbox.every((b) => b.sync_status === "synced")).toBe(
+      true,
+    );
   });
 });
