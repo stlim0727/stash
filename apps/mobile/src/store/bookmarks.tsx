@@ -122,6 +122,13 @@ import {
   recordReconcileNeeded,
 } from "@/sync/reconcile-diagnostics";
 
+export function isBookmarkSyncedOnce(bookmark: Bookmark): boolean {
+  return (
+    hasRemoteIdentity(bookmark.id) &&
+    (bookmark.sync_status === "synced" || bookmark.ever_synced === true)
+  );
+}
+
 export type AddBookmarkResult =
   | {
       status: "created" | "duplicate";
@@ -480,6 +487,11 @@ const AI_RETRY_CHECK_INTERVAL_MS = 5 * 60_000;
  *  aborted the ART runtime. Low enough to keep a 500-item burst harmless, high
  *  enough that interactive saves never queue behind each other in practice. */
 const ENRICHMENT_FETCH_CONCURRENCY = 4;
+/** How long the auto-sync trigger waits after queued work becomes ready before
+ *  running a pass. A burst of captures settles its metadata one row at a time,
+ *  and each settle used to trigger its own sync; this collects them into a
+ *  single bulk upload. Short enough that a lone save still syncs promptly. */
+const METADATA_SYNC_DEBOUNCE_MS = 250;
 
 /** Parse the persisted AI-retry bookkeeping map, tolerating absent/corrupt
  *  values (mirrors `parseIdSet`/`parseTagOps` for the store's other durable
@@ -809,7 +821,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   >(new Set());
   const unseenSuggestionIdsRef = useRef<ReadonlySet<string>>(new Set());
   const [lastPulledAt, setLastPulledAt] = useState<string | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncingState, setIsSyncing] = useState(false);
+  const [isSyncDebounceActive, setIsSyncDebounceActive] = useState(false);
+  const isSyncing = isSyncingState || isSyncDebounceActive;
   const [isResettingLibrary, setIsResettingLibrary] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const syncInFlight = useRef(false);
@@ -1046,10 +1060,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // bookmark-* id was never a real cloud row. hasRemoteIdentity excludes
     // those; every genuine bookmark (old-scheme or new) has a real UUID id
     // regardless of sync state, so this never excludes a legitimately synced one.
-    return (
-      hasRemoteIdentity(bookmark.id) &&
-      (bookmark.sync_status === "synced" || bookmark.ever_synced === true)
-    );
+    return isBookmarkSyncedOnce(bookmark);
   }, []);
 
   // Queue a remote mutation for a bookmark that already exists on the server.
@@ -2450,16 +2461,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // sees `bookmarksRef.current`, which is incomplete while the initial
       // local load hasn't landed (bookmarksRef.current still null) or while
       // the account's first cloud pull is still bringing down previously-
-      // synced rows (isSyncing true covers this window too, since the pull-
-      // on-first-ready effect fires essentially immediately after load).
+      // synced rows (isSyncingState true covers this window too, since the
+      // pull-on-first-ready effect fires essentially immediately after load).
       // Importing during either window can't recognize already-existing
       // rows and durably re-creates every one of them as a fresh duplicate —
       // this is the exact "561 -> 1122" doubling reported twice. Refuse
       // outright rather than risk it; the caller asks the user to retry.
-      if (bookmarksRef.current === null || isSyncing) {
+      if (bookmarksRef.current === null || isSyncingState) {
         recordLog(
           "warn",
-          `import: refused (not ready) items=${items.length} loaded=${bookmarksRef.current !== null} isSyncing=${isSyncing}`,
+          `import: refused (not ready) items=${items.length} loaded=${bookmarksRef.current !== null} isSyncing=${isSyncingState}`,
         );
         return { imported: 0, duplicates: 0, skipped: 0, notReady: true };
       }
@@ -2645,7 +2656,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       );
       return { imported, duplicates, skipped };
     },
-    [loadedBookmarks, enrichInBackground, isSyncing],
+    [loadedBookmarks, enrichInBackground, isSyncingState],
   );
 
   // Record that the user just opened a bookmark (viewed its Detail or opened its
@@ -5422,21 +5433,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // run, and re-triggering it on every render would hot-loop. The lazy-mint
   // effect below bridges the gap — once it mints an anonymous session, auth
   // flips to `anonymous` and this effect takes over with the queued work.
-  useEffect(() => {
-    // Determine if there is any create entry in the queue that is still waiting
-    // for background metadata enrichment to resolve.
-    const hasPendingMetadataCreate = queue.some((entry) => {
-      if (entry.operation !== "create") {
-        return false;
-      }
-      const bookmark = bookmarksRef.current?.find(
-        (b) => b.id === entry.local_id,
-      );
-      return bookmark && bookmark.metadata_status === "pending";
-    });
+  const syncDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-    if (
-      !isSyncing &&
+  useEffect(() => {
+    return () => {
+      if (syncDebounceTimerRef.current) {
+        clearTimeout(syncDebounceTimerRef.current);
+        syncDebounceTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const isSyncNeeded =
+      !isSyncingState &&
       bookmarks !== null &&
       (auth.status === "anonymous" || auth.status === "authenticated") &&
       // 'syncing' is included so an entry an interrupted run stranded in-flight
@@ -5452,19 +5462,45 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           return false;
         }
         if (entry.operation === "create") {
-          // Defer the trigger check for ALL creates in the queue if any create
-          // is still waiting on metadata. This coordinates/batches them so they
-          // accumulate and fire in a single bulk sync pass once all settle.
-          if (hasPendingMetadataCreate) {
+          // Defer only this create while its metadata fetch is still in flight.
+          // Other ready creates can start the debounce window and syncNow will
+          // still filter any pending-metadata rows before upload.
+          const bookmark = bookmarksRef.current?.find(
+            (b) => b.id === entry.local_id,
+          );
+          if (bookmark && bookmark.metadata_status === "pending") {
             return false;
           }
         }
         return true;
-      })
-    ) {
-      void syncNow();
+      });
+
+    if (isSyncNeeded) {
+      if (!syncDebounceTimerRef.current) {
+        setIsSyncDebounceActive(true);
+        syncDebounceTimerRef.current = setTimeout(() => {
+          syncDebounceTimerRef.current = null;
+          setIsSyncDebounceActive(false);
+          // Deliberately syncNowRef, not the `syncNow` captured when the timer
+          // was armed. The window exists precisely so more work can arrive
+          // during it, and every such arrival recreates syncNow (queue is one
+          // of its deps) — the captured closure would upload a snapshot taken
+          // before the batch it is supposed to be batching. Worse, a sign-in or
+          // account switch landing in the window recreates it around the NEW
+          // session, so the stale closure would run a full upload+pull under
+          // the previous account's session. The ref is reassigned every render,
+          // so it always holds the current queue and session.
+          void syncNowRef.current?.().catch(() => {});
+        }, METADATA_SYNC_DEBOUNCE_MS);
+      }
+    } else {
+      if (syncDebounceTimerRef.current) {
+        clearTimeout(syncDebounceTimerRef.current);
+        syncDebounceTimerRef.current = null;
+        setIsSyncDebounceActive(false);
+      }
     }
-  }, [bookmarks, auth.status, queue, isSyncing, syncNow]);
+  }, [bookmarks, auth.status, queue, isSyncingState, syncNow]);
 
   // Lazy anonymous creation on the first save after logout. With lazy logout,
   // signing out leaves `auth.status === 'signed_out'` and NO session — no
@@ -5620,7 +5656,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const diagnosticStats = useMemo(() => {
     const list = bookmarks ?? [];
     const syncTodo = queue.filter((entry) => isSyncable(entry)).length;
-    const syncDone = list.filter((b) => hasSyncedOnce(b.id)).length;
+    const syncDone = list.filter((b) => isBookmarkSyncedOnce(b)).length;
 
     // A bookmark is "syncing twice" if it has already synced once but has a pending update mutation in the queue.
     const syncingTwiceIds = new Set(
@@ -5629,7 +5665,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .map((entry) => entry.local_id),
     );
     const syncingTwice = list.filter(
-      (b) => hasSyncedOnce(b.id) && syncingTwiceIds.has(b.id),
+      (b) => isBookmarkSyncedOnce(b) && syncingTwiceIds.has(b.id),
     ).length;
     const syncedOnce = Math.max(0, syncDone - syncingTwice);
 
