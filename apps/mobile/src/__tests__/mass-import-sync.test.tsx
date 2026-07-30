@@ -501,6 +501,42 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     expect(apiMock.__resetLibraryMock).toHaveBeenCalledTimes(1);
   });
 
+  test("a save landing inside the debounce window joins the same batch (fresh queue, not the armed-at snapshot)", async () => {
+    // PR #635 review: the auto-sync trigger waits METADATA_SYNC_DEBOUNCE_MS
+    // before running a pass so a burst of captures uploads together. The
+    // timer must invoke the CURRENT syncNow, not the one captured when it was
+    // armed — the whole point of the window is that more work arrives during
+    // it, and each arrival recreates syncNow around the new queue. A captured
+    // closure would upload only the first save (a single non-bulk create),
+    // leaving the second for a later pass, which is exactly the per-item sync
+    // churn the debounce was added to stop.
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.addBookmark({ url: "https://example.com/batched-1" });
+    });
+    // Well inside the 250ms window, so this must join the first one's batch.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      result.current.addBookmark({ url: "https://example.com/batched-2" });
+    });
+
+    await waitFor(() => expect(result.current.queue).toHaveLength(0), {
+      timeout: 5000,
+    });
+
+    expect(apiMock.__createBookmarksMock).toHaveBeenCalledTimes(1);
+    const batch = apiMock.__createBookmarksMock.mock.calls[0]?.[0] as Array<{
+      url: string;
+    }>;
+    expect(batch.map((payload) => payload.url).sort()).toEqual([
+      "https://example.com/batched-1",
+      "https://example.com/batched-2",
+    ]);
+    // The single-row endpoint is the tell-tale of a one-item stale batch.
+    expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  });
+
   test("recovers from transient network error mid-bulk sync without losing pending queue items", async () => {
     const { result } = await renderReadyStore();
 

@@ -325,6 +325,58 @@ test('resetLibrary succeeds even while a paused syncNow call is mid-check', asyn
   });
 });
 
+test('queued work left sitting while paused does not re-arm the auto-sync timer in a loop', async () => {
+  // PR #635 review: the auto-sync trigger now debounces before running a pass,
+  // and the debounce window is mirrored into React state. Paused is the case
+  // where that could bite — syncNow's paused branch returns without draining
+  // anything, so the trigger condition stays true forever. If the state flip
+  // when the timer fires ever re-ran the scheduling effect (i.e. if that state
+  // joined its dependency array), it would arm another timer, then another:
+  // an ensureRepositoryReady + 'synced_user_id' read every 250ms for as long
+  // as sync stays paused. On a real device that read is a genuine SQLite call
+  // that also contends with resetLibrary's busy-guard (Sentry STASH-3K). The
+  // timer must be armed once per real input change, never once per firing.
+  const { result } = await renderReadyStore();
+  await act(async () => {
+    result.current.setSyncPaused(true);
+  });
+
+  const originalGetMeta = fakeRepo.repository.getMeta;
+  let syncedUserIdReads = 0;
+  fakeRepo.repository.getMeta = (key: string) => {
+    if (key === 'synced_user_id') {
+      syncedUserIdReads += 1;
+    }
+    return originalGetMeta(key);
+  };
+
+  try {
+    await act(async () => {
+      result.current.addBookmark({ url: 'https://example.com/paused-loop' });
+    });
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+
+    // Let the single armed debounce fire and everything it triggers settle.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    // Guards the probe itself: if the trigger never fired at all, the
+    // no-growth assertion below would pass vacuously.
+    const readsAfterSettling = syncedUserIdReads;
+    expect(readsAfterSettling).toBeGreaterThan(0);
+
+    // Nothing changes from here on: no save, no unpause, no auth change. Four
+    // more debounce periods must therefore produce no further checks at all.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    });
+    expect(syncedUserIdReads).toBe(readsAfterSettling);
+    expect(apiMock.__createBookmarkMock).not.toHaveBeenCalled();
+  } finally {
+    fakeRepo.repository.getMeta = originalGetMeta;
+  }
+});
+
 test('import while the startup cloud pull is still in flight is refused (Sentry STASH-3K/3M: fresh device, non-empty cloud account)', async () => {
   // The realistic trigger for the reported "561 -> 1122" doubling: a fresh
   // install (or post-reset re-signin) has an EMPTY local cache but a

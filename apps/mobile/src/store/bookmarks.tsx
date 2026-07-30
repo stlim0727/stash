@@ -487,6 +487,10 @@ const AI_RETRY_CHECK_INTERVAL_MS = 5 * 60_000;
  *  aborted the ART runtime. Low enough to keep a 500-item burst harmless, high
  *  enough that interactive saves never queue behind each other in practice. */
 const ENRICHMENT_FETCH_CONCURRENCY = 4;
+/** How long the auto-sync trigger waits after queued work becomes ready before
+ *  running a pass. A burst of captures settles its metadata one row at a time,
+ *  and each settle used to trigger its own sync; this collects them into a
+ *  single bulk upload. Short enough that a lone save still syncs promptly. */
 const METADATA_SYNC_DEBOUNCE_MS = 250;
 
 /** Parse the persisted AI-retry bookkeeping map, tolerating absent/corrupt
@@ -5477,7 +5481,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         syncDebounceTimerRef.current = setTimeout(() => {
           syncDebounceTimerRef.current = null;
           setIsSyncDebounceActive(false);
-          void syncNow();
+          // Deliberately syncNowRef, not the `syncNow` captured when the timer
+          // was armed. The window exists precisely so more work can arrive
+          // during it, and every such arrival recreates syncNow (queue is one
+          // of its deps) — the captured closure would upload a snapshot taken
+          // before the batch it is supposed to be batching. Worse, a sign-in or
+          // account switch landing in the window recreates it around the NEW
+          // session, so the stale closure would run a full upload+pull under
+          // the previous account's session. The ref is reassigned every render,
+          // so it always holds the current queue and session.
+          void syncNowRef.current?.().catch(() => {});
         }, METADATA_SYNC_DEBOUNCE_MS);
       }
     } else {
