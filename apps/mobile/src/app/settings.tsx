@@ -1217,18 +1217,21 @@ export default function SettingsScreen() {
           {
             key: "html",
             label: t("settings.exportSheet.html"),
+            description: t("settings.exportSheet.htmlDescription"),
             icon: "globe-outline",
             onPress: () => chooseExport("html"),
           },
           {
             key: "csv",
             label: t("settings.exportSheet.csv"),
+            description: t("settings.exportSheet.csvDescription"),
             icon: "grid-outline",
             onPress: () => chooseExport("csv"),
           },
           {
             key: "json",
             label: t("settings.exportSheet.json"),
+            description: t("settings.exportSheet.jsonDescription"),
             icon: "code-slash-outline",
             onPress: () => chooseExport("json"),
           },
