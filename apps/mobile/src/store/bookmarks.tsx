@@ -3440,8 +3440,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // first cut of this diagnostic used exactly those words and every
             // occurrence came back as "[Filtered]" (STASH-4F), hiding even
             // the baseline message that used to be visible pre-#649.
+            //
+            // STASH-4G/4H: with the scrubbing fixed, real diagnostics came
+            // back — and every field was healthy (correct owner, JWT sub
+            // matches, not anonymous, same bearer as the reactive session,
+            // ~an hour from expiry), repeated across a dozen+ failures. That
+            // rules out every session-identity theory this diagnostic was
+            // built to test. What's left of the insert policy is the OTHER
+            // clause: `EXISTS (SELECT 1 FROM bookmarks WHERE id = bookmark_id
+            // AND user_id = auth.uid())`. Since auth.uid() is now proven
+            // correct, a failure there means THIS bookmark_id specifically
+            // doesn't resolve — logging it is what actually lets that be
+            // checked against the database on the next occurrence.
             const jwtSub = jwtSubject(session.access_token);
             const enqueueSessionDiagnostics = JSON.stringify({
+              bookmarkId,
               enqueueOwnerId: session.user.id,
               jwtSubMatchesOwnerId: jwtSub === null ? null : jwtSub === session.user.id,
               ownerIsAnonymous: session.user.is_anonymous ?? null,
