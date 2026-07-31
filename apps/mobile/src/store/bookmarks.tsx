@@ -15,6 +15,7 @@ import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
 import { createConcurrencyLimiter } from "@/domain/concurrency";
 import { enrichBookmark } from "@/domain/enrichment";
 import { isTransientNetworkError } from "@/domain/network-errors";
+import { jwtSubject } from "@/domain/jwt";
 import { planTitleBackfill } from "@/domain/title-backfill";
 import type { TitleBackfillPatch } from "@/domain/title-backfill";
 import {
@@ -3253,6 +3254,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (error instanceof SupabaseRequestError && error.status === 401) {
             const refreshed =
               (await auth.ensureAnonymousSession(true)) ?? session;
+            // Codex review (PR #649): this used to retry with `refreshed`
+            // but leave the outer `session` pointing at the rejected one —
+            // so if this retry itself came back 429, the 429 handler below
+            // would enqueue with the SAME session PostgREST just 401'd,
+            // rather than the one that actually reached the rate-limit
+            // check. Reassign so every later use of `session` (including
+            // the enqueue diagnostics) reflects what this call actually used.
+            session = refreshed;
             enrichment = await createSyncApi(refreshed).requestEnrichment(
               bookmarkId,
               metadata,
@@ -3363,6 +3372,47 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // an enqueue failure must never change what the caller sees for
           // this 429, and is never retried here.
           if (session) {
+            // STASH-4D/4E: production keeps reporting "new row violates row-
+            // level security policy for table pending_ai_enrichment" on this
+            // insert even on builds carrying STASH-49's fix (this call
+            // already reuses `session`, not the possibly-stale `auth.session`
+            // — see the comment where `session` is assigned above). The same
+            // session's token is independently proven valid moments earlier:
+            // the edge function's forwarded-auth GET of this exact bookmark,
+            // inside requestEnrichment above, just succeeded. Static review
+            // of both call sites finds nothing further wrong, so capture
+            // enough about the session actually used here — instead of
+            // guessing a further fix — to tell "wrong identity" from
+            // "empty/expired token" from "a session object requestEnrichment
+            // didn't use" apart on the next occurrence.
+            //
+            // Codex review (PR #649) on the first cut of this diagnostic:
+            // - `session === auth.session` is nearly always false even in
+            //   the healthy case, since ensureAnonymousSession() restores
+            //   from storage and allocates a fresh object every call — it
+            //   can't distinguish "actually different" from "just
+            //   re-deserialized". Compare the token VALUE instead.
+            // - session.user.id is only what the JS session object claims;
+            //   the RLS check evaluates auth.uid() from the access token's
+            //   own `sub` claim. Decode it locally (jwtSubject — no
+            //   atob/Buffer dependency, never logs the raw token) so a
+            //   divergence between the two is directly visible instead of
+            //   assumed away.
+            const tokenSubject = jwtSubject(session.access_token);
+            const enqueueSessionDiagnostics = JSON.stringify({
+              sessionUserId: session.user.id,
+              tokenSubjectMatchesSessionUserId:
+                tokenSubject === null ? null : tokenSubject === session.user.id,
+              sessionIsAnonymous: session.user.is_anonymous ?? null,
+              authSessionUserId: auth.session?.user.id ?? null,
+              sameAccessTokenAsAuthSession: session.access_token === auth.session?.access_token,
+              accessTokenLength: session.access_token?.length ?? 0,
+              expiresAt: session.expires_at ?? null,
+              secondsUntilExpiry:
+                session.expires_at != null
+                  ? session.expires_at - Math.floor(Date.now() / 1000)
+                  : null,
+            });
             // Snapshotted now (before the enqueue POST's round trip) so the
             // .then() below can detect a set-after-clear race: this call's
             // own aiEnriching guard releases in the `finally` below as soon
@@ -3423,13 +3473,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 .catch((enqueueError: unknown) => {
                   recordLog(
                     "warn",
-                    `pending_ai_enrichment enqueue failed: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)}`,
+                    `pending_ai_enrichment enqueue failed: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)} ${enqueueSessionDiagnostics}`,
                   );
                 });
             } catch (enqueueError) {
               recordLog(
                 "warn",
-                `pending_ai_enrichment enqueue threw: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)}`,
+                `pending_ai_enrichment enqueue threw: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)} ${enqueueSessionDiagnostics}`,
               );
             }
           }
