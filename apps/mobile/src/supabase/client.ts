@@ -37,10 +37,39 @@ export class SupabaseRequestError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    /** The response body's `reason` field, when present — e.g. ai-enrich's 429
+     *  carries `'daily_limit' | 'hourly_limit' | ...` so callers can tell a
+     *  quota-exhausted rate limit apart from any other rejection. */
+    public readonly reason?: string,
+    /** The response body's `retry_after` field (seconds), when present. For
+     *  ai-enrich's hourly_limit this is the server's exact computed wait —
+     *  `ceil(seconds until the oldest hourly request leaves the window)` —
+     *  worth preserving instead of guessing a fixed client-side cooldown. */
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = 'SupabaseRequestError';
   }
+}
+
+/** Extract the response body's `reason` field, if it's a string. Shared by
+ *  every edge-function error shape that carries one (currently ai-enrich's
+ *  429 body). */
+function errorReasonFrom(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null) {
+    return undefined;
+  }
+  const reason = (payload as Record<string, unknown>).reason;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
+/** Extract the response body's `retry_after` field, if it's a finite number. */
+function retryAfterSecondsFrom(payload: unknown): number | undefined {
+  if (typeof payload !== 'object' || payload === null) {
+    return undefined;
+  }
+  const retryAfter = (payload as Record<string, unknown>).retry_after;
+  return typeof retryAfter === 'number' && Number.isFinite(retryAfter) ? retryAfter : undefined;
 }
 
 function requireConfig(): SupabaseConfig {
@@ -156,7 +185,12 @@ export class StashSupabaseClient {
 
     const payload = await parseResponse(response);
     if (!response.ok) {
-      throw new SupabaseRequestError(errorMessageFrom(payload, response.status), response.status);
+      throw new SupabaseRequestError(
+        errorMessageFrom(payload, response.status),
+        response.status,
+        errorReasonFrom(payload),
+        retryAfterSecondsFrom(payload),
+      );
     }
 
     return payload as T;

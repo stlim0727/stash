@@ -933,6 +933,17 @@ export default function SettingsScreen() {
           )}
           onPress={() => setAiSuggestionsSheetOpen(true)}
         />
+        {diagnosticStats.ai.todo > 0 ? (
+          <Row
+            styles={styles}
+            palette={palette}
+            icon="hourglass-outline"
+            label={t("settings.aiQueueBacklog.label")}
+            value={t("settings.aiQueueBacklog.value", {
+              count: diagnosticStats.ai.todo,
+            })}
+          />
+        ) : null}
         <Row
           styles={styles}
           palette={palette}
