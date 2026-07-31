@@ -184,12 +184,18 @@ async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefine
 // synchronous handler above — that path is untouched by this addition.
 
 /** How many pending rows one worker tick claims across ALL users. Bounded so
- *  one tick's wall-clock time (chunks run concurrently, so ~one chunk's worth
- *  of Gemini latency) stays comfortably under the cron dispatch's pg_net
- *  timeout (see the migration). */
-const BATCH_CLAIM_LIMIT = 40;
-/** Items per single batched Gemini call — within the 5-10 range from #578. */
-const BATCH_CHUNK_SIZE = 8;
+ *  one tick's wall-clock time (ENRICHMENT_CONCURRENCY rows at a time, so
+ *  ceil(limit / concurrency) waves of provider latency) stays comfortably
+ *  under the cron dispatch's pg_net timeout (see the migration). The cron
+ *  ticks every minute, so this is throughput per minute, not a backlog cap —
+ *  and the per-user quota gate below is the real limit on how fast any one
+ *  user's overflow drains anyway. */
+const BATCH_CLAIM_LIMIT = 24;
+/** How many rows one tick enriches concurrently. Each row is its own provider
+ *  call (see processEnrichmentRow for why they are never batched into one),
+ *  so this — not a prompt-level chunk size — is what keeps a tick from
+ *  bursting past the model provider's per-minute request limit. */
+const ENRICHMENT_CONCURRENCY = 8;
 
 /** Expo's push-send endpoint (STASH #579). Registered/non-anonymous users
  *  only — see the push_tokens migration; nothing here bypasses that, it just
@@ -315,113 +321,126 @@ async function claimEnrichmentQuotaSlot(userId: string): Promise<boolean> {
   }
 }
 
-/** Run one Gemini batch call for `rows` and persist each result. Falls back
- *  to per-item heuristics (mirroring the single-item path's degrade-on-error
- *  behavior) if the batch call itself fails, rather than leaving the whole
- *  chunk stuck; only a failure in the fallback itself (shouldn't happen — it
- *  is network-free) reaches the outer catch and reschedules the chunk. */
-async function processEnrichmentChunk(
-  rows: PendingEnrichmentRow[],
+const EMPTY_ENRICHMENT_CONTEXT = {
+  collections: [] as Array<{ id: string; name: string }>,
+  existingTags: [] as string[],
+};
+
+/** Enrich ONE claimed row with its own provider call and persist the result.
+ *
+ *  One bookmark per model call, deliberately. This worker used to embed a
+ *  whole chunk of bookmarks in a single Gemini call and map the returned JSON
+ *  array back to rows BY ARRAY POSITION, with nothing tying an answer to the
+ *  bookmark it was about: the response only had to be an array of the right
+ *  length. Any reordering, omission-plus-padding, or cross-item bleed in the
+ *  model's answer therefore filed one link's summary/tags/collection under a
+ *  different link, silently and undetectably — the bug users hit on a bulk
+ *  import, which is the one flow that overflows quota into this queue in the
+ *  first place. Per-bookmark calls make that class of mix-up structurally
+ *  impossible rather than merely discouraged by prompt wording.
+ *
+ *  Degrades to the deterministic heuristics for THIS bookmark alone when its
+ *  call fails (mirroring the single-item synchronous path), so one bad link
+ *  can't drag its neighbours down with it. */
+async function processEnrichmentRow(
+  row: PendingEnrichmentRow,
   bookmarksById: Map<string, BookmarkRow>,
   contextByUser: Map<string, { collections: Array<{ id: string; name: string }>; existingTags: string[] }>,
 ): Promise<void> {
-  const emptyContext = { collections: [] as Array<{ id: string; name: string }>, existingTags: [] as string[] };
-  const inputs: EnrichmentInput[] = rows.map((row) => {
-    const bookmark = bookmarksById.get(row.bookmark_id);
-    const ctx = contextByUser.get(row.user_id) ?? emptyContext;
-    return {
-      url: bookmark?.url ?? null,
-      title: bookmark?.title ?? null,
-      description: bookmark?.description ?? null,
-      notes: bookmark?.notes ?? null,
-      site_name: bookmark?.site_name ?? null,
-      content_type: bookmark?.content_type ?? 'url',
-      collections: ctx.collections.map((col) => col.name),
-      existing_tags: ctx.existingTags,
-      locale: row.locale ?? undefined,
-    };
-  });
+  const bookmark = bookmarksById.get(row.bookmark_id);
+  if (!bookmark) {
+    // Defensive: shouldn't happen (a deleted bookmark cascade-deletes its
+    // pending row). Retry rather than fail outright — may be a transient blip.
+    const next = nextAttemptState(row.attempts);
+    await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
+    return;
+  }
+  const ctx = contextByUser.get(row.user_id) ?? EMPTY_ENRICHMENT_CONTEXT;
+  const input: EnrichmentInput = {
+    url: bookmark.url,
+    title: bookmark.title,
+    description: bookmark.description,
+    notes: bookmark.notes,
+    site_name: bookmark.site_name,
+    content_type: bookmark.content_type,
+    collections: ctx.collections.map((col) => col.name),
+    existing_tags: ctx.existingTags,
+    locale: row.locale ?? undefined,
+  };
 
-  let outputs: EnrichmentOutput[];
+  let output: EnrichmentOutput;
   let usedModel = provider.model;
   let degraded = provider === fallbackProvider;
   let degradedReason: DegradedReason | null = degraded ? 'not_configured' : null;
+  let usage: EnrichmentOutput['usage'] = null;
   try {
-    if (provider instanceof GeminiProvider) {
-      const result = await provider.enrichBatch(inputs);
-      outputs = result.outputs;
-    } else {
-      outputs = await Promise.all(inputs.map((input) => provider.enrich(input)));
-    }
+    output = await provider.enrich(input);
+    usage = output.usage ?? null;
   } catch (err) {
-    console.error('Batch enrichment provider failed; using fallback for this chunk:', err);
+    if (provider === fallbackProvider) {
+      // The network-free heuristics threw — nothing left to fall back to.
+      console.error('Batch worker: fallback provider failed', row.bookmark_id, err);
+      const next = nextAttemptState(row.attempts);
+      await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
+      return;
+    }
+    console.error('Batch worker: provider failed; using fallback', row.bookmark_id, err);
+    output = await fallbackProvider.enrich(input);
+    usedModel = fallbackProvider.model;
     degraded = true;
     degradedReason = classifyDegradedReason(err);
-    usedModel = fallbackProvider.model;
-    outputs = await Promise.all(inputs.map((input) => fallbackProvider.enrich(input)));
+    // A GeminiContentError reached Gemini and may have spent tokens even
+    // though its response had no usable candidate — keep that spend rather
+    // than losing it to the fallback's null usage (same as the single-item path).
+    usage = err instanceof GeminiContentError ? err.usage ?? null : null;
   }
 
-  await Promise.all(
-    rows.map(async (row, index) => {
-      const bookmark = bookmarksById.get(row.bookmark_id);
-      const output = outputs[index];
-      if (!bookmark || !output) {
-        // Defensive: shouldn't happen (a deleted bookmark cascade-deletes its
-        // pending row; enrichBatch's length is validated against inputs).
-        // Retry rather than fail outright — this may be a transient blip.
-        const next = nextAttemptState(row.attempts);
-        await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
-        return;
-      }
-      const ctx = contextByUser.get(row.user_id) ?? emptyContext;
-      const matched = matchSuggestedCollection(ctx.collections, output.suggested_collection);
-      const enrichmentRow = {
-        bookmark_id: row.bookmark_id,
-        user_id: row.user_id,
-        summary: output.summary,
-        topics: output.topics,
-        suggested_tags: output.suggested_tags,
-        suggested_collection_id: matched?.id ?? null,
-        suggested_collection_name:
-          !matched && output.suggested_collection?.trim() ? output.suggested_collection.trim() : null,
-        model: usedModel,
-        status: 'complete',
-        confidence: output.confidence,
-        degraded,
-        degraded_reason: degradedReason,
-        // A batch call's usage covers the whole chunk, not one bookmark — see
-        // BatchEnrichmentResult's docs. Left null (not divided/duplicated)
-        // rather than misrepresenting per-bookmark spend; the ai_enrichment_calls
-        // ledger is likewise not written for batch-produced rows.
-        prompt_tokens: null,
-        output_tokens: null,
-        total_tokens: null,
-        updated_at: new Date().toISOString(),
-      };
-      try {
-        const saveRes = await serviceRest(`/ai_enrichments?on_conflict=bookmark_id`, {
-          method: 'POST',
-          headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
-          body: JSON.stringify(enrichmentRow),
-        });
-        if (!saveRes.ok) {
-          console.error(
-            'Batch worker: failed to save ai_enrichments row',
-            row.bookmark_id,
-            saveRes.status,
-          );
-          const next = nextAttemptState(row.attempts);
-          await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
-          return;
-        }
-        await markPendingEnrichmentSettled(row.id, 'done', row.attempts);
-      } catch (err) {
-        console.error('Batch worker: error saving ai_enrichments row', row.bookmark_id, err);
-        const next = nextAttemptState(row.attempts);
-        await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
-      }
-    }),
-  );
+  const matched = matchSuggestedCollection(ctx.collections, output.suggested_collection);
+  const enrichmentRow = {
+    bookmark_id: row.bookmark_id,
+    user_id: row.user_id,
+    summary: output.summary,
+    topics: output.topics,
+    suggested_tags: output.suggested_tags,
+    suggested_collection_id: matched?.id ?? null,
+    suggested_collection_name:
+      !matched && output.suggested_collection?.trim() ? output.suggested_collection.trim() : null,
+    model: usedModel,
+    status: 'complete',
+    confidence: output.confidence,
+    degraded,
+    degraded_reason: degradedReason,
+    // Now that each row has its own call, its usage is genuinely per-bookmark
+    // and can be recorded (a batched call's usage covered a whole chunk, so it
+    // was left null rather than divided). The separate ai_enrichment_calls
+    // spend ledger stays unwritten on this path, as before.
+    prompt_tokens: usage?.prompt_tokens ?? null,
+    output_tokens: usage?.output_tokens ?? null,
+    total_tokens: usage?.total_tokens ?? null,
+    updated_at: new Date().toISOString(),
+  };
+  try {
+    const saveRes = await serviceRest(`/ai_enrichments?on_conflict=bookmark_id`, {
+      method: 'POST',
+      headers: { Prefer: 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify(enrichmentRow),
+    });
+    if (!saveRes.ok) {
+      console.error(
+        'Batch worker: failed to save ai_enrichments row',
+        row.bookmark_id,
+        saveRes.status,
+      );
+      const next = nextAttemptState(row.attempts);
+      await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
+      return;
+    }
+    await markPendingEnrichmentSettled(row.id, 'done', row.attempts);
+  } catch (err) {
+    console.error('Batch worker: error saving ai_enrichments row', row.bookmark_id, err);
+    const next = nextAttemptState(row.attempts);
+    await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
+  }
 }
 
 interface PushTokenRow {
@@ -595,10 +614,13 @@ async function runBatchWorker(): Promise<Response> {
     const contexts = await Promise.all(userIds.map((id) => loadEnrichmentContextForUser(id)));
     const contextByUser = new Map(userIds.map((id, i) => [id, contexts[i]] as const));
 
-    const chunks = chunk(eligible, BATCH_CHUNK_SIZE);
-    await Promise.all(
-      chunks.map((rows) => processEnrichmentChunk(rows, bookmarksById, contextByUser)),
-    );
+    // Bounded concurrency: each row is its own provider call now, so waves run
+    // one after another (only the rows WITHIN a wave overlap). Firing all
+    // BATCH_CLAIM_LIMIT calls at once would burst straight into the model
+    // provider's own per-minute limit and degrade a chunk of them to heuristics.
+    for (const wave of chunk(eligible, ENRICHMENT_CONCURRENCY)) {
+      await Promise.all(wave.map((row) => processEnrichmentRow(row, bookmarksById, contextByUser)));
+    }
 
     // STASH #579: best-effort drained-queue push notification, after the
     // real work above is fully settled. Never throws (see its own docs) and

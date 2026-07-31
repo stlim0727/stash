@@ -6,8 +6,11 @@
 // provider, and writing results back.
 
 /** Split `items` into consecutive groups of at most `size` (the last group
- *  may be smaller). Used to chunk a claimed batch into 5-10-item groups, one
- *  Gemini call per group, per the batching design in #578. */
+ *  may be smaller). Used to walk a claimed batch in bounded-concurrency waves
+ *  — index.ts awaits one wave before starting the next, so at most `size`
+ *  provider calls are ever in flight. (It once cut the batch into groups that
+ *  each became ONE multi-bookmark model call; that positional mapping is what
+ *  crossed suggestions between links — see processEnrichmentRow.) */
 export function chunk<T>(items: readonly T[], size: number): T[][] {
   if (size < 1) {
     throw new Error('chunk size must be >= 1');

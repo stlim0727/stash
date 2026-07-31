@@ -372,126 +372,49 @@ test('requires an api key', () => {
   assert.throws(() => new GeminiProvider({ apiKey: '', fetchImpl: stubFetch(null).fetchImpl }));
 });
 
-// ── Batch worker path (STASH #578 Phase 2) ──────────────────────────────────
+// ── One bookmark per model call ─────────────────────────────────────────────
+// The overflow-queue worker (index.ts) once embedded a whole chunk of
+// bookmarks in ONE call and mapped the returned array back to them by
+// position, which crossed one link's suggestions onto another during a bulk
+// import. There is deliberately no multi-item entry point any more: every call
+// carries exactly one bookmark, so a returned answer can only ever belong to
+// the bookmark that was asked about.
 
-test('enrichBatch sends one call embedding all items and maps results back in order', async () => {
-  const { fetchImpl, calls } = stubFetch([
-    {
-      summary: 'First item summary.',
-      topics: ['a'],
-      suggested_tags: [{ name: 'alpha', confidence: 0.9 }],
-      suggested_collection: null,
-      confidence: 0.9,
-    },
-    {
-      summary: 'Second item summary.',
-      topics: ['b'],
-      suggested_tags: [{ name: 'beta', confidence: 0.8 }],
-      suggested_collection: 'Cooking',
-      confidence: 0.8,
-    },
-  ]);
+test('a call carries exactly one bookmark, never several', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
   const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
 
-  const { outputs, usage } = await provider.enrichBatch([
-    input({ title: 'First' }),
-    input({ title: 'Second' }),
-  ]);
+  await provider.enrich(input({ url: 'https://example.com/alpha', title: 'Alpha' }));
 
   assert.equal(calls.length, 1);
-  assert.equal(outputs.length, 2);
-  assert.equal(outputs[0].summary, 'First item summary.');
-  assert.equal(outputs[1].summary, 'Second item summary.');
-  assert.equal(outputs[1].suggested_collection, 'Cooking');
-  assert.equal(usage, null);
   const body = calls[0].init?.body ?? '';
-  assert.match(body, /Item 1:/);
-  assert.match(body, /Item 2:/);
-  assert.match(body, /First/);
-  assert.match(body, /Second/);
-  assert.match(body, /JSON array of exactly 2 objects/);
+  assert.equal((body.match(/URL: /g) ?? []).length, 1);
+  assert.match(body, /https:\/\/example\.com\/alpha/);
 });
 
-test('enrichBatch lets each item request its own language independently', async () => {
-  const { fetchImpl, calls } = stubFetch([
-    { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
-    { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
-  ]);
+test('two bookmarks go out as two calls that share no content', async () => {
+  const { fetchImpl, calls } = stubFetch({
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection: null,
+    confidence: null,
+  });
   const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
 
-  await provider.enrichBatch([input({ locale: 'ko' }), input({ locale: 'en' })]);
-  const body = calls[0].init?.body ?? '';
-  assert.match(body, /Item 1:[\s\S]*Write this item's summary, suggested_tags, and topics in Korean/);
-  assert.match(body, /Item 2:[\s\S]*Write this item's summary, suggested_tags, and topics in English/);
-});
+  await provider.enrich(input({ url: 'https://example.com/alpha', title: 'Alpha' }));
+  await provider.enrich(input({ url: 'https://example.com/beta', title: 'Beta' }));
 
-test('enrichBatch returns an empty result without calling Gemini for zero inputs', async () => {
-  const { fetchImpl, calls } = stubFetch([]);
-  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
-
-  const { outputs, usage } = await provider.enrichBatch([]);
-  assert.deepEqual(outputs, []);
-  assert.equal(usage, null);
-  assert.equal(calls.length, 0);
-});
-
-test('enrichBatch throws when the model returns the wrong array length', async () => {
-  const { fetchImpl } = stubFetch([
-    { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
-  ]);
-  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
-
-  await assert.rejects(
-    () => provider.enrichBatch([input(), input()]),
-    (err: unknown) => {
-      assert.ok(err instanceof GeminiContentError);
-      assert.match(err.message, /expected an array of 2, got an array of 1/);
-      return true;
-    },
-  );
-});
-
-test('enrichBatch throws when the model returns a non-array', async () => {
-  const { fetchImpl } = stubFetch({ not: 'an array' });
-  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
-
-  await assert.rejects(
-    () => provider.enrichBatch([input()]),
-    (err: unknown) => {
-      assert.ok(err instanceof GeminiContentError);
-      assert.match(err.message, /expected an array of 1, got object/);
-      return true;
-    },
-  );
-});
-
-test('enrichBatch reports the real usage for the whole call, not per item', async () => {
-  const { fetchImpl } = stubFetch(
-    [
-      { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
-      { summary: null, topics: [], suggested_tags: [], suggested_collection: null, confidence: null },
-    ],
-    { usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 300, totalTokenCount: 1200 } },
-  );
-  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
-
-  const { usage } = await provider.enrichBatch([input(), input()]);
-  assert.deepEqual(usage, { prompt_tokens: 900, output_tokens: 300, total_tokens: 1200 });
-});
-
-test('enrichBatch aborts and throws when the endpoint hangs past the timeout', async () => {
-  const fetchImpl: FetchLike = (_url, init) =>
-    new Promise((_resolve, reject) => {
-      init?.signal?.addEventListener('abort', () =>
-        reject(new DOMException('aborted', 'AbortError')),
-      );
-    });
-  const provider = new GeminiProvider({ apiKey: 'k', timeoutMs: 10, fetchImpl });
-  await assert.rejects(() => provider.enrichBatch([input()]), /Gemini batch request timed out after 10ms/);
-});
-
-test('enrichBatch throws on a non-ok response', async () => {
-  const { fetchImpl } = stubFetch(null, { ok: false, status: 429 });
-  const provider = new GeminiProvider({ apiKey: 'k', fetchImpl });
-  await assert.rejects(() => provider.enrichBatch([input()]), /Gemini batch request failed \(429\)/);
+  assert.equal(calls.length, 2);
+  const [first, second] = calls.map((call) => call.init?.body ?? '');
+  assert.match(first, /Alpha/);
+  assert.doesNotMatch(first, /Beta/);
+  assert.match(second, /Beta/);
+  assert.doesNotMatch(second, /Alpha/);
 });
