@@ -3769,6 +3769,103 @@ test('a server-queued marker stays put while the remote row is still pending/pro
   expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
 });
 
+test('a server-queued marker clears when the remote row is already done (Codex review, PR #660)', async () => {
+  // A stale enqueue: a bookmark whose pending_ai_enrichment row the worker
+  // already finished hits 429 again later (e.g. a manual "Refresh AI
+  // suggestions" while quota is exhausted). enqueuePendingEnrichment's
+  // ignore-duplicates resolves successfully against the existing 'done' row
+  // without reviving it, so the client marks it server-queued anyway -- but
+  // the worker will never revisit a 'done' row, and the existing
+  // ai_enrichments row is unchanged (not newer), so no pull would ever clear
+  // this the normal way either. 'done' must be treated as terminal here too.
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta('ai_server_queued', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.fetchPendingEnrichmentStatuses.mockResolvedValueOnce([
+    { bookmark_id: SYNCED_ID, status: 'done' },
+  ]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
+
+  await act(async () => {
+    fireForeground();
+  });
+
+  await waitFor(() =>
+    expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false),
+  );
+});
+
+test('reconciling many terminal ids in one pass persists the removal once, not once per id (Codex review, PR #660)', async () => {
+  // A device returning after many queued rows failed/disappeared must not
+  // fan one setMeta write per id onto the single-connection SQLite actor --
+  // the documented tail-wait contention pattern (STASH-3B, -3N, -3Y).
+  const ids = Array.from(
+    { length: 5 },
+    (_, i) => `7e64cf1e-1111-4000-8000-00000000000${i}`,
+  );
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta('ai_server_queued', JSON.stringify(ids));
+  apiMock.__spies.fetchPendingEnrichmentStatuses.mockResolvedValueOnce(
+    ids.map((bookmark_id) => ({ bookmark_id, status: 'failed' })),
+  );
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+
+  const setMetaSpy = jest.spyOn(fakeRepo.repository, 'setMeta');
+  const callsBefore = setMetaSpy.mock.calls.filter(
+    ([key]) => key === 'ai_server_queued',
+  ).length;
+
+  await act(async () => {
+    fireForeground();
+  });
+
+  await waitFor(() => expect(fakeRepo.__meta('ai_server_queued')).toBe('[]'));
+  const serverQueuedCalls = setMetaSpy.mock.calls.filter(
+    ([key]) => key === 'ai_server_queued',
+  ).length;
+  expect(serverQueuedCalls - callsBefore).toBe(1);
+  setMetaSpy.mockRestore();
+});
+
+test('reconciling more ids than the batch size splits the status check into chunks (Codex review, PR #660)', async () => {
+  // A bulk-import-sized confirmed-queued backlog in one `bookmark_id=in.(...)`
+  // query target runs well into tens of KB, which common HTTP gateways
+  // reject as URI-too-long. 51 ids (one over the 50-per-chunk batch size)
+  // must produce two calls, not one.
+  const ids = Array.from({ length: 51 }, (_, i) => {
+    const hex = i.toString(16).padStart(12, '0');
+    return `7e64cf1e-2222-4000-8000-${hex}`;
+  });
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta('ai_server_queued', JSON.stringify(ids));
+  apiMock.__spies.fetchPendingEnrichmentStatuses.mockImplementation(
+    async (chunk: string[]) =>
+      chunk.map((bookmark_id) => ({ bookmark_id, status: 'pending' })),
+  );
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+
+  await act(async () => {
+    fireForeground();
+  });
+
+  await waitFor(() =>
+    expect(apiMock.__spies.fetchPendingEnrichmentStatuses).toHaveBeenCalledTimes(2),
+  );
+  const callSizes = apiMock.__spies.fetchPendingEnrichmentStatuses.mock.calls.map(
+    ([chunk]: [string[]]) => chunk.length,
+  );
+  expect(callSizes.sort((a: number, b: number) => b - a)).toEqual([50, 1]);
+});
+
 test('a pull that re-delivers the same already-known enrichment (watermark overlap) does not clear a legitimately armed retry marker', async () => {
   // A bookmark already has a known (possibly stale) enrichment. Separately, a
   // *refresh* attempt on it fails and arms a retry marker. The pull's

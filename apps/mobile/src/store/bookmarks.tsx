@@ -453,6 +453,13 @@ const AI_RETRY_STATE_KEY = "ai_suggestion_retry";
  *  `isAiSuggestionServerQueued`. */
 const AI_SERVER_QUEUED_KEY = "ai_server_queued";
 
+// How many ids reconcileAiServerQueued's status check batches per request
+// (Codex review, PR #660) — bounds the `bookmark_id=in.(...)` query target's
+// length so a large confirmed-queued backlog can't produce a URI-too-long
+// rejection. Matches BULK_CREATE_SYNC_CHUNK_SIZE's batch size for the same
+// class of reason (sync/sync-bookmarks.ts).
+const AI_SERVER_QUEUED_STATUS_CHUNK_SIZE = 50;
+
 interface AiRetryState {
   /** When the first attempt (of the current, unexhausted streak) failed. */
   firstAttemptAt: string;
@@ -5676,15 +5683,47 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     if (!session || ids.length === 0) {
       return;
     }
-    createSyncApi(session)
-      .fetchPendingEnrichmentStatuses(ids)
-      .then((rows) => {
-        const statusById = new Map(rows.map((row) => [row.bookmark_id, row.status]));
+    const api = createSyncApi(session);
+    // Bounded chunks (Codex review, PR #660): a bulk-import-sized backlog
+    // (500+ confirmed-queued ids) in one `bookmark_id=in.(...)` query target
+    // runs well into tens of KB, which common HTTP gateways reject as
+    // URI-too-long — the failed request would then just retry itself
+    // unchanged every tick, forever unable to reconcile anything.
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += AI_SERVER_QUEUED_STATUS_CHUNK_SIZE) {
+      chunks.push(ids.slice(i, i + AI_SERVER_QUEUED_STATUS_CHUNK_SIZE));
+    }
+    Promise.all(chunks.map((chunk) => api.fetchPendingEnrichmentStatuses(chunk)))
+      .then((results) => {
+        const statusById = new Map(results.flat().map((row) => [row.bookmark_id, row.status]));
+        // Batch removal: mutate the ref directly and persist/sync the mirror
+        // ONCE for the whole pass, instead of once per terminal id via
+        // clearAiServerQueued. A device returning after many rows failed or
+        // disappeared would otherwise fan that many separate native setMeta
+        // writes onto the single-connection SQLite actor — the documented
+        // tail-wait contention pattern (STASH-3B, -3N, -3Y; see
+        // docs/architecture/sqlite-write-contention.md), which recurs
+        // whenever a loop persists once per item instead of once per batch
+        // (Codex review, PR #660).
+        let removedAny = false;
         for (const id of ids) {
           const status = statusById.get(id);
-          if (status === undefined || status === "failed") {
-            clearAiServerQueued(id);
+          // 'done' is terminal too, alongside 'failed'/missing: a later 429
+          // against a bookmark whose pending_ai_enrichment row the worker
+          // already finished resolves via enqueuePendingEnrichment's
+          // ignore-duplicates without reviving that row, so the worker will
+          // never revisit it and — since the existing ai_enrichments row is
+          // unchanged, not newer — no pull will ever clear this marker the
+          // normal way either (Codex review, PR #660).
+          if (status === undefined || status === "failed" || status === "done") {
+            if (aiServerQueued.current.delete(id)) {
+              removedAny = true;
+            }
           }
+        }
+        if (removedAny) {
+          persistAiServerQueued();
+          syncAiServerQueuedIds();
         }
       })
       .catch((error: unknown) => {
@@ -5693,7 +5732,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           `pending_ai_enrichment status reconcile failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       });
-  }, [auth.session, clearAiServerQueued]);
+  }, [auth.session, persistAiServerQueued, syncAiServerQueuedIds]);
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
