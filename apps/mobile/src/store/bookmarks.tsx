@@ -15,6 +15,7 @@ import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
 import { createConcurrencyLimiter } from "@/domain/concurrency";
 import { enrichBookmark } from "@/domain/enrichment";
 import { isTransientNetworkError } from "@/domain/network-errors";
+import { jwtSubject } from "@/domain/jwt";
 import { planTitleBackfill } from "@/domain/title-backfill";
 import type { TitleBackfillPatch } from "@/domain/title-backfill";
 import {
@@ -3253,6 +3254,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (error instanceof SupabaseRequestError && error.status === 401) {
             const refreshed =
               (await auth.ensureAnonymousSession(true)) ?? session;
+            // Codex review (PR #649): this used to retry with `refreshed`
+            // but leave the outer `session` pointing at the rejected one —
+            // so if this retry itself came back 429, the 429 handler below
+            // would enqueue with the SAME session PostgREST just 401'd,
+            // rather than the one that actually reached the rate-limit
+            // check. Reassign so every later use of `session` (including
+            // the enqueue diagnostics) reflects what this call actually used.
+            session = refreshed;
             enrichment = await createSyncApi(refreshed).requestEnrichment(
               bookmarkId,
               metadata,
@@ -3376,11 +3385,27 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // guessing a further fix — to tell "wrong identity" from
             // "empty/expired token" from "a session object requestEnrichment
             // didn't use" apart on the next occurrence.
+            //
+            // Codex review (PR #649) on the first cut of this diagnostic:
+            // - `session === auth.session` is nearly always false even in
+            //   the healthy case, since ensureAnonymousSession() restores
+            //   from storage and allocates a fresh object every call — it
+            //   can't distinguish "actually different" from "just
+            //   re-deserialized". Compare the token VALUE instead.
+            // - session.user.id is only what the JS session object claims;
+            //   the RLS check evaluates auth.uid() from the access token's
+            //   own `sub` claim. Decode it locally (jwtSubject — no
+            //   atob/Buffer dependency, never logs the raw token) so a
+            //   divergence between the two is directly visible instead of
+            //   assumed away.
+            const tokenSubject = jwtSubject(session.access_token);
             const enqueueSessionDiagnostics = JSON.stringify({
               sessionUserId: session.user.id,
+              tokenSubjectMatchesSessionUserId:
+                tokenSubject === null ? null : tokenSubject === session.user.id,
               sessionIsAnonymous: session.user.is_anonymous ?? null,
               authSessionUserId: auth.session?.user.id ?? null,
-              sameRefAsAuthSession: session === auth.session,
+              sameAccessTokenAsAuthSession: session.access_token === auth.session?.access_token,
               accessTokenLength: session.access_token?.length ?? 0,
               expiresAt: session.expires_at ?? null,
               secondsUntilExpiry:

@@ -390,9 +390,11 @@ test('a 429 enqueue failure logs session diagnostics for triage (STASH-4D/4E)', 
   // failure on this exact insert. Since static review of the code found
   // nothing further wrong, the enqueue-failure log now carries enough about
   // the session actually used — its owning user id vs the reactive
-  // `auth.session`'s, whether it's the same object reference, and whether it
-  // even has a token — to tell "wrong identity" from "stale reference" from
-  // "empty token" apart on the next occurrence, instead of guessing again.
+  // `auth.session`'s, whether its token value matches auth.session's, whether
+  // the JWT's own `sub` claim agrees with the session object's user id, and
+  // whether it even has a token — to tell "wrong identity" from "stale
+  // reference" from "empty token" apart on the next occurrence, instead of
+  // guessing again.
   const store = await renderReady();
   apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
     throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
@@ -412,9 +414,10 @@ test('a 429 enqueue failure logs session diagnostics for triage (STASH-4D/4E)', 
     );
     expect(entry).toBeDefined();
     expect(entry!.message).toContain('"sessionUserId":"user-test"');
+    expect(entry!.message).toContain('"tokenSubjectMatchesSessionUserId"');
     expect(entry!.message).toContain('"sessionIsAnonymous"');
     expect(entry!.message).toContain('"authSessionUserId":"user-test"');
-    expect(entry!.message).toContain('"sameRefAsAuthSession"');
+    expect(entry!.message).toContain('"sameAccessTokenAsAuthSession"');
     expect(entry!.message).toContain('"accessTokenLength"');
     expect(entry!.message).toContain('"expiresAt"');
     expect(entry!.message).toContain('"secondsUntilExpiry"');
