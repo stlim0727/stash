@@ -86,7 +86,10 @@ export function ActionSheet({
               <Pressable
                 key={action.key}
                 accessibilityRole="button"
-                accessibilityLabel={action.accessibilityLabel ?? action.label}
+                accessibilityLabel={
+                  action.accessibilityLabel ??
+                  (action.description ? `${action.label}. ${action.description}` : action.label)
+                }
                 onPress={action.onPress}
                 style={({ pressed }) => [
                   styles.action,

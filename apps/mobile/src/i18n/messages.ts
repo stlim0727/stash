@@ -427,7 +427,7 @@ export const en = {
   'settings.diagnostics.build': 'Build',
   'settings.exportSheet.title': 'Export my data',
   'settings.exportSheet.html': 'Bookmarks file (HTML)',
-  'settings.exportSheet.htmlDescription': 'Tags only — no AI summaries',
+  'settings.exportSheet.htmlDescription': 'Tags only — skips text-only saves & AI summaries',
   'settings.exportSheet.csv': 'Spreadsheet (CSV)',
   'settings.exportSheet.csvDescription': 'Tags only — no AI summaries',
   'settings.exportSheet.json': 'Full backup (JSON)',

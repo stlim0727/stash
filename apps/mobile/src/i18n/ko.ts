@@ -309,7 +309,7 @@ export const ko: Catalog = {
   'settings.diagnostics.build': '빌드',
   'settings.exportSheet.title': '내 데이터 내보내기',
   'settings.exportSheet.html': '북마크 파일 (HTML)',
-  'settings.exportSheet.htmlDescription': '태그만 포함 — AI 요약 제외',
+  'settings.exportSheet.htmlDescription': '태그만 포함 — 텍스트 전용 저장과 AI 요약은 제외',
   'settings.exportSheet.csv': '스프레드시트 (CSV)',
   'settings.exportSheet.csvDescription': '태그만 포함 — AI 요약 제외',
   'settings.exportSheet.json': '전체 백업 (JSON)',
