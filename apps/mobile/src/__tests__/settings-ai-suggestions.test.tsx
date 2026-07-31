@@ -81,6 +81,26 @@ test('picking Auto-apply in the sheet updates the row label and persists durably
   );
 });
 
+test('the AI queue backlog row is absent when nothing is server-queued', async () => {
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('Review suggestions before applying')).toBeTruthy());
+  expect(screen.queryByText('AI suggestions queued')).toBeNull();
+});
+
+test('the AI queue backlog row surfaces the server-queued count (STASH-4K follow-up UX)', async () => {
+  // A large backlog (e.g. after a bulk import that exhausts the daily AI
+  // quota) should read as "still working, just paced" — not silently stuck.
+  await fakeRepo.repository.setMeta(
+    'ai_server_queued',
+    JSON.stringify(['bm-1', 'bm-2', 'bm-3']),
+  );
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('AI suggestions queued')).toBeTruthy());
+  expect(
+    screen.getByText('3 bookmarks · paced by daily quota, resumes automatically'),
+  ).toBeTruthy();
+});
+
 test("picking 'Off' in the sheet updates the row label", async () => {
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Review suggestions before applying')).toBeTruthy());

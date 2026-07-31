@@ -162,6 +162,7 @@ export default function SettingsScreen() {
     aiSuggestionsMode,
     setAiSuggestionsMode,
     diagnosticStats,
+    aiSuggestionQueuedCount,
   } = useBookmarks();
   const [aiSuggestionsSheetOpen, setAiSuggestionsSheetOpen] = useState(false);
   const auth = useSupabaseAuth();
@@ -933,6 +934,17 @@ export default function SettingsScreen() {
           )}
           onPress={() => setAiSuggestionsSheetOpen(true)}
         />
+        {aiSuggestionQueuedCount > 0 ? (
+          <Row
+            styles={styles}
+            palette={palette}
+            icon="hourglass-outline"
+            label={t("settings.aiQueueBacklog.label")}
+            value={t("settings.aiQueueBacklog.value", {
+              count: aiSuggestionQueuedCount,
+            })}
+          />
+        ) : null}
         <Row
           styles={styles}
           palette={palette}

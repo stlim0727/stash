@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 
-import { errorMessageFrom, StashSupabaseClient } from './client.ts';
+import { errorMessageFrom, StashSupabaseClient, SupabaseRequestError } from './client.ts';
 
 test('errorMessageFrom prefers GoTrue/PostgREST human-readable keys', () => {
   assert.equal(errorMessageFrom({ msg: 'bad login' }, 400), 'bad login');
@@ -81,4 +81,54 @@ test('updateUserMetadata issues PUT /auth/v1/user with { data } (GoTrue rejects 
   assert.deepEqual(JSON.parse(calls[0].init.body as string), {
     data: { app_version: '1.0.0-rc15' },
   });
+});
+
+test('request() carries the response body\'s reason onto SupabaseRequestError', async () => {
+  // ai-enrich's 429 body is { error, reason, retry_after } — callers need
+  // `reason` ('daily_limit' vs 'hourly_limit') to tell a quota-exhausted
+  // rejection apart from any other rate limit.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ error: 'rate_limited', reason: 'daily_limit', retry_after: 3600 }),
+      { status: 429 },
+    )) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    await assert.rejects(
+      client.request('/functions/v1/ai-enrich', { method: 'POST' }),
+      (error: unknown) => {
+        assert.ok(error instanceof SupabaseRequestError);
+        assert.equal(error.status, 429);
+        assert.equal(error.reason, 'daily_limit');
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('request() leaves reason undefined when the response body has none', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ error: 'bookmark_id is required' }), { status: 400 })) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    await assert.rejects(client.request('/functions/v1/ai-enrich', { method: 'POST' }), (error: unknown) => {
+      assert.ok(error instanceof SupabaseRequestError);
+      assert.equal(error.reason, undefined);
+      return true;
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

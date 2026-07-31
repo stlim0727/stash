@@ -495,6 +495,74 @@ test('a 429 enqueue failure that is an RLS violation (403) logs after the retry 
   );
 }, 10000);
 
+test('a 429 revealing quota exhaustion pauses the auto dispatch queue for other bookmarks too (STASH-4K follow-up)', async () => {
+  // A large backlog (e.g. a bulk import with hundreds of un-enriched
+  // bookmarks) used to keep firing the staggered auto dispatch every 400ms
+  // regardless of quota state, so once the daily/hourly cap was hit, every
+  // remaining dispatch was a guaranteed repeat 429 — wasted battery/network
+  // for a result already known. The first 429 should pause the drain
+  // entirely, not just this one bookmark's own retry.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' }),
+    makeStoredBookmark({ id: SECOND_SYNCED_ID, metadata_status: 'complete' }),
+  ]);
+  await fakeRepo.repository.setMeta(
+    'pending_ai_trigger',
+    JSON.stringify([SYNCED_ID, SECOND_SYNCED_ID]),
+  );
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'daily_limit');
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+
+  // Several more 400ms-staggered ticks: without the cooldown gate, the
+  // second queued bookmark would have dispatched (and succeeded, since the
+  // mocked 429 above only fires once) well within this window.
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1);
+});
+
+test('the auto dispatch queue resumes once the quota cooldown elapses (STASH-4K follow-up)', async () => {
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' }),
+    makeStoredBookmark({ id: SECOND_SYNCED_ID, metadata_status: 'complete' }),
+  ]);
+  await fakeRepo.repository.setMeta(
+    'pending_ai_trigger',
+    JSON.stringify([SYNCED_ID, SECOND_SYNCED_ID]),
+  );
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit');
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+
+  // Confirm the gate is actually holding before advancing time — otherwise
+  // the assertion below would pass vacuously even with no gate at all.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1);
+
+  const dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 11 * 60_000);
+  try {
+    await waitFor(() =>
+      expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
+        SECOND_SYNCED_ID,
+        expect.anything(),
+        'en',
+      ),
+    );
+  } finally {
+    dateNowSpy.mockRestore();
+  }
+});
+
 test('a non-429 failure does not enqueue for the overflow worker', async () => {
   const store = await renderReady();
   apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
@@ -522,6 +590,32 @@ test('a 429 with a CONFIRMED (resolved) enqueue marks the bookmark as server-que
   });
 
   await waitFor(() => expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true));
+});
+
+test('aiSuggestionQueuedCount tracks the server-queued set (UX backlog indicator)', async () => {
+  // Settings surfaces this count so a large backlog reads as "still working,
+  // just paced by quota" instead of looking stuck — it must track the same
+  // set isAiSuggestionServerQueued reads, not some independent count.
+  const store = await renderReady();
+  expect(store.current!.aiSuggestionQueuedCount).toBe(0);
+
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'daily_limit');
+  });
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+  await waitFor(() => expect(store.current!.aiSuggestionQueuedCount).toBe(1));
+
+  // Clears back to 0 once a real enrichment lands via pull, same trigger
+  // isAiSuggestionServerQueued itself clears on.
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({ id: 'enrich-from-queue-worker-2', bookmark_id: SYNCED_ID }),
+  ]);
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+  await waitFor(() => expect(store.current!.aiSuggestionQueuedCount).toBe(0));
 });
 
 test('the server-queued flag survives exhausting the local retry cap, unlike isAiSuggestionPostponed (STASH #578 follow-up)', async () => {

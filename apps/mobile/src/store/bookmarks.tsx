@@ -334,6 +334,13 @@ interface BookmarksContextValue {
    *  enrichment actually lands (queue delivery via pull, or a later attempt
    *  succeeding directly) or the bookmark is discarded. */
   isAiSuggestionServerQueued: (bookmarkId: string) => boolean;
+  /** How many bookmarks currently have a CONFIRMED server-queued AI request
+   *  (see {@link isAiSuggestionServerQueued}) — i.e. are durably waiting on
+   *  the background overflow worker rather than failed outright. Settings
+   *  surfaces this so a large backlog (e.g. after a bulk import that
+   *  exhausts the daily/hourly AI quota) reads as "still working, just
+   *  paced" instead of looking broken or silently stuck. */
+  aiSuggestionQueuedCount: number;
   /** True if a bookmark has EVER recorded a failed AI-enrichment attempt that
    *  hasn't since exhausted its retry cap — independent of whether it's
    *  currently enriching right now. Unlike {@link isAiSuggestionPostponed}
@@ -480,6 +487,20 @@ const AI_RETRY_BACKOFF_MS: Record<number, number> = {
  *  the bookmark's retry marker — it then looks exactly like a bookmark that
  *  was never enriched, with no distinct "gave up" state. */
 const AI_RETRY_MAX_ATTEMPTS = 6;
+
+/** How long the staggered AUTO dispatch queue pauses after a 429 reveals the
+ *  per-user AI quota is exhausted (STASH-4K follow-up). A large backlog (a
+ *  bulk import with hundreds of un-enriched bookmarks) would otherwise keep
+ *  firing a direct request roughly every couple seconds, every one of them a
+ *  guaranteed 429, until the whole backlog has been walked once — wasted
+ *  battery/network for a result already known. Manual "Suggest with AI" taps
+ *  are unaffected; only the auto drain checks this. The daily case gets the
+ *  longer cooldown because the quota's own `retry_after` for it is a fixed
+ *  3600s regardless of how much of the day is actually left before a slot in
+ *  the rolling 24h window frees up — not reliable enough to trust directly,
+ *  so this re-checks periodically instead of waiting on it exactly. */
+const AI_QUOTA_DAILY_COOLDOWN_MS = 30 * 60_000;
+const AI_QUOTA_HOURLY_COOLDOWN_MS = 10 * 60_000;
 
 /** STASH-4J: how long to wait before a single retry of a `pending_ai_enrichment`
  *  enqueue that failed with an RLS violation (HTTP 403). Production logs show
@@ -979,6 +1000,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     EMPTY_AI_ENRICHMENT_BURST_QUEUE,
   );
   const aiDispatchInFlight = useRef(false);
+  // STASH-4K follow-up: epoch ms until which the auto drain below pauses
+  // dispatching entirely, armed whenever a 429 reveals the per-user quota is
+  // exhausted (see AI_QUOTA_DAILY_COOLDOWN_MS). 0 means no cooldown.
+  const aiQuotaCooldownUntil = useRef(0);
   // Bumped by resetLibrary once the remote wipe succeeds. requestAiEnrichment
   // snapshots it at entry and discards its settle paths (enrichment write /
   // retry arming / server-queued confirmation) if the epoch moved meanwhile —
@@ -3407,6 +3432,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // Return a sentinel the Detail screen (still) localizes into a calm
         // message pending its own follow-up UI change.
         if (error instanceof SupabaseRequestError && error.status === 429) {
+          // STASH-4K follow-up: a 429 here always means the per-user quota is
+          // exhausted (the only failure mode this endpoint returns 429 for)
+          // — pause the staggered AUTO drain so a large backlog doesn't keep
+          // firing requests that are each a guaranteed repeat of this same
+          // rejection. Manual "Suggest with AI" taps bypass this (see the
+          // drain effect below, which only gates the auto path).
+          aiQuotaCooldownUntil.current =
+            Date.now() +
+            (error.reason === "daily_limit"
+              ? AI_QUOTA_DAILY_COOLDOWN_MS
+              : AI_QUOTA_HOURLY_COOLDOWN_MS);
           // STASH #578 Phase 2: instead of just returning the rate-limited
           // sentinel, enqueue this bookmark for the background overflow
           // worker to retry later. Fire-and-forget in the strictest sense —
@@ -5494,6 +5530,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (aiDispatchInFlight.current) {
         return; // still waiting on the previous dispatch to settle
       }
+      if (Date.now() < aiQuotaCooldownUntil.current) {
+        // STASH-4K follow-up: the quota is known exhausted (armed by a
+        // recent 429) — leave the queue as-is (unlike the mode==='off'
+        // branch above, this isn't abandoned work) and simply wait out the
+        // cooldown instead of dispatching into more guaranteed rejections.
+        return;
+      }
       if (
         queueRef.current.some(
           (entry) =>
@@ -5906,6 +5949,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isManuallyEnriching,
       isAiSuggestionPostponed,
       isAiSuggestionServerQueued,
+      aiSuggestionQueuedCount: aiServerQueuedIds.size,
       hadPriorEnrichmentAttempt,
       acceptSuggestedTags,
       getReviewedSuggestions,
@@ -5962,6 +6006,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isManuallyEnriching,
       isAiSuggestionPostponed,
       isAiSuggestionServerQueued,
+      aiServerQueuedIds,
       hadPriorEnrichmentAttempt,
       acceptSuggestedTags,
       getReviewedSuggestions,
