@@ -3440,22 +3440,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // firing requests that are each a guaranteed repeat of this same
           // rejection. Manual "Suggest with AI" taps bypass this (see the
           // drain effect below, which only gates the auto path).
-          let cooldownMs = AI_QUOTA_HOURLY_COOLDOWN_MS;
-          if (error.reason === "daily_limit") {
-            cooldownMs = AI_QUOTA_DAILY_COOLDOWN_MS;
-          } else if (
-            typeof error.retryAfterSeconds === "number" &&
-            error.retryAfterSeconds >= AI_QUOTA_HOURLY_RETRY_AFTER_BOUNDS_S.min &&
-            error.retryAfterSeconds <= AI_QUOTA_HOURLY_RETRY_AFTER_BOUNDS_S.max
-          ) {
-            // Codex review (PR #655): the server computes this exactly for
-            // hourly_limit — trust it instead of the fixed fallback so a
-            // near-expired window doesn't idle the queue for minutes longer
-            // than necessary, and a nearly-full hour doesn't get probed
-            // before a slot can actually open.
-            cooldownMs = error.retryAfterSeconds * 1000;
+          // Codex review (round 2, PR #655): a request started under account A
+          // can still be in flight when the user switches to account B — the
+          // account-switch effect clears the cooldown first, but this stale
+          // A response would then arm a fresh one and wrongly throttle B.
+          // Only apply it if the account that made this request is still the
+          // active one (lastSyncedUserId.current — the same ref the
+          // account-switch effect itself updates).
+          if (session && session.user.id === lastSyncedUserId.current) {
+            let cooldownMs = AI_QUOTA_HOURLY_COOLDOWN_MS;
+            if (error.reason === "daily_limit") {
+              cooldownMs = AI_QUOTA_DAILY_COOLDOWN_MS;
+            } else if (
+              typeof error.retryAfterSeconds === "number" &&
+              error.retryAfterSeconds >= AI_QUOTA_HOURLY_RETRY_AFTER_BOUNDS_S.min &&
+              error.retryAfterSeconds <= AI_QUOTA_HOURLY_RETRY_AFTER_BOUNDS_S.max
+            ) {
+              // Codex review (PR #655): the server computes this exactly for
+              // hourly_limit — trust it instead of the fixed fallback so a
+              // near-expired window doesn't idle the queue for minutes longer
+              // than necessary, and a nearly-full hour doesn't get probed
+              // before a slot can actually open.
+              cooldownMs = error.retryAfterSeconds * 1000;
+            }
+            aiQuotaCooldownUntil.current = Date.now() + cooldownMs;
           }
-          aiQuotaCooldownUntil.current = Date.now() + cooldownMs;
           // STASH #578 Phase 2: instead of just returning the rate-limited
           // sentinel, enqueue this bookmark for the background overflow
           // worker to retry later. Fire-and-forget in the strictest sense —
@@ -5907,11 +5916,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         b.metadata_status === "complete" || b.metadata_status === "skipped",
     ).length;
 
-    // AI pending = unique union of bookmarks in the trigger set, the dispatch queue, and the retry set
+    // AI pending = unique union of bookmarks in the trigger set, the dispatch
+    // queue, the retry set, and the confirmed server-queued set (Codex review,
+    // PR #655): a bookmark that exhausted its 6-attempt LOCAL retry cap drops
+    // out of aiRetryIds (by design — see AI_RETRY_MAX_ATTEMPTS), but its
+    // confirmed overflow-queue entry is still alive server-side and will still
+    // deliver, so it must not disappear from this count.
     const uniqueAiTodoIds = new Set<string>([
       ...pendingAiTrigger.current,
       ...aiDispatchQueueRef.current.pending,
       ...aiRetryIds,
+      ...aiServerQueuedIds,
     ]);
     const aiTodo = uniqueAiTodoIds.size;
     const aiDone = enrichments.length;
@@ -5921,7 +5936,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       metadata: { todo: metadataTodo, done: metadataDone },
       ai: { todo: aiTodo, done: aiDone },
     };
-  }, [bookmarks, queue, enrichments, aiRetryIds, enrichingIds]);
+  }, [bookmarks, queue, enrichments, aiRetryIds, enrichingIds, aiServerQueuedIds]);
 
   const value = useMemo<BookmarksContextValue>(
     () => ({

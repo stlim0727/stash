@@ -933,7 +933,11 @@ export default function SettingsScreen() {
           )}
           onPress={() => setAiSuggestionsSheetOpen(true)}
         />
-        {diagnosticStats.ai.todo > 0 ? (
+        {/* Codex review, PR #655: when AI suggestions are off, neither the
+            dispatch interval nor the retry checker process anything, so a
+            positive count here doesn't mean "waiting, resumes on its own" —
+            it stays frozen until the user turns AI suggestions back on. */}
+        {diagnosticStats.ai.todo > 0 && aiSuggestionsMode !== "off" ? (
           <Row
             styles={styles}
             palette={palette}

@@ -651,6 +651,55 @@ test('a quota cooldown armed for one account does not throttle a different accou
   );
 });
 
+test('a request that settles AFTER an account switch does not arm the new account cooldown (Codex review round 2, PR #655)', async () => {
+  // Sharper than the test above: there, account A's 429 settles BEFORE the
+  // switch. Here it settles AFTER — the account-switch effect clears
+  // aiQuotaCooldownUntil first, and then the stale in-flight A response
+  // must not re-arm it for the now-active B.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+
+  let releaseFirstRequest: () => void = () => {};
+  const firstRequestGate = new Promise<void>((resolve) => {
+    releaseFirstRequest = resolve;
+  });
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    await firstRequestGate;
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'daily_limit');
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  // Account A's request for SYNCED_ID is now in flight, gated on the promise
+  // above — it will not settle until releaseFirstRequest() is called.
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+
+  // Switch to account B WHILE A's request is still stuck in flight.
+  mockAuthSession = { ...mockSession, user: { id: 'real-user-b' } };
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  // NOW let A's stale request finally resolve with the 429. If the bug were
+  // present, this would arm a ~30-minute cooldown for the now-active B.
+  await act(async () => {
+    releaseFirstRequest();
+    await Promise.resolve();
+  });
+
+  // Give B's own pipeline (rehome + re-trigger, same mechanism as the test
+  // above) a chance to actually dispatch something. If A's stale settle had
+  // wrongly armed the cooldown, this would stay at 1 for the full window.
+  await waitFor(
+    () => expect(apiMock.__spies.requestEnrichment.mock.calls.length).toBeGreaterThan(1),
+    { timeout: 5000 },
+  );
+});
+
 test('a non-429 failure does not enqueue for the overflow worker', async () => {
   const store = await renderReady();
   apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
@@ -705,6 +754,10 @@ test('the server-queued flag survives exhausting the local retry cap, unlike isA
   expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
   // ...but the server-queued marker is untouched by that cap.
   expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
+  // Codex review (PR #655): diagnosticStats.ai.todo (Settings' backlog count)
+  // must still count this bookmark — it's still legitimately waiting on the
+  // server worker even though it dropped out of the local retry set.
+  expect(store.current!.diagnosticStats.ai.todo).toBeGreaterThanOrEqual(1);
 });
 
 test('a 429 whose enqueue call REJECTS does not mark the bookmark as server-queued', async () => {

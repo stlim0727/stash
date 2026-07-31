@@ -29,8 +29,8 @@ treat them as orders of magnitude, not quotes. Two services scale with usage
 
 **The app caps spend.** The per-user limiter
 (`request_ai_enrichment_slot`, `supabase/migrations/…_ai_enrichment_rate_limit.sql`)
-allows **200 enrichments/day per signed-in user** (50/day anonymous). So the
-absolute ceiling is `users × 200 × $0.0005/day` — no runaway bill is possible.
+allows **500 enrichments/day per signed-in user** (50/day anonymous). So the
+absolute ceiling is `users × 500 × $0.0005/day` — no runaway bill is possible.
 
 ### Supabase (backend)
 
@@ -58,7 +58,7 @@ Assumes Gemini flash-lite; "realistic" ≈ 30 enrichments/user/mo, "heavy" ≈ 1
 | 100,000 | ~$200–400 | ~$600 | ~$4,500 | **~$800–5,000** |
 
 The per-user app cap means even a pathological 1,000-user month can't exceed
-~$3,000 of Gemini spend; realistic usage is one to two orders of magnitude
+~$7,500 of Gemini spend; realistic usage is one to two orders of magnitude
 lower.
 
 ## Fixed / non-usage costs
@@ -113,7 +113,7 @@ cheap. Watch out for:
 ## Cost-control levers
 
 1. **Lower the per-user daily cap** — `v_day_limit` in the rate-limit migration
-   (default 200) sets the hard ceiling on Gemini spend; halving it halves the
+   (default 500) sets the hard ceiling on Gemini spend; halving it halves the
    max.
 2. **Pin thinking off** — add `thinkingConfig: { thinkingBudget: 0 }` to the
    Gemini `generationConfig` to keep output tokens (the pricier side) minimal.

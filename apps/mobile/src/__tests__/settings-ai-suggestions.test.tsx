@@ -105,6 +105,21 @@ test('the AI queue backlog row surfaces the full backlog, not just the confirmed
   ).toBeTruthy();
 });
 
+test('the AI queue backlog row stays hidden when AI suggestions are off, even with a backlog (Codex review, PR #655)', async () => {
+  // With aiSuggestionsMode 'off', neither the dispatch interval nor the
+  // retry checker process anything — a backlog count that says "resumes
+  // automatically" would be actively misleading; it stays frozen until the
+  // user turns AI suggestions back on.
+  await fakeRepo.repository.setMeta(AI_SUGGESTIONS_MODE_PREF_KEY, 'off');
+  await fakeRepo.repository.setMeta(
+    'pending_ai_trigger',
+    JSON.stringify(['bm-1', 'bm-2', 'bm-3']),
+  );
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('Off — never auto-suggest')).toBeTruthy());
+  expect(screen.queryByText('AI suggestions queued')).toBeNull();
+});
+
 test("picking 'Off' in the sheet updates the row label", async () => {
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Review suggestions before applying')).toBeTruthy());
