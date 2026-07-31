@@ -5,10 +5,15 @@ import { useBookmarks } from '@/store/bookmarks';
 import { useCaptureToast } from '@/ui/capture-toast';
 
 /**
- * Surfaces the "N bookmarks summarized & tagged" toast once a burst of
- * background auto-enrichments finishes (STASH #574 Phase 1). The store owns
- * deciding *whether* a completion is toast-worthy (2+ settled together — see
- * `AI_ENRICHMENT_BURST_TOAST_MIN`) and exposes it as `aiEnrichmentBurstToast`,
+ * Surfaces the "N bookmarks checked for AI suggestions" toast once a burst of
+ * background auto-enrichments finishes (STASH #574 Phase 1). Deliberately
+ * worded as "checked", not "summarized & tagged" (STASH-4D): the count is
+ * every attempt that settled, not just the ones that actually produced a
+ * summary/tag/collection — a rate-limited or degraded attempt still counts
+ * (see `recordAiEnrichmentDispatchSettled`'s docs), so the copy must not
+ * claim a guaranteed result. The store owns deciding *whether* a completion
+ * is toast-worthy (2+ settled together — see `AI_ENRICHMENT_BURST_TOAST_MIN`)
+ * and exposes it as `aiEnrichmentBurstToast`,
  * a `{ count, token }` value that changes (by `token`, a monotonic counter —
  * not just `count`, so two consecutive same-size bursts both re-fire this
  * effect) each time a new burst completes.

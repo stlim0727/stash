@@ -195,7 +195,7 @@ export const ko: Catalog = {
   'toast.trashed': '휴지통으로 이동됨',
   'toast.noLink': '저장할 링크를 찾지 못했습니다',
   'toast.urlTooLong': '이 링크는 너무 길어서 저장할 수 없습니다',
-  'toast.aiEnrichmentBurst': { other: '북마크 {count}개 요약 및 태그 완료' },
+  'toast.aiEnrichmentBurst': { other: '북마크 {count}개 AI 제안 확인 완료' },
   'toast.linkCopied': '링크가 복사됨',
 
   'settings.section.account': '계정',

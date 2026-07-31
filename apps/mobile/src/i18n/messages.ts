@@ -298,7 +298,7 @@ export const en = {
   'toast.urlTooLong': 'This link is too long to save',
   // STASH #574 Phase 1: shown once a burst of background auto-enrichments
   // finishes (2+ settled together) — never for a single, routine completion.
-  'toast.aiEnrichmentBurst': { other: '{count} bookmarks summarized & tagged' },
+  'toast.aiEnrichmentBurst': { other: '{count} bookmarks checked for AI suggestions' },
   'toast.saveFailed': 'Could not save to Keepory',
   'toast.linkCopied': 'Link copied',
 
