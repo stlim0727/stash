@@ -16,6 +16,12 @@ const mockSession = {
 // auth session is restored (session null). `mock`-prefixed so jest's factory
 // hoisting allows referencing it.
 let mockAuthSession: typeof mockSession | null = mockSession;
+// Spied (rather than inlined) so a test can simulate `ensureAnonymousSession`
+// returning a freshER session than the reactive `mockAuthSession` — e.g. a
+// token refresh that landed after `auth.session` was last read (STASH-49:
+// the 429-overflow enqueue used to reuse the stale `auth.session` instead of
+// this freshly-ensured one).
+const mockEnsureAnonymousSession = jest.fn(async () => mockAuthSession);
 
 jest.mock('@/supabase/auth-provider', () => ({
   // `userId` is derived from `mockAuthSession` (rather than hardcoded) so a
@@ -29,7 +35,7 @@ jest.mock('@/supabase/auth-provider', () => ({
     session: mockAuthSession,
     userId: mockAuthSession?.user.id ?? null,
     message: null,
-    ensureAnonymousSession: async () => mockAuthSession,
+    ensureAnonymousSession: mockEnsureAnonymousSession,
   }),
   SupabaseAuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
@@ -127,6 +133,24 @@ jest.mock('@/api/bookmarks', () => {
   // STASH #578 Phase 2: enqueue-on-429 overflow path. Spied so a test can
   // assert it's called (or not) when requestAiEnrichment is rate limited.
   const enqueuePendingEnrichment = jest.fn(async () => {});
+  // Spied on its `session` arg (rather than ignoring it) so a test can assert
+  // WHICH session object backed a given call — e.g. that the 429-overflow
+  // enqueue used the same freshly-ensured session as the request itself,
+  // not a stale one (STASH-49).
+  const createBookmarkApi = jest.fn((_session: unknown) => ({
+    requestEnrichment,
+    addTags,
+    createBookmark,
+    createBookmarks,
+    updateBookmark,
+    listBookmarksUpdatedSince: empty,
+    listBookmarkIds,
+    listEnrichmentsUpdatedSince,
+    listTags: empty,
+    listBookmarkTags: empty,
+    listCollections: empty,
+    enqueuePendingEnrichment,
+  }));
   return {
     __spies: {
       requestEnrichment,
@@ -137,21 +161,9 @@ jest.mock('@/api/bookmarks', () => {
       updateBookmark,
       listEnrichmentsUpdatedSince,
       enqueuePendingEnrichment,
+      createBookmarkApi,
     },
-    createBookmarkApi: () => ({
-      requestEnrichment,
-      addTags,
-      createBookmark,
-      createBookmarks,
-      updateBookmark,
-      listBookmarksUpdatedSince: empty,
-      listBookmarkIds,
-      listEnrichmentsUpdatedSince,
-      listTags: empty,
-      listBookmarkTags: empty,
-      listCollections: empty,
-      enqueuePendingEnrichment,
-    }),
+    createBookmarkApi,
   };
 });
 
@@ -173,6 +185,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
     updateBookmark: jest.Mock;
     listEnrichmentsUpdatedSince: jest.Mock;
     enqueuePendingEnrichment: jest.Mock;
+    createBookmarkApi: jest.Mock;
   };
 };
 
@@ -238,6 +251,8 @@ async function waitUntilSyncQuiescent(
 
 beforeEach(() => {
   mockAuthSession = mockSession;
+  mockEnsureAnonymousSession.mockReset();
+  mockEnsureAnonymousSession.mockImplementation(async () => mockAuthSession);
   mockForegroundHandlers = [];
   apiMock.__spies.requestEnrichment.mockClear();
   apiMock.__spies.addTags.mockClear();
@@ -258,6 +273,7 @@ beforeEach(() => {
   apiMock.__spies.listEnrichmentsUpdatedSince.mockReset();
   apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValue([]);
   apiMock.__spies.enqueuePendingEnrichment.mockClear();
+  apiMock.__spies.createBookmarkApi.mockClear();
 });
 
 test('requestAiEnrichment fetches and surfaces the enrichment', async () => {
@@ -313,6 +329,41 @@ test('a 429 enqueues the bookmark for the background overflow worker (STASH #578
 
   await waitFor(() => expect(apiMock.__spies.enqueuePendingEnrichment).toHaveBeenCalledTimes(1));
   expect(apiMock.__spies.enqueuePendingEnrichment).toHaveBeenCalledWith(SYNCED_ID, 'en');
+});
+
+test('a 429 overflow-queue enqueue uses the freshly-ensured session, not a stale auth.session (STASH-49)', async () => {
+  // Simulate a session that was refreshed AFTER the reactive `auth.session`
+  // was last read (e.g. a token rotation mid-session): `ensureAnonymousSession()`
+  // — which the request itself awaits before firing — resolves the CURRENT
+  // token, while `auth.session` still reflects the stale one.
+  //
+  // `pending_ai_enrichment`'s insert policy requires `auth.uid() = user_id`,
+  // so if the overflow-queue enqueue fell back to the stale `auth.session`
+  // instead of reusing the session the request itself just proved current,
+  // its JWT could resolve to a different auth context than the row it's
+  // inserting for — and get rejected. That's exactly what happened in
+  // production (STASH-49): every enqueue during a bulk import failed with
+  // "new row violates row-level security policy for table
+  // pending_ai_enrichment", because the enqueue read `auth.session` directly
+  // instead of the `session` variable the request above it had just ensured.
+  const freshSession = { ...mockSession, access_token: 'fresh-token' };
+  mockAuthSession = { ...mockSession, access_token: 'stale-token' };
+  mockEnsureAnonymousSession.mockResolvedValue(freshSession);
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  await waitFor(() => expect(apiMock.__spies.enqueuePendingEnrichment).toHaveBeenCalledTimes(1));
+  const sessionsUsed = apiMock.__spies.createBookmarkApi.mock.calls.map(
+    ([session]: [{ access_token: string }]) => session.access_token,
+  );
+  expect(sessionsUsed.length).toBeGreaterThan(0);
+  expect(sessionsUsed.every((token: string) => token === 'fresh-token')).toBe(true);
 });
 
 test('a 429 still surfaces the rate-limited sentinel even if the enqueue call itself fails', async () => {
