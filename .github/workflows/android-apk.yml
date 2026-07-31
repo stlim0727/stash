@@ -304,6 +304,8 @@ jobs:
           EXPO_PUBLIC_GIT_SHA: ${{ github.sha }}
           EXPO_PUBLIC_GIT_REF: ${{ github.ref_name }}
           EXPO_PUBLIC_COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          EXPO_PUBLIC_EAS_PROJECT_ID: ${{ secrets.EXPO_PUBLIC_EAS_PROJECT_ID }}
+          EXPO_PUBLIC_GOOGLE_SERVICES_BASE64: ${{ secrets.EXPO_PUBLIC_GOOGLE_SERVICES_BASE64 }}
         run: npx expo prebuild --platform android --no-install
 
       - name: Give Gradle more heap
@@ -337,6 +339,8 @@ jobs:
           # versionName/versionCode baked into the APK.
           APP_VERSION: ${{ steps.version.outputs.version || (github.event_name == 'push' && github.ref_name) || '' }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
+          EXPO_PUBLIC_EAS_PROJECT_ID: ${{ secrets.EXPO_PUBLIC_EAS_PROJECT_ID }}
+          EXPO_PUBLIC_GOOGLE_SERVICES_BASE64: ${{ secrets.EXPO_PUBLIC_GOOGLE_SERVICES_BASE64 }}
           # Route every CMake/NDK C++ compile through ccache. React Native only
           # wires ccache when building RN *itself* from source; for a prebuilt-RN
           # app build — and for third-party native modules (reanimated, worklets,
