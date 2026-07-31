@@ -104,8 +104,12 @@ test('exports an HTML bookmarks file assembled from the stored library', async (
   await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
   await fireEvent.press(view.getByLabelText('Export my data'));
-  await waitFor(() => view.getByLabelText('Bookmarks file (HTML)'));
-  await fireEvent.press(view.getByLabelText('Bookmarks file (HTML)'));
+  await waitFor(() =>
+    view.getByLabelText('Bookmarks file (HTML). Tags only — skips text-only saves & AI summaries'),
+  );
+  await fireEvent.press(
+    view.getByLabelText('Bookmarks file (HTML). Tags only — skips text-only saves & AI summaries'),
+  );
 
   await waitFor(() => expect(mockDeliverExport).toHaveBeenCalledTimes(1));
   const file = mockDeliverExport.mock.calls[0][0] as {
@@ -142,8 +146,12 @@ test('exports a JSON backup with the bookmark and its tags', async () => {
   await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
   await fireEvent.press(view.getByLabelText('Export my data'));
-  await waitFor(() => view.getByLabelText('Full backup (JSON)'));
-  await fireEvent.press(view.getByLabelText('Full backup (JSON)'));
+  await waitFor(() =>
+    view.getByLabelText('Full backup (JSON). Includes AI summaries, tags & confidence'),
+  );
+  await fireEvent.press(
+    view.getByLabelText('Full backup (JSON). Includes AI summaries, tags & confidence'),
+  );
 
   await waitFor(() => expect(mockDeliverExport).toHaveBeenCalledTimes(1));
   const file = mockDeliverExport.mock.calls[0][0] as { mimeType: string; contents: string };
@@ -177,8 +185,8 @@ test('exports a CSV table assembled from the stored library', async () => {
   await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
   await fireEvent.press(view.getByLabelText('Export my data'));
-  await waitFor(() => view.getByLabelText('Spreadsheet (CSV)'));
-  await fireEvent.press(view.getByLabelText('Spreadsheet (CSV)'));
+  await waitFor(() => view.getByLabelText('Spreadsheet (CSV). Tags only — no AI summaries'));
+  await fireEvent.press(view.getByLabelText('Spreadsheet (CSV). Tags only — no AI summaries'));
 
   await waitFor(() => expect(mockDeliverExport).toHaveBeenCalledTimes(1));
   const file = mockDeliverExport.mock.calls[0][0] as {
@@ -222,8 +230,12 @@ describe('android delivery sheet', () => {
     await waitFor(() => view.getByText('Download a bookmarks file or full backup'));
 
     await fireEvent.press(view.getByLabelText('Export my data'));
-    await waitFor(() => view.getByLabelText('Full backup (JSON)'));
-    await fireEvent.press(view.getByLabelText('Full backup (JSON)'));
+    await waitFor(() =>
+      view.getByLabelText('Full backup (JSON). Includes AI summaries, tags & confidence'),
+    );
+    await fireEvent.press(
+      view.getByLabelText('Full backup (JSON). Includes AI summaries, tags & confidence'),
+    );
 
     // The format press must not deliver yet — the delivery sheet decides how.
     expect(mockDeliverExport).not.toHaveBeenCalled();

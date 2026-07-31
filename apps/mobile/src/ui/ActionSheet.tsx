@@ -16,6 +16,9 @@ import { usePalette } from '@/theme';
 export interface SheetAction {
   key: string;
   label: string;
+  /** A short secondary line under the label, for a menu whose options need more
+   *  than a name to tell apart (e.g. export formats with different fidelity). */
+  description?: string;
   /** Overrides the spoken label when the visible text alone would be ambiguous. */
   accessibilityLabel?: string;
   icon?: keyof typeof Ionicons.glyphMap;
@@ -83,7 +86,10 @@ export function ActionSheet({
               <Pressable
                 key={action.key}
                 accessibilityRole="button"
-                accessibilityLabel={action.accessibilityLabel ?? action.label}
+                accessibilityLabel={
+                  action.accessibilityLabel ??
+                  (action.description ? `${action.label}. ${action.description}` : action.label)
+                }
                 onPress={action.onPress}
                 style={({ pressed }) => [
                   styles.action,
@@ -100,15 +106,25 @@ export function ActionSheet({
                 ) : (
                   <View style={styles.actionIcon} />
                 )}
-                <Text
-                  style={[
-                    styles.actionLabel,
-                    { color: action.destructive ? palette.danger : palette.text },
-                  ]}
-                  numberOfLines={1}
-                >
-                  {action.label}
-                </Text>
+                <View style={styles.actionTextGroup}>
+                  <Text
+                    style={[
+                      styles.actionLabel,
+                      { color: action.destructive ? palette.danger : palette.text },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {action.label}
+                  </Text>
+                  {action.description ? (
+                    <Text
+                      style={[styles.actionDescription, { color: palette.textSecondary }]}
+                      numberOfLines={2}
+                    >
+                      {action.description}
+                    </Text>
+                  ) : null}
+                </View>
                 {action.selected ? <Text style={{ color: palette.accent }}>✓</Text> : null}
               </Pressable>
             ))}
@@ -162,10 +178,16 @@ const styles = StyleSheet.create({
   actionIcon: {
     width: 28,
   },
-  actionLabel: {
+  actionTextGroup: {
     flex: 1,
+  },
+  actionLabel: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  actionDescription: {
+    fontSize: 12,
+    marginTop: 1,
   },
   cancel: {
     marginTop: 8,
