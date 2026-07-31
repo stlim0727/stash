@@ -90,6 +90,7 @@ import type { CreateSyncCompletion, TagData } from "@/storage/types";
 import { useSupabaseAuth } from "@/supabase/auth-provider";
 import { useRealtimeSync } from "@/supabase/realtime";
 import { SupabaseRequestError } from "@/supabase/client";
+import type { SupabaseAuthSession } from "@/supabase/types";
 import {
   applyAccountTransition,
   planAccountTransition,
@@ -3202,12 +3203,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (source === "manual") {
         setManualEnrichingIds((prev) => new Set(prev).add(bookmarkId));
       }
+      // Hoisted above the try/catch so the 429 handler below can enqueue the
+      // overflow-queue insert with the SAME freshly-ensured session the
+      // request itself used, instead of falling back to the possibly-stale
+      // `auth.session` (see the comment on the assignment below for why that
+      // matters — reusing it there caused the enqueue's own RLS check to
+      // reject the insert (STASH-49): `pending_ai_enrichment`'s policy
+      // requires `auth.uid()` to match the row, and a stale `auth.session`
+      // can resolve to a different auth context than the one this call
+      // proved was current).
+      let session: SupabaseAuthSession | null = null;
       try {
         // The edge function forwards this access token to PostgREST, which 401s
         // on a stale one. The token can expire while the app sits idle, so
         // refresh it before the call (as the sync paths do) instead of reusing
         // the possibly-expired `auth.session`.
-        const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+        session = (await auth.ensureAnonymousSession()) ?? auth.session;
         if (!session) {
           return "AI suggestions need the cloud — Supabase is not available right now.";
         }
@@ -3351,7 +3362,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // missing session or a synchronous throw must not escape either):
           // an enqueue failure must never change what the caller sees for
           // this 429, and is never retried here.
-          if (auth.session) {
+          if (session) {
             // Snapshotted now (before the enqueue POST's round trip) so the
             // .then() below can detect a set-after-clear race: this call's
             // own aiEnriching guard releases in the `finally` below as soon
@@ -3374,7 +3385,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               (item) => item.bookmark_id === bookmarkId,
             );
             try {
-              createSyncApi(auth.session)
+              createSyncApi(session)
                 .enqueuePendingEnrichment(
                   bookmarkId,
                   localeRef.current ?? undefined,
