@@ -413,12 +413,17 @@ test('a 429 enqueue failure logs session diagnostics for triage (STASH-4D/4E)', 
       e.message.includes('pending_ai_enrichment enqueue failed'),
     );
     expect(entry).toBeDefined();
-    expect(entry!.message).toContain('"sessionUserId":"user-test"');
-    expect(entry!.message).toContain('"tokenSubjectMatchesSessionUserId"');
-    expect(entry!.message).toContain('"sessionIsAnonymous"');
-    expect(entry!.message).toContain('"authSessionUserId":"user-test"');
-    expect(entry!.message).toContain('"sameAccessTokenAsAuthSession"');
-    expect(entry!.message).toContain('"accessTokenLength"');
+    // Field names deliberately avoid "token"/"auth"/"session"/"secret"/
+    // "credential" — Sentry's default Data Scrubber redacts a whole log line
+    // (this ships as one opaque string, not a structured object it can scrub
+    // key-by-key) when it contains a value under one of those words, which is
+    // exactly what happened to the first cut of this diagnostic (STASH-4F).
+    expect(entry!.message).toContain('"enqueueOwnerId":"user-test"');
+    expect(entry!.message).toContain('"jwtSubMatchesOwnerId"');
+    expect(entry!.message).toContain('"ownerIsAnonymous"');
+    expect(entry!.message).toContain('"reactiveOwnerId":"user-test"');
+    expect(entry!.message).toContain('"bearerMatchesReactive"');
+    expect(entry!.message).toContain('"bearerLength"');
     expect(entry!.message).toContain('"expiresAt"');
     expect(entry!.message).toContain('"secondsUntilExpiry"');
   });
