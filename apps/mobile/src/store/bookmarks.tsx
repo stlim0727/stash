@@ -3363,6 +3363,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // an enqueue failure must never change what the caller sees for
           // this 429, and is never retried here.
           if (session) {
+            // STASH-4D/4E: production keeps reporting "new row violates row-
+            // level security policy for table pending_ai_enrichment" on this
+            // insert even on builds carrying STASH-49's fix (this call
+            // already reuses `session`, not the possibly-stale `auth.session`
+            // — see the comment where `session` is assigned above). The same
+            // session's token is independently proven valid moments earlier:
+            // the edge function's forwarded-auth GET of this exact bookmark,
+            // inside requestEnrichment above, just succeeded. Static review
+            // of both call sites finds nothing further wrong, so capture
+            // enough about the session actually used here — instead of
+            // guessing a further fix — to tell "wrong identity" from
+            // "empty/expired token" from "a session object requestEnrichment
+            // didn't use" apart on the next occurrence.
+            const enqueueSessionDiagnostics = JSON.stringify({
+              sessionUserId: session.user.id,
+              sessionIsAnonymous: session.user.is_anonymous ?? null,
+              authSessionUserId: auth.session?.user.id ?? null,
+              sameRefAsAuthSession: session === auth.session,
+              accessTokenLength: session.access_token?.length ?? 0,
+              expiresAt: session.expires_at ?? null,
+              secondsUntilExpiry:
+                session.expires_at != null
+                  ? session.expires_at - Math.floor(Date.now() / 1000)
+                  : null,
+            });
             // Snapshotted now (before the enqueue POST's round trip) so the
             // .then() below can detect a set-after-clear race: this call's
             // own aiEnriching guard releases in the `finally` below as soon
@@ -3423,13 +3448,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 .catch((enqueueError: unknown) => {
                   recordLog(
                     "warn",
-                    `pending_ai_enrichment enqueue failed: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)}`,
+                    `pending_ai_enrichment enqueue failed: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)} ${enqueueSessionDiagnostics}`,
                   );
                 });
             } catch (enqueueError) {
               recordLog(
                 "warn",
-                `pending_ai_enrichment enqueue threw: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)}`,
+                `pending_ai_enrichment enqueue threw: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)} ${enqueueSessionDiagnostics}`,
               );
             }
           }

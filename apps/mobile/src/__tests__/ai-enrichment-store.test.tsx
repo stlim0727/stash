@@ -171,6 +171,7 @@ import { AI_RATE_LIMITED, BookmarksProvider, useBookmarks } from '@/store/bookma
 import { SupabaseRequestError } from '@/supabase/client';
 import { pendingSuggestions } from '@/domain/ai-suggestions';
 import { BULK_CREATE_SYNC_CHUNK_SIZE } from '@/sync/sync-bookmarks';
+import { clearLogEntries, getLogEntries } from '@/observability/log-buffer';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
@@ -381,6 +382,43 @@ test('a 429 still surfaces the rate-limited sentinel even if the enqueue call it
   });
 
   expect(error).toBe(AI_RATE_LIMITED);
+});
+
+test('a 429 enqueue failure logs session diagnostics for triage (STASH-4D/4E)', async () => {
+  // STASH-49's fix (reuse the freshly-ensured `session`, not `auth.session`)
+  // shipped, but production kept reporting the identical RLS-violation
+  // failure on this exact insert. Since static review of the code found
+  // nothing further wrong, the enqueue-failure log now carries enough about
+  // the session actually used — its owning user id vs the reactive
+  // `auth.session`'s, whether it's the same object reference, and whether it
+  // even has a token — to tell "wrong identity" from "stale reference" from
+  // "empty token" apart on the next occurrence, instead of guessing again.
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+  apiMock.__spies.enqueuePendingEnrichment.mockRejectedValueOnce(
+    new Error('new row violates row-level security policy for table "pending_ai_enrichment"'),
+  );
+  clearLogEntries();
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  await waitFor(() => {
+    const entry = getLogEntries().find((e) =>
+      e.message.includes('pending_ai_enrichment enqueue failed'),
+    );
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain('"sessionUserId":"user-test"');
+    expect(entry!.message).toContain('"sessionIsAnonymous"');
+    expect(entry!.message).toContain('"authSessionUserId":"user-test"');
+    expect(entry!.message).toContain('"sameRefAsAuthSession"');
+    expect(entry!.message).toContain('"accessTokenLength"');
+    expect(entry!.message).toContain('"expiresAt"');
+    expect(entry!.message).toContain('"secondsUntilExpiry"');
+  });
 });
 
 test('a non-429 failure does not enqueue for the overflow worker', async () => {
