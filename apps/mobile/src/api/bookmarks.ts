@@ -831,25 +831,34 @@ export class BookmarkApi {
    * synchronous path, just what happens instead of a plain failed attempt
    * once the per-user quota is exhausted.
    *
-   * A plain INSERT (never an upsert) with `resolution=ignore-duplicates`: the
-   * table's unique `bookmark_id` constraint means a repeat 429 for a bookmark
-   * that's already queued silently no-ops against the existing row instead of
-   * erroring — this table has no client-facing update policy, so the client
-   * can only ever create its own first overflow request per bookmark, never
-   * revive or reset one the worker already settled.
+   * A plain INSERT (never an upsert) with `resolution=ignore-duplicates` and
+   * an explicit `on_conflict=bookmark_id`: the table's unique `bookmark_id`
+   * constraint means a repeat 429 for a bookmark that's already queued
+   * silently no-ops against the existing row instead of erroring — this
+   * table has no client-facing update policy, so the client can only ever
+   * create its own first overflow request per bookmark, never revive or
+   * reset one the worker already settled.
    *
-   * `return=minimal` (STASH-4K): the table's migration deliberately grants no
-   * client-facing SELECT policy — the worker reads/writes via service-role
-   * only. Without this, PostgREST's default `INSERT ... RETURNING *` needs
-   * the inserting role to be able to see the row it just wrote, which no
-   * SELECT policy ever grants — so the insert's own WITH CHECK passed but the
-   * response construction then failed with the *same* "violates row-level
-   * security policy" error, on every single call, no matter how healthy the
-   * session/identity was. Asking for the minimal response (this call already
-   * returns void and never reads the body) skips that check entirely.
+   * STASH-4K (verified live against production before this fix): every
+   * enqueue failed unconditionally with "new row violates row-level security
+   * policy" since the feature shipped, regardless of session identity,
+   * bookmark existence, or timing — none of it was ever the cause. The
+   * table's migration deliberately grants no client-facing SELECT policy,
+   * but Postgres's `ON CONFLICT` clause (DO NOTHING included, not just DO
+   * UPDATE) requires SELECT privilege under RLS to check for a conflicting
+   * row — with none granted, the check failed before any conflict could even
+   * be evaluated. `20260731150000_pending_ai_enrichment_select_policy.sql`
+   * adds a `select` policy scoped to `auth.uid() = user_id`, which is the
+   * actual fix; it still never lets a client see another user's queue.
+   * `on_conflict=bookmark_id` is required too: without it PostgREST's
+   * conflict target defaults to the primary key (`id`, always a fresh
+   * random UUID), so a genuine repeat enqueue would raise a raw 23505
+   * duplicate-key error instead of the silent no-op this call is meant to
+   * be. `return=minimal` avoids the default RETURNING representation this
+   * call never reads.
    */
   async enqueuePendingEnrichment(bookmarkId: string, locale?: string): Promise<void> {
-    await this.client.request('/rest/v1/pending_ai_enrichment', {
+    await this.client.request('/rest/v1/pending_ai_enrichment?on_conflict=bookmark_id', {
       method: 'POST',
       accessToken: this.session.access_token,
       headers: { Prefer: 'resolution=ignore-duplicates, return=minimal' },

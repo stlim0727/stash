@@ -1,0 +1,31 @@
+-- STASH-4K: add the missing SELECT policy on pending_ai_enrichment.
+--
+-- The original migration (20260723150000_pending_ai_enrichment_queue.sql)
+-- deliberately shipped this table with an INSERT policy only — "no
+-- client-facing select/update/delete policy at all", so a client could never
+-- read another user's queue or mark its own row 'done' to skip real
+-- processing. That reasoning holds for UPDATE/DELETE, but turned out to
+-- break the enqueue itself: the client's enqueue call uses
+-- `Prefer: resolution=ignore-duplicates` (INSERT ... ON CONFLICT (bookmark_id)
+-- DO NOTHING), and Postgres requires SELECT privilege on the target table to
+-- evaluate an ON CONFLICT clause under RLS — DO NOTHING included, not just
+-- DO UPDATE — so it can determine whether the new row actually conflicts. A
+-- request that inserted zero rows was, from Postgres's point of view,
+-- indistinguishable from a request that couldn't even check.
+--
+-- Verified live against production before writing this: the exact same
+-- `INSERT ... ON CONFLICT (bookmark_id) DO NOTHING` (no RETURNING at all)
+-- fails with 42501 "new row violates row-level security policy" with no
+-- SELECT policy, and succeeds cleanly once this policy exists. This is why
+-- every enqueue failed unconditionally since the feature shipped (STASH-49
+-- onward) regardless of session health, bookmark existence, or timing —
+-- session/identity diagnostics (STASH-4G/4H) were never going to find
+-- anything, because there was never anything wrong with the identity.
+--
+-- Scoped to `auth.uid() = user_id`, matching the INSERT policy: a client can
+-- see its own queued rows (needed for ON CONFLICT DO NOTHING to work at all)
+-- but still never another user's, and this grants no UPDATE/DELETE — the
+-- original security property is unchanged.
+create policy "Users can see their own pending enrichment"
+  on public.pending_ai_enrichment for select
+  using (auth.uid() = user_id);
