@@ -195,3 +195,25 @@ test('createBookmarks dedupes same-url inputs before the bulk POST', async () =>
     ],
   );
 });
+
+test('enqueuePendingEnrichment requests a minimal response (STASH-4K)', async () => {
+  // The pending_ai_enrichment migration deliberately grants no client-facing
+  // SELECT policy (the overflow worker reads/writes via service-role only).
+  // Without `return=minimal`, PostgREST's default INSERT ... RETURNING *
+  // needs the inserting role to see the row it just wrote — which no SELECT
+  // policy ever grants — so every enqueue failed with "violates row-level
+  // security policy" even though the insert's own WITH CHECK passed cleanly.
+  let seenHeaders: Record<string, string> | undefined;
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      assert.equal(path, '/rest/v1/pending_ai_enrichment');
+      seenHeaders = options.headers as Record<string, string>;
+      return null;
+    },
+  };
+
+  const api = new BookmarkApi(SESSION, client as never);
+  await api.enqueuePendingEnrichment('00000000-0000-4000-8000-000000000099', 'ko');
+
+  assert.equal(seenHeaders?.Prefer, 'resolution=ignore-duplicates, return=minimal');
+});

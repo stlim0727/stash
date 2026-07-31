@@ -837,12 +837,22 @@ export class BookmarkApi {
    * erroring — this table has no client-facing update policy, so the client
    * can only ever create its own first overflow request per bookmark, never
    * revive or reset one the worker already settled.
+   *
+   * `return=minimal` (STASH-4K): the table's migration deliberately grants no
+   * client-facing SELECT policy — the worker reads/writes via service-role
+   * only. Without this, PostgREST's default `INSERT ... RETURNING *` needs
+   * the inserting role to be able to see the row it just wrote, which no
+   * SELECT policy ever grants — so the insert's own WITH CHECK passed but the
+   * response construction then failed with the *same* "violates row-level
+   * security policy" error, on every single call, no matter how healthy the
+   * session/identity was. Asking for the minimal response (this call already
+   * returns void and never reads the body) skips that check entirely.
    */
   async enqueuePendingEnrichment(bookmarkId: string, locale?: string): Promise<void> {
     await this.client.request('/rest/v1/pending_ai_enrichment', {
       method: 'POST',
       accessToken: this.session.access_token,
-      headers: { Prefer: 'resolution=ignore-duplicates' },
+      headers: { Prefer: 'resolution=ignore-duplicates, return=minimal' },
       body: {
         bookmark_id: bookmarkId,
         user_id: this.session.user.id,
