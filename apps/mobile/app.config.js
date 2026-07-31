@@ -22,8 +22,17 @@
 //                        cache-immune path, so the provenance updates each build.
 //                        Empty locally ⇒ the app shows a "local build" label.
 module.exports = ({ config }) => {
-  const version = (process.env.APP_VERSION || config.version || '0.0.0').replace(/^v/, '');
-  const versionCode = Number.parseInt(process.env.ANDROID_VERSION_CODE || '', 10) || 1;
+  const version = (
+    process.env.APP_VERSION ||
+    config.version ||
+    "0.0.0"
+  ).replace(/^v/, "");
+  const versionCode =
+    Number.parseInt(process.env.ANDROID_VERSION_CODE || "", 10) || 1;
+  const easProjectId =
+    process.env.EXPO_PUBLIC_EAS_PROJECT_ID ||
+    (config.extra && config.extra.eas && config.extra.eas.projectId) ||
+    null;
 
   return {
     ...config,
@@ -35,6 +44,10 @@ module.exports = ({ config }) => {
       gitSha: process.env.EXPO_PUBLIC_GIT_SHA || null,
       gitRef: process.env.EXPO_PUBLIC_GIT_REF || null,
       commitUrl: process.env.EXPO_PUBLIC_COMMIT_URL || null,
+      eas: {
+        ...((config.extra && config.extra.eas) || {}),
+        ...(easProjectId ? { projectId: easProjectId } : {}),
+      },
     },
   };
 };
