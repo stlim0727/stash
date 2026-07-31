@@ -934,17 +934,36 @@ export default function SettingsScreen() {
           onPress={() => setAiSuggestionsSheetOpen(true)}
         />
         {/* Codex review, PR #655: when AI suggestions are off, neither the
-            dispatch interval nor the retry checker process anything, so a
-            positive count here doesn't mean "waiting, resumes on its own" —
-            it stays frozen until the user turns AI suggestions back on. */}
-        {diagnosticStats.ai.todo > 0 && aiSuggestionsMode !== "off" ? (
+            dispatch interval nor the retry checker process anything, so the
+            full backlog count doesn't mean "waiting, resumes on its own" —
+            it stays frozen until the user turns AI suggestions back on.
+            Codex review, PR #656: that doesn't mean nothing is moving,
+            though — the server-side overflow worker keeps draining
+            already-confirmed-queued items regardless of this local
+            preference, so hiding the row entirely was itself misleading in
+            the other direction (suggestions can still arrive with no
+            warning). Off mode shows the server-queued subset alone, with
+            copy that doesn't promise automatic resumption of the rest. */}
+        {aiSuggestionsMode !== "off" ? (
+          diagnosticStats.ai.todo > 0 ? (
+            <Row
+              styles={styles}
+              palette={palette}
+              icon="hourglass-outline"
+              label={t("settings.aiQueueBacklog.label")}
+              value={t("settings.aiQueueBacklog.value", {
+                count: diagnosticStats.ai.todo,
+              })}
+            />
+          ) : null
+        ) : diagnosticStats.ai.serverQueued > 0 ? (
           <Row
             styles={styles}
             palette={palette}
             icon="hourglass-outline"
             label={t("settings.aiQueueBacklog.label")}
-            value={t("settings.aiQueueBacklog.value", {
-              count: diagnosticStats.ai.todo,
+            value={t("settings.aiQueueBacklog.offValue", {
+              count: diagnosticStats.ai.serverQueued,
             })}
           />
         ) : null}

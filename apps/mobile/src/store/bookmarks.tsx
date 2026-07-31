@@ -415,7 +415,7 @@ interface BookmarksContextValue {
       syncingTwice: number;
     };
     metadata: { todo: number; done: number };
-    ai: { todo: number; done: number };
+    ai: { todo: number; done: number; serverQueued: number };
   };
 }
 
@@ -5658,6 +5658,71 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     };
   }, [checkAiRetries]);
 
+  // Reconcile aiServerQueued against the queue's real remote status (Codex
+  // review, PR #656). Unlike checkAiRetries, this deliberately does NOT gate
+  // on aiSuggestionsMode === "off": the overflow worker keeps processing
+  // already-queued rows server-side regardless of the local dispatch/retry
+  // pause, so this must keep running too — it's reading server truth, not
+  // driving new dispatch. A row the worker gave up on (status: 'failed', past
+  // MAX_ENRICHMENT_ATTEMPTS) or that no longer exists (a deleted bookmark
+  // cascades its row away) never produces an ai_enrichments row, so without
+  // this clearAiServerQueued's only trigger (a real enrichment landing via
+  // sync) would never fire for it — the local marker, and the "still queued"
+  // backlog count it drives, would say so forever for a bookmark that will in
+  // fact never complete.
+  const reconcileAiServerQueued = useCallback(() => {
+    const session = auth.session;
+    const ids = [...aiServerQueued.current];
+    if (!session || ids.length === 0) {
+      return;
+    }
+    createSyncApi(session)
+      .fetchPendingEnrichmentStatuses(ids)
+      .then((rows) => {
+        const statusById = new Map(rows.map((row) => [row.bookmark_id, row.status]));
+        for (const id of ids) {
+          const status = statusById.get(id);
+          if (status === undefined || status === "failed") {
+            clearAiServerQueued(id);
+          }
+        }
+      })
+      .catch((error: unknown) => {
+        recordLog(
+          "warn",
+          `pending_ai_enrichment status reconcile failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+  }, [auth.session, clearAiServerQueued]);
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const stopInterval = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+    const startInterval = () => {
+      if (interval) {
+        return;
+      }
+      interval = setInterval(reconcileAiServerQueued, AI_RETRY_CHECK_INTERVAL_MS);
+    };
+    const unregister = registerForForegroundState({
+      onForeground: () => {
+        reconcileAiServerQueued();
+        startInterval();
+      },
+      onBackground: stopInterval,
+    });
+    startInterval(); // the app is foregrounded when this first mounts
+    return () => {
+      unregister();
+      stopInterval();
+    };
+  }, [reconcileAiServerQueued]);
+
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the
   // next save or via the manual Sync now action, not in a hot loop.
@@ -5934,7 +5999,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     return {
       sync: { todo: syncTodo, done: syncDone, syncedOnce, syncingTwice },
       metadata: { todo: metadataTodo, done: metadataDone },
-      ai: { todo: aiTodo, done: aiDone },
+      // serverQueued is the confirmed-overflow-queue subset alone (not the
+      // full union above) — the only part of the backlog still moving when
+      // aiSuggestionsMode is "off": the worker keeps draining these
+      // regardless of the local pause, while the trigger/dispatch/retry
+      // portions are genuinely frozen. Settings uses this to stay honest in
+      // that mode instead of hiding real in-flight server work (Codex
+      // review, PR #656).
+      ai: { todo: aiTodo, done: aiDone, serverQueued: aiServerQueuedIds.size },
     };
   }, [bookmarks, queue, enrichments, aiRetryIds, enrichingIds, aiServerQueuedIds]);
 

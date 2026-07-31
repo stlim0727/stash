@@ -120,6 +120,29 @@ test('the AI queue backlog row stays hidden when AI suggestions are off, even wi
   expect(screen.queryByText('AI suggestions queued')).toBeNull();
 });
 
+test('the AI queue backlog row shows the confirmed server-queued subset with honest off-mode copy when AI suggestions are off (Codex review, PR #656)', async () => {
+  // Codex review: hiding the row entirely when off (the fix above) is itself
+  // misleading in the OTHER direction for items the server already confirmed
+  // into its overflow queue — the cron worker keeps draining those regardless
+  // of this local preference, so they can still arrive with no warning at
+  // all. Only the server-queued subset stays visible here (the local
+  // trigger/dispatch/retry portions really are frozen), with copy that
+  // doesn't promise the rest resumes automatically.
+  await fakeRepo.repository.setMeta(AI_SUGGESTIONS_MODE_PREF_KEY, 'off');
+  await fakeRepo.repository.setMeta(
+    'ai_server_queued',
+    JSON.stringify(['bm-1', 'bm-2']),
+  );
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('Off — never auto-suggest')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('AI suggestions queued')).toBeTruthy());
+  expect(
+    screen.getByText(
+      '2 bookmarks already queued before you turned this off — may still complete',
+    ),
+  ).toBeTruthy();
+});
+
 test("picking 'Off' in the sheet updates the row label", async () => {
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Review suggestions before applying')).toBeTruthy());

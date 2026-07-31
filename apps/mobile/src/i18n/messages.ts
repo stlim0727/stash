@@ -413,6 +413,10 @@ export const en = {
     one: '{count} bookmark · paced by AI quota, resumes automatically',
     other: '{count} bookmarks · paced by AI quota, resumes automatically',
   },
+  'settings.aiQueueBacklog.offValue': {
+    one: '{count} bookmark already queued before you turned this off — may still complete',
+    other: '{count} bookmarks already queued before you turned this off — may still complete',
+  },
   'settings.pushNotifications.label': 'Notify when AI catches up',
   'settings.pushNotifications.on': 'On — a push arrives once AI finishes a backlog',
   'settings.pushNotifications.off': 'Off',
