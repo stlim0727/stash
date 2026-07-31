@@ -410,8 +410,8 @@ export const en = {
   'settings.aiSuggestions.auto_accept': 'Auto-apply high-confidence suggestions',
   'settings.aiQueueBacklog.label': 'AI suggestions queued',
   'settings.aiQueueBacklog.value': {
-    one: '{count} bookmark · paced by daily quota, resumes automatically',
-    other: '{count} bookmarks · paced by daily quota, resumes automatically',
+    one: '{count} bookmark · paced by AI quota, resumes automatically',
+    other: '{count} bookmarks · paced by AI quota, resumes automatically',
   },
   'settings.pushNotifications.label': 'Notify when AI catches up',
   'settings.pushNotifications.on': 'On — a push arrives once AI finishes a backlog',

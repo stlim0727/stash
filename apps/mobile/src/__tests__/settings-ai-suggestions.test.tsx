@@ -81,23 +81,27 @@ test('picking Auto-apply in the sheet updates the row label and persists durably
   );
 });
 
-test('the AI queue backlog row is absent when nothing is server-queued', async () => {
+test('the AI queue backlog row is absent when there is no AI backlog', async () => {
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Review suggestions before applying')).toBeTruthy());
   expect(screen.queryByText('AI suggestions queued')).toBeNull();
 });
 
-test('the AI queue backlog row surfaces the server-queued count (STASH-4K follow-up UX)', async () => {
-  // A large backlog (e.g. after a bulk import that exhausts the daily AI
-  // quota) should read as "still working, just paced" — not silently stuck.
+test('the AI queue backlog row surfaces the full backlog, not just the confirmed-server-queued subset (Codex review, PR #655)', async () => {
+  // Codex review: deriving this from only the confirmed-server-queued set
+  // (isAiSuggestionServerQueued) undercounts badly — only the ONE bookmark
+  // whose 429 already round-tripped through a successful enqueue lands there;
+  // everything still sitting in the local dispatch/trigger/retry queues
+  // (the bulk of a large backlog) was invisible. diagnosticStats.ai.todo is
+  // the union of all three and is what this must track instead.
   await fakeRepo.repository.setMeta(
-    'ai_server_queued',
+    'pending_ai_trigger',
     JSON.stringify(['bm-1', 'bm-2', 'bm-3']),
   );
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('AI suggestions queued')).toBeTruthy());
   expect(
-    screen.getByText('3 bookmarks · paced by daily quota, resumes automatically'),
+    screen.getByText('3 bookmarks · paced by AI quota, resumes automatically'),
   ).toBeTruthy();
 });
 

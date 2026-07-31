@@ -105,6 +105,7 @@ test('request() carries the response body\'s reason onto SupabaseRequestError', 
         assert.ok(error instanceof SupabaseRequestError);
         assert.equal(error.status, 429);
         assert.equal(error.reason, 'daily_limit');
+        assert.equal(error.retryAfterSeconds, 3600);
         return true;
       },
     );
@@ -126,6 +127,7 @@ test('request() leaves reason undefined when the response body has none', async 
     await assert.rejects(client.request('/functions/v1/ai-enrich', { method: 'POST' }), (error: unknown) => {
       assert.ok(error instanceof SupabaseRequestError);
       assert.equal(error.reason, undefined);
+      assert.equal(error.retryAfterSeconds, undefined);
       return true;
     });
   } finally {

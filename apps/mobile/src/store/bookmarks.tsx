@@ -334,13 +334,6 @@ interface BookmarksContextValue {
    *  enrichment actually lands (queue delivery via pull, or a later attempt
    *  succeeding directly) or the bookmark is discarded. */
   isAiSuggestionServerQueued: (bookmarkId: string) => boolean;
-  /** How many bookmarks currently have a CONFIRMED server-queued AI request
-   *  (see {@link isAiSuggestionServerQueued}) — i.e. are durably waiting on
-   *  the background overflow worker rather than failed outright. Settings
-   *  surfaces this so a large backlog (e.g. after a bulk import that
-   *  exhausts the daily/hourly AI quota) reads as "still working, just
-   *  paced" instead of looking broken or silently stuck. */
-  aiSuggestionQueuedCount: number;
   /** True if a bookmark has EVER recorded a failed AI-enrichment attempt that
    *  hasn't since exhausted its retry cap — independent of whether it's
    *  currently enriching right now. Unlike {@link isAiSuggestionPostponed}
@@ -494,13 +487,22 @@ const AI_RETRY_MAX_ATTEMPTS = 6;
  *  firing a direct request roughly every couple seconds, every one of them a
  *  guaranteed 429, until the whole backlog has been walked once — wasted
  *  battery/network for a result already known. Manual "Suggest with AI" taps
- *  are unaffected; only the auto drain checks this. The daily case gets the
- *  longer cooldown because the quota's own `retry_after` for it is a fixed
- *  3600s regardless of how much of the day is actually left before a slot in
- *  the rolling 24h window frees up — not reliable enough to trust directly,
- *  so this re-checks periodically instead of waiting on it exactly. */
+ *  are unaffected; only the auto drain checks this.
+ *
+ *  `daily_limit`'s own `retry_after` is a fixed 3600s from the server
+ *  regardless of how much of the rolling 24h window is actually left before
+ *  a slot frees up — not reliable enough to trust directly, so this instead
+ *  re-checks periodically on a fixed, conservative cooldown.
+ *  `hourly_limit`'s `retry_after` IS the server's exact computed wait (Codex
+ *  review, PR #655) — `AI_QUOTA_HOURLY_COOLDOWN_MS` is only the fallback for
+ *  the rare case the response didn't carry one. */
 const AI_QUOTA_DAILY_COOLDOWN_MS = 30 * 60_000;
 const AI_QUOTA_HOURLY_COOLDOWN_MS = 10 * 60_000;
+/** Defensive clamp on a server-reported hourly `retry_after` (seconds) before
+ *  trusting it for the cooldown — the hourly window is at most 3600s, so
+ *  anything outside [1, 3600] is treated as untrustworthy and falls back to
+ *  AI_QUOTA_HOURLY_COOLDOWN_MS instead. */
+const AI_QUOTA_HOURLY_RETRY_AFTER_BOUNDS_S = { min: 1, max: 3600 } as const;
 
 /** STASH-4J: how long to wait before a single retry of a `pending_ai_enrichment`
  *  enqueue that failed with an RLS violation (HTTP 403). Production logs show
@@ -3438,11 +3440,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // firing requests that are each a guaranteed repeat of this same
           // rejection. Manual "Suggest with AI" taps bypass this (see the
           // drain effect below, which only gates the auto path).
-          aiQuotaCooldownUntil.current =
-            Date.now() +
-            (error.reason === "daily_limit"
-              ? AI_QUOTA_DAILY_COOLDOWN_MS
-              : AI_QUOTA_HOURLY_COOLDOWN_MS);
+          let cooldownMs = AI_QUOTA_HOURLY_COOLDOWN_MS;
+          if (error.reason === "daily_limit") {
+            cooldownMs = AI_QUOTA_DAILY_COOLDOWN_MS;
+          } else if (
+            typeof error.retryAfterSeconds === "number" &&
+            error.retryAfterSeconds >= AI_QUOTA_HOURLY_RETRY_AFTER_BOUNDS_S.min &&
+            error.retryAfterSeconds <= AI_QUOTA_HOURLY_RETRY_AFTER_BOUNDS_S.max
+          ) {
+            // Codex review (PR #655): the server computes this exactly for
+            // hourly_limit — trust it instead of the fixed fallback so a
+            // near-expired window doesn't idle the queue for minutes longer
+            // than necessary, and a nearly-full hour doesn't get probed
+            // before a slot can actually open.
+            cooldownMs = error.retryAfterSeconds * 1000;
+          }
+          aiQuotaCooldownUntil.current = Date.now() + cooldownMs;
           // STASH #578 Phase 2: instead of just returning the rate-limited
           // sentinel, enqueue this bookmark for the background overflow
           // worker to retry later. Fire-and-forget in the strictest sense —
@@ -5787,6 +5800,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Gating on isSyncing makes the effect re-run when the in-flight sync
       // settles, so the new user's pull still fires.
       lastSyncedUserId.current = auth.userId;
+      // Codex review (PR #655): a quota cooldown armed for the PREVIOUS
+      // account must not throttle this one's independent AI quota — each
+      // account has its own per-user rate limit server-side, so a leftover
+      // cooldown here would block up to 30 minutes of a new account's AI
+      // work for no reason.
+      aiQuotaCooldownUntil.current = 0;
       void syncNow();
     }
   }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
@@ -5949,7 +5968,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isManuallyEnriching,
       isAiSuggestionPostponed,
       isAiSuggestionServerQueued,
-      aiSuggestionQueuedCount: aiServerQueuedIds.size,
       hadPriorEnrichmentAttempt,
       acceptSuggestedTags,
       getReviewedSuggestions,
@@ -6006,7 +6024,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       isManuallyEnriching,
       isAiSuggestionPostponed,
       isAiSuggestionServerQueued,
-      aiServerQueuedIds,
       hadPriorEnrichmentAttempt,
       acceptSuggestedTags,
       getReviewedSuggestions,

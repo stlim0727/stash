@@ -563,6 +563,94 @@ test('the auto dispatch queue resumes once the quota cooldown elapses (STASH-4K 
   }
 });
 
+test('an hourly-limit 429 uses the server-reported retry_after instead of the fixed fallback (Codex review, PR #655)', async () => {
+  // The server computes retry_after exactly for hourly_limit (seconds until
+  // the oldest hourly request leaves the window) — trusting it means the
+  // queue can resume in, say, 30s instead of always waiting the fixed
+  // 10-minute fallback that's sized for the case no retry_after was sent.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' }),
+    makeStoredBookmark({ id: SECOND_SYNCED_ID, metadata_status: 'complete' }),
+  ]);
+  await fakeRepo.repository.setMeta(
+    'pending_ai_trigger',
+    JSON.stringify([SYNCED_ID, SECOND_SYNCED_ID]),
+  );
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+
+  // Well short of the 10-minute fixed fallback, but past the reported 30s.
+  const dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 35_000);
+  try {
+    await waitFor(() =>
+      expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledWith(
+        SECOND_SYNCED_ID,
+        expect.anything(),
+        'en',
+      ),
+    );
+  } finally {
+    dateNowSpy.mockRestore();
+  }
+});
+
+test('a quota cooldown armed for one account does not throttle a different account switched into (Codex review, PR #655)', async () => {
+  // Each account has its own independent per-user AI quota server-side — a
+  // cooldown armed for account A's exhausted quota must not silently block
+  // up to 30 minutes of account B's unrelated AI work after a switch.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' }),
+    makeStoredBookmark({ id: SECOND_SYNCED_ID, metadata_status: 'complete' }),
+  ]);
+  await fakeRepo.repository.setMeta(
+    'pending_ai_trigger',
+    JSON.stringify([SYNCED_ID, SECOND_SYNCED_ID]),
+  );
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'daily_limit');
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  // Account A's first (and only, given mockImplementationOnce) dispatch hits
+  // the 429 and arms the 30-minute daily cooldown.
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+
+  // Confirm the cooldown is actually holding SECOND_SYNCED_ID back before
+  // switching accounts — otherwise the assertion below proves nothing.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1);
+
+  // Switch to a different real account (well short of the 30-minute cooldown
+  // — real time has barely moved).
+  mockAuthSession = { ...mockSession, user: { id: 'real-user-b' } };
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  // The account switch also carries bookmarks over onto rehomed ids (a
+  // separate, already-tested mechanism — see "an anon→real carried-over
+  // bookmark..." above), so this doesn't assert on a specific id being
+  // dispatched; it only proves dispatch resumes at all, beyond the single
+  // pre-switch call. If the cooldown had leaked across the switch, this
+  // count would stay frozen at 1 indefinitely (as already confirmed above,
+  // pre-switch) rather than eventually growing once the rehome settles.
+  await waitFor(
+    () => expect(apiMock.__spies.requestEnrichment.mock.calls.length).toBeGreaterThan(1),
+    { timeout: 5000 },
+  );
+});
+
 test('a non-429 failure does not enqueue for the overflow worker', async () => {
   const store = await renderReady();
   apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
@@ -590,32 +678,6 @@ test('a 429 with a CONFIRMED (resolved) enqueue marks the bookmark as server-que
   });
 
   await waitFor(() => expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true));
-});
-
-test('aiSuggestionQueuedCount tracks the server-queued set (UX backlog indicator)', async () => {
-  // Settings surfaces this count so a large backlog reads as "still working,
-  // just paced by quota" instead of looking stuck — it must track the same
-  // set isAiSuggestionServerQueued reads, not some independent count.
-  const store = await renderReady();
-  expect(store.current!.aiSuggestionQueuedCount).toBe(0);
-
-  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
-    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'daily_limit');
-  });
-  await act(async () => {
-    await store.current!.requestAiEnrichment(SYNCED_ID);
-  });
-  await waitFor(() => expect(store.current!.aiSuggestionQueuedCount).toBe(1));
-
-  // Clears back to 0 once a real enrichment lands via pull, same trigger
-  // isAiSuggestionServerQueued itself clears on.
-  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
-    makeEnrichment({ id: 'enrich-from-queue-worker-2', bookmark_id: SYNCED_ID }),
-  ]);
-  await act(async () => {
-    await store.current!.syncNow();
-  });
-  await waitFor(() => expect(store.current!.aiSuggestionQueuedCount).toBe(0));
 });
 
 test('the server-queued flag survives exhausting the local retry cap, unlike isAiSuggestionPostponed (STASH #578 follow-up)', async () => {
