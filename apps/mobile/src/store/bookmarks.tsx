@@ -481,6 +481,17 @@ const AI_RETRY_BACKOFF_MS: Record<number, number> = {
  *  was never enriched, with no distinct "gave up" state. */
 const AI_RETRY_MAX_ATTEMPTS = 6;
 
+/** STASH-4J: how long to wait before a single retry of a `pending_ai_enrichment`
+ *  enqueue that failed with an RLS violation (HTTP 403). Production logs show
+ *  these landing in tight ~30-in-45-second bursts during a bulk import, each
+ *  burst starting right alongside an unrelated Realtime logical-decoding slot
+ *  restart on the DB — a platform-level hiccup, not a logic bug: the exact
+ *  same insert, replayed moments later against the same row, succeeds cleanly
+ *  (verified live in production for several of the affected bookmark ids).
+ *  Long enough to clear that window, short enough not to noticeably delay the
+ *  "queued" confirmation. */
+const ENQUEUE_RLS_RETRY_DELAY_MS = 5000;
+
 /** How often a foreground periodic timer re-checks the backoff table while the
  *  app sits open (in addition to the cold-launch and foreground-transition
  *  checks). Deliberately coarse — the shortest backoff step is 2 minutes, so
@@ -3488,48 +3499,70 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             const enrichmentBeforeEnqueue = enrichmentsRef.current.find(
               (item) => item.bookmark_id === bookmarkId,
             );
+            // CONFIRMED: the server durably accepted this bookmark into the
+            // overflow queue, so the background worker will deliver a real
+            // result via normal sync. Only set on this resolution — never
+            // eagerly, and never from a failure branch, which falls back to
+            // the generic armAiRetry marker above alone.
+            //
+            // But skip it if a real enrichment already landed for this
+            // bookmark since the enqueue was fired (a faster manual retry,
+            // or — in principle — an extremely fast worker delivery): marking
+            // it queued now would strand a "will arrive automatically" note
+            // on an already-complete bookmark forever. See the snapshot
+            // comment above. Un-awaited, so this can also land AFTER a
+            // library reset that ran while the enqueue round-tripped — in
+            // which case the reference-equality check below would pass
+            // vacuously (both sides undefined once the reset emptied the
+            // cache) and strand a marker for a deleted bookmark. Same epoch
+            // guard as the other settle paths.
+            const enqueueSession = session;
+            const attemptEnqueue = async (): Promise<void> => {
+              await createSyncApi(enqueueSession).enqueuePendingEnrichment(
+                bookmarkId,
+                localeRef.current ?? undefined,
+              );
+              if (resetEpoch.current !== epochAtStart) {
+                return;
+              }
+              const enrichmentNow = enrichmentsRef.current.find(
+                (item) => item.bookmark_id === bookmarkId,
+              );
+              if (enrichmentNow === enrichmentBeforeEnqueue) {
+                markAiServerQueued(bookmarkId);
+              }
+            };
             try {
-              createSyncApi(session)
-                .enqueuePendingEnrichment(
-                  bookmarkId,
-                  localeRef.current ?? undefined,
-                )
-                .then(() => {
-                  // CONFIRMED: the server durably accepted this bookmark into
-                  // the overflow queue, so the background worker will
-                  // deliver a real result via normal sync. Only set on this
-                  // resolution — never eagerly, and never below in the
-                  // .catch()/synchronous-throw branches, which fall back to
-                  // the generic armAiRetry marker above alone.
-                  //
-                  // But skip it if a real enrichment already landed for this
-                  // bookmark since the enqueue was fired (a faster manual
-                  // retry, or — in principle — an extremely fast worker
-                  // delivery): marking it queued now would strand a "will
-                  // arrive automatically" note on an already-complete
-                  // bookmark forever. See the snapshot comment above.
-                  // Un-awaited, so this can also land AFTER a library reset
-                  // that ran while the enqueue round-tripped — in which case
-                  // the reference-equality check below would pass vacuously
-                  // (both sides undefined once the reset emptied the cache)
-                  // and strand a marker for a deleted bookmark. Same epoch
-                  // guard as the other settle paths.
-                  if (resetEpoch.current !== epochAtStart) {
-                    return;
-                  }
-                  const enrichmentNow = enrichmentsRef.current.find(
-                    (item) => item.bookmark_id === bookmarkId,
-                  );
-                  if (enrichmentNow === enrichmentBeforeEnqueue) {
-                    markAiServerQueued(bookmarkId);
-                  }
-                })
-                .catch((enqueueError: unknown) => {
+              attemptEnqueue().catch(async (enqueueError: unknown) => {
+                // STASH-4J: a single bounded retry for the specific failure
+                // this diagnostic (STASH-4G/4H) already proved is transient
+                // — an RLS violation (HTTP 403) with otherwise healthy
+                // session/identity diagnostics and a bookmark that
+                // demonstrably exists. Anything else (network failure, a
+                // genuine permissions problem) logs immediately, unretried,
+                // same as before.
+                if (
+                  !(enqueueError instanceof SupabaseRequestError) ||
+                  enqueueError.status !== 403
+                ) {
                   recordLog(
                     "warn",
                     `pending_ai_enrichment enqueue failed: ${enqueueError instanceof Error ? enqueueError.message : String(enqueueError)} ${enqueueSessionDiagnostics}`,
                   );
-                });
+                  return;
+                }
+                await new Promise((resolve) =>
+                  setTimeout(resolve, ENQUEUE_RLS_RETRY_DELAY_MS),
+                );
+                try {
+                  await attemptEnqueue();
+                } catch (retryError) {
+                  recordLog(
+                    "warn",
+                    `pending_ai_enrichment enqueue failed after retry: ${retryError instanceof Error ? retryError.message : String(retryError)} ${enqueueSessionDiagnostics}`,
+                  );
+                }
+              });
             } catch (enqueueError) {
               recordLog(
                 "warn",

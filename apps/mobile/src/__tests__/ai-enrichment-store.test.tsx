@@ -430,6 +430,71 @@ test('a 429 enqueue failure logs session diagnostics for triage (STASH-4D/4E)', 
   });
 });
 
+test('a 429 enqueue failure that is an RLS violation (403) is retried once and succeeds (STASH-4J)', async () => {
+  // STASH-4G/4H's diagnostics proved every occurrence has healthy session
+  // identity; production DB logs then showed these landing in tight bursts
+  // right alongside an unrelated Realtime logical-decoding slot restart — a
+  // transient platform-level window, not a logic bug. The identical insert,
+  // replayed moments later, succeeds. This test simulates exactly that: the
+  // first enqueue attempt gets the real production error shape (a
+  // SupabaseRequestError with status 403), the retry succeeds, and no
+  // "enqueue failed" warning should be logged.
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+  apiMock.__spies.enqueuePendingEnrichment
+    .mockRejectedValueOnce(
+      new SupabaseRequestError(
+        'new row violates row-level security policy for table "pending_ai_enrichment"',
+        403,
+      ),
+    )
+    .mockResolvedValueOnce(undefined);
+  clearLogEntries();
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  await waitFor(
+    () => expect(apiMock.__spies.enqueuePendingEnrichment).toHaveBeenCalledTimes(2),
+    { timeout: 8000 },
+  );
+  expect(
+    getLogEntries().some((entry) => entry.message.includes('pending_ai_enrichment enqueue failed')),
+  ).toBe(false);
+}, 10000);
+
+test('a 429 enqueue failure that is an RLS violation (403) logs after the retry also fails (STASH-4J)', async () => {
+  const store = await renderReady();
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429);
+  });
+  const rlsError = new SupabaseRequestError(
+    'new row violates row-level security policy for table "pending_ai_enrichment"',
+    403,
+  );
+  apiMock.__spies.enqueuePendingEnrichment
+    .mockRejectedValueOnce(rlsError)
+    .mockRejectedValueOnce(rlsError);
+  clearLogEntries();
+
+  await act(async () => {
+    await store.current!.requestAiEnrichment(SYNCED_ID);
+  });
+
+  await waitFor(
+    () => {
+      const entry = getLogEntries().find((e) =>
+        e.message.includes('pending_ai_enrichment enqueue failed after retry'),
+      );
+      expect(entry).toBeDefined();
+    },
+    { timeout: 8000 },
+  );
+}, 10000);
+
 test('a non-429 failure does not enqueue for the overflow worker', async () => {
   const store = await renderReady();
   apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
