@@ -488,3 +488,104 @@ test('normalizeCharsetLabel maps common aliases to WHATWG labels', () => {
   assert.equal(normalizeCharsetLabel('UTF-8'), 'utf-8');
   assert.equal(normalizeCharsetLabel('windows-1252'), 'windows-1252');
 });
+
+// --- Response body size cap (Sentry STASH-3C) --------------------------------
+// `arrayBuffer()` materializes the WHOLE body before any JS-side slice, so a
+// server that ignores our Range header could allocate its full size inside the
+// native fetch pump — during a 500+ bookmark import that ran the Android heap
+// out (`OutOfMemoryError` in `okio.Buffer.readByteArray`). These pin the fix:
+// the reader must stop pulling once it has the head it parses, and a body it
+// cannot stream must be refused rather than buffered.
+
+/** A streaming Response stub that would emit `chunks` bytes forever. */
+function streamingResponse(head: string, opts: { chunkSize?: number } = {}) {
+  const chunkSize = opts.chunkSize ?? 64 * 1024;
+  const headBytes = new TextEncoder().encode(head);
+  const state = { reads: 0, cancelled: false };
+  const response = {
+    ok: true,
+    url: 'https://example.com/huge',
+    headers: {
+      get: (name: string) =>
+        name.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null,
+    },
+    arrayBuffer: async () => {
+      throw new Error('arrayBuffer must not be used when the body streams');
+    },
+    body: {
+      getReader: () => ({
+        read: async () => {
+          state.reads += 1;
+          if (state.reads === 1) return { done: false, value: headBytes };
+          // An effectively endless body: the cap is the only thing that stops it.
+          return { done: false, value: new Uint8Array(chunkSize) };
+        },
+        cancel: async () => {
+          state.cancelled = true;
+        },
+      }),
+    },
+  } as unknown as Response;
+  return { response, state };
+}
+
+test('fetchPageMetadata stops reading a huge streamed body at the head cap and cancels', async () => {
+  const originalFetch = globalThis.fetch;
+  const { response, state } = streamingResponse(
+    '<html><head><title>Huge page</title></head><body>',
+  );
+  globalThis.fetch = (async () => response) as unknown as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://example.com/huge');
+    assert.equal(meta?.title, 'Huge page');
+    // 512 KB cap / 64 KB chunks = 8 chunks, plus the head chunk. The point is
+    // that it terminates at all — an unbounded read never returns.
+    assert.ok(state.reads <= 10, `pulled ${state.reads} chunks, expected the cap to stop it`);
+    assert.equal(state.cancelled, true, 'the reader must be cancelled so the native pump stops');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata refuses an oversized body it cannot stream instead of buffering it', async () => {
+  const originalFetch = globalThis.fetch;
+  let bufferedBytes = false;
+  globalThis.fetch = (async () =>
+    ({
+      ok: true,
+      url: 'https://example.com/big',
+      headers: {
+        get: (name: string) => {
+          const key = name.toLowerCase();
+          if (key === 'content-type') return 'text/html; charset=utf-8';
+          if (key === 'content-length') return String(8 * 1024 * 1024);
+          return null;
+        },
+      },
+      arrayBuffer: async () => {
+        bufferedBytes = true;
+        return new ArrayBuffer(8 * 1024 * 1024);
+      },
+    }) as unknown as Response) as unknown as typeof fetch;
+  clearLogEntries();
+  try {
+    const meta = await fetchPageMetadata('https://example.com/big');
+    assert.equal(meta, null);
+    assert.equal(bufferedBytes, false, 'the oversized body must never be materialized');
+    const logged = getLogEntries().map((entry) => entry.message).join('\n');
+    assert.match(logged, /too_large:8388608/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata still buffers a normal non-streaming body', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => htmlResponse(sampleHtml)) as unknown as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://example.com/small');
+    assert.equal(meta?.title, 'Local-first software');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

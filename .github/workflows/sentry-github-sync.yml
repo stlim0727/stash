@@ -49,9 +49,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
+          # Fail, don't skip. An `exit 0` here kept this workflow green for
+          # months while it delivered nothing, and the mirror silently fell ~20
+          # issues behind before anyone noticed (#638). A red run every 6 hours
+          # is the intended cost of an unset or expired token.
           if [ -z "$SENTRY_AUTH_TOKEN" ]; then
-            echo "SENTRY_AUTH_TOKEN not set — skipping Sentry sync."
-            exit 0
+            echo "::error::SENTRY_AUTH_TOKEN is not set — the Sentry mirror is not running."
+            exit 1
           fi
           ARGS=()
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then

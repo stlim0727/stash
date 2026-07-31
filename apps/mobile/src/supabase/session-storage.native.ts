@@ -53,9 +53,9 @@ const secureBackend: SecureKvBackend = {
 // session into secure storage on first launch after upgrade, then wipe it. No
 // new sessions are ever written here.
 const legacyConnection = new SqliteConnection<SQLite.SQLiteDatabase>(
-  async () => {
+  async ({ useNewConnection }) => {
     ensureNativeSqliteDirectory();
-    const db = await SQLite.openDatabaseAsync('stash-auth.db');
+    const db = await SQLite.openDatabaseAsync('stash-auth.db', { useNewConnection });
     await db.execAsync(`
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,

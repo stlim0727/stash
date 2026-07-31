@@ -183,7 +183,15 @@ async function githubRequest(method, urlPath, config, body) {
   return text ? JSON.parse(text) : null;
 }
 
+// Titles written by this script look like `STASH-3C: <title>`, but issues filed
+// by hand use other shapes — `STASH-R Improve responsive layouts…` (no colon)
+// and `…pthread_mutex_lock (Sentry STASH-J)` (shortId as a suffix). Anchoring
+// dedup to the `^SHORTID:` prefix made every one of those invisible, and
+// STASH-J was duly filed a second time as #643 despite #345 already tracking it
+// (#638). So the strict prefix is only the *preferred* match: any shortId-shaped
+// token anywhere in the title also counts.
 const SHORT_ID_PREFIX = /^([A-Z][A-Z0-9_-]*-[A-Z0-9]+):/;
+const SHORT_ID_ANYWHERE = /\b([A-Z][A-Z0-9]*-[A-Z0-9]+)\b/g;
 
 // Fetches every already-migrated shortId once via the repo issues list
 // (5000 req/hr core rate limit) instead of one Search API call per Sentry
@@ -193,6 +201,10 @@ const SHORT_ID_PREFIX = /^([A-Z][A-Z0-9_-]*-[A-Z0-9]+):/;
 // untracked tail.
 async function fetchTrackedShortIds(config) {
   const tracked = new Map();
+  // Loose (non-prefix) matches are recorded separately so a strict `SHORTID:`
+  // title always wins, and so the run log can name the ones that only matched
+  // loosely — a wrong skip is then visible instead of silent.
+  const loose = new Map();
   let page = 1;
   while (page <= 20) {
     const result = await githubRequest(
@@ -202,11 +214,17 @@ async function fetchTrackedShortIds(config) {
     );
     for (const item of result) {
       if (item.pull_request) continue;
-      const match = item.title.match(SHORT_ID_PREFIX);
-      if (match) tracked.set(match[1], item.number);
+      const prefix = item.title.match(SHORT_ID_PREFIX);
+      if (prefix) tracked.set(prefix[1], item.number);
+      for (const match of item.title.matchAll(SHORT_ID_ANYWHERE)) {
+        if (!loose.has(match[1])) loose.set(match[1], item.number);
+      }
     }
     if (result.length < 100) break;
     page += 1;
+  }
+  for (const [shortId, number] of loose) {
+    if (!tracked.has(shortId)) tracked.set(shortId, number);
   }
   return tracked;
 }
