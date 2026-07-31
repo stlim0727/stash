@@ -81,6 +81,10 @@ import { useI18n } from "@/i18n";
 import { recordLog } from "@/observability/log-buffer";
 import { armHydrationWatchdog } from "@/observability/hydration-watchdog";
 import { armLoopStallWatchdog } from "@/observability/loop-stall-watchdog";
+import {
+  describeRecentSegments,
+  recordSlowSegment,
+} from "@/observability/slow-segment-log";
 import { reportSyncQueueHealthEscalation } from "@/observability/sentry";
 import { registerForForegroundState } from "@/storage/sqlite-app-lifecycle";
 import { repository } from "@/storage/repository";
@@ -2048,6 +2052,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Cost probe for the React work this provider drives: render → commit →
+  // passive-effect flush. The effect below has no dependency array on purpose,
+  // so it runs after EVERY commit and the delta covers the whole cycle. This is
+  // the one big JS-thread block a `measureSyncSegment` bracket around store code
+  // can never see — `setBookmarks`/`setQueue` are batched, so the re-render they
+  // cause happens after the calling region has already returned. React's own
+  // Profiler is compiled out of release builds, which is why this is measured by
+  // hand. Two clock reads per commit; the timestamp is written during render on
+  // purpose (a StrictMode double render just re-stamps it, which can only
+  // under-report, never invent a stall).
+  const reactCycleStartedAt = useRef(0);
+  reactCycleStartedAt.current = Date.now();
+  useEffect(() => {
+    recordSlowSegment("react-cycle", Date.now() - reactCycleStartedAt.current);
+  });
+
   // Continuously watch the JS event loop for multi-second stalls — the "button
   // press does nothing for several seconds after sharing" freeze (Sentry
   // STASH-H) the native ANR/app-hang detectors miss because they watch the main
@@ -2057,8 +2077,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // a frozen-then-resumed app is not misread as a stall.
   useEffect(() => {
     const watchdog = armLoopStallWatchdog({
-      describe: () =>
-        `syncing=${syncInFlight.current} queue=${queueRef.current.length}`,
+      // Sentry STASH-K came back as "stalled ~3096ms (syncing=true queue=685)":
+      // enough to place the stall inside a sync pass over a large queue, not
+      // enough to name the blocking code, which by then has already unwound.
+      // `recentSlow` closes that gap — the instrumented regions time themselves
+      // (see slow-segment-log.ts), so a ~3s segment recorded moments before a
+      // ~3s stall is direct attribution. `none` is a real result too: it rules
+      // the instrumented regions out and points elsewhere.
+      describe: () => {
+        const recentSlow = describeRecentSegments();
+        return (
+          `syncing=${syncInFlight.current} queue=${queueRef.current.length} ` +
+          `recentSlow=[${recentSlow || "none"}]`
+        );
+      },
     });
     const unregister = registerForForegroundState({
       onBackground: () => watchdog.pause(),
@@ -4120,6 +4152,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // completedLocalIds.add below).
           recordBulkChunkStarted(results.length);
         }
+        // STASH-K: bracketed rather than wrapped in a closure so the region's
+        // own declarations stay in scope for the rest of this function. Nothing
+        // between here and the record call awaits, so the elapsed time IS
+        // JS-thread block time — the quantity the loop-stall watchdog measures
+        // from the outside. This loop is O(chunk x library) via the
+        // `preUploadSnapshot.find` below, so it is a prime suspect for a stall
+        // reported with a large queue.
+        const collectStartedAt = Date.now();
         const completedLocalIds = new Set<string>();
         const completions: CreateSyncCompletion[] = [];
         const queueOnlyEntries: LocalPendingBookmark[] = [];
@@ -4218,6 +4258,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        recordSlowSegment(
+          "bulk-chunk-collect",
+          Date.now() - collectStartedAt,
+        );
+
         if (completedLocalIds.size === 0) {
           return;
         }
@@ -4272,6 +4317,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // newer state must win over the stale snapshot (mirrors
         // applySyncEntryResult's identical discipline for the single-entry
         // path — see its "computed synchronously from the ref" comment).
+        // STASH-K: same bracketing as `bulk-chunk-collect` above — an
+        // await-free region whose elapsed time is JS-thread block time. This
+        // one re-filters and re-maps the whole library once per completion
+        // (see the collapse-onto-destination-id step below), so its cost grows
+        // with chunk size x library size.
+        const mergeStartedAt = Date.now();
         let nextBookmarks = bookmarksRef.current ?? [];
         // Collected rather than enqueued/triggered inline: enqueueMutation's
         // own setQueue call would otherwise run BEFORE the completedLocalIds
@@ -4383,6 +4434,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setQueue((current) =>
           current.filter((queued) => !completedLocalIds.has(queued.local_id)),
         );
+        recordSlowSegment("bulk-chunk-merge", Date.now() - mergeStartedAt);
         recordLog(
           "info",
           `bulk create chunk: ${completedLocalIds.size} completed, queue ${queueLenBeforeChunk} -> ` +
