@@ -183,19 +183,23 @@ async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefine
 // service-role key) and never shares code paths with the single-item
 // synchronous handler above — that path is untouched by this addition.
 
-/** How many pending rows one worker tick claims across ALL users. Bounded so
- *  one tick's wall-clock time (ENRICHMENT_CONCURRENCY rows at a time, so
- *  ceil(limit / concurrency) waves of provider latency) stays comfortably
- *  under the cron dispatch's pg_net timeout (see the migration). The cron
- *  ticks every minute, so this is throughput per minute, not a backlog cap —
- *  and the per-user quota gate below is the real limit on how fast any one
- *  user's overflow drains anyway. */
-const BATCH_CLAIM_LIMIT = 24;
-/** How many rows one tick enriches concurrently. Each row is its own provider
- *  call (see processEnrichmentRow for why they are never batched into one),
- *  so this — not a prompt-level chunk size — is what keeps a tick from
- *  bursting past the model provider's per-minute request limit. */
-const ENRICHMENT_CONCURRENCY = 8;
+/** How many pending rows one worker tick claims across ALL users — and, since
+ *  every row is now its own provider call (see processEnrichmentRow), also the
+ *  worker's ceiling on provider REQUESTS PER TICK. The cron ticks every minute,
+ *  so this is effectively a requests-per-minute budget and must stay under the
+ *  provider's project-wide RPM limit: Gemini's free tier allows 15 req/min for
+ *  the whole project (docs/development/cost-estimates.md), shared with the
+ *  synchronous capture path — so this leaves roughly half of it to live
+ *  captures, which are user-facing and must not be starved by a background
+ *  drain. Raise it only alongside a higher provider limit (e.g. billing
+ *  enabled), not to drain a backlog faster: the per-user quota gate below,
+ *  not this, is what bounds how fast any one user's overflow clears. */
+const BATCH_CLAIM_LIMIT = 8;
+/** How many of a tick's rows are in flight at once. Only shapes burstiness
+ *  within the tick (BATCH_CLAIM_LIMIT is what caps the tick's total requests);
+ *  kept below it so the calls spread across the tick instead of arriving as
+ *  one instantaneous spike. */
+const ENRICHMENT_CONCURRENCY = 4;
 
 /** Expo's push-send endpoint (STASH #579). Registered/non-anonymous users
  *  only — see the push_tokens migration; nothing here bypasses that, it just
@@ -321,6 +325,59 @@ async function claimEnrichmentQuotaSlot(userId: string): Promise<boolean> {
   }
 }
 
+/**
+ * Append one row to the `ai_enrichment_calls` spend ledger — one row per
+ * attempted billable provider call, on BOTH the synchronous and worker paths.
+ *
+ * Separate from the `ai_enrichments` row because that one is upserted
+ * on_conflict=bookmark_id (one row per bookmark, overwritten on every re-run),
+ * so its token columns alone would lose a prior call's spend on a manual
+ * "Refresh AI suggestions". This append-only table is what
+ * `admin_ai_enrichment_activity_24h` sums for cumulative cost/degradation
+ * reporting (see the ai_enrichment_calls migration).
+ *
+ * Skipped when the billable provider was never attempted (not configured) —
+ * there's no spend to record. Always written with the service-role key, never
+ * a caller-forwarded token: the table carries no client insert policy (see the
+ * ai_enrichment_calls_server_only migration) specifically so a client can't
+ * POST fabricated token counts and corrupt the ledger. Only this function —
+ * which computed `usage` from the provider's real response — may write to it.
+ *
+ * Best-effort: never throws (a ledger failure must not fail the enrichment
+ * itself), but always logs, so a broken ledger doesn't go unnoticed.
+ */
+async function recordEnrichmentCall(entry: {
+  bookmarkId: string;
+  userId: string;
+  usage: EnrichmentOutput['usage'];
+  degraded: boolean;
+  degradedReason: DegradedReason | null;
+}): Promise<void> {
+  if (provider === fallbackProvider || !SERVICE_ROLE_KEY) {
+    return;
+  }
+  try {
+    const res = await serviceRest('/ai_enrichment_calls', {
+      method: 'POST',
+      body: JSON.stringify({
+        bookmark_id: entry.bookmarkId,
+        user_id: entry.userId,
+        model: provider.model,
+        prompt_tokens: entry.usage?.prompt_tokens ?? null,
+        output_tokens: entry.usage?.output_tokens ?? null,
+        total_tokens: entry.usage?.total_tokens ?? null,
+        degraded: entry.degraded,
+        degraded_reason: entry.degradedReason,
+      }),
+    });
+    if (!res.ok) {
+      console.error('Failed to record ai_enrichment_calls row:', res.status, await res.text());
+    }
+  } catch (err) {
+    console.error('Failed to record ai_enrichment_calls row:', err);
+  }
+}
+
 const EMPTY_ENRICHMENT_CONTEXT = {
   collections: [] as Array<{ id: string; name: string }>,
   existingTags: [] as string[],
@@ -368,7 +425,9 @@ async function processEnrichmentRow(
     locale: row.locale ?? undefined,
   };
 
-  let output: EnrichmentOutput;
+  // Null only when the provider rate-limited us, which is handled below by
+  // putting the row back on the queue rather than persisting anything.
+  let output: EnrichmentOutput | null = null;
   let usedModel = provider.model;
   let degraded = provider === fallbackProvider;
   let degradedReason: DegradedReason | null = degraded ? 'not_configured' : null;
@@ -384,15 +443,50 @@ async function processEnrichmentRow(
       await markPendingEnrichmentSettled(row.id, next.status, next.attempts);
       return;
     }
-    console.error('Batch worker: provider failed; using fallback', row.bookmark_id, err);
-    output = await fallbackProvider.enrich(input);
-    usedModel = fallbackProvider.model;
+    console.error('Batch worker: provider failed', row.bookmark_id, err);
     degraded = true;
     degradedReason = classifyDegradedReason(err);
     // A GeminiContentError reached Gemini and may have spent tokens even
     // though its response had no usable candidate — keep that spend rather
     // than losing it to the fallback's null usage (same as the single-item path).
     usage = err instanceof GeminiContentError ? err.usage ?? null : null;
+    if (degradedReason !== 'rate_limited') {
+      output = await fallbackProvider.enrich(input);
+      usedModel = fallbackProvider.model;
+    }
+  }
+
+  // One ledger row per attempted provider call, degraded ones included — the
+  // rate_limited/timeout/provider_error counts in admin_ai_enrichment_activity_24h
+  // are precisely how an outage or an exhausted project quota becomes visible.
+  await recordEnrichmentCall({
+    bookmarkId: row.bookmark_id,
+    userId: row.user_id,
+    usage,
+    degraded,
+    degradedReason,
+  });
+
+  if (!output) {
+    // Rate-limited by the PROVIDER's project-wide limit (Gemini's 15 req/min
+    // or 1,000/day free tier), not by this user's own quota. Unlike the
+    // synchronous path — which has nowhere to put the request and so returns
+    // degraded heuristics — a queued row can simply wait: put it back to
+    // 'pending' with NO attempts penalty so a later tick retries it against a
+    // refreshed limit. Persisting the heuristics here instead would freeze
+    // generic, non-AI suggestions onto the bookmark permanently, since the
+    // queue row would be settled 'done' and never revisited. Same "not your
+    // turn yet, no penalty" treatment the per-user quota deferral gets in
+    // runBatchWorker.
+    //
+    // Caveat: this row's per-user quota slot was already spent at claim time
+    // and there is no refund RPC, so a long provider outage does burn slots on
+    // retries. That is not a regression — settling the row with heuristics
+    // spent the same slot and gave up on it permanently — but it is why the
+    // claim limit above stays under the provider's RPM rather than relying on
+    // this retry path to mop up.
+    await markPendingEnrichmentSettled(row.id, 'pending', row.attempts);
+    return;
   }
 
   const matched = matchSuggestedCollection(ctx.collections, output.suggested_collection);
@@ -412,8 +506,8 @@ async function processEnrichmentRow(
     degraded_reason: degradedReason,
     // Now that each row has its own call, its usage is genuinely per-bookmark
     // and can be recorded (a batched call's usage covered a whole chunk, so it
-    // was left null rather than divided). The separate ai_enrichment_calls
-    // spend ledger stays unwritten on this path, as before.
+    // was left null rather than divided) — as is the ai_enrichment_calls
+    // ledger row written above.
     prompt_tokens: usage?.prompt_tokens ?? null,
     output_tokens: usage?.output_tokens ?? null,
     total_tokens: usage?.total_tokens ?? null,
@@ -959,47 +1053,15 @@ Deno.serve(async (req) => {
     };
 
     // Append-only ledger of this individual call, independent of the row
-    // above: `ai_enrichments` is upserted on_conflict=bookmark_id (one row
-    // per bookmark, overwritten on every re-run), so its token columns alone
-    // would lose a prior call's spend on a manual "Refresh AI suggestions".
-    // Skipped when the billable provider was never attempted (not
-    // configured) — there's no spend to record. Best-effort: a failure here
-    // must never fail the user-facing enrichment, but IS logged (unlike a
-    // silently-ignored non-2xx) so a broken ledger doesn't go unnoticed.
-    //
-    // Always inserted with the service-role key, never the caller-forwarded
-    // auth `rest()` uses elsewhere: the table carries no client insert policy
-    // (see the ai_enrichment_calls_server_only migration) specifically so a
-    // client can't POST fabricated token counts straight to PostgREST with
-    // its own JWT and corrupt the spend ledger. Only this function — which
-    // computed `usage` from Gemini's real response — may write to it.
-    if (provider !== fallbackProvider && SERVICE_ROLE_KEY) {
-      try {
-        const ledgerRes = await fetch(`${SUPABASE_URL}/rest/v1/ai_enrichment_calls`, {
-          method: 'POST',
-          headers: {
-            apikey: SERVICE_ROLE_KEY,
-            Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            bookmark_id: bookmark.id,
-            user_id: bookmark.user_id,
-            model: provider.model,
-            prompt_tokens: usage?.prompt_tokens ?? null,
-            output_tokens: usage?.output_tokens ?? null,
-            total_tokens: usage?.total_tokens ?? null,
-            degraded,
-            degraded_reason: degradedReason,
-          }),
-        });
-        if (!ledgerRes.ok) {
-          console.error('Failed to record ai_enrichment_calls row:', ledgerRes.status, await ledgerRes.text());
-        }
-      } catch (err) {
-        console.error('Failed to record ai_enrichment_calls row:', err);
-      }
-    }
+    // above — see recordEnrichmentCall for why it exists and why it is always
+    // service-role-written. The worker path records the same entry per row.
+    await recordEnrichmentCall({
+      bookmarkId: bookmark.id,
+      userId: bookmark.user_id,
+      usage,
+      degraded,
+      degradedReason,
+    });
 
     // Atomic single-row upsert keyed by the unique ai_enrichments.bookmark_id.
     // The preflight skip above wins the common (sequential) case; this handles
