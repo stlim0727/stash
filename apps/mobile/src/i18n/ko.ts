@@ -293,6 +293,9 @@ export const ko: Catalog = {
   'settings.aiSuggestions.auto_accept': '신뢰도 높은 추천 자동 적용',
   'settings.aiQueueBacklog.label': 'AI 추천 대기 중',
   'settings.aiQueueBacklog.value': { other: '{count}개 · AI 할당량에 맞춰 자동으로 처리돼요' },
+  'settings.aiQueueBacklog.offValue': {
+    other: '끄기 전에 이미 대기열에 들어간 {count}개 · 완료될 수 있어요',
+  },
   'settings.pushNotifications.label': 'AI 정리가 끝나면 알림',
   'settings.pushNotifications.on': '켜짐 — AI가 밀린 작업을 끝내면 알림이 와요',
   'settings.pushNotifications.off': '꺼짐',

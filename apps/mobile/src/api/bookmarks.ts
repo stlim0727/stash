@@ -870,6 +870,39 @@ export class BookmarkApi {
     });
   }
 
+  /**
+   * Current overflow-queue status for a set of bookmarks this device believes
+   * are still server-queued (see the local `aiServerQueuedIds` marker in
+   * store/bookmarks.tsx). Read-only, via the owner-scoped SELECT policy added
+   * in `20260731150000_pending_ai_enrichment_select_policy.sql` — that policy
+   * exists to make `enqueuePendingEnrichment`'s ON CONFLICT check work, but it
+   * also means the client can now see its own rows' terminal status, which is
+   * what this is for: reconciling a local marker against a `pending_ai_enrichment`
+   * row that the worker gave up on (`status = 'failed'`, after exhausting
+   * MAX_ENRICHMENT_ATTEMPTS) or that no longer exists (a deleted bookmark
+   * cascades its row away). Neither of those ever produces an `ai_enrichments`
+   * row, so without this check the local marker — and the "still queued,
+   * resumes automatically" backlog count it drives — would say so forever for
+   * a bookmark that will in fact never complete (Codex review, PR #656).
+   */
+  async fetchPendingEnrichmentStatuses(
+    bookmarkIds: string[],
+  ): Promise<Array<{ bookmark_id: string; status: string }>> {
+    if (bookmarkIds.length === 0) {
+      return [];
+    }
+    return this.client.request<Array<{ bookmark_id: string; status: string }>>(
+      appendSearchParams(
+        '/rest/v1/pending_ai_enrichment',
+        new URLSearchParams({
+          select: 'bookmark_id,status',
+          bookmark_id: `in.${inFilter(bookmarkIds)}`,
+        }),
+      ),
+      { accessToken: this.session.access_token },
+    );
+  }
+
   async applyAISuggestions(input: ApplyAISuggestionsInput): Promise<BookmarkDetail | null> {
     if (input.tag_names && input.tag_names.length > 0) {
       await this.addTags({

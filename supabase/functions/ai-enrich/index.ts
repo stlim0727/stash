@@ -1016,6 +1016,47 @@ Deno.serve(async (req) => {
       // (safety block, malformed structured output) — preserve that spend
       // instead of losing it to the fallback's null usage.
       usage = err instanceof GeminiContentError ? err.usage ?? null : null;
+
+      // rate_limited is transient — unlike a real provider outage or a
+      // missing config, Gemini's limit will lift on its own. Rather than
+      // settling for the heuristic fallback permanently, enqueue into the
+      // SAME overflow queue the client uses for its own 429s (see
+      // 20260723150000_pending_ai_enrichment_queue.sql) so the pg_cron batch
+      // worker retries this bookmark with the real model once capacity frees
+      // up. ai_enrichments' on_conflict=bookmark_id upsert means a later
+      // success silently overwrites the degraded row below — no client
+      // change needed, the next sync pull just sees the upgraded content.
+      // Best-effort and never blocks the response: an enqueue failure just
+      // means this bookmark keeps today's degraded result, same as before
+      // this existed. Same on_conflict/ignore-duplicates shape as the
+      // client's own enqueuePendingEnrichment (api/bookmarks.ts) so a bulk
+      // import that's already queued this bookmark itself no-ops here too.
+      if (degradedReason === 'rate_limited') {
+        try {
+          const enqueueRes = await rest(`/pending_ai_enrichment?on_conflict=bookmark_id`, {
+            method: 'POST',
+            headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+            body: JSON.stringify({
+              bookmark_id: bookmark.id,
+              user_id: bookmark.user_id,
+              ...(locale ? { locale } : {}),
+            }),
+          });
+          if (!enqueueRes.ok) {
+            console.error(
+              'Sync path: failed to enqueue rate_limited bookmark for retry',
+              bookmark.id,
+              enqueueRes.status,
+            );
+          }
+        } catch (enqueueErr) {
+          console.error(
+            'Sync path: error enqueueing rate_limited bookmark for retry',
+            bookmark.id,
+            enqueueErr,
+          );
+        }
+      }
     }
 
     // Resolve the collection NAME hint to one of the user's existing
