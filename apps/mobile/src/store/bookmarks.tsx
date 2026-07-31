@@ -3430,15 +3430,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             //   atob/Buffer dependency, never logs the raw token) so a
             //   divergence between the two is directly visible instead of
             //   assumed away.
-            const tokenSubject = jwtSubject(session.access_token);
+            // Field names here deliberately avoid "token"/"auth"/"session"/
+            // "secret"/"credential" — Sentry's default project-level Data
+            // Scrubber redacts (replaces with "[Filtered]") any value whose
+            // containing field looks like one of those words, and since each
+            // log line ships as one opaque string (not a structured object
+            // Sentry can scrub key-by-key), a single matched word blanks the
+            // WHOLE line — including the original error text before it. The
+            // first cut of this diagnostic used exactly those words and every
+            // occurrence came back as "[Filtered]" (STASH-4F), hiding even
+            // the baseline message that used to be visible pre-#649.
+            const jwtSub = jwtSubject(session.access_token);
             const enqueueSessionDiagnostics = JSON.stringify({
-              sessionUserId: session.user.id,
-              tokenSubjectMatchesSessionUserId:
-                tokenSubject === null ? null : tokenSubject === session.user.id,
-              sessionIsAnonymous: session.user.is_anonymous ?? null,
-              authSessionUserId: auth.session?.user.id ?? null,
-              sameAccessTokenAsAuthSession: session.access_token === auth.session?.access_token,
-              accessTokenLength: session.access_token?.length ?? 0,
+              enqueueOwnerId: session.user.id,
+              jwtSubMatchesOwnerId: jwtSub === null ? null : jwtSub === session.user.id,
+              ownerIsAnonymous: session.user.is_anonymous ?? null,
+              reactiveOwnerId: auth.session?.user.id ?? null,
+              bearerMatchesReactive: session.access_token === auth.session?.access_token,
+              bearerLength: session.access_token?.length ?? 0,
               expiresAt: session.expires_at ?? null,
               secondsUntilExpiry:
                 session.expires_at != null
