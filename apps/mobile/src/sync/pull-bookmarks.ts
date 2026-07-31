@@ -1,5 +1,6 @@
 import { sanitizeTagData } from '@/domain/tag-data';
 import { recordLog } from '@/observability/log-buffer';
+import { recordSlowSegment } from '@/observability/slow-segment-log';
 import type { AIEnrichment, Bookmark, BookmarkTag, Collection, Tag } from '@/domain/types';
 import type { BookmarkRepository, TagData } from '@/storage/types';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
@@ -125,6 +126,15 @@ export async function pullRemoteChanges(
   // still hold so they never re-enter local state as empty Browse chips.
   const { tagData } = sanitizeTagData({ tags, bookmarkTags, collections });
 
+  // STASH-K: everything from here to the record call below runs without an
+  // await, so its elapsed time is JS-thread block time — what the loop-stall
+  // watchdog measures from the outside but cannot attribute. This region is the
+  // pull-side counterpart to the bulk-create brackets in store/bookmarks.tsx:
+  // `hasQueuedWork` is a linear scan of the pending queue in the store, called
+  // once per remote row here and once per local row in the deletion diff, so the
+  // work is O(rows x queue) — which is exactly the shape of a stall reported
+  // with `syncing=true queue=685`.
+  const mergeStartedAt = Date.now();
   const locals = getLocalBookmarks();
   const localById = new Map(locals.map((bookmark) => [bookmark.id, bookmark]));
 
@@ -178,6 +188,8 @@ export async function pullRemoteChanges(
             !hasQueuedWork(bookmark.id),
         )
         .map((bookmark) => bookmark.id);
+
+  recordSlowSegment('pull-merge', Date.now() - mergeStartedAt);
 
   if (deletions.length > 0) {
     recordLog('info', `pull: removing ${deletions.length} row(s) deleted on another device`);
