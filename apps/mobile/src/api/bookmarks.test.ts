@@ -195,3 +195,33 @@ test('createBookmarks dedupes same-url inputs before the bulk POST', async () =>
     ],
   );
 });
+
+test('enqueuePendingEnrichment targets bookmark_id for conflict resolution and requests a minimal response (STASH-4K)', async () => {
+  // STASH-4K, verified live against production:
+  //  - `on_conflict=bookmark_id` is required for `resolution=ignore-duplicates`
+  //    to target the table's unique `bookmark_id` constraint. Without it,
+  //    PostgREST's conflict target defaults to the primary key (`id`, always
+  //    a fresh random UUID), so a genuine repeat enqueue raised a raw 23505
+  //    duplicate-key error instead of silently no-op'ing as designed.
+  //  - `return=minimal` avoids PostgREST's default RETURNING representation,
+  //    which this call never reads.
+  //  - The actual RLS fix is a DB-side SELECT policy (see
+  //    20260731150000_pending_ai_enrichment_select_policy.sql) — Postgres's
+  //    ON CONFLICT clause needs SELECT privilege to check for a conflicting
+  //    row even under DO NOTHING, which nothing here can substitute for.
+  let seenPath: string | undefined;
+  let seenHeaders: Record<string, string> | undefined;
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      seenPath = path;
+      seenHeaders = options.headers as Record<string, string>;
+      return null;
+    },
+  };
+
+  const api = new BookmarkApi(SESSION, client as never);
+  await api.enqueuePendingEnrichment('00000000-0000-4000-8000-000000000099', 'ko');
+
+  assert.equal(seenPath, '/rest/v1/pending_ai_enrichment?on_conflict=bookmark_id');
+  assert.equal(seenHeaders?.Prefer, 'resolution=ignore-duplicates, return=minimal');
+});
