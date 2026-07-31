@@ -3421,8 +3421,8 @@ test('a pull that re-delivers the same already-known enrichment (watermark overl
 // STASH #578 Phase 2: the background overflow worker delivers its results
 // through the ordinary sync pull (no new polling/realtime), so a pull that
 // brings down 2+ enrichments this device never itself requested should feed
-// the same "N bookmarks summarized & tagged" burst-completion toast that a
-// burst of direct auto-dispatches already triggers (STASH #574 Phase 1).
+// the same "N bookmarks checked for AI suggestions" burst-completion toast
+// that a burst of direct auto-dispatches already triggers (STASH #574 Phase 1).
 const SECOND_SYNCED_ID = '7e64cf1e-0000-4000-8000-000000000002';
 
 test('a sync pull delivering 2+ worker-driven enrichments feeds the burst-completion toast', async () => {
