@@ -418,6 +418,7 @@ test('a 429 enqueue failure logs session diagnostics for triage (STASH-4D/4E)', 
     // (this ships as one opaque string, not a structured object it can scrub
     // key-by-key) when it contains a value under one of those words, which is
     // exactly what happened to the first cut of this diagnostic (STASH-4F).
+    expect(entry!.message).toContain(`"bookmarkId":"${SYNCED_ID}"`);
     expect(entry!.message).toContain('"enqueueOwnerId":"user-test"');
     expect(entry!.message).toContain('"jwtSubMatchesOwnerId"');
     expect(entry!.message).toContain('"ownerIsAnonymous"');
