@@ -686,3 +686,123 @@ test('a probe that hangs is treated as stale and reopened', async () => {
   assert.equal(second.id, 2); // timed-out probe → treated as dead → reopened
   assert.equal(opens, 2);
 });
+
+// --- Abandoned native ops (Sentry STASH-J / STASH-3W / STASH-3Z) -------------
+// A probe or close that blows its timeout has NOT finished — we merely stopped
+// waiting for it. Closing the handle then destroys the sqlite3 mutex while a
+// statement still holds it, which is the fatal `pthread_mutex_lock` under
+// `exsqlite3_finalize` / `NativeStatementBinding::getColumnNames`.
+
+/** A connection whose probe hangs on demand, recording opens and closes. */
+function makeHangingProbeConnection(options: { probeTimeoutMs: number }) {
+  const events: string[] = [];
+  const opens: Array<{ id: number; useNewConnection: boolean }> = [];
+  let opened = 0;
+  let releaseProbe: (() => void) | null = null;
+  let hangNextProbe = false;
+
+  const connection = new SqliteConnection<{ id: number }>(
+    async ({ useNewConnection }) => {
+      opened += 1;
+      opens.push({ id: opened, useNewConnection });
+      events.push(`open:${opened}:new=${useNewConnection}`);
+      return { id: opened };
+    },
+    async (db) => {
+      if (!hangNextProbe) throw new Error('stale handle');
+      hangNextProbe = false;
+      events.push(`probe-hang:${db.id}`);
+      // Still running natively long after the timeout fires.
+      await new Promise<void>((resolve) => {
+        releaseProbe = resolve;
+      });
+    },
+    async (db) => {
+      events.push(`close:${db.id}`);
+    },
+    { probeTimeoutMs: options.probeTimeoutMs, closeTimeoutMs: 10 },
+  );
+
+  return {
+    connection,
+    events,
+    opens,
+    hangProbe: () => {
+      hangNextProbe = true;
+    },
+    releaseProbe: () => releaseProbe?.(),
+  };
+}
+
+test('a timed-out probe never closes the handle underneath its running statement', async () => {
+  const h = makeHangingProbeConnection({ probeTimeoutMs: 10 });
+
+  const first = await h.connection.get();
+  assert.equal(first.id, 1);
+
+  h.hangProbe();
+  const second = await h.connection.get();
+
+  // The reopen happened, but handle 1 was NOT closed — its probe is still live.
+  assert.equal(second.id, 2);
+  assert.ok(
+    !h.events.includes('close:1'),
+    `handle 1 must not be closed while its probe runs; events: ${h.events.join(', ')}`,
+  );
+  // expo-sqlite caches one connection per path, so the reopen has to ask for a
+  // fresh one or it lands right back on the connection being torn down.
+  assert.deepEqual(h.opens[1], { id: 2, useNewConnection: true });
+});
+
+test('the deferred close runs once the abandoned probe finally settles', async () => {
+  const h = makeHangingProbeConnection({ probeTimeoutMs: 10 });
+  await h.connection.get();
+  h.hangProbe();
+  await h.connection.get();
+  assert.ok(!h.events.includes('close:1'));
+
+  h.releaseProbe();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.ok(
+    h.events.includes('close:1'),
+    `handle 1 must be closed after its probe settles; events: ${h.events.join(', ')}`,
+  );
+});
+
+test('an ordinary probe rejection still closes immediately and reuses the cached connection', async () => {
+  const h = makeHangingProbeConnection({ probeTimeoutMs: 1000 });
+  await h.connection.get();
+
+  // No hangProbe(): the probe rejects fast, so nothing is left in flight and the
+  // pre-existing evict-then-reopen behaviour must be untouched.
+  const second = await h.connection.get();
+
+  assert.equal(second.id, 2);
+  assert.ok(h.events.includes('close:1'));
+  assert.deepEqual(h.opens[1], { id: 2, useNewConnection: false });
+});
+
+test('a wedged close forces the reopen onto a new native connection', async () => {
+  const opens: boolean[] = [];
+  let opened = 0;
+  const connection = new SqliteConnection<FakeDb>(
+    async ({ useNewConnection }) => {
+      opened += 1;
+      opens.push(useNewConnection);
+      return new FakeDb(opened);
+    },
+    (db) => db.probe(),
+    () => new Promise<void>(() => {}), // never resolves — wedged close
+    { closeTimeoutMs: 10, probeTimeoutMs: 50 },
+  );
+
+  const first = await connection.get();
+  first.kill();
+  const second = await connection.get();
+
+  assert.equal(second.id, 2);
+  // The close is still in flight and will free that connection when it lands;
+  // reopening onto the cached one would be the use-after-free.
+  assert.deepEqual(opens, [false, true]);
+});

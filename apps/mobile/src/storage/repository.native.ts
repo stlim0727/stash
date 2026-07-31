@@ -118,12 +118,15 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   // invalidated the handle (a backgrounded app), so a stale handle no longer
   // wedges persistence with "NativeDatabase.prepareAsync ... NullPointerException".
   private readonly connection = new SqliteConnection<SQLite.SQLiteDatabase>(
-    async () => {
+    async ({ useNewConnection }) => {
       let phase = 'preflight';
       try {
         ensureNativeSqliteDirectory();
         phase = 'openDatabaseAsync';
-        const db = await SQLite.openDatabaseAsync('stash.db');
+        // `useNewConnection` is set only when the previous handle was abandoned
+        // with a native op still in flight; the default per-path cache would
+        // otherwise hand that very connection straight back.
+        const db = await SQLite.openDatabaseAsync('stash.db', { useNewConnection });
         phase = 'execSchema';
         await db.execAsync(SCHEMA_SQL);
         return db;

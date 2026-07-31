@@ -11,6 +11,13 @@ import { recordLog } from '../observability/log-buffer.ts';
 const FETCH_TIMEOUT_MS = 8000;
 /** Metadata lives in <head>; don't parse unbounded documents. */
 const MAX_HTML_BYTES = 512 * 1024;
+/**
+ * Hard ceiling on what a *non-streaming* runtime may buffer. The streaming path
+ * in `readCappedBody` stops at MAX_HTML_BYTES and never reaches this, but the
+ * `arrayBuffer()` fallback has no such control — so a body declaring more than
+ * this is refused outright rather than allocated (Sentry STASH-3C).
+ */
+const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 
 /**
  * Our honest, identifiable User-Agent — the default. A header-less fetch looks
@@ -47,7 +54,8 @@ function htmlHeaders(userAgent: string): Record<string, string> {
     // just that slice instead of the whole document — the difference between a
     // few KB and, for one reported page, a 24 MB body inlining megabytes of
     // base64 in <body>. Servers that ignore the header return the full 200 body,
-    // which the decode cap in `fetchHtmlMetadata` still bounds.
+    // which `readCappedBody` still bounds — it stops reading at MAX_HTML_BYTES
+    // rather than letting the whole body buffer.
     Range: `bytes=0-${MAX_HTML_BYTES - 1}`,
   };
 }
@@ -176,6 +184,76 @@ interface HtmlFetchResult {
   finalUrl?: string;
 }
 
+interface CappedBody {
+  /** At most MAX_HTML_BYTES, ready to decode. */
+  bytes: Uint8Array;
+  /** Bytes actually pulled off the wire — equals `bytes.length` unless truncated. */
+  read: number;
+  truncated: boolean;
+}
+
+/**
+ * Read at most MAX_HTML_BYTES of a response body.
+ *
+ * Bounding the *decode* is not enough: `response.arrayBuffer()` materializes the
+ * WHOLE body before any JS-side slice can run, so a page that ignores our Range
+ * header allocates its full size inside the native fetch pump. During a 500+
+ * bookmark import that ran the Android heap out and crashed the app with
+ * `OutOfMemoryError` in `okio.Buffer.readByteArray`, under
+ * `expo.modules.fetch.NativeResponse.pumpResponseBodyStream` (Sentry STASH-3C).
+ *
+ * So prefer streaming: pull chunks only until we have the head we actually
+ * parse, then cancel the reader — the native pump stops and the remainder of the
+ * body is never allocated. Runtimes without a streaming body (the web fetch
+ * polyfill, test stubs) fall back to `arrayBuffer()`, guarded by the declared
+ * Content-Length so an oversized body is refused rather than buffered. Returns
+ * null when the body is too large to read safely.
+ */
+async function readCappedBody(response: Response): Promise<CappedBody | null> {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > MAX_BUFFERED_BYTES) {
+      return null;
+    }
+    const raw = new Uint8Array(await response.arrayBuffer());
+    const truncated = raw.length > MAX_HTML_BYTES;
+    return {
+      bytes: truncated ? raw.subarray(0, MAX_HTML_BYTES) : raw,
+      read: raw.length,
+      truncated,
+    };
+  }
+
+  const chunks: Uint8Array[] = [];
+  let read = 0;
+  try {
+    while (read < MAX_HTML_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.length === 0) continue;
+      chunks.push(value);
+      read += value.length;
+    }
+  } finally {
+    // Stops the native body pump. Without it the rest of a huge body keeps
+    // streaming into the buffer we just decided not to read — which is the
+    // allocation that OOM'd in the first place.
+    await reader.cancel().catch(() => {});
+  }
+
+  const size = Math.min(read, MAX_HTML_BYTES);
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    if (offset >= size) break;
+    const take = Math.min(chunk.length, size - offset);
+    bytes.set(chunk.subarray(0, take), offset);
+    offset += take;
+  }
+  return { bytes, read, truncated: read > MAX_HTML_BYTES };
+}
+
 /** Fetch and parse a page's HTML metadata with a specific User-Agent. */
 async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFetchResult> {
   const controller = new AbortController();
@@ -195,18 +273,13 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     // Read raw bytes and decode with the page's real charset. Many Korean/CJK
     // sites serve legacy encodings (EUC-KR, Shift_JIS, …), often declared only
     // in a <meta> tag, so decoding as UTF-8 produces mojibake.
-    //
-    // Cap what we DECODE to the head we actually parse. The Range header above
-    // asks servers for only the first MAX_HTML_BYTES, but one that ignores it
-    // returns the full body — and decoding a multi-megabyte string on the JS
-    // thread blocks input for seconds (a 24 MB page froze the app for ~15 s and
-    // triggered a native SQLite crash under the GC pressure: Sentry STASH-K/J).
-    // Slicing before the decode keeps the synchronous cost bounded regardless of
-    // body size; `parsePageMetadata` slices to the same bound anyway.
-    const raw = new Uint8Array(await response.arrayBuffer());
-    const bytes = raw.length > MAX_HTML_BYTES ? raw.subarray(0, MAX_HTML_BYTES) : raw;
-    const charset = detectCharset(contentType, bytes);
-    const html = await decodeHtml(bytes, charset);
+    const body = await readCappedBody(response);
+    if (!body) {
+      const declared = response.headers.get('content-length') ?? 'unknown';
+      return { metadata: null, outcome: `too_large:${declared}` };
+    }
+    const charset = detectCharset(contentType, body.bytes);
+    const html = await decodeHtml(body.bytes, charset);
     // Redirects may have moved us; resolve relative URLs against the final URL.
     const finalUrl = response.url || url;
     const metadata = parsePageMetadata(html, finalUrl);
@@ -214,7 +287,8 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
       // A 200 with no parseable title is the classic "content-free JS shell".
       // Note the final URL (so a redirect chain like naver.me → m.place shows)
       // and a structural head summary so the failure log says *why* on its own.
-      const detail = `${htmlHeadSummary(html)} bytes=${raw.length} ct=${contentType.split(';')[0] || 'unknown'}`;
+      const size = `${body.read}${body.truncated ? '+' : ''}`;
+      const detail = `${htmlHeadSummary(html)} bytes=${size} ct=${contentType.split(';')[0] || 'unknown'}`;
       return { metadata, outcome: `no_title@${finalUrl} {${detail}}`, finalUrl };
     }
     return { metadata, outcome: 'ok', finalUrl };

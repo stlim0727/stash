@@ -57,6 +57,33 @@ const DEFAULT_REOPEN_ALERT_WINDOW_MS = 60_000;
 // a breadcrumb — while the steady state (fast, uncontended ops) stays silent.
 const TAIL_WAIT_LOG_MS = 250;
 
+/** Options handed to the opener so a recovery reopen can bypass the native cache. */
+export interface SqliteOpenerOptions {
+  /**
+   * True when the handle being replaced was *abandoned* rather than closed —
+   * a probe or close blew its timeout and its native op may still be running.
+   * expo-sqlite caches one connection per database path, so a plain reopen
+   * would hand back that very connection; the opener must ask the native layer
+   * for a fresh one instead (`useNewConnection: true`).
+   */
+  useNewConnection: boolean;
+}
+
+/**
+ * Thrown by {@link SqliteConnection.withTimeout}. Distinct from a genuine
+ * rejection because it means something very different: the native operation is
+ * **still running**, we just stopped waiting for it. Anything that would free
+ * the handle underneath it has to be deferred (see `markAbandoned`).
+ */
+class SqliteTimeoutError extends Error {}
+
+interface ProbeResult {
+  alive: boolean;
+  error?: unknown;
+  /** The probe timed out, so its native statement may still be running. */
+  abandoned: boolean;
+}
+
 /**
  * Coalesced, self-healing SQLite connection manager.
  *
@@ -100,6 +127,17 @@ const TAIL_WAIT_LOG_MS = 250;
  *   6. Reopens are counted and, past a per-session threshold, escalated to a
  *      tracked error — frequent reopens are the leading indicator of the
  *      background-handle thrash that wedges the DB (see {@link noteReopen}).
+ *   7. A probe or close that blows its timeout is treated as **abandoned, not
+ *      finished**: the native op is still running, so the handle is never freed
+ *      underneath it. The close is deferred until the op actually settles and
+ *      the reopen is forced onto a new native connection. Timing out and then
+ *      closing anyway is a use-after-free — it destroys the sqlite3 mutex while
+ *      a statement still holds it, which is the fatal `pthread_mutex_lock` under
+ *      `exsqlite3_finalize` / `NativeStatementBinding::getColumnNames` seen in
+ *      Sentry STASH-J / STASH-3W / STASH-3Z. expo-sqlite opens with
+ *      `finalizeUnusedStatementsBeforeClosing` (default true), so `closeAsync`
+ *      actively finalizes outstanding statements — which is precisely the
+ *      `exsqlite3_finalize` frame those crashes died in.
  *
  * The auth store (`session-storage.native.ts`) drives its single connection the
  * same way.
@@ -131,6 +169,10 @@ export class SqliteConnection<DB> {
   // The next open is expected lifecycle recovery and should stay a breadcrumb,
   // not count toward the churn alert that is meant for stale/wedged handles.
   private nextReopenIsLifecycle = false;
+  // Set when a handle was discarded while one of our native ops against it was
+  // still in flight (see markAbandoned). Consumed by the next successful open,
+  // which must not reuse expo-sqlite's cached per-path connection.
+  private reopenWithNewConnection = false;
   // Count of successful opens this session. The first is the initial open; every
   // one after it is a reopen (a handle died or was proactively closed), which we
   // track as a freeze-risk signal (see noteReopen).
@@ -160,7 +202,7 @@ export class SqliteConnection<DB> {
   private foregroundStateRegistered = false;
 
   constructor(
-    private readonly opener: () => Promise<DB>,
+    private readonly opener: (options: SqliteOpenerOptions) => Promise<DB>,
     /** Cheap liveness check; throws if the handle is stale/invalidated. */
     private readonly probe: (db: DB) => Promise<unknown>,
     /** Best-effort close of a handle being discarded. */
@@ -297,14 +339,17 @@ export class SqliteConnection<DB> {
     } catch (error) {
       // Retry only when the handle itself died; a still-live handle means the
       // error is real (constraint, bad SQL) and must not be replayed.
-      if (await this.isAlive(first)) {
+      const { alive, abandoned } = await this.probeAlive(first);
+      if (alive) {
         throw error;
       }
       if (this.db === first) {
         this.db = null;
       }
       // Evict the dead handle before reopening (see closeQuietly / resolve).
-      await this.closeQuietly(first);
+      // A probe that timed out left its statement running, so `abandoned` routes
+      // the close through markAbandoned instead of freeing it underneath.
+      await this.closeQuietly(first, abandoned);
     }
     const fresh = await this.get();
     try {
@@ -330,7 +375,7 @@ export class SqliteConnection<DB> {
    * original `work(db)` finish *later* against a since-closed connection and
    * land a stale write after a newer edit. So the watchdog only observes; the
    * unit keeps owning the tail until it actually settles, and a genuinely dead
-   * handle is still recovered by {@link runOnce}'s post-throw `isAlive` retry.
+   * handle is still recovered by {@link runOnce}'s post-throw `probeAlive` retry.
    * The report fires at most once per op (the tail is blocked meanwhile, so
    * there is nothing else to drown out).
    */
@@ -400,7 +445,7 @@ export class SqliteConnection<DB> {
     let closeMs = 0;
     if (existing) {
       const probeStart = Date.now();
-      const { alive, error } = await this.probeAlive(existing);
+      const { alive, error, abandoned } = await this.probeAlive(existing);
       probeMs = Date.now() - probeStart;
       if (alive) {
         return existing;
@@ -417,15 +462,20 @@ export class SqliteConnection<DB> {
       // fire-and-forget close lets the reopen reuse the still-cached invalid
       // handle — and once reopened against that binding, the trailing close only
       // drops a refcount instead of freeing it, so it never recovers. The wait
-      // is time-bounded so a wedged close can't deadlock the reopen.
+      // is time-bounded so a wedged close can't deadlock the reopen — and when
+      // that bound is hit, `reopenWithNewConnection` keeps the reopen off the
+      // connection still being torn down.
       const closeStart = Date.now();
-      await this.closeQuietly(existing);
+      await this.closeQuietly(existing, abandoned);
       closeMs = Date.now() - closeStart;
     }
     try {
       const openStart = Date.now();
-      const db = await this.opener();
+      const useNewConnection = this.reopenWithNewConnection;
+      const db = await this.opener({ useNewConnection });
       const openMs = Date.now() - openStart;
+      // Cleared only on success, so a failed open still reopens safely.
+      this.reopenWithNewConnection = false;
       this.db = db;
       this.opens += 1;
       if (this.opens > 1) {
@@ -442,26 +492,69 @@ export class SqliteConnection<DB> {
     }
   }
 
-  private async isAlive(db: DB): Promise<boolean> {
-    return (await this.probeAlive(db)).alive;
-  }
-
-  private async probeAlive(db: DB): Promise<{ alive: boolean; error?: unknown }> {
+  private async probeAlive(db: DB): Promise<ProbeResult> {
+    const work = this.probe(db);
     try {
-      await this.withTimeout(this.probe(db), this.probeTimeoutMs, 'probe');
-      return { alive: true };
+      await this.withTimeout(work, this.probeTimeoutMs, 'probe');
+      return { alive: true, abandoned: false };
     } catch (error) {
-      return { alive: false, error };
+      if (error instanceof SqliteTimeoutError) {
+        // The probe statement is STILL RUNNING natively — we only stopped
+        // waiting. Closing now would tear down the sqlite3 object (and its
+        // mutex) out from under it; that use-after-free is what surfaces as the
+        // fatal `pthread_mutex_lock` in `exsqlite3_finalize` /
+        // `NativeStatementBinding::getColumnNames` (Sentry STASH-J/3W/3Z).
+        this.markAbandoned(db, work, 'probe');
+        return { alive: false, error, abandoned: true };
+      }
+      return { alive: false, error, abandoned: false };
     }
   }
 
-  private async closeQuietly(db: DB): Promise<boolean> {
+  /**
+   * Drop a handle whose native op outlived our patience, without freeing it.
+   *
+   * Two things happen: the next open is forced onto a *new* native connection
+   * (expo-sqlite's per-path cache would otherwise return this same dying one),
+   * and the real close is deferred until the abandoned op actually settles. If
+   * it never settles the handle simply leaks for the rest of the session —
+   * one leaked connection is a far better outcome than a native crash.
+   */
+  private markAbandoned(db: DB, work: Promise<unknown>, label: string): void {
+    this.reopenWithNewConnection = true;
+    recordLog(
+      'warn',
+      `sqlite ${label} abandoned mid-flight — deferring close until it settles and reopening on a new connection`,
+    );
+    const closeLater = () => {
+      void Promise.resolve(this.close(db)).catch(() => {
+        // Best effort: the handle was already unreachable from here.
+      });
+    };
+    work.then(closeLater, closeLater);
+  }
+
+  private async closeQuietly(db: DB, abandoned = false): Promise<boolean> {
+    if (abandoned) {
+      // markAbandoned already owns this handle's close; racing it is the bug.
+      return false;
+    }
+    const work = this.close(db);
     try {
-      await this.withTimeout(this.close(db), this.closeTimeoutMs, 'close');
+      await this.withTimeout(work, this.closeTimeoutMs, 'close');
       return true;
-    } catch {
+    } catch (error) {
       // The handle may already be wedged or slow to close; a bounded wait keeps
-      // that from hanging the connection. We reopen regardless.
+      // that from hanging the connection. We reopen regardless — but if the
+      // close itself is still in flight, the reopen must not land back on the
+      // connection it is about to free.
+      if (error instanceof SqliteTimeoutError) {
+        this.reopenWithNewConnection = true;
+        recordLog(
+          'warn',
+          'sqlite close abandoned mid-flight — reopening on a new connection',
+        );
+      }
       return false;
     }
   }
@@ -469,7 +562,7 @@ export class SqliteConnection<DB> {
   private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error(`sqlite ${label} timed out after ${ms}ms`));
+        reject(new SqliteTimeoutError(`sqlite ${label} timed out after ${ms}ms`));
       }, ms);
       promise.then(
         (value) => {
