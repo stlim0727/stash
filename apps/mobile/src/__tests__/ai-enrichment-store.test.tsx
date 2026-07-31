@@ -133,6 +133,14 @@ jest.mock('@/api/bookmarks', () => {
   // STASH #578 Phase 2: enqueue-on-429 overflow path. Spied so a test can
   // assert it's called (or not) when requestAiEnrichment is rate limited.
   const enqueuePendingEnrichment = jest.fn(async () => {});
+  // Codex review, PR #656: reconciles the confirmed-server-queued marker
+  // against the queue's real remote status. Defaults to "still pending" (an
+  // empty array would mean the row doesn't exist, which a test opts into
+  // explicitly) — most tests never seed this at all.
+  const fetchPendingEnrichmentStatuses = jest.fn(
+    async (bookmarkIds: string[]) =>
+      bookmarkIds.map((bookmark_id) => ({ bookmark_id, status: 'pending' })),
+  );
   // Spied on its `session` arg (rather than ignoring it) so a test can assert
   // WHICH session object backed a given call — e.g. that the 429-overflow
   // enqueue used the same freshly-ensured session as the request itself,
@@ -150,6 +158,7 @@ jest.mock('@/api/bookmarks', () => {
     listBookmarkTags: empty,
     listCollections: empty,
     enqueuePendingEnrichment,
+    fetchPendingEnrichmentStatuses,
   }));
   return {
     __spies: {
@@ -161,6 +170,7 @@ jest.mock('@/api/bookmarks', () => {
       updateBookmark,
       listEnrichmentsUpdatedSince,
       enqueuePendingEnrichment,
+      fetchPendingEnrichmentStatuses,
       createBookmarkApi,
     },
     createBookmarkApi,
@@ -186,6 +196,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
     updateBookmark: jest.Mock;
     listEnrichmentsUpdatedSince: jest.Mock;
     enqueuePendingEnrichment: jest.Mock;
+    fetchPendingEnrichmentStatuses: jest.Mock;
     createBookmarkApi: jest.Mock;
   };
 };
@@ -274,6 +285,11 @@ beforeEach(() => {
   apiMock.__spies.listEnrichmentsUpdatedSince.mockReset();
   apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValue([]);
   apiMock.__spies.enqueuePendingEnrichment.mockClear();
+  apiMock.__spies.fetchPendingEnrichmentStatuses.mockReset();
+  apiMock.__spies.fetchPendingEnrichmentStatuses.mockImplementation(
+    async (bookmarkIds: string[]) =>
+      bookmarkIds.map((bookmark_id) => ({ bookmark_id, status: 'pending' })),
+  );
   apiMock.__spies.createBookmarkApi.mockClear();
 });
 
@@ -3678,6 +3694,79 @@ test('a pull that delivers a real enrichment clears the confirmed server-queued 
   await waitFor(() => expect(store.current!.getEnrichment(SYNCED_ID)).toBeDefined());
   expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false);
   expect(fakeRepo.__meta('ai_server_queued')).toBe('[]');
+});
+
+test('a server-queued marker clears when the queue worker gives up on the row (status: failed) (Codex review, PR #656)', async () => {
+  // When the overflow worker exhausts MAX_ENRICHMENT_ATTEMPTS it marks the
+  // remote row 'failed' and never revisits it -- no ai_enrichments row will
+  // ever arrive for this bookmark, so the pull-based clear (the test above)
+  // never fires. Without the periodic reconcile, isAiSuggestionServerQueued
+  // would say "still queued" forever for a bookmark that can never complete.
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta('ai_server_queued', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.fetchPendingEnrichmentStatuses.mockResolvedValueOnce([
+    { bookmark_id: SYNCED_ID, status: 'failed' },
+  ]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
+
+  // The reconcile effect runs on foreground (like the retry checker).
+  await act(async () => {
+    fireForeground();
+  });
+
+  await waitFor(() =>
+    expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false),
+  );
+  expect(apiMock.__spies.fetchPendingEnrichmentStatuses).toHaveBeenCalledWith([
+    SYNCED_ID,
+  ]);
+});
+
+test('a server-queued marker clears when its remote row no longer exists (Codex review, PR #656)', async () => {
+  // A deleted bookmark cascades its pending_ai_enrichment row away -- the
+  // reconcile query then simply returns nothing for that id, which must be
+  // treated the same as an explicit 'failed' (never revive/hide it forever).
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta('ai_server_queued', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.fetchPendingEnrichmentStatuses.mockResolvedValueOnce([]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
+
+  await act(async () => {
+    fireForeground();
+  });
+
+  await waitFor(() =>
+    expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(false),
+  );
+});
+
+test('a server-queued marker stays put while the remote row is still pending/processing', async () => {
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID })]);
+  await fakeRepo.repository.setMeta('ai_server_queued', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.fetchPendingEnrichmentStatuses.mockResolvedValueOnce([
+    { bookmark_id: SYNCED_ID, status: 'processing' },
+  ]);
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+
+  await act(async () => {
+    fireForeground();
+  });
+  await waitFor(() =>
+    expect(apiMock.__spies.fetchPendingEnrichmentStatuses).toHaveBeenCalled(),
+  );
+
+  expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
 });
 
 test('a pull that re-delivers the same already-known enrichment (watermark overlap) does not clear a legitimately armed retry marker', async () => {
