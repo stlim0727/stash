@@ -15,12 +15,16 @@
 //   EXPO_PUBLIC_GIT_SHA   build provenance — full commit SHA, git ref, and the
 //   EXPO_PUBLIC_GIT_REF   canonical commit URL. Exposed via `extra` (read at
 //   EXPO_PUBLIC_COMMIT_URL runtime through Constants.expoConfig.extra), NOT via
-//                        Babel's EXPO_PUBLIC_* bundle inlining: an inlined value
-//                        gets frozen in Metro's content-keyed transform cache and
-//                        then reports a stale commit on every cached CI build.
-//                        Routing it through `extra` shares `version`'s
-//                        cache-immune path, so the provenance updates each build.
-//                        Empty locally ⇒ the app shows a "local build" label.
+//   Babel's EXPO_PUBLIC_* bundle inlining: an inlined value
+//   gets frozen in Metro's content-keyed transform cache and
+//   then reports a stale commit on every cached CI build.
+//   Routing it through `extra` shares `version`'s
+//   cache-immune path, so the provenance updates each build.
+//   Empty locally ⇒ the app shows a "local build" label.
+
+const path = require("path");
+const fs = require("fs");
+
 module.exports = ({ config }) => {
   const version = (
     process.env.APP_VERSION ||
@@ -34,10 +38,34 @@ module.exports = ({ config }) => {
     (config.extra && config.extra.eas && config.extra.eas.projectId) ||
     null;
 
+  // Dynamically write google-services.json if passed via base64 environment variable
+  const googleServicesBase64 = process.env.EXPO_PUBLIC_GOOGLE_SERVICES_BASE64;
+  const googleServicesPath = path.join(__dirname, "google-services.json");
+  if (googleServicesBase64) {
+    try {
+      fs.writeFileSync(
+        googleServicesPath,
+        Buffer.from(googleServicesBase64, "base64").toString("utf-8"),
+      );
+      console.log(
+        "[build] Wrote google-services.json from EXPO_PUBLIC_GOOGLE_SERVICES_BASE64.",
+      );
+    } catch (err) {
+      console.warn("[build] Failed to write google-services.json:", err);
+    }
+  }
+  const hasGoogleServices = fs.existsSync(googleServicesPath);
+
   return {
     ...config,
     version,
-    android: { ...config.android, versionCode },
+    android: {
+      ...config.android,
+      versionCode,
+      ...(hasGoogleServices
+        ? { googleServicesFile: "./google-services.json" }
+        : {}),
+    },
     ios: { ...config.ios, buildNumber: String(versionCode) },
     extra: {
       ...config.extra,
