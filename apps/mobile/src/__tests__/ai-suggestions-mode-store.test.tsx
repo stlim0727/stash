@@ -100,7 +100,7 @@ jest.mock('@/api/bookmarks', () => {
 import { AI_SUGGESTIONS_MODE_PREF_KEY } from '@/domain/ai-suggestions-pref';
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
-import { makeStoredBookmark } from './helpers/fake-repository';
+import { makeEnrichment, makeStoredBookmark } from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 const apiMock = jest.requireMock('@/api/bookmarks') as {
@@ -381,6 +381,46 @@ test('a broken auto_accept application (e.g. a failed createCollection call) sti
   // meta key is simply never written — `null`, not `'{}'`; see clearAiRetry.)
   expect(store.current!.isAiSuggestionPostponed(ID_A)).toBe(false);
   expect(fakeRepo.__meta('ai_suggestion_retry')).toBeNull();
+});
+
+// --- STASH-4P: auto_accept must also apply to enrichments this device never
+// itself requested -- the background overflow worker's output, delivered
+// through the ordinary sync pull. Previously only the direct-dispatch path
+// (requestAiEnrichment's own settle handler) ran auto-accept, so a worker-
+// completed enrichment landed with real suggested_tags but never got applied
+// to bookmark_tags. ---
+
+test('a worker-driven enrichment arriving via sync pull is auto-accepted too (STASH-4P)', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: ID_A, metadata_status: 'complete', collection_id: null }),
+  ]);
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([ID_A]);
+  await fakeRepo.repository.setMeta(AI_SUGGESTIONS_MODE_PREF_KEY, 'auto_accept');
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+  expect(store.current!.aiSuggestionsMode).toBe('auto_accept');
+
+  // This device never called requestAiEnrichment for ID_A -- exactly how the
+  // background overflow worker's result arrives, via the ordinary sync pull.
+  apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+    makeEnrichment({
+      id: 'enrichment-worker-auto-accept',
+      bookmark_id: ID_A,
+      suggested_tags: [{ name: 'design', confidence: 0.8 }],
+    }),
+  ]);
+
+  await act(async () => {
+    await store.current!.syncNow();
+  });
+
+  await waitFor(() => expect(store.current!.getEnrichment(ID_A)).toBeDefined());
+  expect(apiMock.__spies.requestEnrichment).not.toHaveBeenCalled();
+  await waitFor(() =>
+    expect(store.current!.getTagsForBookmark(ID_A).map((tag) => tag.name)).toContain('design'),
+  );
 });
 
 // --- #574 Phase 1: staggered burst dispatch + completion toast ---
