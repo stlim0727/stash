@@ -5147,6 +5147,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               ...result.upserts,
             ]);
           }
+          // STASH-4P: enrichments this device never itself requested (the
+          // background overflow worker's output, or another device's) used to
+          // skip auto_accept entirely — only the direct-dispatch path
+          // (requestAiEnrichment's own settle handler, above) applied it.
+          // Collected below (when non-empty) and applied once the pull's
+          // tagData merge further down has landed, rather than inline:
+          // applying it mid-loop would race acceptSuggestedTags's
+          // fire-and-forget syncTagOps against this same pull's own "re-layer
+          // pending tag ops over the fresh server snapshot" step, and could
+          // lose the just-applied tag if the upload happens to finish first.
+          const workerAutoAcceptTargets: AIEnrichment[] = [];
           if (result.enrichments.length > 0) {
             // Flag enrichments that arrived unwitnessed (a server-side trigger's
             // result, or another device's) for the Inbox banner. Flag a row when
@@ -5186,6 +5197,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 noteUnseenSuggestions(enrichment);
                 if (!aiEnriching.current.has(enrichment.bookmark_id)) {
                   workerDrivenCount += 1;
+                }
+                if (aiSuggestionsModeRef.current === "auto_accept") {
+                  workerAutoAcceptTargets.push(enrichment);
                 }
               }
               // This bookmark now has an enrichment row through some path other
@@ -5252,6 +5266,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           tagDataRef.current = mergedTagData;
           setTagData(mergedTagData);
           setLastPulledAt(result.pulledAt);
+          // Applied only now that this pull's own tagData merge above has
+          // landed (see the comment where these are collected) — in
+          // auto_accept mode, a worker-driven (or another device's)
+          // enrichment's suggestions get applied here just like a
+          // direct-dispatch enrichment already does in requestAiEnrichment.
+          for (const enrichment of workerAutoAcceptTargets) {
+            try {
+              await autoAcceptEnrichmentRef.current?.(
+                enrichment.bookmark_id,
+                enrichment,
+              );
+            } catch (error) {
+              recordLog(
+                "warn",
+                `ai-enrich auto_accept (sync) failed: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
         } catch (error) {
           logStorageError("pull", error);
         }
