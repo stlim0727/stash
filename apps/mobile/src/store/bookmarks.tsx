@@ -417,6 +417,10 @@ interface BookmarksContextValue {
     metadata: { todo: number; done: number };
     ai: { todo: number; done: number; serverQueued: number };
   };
+  /** The most recent AI-enrichment 429's reason and accurate reset time, for
+   *  the Settings backlog row and feedback diagnostics. `null` once the
+   *  window has passed (or on account switch) — see `aiQuotaExceeded`. */
+  aiQuotaExceeded: { reason: string; retryAt: number } | null;
 }
 
 const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
@@ -496,11 +500,14 @@ const AI_RETRY_MAX_ATTEMPTS = 6;
  *  battery/network for a result already known. Manual "Suggest with AI" taps
  *  are unaffected; only the auto drain checks this.
  *
- *  `daily_limit`'s own `retry_after` is a fixed 3600s from the server
- *  regardless of how much of the rolling 24h window is actually left before
- *  a slot frees up — not reliable enough to trust directly, so this instead
- *  re-checks periodically on a fixed, conservative cooldown.
- *  `hourly_limit`'s `retry_after` IS the server's exact computed wait (Codex
+ *  `daily_limit`'s own `retry_after` is now computed exactly by the server
+ *  too (STASH-4P follow-up — see request_ai_enrichment_slot), but this
+ *  internal gate deliberately does NOT use it directly: a real daily wait can
+ *  be close to 24h, and idling the drain loop that long would miss a slot
+ *  freed earlier by the rolling window's other requests aging out. It
+ *  re-checks periodically on this fixed, conservative cooldown instead — the
+ *  accurate server value is used only for display (see `aiQuotaExceeded`).
+ *  `hourly_limit`'s `retry_after` IS trusted directly for this gate (Codex
  *  review, PR #655) — `AI_QUOTA_HOURLY_COOLDOWN_MS` is only the fallback for
  *  the rare case the response didn't carry one. */
 const AI_QUOTA_DAILY_COOLDOWN_MS = 30 * 60_000;
@@ -1030,6 +1037,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     token: number;
   } | null>(null);
   const aiBurstTokenSeq = useRef(0);
+
+  // Reactive mirror of a 429's reason + accurate reset time, for display only
+  // (Settings backlog row, feedback diagnostics) — separate from
+  // `aiQuotaCooldownUntil` above, which stays capped at its own fixed 10/30min
+  // ceiling for the drain loop's internal gating and would understate a real
+  // daily-limit wait if reused for display. Cleared once `retryAt` passes (see
+  // the drain-loop interval below) or on account switch.
+  const [aiQuotaExceeded, setAiQuotaExceeded] = useState<{
+    reason: string;
+    retryAt: number;
+  } | null>(null);
 
   // Pause or resume sync. Turning it on makes syncNow no-op (see the guard
   // inside it) so queued work sits still — long enough to delete unwanted
@@ -3453,8 +3471,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // A response would then arm a fresh one and wrongly throttle B.
           // Only apply it if the account that made this request is still the
           // active one (lastSyncedUserId.current — the same ref the
-          // account-switch effect itself updates).
-          if (session && session.user.id === lastSyncedUserId.current) {
+          // account-switch effect itself updates). Codex review (PR #664):
+          // an anonymous request can still be in flight when OAuth linking
+          // completes — id-only equality still matches (linking preserves
+          // the id), so also require the captured session's anonymity to
+          // match wasAnonymousRef.current (kept live by the link-clear
+          // effect below, same forward-reference-via-ref pattern as
+          // autoAcceptEnrichmentRef) rather than reading `auth.session`
+          // directly here — this callback's own closure can be just as
+          // stale as `session` itself if it was created before the link
+          // completed. Without this, a late anonymous-quota 429 would
+          // repopulate aiQuotaExceeded with the just-upgraded account's
+          // obsolete (10/hr, 50/day) limits right after the link effect
+          // cleared it.
+          //
+          // Codex review round 2: `lastSyncedUserId.current` is only reset
+          // by an actual NEW sign-in, not by a session disappearing
+          // (session_expired / signed-out with nothing minted yet) — so it
+          // still matches the departed user's id in that case. Coalescing
+          // `wasAnonymousRef.current` to `false` when it's `null` (no
+          // current session at all) would then falsely "match" a captured
+          // non-anonymous session's `is_anonymous: false`, letting a late
+          // 429 through with no live session to even own the resulting
+          // cooldown/display state. Requiring `!== null` here (there IS a
+          // current session) closes that, on top of the anonymity check.
+          if (
+            session &&
+            session.user.id === lastSyncedUserId.current &&
+            wasAnonymousRef.current !== null &&
+            (session.user.is_anonymous !== false) === wasAnonymousRef.current
+          ) {
             let cooldownMs = AI_QUOTA_HOURLY_COOLDOWN_MS;
             if (error.reason === "daily_limit") {
               cooldownMs = AI_QUOTA_DAILY_COOLDOWN_MS;
@@ -3471,6 +3517,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               cooldownMs = error.retryAfterSeconds * 1000;
             }
             aiQuotaCooldownUntil.current = Date.now() + cooldownMs;
+            // Display-only mirror (Settings backlog row, feedback
+            // diagnostics): unlike `cooldownMs` above (deliberately capped so
+            // the drain loop re-probes periodically rather than idling for a
+            // full day), this uses the server's real retry_after verbatim —
+            // accurate for both hourly_limit and daily_limit as of the
+            // request_ai_enrichment_slot migration that computes it from the
+            // oldest request in each window, not a flat guess.
+            const displaySeconds =
+              typeof error.retryAfterSeconds === "number" &&
+              error.retryAfterSeconds > 0
+                ? error.retryAfterSeconds
+                : cooldownMs / 1000;
+            setAiQuotaExceeded({
+              reason: error.reason ?? "rate_limited",
+              retryAt: Date.now() + displaySeconds * 1000,
+            });
           }
           // STASH #578 Phase 2: instead of just returning the rate-limited
           // sentinel, enqueue this bookmark for the background overflow
@@ -5582,6 +5644,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return;
     }
     const interval = setInterval(() => {
+      // Display-only cleanup, independent of the mode/dispatch gating below:
+      // once the server-accurate reset time has passed, stop telling Settings
+      // and feedback diagnostics the quota is still exceeded. A future 429
+      // (if the wait wasn't actually over, or a fresh burst re-exhausts it)
+      // re-arms this the same way.
+      setAiQuotaExceeded((current) =>
+        current && Date.now() >= current.retryAt ? null : current,
+      );
       if (aiSuggestionsModeRef.current === "off") {
         // Mode flipped off mid-burst: drop whatever's left rather than keep
         // firing requests for a feature the user just turned off.
@@ -5951,9 +6021,45 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // cooldown here would block up to 30 minutes of a new account's AI
       // work for no reason.
       aiQuotaCooldownUntil.current = 0;
+      setAiQuotaExceeded(null);
       void syncNow();
     }
   }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
+
+  // Codex review, PR #664: the account-switch clear above only fires when a
+  // NEW user id shows up. Two cases it misses, both cleared independently
+  // here:
+  //  - Sign-out or session expiry (auth.session -> null, with no replacement
+  //    session minted yet) — the drain-loop interval that otherwise expires
+  //    this on its own timer stops entirely while there's no session, so a
+  //    departed account's quota state would otherwise stay on display
+  //    indefinitely.
+  //  - Linking an anonymous account to a real one preserves the SAME user id
+  //    while swapping the session's `is_anonymous` flag false — the
+  //    account-switch effect never fires (no id change), so a stale
+  //    "exceeded" state from the old anonymous caps (10/hr, 50/day) would
+  //    otherwise linger even though the just-linked real account has much
+  //    higher limits (30/hr, 500/day) and the old quota's premise no longer
+  //    applies.
+  const wasAnonymousRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    // `null` means "no current session at all" — kept distinct from a real
+    // session's anonymity (never collapsed into it) so the 429 guard below
+    // can tell "nothing to compare against" apart from "compares equal by
+    // coincidence" (Codex review round 3: coalescing this to `false` let a
+    // late 429 through with no live session to even own the result). A
+    // session's own `is_anonymous !== false` mirrors this file's existing
+    // convention elsewhere (e.g. `isAnonymous: sessionUser.is_anonymous !==
+    // false`) — undefined is treated as anonymous, not as "not anonymous".
+    const isAnonymousNow = auth.session
+      ? auth.session.user.is_anonymous !== false
+      : null;
+    const linkedToReal = wasAnonymousRef.current === true && isAnonymousNow === false;
+    wasAnonymousRef.current = isAnonymousNow;
+    if (!auth.session || linkedToReal) {
+      setAiQuotaExceeded(null);
+    }
+  }, [auth.session]);
 
   // Logout cache-clear: with lazy anonymous creation, logout mints no new user
   // and runs no sync, so the just-logged-out real account's bookmarks would
@@ -6104,6 +6210,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       resetLibrary,
       isResettingLibrary,
       diagnosticStats,
+      aiQuotaExceeded,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,
@@ -6160,6 +6267,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       resetLibrary,
       isResettingLibrary,
       diagnosticStats,
+      aiQuotaExceeded,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,

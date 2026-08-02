@@ -65,6 +65,16 @@ export interface DiagnosticsInput {
   shareAttempt?: ShareAttemptDiagnostics | null;
   /** Optional user-approved screen capture from where feedback was opened. */
   screenshot?: DiagnosticsScreenshot | null;
+  /** The most recent AI-enrichment 429's reason and reset time, if the quota
+   *  is currently exceeded (STASH-4P follow-up — "which limit, when does it
+   *  free up" visibility). `null`/absent when no quota cooldown is active. */
+  aiQuota?: DiagnosticsAiQuota | null;
+}
+
+export interface DiagnosticsAiQuota {
+  reason: string;
+  /** ISO timestamp of when the server-computed retry window ends. */
+  resetAt: string;
 }
 
 export interface DiagnosticsScreenshot {
@@ -119,6 +129,8 @@ export interface DiagnosticsContext {
   shareAttempt?: ShareAttemptDiagnostics;
   /** User-approved screenshot. May contain visible bookmark or account details. */
   screenshot?: DiagnosticsScreenshot;
+  /** Present only when an AI-enrichment quota cooldown is currently active. */
+  aiQuota?: DiagnosticsAiQuota;
   capturedAt: string;
 }
 
@@ -206,6 +218,12 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.shareAttempt && typeof input.shareAttempt === 'object') {
     context.shareAttempt = input.shareAttempt;
+  }
+
+  const aiQuotaReason = cleanString(input.aiQuota?.reason);
+  const aiQuotaResetAt = cleanString(input.aiQuota?.resetAt);
+  if (aiQuotaReason && aiQuotaResetAt) {
+    context.aiQuota = { reason: aiQuotaReason, resetAt: aiQuotaResetAt };
   }
 
   if (

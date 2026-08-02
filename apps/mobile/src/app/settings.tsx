@@ -130,6 +130,22 @@ const AI_SUGGESTIONS_MODE_OPTIONS: {
   labelKey: `settings.aiSuggestions.${mode}` as MessageKey,
 }));
 
+/** "5:41 PM" for a reset later today, "Aug 3, 5:41 PM" otherwise — a bare
+ *  time for a reset on a different day would misread as already past once
+ *  it's tomorrow's clock time (Codex review, PR #664). */
+function formatQuotaResetTime(
+  retryAt: number,
+  formatDate: ReturnType<typeof useI18n>["formatDate"],
+): string {
+  const isToday = new Date(retryAt).toDateString() === new Date().toDateString();
+  return formatDate(
+    retryAt,
+    isToday
+      ? { hour: "numeric", minute: "2-digit" }
+      : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+  );
+}
+
 export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
@@ -162,6 +178,7 @@ export default function SettingsScreen() {
     aiSuggestionsMode,
     setAiSuggestionsMode,
     diagnosticStats,
+    aiQuotaExceeded,
   } = useBookmarks();
   const [aiSuggestionsSheetOpen, setAiSuggestionsSheetOpen] = useState(false);
   const auth = useSupabaseAuth();
@@ -965,6 +982,27 @@ export default function SettingsScreen() {
             value={t("settings.aiQueueBacklog.offValue", {
               count: diagnosticStats.ai.serverQueued,
             })}
+          />
+        ) : null}
+        {/* STASH-4P follow-up: which limit (hourly vs daily) was hit and
+            exactly when it resets, sourced from the server's accurate
+            retry_after (see request_ai_enrichment_slot) rather than a guess.
+            Shown regardless of aiSuggestionsMode — a manual "Suggest with AI"
+            tap can trigger this even in 'off' mode. */}
+        {aiQuotaExceeded ? (
+          <Row
+            styles={styles}
+            palette={palette}
+            icon="timer-outline"
+            label={t("settings.aiQuotaExceeded.label")}
+            value={t(
+              aiQuotaExceeded.reason === "daily_limit"
+                ? "settings.aiQuotaExceeded.daily"
+                : aiQuotaExceeded.reason === "hourly_limit"
+                  ? "settings.aiQuotaExceeded.hourly"
+                  : "settings.aiQuotaExceeded.generic",
+              { resetTime: formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate) },
+            )}
           />
         ) : null}
         <Row

@@ -616,6 +616,207 @@ test('an hourly-limit 429 uses the server-reported retry_after instead of the fi
   }
 });
 
+test('a 429 sets aiQuotaExceeded with the reason and the server-reported reset time (STASH-4P follow-up)', async () => {
+  // Settings/feedback-diagnostics visibility: distinct from the internal
+  // aiQuotaCooldownUntil ref (which stays capped at a fixed ceiling for the
+  // drain loop's own pacing), this display-only state should reflect the
+  // server's real retry_after verbatim.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  const before = Date.now();
+  await waitFor(() => expect(store.current!.aiQuotaExceeded).not.toBeNull());
+  expect(store.current!.aiQuotaExceeded?.reason).toBe('hourly_limit');
+  // ~30s out from when the 429 landed, not the far larger fixed fallback.
+  const retryAt = store.current!.aiQuotaExceeded!.retryAt;
+  expect(retryAt).toBeGreaterThanOrEqual(before + 29_000);
+  expect(retryAt).toBeLessThan(before + 60_000);
+});
+
+test('aiQuotaExceeded clears once its server-reported reset time passes (STASH-4P follow-up)', async () => {
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current!.aiQuotaExceeded).not.toBeNull());
+
+  const dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 35_000);
+  try {
+    await waitFor(() => expect(store.current!.aiQuotaExceeded).toBeNull());
+  } finally {
+    dateNowSpy.mockRestore();
+  }
+});
+
+test('aiQuotaExceeded clears when the session disappears, not just on an account switch (Codex review, PR #664)', async () => {
+  // The account-switch effect only fires for a NEW user id, and the
+  // drain-loop interval that otherwise expires this on its own timer stops
+  // entirely while there's no session — so signing out (or a session
+  // expiring with no replacement minted yet) must clear this independently,
+  // or a departed account's quota state would show indefinitely.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(result.current.aiQuotaExceeded).not.toBeNull());
+
+  // Session disappears with nothing minted to replace it yet.
+  mockAuthSession = null;
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  await waitFor(() => expect(result.current.aiQuotaExceeded).toBeNull());
+});
+
+test('aiQuotaExceeded clears when an anonymous account links to a real one under the same user id (Codex review, PR #664)', async () => {
+  // OAuth linking preserves the user id while flipping is_anonymous false —
+  // the account-switch effect (keyed on a CHANGED id) never fires for this,
+  // and the session-loss effect never sees a null session either. Without a
+  // dedicated check, a stale "exceeded" state from the old anonymous caps
+  // (10/hr, 50/day) would linger even though the just-linked real account's
+  // limits are much higher (30/hr, 500/day).
+  const anonUser: { id: string; is_anonymous?: boolean } = { id: 'user-test', is_anonymous: true };
+  mockAuthSession = { ...mockSession, user: anonUser };
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(result.current.aiQuotaExceeded).not.toBeNull());
+
+  // Link to a real account: same user id, is_anonymous flips false.
+  const linkedUser: { id: string; is_anonymous?: boolean } = { id: 'user-test', is_anonymous: false };
+  mockAuthSession = { ...mockSession, user: linkedUser };
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  await waitFor(() => expect(result.current.aiQuotaExceeded).toBeNull());
+});
+
+test('a late 429 from a request started before linking does not repopulate aiQuotaExceeded after linking (Codex review round 2, PR #664)', async () => {
+  // Sharper than the test above: there, linking completes strictly AFTER the
+  // anonymous 429 already landed. Here the anonymous request is still in
+  // flight WHEN linking completes, and only settles afterward with a 429
+  // captured under the OLD anonymous session — id-only equality (linking
+  // preserves the id) would otherwise let this late response repopulate
+  // aiQuotaExceeded right after the link effect just cleared it.
+  const anonUser: { id: string; is_anonymous?: boolean } = { id: 'user-test', is_anonymous: true };
+  mockAuthSession = { ...mockSession, user: anonUser };
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+
+  let releaseRequest: () => void = () => {};
+  const requestGate = new Promise<void>((resolve) => {
+    releaseRequest = resolve;
+  });
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    await requestGate;
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'daily_limit');
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  // The anonymous request for SYNCED_ID is now in flight, gated on the
+  // promise above — it will not settle until releaseRequest() is called.
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+
+  // Link to a real account WHILE the anonymous request is still stuck.
+  const linkedUser: { id: string; is_anonymous?: boolean } = { id: 'user-test', is_anonymous: false };
+  mockAuthSession = { ...mockSession, user: linkedUser };
+  await act(async () => {
+    rerender(undefined);
+  });
+  expect(result.current.aiQuotaExceeded).toBeNull();
+
+  // NOW let the stale anonymous request finally resolve with its 429.
+  await act(async () => {
+    releaseRequest();
+    await Promise.resolve();
+  });
+
+  expect(result.current.aiQuotaExceeded).toBeNull();
+});
+
+test('a late 429 from a request started before session expiry does not repopulate aiQuotaExceeded (Codex review round 3, PR #664)', async () => {
+  // Sharper still: session_expired (or a plain sign-out with nothing minted
+  // yet) never touches lastSyncedUserId.current -- that ref is only reset by
+  // an actual NEW sign-in -- so the id check alone still "matches" the
+  // departed user. wasAnonymousRef.current also goes to null (no current
+  // session at all), and null was previously coalesced to `false` --
+  // accidentally "matching" a captured NON-anonymous session's
+  // is_anonymous: false and letting the late 429 back in with no live
+  // session to even own the resulting state.
+  const realUser: { id: string; is_anonymous?: boolean } = { id: 'user-test', is_anonymous: false };
+  mockAuthSession = { ...mockSession, user: realUser };
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+
+  let releaseRequest: () => void = () => {};
+  const requestGate = new Promise<void>((resolve) => {
+    releaseRequest = resolve;
+  });
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    await requestGate;
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'daily_limit');
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+
+  // Session disappears WHILE the request is still stuck in flight.
+  mockAuthSession = null;
+  await act(async () => {
+    rerender(undefined);
+  });
+  expect(result.current.aiQuotaExceeded).toBeNull();
+
+  // NOW let the stale request finally resolve with its 429.
+  await act(async () => {
+    releaseRequest();
+    await Promise.resolve();
+  });
+
+  expect(result.current.aiQuotaExceeded).toBeNull();
+});
+
 test('a quota cooldown armed for one account does not throttle a different account switched into (Codex review, PR #655)', async () => {
   // Each account has its own independent per-user AI quota server-side — a
   // cooldown armed for account A's exhausted quota must not silently block

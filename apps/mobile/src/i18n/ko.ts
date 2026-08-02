@@ -296,6 +296,10 @@ export const ko: Catalog = {
   'settings.aiQueueBacklog.offValue': {
     other: '끄기 전에 이미 대기열에 들어간 {count}개 · 완료될 수 있어요',
   },
+  'settings.aiQuotaExceeded.label': 'AI 할당량 초과',
+  'settings.aiQuotaExceeded.hourly': '시간당 한도 도달 — {resetTime}에 재개',
+  'settings.aiQuotaExceeded.daily': '일일 한도 도달 — {resetTime}에 할당량 초기화',
+  'settings.aiQuotaExceeded.generic': '요청 제한됨 — {resetTime}에 재개',
   'settings.pushNotifications.label': 'AI 정리가 끝나면 알림',
   'settings.pushNotifications.on': '켜짐 — AI가 밀린 작업을 끝내면 알림이 와요',
   'settings.pushNotifications.off': '꺼짐',

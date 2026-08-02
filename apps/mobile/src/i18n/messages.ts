@@ -417,6 +417,17 @@ export const en = {
     one: '{count} bookmark already queued before you turned this off — may still complete',
     other: '{count} bookmarks already queued before you turned this off — may still complete',
   },
+  'settings.aiQuotaExceeded.label': 'AI quota reached',
+  'settings.aiQuotaExceeded.hourly': 'Hourly limit reached — resumes at {resetTime}',
+  // Codex review, PR #664: the daily case's displayed reset time is the
+  // server's exact figure, but the auto-dispatch drain loop still waits out
+  // a fixed 30-minute cooldown regardless (see AI_QUOTA_DAILY_COOLDOWN_MS) —
+  // "resumes at" would overpromise whenever the real reset lands sooner than
+  // that. Worded as the quota's own reset instead of a resume-processing
+  // promise; hourly/generic don't need this hedge since their internal gate
+  // already trusts the server's exact figure directly.
+  'settings.aiQuotaExceeded.daily': 'Daily limit reached — quota resets at {resetTime}',
+  'settings.aiQuotaExceeded.generic': 'Rate limited — resumes at {resetTime}',
   'settings.pushNotifications.label': 'Notify when AI catches up',
   'settings.pushNotifications.on': 'On — a push arrives once AI finishes a backlog',
   'settings.pushNotifications.off': 'Off',

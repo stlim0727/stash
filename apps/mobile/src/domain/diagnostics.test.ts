@@ -76,6 +76,7 @@ test('buildDiagnosticsContext excludes user content — it only keeps known keys
     'logs',
     'storage',
     'shareAttempt',
+    'aiQuota',
     'capturedAt',
   ];
   for (const key of Object.keys(context)) {
@@ -128,6 +129,29 @@ test('buildDiagnosticsContext includes the durable last share-attempt record whe
 
   const report = formatDiagnosticsReport(context);
   assert.match(report, /"shareAttempt"/);
+});
+
+test('buildDiagnosticsContext includes the active AI-quota cooldown when provided', () => {
+  const context = buildDiagnosticsContext({
+    aiQuota: { reason: 'daily_limit', resetAt: '2026-08-02T05:41:00.000Z' },
+  });
+
+  assert.deepEqual(context.aiQuota, {
+    reason: 'daily_limit',
+    resetAt: '2026-08-02T05:41:00.000Z',
+  });
+
+  const report = formatDiagnosticsReport(context);
+  assert.match(report, /"aiQuota"/);
+  assert.match(report, /daily_limit/);
+});
+
+test('buildDiagnosticsContext omits aiQuota when no cooldown is active', () => {
+  const noInput = buildDiagnosticsContext({});
+  assert.equal(noInput.aiQuota, undefined);
+
+  const explicitNull = buildDiagnosticsContext({ aiQuota: null });
+  assert.equal(explicitNull.aiQuota, undefined);
 });
 
 test('build and logs are included when provided and formatted for sharing', () => {
