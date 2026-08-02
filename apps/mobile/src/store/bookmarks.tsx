@@ -500,11 +500,14 @@ const AI_RETRY_MAX_ATTEMPTS = 6;
  *  battery/network for a result already known. Manual "Suggest with AI" taps
  *  are unaffected; only the auto drain checks this.
  *
- *  `daily_limit`'s own `retry_after` is a fixed 3600s from the server
- *  regardless of how much of the rolling 24h window is actually left before
- *  a slot frees up — not reliable enough to trust directly, so this instead
- *  re-checks periodically on a fixed, conservative cooldown.
- *  `hourly_limit`'s `retry_after` IS the server's exact computed wait (Codex
+ *  `daily_limit`'s own `retry_after` is now computed exactly by the server
+ *  too (STASH-4P follow-up — see request_ai_enrichment_slot), but this
+ *  internal gate deliberately does NOT use it directly: a real daily wait can
+ *  be close to 24h, and idling the drain loop that long would miss a slot
+ *  freed earlier by the rolling window's other requests aging out. It
+ *  re-checks periodically on this fixed, conservative cooldown instead — the
+ *  accurate server value is used only for display (see `aiQuotaExceeded`).
+ *  `hourly_limit`'s `retry_after` IS trusted directly for this gate (Codex
  *  review, PR #655) — `AI_QUOTA_HOURLY_COOLDOWN_MS` is only the fallback for
  *  the rare case the response didn't carry one. */
 const AI_QUOTA_DAILY_COOLDOWN_MS = 30 * 60_000;
@@ -5994,6 +5997,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void syncNow();
     }
   }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
+
+  // Codex review, PR #664: the account-switch clear above only fires when a
+  // NEW user id shows up, and the drain-loop interval that otherwise expires
+  // this on its own timer stops entirely while there's no session — so a
+  // sign-out or session expiry (auth.session -> null, with no replacement
+  // session minted yet) would otherwise leave a departed account's quota
+  // state on display indefinitely. Cleared independently here on session loss.
+  useEffect(() => {
+    if (!auth.session) {
+      setAiQuotaExceeded(null);
+    }
+  }, [auth.session]);
 
   // Logout cache-clear: with lazy anonymous creation, logout mints no new user
   // and runs no sync, so the just-logged-out real account's bookmarks would

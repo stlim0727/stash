@@ -660,6 +660,35 @@ test('aiQuotaExceeded clears once its server-reported reset time passes (STASH-4
   }
 });
 
+test('aiQuotaExceeded clears when the session disappears, not just on an account switch (Codex review, PR #664)', async () => {
+  // The account-switch effect only fires for a NEW user id, and the
+  // drain-loop interval that otherwise expires this on its own timer stops
+  // entirely while there's no session — so signing out (or a session
+  // expiring with no replacement minted yet) must clear this independently,
+  // or a departed account's quota state would show indefinitely.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(result.current.aiQuotaExceeded).not.toBeNull());
+
+  // Session disappears with nothing minted to replace it yet.
+  mockAuthSession = null;
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  await waitFor(() => expect(result.current.aiQuotaExceeded).toBeNull());
+});
+
 test('a quota cooldown armed for one account does not throttle a different account switched into (Codex review, PR #655)', async () => {
   // Each account has its own independent per-user AI quota server-side — a
   // cooldown armed for account A's exhausted quota must not silently block
