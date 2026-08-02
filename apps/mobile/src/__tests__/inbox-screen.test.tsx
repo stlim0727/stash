@@ -101,7 +101,7 @@ jest.mock('expo-router', () => {
 });
 
 import InboxScreen from '@/app/index';
-import { BookmarksProvider } from '@/store/bookmarks';
+import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import { INBOX_VIEW_PREF_KEY } from '@/domain/view-mode';
 import type { Collection, Tag } from '@/domain/types';
@@ -1145,6 +1145,55 @@ test('folder view shows a tile per collection, the uncollected bucket, and a New
   const workTile = screen.getByTestId('folder-tile-__folder-c:col-work');
   expect(within(workTile).getByText('1 item')).toBeTruthy();
   expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
+});
+
+test('the view-mode toggle stays reachable in Folder View even if the library empties out from under it (Sentry STASH-4T)', async () => {
+  // Reported bug: resetting the library while sitting in Folder View left the
+  // user stuck there with no way back to Card/List. Folder View never
+  // actually goes empty (it always renders a trailing "New folder" tile), but
+  // the row hosting the view-mode toggle used to be gated purely on
+  // `inbox.length > 0` -- so it vanished along with everything else once the
+  // library was wiped, taking the only escape hatch with it.
+  const id = '7e64cf1e-0000-4000-8000-0000000000f9';
+  fakeRepo.__reset(
+    [makeStoredBookmark({ id, title: 'Work doc', collection_id: 'col-work' })],
+    { tags: [], bookmarkTags: [], collections: [makeCollection('col-work', 'Work')] },
+  );
+
+  type Store = ReturnType<typeof useBookmarks>;
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const screen = await render(
+    <BookmarksProvider>
+      <CaptureToastProvider>
+        <Probe />
+        <InboxScreen />
+      </CaptureToastProvider>
+    </BookmarksProvider>,
+  );
+  await waitFor(() => expect(screen.getByText('Work doc')).toBeTruthy());
+
+  await fireEvent.press(screen.getByTestId('inbox-view-folder'));
+  await waitFor(() => expect(screen.getByTestId('folder-tile-__folder-c:col-work')).toBeTruthy());
+
+  // Simulate a reset's effect on the underlying library (bookmarks wiped)
+  // while still sitting in Folder View -- the reported scenario.
+  await act(async () => {
+    storeRef.current!.trashBookmark(id);
+  });
+
+  // Folder View keeps rendering (the trailing tile), and — the actual fix —
+  // the toggle back to Card/List is still there, not folded away with it.
+  expect(screen.getByTestId('folder-tile-new')).toBeTruthy();
+  expect(screen.getByTestId('inbox-view-card')).toBeTruthy();
+  expect(screen.getByTestId('inbox-view-list')).toBeTruthy();
+
+  await fireEvent.press(screen.getByTestId('inbox-view-card'));
+  await waitFor(() => expect(screen.queryByTestId('folder-tile-new')).toBeNull());
 });
 
 test('tapping a folder tile filters the Inbox and returns to the layout used before Folder View', async () => {

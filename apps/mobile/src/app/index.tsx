@@ -1594,7 +1594,14 @@ export default function InboxScreen() {
   // is all about the first save. Keyed on the unfiltered library, not the
   // current view, so a search/filter that yields zero rows still keeps the
   // controls (the user needs them to clear the query or facet).
-  const showControls = inbox.length > 0 || searching;
+  //
+  // Folder View is an exception (Sentry STASH-4T): it always renders at least
+  // the trailing "New folder" tile (see `folderTiles`), so it never falls
+  // into the empty-library state above and never gets its own escape hatch —
+  // a reset (or any other event that empties `inbox`) while sitting in
+  // Folder View would otherwise hide this entire row, including the view-mode
+  // toggle, leaving no way back to Card/List short of restarting the app.
+  const showControls = inbox.length > 0 || searching || viewMode === 'folder';
 
   // The sort pill/menu shows one of two independent controls depending on the
   // active layout: Folder View's own name/count order, or the bookmark-level
