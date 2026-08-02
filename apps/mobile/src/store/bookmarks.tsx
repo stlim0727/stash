@@ -3484,11 +3484,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // repopulate aiQuotaExceeded with the just-upgraded account's
           // obsolete (10/hr, 50/day) limits right after the link effect
           // cleared it.
+          //
+          // Codex review round 2: `lastSyncedUserId.current` is only reset
+          // by an actual NEW sign-in, not by a session disappearing
+          // (session_expired / signed-out with nothing minted yet) — so it
+          // still matches the departed user's id in that case. Coalescing
+          // `wasAnonymousRef.current` to `false` when it's `null` (no
+          // current session at all) would then falsely "match" a captured
+          // non-anonymous session's `is_anonymous: false`, letting a late
+          // 429 through with no live session to even own the resulting
+          // cooldown/display state. Requiring `!== null` here (there IS a
+          // current session) closes that, on top of the anonymity check.
           if (
             session &&
             session.user.id === lastSyncedUserId.current &&
-            (session.user.is_anonymous ?? false) ===
-              (wasAnonymousRef.current ?? false)
+            wasAnonymousRef.current !== null &&
+            (session.user.is_anonymous !== false) === wasAnonymousRef.current
           ) {
             let cooldownMs = AI_QUOTA_HOURLY_COOLDOWN_MS;
             if (error.reason === "daily_limit") {
@@ -6032,7 +6043,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   //    applies.
   const wasAnonymousRef = useRef<boolean | null>(null);
   useEffect(() => {
-    const isAnonymousNow = auth.session?.user.is_anonymous ?? null;
+    // `null` means "no current session at all" — kept distinct from a real
+    // session's anonymity (never collapsed into it) so the 429 guard below
+    // can tell "nothing to compare against" apart from "compares equal by
+    // coincidence" (Codex review round 3: coalescing this to `false` let a
+    // late 429 through with no live session to even own the result). A
+    // session's own `is_anonymous !== false` mirrors this file's existing
+    // convention elsewhere (e.g. `isAnonymous: sessionUser.is_anonymous !==
+    // false`) — undefined is treated as anonymous, not as "not anonymous".
+    const isAnonymousNow = auth.session
+      ? auth.session.user.is_anonymous !== false
+      : null;
     const linkedToReal = wasAnonymousRef.current === true && isAnonymousNow === false;
     wasAnonymousRef.current = isAnonymousNow;
     if (!auth.session || linkedToReal) {
