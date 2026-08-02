@@ -3471,8 +3471,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // A response would then arm a fresh one and wrongly throttle B.
           // Only apply it if the account that made this request is still the
           // active one (lastSyncedUserId.current — the same ref the
-          // account-switch effect itself updates).
-          if (session && session.user.id === lastSyncedUserId.current) {
+          // account-switch effect itself updates). Codex review (PR #664):
+          // an anonymous request can still be in flight when OAuth linking
+          // completes — id-only equality still matches (linking preserves
+          // the id), so also require the captured session's anonymity to
+          // match wasAnonymousRef.current (kept live by the link-clear
+          // effect below, same forward-reference-via-ref pattern as
+          // autoAcceptEnrichmentRef) rather than reading `auth.session`
+          // directly here — this callback's own closure can be just as
+          // stale as `session` itself if it was created before the link
+          // completed. Without this, a late anonymous-quota 429 would
+          // repopulate aiQuotaExceeded with the just-upgraded account's
+          // obsolete (10/hr, 50/day) limits right after the link effect
+          // cleared it.
+          if (
+            session &&
+            session.user.id === lastSyncedUserId.current &&
+            (session.user.is_anonymous ?? false) ===
+              (wasAnonymousRef.current ?? false)
+          ) {
             let cooldownMs = AI_QUOTA_HOURLY_COOLDOWN_MS;
             if (error.reason === "daily_limit") {
               cooldownMs = AI_QUOTA_DAILY_COOLDOWN_MS;
