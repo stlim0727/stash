@@ -5999,13 +5999,26 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
 
   // Codex review, PR #664: the account-switch clear above only fires when a
-  // NEW user id shows up, and the drain-loop interval that otherwise expires
-  // this on its own timer stops entirely while there's no session — so a
-  // sign-out or session expiry (auth.session -> null, with no replacement
-  // session minted yet) would otherwise leave a departed account's quota
-  // state on display indefinitely. Cleared independently here on session loss.
+  // NEW user id shows up. Two cases it misses, both cleared independently
+  // here:
+  //  - Sign-out or session expiry (auth.session -> null, with no replacement
+  //    session minted yet) — the drain-loop interval that otherwise expires
+  //    this on its own timer stops entirely while there's no session, so a
+  //    departed account's quota state would otherwise stay on display
+  //    indefinitely.
+  //  - Linking an anonymous account to a real one preserves the SAME user id
+  //    while swapping the session's `is_anonymous` flag false — the
+  //    account-switch effect never fires (no id change), so a stale
+  //    "exceeded" state from the old anonymous caps (10/hr, 50/day) would
+  //    otherwise linger even though the just-linked real account has much
+  //    higher limits (30/hr, 500/day) and the old quota's premise no longer
+  //    applies.
+  const wasAnonymousRef = useRef<boolean | null>(null);
   useEffect(() => {
-    if (!auth.session) {
+    const isAnonymousNow = auth.session?.user.is_anonymous ?? null;
+    const linkedToReal = wasAnonymousRef.current === true && isAnonymousNow === false;
+    wasAnonymousRef.current = isAnonymousNow;
+    if (!auth.session || linkedToReal) {
       setAiQuotaExceeded(null);
     }
   }, [auth.session]);

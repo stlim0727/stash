@@ -130,6 +130,22 @@ const AI_SUGGESTIONS_MODE_OPTIONS: {
   labelKey: `settings.aiSuggestions.${mode}` as MessageKey,
 }));
 
+/** "5:41 PM" for a reset later today, "Aug 3, 5:41 PM" otherwise — a bare
+ *  time for a reset on a different day would misread as already past once
+ *  it's tomorrow's clock time (Codex review, PR #664). */
+function formatQuotaResetTime(
+  retryAt: number,
+  formatDate: ReturnType<typeof useI18n>["formatDate"],
+): string {
+  const isToday = new Date(retryAt).toDateString() === new Date().toDateString();
+  return formatDate(
+    retryAt,
+    isToday
+      ? { hour: "numeric", minute: "2-digit" }
+      : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+  );
+}
+
 export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
@@ -985,12 +1001,7 @@ export default function SettingsScreen() {
                 : aiQuotaExceeded.reason === "hourly_limit"
                   ? "settings.aiQuotaExceeded.hourly"
                   : "settings.aiQuotaExceeded.generic",
-              {
-                resetTime: formatDate(aiQuotaExceeded.retryAt, {
-                  hour: "numeric",
-                  minute: "2-digit",
-                }),
-              },
+              { resetTime: formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate) },
             )}
           />
         ) : null}

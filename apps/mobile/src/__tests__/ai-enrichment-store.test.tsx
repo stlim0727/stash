@@ -689,6 +689,39 @@ test('aiQuotaExceeded clears when the session disappears, not just on an account
   await waitFor(() => expect(result.current.aiQuotaExceeded).toBeNull());
 });
 
+test('aiQuotaExceeded clears when an anonymous account links to a real one under the same user id (Codex review, PR #664)', async () => {
+  // OAuth linking preserves the user id while flipping is_anonymous false —
+  // the account-switch effect (keyed on a CHANGED id) never fires for this,
+  // and the session-loss effect never sees a null session either. Without a
+  // dedicated check, a stale "exceeded" state from the old anonymous caps
+  // (10/hr, 50/day) would linger even though the just-linked real account's
+  // limits are much higher (30/hr, 500/day).
+  const anonUser: { id: string; is_anonymous?: boolean } = { id: 'user-test', is_anonymous: true };
+  mockAuthSession = { ...mockSession, user: anonUser };
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(result.current.aiQuotaExceeded).not.toBeNull());
+
+  // Link to a real account: same user id, is_anonymous flips false.
+  const linkedUser: { id: string; is_anonymous?: boolean } = { id: 'user-test', is_anonymous: false };
+  mockAuthSession = { ...mockSession, user: linkedUser };
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  await waitFor(() => expect(result.current.aiQuotaExceeded).toBeNull());
+});
+
 test('a quota cooldown armed for one account does not throttle a different account switched into (Codex review, PR #655)', async () => {
   // Each account has its own independent per-user AI quota server-side — a
   // cooldown armed for account A's exhausted quota must not silently block
