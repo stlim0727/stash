@@ -162,6 +162,7 @@ export default function SettingsScreen() {
     aiSuggestionsMode,
     setAiSuggestionsMode,
     diagnosticStats,
+    aiQuotaExceeded,
   } = useBookmarks();
   const [aiSuggestionsSheetOpen, setAiSuggestionsSheetOpen] = useState(false);
   const auth = useSupabaseAuth();
@@ -965,6 +966,32 @@ export default function SettingsScreen() {
             value={t("settings.aiQueueBacklog.offValue", {
               count: diagnosticStats.ai.serverQueued,
             })}
+          />
+        ) : null}
+        {/* STASH-4P follow-up: which limit (hourly vs daily) was hit and
+            exactly when it resets, sourced from the server's accurate
+            retry_after (see request_ai_enrichment_slot) rather than a guess.
+            Shown regardless of aiSuggestionsMode — a manual "Suggest with AI"
+            tap can trigger this even in 'off' mode. */}
+        {aiQuotaExceeded ? (
+          <Row
+            styles={styles}
+            palette={palette}
+            icon="timer-outline"
+            label={t("settings.aiQuotaExceeded.label")}
+            value={t(
+              aiQuotaExceeded.reason === "daily_limit"
+                ? "settings.aiQuotaExceeded.daily"
+                : aiQuotaExceeded.reason === "hourly_limit"
+                  ? "settings.aiQuotaExceeded.hourly"
+                  : "settings.aiQuotaExceeded.generic",
+              {
+                resetTime: formatDate(aiQuotaExceeded.retryAt, {
+                  hour: "numeric",
+                  minute: "2-digit",
+                }),
+              },
+            )}
           />
         ) : null}
         <Row

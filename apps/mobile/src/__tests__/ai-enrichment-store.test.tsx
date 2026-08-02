@@ -616,6 +616,50 @@ test('an hourly-limit 429 uses the server-reported retry_after instead of the fi
   }
 });
 
+test('a 429 sets aiQuotaExceeded with the reason and the server-reported reset time (STASH-4P follow-up)', async () => {
+  // Settings/feedback-diagnostics visibility: distinct from the internal
+  // aiQuotaCooldownUntil ref (which stays capped at a fixed ceiling for the
+  // drain loop's own pacing), this display-only state should reflect the
+  // server's real retry_after verbatim.
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  const before = Date.now();
+  await waitFor(() => expect(store.current!.aiQuotaExceeded).not.toBeNull());
+  expect(store.current!.aiQuotaExceeded?.reason).toBe('hourly_limit');
+  // ~30s out from when the 429 landed, not the far larger fixed fallback.
+  const retryAt = store.current!.aiQuotaExceeded!.retryAt;
+  expect(retryAt).toBeGreaterThanOrEqual(before + 29_000);
+  expect(retryAt).toBeLessThan(before + 60_000);
+});
+
+test('aiQuotaExceeded clears once its server-reported reset time passes (STASH-4P follow-up)', async () => {
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID]);
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([SYNCED_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+  await waitFor(() => expect(store.current!.aiQuotaExceeded).not.toBeNull());
+
+  const dateNowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 35_000);
+  try {
+    await waitFor(() => expect(store.current!.aiQuotaExceeded).toBeNull());
+  } finally {
+    dateNowSpy.mockRestore();
+  }
+});
+
 test('a quota cooldown armed for one account does not throttle a different account switched into (Codex review, PR #655)', async () => {
   // Each account has its own independent per-user AI quota server-side — a
   // cooldown armed for account A's exhausted quota must not silently block

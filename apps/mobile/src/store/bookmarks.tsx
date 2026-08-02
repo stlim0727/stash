@@ -417,6 +417,10 @@ interface BookmarksContextValue {
     metadata: { todo: number; done: number };
     ai: { todo: number; done: number; serverQueued: number };
   };
+  /** The most recent AI-enrichment 429's reason and accurate reset time, for
+   *  the Settings backlog row and feedback diagnostics. `null` once the
+   *  window has passed (or on account switch) — see `aiQuotaExceeded`. */
+  aiQuotaExceeded: { reason: string; retryAt: number } | null;
 }
 
 const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
@@ -1030,6 +1034,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     token: number;
   } | null>(null);
   const aiBurstTokenSeq = useRef(0);
+
+  // Reactive mirror of a 429's reason + accurate reset time, for display only
+  // (Settings backlog row, feedback diagnostics) — separate from
+  // `aiQuotaCooldownUntil` above, which stays capped at its own fixed 10/30min
+  // ceiling for the drain loop's internal gating and would understate a real
+  // daily-limit wait if reused for display. Cleared once `retryAt` passes (see
+  // the drain-loop interval below) or on account switch.
+  const [aiQuotaExceeded, setAiQuotaExceeded] = useState<{
+    reason: string;
+    retryAt: number;
+  } | null>(null);
 
   // Pause or resume sync. Turning it on makes syncNow no-op (see the guard
   // inside it) so queued work sits still — long enough to delete unwanted
@@ -3471,6 +3486,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               cooldownMs = error.retryAfterSeconds * 1000;
             }
             aiQuotaCooldownUntil.current = Date.now() + cooldownMs;
+            // Display-only mirror (Settings backlog row, feedback
+            // diagnostics): unlike `cooldownMs` above (deliberately capped so
+            // the drain loop re-probes periodically rather than idling for a
+            // full day), this uses the server's real retry_after verbatim —
+            // accurate for both hourly_limit and daily_limit as of the
+            // request_ai_enrichment_slot migration that computes it from the
+            // oldest request in each window, not a flat guess.
+            const displaySeconds =
+              typeof error.retryAfterSeconds === "number" &&
+              error.retryAfterSeconds > 0
+                ? error.retryAfterSeconds
+                : cooldownMs / 1000;
+            setAiQuotaExceeded({
+              reason: error.reason ?? "rate_limited",
+              retryAt: Date.now() + displaySeconds * 1000,
+            });
           }
           // STASH #578 Phase 2: instead of just returning the rate-limited
           // sentinel, enqueue this bookmark for the background overflow
@@ -5582,6 +5613,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       return;
     }
     const interval = setInterval(() => {
+      // Display-only cleanup, independent of the mode/dispatch gating below:
+      // once the server-accurate reset time has passed, stop telling Settings
+      // and feedback diagnostics the quota is still exceeded. A future 429
+      // (if the wait wasn't actually over, or a fresh burst re-exhausts it)
+      // re-arms this the same way.
+      setAiQuotaExceeded((current) =>
+        current && Date.now() >= current.retryAt ? null : current,
+      );
       if (aiSuggestionsModeRef.current === "off") {
         // Mode flipped off mid-burst: drop whatever's left rather than keep
         // firing requests for a feature the user just turned off.
@@ -5951,6 +5990,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // cooldown here would block up to 30 minutes of a new account's AI
       // work for no reason.
       aiQuotaCooldownUntil.current = 0;
+      setAiQuotaExceeded(null);
       void syncNow();
     }
   }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
@@ -6104,6 +6144,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       resetLibrary,
       isResettingLibrary,
       diagnosticStats,
+      aiQuotaExceeded,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,
@@ -6160,6 +6201,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       resetLibrary,
       isResettingLibrary,
       diagnosticStats,
+      aiQuotaExceeded,
       updateBookmarkFields,
       markBookmarkAccessed,
       deleteBookmark,

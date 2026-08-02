@@ -107,7 +107,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
   const asSheet = width >= 760;
   const auth = useSupabaseAuth();
   const pathname = usePathname();
-  const { queue, isSyncing, lastPulledAt } = useBookmarks();
+  const { queue, isSyncing, lastPulledAt, aiQuotaExceeded } = useBookmarks();
 
   const [category, setCategory] = useState<FeedbackCategory>('bug');
   const [message, setMessage] = useState('');
@@ -193,6 +193,12 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         syncReconcile: getReconcileDiagnostics(),
         shareAttempt: getShareDiagnostics(),
         screenshot: includeScreenshot ? screenshot : null,
+        aiQuota: aiQuotaExceeded
+          ? {
+              reason: aiQuotaExceeded.reason,
+              resetAt: new Date(aiQuotaExceeded.retryAt).toISOString(),
+            }
+          : null,
       }),
     [
       appVersion,
@@ -207,6 +213,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       buildLabel,
       includeScreenshot,
       screenshot,
+      aiQuotaExceeded,
     ],
   );
 
