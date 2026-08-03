@@ -750,6 +750,81 @@ export default function SettingsScreen() {
           ? t("settings.sync.waiting", { count: waiting })
           : t("settings.sync.allBackedUp");
 
+  // Sync-pipeline breakdown (Sentry STASH-4W): the headline row above only
+  // ever reports the upload queue, which reads as "stuck" when metadata
+  // enrichment or AI tagging is still working (or stalled on quota) after
+  // uploads finish. These conditional sub-rows surface each pipeline's own
+  // count independently — they are NOT a partition of one total, a bookmark
+  // can be counted in more than one stage at once (e.g. freshly captured is
+  // both upload-pending and metadata-pending).
+  //
+  // `waiting` includes queue entries stuck in sync_status 'failed', not just
+  // 'pending'/'syncing' — so this row is worded as a neutral "waiting to
+  // upload" (matching the headline's own established copy) rather than an
+  // active-sounding "Uploading", which would misrepresent a failed entry
+  // that's merely sitting until its next retry (Codex review, PR #670).
+  const uploadingCount = waiting; // same value as today's headline count
+  const fetchingInfoCount = diagnosticStats.metadata.todo;
+  // The AI dispatch loop won't start new local (trigger/dispatch/retry) work
+  // while any queue entry is pending or syncing (see the loop's own queue
+  // check in store/bookmarks.tsx) — and a paused sync can never clear that
+  // gate for such entries. Checked against those two statuses specifically,
+  // not the broader `waiting`/uploadingCount (which also includes 'failed'
+  // entries that do NOT block the drain loop) — a queue holding only failed
+  // entries while paused doesn't actually block local AI work (Codex review,
+  // PR #670).
+  const queueBlocksAiDispatch = queue.some(
+    (entry) =>
+      entry.sync_status === "pending" || entry.sync_status === "syncing",
+  );
+  // Local (trigger/dispatch/retry) AI dispatch is frozen either by
+  // aiSuggestionsMode === "off" or by a paused sync with a pending/syncing
+  // queue (Codex review, PR #670) — in both cases, `activeBlocked` already
+  // accounts for the only work that keeps moving regardless (server-queued,
+  // and anything already executing, manual or auto — a request in flight
+  // can't be un-started by either freeze). `activeUnblocked` is the
+  // deduplicated total for the normal case. Using the store's own Set-union
+  // fields here (rather than adding separate counts) is what makes this
+  // structurally immune to double-counting a bookmark present in more than
+  // one source set.
+  const aiCount =
+    aiSuggestionsMode === "off" || (syncPaused && queueBlocksAiDispatch)
+      ? diagnosticStats.ai.activeBlocked
+      : diagnosticStats.ai.activeUnblocked;
+  const aiQuotaReached = aiQuotaExceeded !== null;
+  const syncStages = [
+    // "Pause sync" only gates syncNow's network phases — enrichInBackground
+    // (metadata) and AI dispatch are never paused (see
+    // docs/architecture/sync-pause-import-reset.md), so only the upload
+    // stage itself is excluded while paused; metadata/AI stay visible if
+    // they're independently active (Codex review, PR #670).
+    //
+    // Known tiny gap, deliberately not chased further: `syncPausedRef` is
+    // only re-checked between chunks/entries, not mid-request
+    // (store/bookmarks.tsx's bulk-chunk and per-entry loops), so a request
+    // already in flight when pause was tapped keeps running for well under a
+    // second after this flips to hidden. The natural signal, `isSyncing`,
+    // can't distinguish that from the unrelated auto-sync debounce window
+    // (`isSyncDebounceActive`), which arms on every queue change regardless
+    // of pause and would keep this row visible for the whole debounce delay
+    // with nothing actually in flight — worse than the gap it would "fix".
+    // Closing this properly needs a new store-exposed flag for the raw
+    // syncInFlight state, which isn't worth the surface area for a
+    // sub-second display lag (Codex review, PR #670).
+    ...(syncPaused ? [] : [{ key: "uploading" as const, count: uploadingCount }]),
+    { key: "fetchingInfo" as const, count: fetchingInfoCount },
+    { key: "aiSuggestions" as const, count: aiCount },
+  ].filter((stage) => stage.count > 0);
+  // A lone "uploading" stage duplicates the headline (which already reports
+  // the upload count), so it stays suppressed on its own — but a lone
+  // metadata/AI stage is otherwise invisible anywhere in Settings (the
+  // headline only ever talks about uploads), so it must still show even by
+  // itself (Codex review, PR #670).
+  const showSyncBreakdown =
+    cloudAvailable &&
+    (syncStages.length >= 2 ||
+      (syncStages.length === 1 && syncStages[0].key !== "uploading"));
+
   const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
     Constants.expoConfig?.sdkVersion ?? "56"
@@ -857,7 +932,7 @@ export default function SettingsScreen() {
             icon={syncPaused ? "pause-circle-outline" : "sync"}
             label={t("settings.sync.label")}
             value={syncSummary}
-            last
+            last={!showSyncBreakdown}
             right={
               <View style={styles.syncActions}>
                 {isSyncing ? (
@@ -906,6 +981,57 @@ export default function SettingsScreen() {
               </View>
             }
           />
+          {showSyncBreakdown
+            ? syncStages.map((stage, index) => {
+                const isLastStage = index === syncStages.length - 1;
+                if (stage.key === "uploading") {
+                  return (
+                    <Row
+                      key={stage.key}
+                      styles={styles}
+                      palette={palette}
+                      icon="cloud-upload-outline"
+                      label={t("settings.syncBreakdown.uploading.label")}
+                      value={t("settings.syncBreakdown.uploading.value", {
+                        count: stage.count,
+                      })}
+                      last={isLastStage}
+                    />
+                  );
+                }
+                if (stage.key === "fetchingInfo") {
+                  return (
+                    <Row
+                      key={stage.key}
+                      styles={styles}
+                      palette={palette}
+                      icon="document-text-outline"
+                      label={t("settings.syncBreakdown.fetchingInfo.label")}
+                      value={t("settings.syncBreakdown.fetchingInfo.value", {
+                        count: stage.count,
+                      })}
+                      last={isLastStage}
+                    />
+                  );
+                }
+                return (
+                  <Row
+                    key={stage.key}
+                    styles={styles}
+                    palette={palette}
+                    icon="hourglass-outline"
+                    label={t("settings.syncBreakdown.aiSuggestions.label")}
+                    value={t(
+                      aiQuotaReached
+                        ? "settings.syncBreakdown.aiSuggestions.valueQuotaReached"
+                        : "settings.syncBreakdown.aiSuggestions.value",
+                      { count: stage.count },
+                    )}
+                    last={isLastStage}
+                  />
+                );
+              })
+            : null}
         </Card>
       </View>
 

@@ -343,6 +343,25 @@ export const en = {
   },
   'settings.sync.pauseButton': 'Pause sync',
   'settings.sync.resumeButton': 'Resume sync',
+  'settings.syncBreakdown.uploading.label': 'Waiting to upload',
+  'settings.syncBreakdown.uploading.value': {
+    one: '{count} bookmark',
+    other: '{count} bookmarks',
+  },
+  'settings.syncBreakdown.fetchingInfo.label': 'Fetching info',
+  'settings.syncBreakdown.fetchingInfo.value': {
+    one: '{count} bookmark',
+    other: '{count} bookmarks',
+  },
+  'settings.syncBreakdown.aiSuggestions.label': 'AI suggestions',
+  'settings.syncBreakdown.aiSuggestions.value': {
+    one: '{count} bookmark',
+    other: '{count} bookmarks',
+  },
+  'settings.syncBreakdown.aiSuggestions.valueQuotaReached': {
+    one: '{count} bookmark · quota reached',
+    other: '{count} bookmarks · quota reached',
+  },
   'settings.trash.label': 'Trash',
   'settings.trash.value': '{count} items',
   'settings.report.label': 'Report a problem',

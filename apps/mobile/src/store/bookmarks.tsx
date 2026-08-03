@@ -415,7 +415,13 @@ interface BookmarksContextValue {
       syncingTwice: number;
     };
     metadata: { todo: number; done: number };
-    ai: { todo: number; done: number; serverQueued: number };
+    ai: {
+      todo: number;
+      done: number;
+      serverQueued: number;
+      activeUnblocked: number;
+      activeBlocked: number;
+    };
   };
   /** The most recent AI-enrichment 429's reason and accurate reset time, for
    *  the Settings backlog row and feedback diagnostics. `null` once the
@@ -6159,11 +6165,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ).length;
 
     // AI pending = unique union of bookmarks in the trigger set, the dispatch
-    // queue, the retry set, and the confirmed server-queued set (Codex review,
-    // PR #655): a bookmark that exhausted its 6-attempt LOCAL retry cap drops
-    // out of aiRetryIds (by design — see AI_RETRY_MAX_ATTEMPTS), but its
-    // confirmed overflow-queue entry is still alive server-side and will still
-    // deliver, so it must not disappear from this count.
+    // queue, the retry set, and the confirmed server-queued set (Codex
+    // review, PR #655): a bookmark that exhausted its 6-attempt LOCAL retry
+    // cap drops out of aiRetryIds (by design — see AI_RETRY_MAX_ATTEMPTS),
+    // but its confirmed overflow-queue entry is still alive server-side and
+    // will still deliver, so it must not disappear from this count.
+    //
+    // Deliberately does NOT include `enrichingIds`/`manualEnrichingIds`: this
+    // `todo` count also drives the pre-existing Preferences aiQueueBacklog
+    // row, which specifically claims queued/quota-paced/auto-resuming
+    // semantics — folding in an in-flight manual request (already executing,
+    // not queued) would make that row lie about it (Codex review, PR #670,
+    // reverting the same PR's own earlier attempt at this).
     const uniqueAiTodoIds = new Set<string>([
       ...pendingAiTrigger.current,
       ...aiDispatchQueueRef.current.pending,
@@ -6176,16 +6189,41 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     return {
       sync: { todo: syncTodo, done: syncDone, syncedOnce, syncingTwice },
       metadata: { todo: metadataTodo, done: metadataDone },
-      // serverQueued is the confirmed-overflow-queue subset alone (not the
-      // full union above) — the only part of the backlog still moving when
-      // aiSuggestionsMode is "off": the worker keeps draining these
-      // regardless of the local pause, while the trigger/dispatch/retry
-      // portions are genuinely frozen. Settings uses this to stay honest in
-      // that mode instead of hiding real in-flight server work (Codex
-      // review, PR #656).
-      ai: { todo: aiTodo, done: aiDone, serverQueued: aiServerQueuedIds.size },
+      ai: {
+        todo: aiTodo,
+        done: aiDone,
+        // serverQueued is the confirmed-overflow-queue subset alone (not the
+        // full union above) — the only part of the backlog still moving when
+        // aiSuggestionsMode is "off": the worker keeps draining these
+        // regardless of the local pause, while the trigger/dispatch/retry
+        // portions are genuinely frozen. Settings uses this to stay honest in
+        // that mode instead of hiding real in-flight server work (Codex
+        // review, PR #656).
+        serverQueued: aiServerQueuedIds.size,
+        // The pipeline breakdown's own count (Codex review, PR #670,
+        // replacing an additive `todo + manualInFlight` model that both
+        // double-counted a bookmark present in both sets AND dropped an
+        // already-executing AUTOMATIC request the instant local dispatch got
+        // frozen — two symptoms of the same modeling mistake: treating
+        // "queued" and "executing" as separately-counted buckets instead of
+        // a genuine union over bookmark ids). `enrichingIds` covers BOTH
+        // manual and auto in-flight requests — nothing about pause or
+        // aiSuggestionsMode cancels a request already in progress, so it
+        // always counts. `activeUnblocked` is the normal-case total,
+        // deduplicated by construction (Set union, not addition).
+        activeUnblocked: new Set<string>([...uniqueAiTodoIds, ...enrichingIds])
+          .size,
+        // When local dispatch is genuinely frozen (aiSuggestionsMode ===
+        // "off", or paused with a pending/syncing queue — see the drain
+        // loop's own gate), the not-yet-dispatched backlog
+        // (trigger/dispatch/retry) is excluded, but server-queued work and
+        // anything already executing keep counting: a already-dispatched
+        // request can't be un-started by either freeze.
+        activeBlocked: new Set<string>([...aiServerQueuedIds, ...enrichingIds])
+          .size,
+      },
     };
-  }, [bookmarks, queue, enrichments, aiRetryIds, enrichingIds, aiServerQueuedIds]);
+  }, [bookmarks, queue, enrichments, aiRetryIds, aiServerQueuedIds, enrichingIds]);
 
   const value = useMemo<BookmarksContextValue>(
     () => ({
