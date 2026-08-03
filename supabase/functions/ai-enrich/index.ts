@@ -301,12 +301,22 @@ async function loadEnrichmentContextForUser(
  *  Gemini calls on their behalf. Checked once per CLAIMED ROW (matching the
  *  synchronous path's one-slot-per-bookmark accounting), so N items from the
  *  same user in one tick still only ever consume N of that user's slots.
- *  Fails OPEN on an RPC error (a transient limiter hiccup must not strand
- *  overflow rows forever — this is a best-effort background job, not a live
- *  user-facing request the way the synchronous path's fail-open/closed policy
- *  is for). Only called when `enforceRateLimit` (a real, billable provider is
- *  configured) — see its call site. */
-async function claimEnrichmentQuotaSlot(userId: string): Promise<boolean> {
+ *  Only called when `enforceRateLimit` (a real, billable provider is
+ *  configured) — see its call site.
+ *
+ *  Returns two distinct flags because an RPC error fails OPEN (a transient
+ *  limiter hiccup must not strand overflow rows forever — this is a best-
+ *  effort background job, not a live user-facing request the way the
+ *  synchronous path's fail-open/closed policy is for), and that path spends
+ *  no real slot:
+ *  - `eligible`: whether this row may proceed to a provider call this tick.
+ *  - `slotClaimed`: whether the RPC's INSERT actually ran — false on the
+ *    fail-open path. Kept distinct so a later rate_limited refund never
+ *    deletes an unrelated slot a genuinely earlier, successful call spent
+ *    (Codex review, PR #669): eligible-but-not-claimed must never be refunded. */
+async function claimEnrichmentQuotaSlot(
+  userId: string,
+): Promise<{ eligible: boolean; slotClaimed: boolean }> {
   try {
     const res = await serviceRest(`/rpc/request_ai_enrichment_slot_for`, {
       method: 'POST',
@@ -315,13 +325,14 @@ async function claimEnrichmentQuotaSlot(userId: string): Promise<boolean> {
     });
     if (!res.ok) {
       console.error('Batch worker: rate-limit check failed', userId, res.status);
-      return true;
+      return { eligible: true, slotClaimed: false };
     }
     const verdict = (await res.json()) as { allowed?: boolean };
-    return verdict.allowed !== false;
+    const allowed = verdict.allowed !== false;
+    return { eligible: allowed, slotClaimed: allowed };
   } catch (err) {
     console.error('Batch worker: rate-limit check threw', userId, err);
-    return true;
+    return { eligible: true, slotClaimed: false };
   }
 }
 
@@ -429,6 +440,7 @@ async function processEnrichmentRow(
   row: PendingEnrichmentRow,
   bookmarksById: Map<string, BookmarkRow>,
   contextByUser: Map<string, { collections: Array<{ id: string; name: string }>; existingTags: string[] }>,
+  slotClaimed: boolean,
 ): Promise<void> {
   const bookmark = bookmarksById.get(row.bookmark_id);
   if (!bookmark) {
@@ -509,7 +521,12 @@ async function processEnrichmentRow(
     // refund it now that the attempt is known to have produced nothing (see
     // refundEnrichmentQuotaSlot's docs), so a long provider outage doesn't
     // burn the user's fixed budget on retries that never got a usable answer.
-    await refundEnrichmentQuotaSlot(row.user_id);
+    // Only when a slot was actually claimed: a fail-open eligibility (the
+    // quota RPC itself errored) never inserted one, so refunding here would
+    // instead delete an unrelated slot a genuinely earlier call spent.
+    if (slotClaimed) {
+      await refundEnrichmentQuotaSlot(row.user_id);
+    }
     await markPendingEnrichmentSettled(row.id, 'pending', row.attempts);
     return;
   }
@@ -708,10 +725,17 @@ async function runBatchWorker(): Promise<Response> {
     // the single-item path above).
     let eligible = claimed;
     let deferred: PendingEnrichmentRow[] = [];
+    // Per-row record of whether its quota RPC actually inserted a slot (vs.
+    // fail-open eligibility with no real charge) — see claimEnrichmentQuotaSlot
+    // and processEnrichmentRow's refund guard.
+    const slotClaimedByRowId = new Map<string, boolean>();
     if (enforceRateLimit) {
-      const granted = await Promise.all(claimed.map((row) => claimEnrichmentQuotaSlot(row.user_id)));
-      eligible = claimed.filter((_, i) => granted[i]);
-      deferred = claimed.filter((_, i) => !granted[i]);
+      const results = await Promise.all(claimed.map((row) => claimEnrichmentQuotaSlot(row.user_id)));
+      claimed.forEach((row, i) => slotClaimedByRowId.set(row.id, results[i].slotClaimed));
+      eligible = claimed.filter((_, i) => results[i].eligible);
+      deferred = claimed.filter((_, i) => !results[i].eligible);
+    } else {
+      claimed.forEach((row) => slotClaimedByRowId.set(row.id, false));
     }
     // Rows still over quota go straight back to 'pending' with no attempts
     // penalty — this isn't a failure, just "try again once the window rolls
@@ -738,7 +762,11 @@ async function runBatchWorker(): Promise<Response> {
     // BATCH_CLAIM_LIMIT calls at once would burst straight into the model
     // provider's own per-minute limit and degrade a chunk of them to heuristics.
     for (const wave of chunk(eligible, ENRICHMENT_CONCURRENCY)) {
-      await Promise.all(wave.map((row) => processEnrichmentRow(row, bookmarksById, contextByUser)));
+      await Promise.all(
+        wave.map((row) =>
+          processEnrichmentRow(row, bookmarksById, contextByUser, slotClaimedByRowId.get(row.id) ?? false),
+        ),
+      );
     }
 
     // STASH #579: best-effort drained-queue push notification, after the
@@ -933,6 +961,11 @@ Deno.serve(async (req) => {
     // slot — and only when a billable provider is configured. The DB function
     // scopes the count to the caller via the forwarded JWT (auth.uid()), so a
     // user can only ever exhaust their own quota.
+    // Whether the RPC below actually inserted a slot (vs. the fail-open path
+    // reaching the provider with nothing spent) — a later rate_limited refund
+    // must only fire when true, or it deletes an unrelated slot a genuinely
+    // earlier call spent (Codex review, PR #669).
+    let slotClaimed = false;
     if (enforceRateLimit) {
       let verdict: RateLimitVerdict | null = null;
       // Whether we actually obtained a verdict. Distinct from `verdict` so a
@@ -998,6 +1031,10 @@ Deno.serve(async (req) => {
           429,
           { 'Retry-After': String(retryAfter) },
         );
+      } else {
+        // Reached only when the RPC succeeded and returned allowed — the only
+        // branch where the RPC's own INSERT actually ran.
+        slotClaimed = true;
       }
     }
 
@@ -1061,7 +1098,11 @@ Deno.serve(async (req) => {
         // attempt that the provider itself rejected — refund it before
         // queueing the retry, for the same reason processEnrichmentRow's
         // batch-worker retries do (see refundEnrichmentQuotaSlot's docs).
-        await refundEnrichmentQuotaSlot(bookmark.user_id);
+        // Only when a slot was actually claimed (see `slotClaimed`'s docs
+        // above) — the fail-open path never spent one.
+        if (slotClaimed) {
+          await refundEnrichmentQuotaSlot(bookmark.user_id);
+        }
         try {
           const enqueueRes = await rest(`/pending_ai_enrichment?on_conflict=bookmark_id`, {
             method: 'POST',
