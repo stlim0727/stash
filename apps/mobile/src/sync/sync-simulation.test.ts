@@ -187,3 +187,79 @@ test('simulation: invariant failures include seed, trace, and state', async () =
     },
   );
 });
+
+test('simulation: finish drains tasks spawned by running tasks', async () => {
+  const state = { childCompleted: false };
+  const simulation = new DeterministicSimulation(() => state);
+
+  simulation.spawn('parent', () => {
+    simulation.spawn('child', async () => {
+      await simulation.waitAt('child-work');
+      state.childCompleted = true;
+    });
+  });
+
+  let didFinish = false;
+  const finishing = simulation.finish().then(() => {
+    didFinish = true;
+  });
+  await simulation.waitUntilReached('child-work');
+  assert.equal(didFinish, false);
+  simulation.release('child-work');
+  await finishing;
+
+  assert.equal(state.childCompleted, true);
+  assert.equal(simulation.checkpoints.at(-1)?.label, 'finish');
+});
+
+test('simulation: barrier waits surface a producer task failure', async () => {
+  const simulation = new DeterministicSimulation(() => ({ ready: false }), undefined, 675);
+  simulation.spawn('producer', () => {
+    throw new Error('dependency failed before barrier');
+  });
+
+  await assert.rejects(
+    () => simulation.waitUntilReached('never-reached'),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /dependency failed before barrier/);
+      assert.match(error.message, /task:producer:failed/);
+      assert.match(error.message, /seed: 675/);
+      return true;
+    },
+  );
+});
+
+test('simulation: every rejection value fails a joined task', async () => {
+  const simulation = new DeterministicSimulation(() => ({ pending: true }));
+  simulation.spawn('null-rejection', () => Promise.reject(null));
+
+  await assert.rejects(() => simulation.finish(), /null/);
+});
+
+test('simulation: reaching a barrier checks transient state invariants', async () => {
+  const state = { activeRuns: 0 };
+  const simulation = new DeterministicSimulation(
+    () => state,
+    ({ state: current }) => {
+      assert.ok(current.activeRuns <= 1, 'concurrent sync runs observed at barrier');
+    },
+  );
+
+  simulation.spawn('sync', async () => {
+    state.activeRuns = 2;
+    await simulation.waitAt('upload');
+    state.activeRuns = 1;
+  });
+
+  await assert.rejects(
+    () => simulation.waitUntilReached('upload'),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /concurrent sync runs observed at barrier/);
+      assert.match(error.message, /checkpoint: barrier:upload/);
+      assert.match(error.message, /"activeRuns": 2/);
+      return true;
+    },
+  );
+});

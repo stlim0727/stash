@@ -20,6 +20,12 @@ interface Deferred<T> {
 
 interface TaskRecord {
   promise: Promise<void>;
+  failed: boolean;
+  error: unknown;
+}
+
+interface TaskFailure {
+  label: string;
   error: unknown;
 }
 
@@ -78,6 +84,7 @@ export class DeterministicSimulation<State> {
     { reached: Deferred<void>; released: Deferred<void>; didReach: boolean; didRelease: boolean }
   >();
   private readonly tasks = new Map<string, TaskRecord>();
+  private readonly taskFailure = deferred<TaskFailure>();
 
   constructor(
     private readonly snapshot: () => State,
@@ -98,7 +105,7 @@ export class DeterministicSimulation<State> {
 
   spawn(label: string, action: () => void | Promise<void>): void {
     assert.equal(this.tasks.has(label), false, `simulation task already exists: ${label}`);
-    const record: TaskRecord = { promise: Promise.resolve(), error: null };
+    const record: TaskRecord = { promise: Promise.resolve(), failed: false, error: undefined };
     this.trace.push(`task:${label}:start`);
     record.promise = Promise.resolve()
       .then(action)
@@ -107,8 +114,10 @@ export class DeterministicSimulation<State> {
         this.capture(`task:${label}`);
       })
       .catch((error: unknown) => {
+        record.failed = true;
         record.error = error;
         this.trace.push(`task:${label}:failed`);
+        this.taskFailure.resolve({ label, error });
       });
     this.tasks.set(label, record);
   }
@@ -118,13 +127,15 @@ export class DeterministicSimulation<State> {
     assert.ok(record, `simulation task does not exist: ${label}`);
     await record.promise;
     this.tasks.delete(label);
-    if (record.error !== null) {
+    if (record.failed) {
       throw this.failure(record.error, `task:${label}`);
     }
   }
 
   async finish(): Promise<void> {
-    for (const label of [...this.tasks.keys()]) {
+    while (this.tasks.size > 0) {
+      const label = this.tasks.keys().next().value;
+      assert.ok(label, 'simulation task map contained an invalid label');
       await this.join(label);
     }
     this.capture('finish');
@@ -136,6 +147,7 @@ export class DeterministicSimulation<State> {
     assert.equal(barrier.didReach, false, `barrier reached more than once: ${barrierName}`);
     barrier.didReach = true;
     this.trace.push(`barrier:${barrierName}:reached`);
+    this.capture(`barrier:${barrierName}`);
     barrier.reached.resolve(undefined);
     await barrier.released.promise;
     this.trace.push(`barrier:${barrierName}:passed`);
@@ -143,7 +155,13 @@ export class DeterministicSimulation<State> {
 
   /** Called by the test to wait until a fake dependency is definitely paused. */
   async waitUntilReached(barrierName: string): Promise<void> {
-    await this.getBarrier(barrierName).reached.promise;
+    const result = await Promise.race([
+      this.getBarrier(barrierName).reached.promise.then(() => null),
+      this.taskFailure.promise,
+    ]);
+    if (result !== null) {
+      throw this.failure(result.error, `task:${result.label}`);
+    }
   }
 
   release(barrierName: string): void {
