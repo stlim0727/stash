@@ -203,6 +203,32 @@ test('paused with only the upload queue non-empty (no independent background wor
   expect(screen.queryByText('Fetching info')).toBeNull();
 });
 
+test('paused with a non-empty queue caps the AI count at server-queued only — local trigger/dispatch/retry work is genuinely blocked until sync resumes (Codex review, PR #670)', async () => {
+  await seed({
+    rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
+    queue: [pendingUploadEntry('up-1')],
+    meta: {
+      'pref.sync.paused': 'true',
+      // Two local triggers, but only one is confirmed server-queued — the AI
+      // dispatch loop can't drain the other while the queue above is stuck
+      // pending (it early-returns whenever any entry is pending/syncing), so
+      // the breakdown must report 1 (server-queued), not 2 (the full union).
+      pending_ai_trigger: JSON.stringify(['bm-ai-1', 'bm-ai-2']),
+      ai_server_queued: JSON.stringify(['bm-ai-1']),
+    },
+  });
+
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
+
+  expect(screen.getByText('Fetching info')).toBeTruthy();
+  expect(screen.getAllByText('AI suggestions')).toHaveLength(2);
+  // The AI row's own count is 1 bookmark (server-queued only); "Fetching
+  // info" also happens to read "1 bookmark" — both present, never "2".
+  expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
+  expect(screen.queryByText('2 bookmarks')).toBeNull();
+});
+
 test('local-only (not signed in) suppresses the breakdown even with multiple non-zero stages', async () => {
   mockAuth.status = 'not_configured';
   mockAuth.isSignedIn = false;

@@ -6159,16 +6159,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ).length;
 
     // AI pending = unique union of bookmarks in the trigger set, the dispatch
-    // queue, the retry set, and the confirmed server-queued set (Codex review,
-    // PR #655): a bookmark that exhausted its 6-attempt LOCAL retry cap drops
-    // out of aiRetryIds (by design — see AI_RETRY_MAX_ATTEMPTS), but its
-    // confirmed overflow-queue entry is still alive server-side and will still
-    // deliver, so it must not disappear from this count.
+    // queue, the retry set, the confirmed server-queued set (Codex review,
+    // PR #655), and any request currently in flight (Codex review, PR #670):
+    // a bookmark that exhausted its 6-attempt LOCAL retry cap drops out of
+    // aiRetryIds (by design — see AI_RETRY_MAX_ATTEMPTS), but its confirmed
+    // overflow-queue entry is still alive server-side and will still deliver,
+    // so it must not disappear from this count. `enrichingIds` is included so
+    // a manual "Suggest with AI" request (added there but not to the
+    // trigger/dispatch/retry sets — see requestAiEnrichment's `source ===
+    // "manual"` branch) isn't invisible here while it's still running.
     const uniqueAiTodoIds = new Set<string>([
       ...pendingAiTrigger.current,
       ...aiDispatchQueueRef.current.pending,
       ...aiRetryIds,
       ...aiServerQueuedIds,
+      ...enrichingIds,
     ]);
     const aiTodo = uniqueAiTodoIds.size;
     const aiDone = enrichments.length;

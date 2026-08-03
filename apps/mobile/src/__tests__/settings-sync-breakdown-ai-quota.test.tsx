@@ -195,3 +195,43 @@ test('AI quota reached: the AI breakdown row uses the quota-reached copy (no res
   // row (also visible here), whose formatting this must not duplicate.
   expect(screen.getByText('1 bookmark · quota reached')).toBeTruthy();
 });
+
+test('a manual "Suggest with AI" request in flight is counted even though it never joined the trigger/dispatch/retry sets (Codex review, PR #670)', async () => {
+  const MANUAL_ID = '7e64cf1e-0000-4000-8000-000000000003';
+  fakeRepo.__reset([makeStoredBookmark({ id: MANUAL_ID, metadata_status: 'complete' })]);
+  // Never resolves: requestAiEnrichment adds the id to `enrichingIds` (and,
+  // for a manual call, `manualEnrichingIds`) before awaiting the API call —
+  // neither the trigger set, the dispatch queue, nor aiRetryIds ever see
+  // this id, since none of those producers are involved in a direct manual
+  // call. Before this fix, diagnosticStats.ai.todo stayed 0 for the whole
+  // window this request is in flight.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(() => new Promise(() => {}));
+
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const screen = await render(
+    <BookmarksProvider>
+      <Probe />
+      <SettingsScreen />
+    </BookmarksProvider>,
+  );
+
+  await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
+  await waitFor(() => expect(storeRef.current?.lastPulledAt).not.toBeNull());
+
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(MANUAL_ID);
+  });
+  await waitFor(() => expect(storeRef.current!.isEnriching(MANUAL_ID)).toBe(true));
+
+  // Nothing else is active — uploads are done and metadata is already
+  // complete — so this is a lone AI stage, and per the earlier fix (a lone
+  // non-upload stage must still show) it renders on its own.
+  await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
+  expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getByText('1 bookmark')).toBeTruthy();
+});

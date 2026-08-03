@@ -765,7 +765,21 @@ export default function SettingsScreen() {
   // that's merely sitting until its next retry (Codex review, PR #670).
   const uploadingCount = waiting; // same value as today's headline count
   const fetchingInfoCount = diagnosticStats.metadata.todo;
-  const aiCount = aiSuggestionsMode !== "off" ? diagnosticStats.ai.todo : 0;
+  // The AI dispatch loop won't start new local (trigger/dispatch/retry) work
+  // while any queue entry is still pending/syncing (see the loop's own queue
+  // check in store/bookmarks.tsx) — and a paused sync with items still
+  // queued can never clear that gate. Only the confirmed server-queued
+  // subset keeps draining regardless (same distinction the pre-existing
+  // aiQueueBacklog row already draws for aiSuggestionsMode === "off"), so
+  // that's all this row should claim is "active" in that state (Codex
+  // review, PR #670).
+  const localAiWorkBlockedByPause = syncPaused && uploadingCount > 0;
+  const aiCount =
+    aiSuggestionsMode === "off"
+      ? 0
+      : localAiWorkBlockedByPause
+        ? diagnosticStats.ai.serverQueued
+        : diagnosticStats.ai.todo;
   const aiQuotaReached = aiQuotaExceeded !== null;
   const syncStages = [
     // "Pause sync" only gates syncNow's network phases — enrichInBackground
@@ -773,9 +787,20 @@ export default function SettingsScreen() {
     // docs/architecture/sync-pause-import-reset.md), so only the upload
     // stage itself is excluded while paused; metadata/AI stay visible if
     // they're independently active (Codex review, PR #670).
-    ...(syncPaused
-      ? []
-      : [{ key: "uploading" as const, count: uploadingCount }]),
+    //
+    // Known tiny gap, deliberately not chased further: `syncPausedRef` is
+    // only re-checked between chunks/entries, not mid-request
+    // (store/bookmarks.tsx's bulk-chunk and per-entry loops), so a request
+    // already in flight when pause was tapped keeps running for well under a
+    // second after this flips to hidden. The natural signal, `isSyncing`,
+    // can't distinguish that from the unrelated auto-sync debounce window
+    // (`isSyncDebounceActive`), which arms on every queue change regardless
+    // of pause and would keep this row visible for the whole debounce delay
+    // with nothing actually in flight — worse than the gap it would "fix".
+    // Closing this properly needs a new store-exposed flag for the raw
+    // syncInFlight state, which isn't worth the surface area for a
+    // sub-second display lag (Codex review, PR #670).
+    ...(syncPaused ? [] : [{ key: "uploading" as const, count: uploadingCount }]),
     { key: "fetchingInfo" as const, count: fetchingInfoCount },
     { key: "aiSuggestions" as const, count: aiCount },
   ].filter((stage) => stage.count > 0);
