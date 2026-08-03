@@ -734,6 +734,88 @@ test('createNeedsReconcileUpdate: a fetched title filled during create upload ne
   assert.equal(needs, false);
 });
 
+test('createNeedsReconcileUpdate: metadata settling mid-upload needs no follow-up (Sentry STASH-3Y queue-bouncing regression)', () => {
+  // The bug: background OpenGraph enrichment finishes for nearly every newly
+  // created bookmark while its own create upload is still in flight. Before
+  // this predicate dropped metadata_status/site_name/favicon_url/
+  // preview_image_url, that alone made this return true for almost every row
+  // in a bulk import, re-queuing a just-finished batch as "update" mutations
+  // and making the Settings "N syncing" counter bounce back up instead of
+  // draining to 0. None of these are user-authored, so they must never
+  // trigger a follow-up on their own.
+  const persisted = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'Title',
+    notes: 'note',
+    metadata_status: 'complete',
+    site_name: 'Example Site',
+    favicon_url: 'https://example.com/favicon.ico',
+    preview_image_url: 'https://example.com/preview.png',
+    sync_status: 'synced',
+  });
+  const needs = createNeedsReconcileUpdate(persisted, {
+    url: 'https://example.com/a',
+    title: 'Title',
+    notes: 'note',
+  });
+  assert.equal(needs, false);
+});
+
+test('createNeedsReconcileUpdate: a genuine user edit concurrent with metadata settling still needs a follow-up (STASH-3Y)', () => {
+  // Metadata churn alone must not trigger reconciliation (see above), but a
+  // real user-authored change landing in the SAME window still must — the
+  // fix must not have overcorrected into silently dropping real divergence.
+  const archivedWhileEnriching = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'Title',
+    notes: 'note',
+    is_archived: true,
+    metadata_status: 'complete',
+    site_name: 'Example Site',
+    sync_status: 'synced',
+  });
+  assert.equal(
+    createNeedsReconcileUpdate(archivedWhileEnriching, {
+      url: 'https://example.com/a',
+      title: 'Title',
+      notes: 'note',
+    }),
+    true,
+  );
+
+  const filedWhileEnriching = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'Title',
+    collection_id: 'collection-1',
+    metadata_status: 'complete',
+    favicon_url: 'https://example.com/favicon.ico',
+    sync_status: 'synced',
+  });
+  assert.equal(
+    createNeedsReconcileUpdate(filedWhileEnriching, {
+      url: 'https://example.com/a',
+      title: 'Title',
+    }),
+    true,
+  );
+
+  const editedWhileEnriching = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000001',
+    title: 'User-edited title',
+    metadata_status: 'complete',
+    preview_image_url: 'https://example.com/preview.png',
+    sync_status: 'synced',
+  });
+  assert.equal(
+    createNeedsReconcileUpdate(
+      editedWhileEnriching,
+      { url: 'https://example.com/a', title: 'Original title' },
+      { titleChangedByUser: true },
+    ),
+    true,
+  );
+});
+
 test('createNeedsReconcileUpdate: a user title edited during create upload needs a follow-up', () => {
   const persisted = makeBookmark({
     id: '00000000-0000-4000-8000-000000000001',
