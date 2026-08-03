@@ -415,7 +415,12 @@ interface BookmarksContextValue {
       syncingTwice: number;
     };
     metadata: { todo: number; done: number };
-    ai: { todo: number; done: number; serverQueued: number };
+    ai: {
+      todo: number;
+      done: number;
+      serverQueued: number;
+      manualInFlight: number;
+    };
   };
   /** The most recent AI-enrichment 429's reason and accurate reset time, for
    *  the Settings backlog row and feedback diagnostics. `null` once the
@@ -6159,21 +6164,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ).length;
 
     // AI pending = unique union of bookmarks in the trigger set, the dispatch
-    // queue, the retry set, the confirmed server-queued set (Codex review,
-    // PR #655), and any request currently in flight (Codex review, PR #670):
-    // a bookmark that exhausted its 6-attempt LOCAL retry cap drops out of
-    // aiRetryIds (by design — see AI_RETRY_MAX_ATTEMPTS), but its confirmed
-    // overflow-queue entry is still alive server-side and will still deliver,
-    // so it must not disappear from this count. `enrichingIds` is included so
-    // a manual "Suggest with AI" request (added there but not to the
-    // trigger/dispatch/retry sets — see requestAiEnrichment's `source ===
-    // "manual"` branch) isn't invisible here while it's still running.
+    // queue, the retry set, and the confirmed server-queued set (Codex
+    // review, PR #655): a bookmark that exhausted its 6-attempt LOCAL retry
+    // cap drops out of aiRetryIds (by design — see AI_RETRY_MAX_ATTEMPTS),
+    // but its confirmed overflow-queue entry is still alive server-side and
+    // will still deliver, so it must not disappear from this count.
+    //
+    // Deliberately does NOT include `enrichingIds`/`manualEnrichingIds`: this
+    // `todo` count also drives the pre-existing Preferences aiQueueBacklog
+    // row, which specifically claims queued/quota-paced/auto-resuming
+    // semantics — folding in an in-flight manual request (already executing,
+    // not queued) would make that row lie about it (Codex review, PR #670,
+    // reverting the same PR's own earlier attempt at this).
     const uniqueAiTodoIds = new Set<string>([
       ...pendingAiTrigger.current,
       ...aiDispatchQueueRef.current.pending,
       ...aiRetryIds,
       ...aiServerQueuedIds,
-      ...enrichingIds,
     ]);
     const aiTodo = uniqueAiTodoIds.size;
     const aiDone = enrichments.length;
@@ -6181,16 +6188,37 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     return {
       sync: { todo: syncTodo, done: syncDone, syncedOnce, syncingTwice },
       metadata: { todo: metadataTodo, done: metadataDone },
-      // serverQueued is the confirmed-overflow-queue subset alone (not the
-      // full union above) — the only part of the backlog still moving when
-      // aiSuggestionsMode is "off": the worker keeps draining these
-      // regardless of the local pause, while the trigger/dispatch/retry
-      // portions are genuinely frozen. Settings uses this to stay honest in
-      // that mode instead of hiding real in-flight server work (Codex
-      // review, PR #656).
-      ai: { todo: aiTodo, done: aiDone, serverQueued: aiServerQueuedIds.size },
+      ai: {
+        todo: aiTodo,
+        done: aiDone,
+        // serverQueued is the confirmed-overflow-queue subset alone (not the
+        // full union above) — the only part of the backlog still moving when
+        // aiSuggestionsMode is "off": the worker keeps draining these
+        // regardless of the local pause, while the trigger/dispatch/retry
+        // portions are genuinely frozen. Settings uses this to stay honest in
+        // that mode instead of hiding real in-flight server work (Codex
+        // review, PR #656).
+        serverQueued: aiServerQueuedIds.size,
+        // A manual "Suggest with AI" request in flight (Codex review, PR
+        // #670) — never added to the trigger/dispatch/retry/serverQueued
+        // sets above (see requestAiEnrichment's `source === "manual"`
+        // branch), and unlike that queued/frozen backlog, this is already
+        // executing: it's neither paused-blocked (nothing about it touches
+        // the upload queue) nor frozen by aiSuggestionsMode === "off"
+        // (manual calls aren't gated on that preference). Kept as its own
+        // field rather than folded into `todo` so the Preferences backlog
+        // row's queued/quota-paced copy stays accurate.
+        manualInFlight: manualEnrichingIds.size,
+      },
     };
-  }, [bookmarks, queue, enrichments, aiRetryIds, enrichingIds, aiServerQueuedIds]);
+  }, [
+    bookmarks,
+    queue,
+    enrichments,
+    aiRetryIds,
+    aiServerQueuedIds,
+    manualEnrichingIds,
+  ]);
 
   const value = useMemo<BookmarksContextValue>(
     () => ({

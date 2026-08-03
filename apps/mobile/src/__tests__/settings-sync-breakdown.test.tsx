@@ -76,6 +76,14 @@ function pendingUploadEntry(localId: string): LocalPendingBookmark {
   };
 }
 
+function failedUploadEntry(localId: string): LocalPendingBookmark {
+  return {
+    ...pendingUploadEntry(localId),
+    sync_status: 'failed',
+    last_error: 'network error',
+  };
+}
+
 /** Seeds the fake repository's bookmarks/queue/meta in one go — `__reset`
  *  wipes ALL of those, so seeding must happen in a single call rather than
  *  several `__reset`/`enqueue`/`setMeta` calls in sequence. */
@@ -227,6 +235,27 @@ test('paused with a non-empty queue caps the AI count at server-queued only — 
   // info" also happens to read "1 bookmark" — both present, never "2".
   expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
   expect(screen.queryByText('2 bookmarks')).toBeNull();
+});
+
+test('paused with only a failed (not pending/syncing) queue entry does not block local AI work — the drain loop only gates on pending/syncing (Codex review, PR #670)', async () => {
+  await seed({
+    queue: [failedUploadEntry('up-1')],
+    meta: {
+      'pref.sync.paused': 'true',
+      pending_ai_trigger: JSON.stringify(['bm-ai-1', 'bm-ai-2']),
+      ai_server_queued: JSON.stringify(['bm-ai-1']),
+    },
+  });
+
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
+
+  // A lone AI stage still renders on its own (earlier fix), and — unlike the
+  // sibling "genuinely blocked" test above — its count is the full local
+  // union (2), not capped to server-queued (1): a failed entry can't clear
+  // the drain loop's pending/syncing gate, so it was never actually blocking.
+  expect(screen.getByText('2 bookmarks')).toBeTruthy();
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
 });
 
 test('local-only (not signed in) suppresses the breakdown even with multiple non-zero stages', async () => {

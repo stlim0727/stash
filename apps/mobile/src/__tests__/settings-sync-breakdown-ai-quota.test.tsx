@@ -124,6 +124,7 @@ jest.mock('@/api/bookmarks', () => {
 });
 
 import SettingsScreen from '@/app/settings';
+import { AI_SUGGESTIONS_MODE_PREF_KEY } from '@/domain/ai-suggestions-pref';
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { SupabaseRequestError } from '@/supabase/client';
 import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
@@ -231,6 +232,43 @@ test('a manual "Suggest with AI" request in flight is counted even though it nev
   // Nothing else is active — uploads are done and metadata is already
   // complete — so this is a lone AI stage, and per the earlier fix (a lone
   // non-upload stage must still show) it renders on its own.
+  await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
+  expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
+  expect(screen.getByText('1 bookmark')).toBeTruthy();
+});
+
+test('a manual AI request stays visible even when aiSuggestionsMode is "off" — manual calls are not gated on that preference (Codex review, PR #670)', async () => {
+  const MANUAL_ID = '7e64cf1e-0000-4000-8000-000000000004';
+  fakeRepo.__reset([makeStoredBookmark({ id: MANUAL_ID, metadata_status: 'complete' })]);
+  await fakeRepo.repository.setMeta(AI_SUGGESTIONS_MODE_PREF_KEY, 'off');
+  // Never resolves, same as the sibling test above — keeps the manual
+  // request "in flight" for the duration of the assertions.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(() => new Promise(() => {}));
+
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const screen = await render(
+    <BookmarksProvider>
+      <Probe />
+      <SettingsScreen />
+    </BookmarksProvider>,
+  );
+
+  await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
+  await waitFor(() => expect(storeRef.current?.lastPulledAt).not.toBeNull());
+
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(MANUAL_ID);
+  });
+  await waitFor(() => expect(storeRef.current!.isEnriching(MANUAL_ID)).toBe(true));
+
+  // Before this fix, the breakdown's `aiSuggestionsMode === "off"` branch
+  // zeroed the count unconditionally, hiding this in-flight manual request
+  // and leaving the headline at "All backed up" with no trace of real work.
   await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
   expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText('1 bookmark')).toBeTruthy();

@@ -766,20 +766,30 @@ export default function SettingsScreen() {
   const uploadingCount = waiting; // same value as today's headline count
   const fetchingInfoCount = diagnosticStats.metadata.todo;
   // The AI dispatch loop won't start new local (trigger/dispatch/retry) work
-  // while any queue entry is still pending/syncing (see the loop's own queue
-  // check in store/bookmarks.tsx) — and a paused sync with items still
-  // queued can never clear that gate. Only the confirmed server-queued
-  // subset keeps draining regardless (same distinction the pre-existing
-  // aiQueueBacklog row already draws for aiSuggestionsMode === "off"), so
-  // that's all this row should claim is "active" in that state (Codex
-  // review, PR #670).
-  const localAiWorkBlockedByPause = syncPaused && uploadingCount > 0;
+  // while any queue entry is pending or syncing (see the loop's own queue
+  // check in store/bookmarks.tsx) — and a paused sync can never clear that
+  // gate for such entries. Checked against those two statuses specifically,
+  // not the broader `waiting`/uploadingCount (which also includes 'failed'
+  // entries that do NOT block the drain loop) — a queue holding only failed
+  // entries while paused doesn't actually block local AI work (Codex review,
+  // PR #670).
+  const queueBlocksAiDispatch = queue.some(
+    (entry) =>
+      entry.sync_status === "pending" || entry.sync_status === "syncing",
+  );
+  const localAiWorkBlockedByPause = syncPaused && queueBlocksAiDispatch;
+  // Only the confirmed server-queued subset keeps draining regardless of the
+  // pause block (same distinction the pre-existing aiQueueBacklog row already
+  // draws for aiSuggestionsMode === "off"). A manual "Suggest with AI"
+  // request in flight is added on top unconditionally — it isn't queued
+  // work paced by the auto backlog, so it's never frozen by "off" mode or
+  // blocked by a paused upload queue (Codex review, PR #670).
+  const aiBacklogCount = localAiWorkBlockedByPause
+    ? diagnosticStats.ai.serverQueued
+    : diagnosticStats.ai.todo;
   const aiCount =
-    aiSuggestionsMode === "off"
-      ? 0
-      : localAiWorkBlockedByPause
-        ? diagnosticStats.ai.serverQueued
-        : diagnosticStats.ai.todo;
+    (aiSuggestionsMode === "off" ? 0 : aiBacklogCount) +
+    diagnosticStats.ai.manualInFlight;
   const aiQuotaReached = aiQuotaExceeded !== null;
   const syncStages = [
     // "Pause sync" only gates syncNow's network phases — enrichInBackground
