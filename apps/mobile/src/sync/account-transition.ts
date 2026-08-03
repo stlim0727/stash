@@ -22,7 +22,7 @@
 import { createPayloadFromBookmark } from '@/domain/create-payload';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import { recordLog } from '@/observability/log-buffer';
-import type { BookmarkRepository } from '@/storage/types';
+import type { BookmarkRepository, IdentityRekeyState } from '@/storage/types';
 import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
 
 export interface SyncedUserRef {
@@ -217,8 +217,10 @@ export async function applyAccountTransition(
    *    cross-account leak.
    */
   tagState: {
-    rehome?: (idMap: Map<string, string>) => void;
-    drop?: (ids: string[]) => void;
+    rehome?: (
+      idMap: Map<string, string>,
+    ) => void | IdentityRekeyState | Promise<void | IdentityRekeyState>;
+    drop?: (ids: string[]) => void | Promise<void>;
   } = {},
 ): Promise<void> {
   if (plan.rehome.length > 0) {
@@ -263,13 +265,21 @@ export async function applyAccountTransition(
     // Re-key tag ops/links onto the new local ids so the carried-over tags
     // upload against the re-homed bookmark instead of an id the new account
     // never had.
-    tagState.rehome?.(idMap);
+    const identityState = await tagState.rehome?.(idMap);
     await ensureRepositoryReady();
-    for (const [oldId, rehomed] of rehomedById) {
-      await repository.replaceBookmark(oldId, rehomed);
-    }
-    for (const entry of newEntries) {
-      await repository.enqueue(entry);
+    const replacements = [...rehomedById].map(([previousId, bookmark]) => ({
+      previousId,
+      bookmark,
+    }));
+    if (identityState && repository.replaceBookmarkIdentities) {
+      await repository.replaceBookmarkIdentities(replacements, newEntries, identityState);
+    } else {
+      for (const { previousId, bookmark } of replacements) {
+        await repository.replaceBookmark(previousId, bookmark);
+      }
+      for (const entry of newEntries) {
+        await repository.enqueue(entry);
+      }
     }
   }
   if (plan.drop.length > 0) {
@@ -295,7 +305,7 @@ export async function applyAccountTransition(
     // Purge the dropped rows' tag state too, symmetric to the re-home re-key:
     // otherwise account A's pending tag ops/links leak into account B's session
     // and syncTagOps uploads them as B.
-    tagState.drop?.(plan.drop);
+    await tagState.drop?.(plan.drop);
     await ensureRepositoryReady();
     await Promise.all(plan.drop.map((id) => repository.deleteBookmark(id)));
     // Remove the queue entries durably too, not just in memory — otherwise the

@@ -41,7 +41,10 @@ bugs below) let them race each other.
   - `importBookmarks` — the `notReady` guard sits at the top, before the
     dedup `seen` set is built. `localCreateFlushesInFlight` is incremented
     right after the optimistic state update and decremented in the flush's
-    `.finally()`.
+    `.finally()`. Parsed tags are written to the existing tag outbox in the
+    same durable import batch. Parsed collection names use a separate durable
+    assignment outbox, consumed only after the bookmark has a confirmed remote
+    identity; failures remain for manual sync or restart retry.
   - `syncNow` — guard order is `syncInFlight` → `localCreateFlushesInFlight`
     → `!auth.session` → `syncPausedRef` (the paused branch does its own
     lightweight account-mismatch check, see `reconcileAccountTransition`)

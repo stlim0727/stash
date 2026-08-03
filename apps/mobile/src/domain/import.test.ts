@@ -75,6 +75,7 @@ test('parseJsonBackup reads url, title, notes, tags, and collection name', () =>
     ],
   });
   const [item] = parseJsonBackup(json);
+  assert.equal(item?.source, 'stash-backup');
   assert.equal(item?.url, 'https://example.com/a');
   assert.equal(item?.title, 'A');
   assert.equal(item?.notes, 'my note');
@@ -122,6 +123,7 @@ test('parseNetscapeHtml reads top-level links with HREF, title, and TAGS', () =>
   const items = parseNetscapeHtml(html);
   assert.equal(items.length, 1);
   assert.equal(items[0]?.url, 'https://example.com/a');
+  assert.equal(items[0]?.source, 'netscape-html');
   assert.equal(items[0]?.title, 'Example A');
   assert.deepEqual(items[0]?.tags, ['reading', 'tech']);
   assert.equal(items[0]?.collection, null);
@@ -217,6 +219,7 @@ test('parsePocketCsv maps url/title/tags by header and splits tags on a pipe', (
   const items = parsePocketCsv(csv);
   assert.equal(items.length, 2);
   assert.deepEqual(items[0], {
+    source: 'pocket-csv',
     url: 'https://example.com/a',
     title: 'My Article',
     notes: null,

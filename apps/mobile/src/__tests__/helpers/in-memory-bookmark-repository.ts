@@ -119,8 +119,12 @@ export class InMemoryBookmarkRepository implements BookmarkRepository {
   async insertImportBatch(
     bookmarks: Bookmark[],
     entries: LocalPendingBookmark[],
+    options?: { metaUpdates?: Record<string, string> },
   ): Promise<void> {
     const next = this.inspect();
+    if (options?.metaUpdates) {
+      next.meta = { ...next.meta, ...clone(options.metaUpdates) };
+    }
     for (const bookmark of bookmarks) {
       next.bookmarks = upsertById(next.bookmarks, bookmark);
     }

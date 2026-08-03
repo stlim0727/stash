@@ -27,6 +27,16 @@ export interface CreateSyncCompletion {
   originalLocalId?: string;
 }
 
+export interface ImportBatchOptions {
+  /** Meta snapshots that must exist whenever any imported bookmark does. */
+  metaUpdates?: Record<string, string>;
+}
+
+export interface IdentityRekeyState {
+  metaUpdates: Record<string, string>;
+  tagData: TagData;
+}
+
 /**
  * Durable local storage contract for bookmarks and the offline sync queue.
  *
@@ -49,6 +59,12 @@ export interface BookmarkRepository {
   updateBookmark(bookmark: Bookmark): Promise<void>;
   /** Atomically swap a row's identity, e.g. local ID -> remote ID after sync. */
   replaceBookmark(previousId: string, bookmark: Bookmark): Promise<void>;
+  /** Atomically rehome bookmark ids, their create queue, and id-keyed organization state. */
+  replaceBookmarkIdentities?(
+    replacements: Array<{ previousId: string; bookmark: Bookmark }>,
+    entries: LocalPendingBookmark[],
+    state: IdentityRekeyState,
+  ): Promise<void>;
   /**
    * Atomically finish a bulk create chunk: each bookmark's updated fields
    * (sync_status, ever_synced, etc.) and its completed create queue row are
@@ -61,7 +77,11 @@ export interface BookmarkRepository {
    * Atomically insert a batch of imported bookmarks and their pending create queue
    * entries in a single transaction (Sentry STASH-3S / STASH-3T).
    */
-  insertImportBatch?(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void>;
+  insertImportBatch?(
+    bookmarks: Bookmark[],
+    entries: LocalPendingBookmark[],
+    options?: ImportBatchOptions,
+  ): Promise<void>;
   deleteBookmark(id: string): Promise<void>;
   listQueue(): Promise<LocalPendingBookmark[]>;
   enqueue(entry: LocalPendingBookmark): Promise<void>;

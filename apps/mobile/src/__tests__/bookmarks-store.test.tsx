@@ -28,6 +28,7 @@ jest.mock('@/domain/enrichment', () => ({
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
 import { clearLogEntries, getLogEntries } from '@/observability/log-buffer';
+import { PENDING_IMPORT_COLLECTIONS_KEY } from '@/domain/pending-import-collections';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 
@@ -237,6 +238,39 @@ test('re-adding a trashed URL creates a fresh active bookmark instead of folding
   expect(status).toBe('created');
   expect(result.current.inbox).toHaveLength(1);
   expect(result.current.trash).toHaveLength(1);
+});
+
+test('emptyTrash coalesces organization persistence for the full deleted set', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: 'trash-bulk-1',
+      deleted_at: '2026-06-13T00:00:00.000Z',
+    }),
+    makeStoredBookmark({
+      id: 'trash-bulk-2',
+      url: 'https://example.com/trash-2',
+      url_hash: 'https://example.com/trash-2',
+      deleted_at: '2026-06-13T00:00:00.000Z',
+    }),
+  ]);
+  const { result } = await renderStore();
+  const setMeta = jest.spyOn(fakeRepo.repository, 'setMeta');
+  const replaceTagData = jest.spyOn(fakeRepo.repository, 'replaceTagData');
+
+  await act(async () => {
+    result.current.emptyTrash();
+  });
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(0));
+
+  expect(
+    setMeta.mock.calls.filter(([key]) => key === 'pending_tag_ops'),
+  ).toHaveLength(1);
+  expect(
+    setMeta.mock.calls.filter(
+      ([key]) => key === PENDING_IMPORT_COLLECTIONS_KEY,
+    ),
+  ).toHaveLength(1);
+  expect(replaceTagData).toHaveBeenCalledTimes(1);
 });
 
 test('deleting a local bookmark also clears its queued upload', async () => {
@@ -518,6 +552,47 @@ test('import: an enrichment finishing early never gets clobbered by the row\'s l
       expect(row.title).toBe(`Enriched ${row.url}`);
     }
   });
+});
+
+test('import: tags and collection intent are written durably', async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    result.current.importBookmarks([
+      {
+        source: 'stash-backup',
+        url: 'https://example.com/organized',
+        title: 'Organized',
+        notes: null,
+        tags: ['reading', 'research'],
+        collection: 'Projects',
+      },
+    ]);
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  const bookmarkId = fakeRepo.__bookmarks()[0]!.id;
+  expect(
+    result.current
+      .getTagsForBookmark(bookmarkId)
+      .map((tag) => tag.name)
+      .sort(),
+  ).toEqual(['reading', 'research']);
+  expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ bookmark_id: bookmarkId, tag_name: 'reading' }),
+      expect.objectContaining({ bookmark_id: bookmarkId, tag_name: 'research' }),
+    ]),
+  );
+  expect(
+    JSON.parse(fakeRepo.__meta(PENDING_IMPORT_COLLECTIONS_KEY) ?? '[]'),
+  ).toEqual([
+    expect.objectContaining({
+      bookmark_id: bookmarkId,
+      collection_name: 'Projects',
+      status: 'pending',
+    }),
+  ]);
 });
 
 test('import: logs a start/finish summary (Sentry STASH-3K/3M instrumentation)', async () => {

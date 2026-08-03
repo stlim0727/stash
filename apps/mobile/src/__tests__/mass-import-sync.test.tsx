@@ -14,6 +14,15 @@ const mockRealSession = {
   expires_at: Math.floor(Date.now() / 1000) + 3600,
   user: { id: "real-user", is_anonymous: false, email: "user@example.com" },
 };
+const mockOtherRealSession = {
+  ...mockRealSession,
+  access_token: "other-token",
+  user: {
+    id: "other-real-user",
+    is_anonymous: false,
+    email: "other@example.com",
+  },
+};
 
 jest.mock("@/supabase/auth-provider", () => {
   let state = {
@@ -37,12 +46,50 @@ let mockCreateNetworkErrorOnce = false;
 
 jest.mock("@/api/bookmarks", () => {
   let remoteRows: Array<{ id: string; url: string | null }> = [];
+  let remoteCollections: Array<{
+    id: string;
+    user_id: string;
+    name: string;
+    description: null;
+    created_at: string;
+    updated_at: string;
+  }> = [];
   const listBookmarksUpdatedSince = jest.fn(async () => []);
   const listBookmarkIds = jest.fn(async () => remoteRows.map((r) => r.id));
   const empty = async () => [];
   const resetLibraryMock = jest.fn(async () => ({
     bookmarks: remoteRows.length,
   }));
+  const createCollectionMock = jest.fn(async (name: string) => {
+    const now = new Date().toISOString();
+    const collection = {
+      id: `collection-${remoteCollections.length + 1}`,
+      user_id: "real-user",
+      name,
+      description: null,
+      created_at: now,
+      updated_at: now,
+    };
+    remoteCollections.push(collection);
+    return collection;
+  });
+  const updateBookmarkMock = jest.fn(
+    async (id: string, payload: Record<string, unknown>) => ({
+      id,
+      ...payload,
+      updated_at: new Date().toISOString(),
+    }),
+  );
+  const addTagsMock = jest.fn(async ({ tags }: { tags: string[] }) =>
+    tags.map((name, index) => ({
+      id: `tag-${index + 1}`,
+      user_id: "real-user",
+      name,
+      slug: name.toLowerCase(),
+      source: "user" as const,
+      created_at: new Date().toISOString(),
+    })),
+  );
 
   const createBookmarkMock = jest.fn(
     async (payload: { url?: string | null; id?: string }) => {
@@ -101,6 +148,7 @@ jest.mock("@/api/bookmarks", () => {
   return {
     __setRemoteRows: (rows: Array<{ id: string; url: string | null }>) => {
       remoteRows = [...rows];
+      remoteCollections = [];
     },
     __setDuplicateMap: (map: Record<string, string>) => {
       mockServerDuplicateUrlMap = map;
@@ -111,17 +159,22 @@ jest.mock("@/api/bookmarks", () => {
     __createBookmarkMock: createBookmarkMock,
     __createBookmarksMock: createBookmarksMock,
     __resetLibraryMock: resetLibraryMock,
+    __createCollectionMock: createCollectionMock,
+    __updateBookmarkMock: updateBookmarkMock,
+    __addTagsMock: addTagsMock,
     createBookmarkApi: () => ({
       listBookmarksUpdatedSince,
       listBookmarkIds,
       listEnrichmentsUpdatedSince: empty,
       listTags: empty,
       listBookmarkTags: empty,
-      listCollections: empty,
+      listCollections: async () => [...remoteCollections],
       createBookmark: createBookmarkMock,
       createBookmarks: createBookmarksMock,
-      updateBookmark: async (_id: string, payload: unknown) =>
-        payload as Bookmark,
+      updateBookmark: updateBookmarkMock,
+      addTags: addTagsMock,
+      removeTags: jest.fn(async () => undefined),
+      createCollection: createCollectionMock,
       resetLibrary: resetLibraryMock,
     }),
   };
@@ -144,6 +197,9 @@ const apiMock = jest.requireMock("@/api/bookmarks") as {
   __createBookmarkMock: jest.Mock;
   __createBookmarksMock: jest.Mock;
   __resetLibraryMock: jest.Mock;
+  __createCollectionMock: jest.Mock;
+  __updateBookmarkMock: jest.Mock;
+  __addTagsMock: jest.Mock;
 };
 const authMock = jest.requireMock("@/supabase/auth-provider") as {
   __setAuth: (next: Record<string, unknown>) => void;
@@ -178,6 +234,9 @@ beforeEach(() => {
   apiMock.__createBookmarkMock.mockClear();
   apiMock.__createBookmarksMock.mockClear();
   apiMock.__resetLibraryMock.mockClear();
+  apiMock.__createCollectionMock.mockClear();
+  apiMock.__updateBookmarkMock.mockClear();
+  apiMock.__addTagsMock.mockClear();
   authMock.__setAuth({
     status: "authenticated",
     session: mockRealSession,
@@ -211,6 +270,290 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     expect(fakeRepo.__bookmarks()).toHaveLength(40);
   });
 
+  test("restores an imported collection through the durable post-create outbox", async () => {
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/organized",
+          title: "Organized",
+          notes: null,
+          tags: [],
+          collection: "Projects",
+        },
+      ]);
+    });
+
+    await waitFor(
+      () => expect(apiMock.__createCollectionMock).toHaveBeenCalledWith("Projects"),
+      { timeout: 5_000 },
+    );
+    const collectionId = apiMock.__createCollectionMock.mock.results[0]?.value
+      ? (await apiMock.__createCollectionMock.mock.results[0].value).id
+      : null;
+    expect(collectionId).toBe("collection-1");
+    await waitFor(() =>
+      expect(apiMock.__updateBookmarkMock).toHaveBeenCalledWith(
+        expect.any(String),
+        { collection_id: "collection-1" },
+      ),
+    );
+    await waitFor(() =>
+      expect(result.current.inbox[0]?.collection_id).toBe("collection-1"),
+    );
+    expect(fakeRepo.__meta("pending_import_collections")).toBe("[]");
+  });
+
+  test("keeps a failed collection intent and retries it on manual sync", async () => {
+    apiMock.__createCollectionMock.mockRejectedValueOnce(
+      new Error("temporary collection failure"),
+    );
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "netscape-html",
+          url: "https://example.com/retry-folder",
+          title: "Retry folder",
+          notes: null,
+          tags: [],
+          collection: "Retry Projects",
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      const pending = JSON.parse(
+        fakeRepo.__meta("pending_import_collections") ?? "[]",
+      );
+      expect(pending[0]).toEqual(
+        expect.objectContaining({
+          collection_name: "Retry Projects",
+          status: "failed",
+          last_error: "temporary collection failure",
+        }),
+      );
+    });
+
+    await act(async () => {
+      await result.current.syncNow();
+    });
+
+    await waitFor(() =>
+      expect(fakeRepo.__meta("pending_import_collections")).toBe("[]"),
+    );
+    expect(apiMock.__createCollectionMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("a manual collection move supersedes a failed imported collection intent", async () => {
+    apiMock.__createCollectionMock.mockRejectedValueOnce(
+      new Error("temporary collection failure"),
+    );
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "netscape-html",
+          url: "https://example.com/manual-folder-wins",
+          title: "Manual folder wins",
+          notes: null,
+          tags: [],
+          collection: "Imported folder",
+        },
+      ]);
+    });
+    await waitFor(() => {
+      const pending = JSON.parse(
+        fakeRepo.__meta("pending_import_collections") ?? "[]",
+      );
+      expect(pending[0]?.status).toBe("failed");
+    });
+
+    const bookmarkId = result.current.inbox[0]!.id;
+    await act(async () => {
+      result.current.assignCollection(bookmarkId, "manual-collection");
+      await result.current.syncNow();
+    });
+
+    await waitFor(() =>
+      expect(fakeRepo.__meta("pending_import_collections")).toBe("[]"),
+    );
+    expect(apiMock.__createCollectionMock).toHaveBeenCalledTimes(1);
+    expect(apiMock.__updateBookmarkMock).not.toHaveBeenCalledWith(
+      bookmarkId,
+      { collection_id: "collection-1" },
+    );
+  });
+
+  test("a manual move during collection lookup wins over the in-flight import intent", async () => {
+    const collectionGate = deferred<{
+      id: string;
+      user_id: string;
+      name: string;
+      description: null;
+      created_at: string;
+      updated_at: string;
+    }>();
+    apiMock.__createCollectionMock.mockImplementationOnce(
+      async () => collectionGate.promise,
+    );
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "netscape-html",
+          url: "https://example.com/in-flight-folder",
+          title: "In-flight folder",
+          notes: null,
+          tags: [],
+          collection: "Imported folder",
+        },
+      ]);
+    });
+    await waitFor(() =>
+      expect(apiMock.__createCollectionMock).toHaveBeenCalledWith(
+        "Imported folder",
+      ),
+    );
+    const bookmarkId = result.current.inbox[0]!.id;
+    await act(async () => {
+      result.current.assignCollection(bookmarkId, "manual-collection");
+      collectionGate.resolve({
+        id: "in-flight-imported-collection",
+        user_id: "real-user",
+        name: "Imported folder",
+        description: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSyncing).toBe(false));
+    expect(result.current.inbox[0]?.collection_id).toBe("manual-collection");
+    expect(apiMock.__updateBookmarkMock).not.toHaveBeenCalledWith(bookmarkId, {
+      collection_id: "in-flight-imported-collection",
+    });
+  });
+
+  test("does not reuse a same-named collection owned by the previous account", async () => {
+    const now = new Date().toISOString();
+    fakeRepo.__reset([], {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        {
+          id: "foreign-collection",
+          user_id: "departed-user",
+          name: "Projects",
+          description: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ],
+    });
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/owned-folder-only",
+          title: "Owned folder only",
+          notes: null,
+          tags: [],
+          collection: "Projects",
+        },
+      ]);
+    });
+
+    await waitFor(() =>
+      expect(apiMock.__createCollectionMock).toHaveBeenCalledWith("Projects"),
+    );
+    expect(apiMock.__updateBookmarkMock).not.toHaveBeenCalledWith(
+      expect.any(String),
+      { collection_id: "foreign-collection" },
+    );
+  });
+
+  test("re-drives imported tags after their bookmark create finishes", async () => {
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "pocket-csv",
+          url: "https://example.com/imported-tag-redrive",
+          title: "Imported tag redrive",
+          notes: null,
+          tags: ["Reading"],
+          collection: null,
+        },
+      ]);
+    });
+
+    await waitFor(
+      () =>
+        expect(apiMock.__addTagsMock).toHaveBeenCalledWith(
+          expect.objectContaining({ tags: ["Reading"] }),
+        ),
+      { timeout: 5_000 },
+    );
+    await waitFor(() =>
+      expect(fakeRepo.__meta("pending_tag_ops")).toBe("[]"),
+    );
+  });
+
+  test("reconciles an account switch before uploading an in-flight import", async () => {
+    const { result, rerender } = await renderReadyStore();
+    await act(async () => {
+      result.current.setSyncPaused(true);
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/account-switch-import",
+          title: "Account switch import",
+          notes: null,
+          tags: [],
+          collection: "Carried import folder",
+        },
+      ]);
+    });
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+
+    authMock.__setAuth({
+      status: "authenticated",
+      session: mockOtherRealSession,
+      userId: "other-real-user",
+    });
+    await act(async () => {
+      rerender(undefined);
+    });
+    await act(async () => {
+      result.current.setSyncPaused(false);
+    });
+
+    await waitFor(
+      () => expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1),
+      { timeout: 5_000 },
+    );
+    await waitFor(() =>
+      expect(result.current.inbox[0]?.collection_id).toBe("collection-1"),
+    );
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
+    await waitFor(() => expect(result.current.isSyncing).toBe(false));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    await waitFor(() => expect(result.current.isSyncing).toBe(false));
+    expect(result.current.inbox).toHaveLength(1);
+    expect(fakeRepo.__meta("pending_import_collections")).toBe("[]");
+  });
+
   test("syncs bulk import and adopts server duplicate IDs (STASH-3Q) without duplicating local rows", async () => {
     const EXISTING_SERVER_ID = "00000000-0000-4000-8000-0000000000ef";
     const DUP_URL = "https://example.com/already-on-server";
@@ -227,7 +570,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
         title: "Duplicate Item",
         notes: null,
         tags: [],
-        collection: null,
+        collection: "Existing duplicate folder",
       },
       {
         url: "https://example.com/fresh-item-1",
@@ -262,6 +605,14 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     expect(dupBookmark).toBeDefined();
     expect(dupBookmark?.id).toBe(EXISTING_SERVER_ID);
     expect(dupBookmark?.sync_status).toBe("synced");
+    await waitFor(
+      () =>
+        expect(apiMock.__updateBookmarkMock).toHaveBeenCalledWith(
+          EXISTING_SERVER_ID,
+          { collection_id: "collection-1" },
+        ),
+      { timeout: 5_000 },
+    );
 
     // Ensure library total count is exactly 3 (no duplication of duplicate item)
     expect(result.current.inbox).toHaveLength(3);

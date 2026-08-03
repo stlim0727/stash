@@ -52,6 +52,17 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         .filter((b) => b.id === previousId || b.id !== bookmark.id)
         .map((b) => (b.id === previousId ? bookmark : b));
     },
+    replaceBookmarkIdentities: async (replacements, entries, state) => {
+      for (const { previousId, bookmark } of replacements) {
+        bookmarks = bookmarks
+          .filter((b) => b.id === previousId || b.id !== bookmark.id)
+          .map((b) => (b.id === previousId ? bookmark : b));
+      }
+      const entryIds = new Set(entries.map((entry) => entry.local_id));
+      queue = [...queue.filter((entry) => !entryIds.has(entry.local_id)), ...entries];
+      meta = { ...meta, ...state.metaUpdates };
+      tagData = state.tagData;
+    },
     completeCreateSyncBatch: async (completions) => {
       for (const { bookmark, entry, originalLocalId } of completions) {
         const stored = queue.find((queued) => queued.local_id === entry.local_id);
@@ -78,7 +89,10 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         queue = queue.filter((queued) => queued.local_id !== entry.local_id);
       }
     },
-    insertImportBatch: async (importedBookmarks, importedEntries) => {
+    insertImportBatch: async (importedBookmarks, importedEntries, options) => {
+      if (options?.metaUpdates) {
+        meta = { ...meta, ...options.metaUpdates };
+      }
       for (let i = 0; i < importedBookmarks.length; i += 1) {
         await repository.insertBookmark(importedBookmarks[i]);
         await repository.enqueue(importedEntries[i]);

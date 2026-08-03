@@ -1,5 +1,10 @@
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
-import type { BookmarkRepository, CreateSyncCompletion, TagData } from '@/storage/types';
+import type {
+  BookmarkRepository,
+  CreateSyncCompletion,
+  IdentityRekeyState,
+  TagData,
+} from '@/storage/types';
 
 /**
  * Web/dev fallback store. Uses localStorage when available so bookmarks
@@ -14,8 +19,16 @@ const SEEDED_KEY = 'stash.seeded';
 const META_KEY = 'stash.meta';
 const ENRICHMENTS_KEY = 'stash.enrichments';
 const TAG_DATA_KEY = 'stash.tagData';
+const IDENTITY_REKEY_COMMIT_KEY = 'stash.identityRekeyCommit';
 
 const EMPTY_TAG_DATA: TagData = { tags: [], bookmarkTags: [], collections: [] };
+
+interface IdentityRekeyCommit {
+  bookmarks: Bookmark[];
+  queue: LocalPendingBookmark[];
+  meta: Record<string, string>;
+  tagData: TagData;
+}
 
 function storageAvailable(): boolean {
   return typeof localStorage !== 'undefined';
@@ -63,6 +76,21 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.meta = this.read<Record<string, string>>(META_KEY, {});
     this.enrichments = this.read<AIEnrichment[]>(ENRICHMENTS_KEY, []);
     this.tagData = this.read<TagData>(TAG_DATA_KEY, EMPTY_TAG_DATA);
+    const interruptedRekey = this.read<IdentityRekeyCommit | null>(
+      IDENTITY_REKEY_COMMIT_KEY,
+      null,
+    );
+    if (interruptedRekey) {
+      this.bookmarks = interruptedRekey.bookmarks;
+      this.queue = interruptedRekey.queue;
+      this.meta = interruptedRekey.meta;
+      this.tagData = interruptedRekey.tagData;
+      this.write(BOOKMARKS_KEY, this.bookmarks);
+      this.write(QUEUE_KEY, this.queue);
+      this.write(META_KEY, this.meta);
+      this.write(TAG_DATA_KEY, this.tagData);
+      localStorage.removeItem(IDENTITY_REKEY_COMMIT_KEY);
+    }
     if (!seeded) {
       this.bookmarks = [...seed];
       this.write(BOOKMARKS_KEY, this.bookmarks);
@@ -112,6 +140,42 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(BOOKMARKS_KEY, this.bookmarks);
   }
 
+  async replaceBookmarkIdentities(
+    replacements: Array<{ previousId: string; bookmark: Bookmark }>,
+    entries: LocalPendingBookmark[],
+    state: IdentityRekeyState,
+  ): Promise<void> {
+    let nextBookmarks = this.bookmarks;
+    for (const { previousId, bookmark } of replacements) {
+      nextBookmarks = nextBookmarks
+        .filter((existing) => existing.id === previousId || existing.id !== bookmark.id)
+        .map((existing) => (existing.id === previousId ? bookmark : existing));
+    }
+    const entryIds = new Set(entries.map((entry) => entry.local_id));
+    const nextQueue = [
+      ...this.queue.filter((entry) => !entryIds.has(entry.local_id)),
+      ...entries,
+    ];
+    const commit: IdentityRekeyCommit = {
+      bookmarks: nextBookmarks,
+      queue: nextQueue,
+      meta: { ...this.meta, ...state.metaUpdates },
+      tagData: state.tagData,
+    };
+    this.write(IDENTITY_REKEY_COMMIT_KEY, commit);
+    this.bookmarks = commit.bookmarks;
+    this.queue = commit.queue;
+    this.meta = commit.meta;
+    this.tagData = commit.tagData;
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+    this.write(QUEUE_KEY, this.queue);
+    this.write(META_KEY, this.meta);
+    this.write(TAG_DATA_KEY, this.tagData);
+    if (storageAvailable()) {
+      localStorage.removeItem(IDENTITY_REKEY_COMMIT_KEY);
+    }
+  }
+
   async completeCreateSyncBatch(completions: CreateSyncCompletion[]): Promise<void> {
     const applied = completions.filter((completion) => {
       const stored = this.queue.find((entry) => entry.local_id === completion.entry.local_id);
@@ -150,9 +214,17 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(QUEUE_KEY, this.queue);
   }
 
-  async insertImportBatch(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void> {
+  async insertImportBatch(
+    bookmarks: Bookmark[],
+    entries: LocalPendingBookmark[],
+    options?: { metaUpdates?: Record<string, string> },
+  ): Promise<void> {
     if (bookmarks.length === 0) {
       return;
+    }
+    if (options?.metaUpdates) {
+      this.meta = { ...this.meta, ...options.metaUpdates };
+      this.write(META_KEY, this.meta);
     }
     const existingIds = new Set(this.bookmarks.map((b) => b.id));
     const newBookmarks = bookmarks.filter((b) => !existingIds.has(b.id));

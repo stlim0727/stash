@@ -78,6 +78,14 @@ import {
   rekeyPendingTagOps,
   type PendingTagOp,
 } from "@/domain/pending-tags";
+import {
+  PENDING_IMPORT_COLLECTIONS_KEY,
+  dropPendingImportCollections,
+  enqueuePendingImportCollection,
+  parsePendingImportCollections,
+  rekeyPendingImportCollections,
+  type PendingImportCollection,
+} from "@/domain/pending-import-collections";
 import { useI18n } from "@/i18n";
 import { recordLog } from "@/observability/log-buffer";
 import { armHydrationWatchdog } from "@/observability/hydration-watchdog";
@@ -91,7 +99,11 @@ import { registerForForegroundState } from "@/storage/sqlite-app-lifecycle";
 import { repository } from "@/storage/repository";
 import { copyImageToLibrary } from "@/storage/image-store";
 import type { EnrichmentMetadataHint } from "@/api/bookmarks";
-import type { CreateSyncCompletion, TagData } from "@/storage/types";
+import type {
+  CreateSyncCompletion,
+  IdentityRekeyState,
+  TagData,
+} from "@/storage/types";
 import { useSupabaseAuth } from "@/supabase/auth-provider";
 import { useRealtimeSync } from "@/supabase/realtime";
 import { SupabaseRequestError } from "@/supabase/client";
@@ -223,8 +235,9 @@ interface BookmarksContextValue {
   /**
    * Re-ingest items parsed from an imported file. Local-first like addBookmark:
    * each URL is added with pending states, deduped against the existing library
-   * (and within the batch). Returns a count summary. Note: tags/collections from
-   * the source are not restored yet — see the import UI copy.
+   * (and within the batch). Parsed tags are queued through the existing tag
+   * outbox; collection names use a restartable post-create assignment outbox.
+   * Returns a count summary.
    */
   importBookmarks: (items: ImportItem[]) => ImportSummary;
   /** Move a bookmark to the trash (soft delete). */
@@ -873,6 +886,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // tagData is the server snapshot with these layered on top.
   const [pendingTagOps, setPendingTagOps] = useState<PendingTagOp[]>([]);
   const pendingTagOpsRef = useRef<PendingTagOp[]>([]);
+  const [pendingImportCollections, setPendingImportCollections] = useState<
+    PendingImportCollection[]
+  >([]);
+  const pendingImportCollectionsRef = useRef<PendingImportCollection[]>([]);
   // Bookmark ids whose AI suggestions arrived unwitnessed (drives the Inbox
   // banner). The ref mirrors state so the arrival paths (auto enrichment, pull)
   // can read-modify-write synchronously across back-to-back updates.
@@ -1119,6 +1136,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .then(() => repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)))
       .catch((error) => logStorageError("tag ops", error));
   }, []);
+
+  const applyPendingImportCollections = useCallback(
+    (next: PendingImportCollection[]) => {
+      pendingImportCollectionsRef.current = next;
+      setPendingImportCollections(next);
+      ensureRepositoryReady()
+        .then(() =>
+          repository.setMeta(
+            PENDING_IMPORT_COLLECTIONS_KEY,
+            JSON.stringify(next),
+          ),
+        )
+        .catch((error) => logStorageError("import collection ops", error));
+    },
+    [],
+  );
 
   // True once a bookmark's create has been confirmed synced at least once —
   // even if it currently reads `sync_status: 'pending'` again because of a
@@ -1886,6 +1919,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedTagData,
             storedPulledAt,
             storedTagOpsRaw,
+            storedImportCollectionsRaw,
             storedAiTriggerRaw,
             storedAiRetryRaw,
             storedAiServerQueuedRaw,
@@ -1902,6 +1936,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.listTagData(),
             repository.getMeta(LAST_PULLED_AT_KEY),
             repository.getMeta(PENDING_TAG_OPS_KEY),
+            repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
             repository.getMeta(PENDING_AI_TRIGGER_KEY),
             repository.getMeta(AI_RETRY_STATE_KEY),
             repository.getMeta(AI_SERVER_QUEUED_KEY),
@@ -2083,9 +2118,40 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 .catch((error) => logStorageError("blank-tag cleanup", error));
             }
             // Layer not-yet-synced local tag ops on top of the cached snapshot.
-            const storedOps = parseTagOps(storedTagOpsRaw);
+            const storedBookmarkIds = new Set(
+              storedBookmarks.map((bookmark) => bookmark.id),
+            );
+            const parsedStoredOps = parseTagOps(storedTagOpsRaw);
+            const storedOps = parsedStoredOps.filter((op) =>
+              storedBookmarkIds.has(op.bookmark_id),
+            );
+            if (storedOps.length !== parsedStoredOps.length) {
+              void repository
+                .setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(storedOps))
+                .catch((error) => logStorageError("orphan tag ops", error));
+            }
             pendingTagOpsRef.current = storedOps;
             setPendingTagOps(storedOps);
+            const parsedImportCollections = parsePendingImportCollections(
+              storedImportCollectionsRaw,
+            );
+            const storedImportCollections = parsedImportCollections.filter(
+              (item) => storedBookmarkIds.has(item.bookmark_id),
+            );
+            if (
+              storedImportCollections.length !== parsedImportCollections.length
+            ) {
+              void repository
+                .setMeta(
+                  PENDING_IMPORT_COLLECTIONS_KEY,
+                  JSON.stringify(storedImportCollections),
+                )
+                .catch((error) =>
+                  logStorageError("orphan import collection ops", error),
+                );
+            }
+            pendingImportCollectionsRef.current = storedImportCollections;
+            setPendingImportCollections(storedImportCollections);
             tagDataRef.current = applyPendingTagOps(
               cleanTagData,
               storedOps,
@@ -2582,10 +2648,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const activeLocalBookmarks = (
         bookmarksRef.current ?? loadedBookmarks
       ).filter((bookmark) => isActiveBookmark(bookmark));
-      const seen = new Set(
+      const bookmarkIdByDedupeKey = new Map(
         activeLocalBookmarks
-          .map((bookmark) => currentDedupeKey(bookmark))
-          .filter((hash): hash is string => hash !== null),
+          .map((bookmark) => [currentDedupeKey(bookmark), bookmark.id] as const)
+          .filter((entry): entry is [string, string] => entry[0] !== null),
+      );
+      const activeBookmarkById = new Map(
+        activeLocalBookmarks.map((bookmark) => [bookmark.id, bookmark]),
       );
       // Sentry STASH-3K/3M: a bulk import has repeatedly doubled a user's
       // library (their local total exactly 2x the cloud count) with no
@@ -2596,10 +2665,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // matches the library size but `duplicates` is still ~0 on a re-import).
       recordLog(
         "info",
-        `import: starting items=${items.length} activeLocal=${activeLocalBookmarks.length} seenKeys=${seen.size}`,
+        `import: starting items=${items.length} activeLocal=${activeLocalBookmarks.length} seenKeys=${bookmarkIdByDedupeKey.size}`,
       );
       const newBookmarks: Bookmark[] = [];
       const newEntries: LocalPendingBookmark[] = [];
+      let nextTagData = tagDataRef.current;
+      let nextTagOps = pendingTagOpsRef.current;
+      let nextImportCollections = pendingImportCollectionsRef.current;
+      let organizationChanged = false;
       let imported = 0;
       let duplicates = 0;
       let skipped = 0;
@@ -2619,62 +2692,104 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           skipped += 1;
           continue;
         }
-        if (seen.has(dedupeKey)) {
+        const existingId = bookmarkIdByDedupeKey.get(dedupeKey);
+        const isNew = existingId === undefined;
+        const id = existingId ?? makeBookmarkId();
+        if (!isNew) {
           duplicates += 1;
-          continue;
+        } else {
+          bookmarkIdByDedupeKey.set(dedupeKey, id);
         }
-        seen.add(dedupeKey);
-
-        const id = makeBookmarkId();
-        const clientId = makeClientId();
-        const title = item.title?.trim() ? item.title.trim() : null;
-        const notes = item.notes?.trim() ? item.notes.trim() : null;
-        newBookmarks.push({
-          id,
-          user_id: mockUserId,
-          url: normalized,
-          canonical_url: null,
-          url_hash: dedupeKey,
-          title,
-          title_is_derived: title ? false : undefined,
-          client_id: clientId,
-          description: null,
-          notes,
-          source_app: null,
-          content_type: "url",
-          preview_image_url: null,
-          favicon_url: null,
-          site_name: null,
-          collection_id: null,
-          is_archived: false,
-          deleted_at: null,
-          created_at: now,
-          updated_at: now,
-          last_saved_at: now,
-          metadata_status: "pending",
-          sync_status: "pending",
-        });
-        newEntries.push({
-          local_id: id,
-          remote_id: null,
-          operation: "create",
-          payload: {
+        if (isNew) {
+          const clientId = makeClientId();
+          const title = item.title?.trim() ? item.title.trim() : null;
+          const notes = item.notes?.trim() ? item.notes.trim() : null;
+          newBookmarks.push({
             id,
+            user_id: mockUserId,
             url: normalized,
-            title: title ?? undefined,
-            notes: notes ?? undefined,
+            canonical_url: null,
+            url_hash: dedupeKey,
+            title,
+            title_is_derived: title ? false : undefined,
             client_id: clientId,
-          },
-          sync_status: "pending",
-          retry_count: 0,
-          last_error: null,
-          created_at: now,
-          updated_at: now,
-        });
-        imported += 1;
+            description: null,
+            notes,
+            source_app: null,
+            content_type: "url",
+            preview_image_url: null,
+            favicon_url: null,
+            site_name: null,
+            collection_id: null,
+            is_archived: false,
+            deleted_at: null,
+            created_at: now,
+            updated_at: now,
+            last_saved_at: now,
+            metadata_status: "pending",
+            sync_status: "pending",
+          });
+          newEntries.push({
+            local_id: id,
+            remote_id: null,
+            operation: "create",
+            payload: {
+              id,
+              url: normalized,
+              title: title ?? undefined,
+              notes: notes ?? undefined,
+              client_id: clientId,
+            },
+            sync_status: "pending",
+            retry_count: 0,
+            last_error: null,
+            created_at: now,
+            updated_at: now,
+          });
+          imported += 1;
+        }
+
+        for (const tagName of item.tags) {
+          const op: PendingTagOp = {
+            id: makeUuid(),
+            bookmark_id: id,
+            tag_name: tagName,
+            op: "add",
+            source: "user",
+            confidence: null,
+            created_at: now,
+          };
+          nextTagData = applyTagOp(nextTagData, op, auth.userId ?? mockUserId);
+          nextTagOps = enqueueTagOp(nextTagOps, op);
+          organizationChanged = true;
+        }
+        const collectionName = item.collection?.trim();
+        const target = activeBookmarkById.get(id);
+        if (collectionName && !target?.collection_id) {
+          nextImportCollections = enqueuePendingImportCollection(
+            nextImportCollections,
+            {
+              bookmark_id: id,
+              collection_name: collectionName,
+              status: "pending",
+              last_error: null,
+              created_at: now,
+            },
+          );
+          organizationChanged = true;
+        }
       }
 
-      if (newBookmarks.length > 0) {
+      if (organizationChanged) {
+        pendingTagOpsRef.current = nextTagOps;
+        setPendingTagOps(nextTagOps);
+        tagDataRef.current = nextTagData;
+        setTagData(nextTagData);
+        pendingImportCollectionsRef.current = nextImportCollections;
+        setPendingImportCollections(nextImportCollections);
+      }
+
+      if (newBookmarks.length > 0 || organizationChanged) {
         setBookmarks((current) => [...newBookmarks, ...(current ?? [])]);
         setQueue((current) => [...current, ...newEntries]);
         localCreateFlushesInFlight.current += 1;
@@ -2703,8 +2818,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               recordLog("warn", "import: loop aborted by library reset");
               return;
             }
-            if (repository.insertImportBatch) {
-              await repository.insertImportBatch(newBookmarks, newEntries);
+            const metaUpdates = organizationChanged
+              ? {
+                  [PENDING_TAG_OPS_KEY]: JSON.stringify(nextTagOps),
+                  [PENDING_IMPORT_COLLECTIONS_KEY]: JSON.stringify(
+                    nextImportCollections,
+                  ),
+                }
+              : undefined;
+            if (repository.insertImportBatch && newBookmarks.length > 0) {
+              await repository.insertImportBatch(newBookmarks, newEntries, {
+                metaUpdates,
+              });
               const ENRICH_BATCH_SIZE = 10;
               for (let i = 0; i < newBookmarks.length; i += ENRICH_BATCH_SIZE) {
                 if (resetEpoch.current !== epochAtStart) {
@@ -2719,6 +2844,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 }
               }
             } else {
+              if (metaUpdates) {
+                for (const [key, value] of Object.entries(metaUpdates)) {
+                  await repository.setMeta(key, value);
+                }
+              }
               for (let i = 0; i < newBookmarks.length; i += 1) {
                 if (resetEpoch.current !== epochAtStart) {
                   recordLog("warn", "import: loop aborted by library reset");
@@ -2742,10 +2872,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             for (const bookmark of newBookmarks) {
               releaseAndEnrich(bookmark);
             }
-            if (
-              localCreateFlushesInFlight.current === 0 &&
-              syncPendingRef.current
-            ) {
+            if (localCreateFlushesInFlight.current === 0) {
+              syncPendingRef.current = false;
               setTimeout(() => {
                 void syncNowRef.current?.().catch(() => {});
               }, 50);
@@ -2759,7 +2887,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       );
       return { imported, duplicates, skipped };
     },
-    [loadedBookmarks, enrichInBackground, isSyncingState],
+    [auth.userId, loadedBookmarks, enrichInBackground, isSyncingState],
   );
 
   // Record that the user just opened a bookmark (viewed its Detail or opened its
@@ -2983,6 +3111,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const deleteBookmark = useCallback(
     (id: string) => {
       deletedIds.current.add(id);
+      applyTagOps(
+        dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, [id]),
+      );
+      applyPendingImportCollections(
+        dropPendingImportCollections(
+          pendingImportCollectionsRef.current,
+          [id],
+        ),
+      );
+      applyTagData({
+        ...tagDataRef.current,
+        bookmarkTags: tagDataRef.current.bookmarkTags.filter(
+          (link) => link.bookmark_id !== id,
+        ),
+      });
       const hadSyncedOnce = hasSyncedOnce(id);
       setBookmarks((current) =>
         current === null ? current : current.filter((b) => b.id !== id),
@@ -3021,6 +3164,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .catch((error) => logStorageError("delete bookmark", error));
     },
     [
+      applyPendingImportCollections,
+      applyTagData,
+      applyTagOps,
       enqueueMutation,
       clearAiRetry,
       syncAiRetryIds,
@@ -3033,10 +3179,70 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const trashed = (bookmarksRef.current ?? []).filter(
       (b) => b.deleted_at != null,
     );
-    for (const bookmark of trashed) {
-      deleteBookmark(bookmark.id);
+    if (trashed.length === 0) {
+      return;
     }
-  }, [deleteBookmark]);
+    const ids = trashed.map((bookmark) => bookmark.id);
+    const deleted = new Set(ids);
+    for (const id of ids) {
+      deletedIds.current.add(id);
+    }
+
+    // Persist each organization snapshot once for the whole operation. Calling
+    // deleteBookmark in a loop would fan out three full-snapshot writes per row
+    // onto the single native SQLite actor.
+    applyTagOps(
+      dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids),
+    );
+    applyPendingImportCollections(
+      dropPendingImportCollections(pendingImportCollectionsRef.current, ids),
+    );
+    applyTagData({
+      ...tagDataRef.current,
+      bookmarkTags: tagDataRef.current.bookmarkTags.filter(
+        (link) => !deleted.has(link.bookmark_id),
+      ),
+    });
+    dropAiRetryBookkeeping(ids);
+
+    const deleteEntries = trashed
+      .filter((bookmark) => isBookmarkSyncedOnce(bookmark))
+      .map((bookmark) => makeMutationEntry(bookmark.id, "delete"));
+    const nextQueue = [
+      ...queueRef.current.filter((entry) => !deleted.has(entry.local_id)),
+      ...deleteEntries,
+    ];
+    queueRef.current = nextQueue;
+    setQueue(nextQueue);
+    bookmarksRef.current = (bookmarksRef.current ?? []).filter(
+      (bookmark) => !deleted.has(bookmark.id),
+    );
+    setBookmarks((current) =>
+      current?.filter((bookmark) => !deleted.has(bookmark.id)) ?? current,
+    );
+
+    const deleteEntryById = new Map(
+      deleteEntries.map((entry) => [entry.local_id, entry]),
+    );
+    void ensureRepositoryReady()
+      .then(async () => {
+        for (const bookmark of trashed) {
+          const entry = deleteEntryById.get(bookmark.id);
+          if (entry) {
+            await repository.enqueue(entry);
+          } else {
+            await repository.removeQueueEntry(bookmark.id);
+          }
+          await repository.deleteBookmark(bookmark.id);
+        }
+      })
+      .catch((error) => logStorageError("empty trash", error));
+  }, [
+    applyPendingImportCollections,
+    applyTagData,
+    applyTagOps,
+    dropAiRetryBookkeeping,
+  ]);
 
   // Destructive library reset (issue #600). Remote first: one server-side RPC
   // wipes every cloud row the user owns set-wise (no per-bookmark delete
@@ -3119,6 +3325,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncAiServerQueuedIds();
       applyUnseenSuggestions(new Set());
       applyTagOps([]);
+      applyPendingImportCollections([]);
       applyTagData(EMPTY_TAG_DATA);
       setBookmarks([]);
       setQueue([]);
@@ -3131,6 +3338,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
   }, [
     auth,
+    applyPendingImportCollections,
     applyTagData,
     applyTagOps,
     applyUnseenSuggestions,
@@ -3861,9 +4069,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   );
 
   const assignCollection = useCallback(
-    (bookmarkId: string, collectionId: string | null) =>
-      applyBookmarkUpdate(bookmarkId, { collection_id: collectionId }),
-    [applyBookmarkUpdate],
+    (bookmarkId: string, collectionId: string | null) => {
+      // A direct user move is newer than an imported folder hint. Remove the
+      // hint synchronously from the active outbox so a later retry cannot move
+      // the bookmark back to its stale imported collection.
+      const remaining = dropPendingImportCollections(
+        pendingImportCollectionsRef.current,
+        [bookmarkId],
+      );
+      if (remaining.length !== pendingImportCollectionsRef.current.length) {
+        applyPendingImportCollections(remaining);
+      }
+      applyBookmarkUpdate(bookmarkId, { collection_id: collectionId });
+    },
+    [applyBookmarkUpdate, applyPendingImportCollections],
   );
 
   const createCollection = useCallback(
@@ -3899,6 +4118,143 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [auth, applyTagData],
   );
+
+  const syncPendingImportCollections = useCallback(async (): Promise<boolean> => {
+    if (!auth.session || syncPausedRef.current) {
+      return false;
+    }
+    const eligible = pendingImportCollectionsRef.current.filter((item) =>
+      hasSyncedOnce(item.bookmark_id),
+    );
+    if (eligible.length === 0) {
+      return false;
+    }
+
+    const api = createSyncApi(auth.session);
+    let remoteCollections: Collection[] | null = null;
+    let mutationsPushed = false;
+    for (const item of eligible) {
+      try {
+        const currentBookmark = bookmarksRef.current?.find(
+          (bookmark) => bookmark.id === item.bookmark_id,
+        );
+        if (currentBookmark?.collection_id) {
+          const remaining = pendingImportCollectionsRef.current.filter(
+            (candidate) => candidate.bookmark_id !== item.bookmark_id,
+          );
+          await repository.setMeta(
+            PENDING_IMPORT_COLLECTIONS_KEY,
+            JSON.stringify(remaining),
+          );
+          pendingImportCollectionsRef.current = remaining;
+          setPendingImportCollections(remaining);
+          continue;
+        }
+        const key = normalizeTag(item.collection_name);
+        let collection = tagDataRef.current.collections.find(
+          (candidate) =>
+            candidate.user_id === auth.session!.user.id &&
+            normalizeTag(candidate.name) === key,
+        );
+        if (!collection) {
+          remoteCollections ??= await api.listCollections();
+          collection = remoteCollections.find(
+            (candidate) => normalizeTag(candidate.name) === key,
+          );
+        }
+        if (!collection) {
+          collection = await api.createCollection(item.collection_name);
+          remoteCollections ??= [];
+          remoteCollections.push(collection);
+          mutationsPushed = true;
+        }
+
+        const intentIsCurrent = () =>
+          pendingImportCollectionsRef.current.some(
+            (candidate) =>
+              candidate.bookmark_id === item.bookmark_id &&
+              candidate.created_at === item.created_at &&
+              candidate.collection_name === item.collection_name,
+          );
+        const latestBeforeUpdate = bookmarksRef.current?.find(
+          (bookmark) => bookmark.id === item.bookmark_id,
+        );
+        if (!intentIsCurrent() || latestBeforeUpdate?.collection_id) {
+          continue;
+        }
+
+        const remote = await api.updateBookmark(item.bookmark_id, {
+          collection_id: collection.id,
+        });
+        mutationsPushed = true;
+        const latest = bookmarksRef.current?.find(
+          (bookmark) => bookmark.id === item.bookmark_id,
+        );
+        if (latest && intentIsCurrent() && latest.collection_id === null) {
+          const updated: Bookmark = {
+            ...latest,
+            collection_id: collection.id,
+            updated_at: remote.updated_at,
+          };
+          await repository.updateBookmark(updated);
+          bookmarksRef.current = bookmarksRef.current!.map((bookmark) =>
+            bookmark.id === updated.id ? updated : bookmark,
+          );
+          setBookmarks((current) =>
+            current?.map((bookmark) =>
+              bookmark.id === updated.id ? updated : bookmark,
+            ) ?? current,
+          );
+        }
+
+        if (
+          !tagDataRef.current.collections.some(
+            (candidate) => candidate.id === collection.id,
+          )
+        ) {
+          const nextTagData = {
+            ...tagDataRef.current,
+            collections: [...tagDataRef.current.collections, collection],
+          };
+          await repository.replaceTagData(nextTagData);
+          tagDataRef.current = nextTagData;
+          setTagData(nextTagData);
+        }
+
+        const remaining = pendingImportCollectionsRef.current.filter(
+          (candidate) => candidate.bookmark_id !== item.bookmark_id,
+        );
+        await repository.setMeta(
+          PENDING_IMPORT_COLLECTIONS_KEY,
+          JSON.stringify(remaining),
+        );
+        pendingImportCollectionsRef.current = remaining;
+        setPendingImportCollections(remaining);
+      } catch (error) {
+        const failed = pendingImportCollectionsRef.current.map((candidate) =>
+          candidate.bookmark_id === item.bookmark_id
+            ? {
+                ...candidate,
+                status: "failed" as const,
+                last_error:
+                  error instanceof Error ? error.message : String(error),
+              }
+            : candidate,
+        );
+        await repository.setMeta(
+          PENDING_IMPORT_COLLECTIONS_KEY,
+          JSON.stringify(failed),
+        );
+        pendingImportCollectionsRef.current = failed;
+        setPendingImportCollections(failed);
+        recordLog(
+          "warn",
+          `import collection sync failed (${item.collection_name}): ${String(error)}`,
+        );
+      }
+    }
+    return mutationsPushed;
+  }, [auth.session, hasSyncedOnce]);
 
   // STASH #573 auto_accept mode: apply an enrichment's tag/folder suggestions
   // automatically, with no review step. Reuses the exact same eligibility
@@ -3994,19 +4350,55 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // re-keyed bookmark silently loses its queued tags / retry eligibility,
   // stranded on an id that no longer exists.
   const rekeyBookmarkIdentity = useCallback(
-    (idMap: Map<string, string>) => {
+    async (
+      idMap: Map<string, string>,
+      options: { persist?: boolean } = {},
+    ): Promise<IdentityRekeyState> => {
       for (const [oldId, newId] of idMap) {
         idAliases.current.set(oldId, newId);
       }
-      applyTagOps(rekeyPendingTagOps(pendingTagOpsRef.current, idMap));
+      const rekeyedTagOps = rekeyPendingTagOps(
+        pendingTagOpsRef.current,
+        idMap,
+      );
+      const rekeyedImportCollections = rekeyPendingImportCollections(
+        pendingImportCollectionsRef.current,
+        idMap,
+      );
       const links = tagDataRef.current.bookmarkTags.map((link) => {
         const newId = idMap.get(link.bookmark_id);
         return newId ? { ...link, bookmark_id: newId } : link;
       });
-      applyTagData({ ...tagDataRef.current, bookmarkTags: links });
+      const rekeyedTagData = { ...tagDataRef.current, bookmarkTags: links };
+      pendingTagOpsRef.current = rekeyedTagOps;
+      setPendingTagOps(rekeyedTagOps);
+      pendingImportCollectionsRef.current = rekeyedImportCollections;
+      setPendingImportCollections(rekeyedImportCollections);
+      tagDataRef.current = rekeyedTagData;
+      setTagData(rekeyedTagData);
       remapAiRetryIdentity(idMap);
+
+      const identityState: IdentityRekeyState = {
+        metaUpdates: {
+          [PENDING_TAG_OPS_KEY]: JSON.stringify(rekeyedTagOps),
+          [PENDING_IMPORT_COLLECTIONS_KEY]: JSON.stringify(
+            rekeyedImportCollections,
+          ),
+        },
+        tagData: rekeyedTagData,
+      };
+      if (options.persist !== false) {
+        // Duplicate adoption has already made the bookmark swap durable. Await
+        // the matching organization state before reconciliation continues.
+        await ensureRepositoryReady();
+        for (const [key, value] of Object.entries(identityState.metaUpdates)) {
+          await repository.setMeta(key, value);
+        }
+        await repository.replaceTagData(rekeyedTagData);
+      }
+      return identityState;
     },
-    [applyTagOps, applyTagData, remapAiRetryIdentity],
+    [remapAiRetryIdentity],
   );
 
   // Account-switch guard: reconciles the local cache with the signed-in user
@@ -4022,7 +4414,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     async (currentUser: {
       id: string;
       isAnonymous: boolean;
-    }): Promise<void> => {
+    }): Promise<boolean> => {
       try {
         const previousUserId = await repository.getMeta(SYNCED_USER_ID_KEY);
         const previousAnon =
@@ -4042,15 +4434,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           makeBookmarkId,
           ensureRepositoryReady,
           {
-            rehome: (idMap) => {
-              rekeyBookmarkIdentity(idMap);
-            },
+            rehome: (idMap) =>
+              rekeyBookmarkIdentity(idMap, { persist: false }),
             drop: (ids) => {
               // Real A→real B switch: purge A's pending tag ops + links so a
               // later syncTagOps call (now under B's auth) can't upload A's
               // tags as B or surface them in B's UI.
               applyTagOps(
                 dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids),
+              );
+              applyPendingImportCollections(
+                dropPendingImportCollections(
+                  pendingImportCollectionsRef.current,
+                  ids,
+                ),
               );
               const dropped = new Set(ids);
               const links = tagDataRef.current.bookmarkTags.filter(
@@ -4064,11 +4461,44 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             },
           },
         );
+        return true;
       } catch (error) {
         logStorageError("account transition", error);
+        try {
+          await ensureRepositoryReady();
+          const [storedBookmarks, storedQueue, storedTagData, rawTagOps, rawCollections] =
+            await Promise.all([
+              repository.listBookmarks(),
+              repository.listQueue(),
+              repository.listTagData(),
+              repository.getMeta(PENDING_TAG_OPS_KEY),
+              repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
+            ]);
+          const storedTagOps = parseTagOps(rawTagOps);
+          const storedCollections = parsePendingImportCollections(rawCollections);
+          bookmarksRef.current = storedBookmarks;
+          queueRef.current = storedQueue;
+          tagDataRef.current = storedTagData;
+          pendingTagOpsRef.current = storedTagOps;
+          pendingImportCollectionsRef.current = storedCollections;
+          setBookmarks(storedBookmarks);
+          setQueue(storedQueue);
+          setTagData(storedTagData);
+          setPendingTagOps(storedTagOps);
+          setPendingImportCollections(storedCollections);
+        } catch (reloadError) {
+          logStorageError("account transition recovery", reloadError);
+        }
+        return false;
       }
     },
-    [applyTagOps, applyTagData, dropAiRetryBookkeeping, rekeyBookmarkIdentity],
+    [
+      applyPendingImportCollections,
+      applyTagOps,
+      applyTagData,
+      dropAiRetryBookkeeping,
+      rekeyBookmarkIdentity,
+    ],
   );
 
   const syncNow = useCallback(async (): Promise<boolean> => {
@@ -4114,38 +4544,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncPendingRef.current = true;
       return false;
     }
-    // Upload-then-pull: even with nothing to upload, the pull still runs.
-    // Defer creates whose metadata is still fetching, so that metadata rides along with the create payload instead of syncing twice.
-    const syncable = queue.filter((entry) => {
-      if (!isSyncable(entry)) {
-        return false;
-      }
-      if (entry.operation === "create") {
-        const bookmark = bookmarksRef.current?.find(
-          (b) => b.id === entry.local_id,
-        );
-        if (bookmark && bookmark.metadata_status === "pending") {
-          return false; // defer until metadata resolves
-        }
-      }
-      return true;
-    });
-    // Sentry STASH-3K/3M: pairs with the import-side logging above. A bulk
-    // import that already shows up here with a suspiciously large create
-    // count (e.g. matching a prior "561 -> 1122" report) confirms the
-    // duplication happened before upload, not during it; a normal count here
-    // despite a later doubled server-side total would point at the upload
-    // path instead. Gated on size so an everyday small sync doesn't spam it.
-    const pendingCreateCount = syncable.filter(
-      (entry) => entry.operation === "create",
-    ).length;
-    if (pendingCreateCount > 10) {
-      recordLog(
-        "info",
-        `sync: uploading ${pendingCreateCount} pending create(s) (queue total ${queue.length})`,
-      );
-    }
-
     syncInFlight.current = true;
     setIsSyncing(true);
     let mutationsPushed = false;
@@ -4156,7 +4554,56 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // open is refreshed before we sync; otherwise every entry would fail
       // against a stale bearer token until restart.
       const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+      const currentUser = {
+        id: session.user.id,
+        isAnonymous: session.user.is_anonymous !== false,
+      };
+
+      // Account ownership must be reconciled before selecting upload work.
+      // Afterwards reload the durable snapshot: React state/ref updates from
+      // the transition are not guaranteed to commit before this same sync run
+      // continues, and using the captured queue could upload account A's work
+      // with account B's token.
+      const accountReady = await reconcileAccountTransition(currentUser);
+      if (!accountReady) {
+        return false;
+      }
+      const durableBookmarks = await repository.listBookmarks();
+      const durableQueue = await repository.listQueue();
+      bookmarksRef.current = durableBookmarks;
+      queueRef.current = durableQueue;
+      setBookmarks(durableBookmarks);
+      setQueue(durableQueue);
+
+      // Upload-then-pull: even with nothing to upload, the pull still runs.
+      // Defer creates whose metadata is still fetching, so that metadata rides
+      // along with the create payload instead of syncing twice.
+      const syncable = durableQueue.filter((entry) => {
+        if (!isSyncable(entry)) {
+          return false;
+        }
+        if (entry.operation === "create") {
+          const bookmark = bookmarksRef.current?.find(
+            (candidate) => candidate.id === entry.local_id,
+          );
+          if (bookmark && bookmark.metadata_status === "pending") {
+            return false;
+          }
+        }
+        return true;
+      });
+      const pendingCreateCount = syncable.filter(
+        (entry) => entry.operation === "create",
+      ).length;
+      if (pendingCreateCount > 10) {
+        recordLog(
+          "info",
+          `sync: uploading ${pendingCreateCount} pending create(s) (queue total ${durableQueue.length})`,
+        );
+      }
+
       const api = createSyncApi(session);
+      const createdIdsSyncedThisRun = new Set<string>();
       const getLatestBookmark = (id: string) =>
         bookmarksRef.current?.find((bookmark) => bookmark.id === id);
       const applySyncEntryResult = async (
@@ -4300,7 +4747,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // — otherwise a tag added (or a rehome carried over) in the
               // window before this duplicate-swap silently never uploads,
               // parked on the now-dead original id.
-              rekeyBookmarkIdentity(
+              await rekeyBookmarkIdentity(
                 new Map([[result.originalLocalId, merged.id]]),
               );
             }
@@ -4311,6 +4758,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // it, not `entry.operation`, so a promoted create reconciles and
             // AI-triggers too: the loop's `entry.operation` is still 'update'.
             const createUploaded = result.uploadedPayload !== undefined;
+            if (createUploaded) {
+              createdIdsSyncedThisRun.add(merged.id);
+            }
             // The create payload only carries url/title/notes, and the remote
             // row defaults to no generated metadata + pending status + active.
             // If the local row has since diverged — archived, filed into a
@@ -4691,7 +5141,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // or an open Detail route still holding the original id needs the
           // alias resolvable for that whole window, not just once this
           // chunk's persistence finally settles (caught in PR review).
-          rekeyBookmarkIdentity(rekeyedIds);
+          await rekeyBookmarkIdentity(rekeyedIds);
+        }
+        for (const localId of completedLocalIds) {
+          createdIdsSyncedThisRun.add(rekeyedIds.get(localId) ?? localId);
         }
 
         // Covers the AI-marker persist below AND both follow-up loops: the
@@ -5167,20 +5620,29 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         );
       }
 
-      const currentUser = {
-        id: session.user.id,
-        isAnonymous: session.user.is_anonymous !== false,
-      };
-
-      // Before pulling: reconcile the local cache with the signed-in user so
-      // the pull can never treat another account's rows as remote deletions.
-      await reconcileAccountTransition(currentUser);
+      // Imported collection names are a separate durable outbox because a
+      // bookmark must exist remotely before it can reference a cloud collection.
+      const importCollectionsSynced = await syncPendingImportCollections();
+      if (importCollectionsSynced) {
+        mutationsPushed = true;
+      }
 
       // Upload any queued local-first tag ops before pulling, so the pull's
       // server snapshot already reflects them.
       const tagsSynced = await syncTagOps();
       if (tagsSynced) {
         mutationsPushed = true;
+      }
+      if (
+        pendingTagOpsRef.current.some((op) =>
+          createdIdsSyncedThisRun.has(op.bookmark_id),
+        )
+      ) {
+        // A fast repository can finish create persistence before the synced
+        // bookmark ref is visible to syncTagOps. Re-drive once after this run;
+        // unlike an effect over every pending tag op, this cannot hot-loop a
+        // genuine tag API failure.
+        syncPendingRef.current = true;
       }
 
       // Pull phase: bring down remote changes (other devices, cloud AI
@@ -5378,6 +5840,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     enqueueMutation,
     requestAiEnrichment,
     syncTagOps,
+    syncPendingImportCollections,
     noteUnseenSuggestions,
     reconcileAccountTransition,
   ]);
@@ -5896,7 +6359,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       (auth.status === "anonymous" || auth.status === "authenticated") &&
       // 'syncing' is included so an entry an interrupted run stranded in-flight
       // is re-driven automatically; failed entries wait for a save / Sync now.
-      queue.some((entry) => {
+      (queue.some((entry) => {
         if (
           entry.sync_status !== "pending" &&
           entry.sync_status !== "syncing"
@@ -5918,7 +6381,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           }
         }
         return true;
-      });
+      }) ||
+        pendingImportCollections.some(
+          (item) =>
+            item.status === "pending" && hasSyncedOnce(item.bookmark_id),
+        ));
 
     if (isSyncNeeded) {
       if (!syncDebounceTimerRef.current) {
@@ -5945,7 +6412,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setIsSyncDebounceActive(false);
       }
     }
-  }, [bookmarks, auth.status, queue, isSyncingState, syncNow]);
+  }, [
+    bookmarks,
+    auth.status,
+    queue,
+    pendingImportCollections,
+    isSyncingState,
+    syncNow,
+    hasSyncedOnce,
+  ]);
 
   // Lazy anonymous creation on the first save after logout. With lazy logout,
   // signing out leaves `auth.status === 'signed_out'` and NO session — no
@@ -6115,6 +6590,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               applyTagOps(
                 dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, ids),
               );
+              applyPendingImportCollections(
+                dropPendingImportCollections(
+                  pendingImportCollectionsRef.current,
+                  ids,
+                ),
+              );
               const dropped = new Set(ids);
               const links = tagDataRef.current.bookmarkTags.filter(
                 (link) => !dropped.has(link.bookmark_id),
@@ -6138,7 +6619,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         logStorageError("logout cache clear", error);
       }
     })();
-  }, [auth.status, bookmarks, applyTagOps, applyTagData]);
+  }, [
+    auth.status,
+    bookmarks,
+    applyPendingImportCollections,
+    applyTagOps,
+    applyTagData,
+  ]);
 
   const diagnosticStats = useMemo(() => {
     const list = bookmarks ?? [];

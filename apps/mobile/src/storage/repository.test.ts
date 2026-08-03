@@ -9,10 +9,15 @@ import { repository } from '@/storage/repository';
  *  global inside its methods, so installing this before `init` is enough. */
 class MemoryStorage {
   private store = new Map<string, string>();
+  failNextWriteTo: string | null = null;
   getItem(key: string): string | null {
     return this.store.has(key) ? (this.store.get(key) as string) : null;
   }
   setItem(key: string, value: string): void {
+    if (this.failNextWriteTo === key) {
+      this.failNextWriteTo = null;
+      throw new Error(`injected write failure: ${key}`);
+    }
     this.store.set(key, String(value));
   }
   removeItem(key: string): void {
@@ -20,8 +25,10 @@ class MemoryStorage {
   }
 }
 
+let memoryStorage: MemoryStorage;
 beforeEach(() => {
-  (globalThis as unknown as { localStorage: unknown }).localStorage = new MemoryStorage();
+  memoryStorage = new MemoryStorage();
+  (globalThis as unknown as { localStorage: unknown }).localStorage = memoryStorage;
 });
 
 function makeBookmark(id: string): Bookmark {
@@ -129,5 +136,48 @@ test('clearAllData wipes library data but keeps meta (and never re-seeds)', asyn
     (await repository.listBookmarks()).length,
     0,
     'a post-reset init must not re-seed',
+  );
+});
+
+test('an interrupted web identity rekey is completed from its commit journal on reload', async () => {
+  const old = makeBookmark('old-id');
+  await repository.init([]);
+  await repository.insertBookmark(old);
+  const rehomed = { ...old, id: 'new-id', sync_status: 'pending' as const };
+  const entry = {
+    local_id: 'new-id',
+    remote_id: null,
+    operation: 'create' as const,
+    payload: { id: 'new-id', url: old.url ?? undefined },
+    sync_status: 'pending' as const,
+    retry_count: 0,
+    last_error: null,
+    created_at: old.created_at,
+    updated_at: old.updated_at,
+  };
+
+  memoryStorage.failNextWriteTo = 'stash.bookmarks';
+  await assert.rejects(
+    repository.replaceBookmarkIdentities!(
+      [{ previousId: old.id, bookmark: rehomed }],
+      [entry],
+      {
+        metaUpdates: { pending_import_collections: '[{"bookmark_id":"new-id"}]' },
+        tagData: { tags: [], bookmarkTags: [], collections: [] },
+      },
+    ),
+    /injected write failure/,
+  );
+
+  await repository.init([]);
+  assert.deepEqual((await repository.listBookmarks()).map((bookmark) => bookmark.id), [
+    'new-id',
+  ]);
+  assert.deepEqual((await repository.listQueue()).map((queued) => queued.local_id), [
+    'new-id',
+  ]);
+  assert.equal(
+    await repository.getMeta('pending_import_collections'),
+    '[{"bookmark_id":"new-id"}]',
   );
 });
