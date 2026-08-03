@@ -325,6 +325,32 @@ async function claimEnrichmentQuotaSlot(userId: string): Promise<boolean> {
   }
 }
 
+/** Give back the per-user slot spent by claimEnrichmentQuotaSlot/
+ *  request_ai_enrichment_slot(_for) when the attempt it paid for turned out
+ *  to be rate_limited by the PROVIDER, not by the user's own quota. Without
+ *  this, a provider-side outage permanently burns the user's fixed
+ *  daily/hourly budget on retries that produced zero usable output — the
+ *  batch worker's overflow queue exists specifically to retry rate_limited
+ *  rows, so every retry cycle during a long outage was spending another slot
+ *  for nothing, capable of exhausting the full daily cap before the provider
+ *  ever recovers. Only called for degradedReason === 'rate_limited' — a real
+ *  provider_error or timeout still represents a genuine, concluded attempt
+ *  and keeps its charge. Best-effort and never throws: a failed refund just
+ *  means this one slot stays spent, same as before this existed. */
+async function refundEnrichmentQuotaSlot(userId: string): Promise<void> {
+  try {
+    const res = await serviceRest(`/rpc/refund_ai_enrichment_slot_for`, {
+      method: 'POST',
+      body: JSON.stringify({ p_user_id: userId }),
+    });
+    if (!res.ok) {
+      console.error('Failed to refund enrichment quota slot', userId, res.status);
+    }
+  } catch (err) {
+    console.error('Error refunding enrichment quota slot', userId, err);
+  }
+}
+
 /**
  * Append one row to the `ai_enrichment_calls` spend ledger — one row per
  * attempted billable provider call, on BOTH the synchronous and worker paths.
@@ -479,12 +505,11 @@ async function processEnrichmentRow(
     // turn yet, no penalty" treatment the per-user quota deferral gets in
     // runBatchWorker.
     //
-    // Caveat: this row's per-user quota slot was already spent at claim time
-    // and there is no refund RPC, so a long provider outage does burn slots on
-    // retries. That is not a regression — settling the row with heuristics
-    // spent the same slot and gave up on it permanently — but it is why the
-    // claim limit above stays under the provider's RPM rather than relying on
-    // this retry path to mop up.
+    // This row's per-user quota slot was already spent at claim time —
+    // refund it now that the attempt is known to have produced nothing (see
+    // refundEnrichmentQuotaSlot's docs), so a long provider outage doesn't
+    // burn the user's fixed budget on retries that never got a usable answer.
+    await refundEnrichmentQuotaSlot(row.user_id);
     await markPendingEnrichmentSettled(row.id, 'pending', row.attempts);
     return;
   }
@@ -1032,6 +1057,11 @@ Deno.serve(async (req) => {
       // client's own enqueuePendingEnrichment (api/bookmarks.ts) so a bulk
       // import that's already queued this bookmark itself no-ops here too.
       if (degradedReason === 'rate_limited') {
+        // The slot spent above (request_ai_enrichment_slot(_for)) paid for an
+        // attempt that the provider itself rejected — refund it before
+        // queueing the retry, for the same reason processEnrichmentRow's
+        // batch-worker retries do (see refundEnrichmentQuotaSlot's docs).
+        await refundEnrichmentQuotaSlot(bookmark.user_id);
         try {
           const enqueueRes = await rest(`/pending_ai_enrichment?on_conflict=bookmark_id`, {
             method: 'POST',
