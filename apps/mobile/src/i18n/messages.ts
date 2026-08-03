@@ -343,7 +343,7 @@ export const en = {
   },
   'settings.sync.pauseButton': 'Pause sync',
   'settings.sync.resumeButton': 'Resume sync',
-  'settings.syncBreakdown.uploading.label': 'Uploading',
+  'settings.syncBreakdown.uploading.label': 'Waiting to upload',
   'settings.syncBreakdown.uploading.value': {
     one: '{count} bookmark',
     other: '{count} bookmarks',

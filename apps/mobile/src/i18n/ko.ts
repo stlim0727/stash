@@ -229,7 +229,7 @@ export const ko: Catalog = {
   'settings.sync.waiting': { other: '{count}개 항목 업로드 대기 중' },
   'settings.sync.pauseButton': '동기화 일시 정지',
   'settings.sync.resumeButton': '동기화 재개',
-  'settings.syncBreakdown.uploading.label': '업로드 중',
+  'settings.syncBreakdown.uploading.label': '업로드 대기 중',
   'settings.syncBreakdown.uploading.value': { other: '{count}개' },
   'settings.syncBreakdown.fetchingInfo.label': '정보 가져오는 중',
   'settings.syncBreakdown.fetchingInfo.value': { other: '{count}개' },

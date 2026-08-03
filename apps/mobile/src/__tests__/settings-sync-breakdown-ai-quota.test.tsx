@@ -85,7 +85,8 @@ jest.mock('@/api/bookmarks', () => {
   const updateBookmark = jest.fn(async () => undefined);
   const listBookmarkIds = jest.fn(async () => [] as string[]);
   // Never resolves: keeps a freshly-queued create's sync_status 'pending'
-  // (isSyncable) for the whole test, so the "Uploading" stage stays non-zero.
+  // (isSyncable) for the whole test, so the "Waiting to upload" stage stays
+  // non-zero.
   const createBookmark = jest.fn(() => new Promise(() => {}));
   const createBookmarks = jest.fn(
     async (inputs: Array<{ id?: string }>) =>
@@ -177,14 +178,14 @@ test('AI quota reached: the AI breakdown row uses the quota-reached copy (no res
   await waitFor(() => expect(storeRef.current!.aiQuotaExceeded).not.toBeNull());
 
   // Now queue a second, unrelated create — its upload hangs (mocked
-  // createBookmark never resolves), keeping "Uploading" non-zero for the rest
-  // of the test without racing the AI dispatch loop (which defers AI work
-  // until the sync queue is clear — see the deferred-dispatch effect).
+  // createBookmark never resolves), keeping "Waiting to upload" non-zero for
+  // the rest of the test without racing the AI dispatch loop (which defers AI
+  // work until the sync queue is clear — see the deferred-dispatch effect).
   await act(async () => {
     storeRef.current!.addBookmark({ url: 'https://example.com/still-uploading' });
   });
 
-  await waitFor(() => expect(screen.getByText('Uploading')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('Waiting to upload')).toBeTruthy());
   expect(screen.getByText('Fetching info')).toBeTruthy();
   // "AI suggestions" is ambiguous with the Preferences mode-selector row's
   // own label — its unique quota-reached value text below is the real check.

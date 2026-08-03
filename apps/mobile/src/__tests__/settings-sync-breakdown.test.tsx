@@ -107,8 +107,21 @@ test('a single active pipeline (uploading only) renders no breakdown rows', asyn
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('1 item waiting to upload')).toBeTruthy());
 
-  expect(screen.queryByText('Uploading')).toBeNull();
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.queryByText('Fetching info')).toBeNull();
+});
+
+test('a lone metadata-only stage still renders on its own — the headline never mentions it otherwise (Codex review, PR #670)', async () => {
+  await seed({
+    rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
+  });
+
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
+
+  expect(screen.getByText('Fetching info')).toBeTruthy();
+  expect(screen.getByText('1 bookmark')).toBeTruthy();
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
 });
 
 test('two active pipelines (uploading + fetching info) render both breakdown rows with their own counts', async () => {
@@ -121,7 +134,7 @@ test('two active pipelines (uploading + fetching info) render both breakdown row
   // Headline is unaffected by the breakdown — still just the upload count.
   await waitFor(() => expect(screen.getByText('1 item waiting to upload')).toBeTruthy());
 
-  expect(screen.getByText('Uploading')).toBeTruthy();
+  expect(screen.getByText('Waiting to upload')).toBeTruthy();
   expect(screen.getByText('Fetching info')).toBeTruthy();
   // Both stages happen to have a count of 1 bookmark each.
   expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
@@ -137,7 +150,7 @@ test('three active pipelines (uploading + fetching info + AI) render in fixed or
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('1 item waiting to upload')).toBeTruthy());
 
-  expect(screen.getByText('Uploading')).toBeTruthy();
+  expect(screen.getByText('Waiting to upload')).toBeTruthy();
   expect(screen.getByText('Fetching info')).toBeTruthy();
   // "AI suggestions" is ambiguous with the Preferences mode-selector row's
   // label, so assert on the breakdown row's own (unique) value text instead.
@@ -160,7 +173,7 @@ test('sync caught up but metadata/AI still working: headline says "All backed up
   expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
 });
 
-test('paused suppresses the breakdown even with multiple non-zero stages', async () => {
+test('paused excludes the upload stage (nothing is actually uploading) but keeps independently-running background stages visible (Codex review, PR #670)', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
     queue: [pendingUploadEntry('up-1')],
@@ -170,7 +183,23 @@ test('paused suppresses the breakdown even with multiple non-zero stages', async
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
 
-  expect(screen.queryByText('Uploading')).toBeNull();
+  // "Pause sync" only gates the upload/pull network phases — metadata
+  // enrichment (enrichInBackground) is never paused, so it must stay visible
+  // even though the headline is in its paused state.
+  expect(screen.getByText('Fetching info')).toBeTruthy();
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
+});
+
+test('paused with only the upload queue non-empty (no independent background work) shows no breakdown', async () => {
+  await seed({
+    queue: [pendingUploadEntry('up-1')],
+    meta: { 'pref.sync.paused': 'true' },
+  });
+
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
+
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.queryByText('Fetching info')).toBeNull();
 });
 
@@ -186,7 +215,7 @@ test('local-only (not signed in) suppresses the breakdown even with multiple non
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Local only')).toBeTruthy());
 
-  expect(screen.queryByText('Uploading')).toBeNull();
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.queryByText('Fetching info')).toBeNull();
 });
 
@@ -204,7 +233,7 @@ test('AI suggestions off excludes the AI row but still shows upload+metadata whe
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Off — never auto-suggest')).toBeTruthy());
 
-  expect(screen.getByText('Uploading')).toBeTruthy();
+  expect(screen.getByText('Waiting to upload')).toBeTruthy();
   expect(screen.getByText('Fetching info')).toBeTruthy();
   // Only the mode-selector row's own label remains — no breakdown AI row.
   expect(screen.getAllByText('AI suggestions')).toHaveLength(1);

@@ -757,17 +757,37 @@ export default function SettingsScreen() {
   // count independently — they are NOT a partition of one total, a bookmark
   // can be counted in more than one stage at once (e.g. freshly captured is
   // both upload-pending and metadata-pending).
+  //
+  // `waiting` includes queue entries stuck in sync_status 'failed', not just
+  // 'pending'/'syncing' — so this row is worded as a neutral "waiting to
+  // upload" (matching the headline's own established copy) rather than an
+  // active-sounding "Uploading", which would misrepresent a failed entry
+  // that's merely sitting until its next retry (Codex review, PR #670).
   const uploadingCount = waiting; // same value as today's headline count
   const fetchingInfoCount = diagnosticStats.metadata.todo;
   const aiCount = aiSuggestionsMode !== "off" ? diagnosticStats.ai.todo : 0;
   const aiQuotaReached = aiQuotaExceeded !== null;
   const syncStages = [
-    { key: "uploading" as const, count: uploadingCount },
+    // "Pause sync" only gates syncNow's network phases — enrichInBackground
+    // (metadata) and AI dispatch are never paused (see
+    // docs/architecture/sync-pause-import-reset.md), so only the upload
+    // stage itself is excluded while paused; metadata/AI stay visible if
+    // they're independently active (Codex review, PR #670).
+    ...(syncPaused
+      ? []
+      : [{ key: "uploading" as const, count: uploadingCount }]),
     { key: "fetchingInfo" as const, count: fetchingInfoCount },
     { key: "aiSuggestions" as const, count: aiCount },
   ].filter((stage) => stage.count > 0);
+  // A lone "uploading" stage duplicates the headline (which already reports
+  // the upload count), so it stays suppressed on its own — but a lone
+  // metadata/AI stage is otherwise invisible anywhere in Settings (the
+  // headline only ever talks about uploads), so it must still show even by
+  // itself (Codex review, PR #670).
   const showSyncBreakdown =
-    cloudAvailable && !syncPaused && syncStages.length >= 2;
+    cloudAvailable &&
+    (syncStages.length >= 2 ||
+      (syncStages.length === 1 && syncStages[0].key !== "uploading"));
 
   const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
