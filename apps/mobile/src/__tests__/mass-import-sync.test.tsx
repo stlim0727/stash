@@ -389,6 +389,97 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     );
   });
 
+  test("a manual move during collection lookup wins over the in-flight import intent", async () => {
+    const collectionGate = deferred<{
+      id: string;
+      user_id: string;
+      name: string;
+      description: null;
+      created_at: string;
+      updated_at: string;
+    }>();
+    apiMock.__createCollectionMock.mockImplementationOnce(
+      async () => collectionGate.promise,
+    );
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "netscape-html",
+          url: "https://example.com/in-flight-folder",
+          title: "In-flight folder",
+          notes: null,
+          tags: [],
+          collection: "Imported folder",
+        },
+      ]);
+    });
+    await waitFor(() =>
+      expect(apiMock.__createCollectionMock).toHaveBeenCalledWith(
+        "Imported folder",
+      ),
+    );
+    const bookmarkId = result.current.inbox[0]!.id;
+    await act(async () => {
+      result.current.assignCollection(bookmarkId, "manual-collection");
+      collectionGate.resolve({
+        id: "in-flight-imported-collection",
+        user_id: "real-user",
+        name: "Imported folder",
+        description: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    });
+
+    await waitFor(() => expect(result.current.isSyncing).toBe(false));
+    expect(result.current.inbox[0]?.collection_id).toBe("manual-collection");
+    expect(apiMock.__updateBookmarkMock).not.toHaveBeenCalledWith(bookmarkId, {
+      collection_id: "in-flight-imported-collection",
+    });
+  });
+
+  test("does not reuse a same-named collection owned by the previous account", async () => {
+    const now = new Date().toISOString();
+    fakeRepo.__reset([], {
+      tags: [],
+      bookmarkTags: [],
+      collections: [
+        {
+          id: "foreign-collection",
+          user_id: "departed-user",
+          name: "Projects",
+          description: null,
+          created_at: now,
+          updated_at: now,
+        },
+      ],
+    });
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/owned-folder-only",
+          title: "Owned folder only",
+          notes: null,
+          tags: [],
+          collection: "Projects",
+        },
+      ]);
+    });
+
+    await waitFor(() =>
+      expect(apiMock.__createCollectionMock).toHaveBeenCalledWith("Projects"),
+    );
+    expect(apiMock.__updateBookmarkMock).not.toHaveBeenCalledWith(
+      expect.any(String),
+      { collection_id: "foreign-collection" },
+    );
+  });
+
   test("re-drives imported tags after their bookmark create finishes", async () => {
     const { result } = await renderReadyStore();
 

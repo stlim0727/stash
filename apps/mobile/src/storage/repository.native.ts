@@ -6,7 +6,12 @@ import { runImportBatchTransactions } from '@/storage/import-batch';
 import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
-import type { BookmarkRepository, CreateSyncCompletion, TagData } from '@/storage/types';
+import type {
+  BookmarkRepository,
+  CreateSyncCompletion,
+  IdentityRekeyState,
+  TagData,
+} from '@/storage/types';
 
 interface BookmarkRow {
   id: string;
@@ -219,6 +224,46 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       db.withTransactionAsync(async () => {
         await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
         await writeBookmark(db, bookmark);
+      }),
+    );
+  }
+
+  async replaceBookmarkIdentities(
+    replacements: Array<{ previousId: string; bookmark: Bookmark }>,
+    entries: LocalPendingBookmark[],
+    state: IdentityRekeyState,
+  ): Promise<void> {
+    await this.connection.run((db) =>
+      db.withTransactionAsync(async () => {
+        for (const { previousId, bookmark } of replacements) {
+          await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
+          await writeBookmark(db, bookmark);
+        }
+        for (const entry of entries) {
+          await db.runAsync(
+            `INSERT OR REPLACE INTO local_pending_bookmarks
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              entry.local_id,
+              entry.remote_id,
+              entry.operation,
+              JSON.stringify(entry.payload),
+              entry.sync_status,
+              entry.retry_count,
+              entry.last_error,
+              entry.created_at,
+              entry.updated_at,
+            ],
+          );
+        }
+        for (const [key, value] of Object.entries(state.metaUpdates)) {
+          await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
+            key,
+            value,
+          ]);
+        }
+        await writeTagData(db, state.tagData);
       }),
     );
   }

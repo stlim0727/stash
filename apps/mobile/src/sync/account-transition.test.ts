@@ -364,6 +364,52 @@ test('applyAccountTransition re-keys pending tag ops from the old id to the new 
   assert.equal(queue[0]?.operation, 'create');
 });
 
+test('applyAccountTransition commits rehomed rows and organization state through one repository call', async () => {
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [bookmark({ id: REMOTE_A })],
+  );
+  const base = fakeRepository();
+  let batchCalls = 0;
+  let replacementCount = 0;
+  let entryCount = 0;
+  let persistedBookmarkId = '';
+  let persistedMeta = '';
+  base.replaceBookmarkIdentities = async (replacements, entries, state) => {
+    batchCalls += 1;
+    replacementCount = replacements.length;
+    entryCount = entries.length;
+    persistedBookmarkId = replacements[0]?.bookmark.id ?? '';
+    persistedMeta = state.metaUpdates.pending_import_collections ?? '';
+  };
+
+  await applyAccountTransition(
+    plan,
+    base,
+    () => {},
+    () => {},
+    () => 'local-rehomed-atomic',
+    async () => {},
+    {
+      rehome: (idMap) => ({
+        metaUpdates: {
+          pending_import_collections: JSON.stringify([
+            { bookmark_id: idMap.get(REMOTE_A) },
+          ]),
+        },
+        tagData: { tags: [], bookmarkTags: [], collections: [] },
+      }),
+    },
+  );
+
+  assert.equal(batchCalls, 1);
+  assert.equal(replacementCount, 1);
+  assert.equal(entryCount, 1);
+  assert.equal(persistedBookmarkId, 'local-rehomed-atomic');
+  assert.match(persistedMeta, /local-rehomed-atomic/);
+});
+
 test('applyAccountTransition (real A→real B) purges the dropped account’s tag state', async () => {
   // The cross-account-leak fix: dropping account A's cached rows must also drop
   // A's pending tag ops + tag links, or syncTagOps (running next under B's auth)

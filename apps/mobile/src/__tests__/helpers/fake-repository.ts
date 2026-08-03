@@ -52,6 +52,17 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
         .filter((b) => b.id === previousId || b.id !== bookmark.id)
         .map((b) => (b.id === previousId ? bookmark : b));
     },
+    replaceBookmarkIdentities: async (replacements, entries, state) => {
+      for (const { previousId, bookmark } of replacements) {
+        bookmarks = bookmarks
+          .filter((b) => b.id === previousId || b.id !== bookmark.id)
+          .map((b) => (b.id === previousId ? bookmark : b));
+      }
+      const entryIds = new Set(entries.map((entry) => entry.local_id));
+      queue = [...queue.filter((entry) => !entryIds.has(entry.local_id)), ...entries];
+      meta = { ...meta, ...state.metaUpdates };
+      tagData = state.tagData;
+    },
     completeCreateSyncBatch: async (completions) => {
       for (const { bookmark, entry, originalLocalId } of completions) {
         const stored = queue.find((queued) => queued.local_id === entry.local_id);

@@ -240,6 +240,39 @@ test('re-adding a trashed URL creates a fresh active bookmark instead of folding
   expect(result.current.trash).toHaveLength(1);
 });
 
+test('emptyTrash coalesces organization persistence for the full deleted set', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: 'trash-bulk-1',
+      deleted_at: '2026-06-13T00:00:00.000Z',
+    }),
+    makeStoredBookmark({
+      id: 'trash-bulk-2',
+      url: 'https://example.com/trash-2',
+      url_hash: 'https://example.com/trash-2',
+      deleted_at: '2026-06-13T00:00:00.000Z',
+    }),
+  ]);
+  const { result } = await renderStore();
+  const setMeta = jest.spyOn(fakeRepo.repository, 'setMeta');
+  const replaceTagData = jest.spyOn(fakeRepo.repository, 'replaceTagData');
+
+  await act(async () => {
+    result.current.emptyTrash();
+  });
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(0));
+
+  expect(
+    setMeta.mock.calls.filter(([key]) => key === 'pending_tag_ops'),
+  ).toHaveLength(1);
+  expect(
+    setMeta.mock.calls.filter(
+      ([key]) => key === PENDING_IMPORT_COLLECTIONS_KEY,
+    ),
+  ).toHaveLength(1);
+  expect(replaceTagData).toHaveBeenCalledTimes(1);
+});
+
 test('deleting a local bookmark also clears its queued upload', async () => {
   const { result } = await renderStore();
   await act(async () => {
