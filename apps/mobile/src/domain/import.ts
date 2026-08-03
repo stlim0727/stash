@@ -16,6 +16,37 @@
  *    Pocket can move into Stash directly. `tags` (pipe-separated) map to tags.
  */
 
+import type { ContentType, EnrichmentStatus, SuggestedTag } from '@/domain/types';
+
+/**
+ * Generated page metadata carried by a Stash JSON backup's bookmark snapshot.
+ * Only ever populated for `source: 'stash-backup'` — a restore can use this to
+ * skip re-fetching metadata the export already had (#671); other formats have
+ * no equivalent snapshot to preserve.
+ */
+export interface ImportedMetadata {
+  description: string | null;
+  preview_image_url: string | null;
+  favicon_url: string | null;
+  site_name: string | null;
+  canonical_url: string | null;
+  content_type: ContentType;
+}
+
+/**
+ * The bookmark's latest AI enrichment, carried by a Stash JSON backup when the
+ * export included one (`toJsonBackup`'s `enrichment` field). Lets a restore
+ * bring enrichment back losslessly instead of paying to regenerate it (#671).
+ */
+export interface ImportedEnrichment {
+  summary: string | null;
+  topics: string[];
+  suggested_tags: SuggestedTag[];
+  status: EnrichmentStatus;
+  model: string | null;
+  confidence: number | null;
+}
+
 /** A single re-ingestable item, normalized across both source formats. */
 export interface ImportItem {
   /** Parser provenance. Present for every item produced by parseImport. */
@@ -27,6 +58,10 @@ export interface ImportItem {
   tags: string[];
   /** Folder (HTML) or collection name (JSON), when the source recorded one. */
   collection: string | null;
+  /** Generated metadata preserved from a Stash JSON backup, when present. */
+  metadata?: ImportedMetadata;
+  /** AI enrichment snapshot preserved from a Stash JSON backup, when present. */
+  enrichment?: ImportedEnrichment;
 }
 
 /** Thrown when a file can't be understood as a supported import format. */
@@ -67,6 +102,66 @@ function normalizeTags(raw: string[]): string[] {
     }
   }
   return tags;
+}
+
+const CONTENT_TYPES: readonly ContentType[] = ['url', 'article', 'image', 'video', 'text', 'unknown'];
+function cleanContentType(value: unknown): ContentType {
+  return typeof value === 'string' && (CONTENT_TYPES as readonly string[]).includes(value)
+    ? (value as ContentType)
+    : 'url';
+}
+
+const ENRICHMENT_STATUSES: readonly EnrichmentStatus[] = ['pending', 'complete', 'failed', 'stale'];
+function cleanEnrichmentStatus(value: unknown): EnrichmentStatus {
+  return typeof value === 'string' && (ENRICHMENT_STATUSES as readonly string[]).includes(value)
+    ? (value as EnrichmentStatus)
+    : 'pending';
+}
+
+/** Generated metadata fields off a backup bookmark entry, or undefined if none were present. */
+function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata | undefined {
+  const metadata: ImportedMetadata = {
+    description: cleanString(entry.description),
+    preview_image_url: cleanString(entry.preview_image_url),
+    favicon_url: cleanString(entry.favicon_url),
+    site_name: cleanString(entry.site_name),
+    canonical_url: cleanString(entry.canonical_url),
+    content_type: cleanContentType(entry.content_type),
+  };
+  const hasSignal =
+    metadata.description !== null ||
+    metadata.preview_image_url !== null ||
+    metadata.favicon_url !== null ||
+    metadata.site_name !== null ||
+    metadata.canonical_url !== null;
+  return hasSignal ? metadata : undefined;
+}
+
+/** The `enrichment` snapshot off a backup bookmark entry, or undefined if absent/malformed. */
+function parseImportedEnrichment(raw: unknown): ImportedEnrichment | undefined {
+  if (raw === null || typeof raw !== 'object') {
+    return undefined;
+  }
+  const entry = raw as Record<string, unknown>;
+  const suggestedTags = Array.isArray(entry.suggested_tags)
+    ? entry.suggested_tags
+        .map((tag): SuggestedTag | null => {
+          const name = cleanString((tag as { name?: unknown })?.name);
+          const confidence = (tag as { confidence?: unknown })?.confidence;
+          return name && typeof confidence === 'number' ? { name, confidence } : null;
+        })
+        .filter((tag): tag is SuggestedTag => tag !== null)
+    : [];
+  return {
+    summary: cleanString(entry.summary),
+    topics: Array.isArray(entry.topics)
+      ? entry.topics.filter((topic): topic is string => typeof topic === 'string')
+      : [],
+    suggested_tags: suggestedTags,
+    status: cleanEnrichmentStatus(entry.status),
+    model: cleanString(entry.model),
+    confidence: typeof entry.confidence === 'number' ? entry.confidence : null,
+  };
 }
 
 /**
@@ -111,6 +206,8 @@ export function parseJsonBackup(text: string): ImportItem[] {
       notes: cleanString(entry.notes),
       tags,
       collection: cleanString(entry.collection_name),
+      metadata: parseImportedMetadata(entry),
+      enrichment: parseImportedEnrichment(entry.enrichment),
     };
   });
 }

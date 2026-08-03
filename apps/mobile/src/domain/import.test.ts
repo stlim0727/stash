@@ -9,7 +9,7 @@ import {
   parsePocketCsv,
 } from './import.ts';
 import { buildJsonBackup, toNetscapeHtml, type ExportInput } from './export.ts';
-import type { Bookmark, Collection, Tag } from './types.ts';
+import type { AIEnrichment, Bookmark, Collection, Tag } from './types.ts';
 
 function bookmark(overrides: Partial<Bookmark> = {}): Bookmark {
   return {
@@ -59,6 +59,27 @@ function collection(id: string, name: string): Collection {
   };
 }
 
+function enrichment(overrides: Partial<AIEnrichment> = {}): AIEnrichment {
+  return {
+    id: 'e1',
+    bookmark_id: 'b1',
+    user_id: 'u1',
+    summary: 'A concise summary.',
+    topics: ['reading', 'productivity'],
+    suggested_tags: [{ name: 'tech', confidence: 0.9 }],
+    suggested_collection_id: null,
+    suggested_collection_name: null,
+    model: 'gpt-5',
+    status: 'complete',
+    confidence: 0.87,
+    degraded: false,
+    degraded_reason: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
 // --- JSON backup ---------------------------------------------------------
 
 test('parseJsonBackup reads url, title, notes, tags, and collection name', () => {
@@ -101,6 +122,84 @@ test('parseJsonBackup keeps url-less items (null url) for the caller to skip', (
   const [item] = parseJsonBackup(json);
   assert.equal(item?.url, null);
   assert.equal(item?.title, 'A thought');
+});
+
+test('parseJsonBackup preserves generated metadata for a lossless restore (#671)', () => {
+  const json = JSON.stringify({
+    bookmarks: [
+      {
+        url: 'https://example.com/a',
+        description: 'A fetched description.',
+        preview_image_url: 'https://example.com/a/preview.png',
+        favicon_url: 'https://example.com/favicon.ico',
+        site_name: 'Example',
+        canonical_url: 'https://example.com/a/',
+        content_type: 'article',
+      },
+    ],
+  });
+  const [item] = parseJsonBackup(json);
+  assert.deepEqual(item?.metadata, {
+    description: 'A fetched description.',
+    preview_image_url: 'https://example.com/a/preview.png',
+    favicon_url: 'https://example.com/favicon.ico',
+    site_name: 'Example',
+    canonical_url: 'https://example.com/a/',
+    content_type: 'article',
+  });
+});
+
+test('parseJsonBackup leaves metadata undefined when the entry carries no generated fields', () => {
+  const json = JSON.stringify({ bookmarks: [{ url: 'https://example.com/a', title: 'A' }] });
+  assert.equal(parseJsonBackup(json)[0]?.metadata, undefined);
+});
+
+test('parseJsonBackup preserves the AI enrichment snapshot for a lossless restore (#671)', () => {
+  const json = JSON.stringify({
+    bookmarks: [
+      {
+        url: 'https://example.com/a',
+        enrichment: {
+          summary: 'A concise summary.',
+          topics: ['reading', 'productivity'],
+          suggested_tags: [{ name: 'tech', confidence: 0.9 }],
+          status: 'complete',
+          model: 'gpt-5',
+          confidence: 0.87,
+        },
+      },
+    ],
+  });
+  const [item] = parseJsonBackup(json);
+  assert.deepEqual(item?.enrichment, {
+    summary: 'A concise summary.',
+    topics: ['reading', 'productivity'],
+    suggested_tags: [{ name: 'tech', confidence: 0.9 }],
+    status: 'complete',
+    model: 'gpt-5',
+    confidence: 0.87,
+  });
+});
+
+test('parseJsonBackup leaves enrichment undefined when the entry has none', () => {
+  const json = JSON.stringify({ bookmarks: [{ url: 'https://example.com/a', enrichment: null }] });
+  assert.equal(parseJsonBackup(json)[0]?.enrichment, undefined);
+});
+
+test('parseJsonBackup drops a malformed suggested_tags entry rather than restoring garbage', () => {
+  const json = JSON.stringify({
+    bookmarks: [
+      {
+        url: 'https://example.com/a',
+        enrichment: {
+          suggested_tags: [{ name: 'tech', confidence: 0.9 }, { name: 'no-confidence' }, { confidence: 0.5 }],
+          status: 'complete',
+        },
+      },
+    ],
+  });
+  const [item] = parseJsonBackup(json);
+  assert.deepEqual(item?.enrichment?.suggested_tags, [{ name: 'tech', confidence: 0.9 }]);
 });
 
 test('parseJsonBackup throws ImportError on invalid JSON', () => {
@@ -184,6 +283,40 @@ test('a Stash JSON backup round-trips back through parseJsonBackup', () => {
   assert.equal(item?.notes, 'keep me');
   assert.deepEqual(item?.tags, ['reading', 'tech']);
   assert.equal(item?.collection, 'Research');
+});
+
+test('a Stash JSON backup round-trips generated metadata and the AI enrichment snapshot losslessly (#671)', () => {
+  const input = exportInput({
+    bookmarks: [
+      bookmark({
+        description: 'A fetched description.',
+        preview_image_url: 'https://example.com/preview.png',
+        favicon_url: 'https://example.com/favicon.ico',
+        site_name: 'Example',
+        canonical_url: 'https://example.com/article/',
+        content_type: 'article',
+      }),
+    ],
+    enrichmentByBookmark: { b1: enrichment() },
+  });
+  const backup = JSON.stringify(buildJsonBackup(input));
+  const [item] = parseJsonBackup(backup);
+  assert.deepEqual(item?.metadata, {
+    description: 'A fetched description.',
+    preview_image_url: 'https://example.com/preview.png',
+    favicon_url: 'https://example.com/favicon.ico',
+    site_name: 'Example',
+    canonical_url: 'https://example.com/article/',
+    content_type: 'article',
+  });
+  assert.deepEqual(item?.enrichment, {
+    summary: 'A concise summary.',
+    topics: ['reading', 'productivity'],
+    suggested_tags: [{ name: 'tech', confidence: 0.9 }],
+    status: 'complete',
+    model: 'gpt-5',
+    confidence: 0.87,
+  });
 });
 
 test('a Stash HTML export round-trips back through parseNetscapeHtml', () => {
