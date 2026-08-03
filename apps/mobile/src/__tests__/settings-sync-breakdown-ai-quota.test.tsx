@@ -273,3 +273,95 @@ test('a manual AI request stays visible even when aiSuggestionsMode is "off" —
   expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText('1 bookmark')).toBeTruthy();
 });
+
+test('manually retrying a bookmark already in the local AI backlog is not double-counted (Codex review, PR #670)', async () => {
+  const OVERLAP_ID = '7e64cf1e-0000-4000-8000-000000000005';
+  fakeRepo.__reset([makeStoredBookmark({ id: OVERLAP_ID, metadata_status: 'complete' })]);
+  // Seeded into the local backlog (pendingAiTrigger) — while the manual
+  // request below is in flight, this id is NOT removed from
+  // pendingAiTrigger.current (that only happens in requestAiEnrichment's
+  // settle/failure handlers), so it's simultaneously present in the backlog
+  // union AND enrichingIds — exactly the Detail-button-bypasses-backoff
+  // overlap the fix guards against.
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([OVERLAP_ID]));
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(() => new Promise(() => {}));
+
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const screen = await render(
+    <BookmarksProvider>
+      <Probe />
+      <SettingsScreen />
+    </BookmarksProvider>,
+  );
+
+  await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
+  await waitFor(() => expect(storeRef.current?.lastPulledAt).not.toBeNull());
+
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(OVERLAP_ID);
+  });
+  await waitFor(() => expect(storeRef.current!.isEnriching(OVERLAP_ID)).toBe(true));
+
+  // Before this fix (additive aiBacklogCount + manualInFlight), this would
+  // have read "2 bookmarks" for one bookmark present in both sets.
+  await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
+  expect(screen.getByText('1 bookmark')).toBeTruthy();
+  expect(screen.queryByText('2 bookmarks')).toBeNull();
+});
+
+test('an automatic AI request already executing stays visible when sync pauses mid-run, even though the not-yet-dispatched local backlog is frozen (Codex review, PR #670)', async () => {
+  const AUTO_INFLIGHT_ID = '7e64cf1e-0000-4000-8000-000000000006';
+  fakeRepo.__reset([makeStoredBookmark({ id: AUTO_INFLIGHT_ID, metadata_status: 'complete' })]);
+  // Never resolves: simulates an AUTOMATIC dispatch already executing
+  // (source: 'auto', not 'manual') — populates enrichingIds only, same as a
+  // real dispatched-then-in-flight request (dequeueAiEnrichmentDispatch
+  // removes it from aiDispatchQueueRef.current.pending the moment dispatch
+  // starts, so by the time it's executing it's no longer in the backlog
+  // union either).
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(() => new Promise(() => {}));
+
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const screen = await render(
+    <BookmarksProvider>
+      <Probe />
+      <SettingsScreen />
+    </BookmarksProvider>,
+  );
+
+  await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
+  await waitFor(() => expect(storeRef.current?.lastPulledAt).not.toBeNull());
+
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(AUTO_INFLIGHT_ID, 'auto');
+  });
+  await waitFor(() => expect(storeRef.current!.isEnriching(AUTO_INFLIGHT_ID)).toBe(true));
+
+  // Now pause sync with a pending upload queued — this freezes local AI
+  // dispatch (per the drain loop's own gate), but must NOT hide the request
+  // that's already executing.
+  await act(async () => {
+    storeRef.current!.addBookmark({ url: 'https://example.com/still-uploading' });
+    storeRef.current!.setSyncPaused(true);
+  });
+  await waitFor(() => expect(storeRef.current!.syncPaused).toBe(true));
+
+  // Before this fix, pausing here would have replaced the AI count with
+  // `serverQueued` alone (0), hiding the already-running automatic request.
+  // The freshly-added bookmark also has metadata_status 'pending' (a fresh
+  // capture, not yet enriched), so "Fetching info" independently reads
+  // "1 bookmark" too — both rows are asserted together.
+  await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
+  expect(screen.getByText('Fetching info')).toBeTruthy();
+  expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
+});

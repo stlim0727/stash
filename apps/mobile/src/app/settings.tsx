@@ -777,19 +777,20 @@ export default function SettingsScreen() {
     (entry) =>
       entry.sync_status === "pending" || entry.sync_status === "syncing",
   );
-  const localAiWorkBlockedByPause = syncPaused && queueBlocksAiDispatch;
-  // Only the confirmed server-queued subset keeps draining regardless of the
-  // pause block (same distinction the pre-existing aiQueueBacklog row already
-  // draws for aiSuggestionsMode === "off"). A manual "Suggest with AI"
-  // request in flight is added on top unconditionally — it isn't queued
-  // work paced by the auto backlog, so it's never frozen by "off" mode or
-  // blocked by a paused upload queue (Codex review, PR #670).
-  const aiBacklogCount = localAiWorkBlockedByPause
-    ? diagnosticStats.ai.serverQueued
-    : diagnosticStats.ai.todo;
+  // Local (trigger/dispatch/retry) AI dispatch is frozen either by
+  // aiSuggestionsMode === "off" or by a paused sync with a pending/syncing
+  // queue (Codex review, PR #670) — in both cases, `activeBlocked` already
+  // accounts for the only work that keeps moving regardless (server-queued,
+  // and anything already executing, manual or auto — a request in flight
+  // can't be un-started by either freeze). `activeUnblocked` is the
+  // deduplicated total for the normal case. Using the store's own Set-union
+  // fields here (rather than adding separate counts) is what makes this
+  // structurally immune to double-counting a bookmark present in more than
+  // one source set.
   const aiCount =
-    (aiSuggestionsMode === "off" ? 0 : aiBacklogCount) +
-    diagnosticStats.ai.manualInFlight;
+    aiSuggestionsMode === "off" || (syncPaused && queueBlocksAiDispatch)
+      ? diagnosticStats.ai.activeBlocked
+      : diagnosticStats.ai.activeUnblocked;
   const aiQuotaReached = aiQuotaExceeded !== null;
   const syncStages = [
     // "Pause sync" only gates syncNow's network phases — enrichInBackground
