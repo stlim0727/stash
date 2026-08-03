@@ -79,6 +79,8 @@ export class InMemoryBookmarkRepository implements BookmarkRepository {
   }
 
   async updateBookmark(bookmark: Bookmark): Promise<void> {
+    // Deliberately model web's strict replace behavior. Native currently upserts,
+    // so cross-platform callers must not rely on a missing row being inserted here.
     const index = this.state.bookmarks.findIndex((candidate) => candidate.id === bookmark.id);
     if (index >= 0) {
       this.state.bookmarks[index] = clone(bookmark);
