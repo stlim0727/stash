@@ -377,3 +377,48 @@ test('simulation: asynchronous invariants fail explicitly', async () => {
     },
   );
 });
+
+test('simulation: a real failure survives a snapshot callback that also throws', async () => {
+  const simulation = new DeterministicSimulation<{ count: number }>(() => {
+    throw new Error('fake state is temporarily unreadable');
+  });
+
+  await assert.rejects(
+    () =>
+      simulation.step('trigger', () => {
+        throw new Error('the real failure');
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /the real failure/);
+      assert.match(error.message, /"snapshotUnavailable": true/);
+      return true;
+    },
+  );
+});
+
+test('simulation: step() itself is bounded by the simulation timeout', async () => {
+  const simulation = new DeterministicSimulation(() => ({}), undefined, null, 20);
+
+  const start = Date.now();
+  await assert.rejects(
+    () => simulation.step('stuck-step', () => new Promise(() => {})),
+    /simulation step did not settle within 20ms: stuck-step/,
+  );
+  assert.ok(Date.now() - start < 1000, 'step() waited far longer than its own timeout');
+});
+
+test('simulation: a timeout message reflects barrier state as of the timeout, not as of the call', async () => {
+  const simulation = new DeterministicSimulation(() => ({}), undefined, null, 30);
+
+  simulation.spawn('worker', async () => {
+    // Not reached yet when join() is called below -- the message must still
+    // name it once it *is* reached during the wait.
+    await simulation.waitAt('reached-during-wait');
+  });
+
+  await assert.rejects(
+    () => simulation.join('worker'),
+    /unreleased barriers: reached-during-wait/,
+  );
+});

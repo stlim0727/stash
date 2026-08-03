@@ -135,7 +135,12 @@ export class DeterministicSimulation<State> {
   async step(label: string, action: () => void | Promise<void>): Promise<void> {
     this.trace.push(`step:${label}:start`);
     try {
-      await action();
+      await this.withTimeout(
+        Promise.resolve().then(action),
+        `step:${label}`,
+        () =>
+          `simulation step did not settle within ${this.timeoutMs}ms: ${label}${this.unreleasedBarrierSummary()}`,
+      );
       this.trace.push(`step:${label}:complete`);
       this.capture(label);
     } catch (error) {
@@ -171,7 +176,8 @@ export class DeterministicSimulation<State> {
         this.taskFailure.promise,
       ]),
       `task:${label}`,
-      `simulation task did not settle within ${this.timeoutMs}ms: ${label}${this.unreleasedBarrierSummary()}`,
+      () =>
+        `simulation task did not settle within ${this.timeoutMs}ms: ${label}${this.unreleasedBarrierSummary()}`,
     );
     if (taskFailure !== null) {
       throw this.failure(taskFailure.error, `task:${taskFailure.label}`);
@@ -202,7 +208,7 @@ export class DeterministicSimulation<State> {
     await this.withTimeout(
       barrier.released.promise,
       `barrier:${barrierName}`,
-      `simulation barrier was not released within ${this.timeoutMs}ms: ${barrierName}`,
+      () => `simulation barrier was not released within ${this.timeoutMs}ms: ${barrierName}`,
     );
     this.trace.push(`barrier:${barrierName}:passed`);
   }
@@ -215,7 +221,7 @@ export class DeterministicSimulation<State> {
         this.taskFailure.promise,
       ]),
       `barrier:${barrierName}`,
-      `simulation barrier was not reached within ${this.timeoutMs}ms: ${barrierName}`,
+      () => `simulation barrier was not reached within ${this.timeoutMs}ms: ${barrierName}`,
     );
     if (result !== null) {
       throw this.failure(result.error, `task:${result.label}`);
@@ -245,10 +251,27 @@ export class DeterministicSimulation<State> {
     return barrier;
   }
 
+  // this.snapshot() is a caller-supplied callback into fake/live state that
+  // can itself throw (e.g. a failing interleaving leaves the fake state
+  // temporarily unreadable). Guard it wherever it's read for diagnostics so a
+  // broken snapshot can't mask the real error underneath it -- or, worse,
+  // escape the plain setTimeout callback in withTimeout as an uncaught
+  // exception instead of a SimulationFailure.
+  private safeSnapshot(): State {
+    try {
+      return this.snapshot();
+    } catch (error) {
+      return {
+        snapshotUnavailable: true,
+        snapshotError: error instanceof Error ? error.message : String(error),
+      } as unknown as State;
+    }
+  }
+
   private capture(label: string): void {
     const liveCheckpoint: SimulationCheckpoint<State> = {
       label,
-      state: this.snapshot(),
+      state: this.safeSnapshot(),
       trace: [...this.trace],
     };
     try {
@@ -286,18 +309,25 @@ export class DeterministicSimulation<State> {
     }
     return new SimulationFailure(
       error,
-      { label, state: diagnosticClone(this.snapshot()), trace: [...this.trace] },
+      { label, state: diagnosticClone(this.safeSnapshot()), trace: [...this.trace] },
       this.seed,
     );
   }
 
-  private async withTimeout<T>(promise: Promise<T>, label: string, message: string): Promise<T> {
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    label: string,
+    message: () => string,
+  ): Promise<T> {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
         promise,
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(this.failure(new Error(message), label)), this.timeoutMs);
+          // message is evaluated here, when the timeout actually fires, not
+          // when withTimeout was called -- so it reflects barrier/task state
+          // as of the timeout, not as of whenever the wait started.
+          timeout = setTimeout(() => reject(this.failure(new Error(message()), label)), this.timeoutMs);
         }),
       ]);
     } finally {
