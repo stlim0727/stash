@@ -8,6 +8,8 @@ export interface SimulationCheckpoint<State> {
 
 export interface SimulationEvent<State> {
   label: string;
+  /** Event labels that must complete before this event becomes runnable. */
+  after?: readonly string[];
   run: (simulation: DeterministicSimulation<State>) => void | Promise<void>;
 }
 
@@ -372,10 +374,30 @@ export function seededEventOrder<State>(
   seed: number,
 ): SimulationEvent<State>[] {
   const random = seededRandom(seed);
-  const ordered = [...events];
-  for (let index = ordered.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    [ordered[index], ordered[swapIndex]] = [ordered[swapIndex]!, ordered[index]!];
+  const byLabel = new Map(events.map((event) => [event.label, event]));
+  assert.equal(byLabel.size, events.length, 'simulation event labels must be unique');
+  for (const event of events) {
+    for (const dependency of event.after ?? []) {
+      assert.ok(byLabel.has(dependency), `simulation event dependency does not exist: ${dependency}`);
+      assert.notEqual(dependency, event.label, `simulation event cannot depend on itself: ${event.label}`);
+    }
+  }
+
+  const remaining = new Map(byLabel);
+  const completed = new Set<string>();
+  const ordered: SimulationEvent<State>[] = [];
+  while (remaining.size > 0) {
+    const ready = [...remaining.values()].filter((event) =>
+      (event.after ?? []).every((dependency) => completed.has(dependency)),
+    );
+    assert.ok(
+      ready.length > 0,
+      `simulation event dependencies contain a cycle: ${[...remaining.keys()].join(', ')}`,
+    );
+    const selected = ready[Math.floor(random() * ready.length)]!;
+    ordered.push(selected);
+    completed.add(selected.label);
+    remaining.delete(selected.label);
   }
   return ordered;
 }
