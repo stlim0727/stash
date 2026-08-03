@@ -263,3 +263,47 @@ test('simulation: reaching a barrier checks transient state invariants', async (
     },
   );
 });
+
+test('simulation: an unreleased barrier fails with bounded diagnostics', async () => {
+  const simulation = new DeterministicSimulation(
+    () => ({ waiting: true }),
+    undefined,
+    675,
+    20,
+  );
+  simulation.spawn('stuck-upload', () => simulation.waitAt('upload-response'));
+  await simulation.waitUntilReached('upload-response');
+
+  await assert.rejects(
+    () => simulation.finish(),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /simulation barrier was not released within 20ms/);
+      assert.match(error.message, /upload-response/);
+      assert.match(error.message, /seed: 675/);
+      assert.match(error.message, /barrier:upload-response:reached/);
+      return true;
+    },
+  );
+});
+
+test('simulation: unclonable state preserves the original invariant failure', async () => {
+  const state = { count: 1, callback: () => undefined };
+  const simulation = new DeterministicSimulation(
+    () => state,
+    ({ state: current }) => {
+      assert.equal(current.count, 0, 'count should never exceed zero');
+    },
+  );
+
+  await assert.rejects(
+    () => simulation.step('inspect-unclonable-state', () => undefined),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /count should never exceed zero/);
+      assert.match(error.message, /"count": 1/);
+      assert.match(error.message, /\[Function callback\]/);
+      return true;
+    },
+  );
+});

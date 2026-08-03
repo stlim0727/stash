@@ -39,9 +39,48 @@ function deferred<T>(): Deferred<T> {
 
 function printable(value: unknown): string {
   try {
-    return JSON.stringify(value, null, 2);
+    const seen = new WeakSet<object>();
+    return JSON.stringify(
+      value,
+      (_key, item: unknown) => {
+        if (typeof item === 'function') {
+          return `[Function ${item.name || 'anonymous'}]`;
+        }
+        if (typeof item === 'bigint') {
+          return `${item}n`;
+        }
+        if (typeof item === 'symbol') {
+          return String(item);
+        }
+        if (typeof item === 'object' && item !== null) {
+          if (seen.has(item)) {
+            return '[Circular]';
+          }
+          seen.add(item);
+        }
+        return item;
+      },
+      2,
+    );
   } catch {
     return String(value);
+  }
+}
+
+function diagnosticClone<State>(value: State): State {
+  try {
+    return structuredClone(value);
+  } catch (cloneError) {
+    const preview = printable(value);
+    try {
+      return JSON.parse(preview) as State;
+    } catch {
+      return {
+        snapshotUnavailable: true,
+        cloneError: cloneError instanceof Error ? cloneError.message : String(cloneError),
+        preview,
+      } as State;
+    }
   }
 }
 
@@ -90,6 +129,7 @@ export class DeterministicSimulation<State> {
     private readonly snapshot: () => State,
     private readonly invariant: Invariant<State> = () => {},
     readonly seed: number | null = null,
+    private readonly timeoutMs = 1_000,
   ) {}
 
   async step(label: string, action: () => void | Promise<void>): Promise<void> {
@@ -125,7 +165,11 @@ export class DeterministicSimulation<State> {
   async join(label: string): Promise<void> {
     const record = this.tasks.get(label);
     assert.ok(record, `simulation task does not exist: ${label}`);
-    await record.promise;
+    await this.withTimeout(
+      record.promise,
+      `task:${label}`,
+      `simulation task did not settle within ${this.timeoutMs}ms: ${label}${this.unreleasedBarrierSummary()}`,
+    );
     this.tasks.delete(label);
     if (record.failed) {
       throw this.failure(record.error, `task:${label}`);
@@ -149,16 +193,24 @@ export class DeterministicSimulation<State> {
     this.trace.push(`barrier:${barrierName}:reached`);
     this.capture(`barrier:${barrierName}`);
     barrier.reached.resolve(undefined);
-    await barrier.released.promise;
+    await this.withTimeout(
+      barrier.released.promise,
+      `barrier:${barrierName}`,
+      `simulation barrier was not released within ${this.timeoutMs}ms: ${barrierName}`,
+    );
     this.trace.push(`barrier:${barrierName}:passed`);
   }
 
   /** Called by the test to wait until a fake dependency is definitely paused. */
   async waitUntilReached(barrierName: string): Promise<void> {
-    const result = await Promise.race([
-      this.getBarrier(barrierName).reached.promise.then(() => null),
-      this.taskFailure.promise,
-    ]);
+    const result = await this.withTimeout(
+      Promise.race([
+        this.getBarrier(barrierName).reached.promise.then(() => null),
+        this.taskFailure.promise,
+      ]),
+      `barrier:${barrierName}`,
+      `simulation barrier was not reached within ${this.timeoutMs}ms: ${barrierName}`,
+    );
     if (result !== null) {
       throw this.failure(result.error, `task:${result.label}`);
     }
@@ -188,16 +240,33 @@ export class DeterministicSimulation<State> {
   }
 
   private capture(label: string): void {
-    const checkpoint: SimulationCheckpoint<State> = {
+    const liveCheckpoint: SimulationCheckpoint<State> = {
       label,
-      state: structuredClone(this.snapshot()),
+      state: this.snapshot(),
       trace: [...this.trace],
     };
     try {
-      this.invariant(checkpoint);
+      this.invariant(liveCheckpoint);
+    } catch (error) {
+      throw new SimulationFailure(
+        error,
+        { ...liveCheckpoint, state: diagnosticClone(liveCheckpoint.state) },
+        this.seed,
+      );
+    }
+
+    try {
+      const checkpoint = {
+        ...liveCheckpoint,
+        state: structuredClone(liveCheckpoint.state),
+      };
       this.checkpoints.push(checkpoint);
     } catch (error) {
-      throw new SimulationFailure(error, checkpoint, this.seed);
+      throw new SimulationFailure(
+        error,
+        { ...liveCheckpoint, state: diagnosticClone(liveCheckpoint.state) },
+        this.seed,
+      );
     }
   }
 
@@ -207,9 +276,32 @@ export class DeterministicSimulation<State> {
     }
     return new SimulationFailure(
       error,
-      { label, state: structuredClone(this.snapshot()), trace: [...this.trace] },
+      { label, state: diagnosticClone(this.snapshot()), trace: [...this.trace] },
       this.seed,
     );
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, label: string, message: string): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(this.failure(new Error(message), label)), this.timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  private unreleasedBarrierSummary(): string {
+    const names = [...this.barriers.entries()]
+      .filter(([, barrier]) => barrier.didReach && !barrier.didRelease)
+      .map(([name]) => name);
+    return names.length === 0 ? '' : `; unreleased barriers: ${names.join(', ')}`;
   }
 }
 
