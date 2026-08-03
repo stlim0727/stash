@@ -155,9 +155,9 @@ export class DeterministicSimulation<State> {
       })
       .catch((error: unknown) => {
         record.failed = true;
-        record.error = error;
         this.trace.push(`task:${label}:failed`);
-        this.taskFailure.resolve({ label, error });
+        record.error = this.failure(error, `task:${label}`);
+        this.taskFailure.resolve({ label, error: record.error });
       });
     this.tasks.set(label, record);
   }
@@ -165,11 +165,17 @@ export class DeterministicSimulation<State> {
   async join(label: string): Promise<void> {
     const record = this.tasks.get(label);
     assert.ok(record, `simulation task does not exist: ${label}`);
-    await this.withTimeout(
-      record.promise,
+    const taskFailure = await this.withTimeout(
+      Promise.race([
+        record.promise.then(() => null),
+        this.taskFailure.promise,
+      ]),
       `task:${label}`,
       `simulation task did not settle within ${this.timeoutMs}ms: ${label}${this.unreleasedBarrierSummary()}`,
     );
+    if (taskFailure !== null) {
+      throw this.failure(taskFailure.error, `task:${taskFailure.label}`);
+    }
     this.tasks.delete(label);
     if (record.failed) {
       throw this.failure(record.error, `task:${label}`);
@@ -246,7 +252,11 @@ export class DeterministicSimulation<State> {
       trace: [...this.trace],
     };
     try {
-      this.invariant(liveCheckpoint);
+      const result = this.invariant(liveCheckpoint) as unknown;
+      if (result && typeof (result as PromiseLike<unknown>).then === 'function') {
+        void Promise.resolve(result).catch(() => {});
+        throw new Error('simulation invariants must be synchronous');
+      }
     } catch (error) {
       throw new SimulationFailure(
         error,

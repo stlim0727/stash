@@ -307,3 +307,73 @@ test('simulation: unclonable state preserves the original invariant failure', as
     },
   );
 });
+
+test('simulation: finish surfaces a later task failure before an earlier task timeout', async () => {
+  const simulation = new DeterministicSimulation(
+    () => ({ phase: 'running' }),
+    undefined,
+    675,
+    200,
+  );
+  simulation.spawn('first-stuck', () => simulation.waitAt('first-barrier'));
+  await simulation.waitUntilReached('first-barrier');
+  simulation.spawn('second-fails', () => {
+    throw new Error('later task failed');
+  });
+
+  await assert.rejects(
+    () => simulation.finish(),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /later task failed/);
+      assert.match(error.message, /task:second-fails:failed/);
+      assert.doesNotMatch(error.message, /did not settle within/);
+      return true;
+    },
+  );
+  simulation.release('first-barrier');
+});
+
+test('simulation: spawned task failures retain their failure-time checkpoint', async () => {
+  const state = { revision: 1 };
+  const simulation = new DeterministicSimulation(() => state);
+  simulation.spawn('fails-now', () => {
+    throw new Error('failed at revision one');
+  });
+  await assert.rejects(() => simulation.waitUntilReached('unused'), /failed at revision one/);
+
+  await simulation.step('later-mutation', () => {
+    state.revision = 2;
+  });
+
+  await assert.rejects(
+    () => simulation.join('fails-now'),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /"revision": 1/);
+      assert.doesNotMatch(error.message, /step:later-mutation/);
+      return true;
+    },
+  );
+});
+
+test('simulation: asynchronous invariants fail explicitly', async () => {
+  const simulation = new DeterministicSimulation(
+    () => ({ valid: false }),
+    async () => {
+      throw new Error('async assertion rejection');
+    },
+    675,
+  );
+
+  await assert.rejects(
+    () => simulation.step('async-invariant', () => undefined),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /simulation invariants must be synchronous/);
+      assert.match(error.message, /step:async-invariant:complete/);
+      assert.match(error.message, /"valid": false/);
+      return true;
+    },
+  );
+});
