@@ -750,6 +750,25 @@ export default function SettingsScreen() {
           ? t("settings.sync.waiting", { count: waiting })
           : t("settings.sync.allBackedUp");
 
+  // Sync-pipeline breakdown (Sentry STASH-4W): the headline row above only
+  // ever reports the upload queue, which reads as "stuck" when metadata
+  // enrichment or AI tagging is still working (or stalled on quota) after
+  // uploads finish. These conditional sub-rows surface each pipeline's own
+  // count independently — they are NOT a partition of one total, a bookmark
+  // can be counted in more than one stage at once (e.g. freshly captured is
+  // both upload-pending and metadata-pending).
+  const uploadingCount = waiting; // same value as today's headline count
+  const fetchingInfoCount = diagnosticStats.metadata.todo;
+  const aiCount = aiSuggestionsMode !== "off" ? diagnosticStats.ai.todo : 0;
+  const aiQuotaReached = aiQuotaExceeded !== null;
+  const syncStages = [
+    { key: "uploading" as const, count: uploadingCount },
+    { key: "fetchingInfo" as const, count: fetchingInfoCount },
+    { key: "aiSuggestions" as const, count: aiCount },
+  ].filter((stage) => stage.count > 0);
+  const showSyncBreakdown =
+    cloudAvailable && !syncPaused && syncStages.length >= 2;
+
   const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
     Constants.expoConfig?.sdkVersion ?? "56"
@@ -857,7 +876,7 @@ export default function SettingsScreen() {
             icon={syncPaused ? "pause-circle-outline" : "sync"}
             label={t("settings.sync.label")}
             value={syncSummary}
-            last
+            last={!showSyncBreakdown}
             right={
               <View style={styles.syncActions}>
                 {isSyncing ? (
@@ -906,6 +925,57 @@ export default function SettingsScreen() {
               </View>
             }
           />
+          {showSyncBreakdown
+            ? syncStages.map((stage, index) => {
+                const isLastStage = index === syncStages.length - 1;
+                if (stage.key === "uploading") {
+                  return (
+                    <Row
+                      key={stage.key}
+                      styles={styles}
+                      palette={palette}
+                      icon="cloud-upload-outline"
+                      label={t("settings.syncBreakdown.uploading.label")}
+                      value={t("settings.syncBreakdown.uploading.value", {
+                        count: stage.count,
+                      })}
+                      last={isLastStage}
+                    />
+                  );
+                }
+                if (stage.key === "fetchingInfo") {
+                  return (
+                    <Row
+                      key={stage.key}
+                      styles={styles}
+                      palette={palette}
+                      icon="document-text-outline"
+                      label={t("settings.syncBreakdown.fetchingInfo.label")}
+                      value={t("settings.syncBreakdown.fetchingInfo.value", {
+                        count: stage.count,
+                      })}
+                      last={isLastStage}
+                    />
+                  );
+                }
+                return (
+                  <Row
+                    key={stage.key}
+                    styles={styles}
+                    palette={palette}
+                    icon="hourglass-outline"
+                    label={t("settings.syncBreakdown.aiSuggestions.label")}
+                    value={t(
+                      aiQuotaReached
+                        ? "settings.syncBreakdown.aiSuggestions.valueQuotaReached"
+                        : "settings.syncBreakdown.aiSuggestions.value",
+                      { count: stage.count },
+                    )}
+                    last={isLastStage}
+                  />
+                );
+              })
+            : null}
         </Card>
       </View>
 
