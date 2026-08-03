@@ -18,6 +18,8 @@
 
 /** A single re-ingestable item, normalized across both source formats. */
 export interface ImportItem {
+  /** Parser provenance. Present for every item produced by parseImport. */
+  source?: 'stash-backup' | 'netscape-html' | 'pocket-csv';
   url: string | null;
   title: string | null;
   notes: string | null;
@@ -99,6 +101,7 @@ export function parseJsonBackup(text: string): ImportItem[] {
         )
       : [];
     return {
+      source: 'stash-backup',
       url: cleanString(entry.url),
       title: cleanString(entry.title),
       // `notes` is the user-authored field; `description` is generated page
@@ -150,6 +153,7 @@ export function parseNetscapeHtml(text: string): ImportItem[] {
     }
     const tagsRaw = anchorAttrs?.match(TAGS_ATTR)?.[1];
     items.push({
+      source: 'netscape-html',
       url: unescapeHtml(href).trim() || null,
       title: cleanString(unescapeHtml(anchorText ?? '')),
       notes: null,
@@ -249,6 +253,7 @@ export function parsePocketCsv(text: string): ImportItem[] {
     }
     const rawTags = tagsIdx >= 0 ? (row[tagsIdx] ?? '') : '';
     items.push({
+      source: 'pocket-csv',
       url,
       title: titleIdx >= 0 ? cleanString(row[titleIdx]) : null,
       notes: null,

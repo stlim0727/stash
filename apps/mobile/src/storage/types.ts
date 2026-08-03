@@ -27,6 +27,11 @@ export interface CreateSyncCompletion {
   originalLocalId?: string;
 }
 
+export interface ImportBatchOptions {
+  /** Meta snapshots that must exist whenever any imported bookmark does. */
+  metaUpdates?: Record<string, string>;
+}
+
 /**
  * Durable local storage contract for bookmarks and the offline sync queue.
  *
@@ -61,7 +66,11 @@ export interface BookmarkRepository {
    * Atomically insert a batch of imported bookmarks and their pending create queue
    * entries in a single transaction (Sentry STASH-3S / STASH-3T).
    */
-  insertImportBatch?(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void>;
+  insertImportBatch?(
+    bookmarks: Bookmark[],
+    entries: LocalPendingBookmark[],
+    options?: ImportBatchOptions,
+  ): Promise<void>;
   deleteBookmark(id: string): Promise<void>;
   listQueue(): Promise<LocalPendingBookmark[]>;
   enqueue(entry: LocalPendingBookmark): Promise<void>;

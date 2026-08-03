@@ -11,6 +11,10 @@ import { InMemoryBookmarkRepository } from '@/__tests__/helpers/in-memory-bookma
 import type { BookmarkApi } from '@/api/bookmarks';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import {
+  PENDING_IMPORT_COLLECTIONS_KEY,
+  parsePendingImportCollections,
+} from '@/domain/pending-import-collections';
+import {
   createNeedsReconcileUpdate,
   makeMutationEntry,
   syncQueueEntry,
@@ -149,6 +153,106 @@ test('simulation: a process restart re-drives durable restore work', async () =>
     enrichmentUploaded: true,
     processGeneration: 2,
   });
+});
+
+test('simulation: imported bookmark and organization outboxes cross restart together', async () => {
+  const now = '2026-08-03T00:00:00.000Z';
+  const bookmark: Bookmark = {
+    id: '00000000-0000-4000-8000-000000000671',
+    user_id: 'user-1',
+    url: 'https://example.com/restore',
+    canonical_url: null,
+    url_hash: 'https://example.com/restore',
+    client_id: 'client-671',
+    title: 'Restore me',
+    description: null,
+    notes: null,
+    source_app: null,
+    content_type: 'url',
+    preview_image_url: null,
+    favicon_url: null,
+    site_name: null,
+    collection_id: null,
+    is_archived: false,
+    deleted_at: null,
+    created_at: now,
+    updated_at: now,
+    last_saved_at: now,
+    metadata_status: 'pending',
+    sync_status: 'pending',
+  };
+  const entry: LocalPendingBookmark = {
+    local_id: bookmark.id,
+    remote_id: null,
+    operation: 'create',
+    payload: { id: bookmark.id, url: bookmark.url!, client_id: bookmark.client_id! },
+    sync_status: 'pending',
+    retry_count: 0,
+    last_error: null,
+    created_at: now,
+    updated_at: now,
+  };
+  const tagOps = [
+    {
+      id: 'tag-op-1',
+      bookmark_id: bookmark.id,
+      tag_name: 'research',
+      op: 'add',
+      source: 'user',
+      confidence: null,
+      created_at: now,
+    },
+  ];
+  const collectionOps = [
+    {
+      bookmark_id: bookmark.id,
+      collection_name: 'Projects',
+      status: 'pending',
+      last_error: null,
+      created_at: now,
+    },
+  ];
+  let repository = new InMemoryBookmarkRepository();
+  const simulation = new DeterministicSimulation(
+    () => repository.inspect(),
+    ({ state }) => {
+      for (const stored of state.bookmarks) {
+        assert.ok(state.queue.some((queued) => queued.local_id === stored.id));
+        assert.ok(
+          JSON.parse(state.meta.pending_tag_ops ?? '[]').some(
+            (op: { bookmark_id?: string }) => op.bookmark_id === stored.id,
+          ),
+        );
+        assert.ok(
+          parsePendingImportCollections(
+            state.meta[PENDING_IMPORT_COLLECTIONS_KEY] ?? null,
+          ).some((op) => op.bookmark_id === stored.id),
+        );
+      }
+    },
+  );
+
+  await simulation.step('persist-import-batch', () =>
+    repository.insertImportBatch([bookmark], [entry], {
+      metaUpdates: {
+        pending_tag_ops: JSON.stringify(tagOps),
+        [PENDING_IMPORT_COLLECTIONS_KEY]: JSON.stringify(collectionOps),
+      },
+    }),
+  );
+  await simulation.step('process-restart', () => {
+    repository = repository.restart();
+  });
+  await simulation.finish();
+
+  assert.deepEqual(await repository.listBookmarks(), [bookmark]);
+  assert.deepEqual(await repository.listQueue(), [entry]);
+  assert.equal(
+    parsePendingImportCollections(
+      await repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
+    )[0]?.collection_name,
+    'Projects',
+  );
 });
 
 test('simulation: seeded event ordering is reproducible', async () => {

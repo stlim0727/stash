@@ -150,9 +150,17 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(QUEUE_KEY, this.queue);
   }
 
-  async insertImportBatch(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void> {
+  async insertImportBatch(
+    bookmarks: Bookmark[],
+    entries: LocalPendingBookmark[],
+    options?: { metaUpdates?: Record<string, string> },
+  ): Promise<void> {
     if (bookmarks.length === 0) {
       return;
+    }
+    if (options?.metaUpdates) {
+      this.meta = { ...this.meta, ...options.metaUpdates };
+      this.write(META_KEY, this.meta);
     }
     const existingIds = new Set(this.bookmarks.map((b) => b.id));
     const newBookmarks = bookmarks.filter((b) => !existingIds.has(b.id));

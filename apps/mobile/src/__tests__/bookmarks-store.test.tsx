@@ -28,6 +28,7 @@ jest.mock('@/domain/enrichment', () => ({
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
 import { clearLogEntries, getLogEntries } from '@/observability/log-buffer';
+import { PENDING_IMPORT_COLLECTIONS_KEY } from '@/domain/pending-import-collections';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
 
@@ -518,6 +519,47 @@ test('import: an enrichment finishing early never gets clobbered by the row\'s l
       expect(row.title).toBe(`Enriched ${row.url}`);
     }
   });
+});
+
+test('import: tags and collection intent are written durably', async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    result.current.importBookmarks([
+      {
+        source: 'stash-backup',
+        url: 'https://example.com/organized',
+        title: 'Organized',
+        notes: null,
+        tags: ['reading', 'research'],
+        collection: 'Projects',
+      },
+    ]);
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  const bookmarkId = fakeRepo.__bookmarks()[0]!.id;
+  expect(
+    result.current
+      .getTagsForBookmark(bookmarkId)
+      .map((tag) => tag.name)
+      .sort(),
+  ).toEqual(['reading', 'research']);
+  expect(JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]')).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ bookmark_id: bookmarkId, tag_name: 'reading' }),
+      expect.objectContaining({ bookmark_id: bookmarkId, tag_name: 'research' }),
+    ]),
+  );
+  expect(
+    JSON.parse(fakeRepo.__meta(PENDING_IMPORT_COLLECTIONS_KEY) ?? '[]'),
+  ).toEqual([
+    expect.objectContaining({
+      bookmark_id: bookmarkId,
+      collection_name: 'Projects',
+      status: 'pending',
+    }),
+  ]);
 });
 
 test('import: logs a start/finish summary (Sentry STASH-3K/3M instrumentation)', async () => {

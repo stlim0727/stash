@@ -254,7 +254,11 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     );
   }
 
-  async insertImportBatch(bookmarks: Bookmark[], entries: LocalPendingBookmark[]): Promise<void> {
+  async insertImportBatch(
+    bookmarks: Bookmark[],
+    entries: LocalPendingBookmark[],
+    options?: { metaUpdates?: Record<string, string> },
+  ): Promise<void> {
     if (bookmarks.length === 0) {
       return;
     }
@@ -264,6 +268,14 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         const bookmarkChunk = bookmarks.slice(offset, offset + BATCH_SIZE);
         const entryChunk = entries.slice(offset, offset + BATCH_SIZE);
         await db.withTransactionAsync(async () => {
+          if (offset === 0 && options?.metaUpdates) {
+            for (const [key, value] of Object.entries(options.metaUpdates)) {
+              await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
+                key,
+                value,
+              ]);
+            }
+          }
           for (let i = 0; i < bookmarkChunk.length; i += 1) {
             await writeBookmark(db, bookmarkChunk[i]);
             await db.runAsync(
