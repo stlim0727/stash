@@ -397,6 +397,23 @@ test('simulation: a real failure survives a snapshot callback that also throws',
   );
 });
 
+test('simulation: a snapshot callback failure cannot become a successful checkpoint', async () => {
+  const simulation = new DeterministicSimulation<never>(() => {
+    throw new Error('snapshot read failed');
+  });
+
+  await assert.rejects(
+    () => simulation.step('capture-broken-snapshot', () => undefined),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /snapshot read failed/);
+      assert.match(error.message, /"snapshotUnavailable": true/);
+      assert.equal(simulation.checkpoints.length, 0);
+      return true;
+    },
+  );
+});
+
 test('simulation: step() itself is bounded by the simulation timeout', async () => {
   const simulation = new DeterministicSimulation(() => ({}), undefined, null, 20);
 

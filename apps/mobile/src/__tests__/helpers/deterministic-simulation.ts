@@ -269,9 +269,19 @@ export class DeterministicSimulation<State> {
   }
 
   private capture(label: string): void {
+    let state: State;
+    try {
+      state = this.snapshot();
+    } catch (error) {
+      throw new SimulationFailure(
+        error,
+        { label, state: this.safeSnapshot(), trace: [...this.trace] },
+        this.seed,
+      );
+    }
     const liveCheckpoint: SimulationCheckpoint<State> = {
       label,
-      state: this.safeSnapshot(),
+      state,
       trace: [...this.trace],
     };
     try {
