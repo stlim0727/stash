@@ -93,6 +93,16 @@ export class InMemoryBookmarkRepository implements BookmarkRepository {
   async completeCreateSyncBatch(completions: CreateSyncCompletion[]): Promise<void> {
     const next = this.inspect();
     for (const completion of completions) {
+      const stored = next.queue.find(
+        (entry) => entry.local_id === completion.entry.local_id,
+      );
+      if (
+        !stored ||
+        stored.operation !== completion.entry.operation ||
+        stored.updated_at !== completion.entry.updated_at
+      ) {
+        continue;
+      }
       if (completion.originalLocalId && completion.originalLocalId !== completion.bookmark.id) {
         next.bookmarks = next.bookmarks.filter(
           (bookmark) => bookmark.id !== completion.originalLocalId,
@@ -108,12 +118,19 @@ export class InMemoryBookmarkRepository implements BookmarkRepository {
     bookmarks: Bookmark[],
     entries: LocalPendingBookmark[],
   ): Promise<void> {
+    const next = this.inspect();
     for (const bookmark of bookmarks) {
-      this.state.bookmarks = upsertById(this.state.bookmarks, bookmark);
+      next.bookmarks = upsertById(next.bookmarks, bookmark);
     }
     for (const entry of entries) {
-      await this.enqueue(entry);
+      const index = next.queue.findIndex((candidate) => candidate.local_id === entry.local_id);
+      if (index < 0) {
+        next.queue.push(clone(entry));
+      } else {
+        next.queue[index] = clone(entry);
+      }
     }
+    this.state = next;
   }
 
   async deleteBookmark(id: string): Promise<void> {

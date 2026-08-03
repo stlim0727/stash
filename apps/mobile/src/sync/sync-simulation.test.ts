@@ -10,7 +10,12 @@ import {
 import { InMemoryBookmarkRepository } from '@/__tests__/helpers/in-memory-bookmark-repository';
 import type { BookmarkApi } from '@/api/bookmarks';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
-import { syncQueueEntry, type EntrySyncResult } from '@/sync/sync-bookmarks';
+import {
+  createNeedsReconcileUpdate,
+  makeMutationEntry,
+  syncQueueEntry,
+  type EntrySyncResult,
+} from '@/sync/sync-bookmarks';
 
 interface SyncRunnerState {
   activeRuns: number;
@@ -539,7 +544,7 @@ function makeDurableCreateEntry(): LocalPendingBookmark {
   };
 }
 
-test('simulation: real syncQueueEntry survives duplicate adoption, an in-flight edit, and restart', async () => {
+test('simulation: real syncQueueEntry reconciles duplicate adoption and an in-flight edit after restart', async () => {
   let currentBookmark = makeDurableBookmark();
   const entry = makeDurableCreateEntry();
   let repository = new InMemoryBookmarkRepository({
@@ -547,6 +552,7 @@ test('simulation: real syncQueueEntry survives duplicate adoption, an in-flight 
     queue: [entry],
   });
   const sentTitles: Array<string | undefined> = [];
+  const updatedTitles: Array<string | null> = [];
   let result: EntrySyncResult | undefined;
   const simulation = new DeterministicSimulation(
     () => repository.inspect(),
@@ -575,6 +581,10 @@ test('simulation: real syncQueueEntry survives duplicate adoption, an in-flight 
         metadata_status: 'complete' as const,
       };
     },
+    updateBookmark: async (_id, input) => {
+      updatedTitles.push(input.title ?? null);
+      return currentBookmark;
+    },
   } as BookmarkApi;
 
   simulation.spawn('real-create-sync', async () => {
@@ -594,16 +604,35 @@ test('simulation: real syncQueueEntry survives duplicate adoption, an in-flight 
   simulation.release('create-response');
   await simulation.join('real-create-sync');
 
+  await simulation.step('apply-create-result-and-persist-reconcile-intent', async () => {
+    assert.ok(result?.bookmarkUpdate);
+    currentBookmark = result.bookmarkUpdate;
+    assert.equal(
+      createNeedsReconcileUpdate(currentBookmark, result.uploadedPayload, {
+        titleChangedByUser: true,
+      }),
+      true,
+    );
+    await repository.enqueue(makeMutationEntry(currentBookmark.id, 'update'));
+  });
   await simulation.step('cold-restart-from-durable-state', async () => {
     repository = repository.restart();
     const [restored] = await repository.listBookmarks();
     assert.ok(restored);
     currentBookmark = restored;
   });
+  await simulation.step('resume-durable-reconcile-update', async () => {
+    const [reconcileEntry] = await repository.listQueue();
+    assert.ok(reconcileEntry);
+    await syncQueueEntry(api, repository, reconcileEntry, (id) =>
+      id === currentBookmark.id ? currentBookmark : undefined,
+    );
+  });
   await simulation.finish();
 
   const durable = repository.inspect();
   assert.deepEqual(sentTitles, ['Original title']);
+  assert.deepEqual(updatedTitles, ['Edited while uploading']);
   assert.equal(result?.originalLocalId, LOCAL_ID);
   assert.equal(result?.bookmarkUpdate?.id, EXISTING_REMOTE_ID);
   assert.deepEqual(durable.queue, []);
@@ -624,4 +653,51 @@ test('simulation: repository restart preserves reset without re-seeding', async 
 
   assert.deepEqual(await repository.listBookmarks(), []);
   assert.equal(repository.inspect().initialized, true);
+});
+
+test('simulation: batch completion preserves a superseding queue mutation', async () => {
+  const createEntry = makeDurableCreateEntry();
+  const supersedingUpdate = {
+    ...makeMutationEntry(LOCAL_ID, 'update'),
+    updated_at: '2026-08-03T00:02:00.000Z',
+  };
+  const original = makeDurableBookmark();
+  const repository = new InMemoryBookmarkRepository({
+    bookmarks: [original],
+    queue: [supersedingUpdate],
+  });
+
+  await repository.completeCreateSyncBatch?.([
+    {
+      bookmark: makeDurableBookmark({ id: EXISTING_REMOTE_ID, sync_status: 'synced' }),
+      entry: createEntry,
+      originalLocalId: LOCAL_ID,
+    },
+  ]);
+
+  assert.deepEqual(await repository.listQueue(), [supersedingUpdate]);
+  assert.deepEqual(await repository.listBookmarks(), [original]);
+});
+
+test('simulation: import batch cannot repopulate queue work after a concurrent reset', async () => {
+  const secondId = '33333333-3333-4333-8333-333333333333';
+  const first = makeDurableBookmark();
+  const second = makeDurableBookmark({ id: secondId, url: 'https://example.com/second' });
+  const firstEntry = makeDurableCreateEntry();
+  const secondEntry = {
+    ...makeDurableCreateEntry(),
+    local_id: secondId,
+    payload: { id: secondId, url: 'https://example.com/second', client_id: secondId },
+  };
+  const repository = new InMemoryBookmarkRepository({ initialized: true });
+
+  const insertion = repository.insertImportBatch?.(
+    [first, second],
+    [firstEntry, secondEntry],
+  );
+  await repository.clearAllData();
+  await insertion;
+
+  assert.deepEqual(await repository.listBookmarks(), []);
+  assert.deepEqual(await repository.listQueue(), []);
 });
