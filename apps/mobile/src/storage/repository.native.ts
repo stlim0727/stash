@@ -2,6 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
 import { noteSqliteOpenFailure } from '@/storage/diagnostics';
+import { runImportBatchTransactions } from '@/storage/import-batch';
 import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
@@ -262,41 +263,38 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     if (bookmarks.length === 0) {
       return;
     }
-    const BATCH_SIZE = 50;
     await this.connection.run(async (db) => {
-      for (let offset = 0; offset < bookmarks.length; offset += BATCH_SIZE) {
-        const bookmarkChunk = bookmarks.slice(offset, offset + BATCH_SIZE);
-        const entryChunk = entries.slice(offset, offset + BATCH_SIZE);
-        await db.withTransactionAsync(async () => {
-          if (offset === 0 && options?.metaUpdates) {
-            for (const [key, value] of Object.entries(options.metaUpdates)) {
-              await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
-                key,
-                value,
-              ]);
-            }
-          }
-          for (let i = 0; i < bookmarkChunk.length; i += 1) {
-            await writeBookmark(db, bookmarkChunk[i]);
-            await db.runAsync(
-              `INSERT OR REPLACE INTO local_pending_bookmarks
-              (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                entryChunk[i].local_id,
-                entryChunk[i].remote_id,
-                entryChunk[i].operation,
-                JSON.stringify(entryChunk[i].payload),
-                entryChunk[i].sync_status,
-                entryChunk[i].retry_count,
-                entryChunk[i].last_error,
-                entryChunk[i].created_at,
-                entryChunk[i].updated_at,
-              ],
-            );
-          }
-        });
-      }
+      await runImportBatchTransactions({
+        bookmarks,
+        entries,
+        metaUpdates: options?.metaUpdates,
+        transaction: (work) => db.withTransactionAsync(work),
+        writeMeta: async (key, value) => {
+          await db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [
+            key,
+            value,
+          ]);
+        },
+        writePair: async (bookmark, entry) => {
+          await writeBookmark(db, bookmark);
+          await db.runAsync(
+            `INSERT OR REPLACE INTO local_pending_bookmarks
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              entry.local_id,
+              entry.remote_id,
+              entry.operation,
+              JSON.stringify(entry.payload),
+              entry.sync_status,
+              entry.retry_count,
+              entry.last_error,
+              entry.created_at,
+              entry.updated_at,
+            ],
+          );
+        },
+      });
     });
   }
 
