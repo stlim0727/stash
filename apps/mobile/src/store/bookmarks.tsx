@@ -65,6 +65,7 @@ import {
   EMPTY_AI_ENRICHMENT_BURST_QUEUE,
   clearBurstCompletion,
   dequeueAiEnrichmentDispatch,
+  dropAiEnrichmentDispatchIds,
   enqueueAiEnrichmentDispatch,
   isBurstComplete,
   recordAiEnrichmentDispatchSettled,
@@ -1695,6 +1696,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         pendingAiTrigger.current.delete(id);
         aiTriggerAttempted.current.delete(id);
       }
+      // The staggered auto-dispatch queue is account-scoped bookkeeping too:
+      // a bookmark staged here but not yet popped when the account switched
+      // otherwise keeps counting toward the new session's pipeline total
+      // (Sentry STASH-4Y).
+      aiDispatchQueueRef.current = dropAiEnrichmentDispatchIds(
+        aiDispatchQueueRef.current,
+        ids,
+      );
       if (retryChanged) {
         aiRetryState.current = nextRetry;
         persistAiRetryState();
