@@ -69,6 +69,7 @@ import {
   enqueueAiEnrichmentDispatch,
   isBurstComplete,
   recordAiEnrichmentDispatchSettled,
+  remapAiEnrichmentDispatchIds,
   type AiEnrichmentBurstQueue,
 } from "@/domain/ai-enrichment-burst";
 import { parseStringSetMap } from "@/domain/string-set-map";
@@ -1059,6 +1060,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     EMPTY_AI_ENRICHMENT_BURST_QUEUE,
   );
   const aiDispatchInFlight = useRef(false);
+  // Bumped only at an account boundary (real-account switch, sign-out cache
+  // clear) — NOT by emptyTrash, which also drops ids but must never abort an
+  // unrelated in-flight dispatch for a different, still-active bookmark. The
+  // drain loop below snapshots this at dispatch start and discards the
+  // settle's burst-queue update/toast if it moved meanwhile: otherwise a
+  // dispatch account A started can still settle after a switch to B and
+  // count toward B's burst total (#691, found in STASH-4Y review).
+  const aiDispatchEpoch = useRef(0);
   // STASH-4K follow-up: epoch ms until which the auto drain below pauses
   // dispatching entirely, armed whenever a 429 reveals the per-user quota is
   // exhausted (see AI_QUOTA_DAILY_COOLDOWN_MS). 0 means no cooldown.
@@ -1787,6 +1796,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (triggerChanged) {
         persistPendingAiTrigger();
       }
+      // Re-key the staggered auto-dispatch burst queue too — without this, a
+      // bookmark staged here under its old anonymous id silently no-ops the
+      // moment the drain loop pops it: `requestAiEnrichment`'s first check
+      // (`bookmarksRef.current?.some(item => item.id === bookmarkId)`) finds
+      // nothing under the now-dead old id, and the queued auto-suggestion is
+      // lost rather than delivered under the new one (#692).
+      aiDispatchQueueRef.current = remapAiEnrichmentDispatchIds(
+        aiDispatchQueueRef.current,
+        idMap,
+      );
     },
     [
       persistAiRetryState,
@@ -4696,6 +4715,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // ownership check) can't fire requestAiEnrichment against A's
               // bookmark id under B's now-active session.
               dropAiRetryBookkeeping(ids);
+              // dropAiRetryBookkeeping's per-id filter only zeroes
+              // completedInBurst when it actually removes something from
+              // .pending — if A's last dispatch had already been popped (in
+              // flight, nothing left pending) at switch time, a nonzero count
+              // survives untouched and would bleed into B's first burst
+              // toast. Zero it unconditionally here instead; unlike a full
+              // queue reset this doesn't touch .pending, so a legitimately
+              // surviving never-synced local bookmark's staged dispatch (drop
+              // only removes rows with a remote identity — see
+              // cloudRemoteRows) isn't lost. The epoch bump discards A's
+              // still-in-flight dispatch's own settle too (#691).
+              aiDispatchQueueRef.current = clearBurstCompletion(
+                aiDispatchQueueRef.current,
+              );
+              aiDispatchEpoch.current += 1;
             },
           },
         );
@@ -6447,6 +6481,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         return;
       }
       aiDispatchInFlight.current = true;
+      const dispatchEpochAtStart = aiDispatchEpoch.current;
       void requestAiEnrichment(id, "auto")
         .then((error) => {
           if (!error) {
@@ -6455,6 +6490,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         })
         .finally(() => {
           aiDispatchInFlight.current = false;
+          if (aiDispatchEpoch.current !== dispatchEpochAtStart) {
+            // An account boundary was crossed while this dispatch was in
+            // flight — aiDispatchQueueRef now belongs to a different
+            // session; discard rather than count this settle toward its
+            // burst total (#691).
+            return;
+          }
           aiDispatchQueueRef.current = recordAiEnrichmentDispatchSettled(
             aiDispatchQueueRef.current,
           );
@@ -6905,6 +6947,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // so it can't keep firing requestAiEnrichment against its
               // bookmark ids under the next (different) session.
               dropAiRetryBookkeeping(ids);
+              // Same reasoning as the real A→real B switch above: zero the
+              // settled count unconditionally (dropAiRetryBookkeeping's
+              // per-id filter only does this when something was actually
+              // pending) without touching .pending itself, and bump the
+              // epoch so a dispatch still in flight from the logged-out
+              // account can't settle into the next session's burst (#691).
+              aiDispatchQueueRef.current = clearBurstCompletion(
+                aiDispatchQueueRef.current,
+              );
+              aiDispatchEpoch.current += 1;
             },
           },
         );

@@ -917,6 +917,92 @@ test('a request that settles AFTER an account switch does not arm the new accoun
   );
 });
 
+test('a burst-dispatch settling after a real A→real B switch does not fire a completion toast under B (#691)', async () => {
+  // Sharper than the two cooldown tests above, and specifically targeting the
+  // auto-dispatch BURST QUEUE (aiDispatchQueueRef) rather than the quota
+  // cooldown: this needs a genuine real→real "switch" (drop), not the
+  // anon-carry-over "rehome" those tests exercise — hence is_anonymous:
+  // false on both accounts, so planAccountTransition picks 'switch'.
+  //
+  // Account A auto-dispatches two bookmarks. The first (SYNCED_ID) settles
+  // normally, bumping completedInBurst to 1 — still below the toast
+  // threshold, so nothing has shown yet. The second (SECOND_SYNCED_ID) is
+  // held open. The switch to B happens while it's still in flight, dropping
+  // both of A's bookmarks. If the stale settle were still allowed to count
+  // (the #691 bug), completedInBurst would reach 2 with nothing left
+  // pending — isBurstComplete — and fire a toast under B reporting two
+  // bookmarks that were entirely A's.
+  const realUserA: { id: string; is_anonymous?: boolean } = {
+    id: 'real-user-a',
+    is_anonymous: false,
+  };
+  mockAuthSession = { ...mockSession, user: realUserA };
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID, metadata_status: 'complete' }),
+    makeStoredBookmark({ id: SECOND_SYNCED_ID, metadata_status: 'complete' }),
+  ]);
+  await fakeRepo.repository.setMeta(
+    'pending_ai_trigger',
+    JSON.stringify([SYNCED_ID, SECOND_SYNCED_ID]),
+  );
+
+  let releaseSecond: (value: unknown) => void = () => {};
+  const secondGate = new Promise((resolve) => {
+    releaseSecond = resolve;
+  });
+  // Two mockImplementationOnce calls (not a persistent mockImplementation,
+  // which would leak into every later test in this file — beforeEach only
+  // mockClear()s requestEnrichment, not mockReset()): dispatch is strictly
+  // serial, so the first call is always for SYNCED_ID and the second for
+  // SECOND_SYNCED_ID, matching pending_ai_trigger's insertion order above.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) =>
+    makeEnrichment({ id: 'enrichment-first', bookmark_id: bookmarkId }),
+  );
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => secondGate);
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  // Let the initial pull settle so SYNCED_USER_ID_KEY durably records
+  // real-user-a — the later switch's plan is read from that meta.
+  await waitFor(() => expect(result.current.lastPulledAt).not.toBeNull());
+
+  // Both of A's dispatches have started: SYNCED_ID already resolved (fast
+  // path above), SECOND_SYNCED_ID is now in flight, gated on secondGate.
+  await waitFor(
+    () => expect(apiMock.__spies.requestEnrichment.mock.calls.length).toBeGreaterThanOrEqual(2),
+    { timeout: 5000 },
+  );
+  expect(result.current.aiEnrichmentBurstToast).toBeNull();
+
+  // Switch to a different REAL account WHILE SECOND_SYNCED_ID is still stuck
+  // in flight — a genuine 'switch' (drop), not a 'carry-over' (rehome).
+  const realUserB: { id: string; is_anonymous?: boolean } = {
+    id: 'real-user-b',
+    is_anonymous: false,
+  };
+  mockAuthSession = { ...mockSession, user: realUserB };
+  await act(async () => {
+    rerender(undefined);
+  });
+  // Confirm the switch actually dropped A's bookmarks locally before
+  // releasing the stale request — otherwise the assertion below proves
+  // nothing about the switch itself having happened yet.
+  await waitFor(() => expect(result.current.getBookmark(SYNCED_ID)).toBeUndefined());
+
+  // NOW let A's stale SECOND_SYNCED_ID request finally resolve.
+  await act(async () => {
+    releaseSecond(makeEnrichment({ id: 'enrichment-second', bookmark_id: SECOND_SYNCED_ID }));
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(result.current.aiEnrichmentBurstToast).toBeNull();
+});
+
 test('a non-429 failure does not enqueue for the overflow worker', async () => {
   const store = await renderReady();
   apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
@@ -3796,6 +3882,82 @@ test('an anon→real carried-over bookmark keeps its retry marker through the re
   // The retry marker followed the rehome swap onto the new id.
   expect(result.current.isAiSuggestionPostponed(rehomedId)).toBe(true);
   expect(result.current.isAiSuggestionPostponed(ANON_REMOTE_ID)).toBe(false);
+});
+
+test('a bookmark still staged in the auto-dispatch burst queue keeps its place through an anon→real rehome (#692)', async () => {
+  // Distinct from the retry-marker test above: this targets aiDispatchQueueRef
+  // specifically (the staggered burst queue), not aiRetryState. Reuses the
+  // STASH-4K 429-cooldown mechanism (see "pauses the auto dispatch queue for
+  // other bookmarks too" above) to reliably freeze ANON_ID in .pending —
+  // racing the real 400ms drain interval to catch it there would be flaky.
+  //
+  // SYNCED_ID dispatches first and 429s, arming the cooldown; ANON_ID sits
+  // queued behind it, still pending, when the rehome happens. If the burst
+  // queue isn't re-keyed (the #692 bug), the stale old ANON_ID lingers in
+  // aiDispatchQueueRef.pending forever — a ghost entry alongside the
+  // (correctly re-keyed) pendingAiTrigger's new id — inflating
+  // diagnosticStats.ai.todo by one phantom bookmark that no longer exists.
+  const ANON_SYNCED_ID = '4d4d4d4d-0000-4000-8000-000000000004';
+  const ANON_TARGET_ID = '5e5e5e5e-0000-4000-8000-000000000005';
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([ANON_SYNCED_ID, ANON_TARGET_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: ANON_SYNCED_ID,
+      url: 'https://example.com/anon-429-source',
+      metadata_status: 'complete',
+    }),
+    makeStoredBookmark({
+      id: ANON_TARGET_ID,
+      url: 'https://example.com/anon-rehome-target',
+      metadata_status: 'complete',
+    }),
+  ]);
+  await fakeRepo.repository.setMeta(
+    'pending_ai_trigger',
+    JSON.stringify([ANON_SYNCED_ID, ANON_TARGET_ID]),
+  );
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'daily_limit');
+  });
+
+  function wrapper({ children }: { children: ReactNode }) {
+    return <BookmarksProvider>{children}</BookmarksProvider>;
+  }
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1));
+
+  // Confirm the cooldown gate is actually holding ANON_TARGET_ID back before
+  // rehoming — otherwise the assertions below would prove nothing.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1);
+  expect(result.current.diagnosticStats.ai.todo).toBe(2);
+
+  // Sign in to a real account: both anon bookmarks carry over, re-homed onto
+  // fresh ids.
+  const realUser: { id: string; is_anonymous?: boolean } = {
+    id: 'real-user',
+    is_anonymous: false,
+  };
+  mockAuthSession = { ...mockSession, user: realUser };
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  let rehomedTargetId = '';
+  await waitFor(() => {
+    const row = result.current.inbox.find(
+      (b) => b.url === 'https://example.com/anon-rehome-target',
+    );
+    expect(row).toBeDefined();
+    rehomedTargetId = row!.id;
+  });
+  expect(rehomedTargetId).not.toBe(ANON_TARGET_ID);
+
+  // The count must stay at 2 — the same two bookmarks, just re-keyed. A
+  // stale old ANON_TARGET_ID left behind in aiDispatchQueueRef.pending would
+  // inflate this to 3.
+  expect(result.current.diagnosticStats.ai.todo).toBe(2);
 });
 
 test('a relaunch inside the backoff window does not bypass backoff via the deferred first-trigger effect', async () => {

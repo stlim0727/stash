@@ -113,3 +113,28 @@ export function dropAiEnrichmentDispatchIds(
     completedInBurst: 0,
   };
 }
+
+/** Re-key pending entries from an old bookmark id onto its new one — mirrors
+ *  {@link dropAiEnrichmentDispatchIds}'s purpose but for the anon→real
+ *  carry-over rehome (`remapAiRetryIdentity`'s counterpart), where a
+ *  bookmark's id changes but its staged dispatch should survive, not be
+ *  dropped (#692: without this, the drain loop pops the old id, finds no
+ *  bookmark under it via `bookmarksRef`, and silently no-ops — the queued
+ *  auto-suggestion is lost). Order-preserving; a pending id absent from
+ *  `idMap` is left as-is. Returns the SAME reference when nothing pending
+ *  matches a key in `idMap`. */
+export function remapAiEnrichmentDispatchIds(
+  queue: AiEnrichmentBurstQueue,
+  idMap: ReadonlyMap<string, string>,
+): AiEnrichmentBurstQueue {
+  if (idMap.size === 0 || queue.pending.length === 0) {
+    return queue;
+  }
+  if (!queue.pending.some((id) => idMap.has(id))) {
+    return queue;
+  }
+  return {
+    ...queue,
+    pending: queue.pending.map((id) => idMap.get(id) ?? id),
+  };
+}
