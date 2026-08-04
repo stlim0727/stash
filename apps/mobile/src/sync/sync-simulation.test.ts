@@ -15,6 +15,13 @@ import {
   parsePendingImportCollections,
 } from '@/domain/pending-import-collections';
 import {
+  PENDING_ENRICHMENT_RESTORE_KEY,
+  parsePendingEnrichmentRestores,
+  rekeyPendingEnrichmentRestores,
+  dropPendingEnrichmentRestores,
+  type PendingEnrichmentRestore,
+} from '@/domain/pending-enrichment-restore';
+import {
   createNeedsReconcileUpdate,
   makeMutationEntry,
   syncQueueEntry,
@@ -212,10 +219,35 @@ test('simulation: imported bookmark and organization outboxes cross restart toge
       created_at: now,
     },
   ];
+  const enrichmentOps: PendingEnrichmentRestore[] = [
+    {
+      bookmark_id: bookmark.id,
+      enrichment: {
+        summary: 'snapshot summary',
+        topics: ['reading'],
+        suggested_tags: [{ name: 'tech', confidence: 0.9 }],
+        status: 'complete',
+        model: 'gpt-5',
+        confidence: 0.87,
+      },
+      status: 'pending',
+      last_error: null,
+      created_at: now,
+    },
+  ];
   let repository = new InMemoryBookmarkRepository();
   const simulation = new DeterministicSimulation(
     () => repository.inspect(),
     ({ state }) => {
+      const pendingRestores = parsePendingEnrichmentRestores(
+        state.meta[PENDING_ENRICHMENT_RESTORE_KEY] ?? null,
+      );
+      for (const op of pendingRestores) {
+        assert.ok(
+          state.bookmarks.some((b) => b.id === op.bookmark_id),
+          `bookmark ${op.bookmark_id} with queued restore entry must exist in bookmarks`,
+        );
+      }
       for (const stored of state.bookmarks) {
         assert.ok(state.queue.some((queued) => queued.local_id === stored.id));
         assert.ok(
@@ -237,6 +269,7 @@ test('simulation: imported bookmark and organization outboxes cross restart toge
       metaUpdates: {
         pending_tag_ops: JSON.stringify(tagOps),
         [PENDING_IMPORT_COLLECTIONS_KEY]: JSON.stringify(collectionOps),
+        [PENDING_ENRICHMENT_RESTORE_KEY]: JSON.stringify(enrichmentOps),
       },
     }),
   );
@@ -252,6 +285,12 @@ test('simulation: imported bookmark and organization outboxes cross restart toge
       await repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
     )[0]?.collection_name,
     'Projects',
+  );
+  assert.equal(
+    parsePendingEnrichmentRestores(
+      await repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY),
+    )[0]?.enrichment.summary,
+    'snapshot summary',
   );
 });
 
@@ -651,9 +690,27 @@ function makeDurableCreateEntry(): LocalPendingBookmark {
 test('simulation: real syncQueueEntry reconciles duplicate adoption and an in-flight edit after restart', async () => {
   let currentBookmark = makeDurableBookmark();
   const entry = makeDurableCreateEntry();
+  const enrichmentRestore: PendingEnrichmentRestore = {
+    bookmark_id: LOCAL_ID,
+    enrichment: {
+      summary: 'original summary',
+      topics: ['a'],
+      suggested_tags: [],
+      status: 'complete',
+      model: 'gpt-5',
+      confidence: 0.9,
+    },
+    status: 'pending',
+    last_error: null,
+    created_at: '2026-08-03T00:00:00.000Z',
+  };
+
   let repository = new InMemoryBookmarkRepository({
     bookmarks: [currentBookmark],
     queue: [entry],
+    meta: {
+      [PENDING_ENRICHMENT_RESTORE_KEY]: JSON.stringify([enrichmentRestore]),
+    },
   });
   const sentTitles: Array<string | undefined> = [];
   const updatedTitles: Array<string | null> = [];
@@ -718,6 +775,17 @@ test('simulation: real syncQueueEntry reconciles duplicate adoption and an in-fl
       true,
     );
     await repository.enqueue(makeMutationEntry(currentBookmark.id, 'update'));
+
+    // Rekey the enrichment restore outbox exactly as rekeyBookmarkIdentity does
+    const restoredMeta = await repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY);
+    const restoredRestores = parsePendingEnrichmentRestores(restoredMeta);
+    const idMap = new Map([[LOCAL_ID, EXISTING_REMOTE_ID]]);
+    const rekeyed = rekeyPendingEnrichmentRestores(restoredRestores, idMap);
+
+    await repository.setMeta(
+      PENDING_ENRICHMENT_RESTORE_KEY,
+      JSON.stringify(rekeyed),
+    );
   });
   await simulation.step('cold-restart-from-durable-state', async () => {
     repository = repository.restart();
@@ -725,6 +793,13 @@ test('simulation: real syncQueueEntry reconciles duplicate adoption and an in-fl
     assert.ok(restored);
     currentBookmark = restored;
   });
+
+  // Verify that enrichment restore rekeyed state survived the restart
+  const postRestartMeta = await repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY);
+  const postRestartRestores = parsePendingEnrichmentRestores(postRestartMeta);
+  assert.equal(postRestartRestores.length, 1);
+  assert.equal(postRestartRestores[0]?.bookmark_id, EXISTING_REMOTE_ID);
+
   await simulation.step('resume-durable-reconcile-update', async () => {
     const [reconcileEntry] = await repository.listQueue();
     assert.ok(reconcileEntry);
@@ -804,4 +879,150 @@ test('simulation: import batch cannot repopulate queue work after a concurrent r
 
   assert.deepEqual(await repository.listBookmarks(), []);
   assert.deepEqual(await repository.listQueue(), []);
+});
+
+test('simulation: enrichment restore outbox drives real syncQueueEntry duplicate resolution, restarts, and uploads successfully', async () => {
+  const now = '2026-08-04T00:00:00.000Z';
+  let currentBookmark = makeDurableBookmark();
+  const entry = makeDurableCreateEntry();
+  const enrichmentRestore: PendingEnrichmentRestore = {
+    bookmark_id: currentBookmark.id,
+    enrichment: {
+      summary: 'snapshot summary',
+      topics: ['a'],
+      suggested_tags: [],
+      status: 'complete',
+      model: 'gpt-5',
+      confidence: 0.9,
+    },
+    status: 'pending',
+    last_error: null,
+    created_at: now,
+  };
+
+  let repository = new InMemoryBookmarkRepository();
+  const restoredEnrichments: any[] = [];
+  let result: EntrySyncResult | undefined;
+
+  const simulation = new DeterministicSimulation(
+    () => repository.inspect(),
+    ({ state }) => {
+      const raw = state.meta[PENDING_ENRICHMENT_RESTORE_KEY];
+      if (raw) {
+        const parsed = parsePendingEnrichmentRestores(raw);
+        assert.ok(Array.isArray(parsed));
+      }
+    },
+    673,
+  );
+
+  const api = {
+    createBookmark: async () => {
+      await simulation.waitAt('create-response');
+      return {
+        bookmark_id: EXISTING_REMOTE_ID,
+        status: 'duplicate' as const,
+        metadata_status: 'complete' as const,
+      };
+    },
+    restoreAIEnrichment: async (input: any) => {
+      restoredEnrichments.push(input);
+      return {
+        id: 'enrichment-id',
+        ...input,
+      };
+    },
+  } as unknown as BookmarkApi;
+
+  // Step 1: Persist import batch with metadata updates (enrichment restore enqueued)
+  await simulation.step('persist-import-batch-with-enrichment', () =>
+    repository.insertImportBatch([currentBookmark], [entry], {
+      metaUpdates: {
+        [PENDING_ENRICHMENT_RESTORE_KEY]: JSON.stringify([enrichmentRestore]),
+      },
+    }),
+  );
+
+  // Step 2: Spawn create sync and wait for duplicate create response
+  simulation.spawn('real-create-sync', async () => {
+    result = await syncQueueEntry(api, repository, entry, (id) =>
+      id === currentBookmark.id || id === LOCAL_ID ? currentBookmark : undefined,
+    );
+  });
+  await simulation.waitUntilReached('create-response');
+  simulation.release('create-response');
+  await simulation.join('real-create-sync');
+
+  // Step 3: Apply the create result and re-key the enrichment restore outbox
+  await simulation.step('apply-create-result-and-rekey-outbox', async () => {
+    assert.ok(result?.bookmarkUpdate);
+    currentBookmark = result.bookmarkUpdate;
+    assert.equal(result.originalLocalId, LOCAL_ID);
+    assert.equal(currentBookmark.id, EXISTING_REMOTE_ID);
+
+    // Re-key the meta outbox exactly as the store's rekeyBookmarkIdentity does
+    const restoredMeta = await repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY);
+    const restoredRestores = parsePendingEnrichmentRestores(restoredMeta);
+    const idMap = new Map([[LOCAL_ID, EXISTING_REMOTE_ID]]);
+    const rekeyed = rekeyPendingEnrichmentRestores(restoredRestores, idMap);
+
+    // Save rekeyed outbox + replace bookmark with its adopted remote ID
+    await repository.completeCreateSyncBatch?.([
+      {
+        bookmark: currentBookmark,
+        entry,
+        originalLocalId: LOCAL_ID,
+      },
+    ]);
+    await repository.setMeta(
+      PENDING_ENRICHMENT_RESTORE_KEY,
+      JSON.stringify(rekeyed),
+    );
+  });
+
+  // Step 4: Process restart (verify durability of the rekeyed state)
+  await simulation.step('process-restart', () => {
+    repository = repository.restart();
+  });
+
+  // Verify rekeyed and durable state after restart
+  const postRestartMeta = await repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY);
+  const postRestartRestores = parsePendingEnrichmentRestores(postRestartMeta);
+  assert.equal(postRestartRestores.length, 1);
+  assert.equal(postRestartRestores[0]?.bookmark_id, EXISTING_REMOTE_ID);
+
+  const bookmarks = await repository.listBookmarks();
+  assert.equal(bookmarks.length, 1);
+  assert.equal(bookmarks[0]?.id, EXISTING_REMOTE_ID);
+
+  // Step 5: Upload enrichment restore using the API and drop it from the outbox
+  await simulation.step('sync-enrichment-restore-and-drop-on-success', async () => {
+    const item = postRestartRestores[0]!;
+    // Simulate syncPendingEnrichmentRestores' API call & persist updates
+    const created = await api.restoreAIEnrichment({
+      bookmark_id: item.bookmark_id,
+      summary: item.enrichment.summary,
+      topics: item.enrichment.topics,
+      suggested_tags: item.enrichment.suggested_tags,
+      status: item.enrichment.status,
+      model: item.enrichment.model,
+      confidence: item.enrichment.confidence,
+    });
+
+    assert.ok(created);
+    const remaining = dropPendingEnrichmentRestores(postRestartRestores, [item.bookmark_id]);
+    await repository.setMeta(
+      PENDING_ENRICHMENT_RESTORE_KEY,
+      JSON.stringify(remaining),
+    );
+  });
+
+  await simulation.finish();
+
+  const finalMeta = await repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY);
+  const finalRestores = parsePendingEnrichmentRestores(finalMeta);
+  assert.equal(finalRestores.length, 0);
+  assert.equal(restoredEnrichments.length, 1);
+  assert.equal(restoredEnrichments[0]?.bookmark_id, EXISTING_REMOTE_ID);
+  assert.equal(restoredEnrichments[0]?.summary, 'snapshot summary');
 });

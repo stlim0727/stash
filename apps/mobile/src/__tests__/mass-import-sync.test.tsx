@@ -433,6 +433,64 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledTimes(2);
   });
 
+  test("does not double-upload during an in-flight enrichment restore sync run (#671)", async () => {
+    const gate = deferred<{ id: string }>();
+    apiMock.__restoreAIEnrichmentMock.mockImplementationOnce(async (input: any) => {
+      await gate.promise;
+      return {
+        id: "enrichment-id",
+        bookmark_id: input.bookmark_id,
+        user_id: "real-user",
+        summary: input.summary,
+        topics: [],
+        suggested_tags: [],
+        status: "complete",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/double-upload-enrichment",
+          title: "Double upload",
+          notes: null,
+          tags: [],
+          collection: null,
+          enrichment: {
+            summary: "concurrent test",
+            topics: [],
+            suggested_tags: [],
+            status: "complete",
+            model: null,
+            confidence: null,
+          },
+        },
+      ]);
+    });
+
+    // Wait until the first sync attempts to upload the enrichment and is held open by our gate
+    await waitFor(() => expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledTimes(1));
+
+    // Fire a second syncNow while the first one is pending
+    await act(async () => {
+      await result.current.syncNow();
+    });
+
+    // Release the gate
+    gate.resolve({ id: "enrichment-id" });
+
+    // Ensure it was called exactly once in total (no double-upload happened) and queue is cleared
+    await waitFor(() =>
+      expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
+    );
+    expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledTimes(1);
+  });
+
   test("a Stash JSON backup restore with a metadata snapshot skips the client metadata fetch and marks enrichment_policy skip (#671)", async () => {
     const { result } = await renderReadyStore();
 
@@ -767,6 +825,14 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
           notes: null,
           tags: [],
           collection: "Carried import folder",
+          enrichment: {
+            summary: "Account switch enrichment summary",
+            topics: ["a"],
+            suggested_tags: [],
+            status: "complete",
+            model: "gpt-5",
+            confidence: 0.9,
+          },
         },
       ]);
     });
@@ -791,6 +857,16 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() =>
       expect(result.current.inbox[0]?.collection_id).toBe("collection-1"),
     );
+    await waitFor(
+      () =>
+        expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            bookmark_id: expect.any(String),
+            summary: "Account switch enrichment summary",
+          }),
+        ),
+      { timeout: 5_000 },
+    );
     await waitFor(() => expect(result.current.queue).toHaveLength(0));
     await waitFor(() => expect(result.current.isSyncing).toBe(false));
     await act(async () => {
@@ -799,6 +875,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() => expect(result.current.isSyncing).toBe(false));
     expect(result.current.inbox).toHaveLength(1);
     expect(fakeRepo.__meta("pending_import_collections")).toBe("[]");
+    expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]");
   });
 
   test("syncs bulk import and adopts server duplicate IDs (STASH-3Q) without duplicating local rows", async () => {
