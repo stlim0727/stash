@@ -7012,11 +7012,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // will still deliver, so it must not disappear from this count.
     //
     // Deliberately does NOT include `enrichingIds`/`manualEnrichingIds`: this
-    // `todo` count also drives the pre-existing Preferences aiQueueBacklog
-    // row, which specifically claims queued/quota-paced/auto-resuming
-    // semantics — folding in an in-flight manual request (already executing,
-    // not queued) would make that row lie about it (Codex review, PR #670,
-    // reverting the same PR's own earlier attempt at this).
+    // `todo` count is a queued-only figure (not yet dispatched), now surfaced
+    // in Developer-mode diagnostics as the raw pipeline todo/done pair — the
+    // user-facing Activity row uses `activeUnblocked`/`activeBlocked` below
+    // instead, which does include in-flight requests (Codex review, PR #670,
+    // reverting the same PR's own earlier attempt at folding them into this
+    // count; STASH settings counter cleanup retired the Preferences row that
+    // used to consume this value directly).
     const uniqueAiTodoIds = new Set<string>([
       ...pendingAiTrigger.current,
       ...aiDispatchQueueRef.current.pending,
