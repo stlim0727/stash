@@ -139,12 +139,27 @@ const METADATA_PENDING_ID = '7e64cf1e-0000-4000-8000-000000000002';
 
 type Store = ReturnType<typeof useBookmarks>;
 
+/** Mirrors settings.tsx's formatQuotaResetTime (not exported) so the
+ *  combined Activity AI row's quota copy can be asserted without duplicating
+ *  its own display-formatting decision as a second, possibly-drifting
+ *  implementation. Locale is fixed 'en' — these tests never set a language
+ *  preference, so the store falls back to it. */
+function expectedResetTime(retryAt: number): string {
+  const isToday = new Date(retryAt).toDateString() === new Date().toDateString();
+  return new Date(retryAt).toLocaleString(
+    'en',
+    isToday
+      ? { hour: 'numeric', minute: '2-digit' }
+      : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
+  );
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   fakeRepo.__reset([]);
 });
 
-test('AI quota reached: the AI breakdown row uses the quota-reached copy (no reset time) alongside other active stages (STASH-4W)', async () => {
+test('AI quota reached: the Activity AI row combines the count with the quota-reached reason, alongside other active stages (STASH-4W)', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: AI_TRIGGER_ID, metadata_status: 'complete' }),
     makeStoredBookmark({ id: METADATA_PENDING_ID, metadata_status: 'pending' }),
@@ -191,10 +206,17 @@ test('AI quota reached: the AI breakdown row uses the quota-reached copy (no res
   // "AI suggestions" is ambiguous with the Preferences mode-selector row's
   // own label — its unique quota-reached value text below is the real check.
   expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
-  // Deliberately no reset time in the breakdown row's own copy — that's
-  // shown separately by the pre-existing Preferences settings.aiQuotaExceeded
-  // row (also visible here), whose formatting this must not duplicate.
-  expect(screen.getByText('1 bookmark · quota reached')).toBeTruthy();
+  // The 429's own enqueue confirms AI_TRIGGER_ID into the server-queued set,
+  // so the combined row's count stays 1 (not 0) — quota-priority copy still
+  // folds the count in alongside the reused hourly-limit reason text (STASH
+  // settings counter cleanup: this single row replaces the old breakdown's
+  // bare "quota reached" copy and the separate Preferences quota row).
+  const resetTime = expectedResetTime(storeRef.current!.aiQuotaExceeded!.retryAt);
+  await waitFor(() =>
+    expect(
+      screen.getByText(`1 bookmark · Hourly limit reached — resumes at ${resetTime}`),
+    ).toBeTruthy(),
+  );
 });
 
 test('a manual "Suggest with AI" request in flight is counted even though it never joined the trigger/dispatch/retry sets (Codex review, PR #670)', async () => {
@@ -266,12 +288,20 @@ test('a manual AI request stays visible even when aiSuggestionsMode is "off" —
   });
   await waitFor(() => expect(storeRef.current!.isEnriching(MANUAL_ID)).toBe(true));
 
-  // Before this fix, the breakdown's `aiSuggestionsMode === "off"` branch
-  // zeroed the count unconditionally, hiding this in-flight manual request
-  // and leaving the headline at "All backed up" with no trace of real work.
+  // Before the underlying fix, the breakdown's `aiSuggestionsMode === "off"`
+  // branch zeroed the count unconditionally, hiding this in-flight manual
+  // request and leaving the headline at "All backed up" with no trace of
+  // real work. The row now stays visible AND its copy honestly says local
+  // dispatch is off (only already-in-motion work — this manual request —
+  // keeps processing), rather than a bare count that looks unaffected by the
+  // preference.
   await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
   expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
-  expect(screen.getByText('1 bookmark')).toBeTruthy();
+  expect(
+    screen.getByText(
+      '1 bookmark · AI suggestions are off — only already-queued items keep processing',
+    ),
+  ).toBeTruthy();
 });
 
 test('manually retrying a bookmark already in the local AI backlog is not double-counted (Codex review, PR #670)', async () => {
@@ -355,13 +385,18 @@ test('an automatic AI request already executing stays visible when sync pauses m
   });
   await waitFor(() => expect(storeRef.current!.syncPaused).toBe(true));
 
-  // Before this fix, pausing here would have replaced the AI count with
-  // `serverQueued` alone (0), hiding the already-running automatic request.
-  // The freshly-added bookmark also has metadata_status 'pending' (a fresh
-  // capture, not yet enriched), so "Fetching info" independently reads
-  // "1 bookmark" too — both rows are asserted together.
+  // Before the underlying fix, pausing here would have replaced the AI count
+  // with `serverQueued` alone (0), hiding the already-running automatic
+  // request. The freshly-added bookmark also has metadata_status 'pending'
+  // (a fresh capture, not yet enriched), so "Fetching info" independently
+  // reads "1 bookmark". The AI row's own count is 1 too, but paused-with-a-
+  // blocking-queue is a genuinely blocked state, so its value carries that
+  // context instead of a bare count.
   await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
   expect(screen.getByText('Fetching info')).toBeTruthy();
   expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(1);
-  expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
+  expect(screen.getByText('1 bookmark')).toBeTruthy();
+  expect(
+    screen.getByText('1 bookmark · paused with sync — resumes when you resume sync'),
+  ).toBeTruthy();
 });

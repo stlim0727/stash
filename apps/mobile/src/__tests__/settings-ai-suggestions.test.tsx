@@ -81,35 +81,41 @@ test('picking Auto-apply in the sheet updates the row label and persists durably
   );
 });
 
-test('the AI queue backlog row is absent when there is no AI backlog', async () => {
+// STASH settings counter cleanup: the old separate Preferences "AI
+// suggestions queued" row moved into the Activity section's single "AI
+// suggestions" row (also replacing the old sync-card breakdown AI row and
+// the Preferences quota row). "AI suggestions" as a label is ambiguous with
+// this Preferences mode-selector row's own label, so these tests assert on
+// getAllByText counts / the row's unique value text instead.
+
+test('the Activity AI row is absent when there is no AI backlog', async () => {
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Review suggestions before applying')).toBeTruthy());
-  expect(screen.queryByText('AI suggestions queued')).toBeNull();
+  // Only the mode-selector row's own "AI suggestions" label remains.
+  expect(screen.getAllByText('AI suggestions')).toHaveLength(1);
 });
 
-test('the AI queue backlog row surfaces the full backlog, not just the confirmed-server-queued subset (Codex review, PR #655)', async () => {
+test('the Activity AI row surfaces the full backlog, not just the confirmed-server-queued subset (Codex review, PR #655)', async () => {
   // Codex review: deriving this from only the confirmed-server-queued set
   // (isAiSuggestionServerQueued) undercounts badly — only the ONE bookmark
   // whose 429 already round-tripped through a successful enqueue lands there;
   // everything still sitting in the local dispatch/trigger/retry queues
   // (the bulk of a large backlog) was invisible. diagnosticStats.ai.todo is
-  // the union of all three and is what this must track instead.
+  // the union of all three and (via activeUnblocked) is what this must track.
   await fakeRepo.repository.setMeta(
     'pending_ai_trigger',
     JSON.stringify(['bm-1', 'bm-2', 'bm-3']),
   );
   const screen = await renderSettings();
-  await waitFor(() => expect(screen.getByText('AI suggestions queued')).toBeTruthy());
-  expect(
-    screen.getByText('3 bookmarks · paced by AI quota, resumes automatically'),
-  ).toBeTruthy();
+  await waitFor(() => expect(screen.getAllByText('AI suggestions')).toHaveLength(2));
+  expect(screen.getByText('3 bookmarks')).toBeTruthy();
 });
 
-test('the AI queue backlog row stays hidden when AI suggestions are off, even with a backlog (Codex review, PR #655)', async () => {
+test('the Activity AI row stays hidden when AI suggestions are off and nothing is server-queued, even with a local backlog (Codex review, PR #655)', async () => {
   // With aiSuggestionsMode 'off', neither the dispatch interval nor the
-  // retry checker process anything — a backlog count that says "resumes
-  // automatically" would be actively misleading; it stays frozen until the
-  // user turns AI suggestions back on.
+  // retry checker process anything — the not-yet-dispatched local backlog
+  // (trigger/dispatch/retry) stays frozen until the user turns AI
+  // suggestions back on, and contributes nothing to the blocked count.
   await fakeRepo.repository.setMeta(AI_SUGGESTIONS_MODE_PREF_KEY, 'off');
   await fakeRepo.repository.setMeta(
     'pending_ai_trigger',
@@ -117,10 +123,11 @@ test('the AI queue backlog row stays hidden when AI suggestions are off, even wi
   );
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Off — never auto-suggest')).toBeTruthy());
-  expect(screen.queryByText('AI suggestions queued')).toBeNull();
+  // Only the mode-selector row's own "AI suggestions" label remains.
+  expect(screen.getAllByText('AI suggestions')).toHaveLength(1);
 });
 
-test('the AI queue backlog row shows the confirmed server-queued subset with honest off-mode copy when AI suggestions are off (Codex review, PR #656)', async () => {
+test('the Activity AI row shows the confirmed server-queued subset with honest off-mode copy when AI suggestions are off (Codex review, PR #656)', async () => {
   // Codex review: hiding the row entirely when off (the fix above) is itself
   // misleading in the OTHER direction for items the server already confirmed
   // into its overflow queue — the cron worker keeps draining those regardless
@@ -135,10 +142,10 @@ test('the AI queue backlog row shows the confirmed server-queued subset with hon
   );
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Off — never auto-suggest')).toBeTruthy());
-  await waitFor(() => expect(screen.getByText('AI suggestions queued')).toBeTruthy());
+  await waitFor(() => expect(screen.getAllByText('AI suggestions')).toHaveLength(2));
   expect(
     screen.getByText(
-      '2 bookmarks already queued before you turned this off — may still complete',
+      '2 bookmarks · AI suggestions are off — only already-queued items keep processing',
     ),
   ).toBeTruthy();
 });
