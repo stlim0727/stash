@@ -31,6 +31,7 @@ interface QueueRow {
   last_error: string | null;
   created_at: string;
   updated_at: string;
+  last_attempt_at: string | null;
 }
 
 /**
@@ -73,7 +74,8 @@ const SCHEMA_SQL = `
     retry_count INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    last_attempt_at TEXT
   );
 `;
 
@@ -174,6 +176,13 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       } catch {
         // Column already exists.
       }
+      try {
+        await db.execAsync(
+          'ALTER TABLE local_pending_bookmarks ADD COLUMN last_attempt_at TEXT DEFAULT NULL',
+        );
+      } catch {
+        // Column already exists.
+      }
 
       const seeded = await db.getFirstAsync<{ value: string }>(
         "SELECT value FROM meta WHERE key = 'seeded'",
@@ -242,8 +251,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         for (const entry of entries) {
           await db.runAsync(
             `INSERT OR REPLACE INTO local_pending_bookmarks
-            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at, last_attempt_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               entry.local_id,
               entry.remote_id,
@@ -254,6 +263,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
               entry.last_error,
               entry.created_at,
               entry.updated_at,
+              entry.last_attempt_at ?? null,
             ],
           );
         }
@@ -324,8 +334,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           await writeBookmark(db, bookmark);
           await db.runAsync(
             `INSERT OR REPLACE INTO local_pending_bookmarks
-            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at, last_attempt_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               entry.local_id,
               entry.remote_id,
@@ -336,6 +346,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
               entry.last_error,
               entry.created_at,
               entry.updated_at,
+              entry.last_attempt_at ?? null,
             ],
           );
         },
@@ -362,6 +373,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         last_error: row.last_error,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        last_attempt_at: row.last_attempt_at ?? null,
       }));
     });
   }
@@ -370,8 +382,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     await this.connection.run((db) =>
       db.runAsync(
         `INSERT OR REPLACE INTO local_pending_bookmarks
-        (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at, last_attempt_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.local_id,
           entry.remote_id,
@@ -382,6 +394,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           entry.last_error,
           entry.created_at,
           entry.updated_at,
+          entry.last_attempt_at ?? null,
         ],
       ),
     );

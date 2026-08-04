@@ -941,7 +941,7 @@ export default function SettingsScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={t("settings.sync.label")}
                   hitSlop={8}
-                  onPress={() => void syncNow()}
+                  onPress={() => void syncNow({ force: true })}
                   style={({ pressed }) => [
                     styles.syncIconButton,
                     pressed && { opacity: 0.6 },

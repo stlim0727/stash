@@ -287,8 +287,14 @@ interface BookmarksContextValue {
   deleteBookmark: (id: string) => void;
   /** True while the background sync service is uploading queue entries. */
   isSyncing: boolean;
-  /** Upload pending/failed queue entries to Supabase. No-op without auth. */
-  syncNow: () => Promise<boolean>;
+  /**
+   * Upload pending/failed queue entries to Supabase. No-op without auth.
+   * `{ force: true }` (the Settings "Sync now" tap) bypasses a failed
+   * entry's retry backoff for this one pass; every other caller (auto-sync,
+   * realtime, a save) must omit it so the backoff actually throttles
+   * automatic retries — see `isSyncable`'s `ignoreBackoff` option.
+   */
+  syncNow: (options?: { force?: boolean }) => Promise<boolean>;
   /** True while sync is manually paused: syncNow no-ops (no upload, no pull)
    *  until this is turned back off. Lets a bulk import be reviewed — and
    *  unwanted rows deleted — before anything reaches the network. */
@@ -4804,7 +4810,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  const syncNow = useCallback(async (): Promise<boolean> => {
+  const syncNow = useCallback(async (options?: { force?: boolean }): Promise<boolean> => {
+    const force = options?.force === true;
     if (syncInFlight.current) {
       syncPendingRef.current = true;
       return false;
@@ -4882,7 +4889,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Defer creates whose metadata is still fetching, so that metadata rides
       // along with the create payload instead of syncing twice.
       const syncable = durableQueue.filter((entry) => {
-        if (!isSyncable(entry)) {
+        // `force` (Settings' manual "Sync now" tap, or a test simulating it)
+        // bypasses the retry backoff so an explicit user request always
+        // attempts a failed entry immediately, matching the existing "Failed
+        // entries are retried on the next save or via the manual Sync now
+        // action" contract below. Every OTHER call to syncNow (auto-sync
+        // effect, realtime nudge, a save) must leave force unset, or the
+        // backoff it's gated by never actually throttles anything.
+        if (!isSyncable(entry, { ignoreBackoff: force })) {
           return false;
         }
         if (entry.operation === "create") {
@@ -5644,7 +5658,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           entry.operation === "create" &&
           !deletedIds.current.has(entry.local_id) &&
           hasBulkCreateResultKey(entry) &&
-          isSyncable(entry),
+          isSyncable(entry, { ignoreBackoff: force }),
       );
       if (bulkCreateEntries.length > 1) {
         for (
@@ -5739,6 +5753,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   sync_status: "failed",
                   retry_count: entry.retry_count + 1,
                   last_error: message,
+                  // These entries were actually attempted (the failed bulk
+                  // request), so the retry backoff clock starts now — see
+                  // isSyncable/uploadRetryBackoffMs. The untried entries below
+                  // deliberately do NOT get this: they never made a request,
+                  // so they keep whatever backoff state (if any) they already
+                  // had instead of newly earning one.
+                  last_attempt_at: failedAt,
                   updated_at: failedAt,
                 });
               }
@@ -5897,12 +5918,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           await applySyncEntryResult(entry, result);
         } catch (error) {
           logStorageError("sync entry", error);
+          const failedAt = new Date().toISOString();
           const failed: LocalPendingBookmark = {
             ...entry,
             sync_status: "failed",
             retry_count: entry.retry_count + 1,
             last_error: error instanceof Error ? error.message : "Sync failed.",
-            updated_at: new Date().toISOString(),
+            last_attempt_at: failedAt,
+            updated_at: failedAt,
           };
           setQueue((current) =>
             current.map((queued) =>
@@ -6744,7 +6767,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the
-  // next save or via the manual Sync now action, not in a hot loop.
+  // next save (once its own backoff window elapses — see isSyncable in
+  // sync/sync-bookmarks.ts) or immediately via the manual Sync now action
+  // (syncNow({ force: true }), which bypasses backoff), not in a hot loop.
   //
   // `signed_out` is deliberately EXCLUDED here: with no session, syncNow can't
   // run, and re-triggering it on every render would hot-loop. The lazy-mint
