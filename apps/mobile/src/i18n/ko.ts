@@ -245,6 +245,7 @@ export const ko: Catalog = {
   'settings.activity.aiSuggestions.quotaWithCount': {
     other: '{count}개 · {quotaReason}',
   },
+  'settings.syncBreakdown.aiSuggestions.chipQuotaReached': 'AI 추천 · 할당량 초과',
   'settings.trash.label': '휴지통',
   'settings.trash.value': '{count}개 항목',
   'settings.report.label': '문제 신고',

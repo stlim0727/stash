@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { usePalette } from '@/theme';
 
-type ChipVariant = 'default' | 'selected' | 'accent' | 'danger';
+type ChipVariant = 'default' | 'selected' | 'accent' | 'danger' | 'highlight';
 
 interface ChipProps extends Omit<PressableProps, 'style'> {
   children: ReactNode;
@@ -44,6 +44,11 @@ export function Chip({ children, variant = 'default', quiet, icon, count, disabl
     selected: { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft, color: palette.accentText },
     accent: { backgroundColor: palette.accentSoft, borderColor: palette.accentSoft, color: palette.accentText },
     danger: { backgroundColor: palette.dangerSoft, borderColor: palette.dangerSoft, color: palette.danger },
+    // A blocked/actionable status (e.g. Settings' AI-quota-reached chip) —
+    // the same soft-gold token Folder View's collection tiles use
+    // (`@/domain/collection-color`), reserved for this "you're waiting on a
+    // timer" register rather than the neutral default pill.
+    highlight: { backgroundColor: palette.highlightSoft, borderColor: palette.highlight, color: palette.text },
   }[variant];
 
   // Scale the line height with the OS font setting. A fixed lineHeight does NOT

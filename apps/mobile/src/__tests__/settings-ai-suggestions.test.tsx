@@ -108,7 +108,7 @@ test('the Activity AI row surfaces the full backlog, not just the confirmed-serv
   );
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getAllByText('AI suggestions')).toHaveLength(2));
-  expect(screen.getByText('3 bookmarks')).toBeTruthy();
+  expect(screen.getByText('· 3')).toBeTruthy();
 });
 
 test('the Activity AI row stays hidden when AI suggestions are off and nothing is server-queued, even with a local backlog (Codex review, PR #655)', async () => {
@@ -143,11 +143,11 @@ test('the Activity AI row shows the confirmed server-queued subset with honest o
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Off — never auto-suggest')).toBeTruthy());
   await waitFor(() => expect(screen.getAllByText('AI suggestions')).toHaveLength(2));
-  expect(
-    screen.getByText(
-      '2 bookmarks · AI suggestions are off — only already-queued items keep processing',
-    ),
-  ).toBeTruthy();
+  // The Activity chip strip (docs/design/settings-activity-status.md) shows a
+  // plain count rather than the old full-sentence off-mode explanation — the
+  // count itself (server-queued subset only, not the frozen local backlog)
+  // is still the behavior under test here.
+  expect(screen.getByText('· 2')).toBeTruthy();
 });
 
 test("picking 'Off' in the sheet updates the row label", async () => {

@@ -1,4 +1,5 @@
 import { act, render, waitFor } from '@testing-library/react-native';
+import { LayoutAnimation } from 'react-native';
 import type { ReactNode } from 'react';
 
 // Sentry STASH-4W: the AI-suggestions breakdown row must swap in
@@ -139,27 +140,12 @@ const METADATA_PENDING_ID = '7e64cf1e-0000-4000-8000-000000000002';
 
 type Store = ReturnType<typeof useBookmarks>;
 
-/** Mirrors settings.tsx's formatQuotaResetTime (not exported) so the
- *  combined Activity AI row's quota copy can be asserted without duplicating
- *  its own display-formatting decision as a second, possibly-drifting
- *  implementation. Locale is fixed 'en' — these tests never set a language
- *  preference, so the store falls back to it. */
-function expectedResetTime(retryAt: number): string {
-  const isToday = new Date(retryAt).toDateString() === new Date().toDateString();
-  return new Date(retryAt).toLocaleString(
-    'en',
-    isToday
-      ? { hour: 'numeric', minute: '2-digit' }
-      : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
-  );
-}
-
 beforeEach(() => {
   jest.clearAllMocks();
   fakeRepo.__reset([]);
 });
 
-test('AI quota reached: the Activity AI row combines the count with the quota-reached reason, alongside other active stages (STASH-4W)', async () => {
+test('AI quota reached: the AI chip swaps to a visually distinct quota-reached chip (no count, timer icon), alongside the metadata chip (STASH-4W, docs/design/settings-activity-status.md)', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: AI_TRIGGER_ID, metadata_status: 'complete' }),
     makeStoredBookmark({ id: METADATA_PENDING_ID, metadata_status: 'pending' }),
@@ -194,29 +180,31 @@ test('AI quota reached: the Activity AI row combines the count with the quota-re
   await waitFor(() => expect(storeRef.current!.aiQuotaExceeded).not.toBeNull());
 
   // Now queue a second, unrelated create — its upload hangs (mocked
-  // createBookmark never resolves), keeping "Waiting to upload" non-zero for
-  // the rest of the test without racing the AI dispatch loop (which defers AI
-  // work until the sync queue is clear — see the deferred-dispatch effect).
+  // createBookmark never resolves), keeping the headline's waiting count
+  // non-zero for the rest of the test without racing the AI dispatch loop
+  // (which defers AI work until the sync queue is clear — see the
+  // deferred-dispatch effect).
   await act(async () => {
     storeRef.current!.addBookmark({ url: 'https://example.com/still-uploading' });
   });
 
-  await waitFor(() => expect(screen.getByText('Waiting to upload')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('1 item waiting to upload')).toBeTruthy());
+  // No "Waiting to upload" chip ever renders — the headline above already
+  // reports that same count (the redesign's whole point).
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.getByText('Fetching info')).toBeTruthy();
-  // "AI suggestions" is ambiguous with the Preferences mode-selector row's
-  // own label — its unique quota-reached value text below is the real check.
-  expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
-  // The 429's own enqueue confirms AI_TRIGGER_ID into the server-queued set,
-  // so the combined row's count stays 1 (not 0) — quota-priority copy still
-  // folds the count in alongside the reused hourly-limit reason text (STASH
-  // settings counter cleanup: this single row replaces the old breakdown's
-  // bare "quota reached" copy and the separate Preferences quota row).
-  const resetTime = expectedResetTime(storeRef.current!.aiQuotaExceeded!.retryAt);
-  await waitFor(() =>
-    expect(
-      screen.getByText(`1 bookmark · Hourly limit reached — resumes at ${resetTime}`),
-    ).toBeTruthy(),
-  );
+  // Metadata count is 2 here: METADATA_PENDING_ID plus the freshly-added
+  // "still-uploading" bookmark, which also starts metadata_status 'pending'
+  // (not yet enriched).
+  expect(screen.getByText('· 2')).toBeTruthy();
+  // The AI chip drops its bare "AI suggestions" label entirely once quota is
+  // reached, swapping to the distinct chip's own copy — so only the
+  // Preferences mode-selector row's own label matches "AI suggestions" now.
+  await waitFor(() => expect(screen.getAllByText('AI suggestions')).toHaveLength(1));
+  expect(screen.getByText('AI suggestions · quota reached')).toBeTruthy();
+  // Distinct icon (not the normal hourglass) confirms the visually-different
+  // chip, not just different text on the same neutral pill.
+  expect(screen.getByTestId('chip-icon-timer-outline')).toBeTruthy();
 });
 
 test('a manual "Suggest with AI" request in flight is counted even though it never joined the trigger/dispatch/retry sets (Codex review, PR #670)', async () => {
@@ -252,11 +240,11 @@ test('a manual "Suggest with AI" request in flight is counted even though it nev
   await waitFor(() => expect(storeRef.current!.isEnriching(MANUAL_ID)).toBe(true));
 
   // Nothing else is active — uploads are done and metadata is already
-  // complete — so this is a lone AI stage, and per the earlier fix (a lone
-  // non-upload stage must still show) it renders on its own.
+  // complete — so this is a lone AI chip, and per the earlier fix (a lone
+  // non-upload pipeline must still show) it renders on its own.
   await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
-  expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
-  expect(screen.getByText('1 bookmark')).toBeTruthy();
+  expect(screen.getAllByText('AI suggestions')).toHaveLength(2);
+  expect(screen.getByText('· 1')).toBeTruthy();
 });
 
 test('a manual AI request stays visible even when aiSuggestionsMode is "off" — manual calls are not gated on that preference (Codex review, PR #670)', async () => {
@@ -291,17 +279,14 @@ test('a manual AI request stays visible even when aiSuggestionsMode is "off" —
   // Before the underlying fix, the breakdown's `aiSuggestionsMode === "off"`
   // branch zeroed the count unconditionally, hiding this in-flight manual
   // request and leaving the headline at "All backed up" with no trace of
-  // real work. The row now stays visible AND its copy honestly says local
-  // dispatch is off (only already-in-motion work — this manual request —
-  // keeps processing), rather than a bare count that looks unaffected by the
-  // preference.
+  // real work. The chip now stays visible with the in-flight request's count
+  // (1) even though local auto-dispatch is off — the compact chip form
+  // doesn't spell out the "off"/"paused" reason text the old full-sentence
+  // row did (docs/design/settings-activity-status.md §3), but the count
+  // itself must still reflect this manual request.
   await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
-  expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(2);
-  expect(
-    screen.getByText(
-      '1 bookmark · AI suggestions are off — only already-queued items keep processing',
-    ),
-  ).toBeTruthy();
+  expect(screen.getAllByText('AI suggestions')).toHaveLength(2);
+  expect(screen.getByText('· 1')).toBeTruthy();
 });
 
 test('manually retrying a bookmark already in the local AI backlog is not double-counted (Codex review, PR #670)', async () => {
@@ -338,10 +323,10 @@ test('manually retrying a bookmark already in the local AI backlog is not double
   await waitFor(() => expect(storeRef.current!.isEnriching(OVERLAP_ID)).toBe(true));
 
   // Before this fix (additive aiBacklogCount + manualInFlight), this would
-  // have read "2 bookmarks" for one bookmark present in both sets.
+  // have read "· 2" for one bookmark present in both sets.
   await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
-  expect(screen.getByText('1 bookmark')).toBeTruthy();
-  expect(screen.queryByText('2 bookmarks')).toBeNull();
+  expect(screen.getByText('· 1')).toBeTruthy();
+  expect(screen.queryByText('· 2')).toBeNull();
 });
 
 test('an automatic AI request already executing stays visible when sync pauses mid-run, even though the not-yet-dispatched local backlog is frozen (Codex review, PR #670)', async () => {
@@ -388,15 +373,54 @@ test('an automatic AI request already executing stays visible when sync pauses m
   // Before the underlying fix, pausing here would have replaced the AI count
   // with `serverQueued` alone (0), hiding the already-running automatic
   // request. The freshly-added bookmark also has metadata_status 'pending'
-  // (a fresh capture, not yet enriched), so "Fetching info" independently
-  // reads "1 bookmark". The AI row's own count is 1 too, but paused-with-a-
-  // blocking-queue is a genuinely blocked state, so its value carries that
-  // context instead of a bare count.
+  // (a fresh capture, not yet enriched), so the metadata chip independently
+  // reads "· 1". The AI chip's own count is 1 too (the in-flight request).
   await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
   expect(screen.getByText('Fetching info')).toBeTruthy();
   expect(screen.getAllByText('AI suggestions').length).toBeGreaterThanOrEqual(1);
-  expect(screen.getByText('1 bookmark')).toBeTruthy();
-  expect(
-    screen.getByText('1 bookmark · paused with sync — resumes when you resume sync'),
-  ).toBeTruthy();
+  expect(screen.getAllByText('· 1')).toHaveLength(2);
+});
+
+test('a chip inserting into an already-mounted strip animates via LayoutAnimation (docs/design/settings-activity-status.md §2.1)', async () => {
+  const METADATA_ONLY_ID = '7e64cf1e-0000-4000-8000-000000000007';
+  const MANUAL_ID = '7e64cf1e-0000-4000-8000-000000000008';
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: METADATA_ONLY_ID, metadata_status: 'pending' }),
+    makeStoredBookmark({ id: MANUAL_ID, metadata_status: 'complete' }),
+  ]);
+  // Never resolves — keeps the manual request "in flight" for the assertions.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(() => new Promise(() => {}));
+
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const configureNextSpy = jest.spyOn(LayoutAnimation, 'configureNext');
+
+  const screen = await render(
+    <BookmarksProvider>
+      <Probe />
+      <SettingsScreen />
+    </BookmarksProvider>,
+  );
+
+  await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
+  await waitFor(() => expect(storeRef.current?.lastPulledAt).not.toBeNull());
+  // The strip is already mounted with just the metadata chip before the AI
+  // chip ever exists.
+  await waitFor(() => expect(screen.getByText('Fetching info')).toBeTruthy());
+  expect(screen.queryByTestId('activity-chip-ai')).toBeNull();
+
+  configureNextSpy.mockClear();
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(MANUAL_ID);
+  });
+  await waitFor(() => expect(screen.getByTestId('activity-chip-ai')).toBeTruthy());
+
+  // The AI chip inserting into the ALREADY-mounted strip (metadata chip stays
+  // put) goes through LayoutAnimation, not the strip's own scoped `Animated`
+  // mount transition.
+  expect(configureNextSpy).toHaveBeenCalled();
 });
