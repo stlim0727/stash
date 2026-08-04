@@ -94,6 +94,17 @@ Stores AI-generated metadata separately from user-authored bookmark fields.
 | created_at | timestamptz | Creation timestamp. |
 | updated_at | timestamptz | Update timestamp. |
 
+### user_sync_status
+
+Admin-only, per-user sync/app-version tracking (GH #687). One row per user, owner-scoped RLS (read/insert/update own row only). Not yet populated by any client — a follow-up wires the mobile sync path to upsert it.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| user_id | uuid | Primary key; references `auth.users`. |
+| app_version | text | Reserved for a future sync-path stamp; distinct from the launch-time `auth.users.raw_user_meta_data->>'app_version'` already tracked. |
+| last_synced_at | timestamptz | Last successful sync, once wired. |
+| updated_at | timestamptz | Row update timestamp. |
+
 ## Local Queue
 
 The mobile app should maintain a local queue for share intake and offline operation.
