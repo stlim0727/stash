@@ -6,6 +6,7 @@ import {
   EMPTY_AI_ENRICHMENT_BURST_QUEUE,
   clearBurstCompletion,
   dequeueAiEnrichmentDispatch,
+  dropAiEnrichmentDispatchIds,
   enqueueAiEnrichmentDispatch,
   isBurstComplete,
   recordAiEnrichmentDispatchSettled,
@@ -82,4 +83,30 @@ test('clearBurstCompletion resets the counter and is a no-op at zero', () => {
 test('AI_ENRICHMENT_BURST_TOAST_MIN gates single, routine completions out of the toast', () => {
   // A lone bookmark settling is not a "burst" worth announcing.
   assert.ok(AI_ENRICHMENT_BURST_TOAST_MIN >= 2);
+});
+
+test('dropAiEnrichmentDispatchIds removes a stale id left behind by an account switch (STASH-4Y)', () => {
+  // Reproduces: account A stages a bookmark for staggered auto-dispatch, then
+  // the user switches to account B before the drain loop pops it. Without the
+  // drop, A's bookmark id keeps counting toward B's pipeline total.
+  let queue = enqueueAiEnrichmentDispatch(EMPTY_AI_ENRICHMENT_BURST_QUEUE, 'a-bookmark');
+  queue = enqueueAiEnrichmentDispatch(queue, 'a-other-bookmark');
+  queue = enqueueAiEnrichmentDispatch(queue, 'b-bookmark'); // already B's, e.g. rehomed
+
+  queue = dropAiEnrichmentDispatchIds(queue, ['a-bookmark', 'a-other-bookmark']);
+  assert.deepEqual(queue.pending, ['b-bookmark']);
+});
+
+test('dropAiEnrichmentDispatchIds is a no-op (same reference) when nothing pending matches', () => {
+  let queue = enqueueAiEnrichmentDispatch(EMPTY_AI_ENRICHMENT_BURST_QUEUE, 'b-bookmark');
+  const before = queue;
+
+  queue = dropAiEnrichmentDispatchIds(queue, ['a-bookmark']);
+  assert.equal(queue, before);
+
+  queue = dropAiEnrichmentDispatchIds(queue, []);
+  assert.equal(queue, before);
+
+  queue = dropAiEnrichmentDispatchIds(EMPTY_AI_ENRICHMENT_BURST_QUEUE, ['a-bookmark']);
+  assert.equal(queue, EMPTY_AI_ENRICHMENT_BURST_QUEUE);
 });

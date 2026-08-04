@@ -84,3 +84,21 @@ export function isBurstComplete(queue: AiEnrichmentBurstQueue): boolean {
 export function clearBurstCompletion(queue: AiEnrichmentBurstQueue): AiEnrichmentBurstQueue {
   return queue.completedInBurst === 0 ? queue : { ...queue, completedInBurst: 0 };
 }
+
+/** Drop `ids` from the pending queue — e.g. a bookmark staged for staggered
+ *  dispatch but not yet popped when its owning account changed underneath it
+ *  (STASH-4Y: the stale id otherwise keeps counting toward the new session's
+ *  pipeline total). Returns the SAME reference when none of `ids` are pending. */
+export function dropAiEnrichmentDispatchIds(
+  queue: AiEnrichmentBurstQueue,
+  ids: readonly string[],
+): AiEnrichmentBurstQueue {
+  if (ids.length === 0 || queue.pending.length === 0) {
+    return queue;
+  }
+  const drop = new Set(ids);
+  if (!queue.pending.some((id) => drop.has(id))) {
+    return queue;
+  }
+  return { ...queue, pending: queue.pending.filter((id) => !drop.has(id)) };
+}
