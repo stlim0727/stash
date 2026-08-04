@@ -925,14 +925,27 @@ test('simulation: enrichment restore outbox drives real syncQueueEntry duplicate
         metadata_status: 'complete' as const,
       };
     },
-    restoreAIEnrichment: async (input: any) => {
+    restoreAIEnrichment: async (input) => {
       restoredEnrichments.push(input);
       return {
         id: 'enrichment-id',
-        ...input,
+        user_id: 'real-user',
+        bookmark_id: input.bookmark_id,
+        summary: input.summary ?? null,
+        topics: input.topics ?? [],
+        suggested_tags: input.suggested_tags ?? [],
+        suggested_collection_id: null,
+        suggested_collection_name: null,
+        status: input.status,
+        model: input.model ?? null,
+        confidence: input.confidence ?? null,
+        degraded: false,
+        degraded_reason: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       };
     },
-  } as unknown as BookmarkApi;
+  } as Partial<BookmarkApi> as BookmarkApi;
 
   // Step 1: Persist import batch with metadata updates (enrichment restore enqueued)
   await simulation.step('persist-import-batch-with-enrichment', () =>

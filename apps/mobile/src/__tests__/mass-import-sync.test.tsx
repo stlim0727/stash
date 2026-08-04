@@ -825,14 +825,6 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
           notes: null,
           tags: [],
           collection: "Carried import folder",
-          enrichment: {
-            summary: "Account switch enrichment summary",
-            topics: ["a"],
-            suggested_tags: [],
-            status: "complete",
-            model: "gpt-5",
-            confidence: 0.9,
-          },
         },
       ]);
     });
@@ -857,16 +849,6 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() =>
       expect(result.current.inbox[0]?.collection_id).toBe("collection-1"),
     );
-    await waitFor(
-      () =>
-        expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            bookmark_id: expect.any(String),
-            summary: "Account switch enrichment summary",
-          }),
-        ),
-      { timeout: 5_000 },
-    );
     await waitFor(() => expect(result.current.queue).toHaveLength(0));
     await waitFor(() => expect(result.current.isSyncing).toBe(false));
     await act(async () => {
@@ -875,7 +857,145 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() => expect(result.current.isSyncing).toBe(false));
     expect(result.current.inbox).toHaveLength(1);
     expect(fakeRepo.__meta("pending_import_collections")).toBe("[]");
-    expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]");
+  });
+
+  test("rekeys pending enrichment restores on anonymous to authenticated account transition (carry-over) (#671)", async () => {
+    authMock.__setAuth({
+      status: "authenticated",
+      session: {
+        access_token: "anon-token",
+        refresh_token: "anon-refresh",
+        expires_in: 3600,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        token_type: "bearer",
+        user: { id: "anon-user", is_anonymous: true },
+      },
+      userId: "anon-user",
+    });
+
+    apiMock.__restoreAIEnrichmentMock.mockRejectedValueOnce(
+      new Error("temporary enrichment restore failure"),
+    );
+
+    const { result, rerender } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/carryover-enrichment",
+          title: "Carry over enrichment",
+          notes: null,
+          tags: [],
+          collection: null,
+          enrichment: {
+            summary: "carryover summary",
+            topics: [],
+            suggested_tags: [],
+            status: "complete",
+            model: null,
+            confidence: null,
+          },
+        },
+      ]);
+    });
+
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
+    await waitFor(() => {
+      const pending = JSON.parse(
+        fakeRepo.__meta("pending_enrichment_restore") ?? "[]",
+      );
+      expect(pending).toHaveLength(1);
+      expect(pending[0].status).toBe("failed");
+    });
+
+    const oldId = result.current.inbox[0]?.id;
+    expect(oldId).toBeDefined();
+
+    authMock.__setAuth({
+      status: "authenticated",
+      session: mockRealSession,
+      userId: "real-user",
+    });
+
+    await act(async () => {
+      rerender(undefined);
+    });
+
+    const newId = result.current.inbox[0]?.id;
+    expect(newId).toBeDefined();
+    expect(newId).not.toBe(oldId);
+
+    const pending = JSON.parse(
+      fakeRepo.__meta("pending_enrichment_restore") ?? "[]",
+    );
+    expect(pending).toHaveLength(1);
+    expect(pending[0].bookmark_id).toBe(newId);
+
+    apiMock.__restoreAIEnrichmentMock.mockResolvedValueOnce({ id: "enrichment-id" });
+    await act(async () => {
+      await result.current.syncNow();
+    });
+
+    await waitFor(() =>
+      expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
+    );
+    expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bookmark_id: newId,
+        summary: "carryover summary",
+      }),
+    );
+  });
+
+  test("drops pending enrichment restores on real-to-real account switch (#671)", async () => {
+    const { result, rerender } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/switch-drop-enrichment",
+          title: "Switch drop",
+          notes: null,
+          tags: [],
+          collection: null,
+          enrichment: {
+            summary: "drop me",
+            topics: [],
+            suggested_tags: [],
+            status: "complete",
+            model: null,
+            confidence: null,
+          },
+        },
+      ]);
+    });
+
+    apiMock.__restoreAIEnrichmentMock.mockRejectedValueOnce(new Error("fail"));
+
+    await waitFor(() => expect(result.current.queue).toHaveLength(0));
+    await waitFor(() => {
+      const pending = JSON.parse(
+        fakeRepo.__meta("pending_enrichment_restore") ?? "[]",
+      );
+      expect(pending).toHaveLength(1);
+    });
+
+    authMock.__setAuth({
+      status: "authenticated",
+      session: mockOtherRealSession,
+      userId: "other-real-user",
+    });
+
+    await act(async () => {
+      rerender(undefined);
+    });
+
+    await waitFor(() => expect(result.current.inbox).toHaveLength(0));
+    await waitFor(() =>
+      expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
+    );
   });
 
   test("syncs bulk import and adopts server duplicate IDs (STASH-3Q) without duplicating local rows", async () => {
