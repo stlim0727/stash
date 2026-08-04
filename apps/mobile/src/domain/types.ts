@@ -9,6 +9,17 @@ export type ContentType = 'url' | 'article' | 'image' | 'video' | 'text' | 'unkn
 
 export type MetadataStatus = 'pending' | 'complete' | 'failed' | 'skipped';
 
+/**
+ * Server-dispatch intent, decoupled from `MetadataStatus` (#671):
+ * `dispatch_ai_enrichment()` used to infer "should this bookmark get
+ * automatic AI?" from metadata_status alone (any settled status dispatched),
+ * so a restore/import with already-complete metadata had no way to opt out.
+ * `'skip'` suppresses the server trigger; manual "Suggest with AI" is
+ * unaffected either way. Mirrors `bookmarks.enrichment_policy`'s check
+ * constraint (`supabase/migrations/20260803215821_bookmarks_enrichment_policy.sql`).
+ */
+export type EnrichmentPolicy = 'auto' | 'skip';
+
 export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 
 export type TagSource = 'user' | 'ai' | 'system';
@@ -188,6 +199,12 @@ export interface CreateBookmarkInput {
   favicon_url?: string | null;
   preview_image_url?: string | null;
   metadata_status?: MetadataStatus;
+  /**
+   * Automatic-AI dispatch intent (#671). Omitted (defaults to `'auto'`
+   * server-side) for a fresh save/share; imports/restores send `'skip'` so
+   * the server trigger never auto-spends AI quota on them.
+   */
+  enrichment_policy?: EnrichmentPolicy;
   /**
    * Stable device-generated capture id (see {@link Bookmark.client_id}). Carried
    * in the queue payload so an interrupted upload's retry reuses the same id and

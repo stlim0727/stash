@@ -30,6 +30,7 @@ import type {
   BookmarkTag,
   Collection,
   LocalPendingBookmark,
+  MetadataStatus,
   SuggestedTag,
   Tag,
 } from "@/domain/types";
@@ -2757,6 +2758,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           const clientId = makeClientId();
           const title = item.title?.trim() ? item.title.trim() : null;
           const notes = item.notes?.trim() ? item.notes.trim() : null;
+          // #671: a Stash JSON backup restore carries its own generated
+          // metadata snapshot (parseJsonBackup, #678) — restore it losslessly
+          // instead of re-fetching. metadata_status is deliberately never
+          // 'pending' for a restore (even with no snapshot to restore), so
+          // enrichInBackground's pending-only guard naturally no-ops rather
+          // than needing a separate skip flag. External imports (HTML/CSV)
+          // keep today's client metadata fetch — only automatic AI changes.
+          const isBackupRestore = item.source === "stash-backup";
+          const restoredMetadata = isBackupRestore ? item.metadata : undefined;
+          const description = restoredMetadata?.description ?? null;
+          const previewImageUrl = restoredMetadata?.preview_image_url ?? null;
+          const faviconUrl = restoredMetadata?.favicon_url ?? null;
+          const siteName = restoredMetadata?.site_name ?? null;
+          const metadataStatus: MetadataStatus = isBackupRestore
+            ? restoredMetadata
+              ? "complete"
+              : "skipped"
+            : "pending";
           newBookmarks.push({
             id,
             user_id: mockUserId,
@@ -2766,20 +2785,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             title,
             title_is_derived: title ? false : undefined,
             client_id: clientId,
-            description: null,
+            description,
             notes,
             source_app: null,
             content_type: "url",
-            preview_image_url: null,
-            favicon_url: null,
-            site_name: null,
+            preview_image_url: previewImageUrl,
+            favicon_url: faviconUrl,
+            site_name: siteName,
             collection_id: null,
             is_archived: false,
             deleted_at: null,
             created_at: now,
             updated_at: now,
             last_saved_at: now,
-            metadata_status: "pending",
+            metadata_status: metadataStatus,
             sync_status: "pending",
           });
           newEntries.push({
@@ -2792,6 +2811,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               title: title ?? undefined,
               notes: notes ?? undefined,
               client_id: clientId,
+              description: description ?? undefined,
+              preview_image_url: previewImageUrl,
+              favicon_url: faviconUrl,
+              site_name: siteName,
+              metadata_status: metadataStatus,
+              // #671: never let an imported/restored bookmark auto-spend AI
+              // quota — only a fresh save/share gets automatic server-side AI.
+              enrichment_policy: "skip",
             },
             sync_status: "pending",
             retry_count: 0,
