@@ -90,6 +90,25 @@ jest.mock("@/api/bookmarks", () => {
       created_at: new Date().toISOString(),
     })),
   );
+  const restoreAIEnrichmentMock = jest.fn(
+    async (input: { bookmark_id: string; [key: string]: unknown }) => ({
+      id: `enrichment-${input.bookmark_id}`,
+      bookmark_id: input.bookmark_id,
+      user_id: "real-user",
+      summary: (input.summary as string | null) ?? null,
+      topics: (input.topics as string[]) ?? [],
+      suggested_tags: (input.suggested_tags as unknown[]) ?? [],
+      suggested_collection_id: null,
+      suggested_collection_name: null,
+      model: (input.model as string | null) ?? null,
+      status: input.status,
+      confidence: (input.confidence as number | null) ?? null,
+      degraded: false,
+      degraded_reason: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }),
+  );
 
   const createBookmarkMock = jest.fn(
     async (payload: { url?: string | null; id?: string }) => {
@@ -162,6 +181,7 @@ jest.mock("@/api/bookmarks", () => {
     __createCollectionMock: createCollectionMock,
     __updateBookmarkMock: updateBookmarkMock,
     __addTagsMock: addTagsMock,
+    __restoreAIEnrichmentMock: restoreAIEnrichmentMock,
     createBookmarkApi: () => ({
       listBookmarksUpdatedSince,
       listBookmarkIds,
@@ -176,6 +196,7 @@ jest.mock("@/api/bookmarks", () => {
       removeTags: jest.fn(async () => undefined),
       createCollection: createCollectionMock,
       resetLibrary: resetLibraryMock,
+      restoreAIEnrichment: restoreAIEnrichmentMock,
     }),
   };
 });
@@ -200,6 +221,7 @@ const apiMock = jest.requireMock("@/api/bookmarks") as {
   __createCollectionMock: jest.Mock;
   __updateBookmarkMock: jest.Mock;
   __addTagsMock: jest.Mock;
+  __restoreAIEnrichmentMock: jest.Mock;
 };
 const authMock = jest.requireMock("@/supabase/auth-provider") as {
   __setAuth: (next: Record<string, unknown>) => void;
@@ -237,6 +259,7 @@ beforeEach(() => {
   apiMock.__createCollectionMock.mockClear();
   apiMock.__updateBookmarkMock.mockClear();
   apiMock.__addTagsMock.mockClear();
+  apiMock.__restoreAIEnrichmentMock.mockClear();
   authMock.__setAuth({
     status: "authenticated",
     session: mockRealSession,
@@ -304,6 +327,103 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       expect(result.current.inbox[0]?.collection_id).toBe("collection-1"),
     );
     expect(fakeRepo.__meta("pending_import_collections")).toBe("[]");
+  });
+
+  test("restores a Stash JSON backup's AI enrichment through the durable post-create outbox (#671)", async () => {
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/enriched",
+          title: "Enriched",
+          notes: null,
+          tags: [],
+          collection: null,
+          enrichment: {
+            summary: "A concise summary.",
+            topics: ["reading"],
+            suggested_tags: [{ name: "tech", confidence: 0.9 }],
+            status: "complete",
+            model: "gpt-5",
+            confidence: 0.87,
+          },
+        },
+      ]);
+    });
+
+    await waitFor(
+      () =>
+        expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            bookmark_id: expect.any(String),
+            summary: "A concise summary.",
+            status: "complete",
+            model: "gpt-5",
+          }),
+        ),
+      { timeout: 5_000 },
+    );
+    const bookmarkId = result.current.inbox[0]?.id;
+    await waitFor(() =>
+      expect(result.current.getEnrichment(bookmarkId!)?.summary).toBe(
+        "A concise summary.",
+      ),
+    );
+    expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]");
+  });
+
+  test("keeps a failed enrichment restore intent and retries it on manual sync (#671)", async () => {
+    apiMock.__restoreAIEnrichmentMock.mockRejectedValueOnce(
+      new Error("temporary enrichment restore failure"),
+    );
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/retry-enrichment",
+          title: "Retry enrichment",
+          notes: null,
+          tags: [],
+          collection: null,
+          enrichment: {
+            summary: "retry me",
+            topics: [],
+            suggested_tags: [],
+            status: "complete",
+            model: null,
+            confidence: null,
+          },
+        },
+      ]);
+    });
+
+    await waitFor(
+      () => {
+        const pending = JSON.parse(
+          fakeRepo.__meta("pending_enrichment_restore") ?? "[]",
+        );
+        expect(pending[0]).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            last_error: "temporary enrichment restore failure",
+          }),
+        );
+      },
+      { timeout: 5_000 },
+    );
+
+    await act(async () => {
+      await result.current.syncNow();
+    });
+
+    await waitFor(() =>
+      expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
+    );
+    expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledTimes(2);
   });
 
   test("keeps a failed collection intent and retries it on manual sync", async () => {
