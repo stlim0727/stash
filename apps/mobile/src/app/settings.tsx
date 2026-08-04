@@ -146,6 +146,16 @@ function formatQuotaResetTime(
   );
 }
 
+/** Which of the reused `settings.aiQuotaExceeded.*` copies applies to a given
+ *  429 reason. Shared by the Activity AI row's quota-priority branch. */
+function quotaReasonKey(reason: string): MessageKey {
+  return reason === "daily_limit"
+    ? "settings.aiQuotaExceeded.daily"
+    : reason === "hourly_limit"
+      ? "settings.aiQuotaExceeded.hourly"
+      : "settings.aiQuotaExceeded.generic";
+}
+
 export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
@@ -777,21 +787,58 @@ export default function SettingsScreen() {
     (entry) =>
       entry.sync_status === "pending" || entry.sync_status === "syncing",
   );
-  // Local (trigger/dispatch/retry) AI dispatch is frozen either by
-  // aiSuggestionsMode === "off" or by a paused sync with a pending/syncing
-  // queue (Codex review, PR #670) — in both cases, `activeBlocked` already
-  // accounts for the only work that keeps moving regardless (server-queued,
-  // and anything already executing, manual or auto — a request in flight
-  // can't be un-started by either freeze). `activeUnblocked` is the
-  // deduplicated total for the normal case. Using the store's own Set-union
-  // fields here (rather than adding separate counts) is what makes this
-  // structurally immune to double-counting a bookmark present in more than
-  // one source set.
-  const aiCount =
-    aiSuggestionsMode === "off" || (syncPaused && queueBlocksAiDispatch)
-      ? diagnosticStats.ai.activeBlocked
-      : diagnosticStats.ai.activeUnblocked;
-  const aiQuotaReached = aiQuotaExceeded !== null;
+  // Local (trigger/dispatch/retry) AI dispatch is frozen by any of three
+  // independent causes: aiSuggestionsMode === "off", a paused sync with a
+  // pending/syncing queue (Codex review, PR #670), or a live 429 cooldown
+  // (`aiQuotaExceeded`, STASH quota/count-mismatch fix) — the drain loop's
+  // own gate (store/bookmarks.tsx) checks all three before dispatching new
+  // work. In every case, `activeBlocked` already accounts for the only work
+  // that keeps moving regardless (server-queued, and anything already
+  // executing, manual or auto — a request in flight can't be un-started by
+  // any of the three freezes). `activeUnblocked` is the deduplicated total
+  // for the normal case. Using the store's own Set-union fields here (rather
+  // than adding separate counts) is what makes this structurally immune to
+  // double-counting a bookmark present in more than one source set.
+  const isAiBlocked =
+    aiSuggestionsMode === "off" ||
+    (syncPaused && queueBlocksAiDispatch) ||
+    aiQuotaExceeded !== null;
+  const aiActiveCount = isAiBlocked
+    ? diagnosticStats.ai.activeBlocked
+    : diagnosticStats.ai.activeUnblocked;
+  // The Activity card's single "AI suggestions" row replaces three formerly
+  // separate counters (sync-card breakdown, Preferences backlog, Preferences
+  // quota row) — visible whenever there's active/blocked local work OR a
+  // live quota cooldown to report, even with zero count (a quota exceeded by
+  // a manual "Suggest with AI" tap can leave aiActiveCount at 0 while the
+  // cooldown itself is still worth surfacing).
+  const aiRowVisible = cloudAvailable && (aiActiveCount > 0 || aiQuotaExceeded !== null);
+  let aiValue: string;
+  if (aiQuotaExceeded) {
+    // Quota reached always takes priority over the blocked/active wording
+    // below — reuses the existing hourly/daily/generic copy (with its
+    // resolved reset time) rather than duplicating it.
+    const quotaReason = t(quotaReasonKey(aiQuotaExceeded.reason), {
+      resetTime: formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate),
+    });
+    aiValue =
+      aiActiveCount > 0
+        ? t("settings.activity.aiSuggestions.quotaWithCount", {
+            count: aiActiveCount,
+            quotaReason,
+          })
+        : quotaReason;
+  } else if (isAiBlocked && aiActiveCount > 0) {
+    aiValue = t(
+      aiSuggestionsMode === "off"
+        ? "settings.activity.aiSuggestions.blockedOff"
+        : "settings.activity.aiSuggestions.blockedPaused",
+      { count: aiActiveCount },
+    );
+  } else {
+    aiValue = t("settings.activity.aiSuggestions.value", { count: aiActiveCount });
+  }
+  const aiIcon: IoniconName = aiQuotaExceeded ? "timer-outline" : "hourglass-outline";
   const syncStages = [
     // "Pause sync" only gates syncNow's network phases — enrichInBackground
     // (metadata) and AI dispatch are never paused (see
@@ -811,10 +858,10 @@ export default function SettingsScreen() {
     // Closing this properly needs a new store-exposed flag for the raw
     // syncInFlight state, which isn't worth the surface area for a
     // sub-second display lag (Codex review, PR #670).
-    ...(syncPaused ? [] : [{ key: "uploading" as const, count: uploadingCount }]),
-    { key: "fetchingInfo" as const, count: fetchingInfoCount },
-    { key: "aiSuggestions" as const, count: aiCount },
-  ].filter((stage) => stage.count > 0);
+    ...(syncPaused || uploadingCount === 0 ? [] : [{ key: "uploading" as const }]),
+    ...(fetchingInfoCount > 0 ? [{ key: "fetchingInfo" as const }] : []),
+    ...(aiRowVisible ? [{ key: "aiSuggestions" as const }] : []),
+  ];
   // A lone "uploading" stage duplicates the headline (which already reports
   // the upload count), so it stays suppressed on its own — but a lone
   // metadata/AI stage is otherwise invisible anywhere in Settings (the
@@ -845,14 +892,13 @@ export default function SettingsScreen() {
         { paddingBottom: insets.bottom + 24 },
       ]}
     >
-      {/* Account & sync — identity, sign in/out, and sync status in one card.
-          The auth control sits beside the identity (sign in with a provider, or
-          log out); the sync row below shows backup status. All inline — no
-          separate screen. */}
+      {/* Account — identity, sign in/out only. Sync/metadata/AI status moved
+          to the Activity section below (STASH settings counter cleanup): this
+          card is purely who's signed in, not what's happening. */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>{t("settings.section.account")}</Text>
         <Card style={styles.account} elevated={false}>
-          <View style={styles.accountHeader}>
+          <View style={styles.accountHeaderOnly}>
             {isAuthenticated ? (
               <>
                 <View style={styles.accountText}>
@@ -917,123 +963,124 @@ export default function SettingsScreen() {
               </>
             )}
           </View>
+        </Card>
+      </View>
 
-          {/* Sync — one status-led row: label/value carry the state (incl. the
-            waiting count, even while paused), and the trailing controls are
-            the actions — tap-to-sync-now when there's queued work, and a
-            pause/resume toggle (Sentry STASH-3K follow-up: a safety valve for
-            right after a large import — while paused, nothing uploads or
-            pulls, giving time to delete unwanted rows before they ever reach
-            the network; a still-local, never-synced delete drops out of the
-            queue for free, see deleteBookmark). */}
-          <Row
-            styles={styles}
-            palette={palette}
-            icon={syncPaused ? "pause-circle-outline" : "sync"}
-            label={t("settings.sync.label")}
-            value={syncSummary}
-            last={!showSyncBreakdown}
-            right={
-              <View style={styles.syncActions}>
-                {isSyncing ? (
-                  <ActivityIndicator color={palette.textSecondary} />
-                ) : canSync ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={t("settings.sync.label")}
-                    hitSlop={8}
-                    onPress={() => void syncNow()}
-                    style={({ pressed }) => [
-                      styles.syncIconButton,
-                      pressed && { opacity: 0.6 },
-                    ]}
-                  >
-                    <Ionicons name="refresh" size={18} color={palette.accent} />
-                  </Pressable>
-                ) : cloudAvailable && !syncPaused ? (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={20}
-                    color={palette.success}
-                  />
-                ) : null}
+      {/* Activity — sync/metadata/AI status, formerly split across the
+          Account card's breakdown and two separate Preferences rows (STASH
+          settings counter cleanup). One card: the sync headline row plus up
+          to three conditional pipeline rows (upload / metadata / AI). */}
+      <Group styles={styles} title={t("settings.section.activity")}>
+        {/* Sync — one status-led row: label/value carry the state (incl. the
+          waiting count, even while paused), and the trailing controls are
+          the actions — tap-to-sync-now when there's queued work, and a
+          pause/resume toggle (Sentry STASH-3K follow-up: a safety valve for
+          right after a large import — while paused, nothing uploads or
+          pulls, giving time to delete unwanted rows before they ever reach
+          the network; a still-local, never-synced delete drops out of the
+          queue for free, see deleteBookmark). */}
+        <Row
+          styles={styles}
+          palette={palette}
+          icon={syncPaused ? "pause-circle-outline" : "sync"}
+          label={t("settings.sync.label")}
+          value={syncSummary}
+          last={!showSyncBreakdown}
+          right={
+            <View style={styles.syncActions}>
+              {isSyncing ? (
+                <ActivityIndicator color={palette.textSecondary} />
+              ) : canSync ? (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={
-                    syncPaused
-                      ? t("settings.sync.resumeButton")
-                      : t("settings.sync.pauseButton")
-                  }
-                  disabled={isResettingLibrary}
+                  accessibilityLabel={t("settings.sync.label")}
                   hitSlop={8}
-                  onPress={() => setSyncPaused(!syncPaused)}
+                  onPress={() => void syncNow()}
                   style={({ pressed }) => [
                     styles.syncIconButton,
                     pressed && { opacity: 0.6 },
                   ]}
                 >
-                  <Ionicons
-                    name={syncPaused ? "play-circle" : "pause-circle-outline"}
-                    size={20}
-                    color={syncPaused ? palette.accent : palette.textSecondary}
-                  />
+                  <Ionicons name="refresh" size={18} color={palette.accent} />
                 </Pressable>
-              </View>
-            }
-          />
-          {showSyncBreakdown
-            ? syncStages.map((stage, index) => {
-                const isLastStage = index === syncStages.length - 1;
-                if (stage.key === "uploading") {
-                  return (
-                    <Row
-                      key={stage.key}
-                      styles={styles}
-                      palette={palette}
-                      icon="cloud-upload-outline"
-                      label={t("settings.syncBreakdown.uploading.label")}
-                      value={t("settings.syncBreakdown.uploading.value", {
-                        count: stage.count,
-                      })}
-                      last={isLastStage}
-                    />
-                  );
+              ) : cloudAvailable && !syncPaused ? (
+                <Ionicons
+                  name="checkmark-circle"
+                  size={20}
+                  color={palette.success}
+                />
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={
+                  syncPaused
+                    ? t("settings.sync.resumeButton")
+                    : t("settings.sync.pauseButton")
                 }
-                if (stage.key === "fetchingInfo") {
-                  return (
-                    <Row
-                      key={stage.key}
-                      styles={styles}
-                      palette={palette}
-                      icon="document-text-outline"
-                      label={t("settings.syncBreakdown.fetchingInfo.label")}
-                      value={t("settings.syncBreakdown.fetchingInfo.value", {
-                        count: stage.count,
-                      })}
-                      last={isLastStage}
-                    />
-                  );
-                }
+                disabled={isResettingLibrary}
+                hitSlop={8}
+                onPress={() => setSyncPaused(!syncPaused)}
+                style={({ pressed }) => [
+                  styles.syncIconButton,
+                  pressed && { opacity: 0.6 },
+                ]}
+              >
+                <Ionicons
+                  name={syncPaused ? "play-circle" : "pause-circle-outline"}
+                  size={20}
+                  color={syncPaused ? palette.accent : palette.textSecondary}
+                />
+              </Pressable>
+            </View>
+          }
+        />
+        {showSyncBreakdown
+          ? syncStages.map((stage, index) => {
+              const isLastStage = index === syncStages.length - 1;
+              if (stage.key === "uploading") {
                 return (
                   <Row
                     key={stage.key}
                     styles={styles}
                     palette={palette}
-                    icon="hourglass-outline"
-                    label={t("settings.syncBreakdown.aiSuggestions.label")}
-                    value={t(
-                      aiQuotaReached
-                        ? "settings.syncBreakdown.aiSuggestions.valueQuotaReached"
-                        : "settings.syncBreakdown.aiSuggestions.value",
-                      { count: stage.count },
-                    )}
+                    icon="cloud-upload-outline"
+                    label={t("settings.syncBreakdown.uploading.label")}
+                    value={t("settings.syncBreakdown.uploading.value", {
+                      count: uploadingCount,
+                    })}
                     last={isLastStage}
                   />
                 );
-              })
-            : null}
-        </Card>
-      </View>
+              }
+              if (stage.key === "fetchingInfo") {
+                return (
+                  <Row
+                    key={stage.key}
+                    styles={styles}
+                    palette={palette}
+                    icon="document-text-outline"
+                    label={t("settings.syncBreakdown.fetchingInfo.label")}
+                    value={t("settings.syncBreakdown.fetchingInfo.value", {
+                      count: fetchingInfoCount,
+                    })}
+                    last={isLastStage}
+                  />
+                );
+              }
+              return (
+                <Row
+                  key={stage.key}
+                  styles={styles}
+                  palette={palette}
+                  icon={aiIcon}
+                  label={t("settings.activity.aiSuggestions.label")}
+                  value={aiValue}
+                  last={isLastStage}
+                />
+              );
+            })
+          : null}
+      </Group>
 
       {/* Library — navigation into the user's own content. Reviewing AI
           suggestions now lives on the Inbox (the persistent review banner), not
@@ -1076,61 +1123,9 @@ export default function SettingsScreen() {
           )}
           onPress={() => setAiSuggestionsSheetOpen(true)}
         />
-        {/* Codex review, PR #655: when AI suggestions are off, neither the
-            dispatch interval nor the retry checker process anything, so the
-            full backlog count doesn't mean "waiting, resumes on its own" —
-            it stays frozen until the user turns AI suggestions back on.
-            Codex review, PR #656: that doesn't mean nothing is moving,
-            though — the server-side overflow worker keeps draining
-            already-confirmed-queued items regardless of this local
-            preference, so hiding the row entirely was itself misleading in
-            the other direction (suggestions can still arrive with no
-            warning). Off mode shows the server-queued subset alone, with
-            copy that doesn't promise automatic resumption of the rest. */}
-        {aiSuggestionsMode !== "off" ? (
-          diagnosticStats.ai.todo > 0 ? (
-            <Row
-              styles={styles}
-              palette={palette}
-              icon="hourglass-outline"
-              label={t("settings.aiQueueBacklog.label")}
-              value={t("settings.aiQueueBacklog.value", {
-                count: diagnosticStats.ai.todo,
-              })}
-            />
-          ) : null
-        ) : diagnosticStats.ai.serverQueued > 0 ? (
-          <Row
-            styles={styles}
-            palette={palette}
-            icon="hourglass-outline"
-            label={t("settings.aiQueueBacklog.label")}
-            value={t("settings.aiQueueBacklog.offValue", {
-              count: diagnosticStats.ai.serverQueued,
-            })}
-          />
-        ) : null}
-        {/* STASH-4P follow-up: which limit (hourly vs daily) was hit and
-            exactly when it resets, sourced from the server's accurate
-            retry_after (see request_ai_enrichment_slot) rather than a guess.
-            Shown regardless of aiSuggestionsMode — a manual "Suggest with AI"
-            tap can trigger this even in 'off' mode. */}
-        {aiQuotaExceeded ? (
-          <Row
-            styles={styles}
-            palette={palette}
-            icon="timer-outline"
-            label={t("settings.aiQuotaExceeded.label")}
-            value={t(
-              aiQuotaExceeded.reason === "daily_limit"
-                ? "settings.aiQuotaExceeded.daily"
-                : aiQuotaExceeded.reason === "hourly_limit"
-                  ? "settings.aiQuotaExceeded.hourly"
-                  : "settings.aiQuotaExceeded.generic",
-              { resetTime: formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate) },
-            )}
-          />
-        ) : null}
+        {/* The AI backlog/quota counters that used to live here moved to the
+            Activity section's single "AI suggestions" row (STASH settings
+            counter cleanup) — this row stays a pure mode selector. */}
         <Row
           styles={styles}
           palette={palette}
@@ -1342,7 +1337,11 @@ export default function SettingsScreen() {
 
       {developerMode ? (
         <>
-          <Group styles={styles} title={t("settings.diagnostics.title")}>
+          <Group
+            styles={styles}
+            title={t("settings.diagnostics.title")}
+            footnote={t("settings.diagnostics.footnote")}
+          >
             <InfoRow
               styles={styles}
               label={t("settings.diagnostics.supabaseAuth")}
@@ -1359,18 +1358,29 @@ export default function SettingsScreen() {
             />
             <InfoRow
               styles={styles}
-              label="Pipeline: User Sync (todo / done)"
-              value={`${diagnosticStats.sync.todo} / ${diagnosticStats.sync.done} (1x: ${diagnosticStats.sync.syncedOnce}, 2x: ${diagnosticStats.sync.syncingTwice})`}
+              label={t("settings.diagnostics.pipelineSync.label")}
+              value={t("settings.diagnostics.pipelineSync.value", {
+                todo: diagnosticStats.sync.todo,
+                done: diagnosticStats.sync.done,
+                once: diagnosticStats.sync.syncedOnce,
+                twice: diagnosticStats.sync.syncingTwice,
+              })}
             />
             <InfoRow
               styles={styles}
-              label="Pipeline: Metadata (todo / done)"
-              value={`${diagnosticStats.metadata.todo} / ${diagnosticStats.metadata.done}`}
+              label={t("settings.diagnostics.pipelineMetadata.label")}
+              value={t("settings.diagnostics.pipelineMetadata.value", {
+                todo: diagnosticStats.metadata.todo,
+                done: diagnosticStats.metadata.done,
+              })}
             />
             <InfoRow
               styles={styles}
-              label="Pipeline: AI Suggestions (todo / done)"
-              value={`${diagnosticStats.ai.todo} / ${diagnosticStats.ai.done}`}
+              label={t("settings.diagnostics.pipelineAi.label")}
+              value={t("settings.diagnostics.pipelineAi.value", {
+                todo: diagnosticStats.ai.todo,
+                done: diagnosticStats.ai.done,
+              })}
             />
             <InfoRow
               styles={styles}
@@ -1797,13 +1807,14 @@ const makeStyles = (palette: AppPalette) =>
       paddingVertical: 0,
       overflow: "hidden",
     },
-    accountHeader: {
+    // No bottom border: the Account card now holds identity only (the sync
+    // row that used to follow it moved to the Activity section), so there's
+    // nothing left to divide it from.
+    accountHeaderOnly: {
       flexDirection: "row",
       alignItems: "center",
       gap: 12,
       padding: 16,
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderBottomColor: palette.border,
     },
     authButtons: {
       flexDirection: "row",

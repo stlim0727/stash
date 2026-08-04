@@ -304,6 +304,7 @@ export const en = {
 
   // Settings.
   'settings.section.account': 'Account',
+  'settings.section.activity': 'Activity',
   'settings.section.library': 'Library',
   'settings.section.preferences': 'Preferences',
   'settings.section.data': 'Your data',
@@ -353,14 +354,26 @@ export const en = {
     one: '{count} bookmark',
     other: '{count} bookmarks',
   },
-  'settings.syncBreakdown.aiSuggestions.label': 'AI suggestions',
-  'settings.syncBreakdown.aiSuggestions.value': {
+  // Activity's single "AI suggestions" row (STASH settings counter cleanup):
+  // replaces the old syncBreakdown AI row, the Preferences backlog row, and
+  // the Preferences quota row with one count whose value copy branches by
+  // cause — see settings.tsx's aiValue derivation.
+  'settings.activity.aiSuggestions.label': 'AI suggestions',
+  'settings.activity.aiSuggestions.value': {
     one: '{count} bookmark',
     other: '{count} bookmarks',
   },
-  'settings.syncBreakdown.aiSuggestions.valueQuotaReached': {
-    one: '{count} bookmark · quota reached',
-    other: '{count} bookmarks · quota reached',
+  'settings.activity.aiSuggestions.blockedOff': {
+    one: '{count} bookmark · AI suggestions are off — only already-queued items keep processing',
+    other: '{count} bookmarks · AI suggestions are off — only already-queued items keep processing',
+  },
+  'settings.activity.aiSuggestions.blockedPaused': {
+    one: '{count} bookmark · paused with sync — resumes when you resume sync',
+    other: '{count} bookmarks · paused with sync — resumes when you resume sync',
+  },
+  'settings.activity.aiSuggestions.quotaWithCount': {
+    one: '{count} bookmark · {quotaReason}',
+    other: '{count} bookmarks · {quotaReason}',
   },
   'settings.trash.label': 'Trash',
   'settings.trash.value': '{count} items',
@@ -427,16 +440,8 @@ export const en = {
   'settings.aiSuggestions.off': 'Off — never auto-suggest',
   'settings.aiSuggestions.confirm': 'Review suggestions before applying',
   'settings.aiSuggestions.auto_accept': 'Auto-apply high-confidence suggestions',
-  'settings.aiQueueBacklog.label': 'AI suggestions queued',
-  'settings.aiQueueBacklog.value': {
-    one: '{count} bookmark · paced by AI quota, resumes automatically',
-    other: '{count} bookmarks · paced by AI quota, resumes automatically',
-  },
-  'settings.aiQueueBacklog.offValue': {
-    one: '{count} bookmark already queued before you turned this off — may still complete',
-    other: '{count} bookmarks already queued before you turned this off — may still complete',
-  },
-  'settings.aiQuotaExceeded.label': 'AI quota reached',
+  // Reused by the Activity "AI suggestions" row's quota-priority branch
+  // (settings.tsx's quotaReasonKey) — no longer rendered as their own row.
   'settings.aiQuotaExceeded.hourly': 'Hourly limit reached — resumes at {resetTime}',
   // Codex review, PR #664: the daily case's displayed reset time is the
   // server's exact figure, but the auto-dispatch drain loop still waits out
@@ -459,9 +464,17 @@ export const en = {
   'settings.pushNotifications.unavailableBody':
     'Something went wrong setting up notifications on this device. Please try again later.',
   'settings.diagnostics.title': 'Diagnostics',
+  'settings.diagnostics.footnote':
+    'Raw per-pipeline todo/done counts — may differ from the rollup in the Activity section above.',
   'settings.diagnostics.supabaseAuth': 'Supabase auth',
   'settings.diagnostics.lastPulled': 'Last pulled',
   'settings.diagnostics.lastPulledNever': 'Never — arrives on next sync',
+  'settings.diagnostics.pipelineSync.label': 'Pipeline: Sync (todo / done)',
+  'settings.diagnostics.pipelineSync.value': '{todo} / {done} (1x: {once}, 2x: {twice})',
+  'settings.diagnostics.pipelineMetadata.label': 'Pipeline: Metadata (todo / done)',
+  'settings.diagnostics.pipelineMetadata.value': '{todo} / {done}',
+  'settings.diagnostics.pipelineAi.label': 'Pipeline: AI suggestions (todo / done)',
+  'settings.diagnostics.pipelineAi.value': '{todo} / {done}',
   'settings.diagnostics.appVersion': 'App version',
   'settings.diagnostics.build': 'Build',
   'settings.exportSheet.title': 'Export my data',

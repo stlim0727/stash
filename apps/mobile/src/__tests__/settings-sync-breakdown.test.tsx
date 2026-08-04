@@ -231,9 +231,14 @@ test('paused with a non-empty queue caps the AI count at server-queued only — 
 
   expect(screen.getByText('Fetching info')).toBeTruthy();
   expect(screen.getAllByText('AI suggestions')).toHaveLength(2);
-  // The AI row's own count is 1 bookmark (server-queued only); "Fetching
-  // info" also happens to read "1 bookmark" — both present, never "2".
-  expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
+  // "Fetching info" reads "1 bookmark" (metadata todo=1). The AI row's own
+  // count is 1 bookmark too (server-queued only, not 2 — the full local
+  // union), but paused-with-a-blocking-queue is a genuinely blocked state, so
+  // its value carries that context instead of a bare count.
+  expect(screen.getByText('1 bookmark')).toBeTruthy();
+  expect(
+    screen.getByText('1 bookmark · paused with sync — resumes when you resume sync'),
+  ).toBeTruthy();
   expect(screen.queryByText('2 bookmarks')).toBeNull();
 });
 
