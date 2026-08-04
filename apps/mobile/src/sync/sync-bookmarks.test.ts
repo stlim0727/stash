@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  UPLOAD_RETRY_BACKOFF_MS,
   createNeedsReconcileUpdate,
   crossedHealthEscalationThreshold,
   hasBulkCreateResultKey,
@@ -11,6 +12,7 @@ import {
   reconcileOrphanedQueueEntries,
   syncCreateQueueEntryBatch,
   syncQueueEntry,
+  uploadRetryBackoffMs,
 } from './sync-bookmarks.ts';
 import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
@@ -429,6 +431,9 @@ test('create: failure stays retryable with the error recorded', async () => {
   assert.equal(result.entry.retry_count, 1);
   assert.equal(result.entry.last_error, 'network down');
   assert.equal(result.bookmarkUpdate?.sync_status, 'failed');
+  // last_attempt_at is what the retry backoff (isSyncable/uploadRetryBackoffMs)
+  // clocks from — a failure that doesn't record it would be retried instantly.
+  assert.equal(typeof result.entry.last_attempt_at, 'string');
 });
 
 test('update: sends the LATEST user-editable fields and leaves the queue', async () => {
@@ -1086,6 +1091,102 @@ test('isSyncable still retries a pending/syncing entry regardless of a stale las
 
 test('isSyncable excludes a synced entry as before', () => {
   assert.equal(isSyncable(makeCreateEntry({ sync_status: 'synced' })), false);
+});
+
+test('uploadRetryBackoffMs follows the exponential schedule and caps at the last entry', () => {
+  assert.equal(uploadRetryBackoffMs(makeCreateEntry({ retry_count: 0 })), 0);
+  assert.equal(uploadRetryBackoffMs(makeCreateEntry({ retry_count: 1 })), UPLOAD_RETRY_BACKOFF_MS[0]);
+  assert.equal(uploadRetryBackoffMs(makeCreateEntry({ retry_count: 2 })), UPLOAD_RETRY_BACKOFF_MS[1]);
+  assert.equal(uploadRetryBackoffMs(makeCreateEntry({ retry_count: 3 })), UPLOAD_RETRY_BACKOFF_MS[2]);
+  assert.equal(uploadRetryBackoffMs(makeCreateEntry({ retry_count: 4 })), UPLOAD_RETRY_BACKOFF_MS[3]);
+  assert.equal(uploadRetryBackoffMs(makeCreateEntry({ retry_count: 5 })), UPLOAD_RETRY_BACKOFF_MS[4]);
+  assert.equal(uploadRetryBackoffMs(makeCreateEntry({ retry_count: 6 })), UPLOAD_RETRY_BACKOFF_MS[5]);
+  // Beyond the schedule's length, it stays capped at the last entry rather
+  // than growing unbounded or throwing on an out-of-range index.
+  assert.equal(uploadRetryBackoffMs(makeCreateEntry({ retry_count: 40 })), UPLOAD_RETRY_BACKOFF_MS[5]);
+});
+
+test('uploadRetryBackoffMs waits longer for a transient network failure (DNS/offline) than an ordinary one', () => {
+  const ordinary = makeCreateEntry({ retry_count: 2, last_error: '500 Internal Server Error' });
+  const dnsFailure = makeCreateEntry({
+    retry_count: 2,
+    last_error: 'UnknownHostException: stzutoejnhzxzhjsjtsi.supabase.co',
+  });
+  assert.ok(uploadRetryBackoffMs(dnsFailure) > uploadRetryBackoffMs(ordinary));
+});
+
+test('isSyncable excludes a failed entry still inside its backoff window', () => {
+  const failedNow = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 1,
+    last_attempt_at: '2026-06-12T00:00:00.000Z',
+  });
+  const justAfterFailure = new Date('2026-06-12T00:00:00.000Z').getTime() + 1_000; // 1s later, well within the 5s backoff
+  assert.equal(isSyncable(failedNow, { now: justAfterFailure }), false);
+});
+
+test('isSyncable includes a failed entry again once its backoff window has elapsed', () => {
+  const failedNow = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 1,
+    last_attempt_at: '2026-06-12T00:00:00.000Z',
+  });
+  const afterBackoff =
+    new Date('2026-06-12T00:00:00.000Z').getTime() + UPLOAD_RETRY_BACKOFF_MS[0]!;
+  assert.equal(isSyncable(failedNow, { now: afterBackoff }), true);
+});
+
+test('isSyncable treats a pre-backoff queue entry (no last_attempt_at) as immediately retryable', () => {
+  // Backward compatibility: a queue entry already on a device's local storage
+  // before this field existed loads with last_attempt_at undefined, not null.
+  // It must not get stuck excluded forever for lack of a timestamp.
+  const legacyFailed = makeCreateEntry({ sync_status: 'failed', retry_count: 4 });
+  assert.equal('last_attempt_at' in legacyFailed, false);
+  assert.equal(isSyncable(legacyFailed), true);
+});
+
+test('isSyncable: a syncNow triggered for an unrelated reason does not sweep up a backed-off failed entry', () => {
+  // Simulates the queue.filter(isSyncable) call sites in store/bookmarks.tsx:
+  // a fresh save (pending) sits alongside an entry that JUST failed.
+  const now = new Date('2026-06-12T00:00:10.000Z').getTime();
+  const freshSave = makeCreateEntry({ local_id: 'local-fresh', sync_status: 'pending' });
+  const justFailed = makeCreateEntry({
+    local_id: 'local-failed',
+    sync_status: 'failed',
+    retry_count: 1,
+    last_attempt_at: '2026-06-12T00:00:09.000Z', // 1s ago, inside the 5s backoff
+  });
+
+  const syncable = [freshSave, justFailed].filter((entry) => isSyncable(entry, { now }));
+
+  assert.deepEqual(
+    syncable.map((entry) => entry.local_id),
+    ['local-fresh'],
+  );
+});
+
+test('isSyncable: ignoreBackoff lets an explicit manual retry (Settings "Sync now") through immediately', () => {
+  // The escape hatch for syncNow({ force: true }) — a deliberate user tap
+  // must not be silently swallowed by a backoff window it knows nothing
+  // about (unlike the automatic paths, which must never set this).
+  const now = new Date('2026-06-12T00:00:00.500Z').getTime(); // 0.5s after failure
+  const justFailed = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 1,
+    last_attempt_at: '2026-06-12T00:00:00.000Z',
+  });
+
+  assert.equal(isSyncable(justFailed, { now }), false);
+  assert.equal(isSyncable(justFailed, { now, ignoreBackoff: true }), true);
+});
+
+test('isSyncable: ignoreBackoff still excludes a permanently-unsyncable URL', () => {
+  const stuck = makeCreateEntry({
+    sync_status: 'failed',
+    last_error:
+      'index row size 2888 exceeds btree version 4 maximum 2704 for index "bookmarks_user_url_hash_active_idx"',
+  });
+  assert.equal(isSyncable(stuck, { ignoreBackoff: true }), false);
 });
 
 test('crossedHealthEscalationThreshold fires exactly at the crossing (2 -> 3)', () => {

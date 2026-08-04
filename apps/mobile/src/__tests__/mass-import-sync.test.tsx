@@ -1364,9 +1364,11 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
 
     // Since metadata is already resolved at the time of the first sync run,
     // the network failure leaves the items failed. Trigger syncNow manually
-    // to drive the retry pass (simulating a reconnect or manual Sync now nudge).
+    // (force: true, matching Settings' "Sync now" tap) to drive the retry
+    // pass (simulating a reconnect or manual Sync now nudge) without waiting
+    // out the failed entries' retry backoff (see isSyncable's ignoreBackoff).
     await act(async () => {
-      await result.current.syncNow();
+      await result.current.syncNow({ force: true });
     });
 
     await waitFor(() => expect(result.current.queue).toHaveLength(0), {

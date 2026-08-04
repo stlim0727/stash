@@ -1,6 +1,7 @@
 import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE, createBookmarkApi } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
+import { isTransientNetworkError } from '@/domain/network-errors';
 import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
 import { canonicalizeUrl } from '@/domain/urls';
 import { recordLog } from '@/observability/log-buffer';
@@ -118,6 +119,7 @@ async function failEntry(
     sync_status: 'failed',
     retry_count: entry.retry_count + 1,
     last_error: errorMessage(error),
+    last_attempt_at: now,
     updated_at: now,
   };
   const stored = (await repository.listQueue()).find(
@@ -588,14 +590,93 @@ export function isPermanentlyUnsyncableUrl(entry: LocalPendingBookmark): boolean
   );
 }
 
-export function isSyncable(entry: LocalPendingBookmark): boolean {
+/**
+ * Wall-clock backoff (ms) required since a `failed` upload entry's last
+ * attempt before an automatic retry may pick it up again, indexed by the
+ * entry's `retry_count` (1 = failed once, 2 = failed twice, ...). Mirrors the
+ * shape of `AI_RETRY_BACKOFF_MS` (store/bookmarks.tsx) but on a much shorter
+ * clock: an upload is cheap, time-sensitive work the user is waiting to reach
+ * the cloud, where the AI schedule paces an expensive, quota-metered
+ * background job. Caps at the last entry so an entry stuck failing forever
+ * settles into a steady retry cadence instead of growing unbounded.
+ *
+ * Without this, `isSyncable` let ANY non-synced, non-permanently-broken entry
+ * back into the next upload batch unconditionally — so a `syncNow` triggered
+ * for an unrelated reason (a new save, a tag edit, an enrichment-driven
+ * update) immediately re-attempted every already-failed entry too, with no
+ * gap between attempts. During an outage (e.g. Sentry STASH-4Z's DNS
+ * resolution failure) or a large import this produced an unthrottled retry
+ * loop and a queue/sync count that visibly oscillated instead of settling.
+ */
+export const UPLOAD_RETRY_BACKOFF_MS: readonly number[] = [
+  5_000, // after the 1st failed attempt
+  15_000, // after the 2nd
+  30_000, // after the 3rd
+  60_000, // after the 4th
+  2 * 60_000, // after the 5th
+  5 * 60_000, // after the 6th and every attempt beyond (cap)
+];
+
+/**
+ * A DNS/transport failure (device offline, host unresolved, connection
+ * reset — see `isTransientNetworkError`) will keep failing with near
+ * certainty until connectivity actually returns, unlike a one-off server
+ * error that might already be resolved. Retrying it on the same short
+ * cadence as an ordinary failure just burns battery/network on guaranteed-
+ * doomed requests, so it earns a longer wait instead.
+ */
+const TRANSIENT_NETWORK_BACKOFF_MULTIPLIER = 3;
+
+/** How long a `failed` entry must still wait before its next automatic retry. */
+export function uploadRetryBackoffMs(entry: LocalPendingBookmark): number {
+  if (entry.retry_count <= 0) {
+    return 0;
+  }
+  const index = Math.min(entry.retry_count - 1, UPLOAD_RETRY_BACKOFF_MS.length - 1);
+  const base = UPLOAD_RETRY_BACKOFF_MS[index]!;
+  return isTransientNetworkError(entry.last_error) ? base * TRANSIENT_NETWORK_BACKOFF_MULTIPLIER : base;
+}
+
+export interface IsSyncableOptions {
+  /** Clock to evaluate backoff against. Defaults to `Date.now()`; tests pass
+   *  an explicit value for determinism. */
+  now?: number;
+  /**
+   * Skip the backoff check entirely — for an explicit, user-initiated retry
+   * (the Settings "Sync now" tap; see `syncNow`'s `force` option), which is
+   * exactly the escape hatch the backoff is meant to leave open. Automatic
+   * triggers (a save, the debounced auto-sync effect, a realtime nudge) must
+   * NOT set this, or the backoff they're gated by never has any effect.
+   * Never bypasses the permanently-unsyncable-URL check above — that failure
+   * can never succeed no matter who asks.
+   */
+  ignoreBackoff?: boolean;
+}
+
+export function isSyncable(entry: LocalPendingBookmark, options: IsSyncableOptions = {}): boolean {
   // Anything not yet 'synced' is eligible. 'syncing' is included so an entry
   // that an interrupted run left in-flight (e.g. the app was backgrounded or a
   // storage write threw mid-upload) is retried rather than orphaned forever.
   // The one exception is a permanently-too-long URL (above): retrying it can
   // never succeed, so excluding it here stops both the automatic sync effect
   // and an explicit "Sync now" from hammering the same doomed request.
-  return entry.sync_status !== 'synced' && !isPermanentlyUnsyncableUrl(entry);
+  if (entry.sync_status === 'synced' || isPermanentlyUnsyncableUrl(entry)) {
+    return false;
+  }
+  if (options.ignoreBackoff) {
+    return true;
+  }
+  // Only a `failed` entry with a recorded last attempt is backoff-gated.
+  // `pending`/`syncing` entries (never failed, or mid-flight) are always
+  // eligible, and an entry with no `last_attempt_at` — never failed before,
+  // or a pre-backoff queue row already on a device — is treated as
+  // immediately retryable rather than blocked.
+  if (entry.sync_status !== 'failed' || !entry.last_attempt_at) {
+    return true;
+  }
+  const now = options.now ?? Date.now();
+  const readyAt = new Date(entry.last_attempt_at).getTime() + uploadRetryBackoffMs(entry);
+  return now >= readyAt;
 }
 
 /**

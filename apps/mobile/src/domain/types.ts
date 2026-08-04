@@ -231,4 +231,15 @@ export interface LocalPendingBookmark {
   last_error: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * ISO timestamp of the most recent failed upload attempt. The upload
+   * queue's retry backoff (see `isSyncable`/`uploadRetryBackoffMs` in
+   * `sync/sync-bookmarks.ts`) runs from here — a `failed` entry isn't
+   * eligible for another automatic retry until enough time has passed since
+   * this attempt. Optional and nullable so an entry persisted before this
+   * field existed (already on a device's local queue) loads with it
+   * `undefined`, which is deliberately treated as "no wait yet" rather than
+   * requiring a storage migration.
+   */
+  last_attempt_at?: string | null;
 }
