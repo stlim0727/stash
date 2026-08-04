@@ -354,10 +354,12 @@ export const en = {
     one: '{count} bookmark',
     other: '{count} bookmarks',
   },
-  // Activity's single "AI suggestions" row (STASH settings counter cleanup):
-  // replaces the old syncBreakdown AI row, the Preferences backlog row, and
-  // the Preferences quota row with one count whose value copy branches by
-  // cause — see settings.tsx's aiValue derivation.
+  // Activity's compact chip strip (docs/design/settings-activity-status.md)
+  // reuses this `.label` for the AI chip's text, with the count rendered via
+  // `Chip`'s own `count` prop instead of one of the sentence-form `.value`/
+  // `.blockedOff`/`.blockedPaused`/`.quotaWithCount` variants below — those
+  // are kept unused rather than deleted (not required by this pass; see the
+  // design doc §5).
   'settings.activity.aiSuggestions.label': 'AI suggestions',
   'settings.activity.aiSuggestions.value': {
     one: '{count} bookmark',
@@ -375,6 +377,10 @@ export const en = {
     one: '{count} bookmark · {quotaReason}',
     other: '{count} bookmarks · {quotaReason}',
   },
+  // The Activity strip's distinct quota-reached chip (design doc §2/§5):
+  // static reason text, no reset time (the chip has no room for it) and no
+  // numeric count (how many items is not the useful fact once blocked).
+  'settings.syncBreakdown.aiSuggestions.chipQuotaReached': 'AI suggestions · quota reached',
   'settings.trash.label': 'Trash',
   'settings.trash.value': '{count} items',
   'settings.report.label': 'Report a problem',

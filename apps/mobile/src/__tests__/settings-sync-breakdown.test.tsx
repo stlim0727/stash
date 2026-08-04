@@ -109,17 +109,18 @@ beforeEach(() => {
   mockAuth.isSignedIn = true;
 });
 
-test('a single active pipeline (uploading only) renders no breakdown rows', async () => {
+test('uploading-only leaves the activity strip empty — the headline already reports that exact count (the duplicate-counter bug this redesign fixes)', async () => {
   await seed({ queue: [pendingUploadEntry('up-1')] });
 
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('1 item waiting to upload')).toBeTruthy());
 
+  expect(screen.queryByTestId('activity-strip')).toBeNull();
   expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.queryByText('Fetching info')).toBeNull();
 });
 
-test('a lone metadata-only stage still renders on its own — the headline never mentions it otherwise (Codex review, PR #670)', async () => {
+test('a lone metadata-only chip still renders on its own — the headline never mentions it otherwise (Codex review, PR #670)', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
   });
@@ -128,27 +129,26 @@ test('a lone metadata-only stage still renders on its own — the headline never
   await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
 
   expect(screen.getByText('Fetching info')).toBeTruthy();
-  expect(screen.getByText('1 bookmark')).toBeTruthy();
+  expect(screen.getByText('· 1')).toBeTruthy();
   expect(screen.queryByText('Waiting to upload')).toBeNull();
 });
 
-test('two active pipelines (uploading + fetching info) render both breakdown rows with their own counts', async () => {
+test('an active upload queue never repeats its own count as a second chip — only the independently-active metadata pipeline gets one', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
     queue: [pendingUploadEntry('up-1')],
   });
 
   const screen = await renderSettings();
-  // Headline is unaffected by the breakdown — still just the upload count.
+  // Headline is unaffected by the strip — still just the upload count.
   await waitFor(() => expect(screen.getByText('1 item waiting to upload')).toBeTruthy());
 
-  expect(screen.getByText('Waiting to upload')).toBeTruthy();
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.getByText('Fetching info')).toBeTruthy();
-  // Both stages happen to have a count of 1 bookmark each.
-  expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
+  expect(screen.getByText('· 1')).toBeTruthy();
 });
 
-test('three active pipelines (uploading + fetching info + AI) render in fixed order with independent counts', async () => {
+test('all three pipelines active at once never shows the upload count twice — the exact scenario from the user report (headline + a duplicate "Waiting to upload" row)', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
     queue: [pendingUploadEntry('up-1')],
@@ -158,15 +158,21 @@ test('three active pipelines (uploading + fetching info + AI) render in fixed or
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('1 item waiting to upload')).toBeTruthy());
 
-  expect(screen.getByText('Waiting to upload')).toBeTruthy();
+  // The headline's own upload count renders exactly once on screen — no
+  // second "1 item waiting to upload"/"Waiting to upload" chip repeats it.
+  expect(screen.getAllByText('1 item waiting to upload')).toHaveLength(1);
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
+  // Only the metadata and AI chips render, each with their OWN independent
+  // count (never the upload count).
   expect(screen.getByText('Fetching info')).toBeTruthy();
   // "AI suggestions" is ambiguous with the Preferences mode-selector row's
-  // label, so assert on the breakdown row's own (unique) value text instead.
+  // label, so both are expected here (mode-selector row + the chip itself).
   expect(screen.getAllByText('AI suggestions')).toHaveLength(2);
-  expect(screen.getByText('2 bookmarks')).toBeTruthy();
+  expect(screen.getByText('· 1')).toBeTruthy();
+  expect(screen.getByText('· 2')).toBeTruthy();
 });
 
-test('sync caught up but metadata/AI still working: headline says "All backed up" yet the breakdown still shows (the STASH-4W bug this fixes)', async () => {
+test('sync caught up but metadata/AI still working: headline says "All backed up" yet the strip still shows chips (the STASH-4W bug this fixes)', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
     meta: { pending_ai_trigger: JSON.stringify(['bm-ai-1']) },
@@ -176,12 +182,12 @@ test('sync caught up but metadata/AI still working: headline says "All backed up
   await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
 
   expect(screen.getByText('Fetching info')).toBeTruthy();
-  // Fetching-info's own row plus the AI breakdown row both happen to read
-  // "1 bookmark" here (metadata todo=1, AI todo=1) — assert both are present.
-  expect(screen.getAllByText('1 bookmark')).toHaveLength(2);
+  // Fetching-info's chip and the AI chip both happen to count 1 here
+  // (metadata todo=1, AI todo=1) — assert both counts are present.
+  expect(screen.getAllByText('· 1')).toHaveLength(2);
 });
 
-test('paused excludes the upload stage (nothing is actually uploading) but keeps independently-running background stages visible (Codex review, PR #670)', async () => {
+test('paused excludes the upload chip (nothing is actually uploading — there never was one) but keeps independently-running background chips visible (Codex review, PR #670)', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
     queue: [pendingUploadEntry('up-1')],
@@ -198,7 +204,7 @@ test('paused excludes the upload stage (nothing is actually uploading) but keeps
   expect(screen.queryByText('Waiting to upload')).toBeNull();
 });
 
-test('paused with only the upload queue non-empty (no independent background work) shows no breakdown', async () => {
+test('paused with only the upload queue non-empty (no independent background work) shows an empty strip', async () => {
   await seed({
     queue: [pendingUploadEntry('up-1')],
     meta: { 'pref.sync.paused': 'true' },
@@ -207,11 +213,12 @@ test('paused with only the upload queue non-empty (no independent background wor
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
 
+  expect(screen.queryByTestId('activity-strip')).toBeNull();
   expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.queryByText('Fetching info')).toBeNull();
 });
 
-test('paused with a non-empty queue caps the AI count at server-queued only — local trigger/dispatch/retry work is genuinely blocked until sync resumes (Codex review, PR #670)', async () => {
+test('paused with a non-empty queue caps the AI chip count at server-queued only — local trigger/dispatch/retry work is genuinely blocked until sync resumes (Codex review, PR #670)', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
     queue: [pendingUploadEntry('up-1')],
@@ -220,7 +227,7 @@ test('paused with a non-empty queue caps the AI count at server-queued only — 
       // Two local triggers, but only one is confirmed server-queued — the AI
       // dispatch loop can't drain the other while the queue above is stuck
       // pending (it early-returns whenever any entry is pending/syncing), so
-      // the breakdown must report 1 (server-queued), not 2 (the full union).
+      // the AI chip must report 1 (server-queued), not 2 (the full union).
       pending_ai_trigger: JSON.stringify(['bm-ai-1', 'bm-ai-2']),
       ai_server_queued: JSON.stringify(['bm-ai-1']),
     },
@@ -231,15 +238,10 @@ test('paused with a non-empty queue caps the AI count at server-queued only — 
 
   expect(screen.getByText('Fetching info')).toBeTruthy();
   expect(screen.getAllByText('AI suggestions')).toHaveLength(2);
-  // "Fetching info" reads "1 bookmark" (metadata todo=1). The AI row's own
-  // count is 1 bookmark too (server-queued only, not 2 — the full local
-  // union), but paused-with-a-blocking-queue is a genuinely blocked state, so
-  // its value carries that context instead of a bare count.
-  expect(screen.getByText('1 bookmark')).toBeTruthy();
-  expect(
-    screen.getByText('1 bookmark · paused with sync — resumes when you resume sync'),
-  ).toBeTruthy();
-  expect(screen.queryByText('2 bookmarks')).toBeNull();
+  // Fetching info (metadata todo=1) and the AI chip (server-queued only, not
+  // the full local union of 2) both read "· 1".
+  expect(screen.getAllByText('· 1')).toHaveLength(2);
+  expect(screen.queryByText('· 2')).toBeNull();
 });
 
 test('paused with only a failed (not pending/syncing) queue entry does not block local AI work — the drain loop only gates on pending/syncing (Codex review, PR #670)', async () => {
@@ -255,15 +257,15 @@ test('paused with only a failed (not pending/syncing) queue entry does not block
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Paused — 1 item waiting')).toBeTruthy());
 
-  // A lone AI stage still renders on its own (earlier fix), and — unlike the
+  // A lone AI chip still renders on its own (earlier fix), and — unlike the
   // sibling "genuinely blocked" test above — its count is the full local
   // union (2), not capped to server-queued (1): a failed entry can't clear
   // the drain loop's pending/syncing gate, so it was never actually blocking.
-  expect(screen.getByText('2 bookmarks')).toBeTruthy();
+  expect(screen.getByText('· 2')).toBeTruthy();
   expect(screen.queryByText('Waiting to upload')).toBeNull();
 });
 
-test('local-only (not signed in) suppresses the breakdown even with multiple non-zero stages', async () => {
+test('local-only (not signed in) suppresses the strip even with multiple non-zero pipelines', async () => {
   mockAuth.status = 'not_configured';
   mockAuth.isSignedIn = false;
   await seed({
@@ -275,17 +277,18 @@ test('local-only (not signed in) suppresses the breakdown even with multiple non
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Local only')).toBeTruthy());
 
+  expect(screen.queryByTestId('activity-strip')).toBeNull();
   expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.queryByText('Fetching info')).toBeNull();
 });
 
-test('AI suggestions off excludes the AI row but still shows upload+metadata when both are active', async () => {
+test('AI suggestions off excludes the AI chip but still shows the metadata chip when it is active (upload never gets its own chip either way)', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'bm-metadata-pending', metadata_status: 'pending' })],
     queue: [pendingUploadEntry('up-1')],
     meta: {
       [AI_SUGGESTIONS_MODE_PREF_KEY]: 'off',
-      // A real AI backlog exists, but 'off' mode must exclude it from the breakdown.
+      // A real AI backlog exists, but 'off' mode must exclude it from the strip.
       pending_ai_trigger: JSON.stringify(['bm-ai-1', 'bm-ai-2']),
     },
   });
@@ -293,8 +296,9 @@ test('AI suggestions off excludes the AI row but still shows upload+metadata whe
   const screen = await renderSettings();
   await waitFor(() => expect(screen.getByText('Off — never auto-suggest')).toBeTruthy());
 
-  expect(screen.getByText('Waiting to upload')).toBeTruthy();
+  expect(screen.queryByText('Waiting to upload')).toBeNull();
   expect(screen.getByText('Fetching info')).toBeTruthy();
-  // Only the mode-selector row's own label remains — no breakdown AI row.
+  expect(screen.getByText('· 1')).toBeTruthy();
+  // Only the mode-selector row's own label remains — no AI chip in the strip.
   expect(screen.getAllByText('AI suggestions')).toHaveLength(1);
 });

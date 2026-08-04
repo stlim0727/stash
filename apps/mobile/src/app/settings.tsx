@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  LayoutAnimation,
   Linking,
   Platform,
   Pressable,
@@ -23,7 +25,9 @@ import { usePalette } from "@/theme";
 import { BookmarkletButton } from "@/ui/BookmarkletButton";
 import { Button } from "@/ui/Button";
 import { Card } from "@/ui/Card";
+import { Chip } from "@/ui/Chip";
 import { ActionSheet } from "@/ui/ActionSheet";
+import { useDebouncedFlag } from "@/hooks/useDebouncedFlag";
 import { describeBuild, getBuildInfo } from "@/domain/build-info";
 import {
   DEFAULT_SHARE_BEHAVIOR,
@@ -75,6 +79,23 @@ import {
 } from "@/notifications/push-token-registration";
 
 const DEVELOPER_MODE_PREF_KEY = "settings.developer-mode";
+
+// Activity chip strip tuning (docs/design/settings-activity-status.md §2.1).
+// A genuine 0↔positive flap must not surface as a mount/unmount, so each
+// chip's visibility is debounced: show instantly, hide only after this many
+// ms of sustained zero.
+const ACTIVITY_CHIP_HIDE_DELAY_MS = 2000;
+// Mirrors SearchSuggestionShelf's reveal/dismiss timings (§6 of its own
+// design doc) so status-strip transitions feel consistent with the rest of
+// the app's non-Reanimated fades.
+const ACTIVITY_STRIP_REVEAL_MS = 140;
+const ACTIVITY_STRIP_DISMISS_MS = 120;
+// 8px top padding + up to two 34px-tall chip rows + 8px row gap (the wrap
+// fallback's second line) + 8px bottom padding ≈ 92px; rounded up for
+// headroom. Caps the strip's animated height so the enter/exit transition
+// has a fixed target without measuring layout, while still leaving room for
+// the bounded (max 2-line) wrap fallback described in the design doc.
+const ACTIVITY_STRIP_MAX_HEIGHT = 100;
 
 // Web only: Settings is a `transparentModal`, so the Inbox stays mounted behind
 // it. On mobile browsers, dragging the scroll past its end rubber-bands the
@@ -129,32 +150,6 @@ const AI_SUGGESTIONS_MODE_OPTIONS: {
   value: mode,
   labelKey: `settings.aiSuggestions.${mode}` as MessageKey,
 }));
-
-/** "5:41 PM" for a reset later today, "Aug 3, 5:41 PM" otherwise — a bare
- *  time for a reset on a different day would misread as already past once
- *  it's tomorrow's clock time (Codex review, PR #664). */
-function formatQuotaResetTime(
-  retryAt: number,
-  formatDate: ReturnType<typeof useI18n>["formatDate"],
-): string {
-  const isToday = new Date(retryAt).toDateString() === new Date().toDateString();
-  return formatDate(
-    retryAt,
-    isToday
-      ? { hour: "numeric", minute: "2-digit" }
-      : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
-  );
-}
-
-/** Which of the reused `settings.aiQuotaExceeded.*` copies applies to a given
- *  429 reason. Shared by the Activity AI row's quota-priority branch. */
-function quotaReasonKey(reason: string): MessageKey {
-  return reason === "daily_limit"
-    ? "settings.aiQuotaExceeded.daily"
-    : reason === "hourly_limit"
-      ? "settings.aiQuotaExceeded.hourly"
-      : "settings.aiQuotaExceeded.generic";
-}
 
 export default function SettingsScreen() {
   const palette = usePalette();
@@ -760,29 +755,26 @@ export default function SettingsScreen() {
           ? t("settings.sync.waiting", { count: waiting })
           : t("settings.sync.allBackedUp");
 
-  // Sync-pipeline breakdown (Sentry STASH-4W): the headline row above only
+  // Activity chip strip (Sentry STASH-4W, redesigned per
+  // docs/design/settings-activity-status.md): the headline row above only
   // ever reports the upload queue, which reads as "stuck" when metadata
   // enrichment or AI tagging is still working (or stalled on quota) after
-  // uploads finish. These conditional sub-rows surface each pipeline's own
-  // count independently — they are NOT a partition of one total, a bookmark
-  // can be counted in more than one stage at once (e.g. freshly captured is
-  // both upload-pending and metadata-pending).
-  //
-  // `waiting` includes queue entries stuck in sync_status 'failed', not just
-  // 'pending'/'syncing' — so this row is worded as a neutral "waiting to
-  // upload" (matching the headline's own established copy) rather than an
-  // active-sounding "Uploading", which would misrepresent a failed entry
-  // that's merely sitting until its next retry (Codex review, PR #670).
-  const uploadingCount = waiting; // same value as today's headline count
+  // uploads finish. The strip surfaces each pipeline's own count
+  // independently — they are NOT a partition of one total, a bookmark can be
+  // counted in more than one stage at once (e.g. freshly captured is both
+  // upload-pending and metadata-pending). An upload stage is deliberately
+  // NOT part of this strip: the headline already reports that exact count in
+  // every state it can appear in, so a third "waiting to upload" chip would
+  // just repeat it (§1 of the design doc — this was the user-reported
+  // duplicate-counter bug).
   const fetchingInfoCount = diagnosticStats.metadata.todo;
   // The AI dispatch loop won't start new local (trigger/dispatch/retry) work
   // while any queue entry is pending or syncing (see the loop's own queue
   // check in store/bookmarks.tsx) — and a paused sync can never clear that
   // gate for such entries. Checked against those two statuses specifically,
-  // not the broader `waiting`/uploadingCount (which also includes 'failed'
-  // entries that do NOT block the drain loop) — a queue holding only failed
-  // entries while paused doesn't actually block local AI work (Codex review,
-  // PR #670).
+  // not the broader `waiting` (which also includes 'failed' entries that do
+  // NOT block the drain loop) — a queue holding only failed entries while
+  // paused doesn't actually block local AI work (Codex review, PR #670).
   const queueBlocksAiDispatch = queue.some(
     (entry) =>
       entry.sync_status === "pending" || entry.sync_status === "syncing",
@@ -806,71 +798,25 @@ export default function SettingsScreen() {
   const aiActiveCount = isAiBlocked
     ? diagnosticStats.ai.activeBlocked
     : diagnosticStats.ai.activeUnblocked;
-  // The Activity card's single "AI suggestions" row replaces three formerly
-  // separate counters (sync-card breakdown, Preferences backlog, Preferences
-  // quota row) — visible whenever there's active/blocked local work OR a
+  // The AI chip is visible whenever there's active/blocked local work OR a
   // live quota cooldown to report, even with zero count (a quota exceeded by
   // a manual "Suggest with AI" tap can leave aiActiveCount at 0 while the
   // cooldown itself is still worth surfacing).
-  const aiRowVisible = cloudAvailable && (aiActiveCount > 0 || aiQuotaExceeded !== null);
-  let aiValue: string;
-  if (aiQuotaExceeded) {
-    // Quota reached always takes priority over the blocked/active wording
-    // below — reuses the existing hourly/daily/generic copy (with its
-    // resolved reset time) rather than duplicating it.
-    const quotaReason = t(quotaReasonKey(aiQuotaExceeded.reason), {
-      resetTime: formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate),
-    });
-    aiValue =
-      aiActiveCount > 0
-        ? t("settings.activity.aiSuggestions.quotaWithCount", {
-            count: aiActiveCount,
-            quotaReason,
-          })
-        : quotaReason;
-  } else if (isAiBlocked && aiActiveCount > 0) {
-    aiValue = t(
-      aiSuggestionsMode === "off"
-        ? "settings.activity.aiSuggestions.blockedOff"
-        : "settings.activity.aiSuggestions.blockedPaused",
-      { count: aiActiveCount },
-    );
-  } else {
-    aiValue = t("settings.activity.aiSuggestions.value", { count: aiActiveCount });
-  }
+  const aiChipRawVisible = cloudAvailable && (aiActiveCount > 0 || aiQuotaExceeded !== null);
   const aiIcon: IoniconName = aiQuotaExceeded ? "timer-outline" : "hourglass-outline";
-  const syncStages = [
-    // "Pause sync" only gates syncNow's network phases — enrichInBackground
-    // (metadata) and AI dispatch are never paused (see
-    // docs/architecture/sync-pause-import-reset.md), so only the upload
-    // stage itself is excluded while paused; metadata/AI stay visible if
-    // they're independently active (Codex review, PR #670).
-    //
-    // Known tiny gap, deliberately not chased further: `syncPausedRef` is
-    // only re-checked between chunks/entries, not mid-request
-    // (store/bookmarks.tsx's bulk-chunk and per-entry loops), so a request
-    // already in flight when pause was tapped keeps running for well under a
-    // second after this flips to hidden. The natural signal, `isSyncing`,
-    // can't distinguish that from the unrelated auto-sync debounce window
-    // (`isSyncDebounceActive`), which arms on every queue change regardless
-    // of pause and would keep this row visible for the whole debounce delay
-    // with nothing actually in flight — worse than the gap it would "fix".
-    // Closing this properly needs a new store-exposed flag for the raw
-    // syncInFlight state, which isn't worth the surface area for a
-    // sub-second display lag (Codex review, PR #670).
-    ...(syncPaused || uploadingCount === 0 ? [] : [{ key: "uploading" as const }]),
-    ...(fetchingInfoCount > 0 ? [{ key: "fetchingInfo" as const }] : []),
-    ...(aiRowVisible ? [{ key: "aiSuggestions" as const }] : []),
-  ];
-  // A lone "uploading" stage duplicates the headline (which already reports
-  // the upload count), so it stays suppressed on its own — but a lone
-  // metadata/AI stage is otherwise invisible anywhere in Settings (the
-  // headline only ever talks about uploads), so it must still show even by
-  // itself (Codex review, PR #670).
-  const showSyncBreakdown =
-    cloudAvailable &&
-    (syncStages.length >= 2 ||
-      (syncStages.length === 1 && syncStages[0].key !== "uploading"));
+  // Debounced chip visibility (design doc §2.1): a genuine 0↔positive flap on
+  // either pipeline's count must not surface as a chip mount/unmount — show
+  // instantly on the way up, hold for ~2s of sustained zero before hiding.
+  // The strip's own mount/unmount is exactly the 0-chips↔1-chip edge of this
+  // same debounced pair, so no separate flag is needed for it.
+  const metadataChipVisible = useDebouncedFlag(
+    cloudAvailable && fetchingInfoCount > 0,
+    { hideDelayMs: ACTIVITY_CHIP_HIDE_DELAY_MS },
+  );
+  const aiChipVisible = useDebouncedFlag(aiChipRawVisible, {
+    hideDelayMs: ACTIVITY_CHIP_HIDE_DELAY_MS,
+  });
+  const showActivityStrip = metadataChipVisible || aiChipVisible;
 
   const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
@@ -985,7 +931,7 @@ export default function SettingsScreen() {
           icon={syncPaused ? "pause-circle-outline" : "sync"}
           label={t("settings.sync.label")}
           value={syncSummary}
-          last={!showSyncBreakdown}
+          last={!showActivityStrip}
           right={
             <View style={styles.syncActions}>
               {isSyncing ? (
@@ -1034,52 +980,17 @@ export default function SettingsScreen() {
             </View>
           }
         />
-        {showSyncBreakdown
-          ? syncStages.map((stage, index) => {
-              const isLastStage = index === syncStages.length - 1;
-              if (stage.key === "uploading") {
-                return (
-                  <Row
-                    key={stage.key}
-                    styles={styles}
-                    palette={palette}
-                    icon="cloud-upload-outline"
-                    label={t("settings.syncBreakdown.uploading.label")}
-                    value={t("settings.syncBreakdown.uploading.value", {
-                      count: uploadingCount,
-                    })}
-                    last={isLastStage}
-                  />
-                );
-              }
-              if (stage.key === "fetchingInfo") {
-                return (
-                  <Row
-                    key={stage.key}
-                    styles={styles}
-                    palette={palette}
-                    icon="document-text-outline"
-                    label={t("settings.syncBreakdown.fetchingInfo.label")}
-                    value={t("settings.syncBreakdown.fetchingInfo.value", {
-                      count: fetchingInfoCount,
-                    })}
-                    last={isLastStage}
-                  />
-                );
-              }
-              return (
-                <Row
-                  key={stage.key}
-                  styles={styles}
-                  palette={palette}
-                  icon={aiIcon}
-                  label={t("settings.activity.aiSuggestions.label")}
-                  value={aiValue}
-                  last={isLastStage}
-                />
-              );
-            })
-          : null}
+        <ActivitySyncStrip
+          styles={styles}
+          t={t}
+          width={width}
+          metadataVisible={metadataChipVisible}
+          metadataCount={fetchingInfoCount}
+          aiVisible={aiChipVisible}
+          aiIcon={aiIcon}
+          aiQuotaReached={aiQuotaExceeded !== null}
+          aiCount={aiActiveCount}
+        />
       </Group>
 
       {/* Library — navigation into the user's own content. Reviewing AI
@@ -1735,6 +1646,128 @@ function Row({
   );
 }
 
+/**
+ * The compact "Activity" chip strip — replaces the old stacked-`Row` sync
+ * breakdown (docs/design/settings-activity-status.md). Sits directly under
+ * the sync headline row, inset to align with that row's TEXT column (not its
+ * icon), so it reads as a detail of the Sync row rather than an independent
+ * row of its own. Renders nothing when neither chip has anything to show —
+ * no empty reserved slot.
+ *
+ * Two independent animation mechanisms, per the design doc's §2.1:
+ *  - The strip's own mount/unmount (0 visible chips ↔ the first chip
+ *    becoming visible) fades + height-collapses via a scoped `Animated`
+ *    value, matching `SearchSuggestionShelf`'s precedent. Scoped rather than
+ *    a `LayoutAnimation` so it never accidentally animates unrelated pending
+ *    layout elsewhere on the screen.
+ *  - A chip inserting/removing/reflowing (wrapping) while the strip STAYS
+ *    mounted goes through `LayoutAnimation.configureNext` instead, called
+ *    during render (not an effect) so it lands before the commit it's meant
+ *    to animate — the same pattern the Inbox header's collapse reflow uses
+ *    (`app/index.tsx`).
+ */
+function ActivitySyncStrip({
+  styles,
+  t,
+  width,
+  metadataVisible,
+  metadataCount,
+  aiVisible,
+  aiIcon,
+  aiQuotaReached,
+  aiCount,
+}: {
+  styles: ReturnType<typeof makeStyles>;
+  t: ReturnType<typeof useI18n>["t"];
+  width: number;
+  metadataVisible: boolean;
+  metadataCount: number;
+  aiVisible: boolean;
+  aiIcon: IoniconName;
+  aiQuotaReached: boolean;
+  aiCount: number;
+}) {
+  const anyVisible = metadataVisible || aiVisible;
+  const [rendered, setRendered] = useState(anyVisible);
+  const progress = useRef(new Animated.Value(anyVisible ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (anyVisible) {
+      setRendered(true);
+    }
+    const animation = Animated.timing(progress, {
+      toValue: anyVisible ? 1 : 0,
+      duration: anyVisible ? ACTIVITY_STRIP_REVEAL_MS : ACTIVITY_STRIP_DISMISS_MS,
+      useNativeDriver: false,
+    });
+    animation.start(({ finished }) => {
+      if (finished && !anyVisible) {
+        setRendered(false);
+      }
+    });
+    // Explicitly stop (not just let run to completion) on unmount/re-trigger,
+    // so a torn-down component (or a same-direction re-render) never leaves a
+    // real timer chain running past its own lifetime — the pending finish
+    // callback above would otherwise still fire and call setState later.
+    return () => {
+      animation.stop();
+    };
+  }, [anyVisible, progress]);
+
+  // Chip insert/remove/wrap reflow within an already-mounted strip. `width`
+  // is included so a rotation/resize that changes whether the two chips wrap
+  // to a second line also animates instead of snapping. Gated on `anyVisible`
+  // too, not just `rendered`: the render where the LAST chip disappears (the
+  // strip is about to unmount) belongs to the Animated fade/height mechanism
+  // above, not this one — without the gate, both would fire on that same
+  // render.
+  const signature = `${metadataVisible}|${aiVisible}|${aiQuotaReached}|${Math.round(width)}`;
+  const prevSignature = useRef(signature);
+  if (rendered && anyVisible && prevSignature.current !== signature && Platform.OS !== "web") {
+    LayoutAnimation.configureNext(LayoutAnimation.create(180, "easeInEaseOut", "opacity"));
+  }
+  prevSignature.current = signature;
+
+  if (!rendered) {
+    return null;
+  }
+
+  return (
+    <Animated.View
+      testID="activity-strip"
+      style={[
+        styles.activityStrip,
+        {
+          opacity: progress,
+          maxHeight: progress.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0, ACTIVITY_STRIP_MAX_HEIGHT],
+          }),
+        },
+      ]}
+    >
+      <View style={styles.activityStripChips}>
+        {metadataVisible ? (
+          <Chip testID="activity-chip-metadata" icon="document-text-outline" quiet count={metadataCount}>
+            {t("settings.syncBreakdown.fetchingInfo.label")}
+          </Chip>
+        ) : null}
+        {aiVisible ? (
+          aiQuotaReached ? (
+            <Chip testID="activity-chip-ai" icon={aiIcon} variant="highlight">
+              {t("settings.syncBreakdown.aiSuggestions.chipQuotaReached")}
+            </Chip>
+          ) : (
+            <Chip testID="activity-chip-ai" icon={aiIcon} quiet count={aiCount}>
+              {t("settings.activity.aiSuggestions.label")}
+            </Chip>
+          )
+        ) : null}
+      </View>
+    </Animated.View>
+  );
+}
+
 /** Compact label/value row used for read-only diagnostics. */
 function InfoRow({
   styles,
@@ -1880,6 +1913,26 @@ const makeStyles = (palette: AppPalette) =>
     },
     syncIconButton: {
       padding: 4,
+    },
+    // The Activity chip strip (docs/design/settings-activity-status.md §2):
+    // clipped so the Animated mount/unmount height interpolation (0 →
+    // ACTIVITY_STRIP_MAX_HEIGHT) never shows overflow mid-transition.
+    activityStrip: {
+      overflow: "hidden",
+    },
+    activityStripChips: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      alignItems: "center",
+      rowGap: 8,
+      columnGap: 10,
+      // Left inset = the headline row's icon width (32) + row gap (12) + the
+      // row's own paddingHorizontal (14) = 58px, so the strip aligns under
+      // the headline's TEXT column rather than starting at the card edge.
+      paddingLeft: 58,
+      paddingRight: 14,
+      paddingTop: 8,
+      paddingBottom: 8,
     },
     divider: {
       borderBottomWidth: StyleSheet.hairlineWidth,
