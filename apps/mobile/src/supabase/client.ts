@@ -72,6 +72,25 @@ function retryAfterSecondsFrom(payload: unknown): number | undefined {
   return typeof retryAfter === 'number' && Number.isFinite(retryAfter) ? retryAfter : undefined;
 }
 
+/**
+ * Parse a PostgREST `Content-Range` response header (e.g. `0-24/1101`, or a
+ * wildcard range like `star/1101` for a HEAD request with no rows in the
+ * range) into just the total. Used by
+ * {@link StashSupabaseClient.requestCount} — the header is the only place the
+ * exact count lives when the response body is intentionally empty.
+ */
+function parseContentRangeTotal(headerValue: string | null): number {
+  const totalPart = headerValue?.split('/')[1];
+  const total = totalPart === undefined ? NaN : Number(totalPart);
+  if (!Number.isFinite(total)) {
+    throw new SupabaseRequestError(
+      `Supabase response did not include a usable Content-Range count (got "${headerValue ?? 'null'}").`,
+      200,
+    );
+  }
+  return total;
+}
+
 function requireConfig(): SupabaseConfig {
   const state = getSupabaseConfigState();
   if (state.status === 'missing') {
@@ -194,6 +213,37 @@ export class StashSupabaseClient {
     }
 
     return payload as T;
+  }
+
+  /**
+   * Row count only, via PostgREST's `Prefer: count=exact` + a `HEAD` request —
+   * no row bodies ever cross the wire, just the total in the `Content-Range`
+   * response header (see {@link parseContentRangeTotal}). For a table an RLS
+   * policy already scopes to the caller's own rows (e.g.
+   * `pending_ai_enrichment`'s owner-scoped SELECT policy), this is the
+   * cheapest way to get an account-wide total without listing ids.
+   */
+  async requestCount(path: string, options: { accessToken?: string } = {}): Promise<number> {
+    const response = await fetch(`${this.config.url}${path}`, {
+      method: 'HEAD',
+      headers: {
+        apikey: this.config.anonKey,
+        Authorization: `Bearer ${options.accessToken ?? this.config.anonKey}`,
+        Prefer: 'count=exact',
+      },
+    });
+
+    if (!response.ok) {
+      const payload = await parseResponse(response);
+      throw new SupabaseRequestError(
+        errorMessageFrom(payload, response.status),
+        response.status,
+        errorReasonFrom(payload),
+        retryAfterSecondsFrom(payload),
+      );
+    }
+
+    return parseContentRangeTotal(response.headers.get('content-range'));
   }
 
   async signInAnonymously(): Promise<SupabaseAuthSession> {

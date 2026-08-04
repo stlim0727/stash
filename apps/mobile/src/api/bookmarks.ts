@@ -954,6 +954,35 @@ export class BookmarkApi {
     );
   }
 
+  /**
+   * Account-wide count of rows still outstanding (`status in ('pending',
+   * 'processing')`) in the server-side AI-enrichment overflow queue —
+   * EVERY bookmark this user owns, not just the ones this device happens to
+   * know about. Unlike {@link fetchPendingEnrichmentStatuses} (which only
+   * reconciles specific ids this device already believes it queued via its
+   * own 429s), this is the ground truth: it also counts a row created by
+   * another device's 429, the server-side `ai_enrich_dispatch` trigger, or a
+   * direct backfill this device never learned about — none of which the
+   * client's local trigger/dispatch/retry/server-queued sets can ever see
+   * (store/bookmarks.tsx's `diagnosticStats.ai`, formerly a pure local-event
+   * union, was silently blind to all three).
+   *
+   * Count-only, via `StashSupabaseClient.requestCount`'s `Prefer: count=exact`
+   * + `HEAD` request — no row bodies. Relies entirely on the owner-scoped
+   * SELECT policy already granted in
+   * `20260731150000_pending_ai_enrichment_select_policy.sql`
+   * (`auth.uid() = user_id`), so no extra `user_id` filter is needed here.
+   */
+  async fetchAiBacklogCount(): Promise<number> {
+    return this.client.requestCount(
+      appendSearchParams(
+        '/rest/v1/pending_ai_enrichment',
+        new URLSearchParams({ select: 'id', status: 'in.(pending,processing)' }),
+      ),
+      { accessToken: this.session.access_token },
+    );
+  }
+
   async applyAISuggestions(input: ApplyAISuggestionsInput): Promise<BookmarkDetail | null> {
     if (input.tag_names && input.tag_names.length > 0) {
       await this.addTags({
