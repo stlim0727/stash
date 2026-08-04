@@ -3,10 +3,10 @@
 // avoids `firebase-tools` (whose service-account CLI auth is broken in CI,
 // firebase/firebase-tools#10041) and mints a token straight from the SA key.
 //
-// Policy: sort releases newest-first, always keep the most recent KEEP of them,
-// then among the rest delete those older than MAX_AGE_DAYS. With MAX_AGE_DAYS=0
-// every release beyond KEEP is deleted. The newest KEEP are never touched, so a
-// too-aggressive age can't wipe out your latest build.
+// Policy: sort releases newest-first. A release is kept only if it is BOTH among
+// the most recent KEEP releases AND newer than MAX_AGE_DAYS. In other words, a release
+// is deleted if it is beyond the KEEP count OR older than MAX_AGE_DAYS. With MAX_AGE_DAYS=0
+// (or unset), age is ignored, so every release beyond KEEP is deleted.
 //
 // Inputs (env):
 //   GOOGLE_APPLICATION_CREDENTIALS  path to the service-account JSON key
@@ -108,10 +108,12 @@ export function selectReleasesToDelete(releases, { keep, maxAgeDays, now }) {
   const sorted = [...releases].sort(
     (a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime(),
   );
-  const candidates = sorted.slice(keep); // protect the newest `keep`
-  if (!maxAgeDays) return candidates;
-  const cutoff = now - maxAgeDays * 86400 * 1000;
-  return candidates.filter((r) => new Date(r.createTime).getTime() < cutoff);
+  const cutoff = maxAgeDays ? now - maxAgeDays * 86400 * 1000 : null;
+  return sorted.filter((r, idx) => {
+    const isOutsideKeep = idx >= keep;
+    const isTooOld = cutoff ? new Date(r.createTime).getTime() < cutoff : false;
+    return isOutsideKeep || isTooOld;
+  });
 }
 
 async function listAllReleases(appName, token) {
@@ -154,8 +156,8 @@ async function main() {
 
   const releases = await listAllReleases(appName, token);
   console.log(
-    `Found ${releases.length} release(s). Policy: keep newest ${keep}` +
-      (maxAgeDays ? `, delete the rest older than ${maxAgeDays} day(s).` : ", delete the rest."),
+    `Found ${releases.length} release(s). Policy: keep only if release is among the newest ${keep}` +
+      (maxAgeDays ? ` AND newer than ${maxAgeDays} day(s).` : "."),
   );
 
   const toDelete = selectReleasesToDelete(releases, {
