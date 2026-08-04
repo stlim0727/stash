@@ -9,6 +9,9 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 
+import Constants from "expo-constants";
+import { Platform } from "react-native";
+
 import { resolveAliasedId } from "@/domain/bookmark-id-swap";
 import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
@@ -115,7 +118,8 @@ import type {
 } from "@/storage/types";
 import { useSupabaseAuth } from "@/supabase/auth-provider";
 import { useRealtimeSync } from "@/supabase/realtime";
-import { SupabaseRequestError } from "@/supabase/client";
+import { SupabaseRequestError, createSupabaseClient } from "@/supabase/client";
+import { trackSyncStatus } from "@/supabase/sync-status-tracker";
 import type { SupabaseAuthSession } from "@/supabase/types";
 import {
   applyAccountTransition,
@@ -6062,6 +6066,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         } catch (error) {
           logStorageError("pull", error);
         }
+      }
+
+      // Best-effort per-sync stamp for the admin dashboard (GH #687):
+      // records app_version + last_synced_at once a full pass (upload +
+      // pull) actually completes — never on an early return above (no
+      // session, paused, already in flight, account-transition not ready).
+      // Fire-and-forget: trackSyncStatus never throws, but constructing the
+      // client here can (e.g. missing Supabase config), so this is wrapped
+      // too — a failed stamp is simply retried on the next successful pass
+      // and must never surface as a "sync run" failure for the pass that
+      // actually just succeeded.
+      try {
+        void trackSyncStatus({
+          client: createSupabaseClient(),
+          session,
+          runtime: {
+            appVersion: Constants.expoConfig?.version,
+            platform: Platform.OS,
+          },
+          now: new Date().toISOString(),
+        });
+      } catch (error) {
+        recordLog(
+          "warn",
+          `sync status stamp failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     } catch (error) {
       logStorageError("sync run", error);

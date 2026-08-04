@@ -271,6 +271,23 @@ export class StashSupabaseClient {
   }
 
   /**
+   * Best-effort per-sync stamp for the admin dashboard (GH #687): upsert the
+   * authenticated user's `app_version` + `last_synced_at` row. `user_id` is
+   * `user_sync_status`'s primary key, so a plain POST with
+   * `resolution=merge-duplicates` upserts onto it without an explicit
+   * `on_conflict` — same idiom as `BookmarkApi.addTags`'s `bookmark_tags`
+   * upsert, which relies on its own primary key the same way.
+   */
+  async upsertSyncStatus(accessToken: string, data: Record<string, unknown>): Promise<void> {
+    await this.request('/rest/v1/user_sync_status', {
+      method: 'POST',
+      accessToken,
+      headers: { Prefer: 'resolution=merge-duplicates' },
+      body: data,
+    });
+  }
+
+  /**
    * Persist a session to local secure storage without going through the network.
    * Used to write back an in-memory mutation (e.g. a freshly stamped
    * `user_metadata`) so a cold restart restores the updated copy instead of the
