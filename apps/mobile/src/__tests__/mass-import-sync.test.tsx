@@ -202,7 +202,10 @@ jest.mock("@/api/bookmarks", () => {
 });
 
 jest.mock("@/domain/enrichment", () => ({
-  enrichBookmark: async () => ({ patch: {}, metadata_status: "complete" }),
+  enrichBookmark: jest.fn(async () => ({
+    patch: {},
+    metadata_status: "complete" as const,
+  })),
 }));
 
 import { BookmarksProvider, useBookmarks } from "@/store/bookmarks";
@@ -225,6 +228,9 @@ const apiMock = jest.requireMock("@/api/bookmarks") as {
 };
 const authMock = jest.requireMock("@/supabase/auth-provider") as {
   __setAuth: (next: Record<string, unknown>) => void;
+};
+const enrichmentMock = jest.requireMock("@/domain/enrichment") as {
+  enrichBookmark: jest.Mock;
 };
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -260,6 +266,7 @@ beforeEach(() => {
   apiMock.__updateBookmarkMock.mockClear();
   apiMock.__addTagsMock.mockClear();
   apiMock.__restoreAIEnrichmentMock.mockClear();
+  enrichmentMock.enrichBookmark.mockClear();
   authMock.__setAuth({
     status: "authenticated",
     session: mockRealSession,
@@ -424,6 +431,126 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
     );
     expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("a Stash JSON backup restore with a metadata snapshot skips the client metadata fetch and marks enrichment_policy skip (#671)", async () => {
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/restored-metadata",
+          title: "Restored",
+          notes: null,
+          tags: [],
+          collection: null,
+          metadata: {
+            description: "A fetched description.",
+            preview_image_url: "https://example.com/preview.png",
+            favicon_url: "https://example.com/favicon.ico",
+            site_name: "Example",
+            canonical_url: "https://example.com/restored-metadata/",
+            content_type: "article",
+          },
+        },
+      ]);
+    });
+
+    // Restored losslessly, not re-fetched: enrichBookmark's pending-only guard
+    // means it must never even be invoked for a bookmark whose metadata_status
+    // is already settled by the restore.
+    expect(result.current.inbox[0]).toMatchObject({
+      metadata_status: "complete",
+      description: "A fetched description.",
+      preview_image_url: "https://example.com/preview.png",
+      favicon_url: "https://example.com/favicon.ico",
+      site_name: "Example",
+    });
+    expect(enrichmentMock.enrichBookmark).not.toHaveBeenCalled();
+
+    // A lone import goes through the single-bookmark create path, not the
+    // bulk one (see the "syncs bulk import..." test below for that path).
+    await waitFor(() =>
+      expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1),
+    );
+    const uploaded = apiMock.__createBookmarkMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(uploaded).toMatchObject({
+      enrichment_policy: "skip",
+      metadata_status: "complete",
+      description: "A fetched description.",
+      site_name: "Example",
+      favicon_url: "https://example.com/favicon.ico",
+      preview_image_url: "https://example.com/preview.png",
+    });
+  });
+
+  test("a Stash JSON backup restore with no metadata snapshot still skips the fetch (marks metadata_status skipped, not pending) (#671)", async () => {
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "stash-backup",
+          url: "https://example.com/no-metadata",
+          title: "No metadata in backup",
+          notes: null,
+          tags: [],
+          collection: null,
+        },
+      ]);
+    });
+
+    expect(result.current.inbox[0]?.metadata_status).toBe("skipped");
+    expect(enrichmentMock.enrichBookmark).not.toHaveBeenCalled();
+
+    await waitFor(() =>
+      expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1),
+    );
+    const uploaded = apiMock.__createBookmarkMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(uploaded).toMatchObject({
+      enrichment_policy: "skip",
+      metadata_status: "skipped",
+    });
+  });
+
+  test("an external HTML/CSV import still fetches metadata but marks enrichment_policy skip (#671)", async () => {
+    const { result } = await renderReadyStore();
+
+    await act(async () => {
+      result.current.importBookmarks([
+        {
+          source: "netscape-html",
+          url: "https://example.com/external-import",
+          title: "External",
+          notes: null,
+          tags: [],
+          collection: null,
+        },
+      ]);
+    });
+
+    // Unchanged behavior: external imports still get the client metadata
+    // fetch (unlike a stash-backup restore above) — only automatic AI is
+    // suppressed, per the #671 policy table.
+    await waitFor(() =>
+      expect(enrichmentMock.enrichBookmark).toHaveBeenCalled(),
+    );
+
+    await waitFor(() =>
+      expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1),
+    );
+    const uploaded = apiMock.__createBookmarkMock.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(uploaded).toMatchObject({ enrichment_policy: "skip" });
   });
 
   test("keeps a failed collection intent and retries it on manual sync", async () => {
