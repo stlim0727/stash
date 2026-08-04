@@ -10,6 +10,7 @@ import {
   enqueueAiEnrichmentDispatch,
   isBurstComplete,
   recordAiEnrichmentDispatchSettled,
+  remapAiEnrichmentDispatchIds,
 } from './ai-enrichment-burst.ts';
 
 test('enqueue adds ids in order and is idempotent', () => {
@@ -136,5 +137,50 @@ test('dropAiEnrichmentDispatchIds is a no-op (same reference) when nothing pendi
   assert.equal(queue, before);
 
   queue = dropAiEnrichmentDispatchIds(EMPTY_AI_ENRICHMENT_BURST_QUEUE, ['a-bookmark']);
+  assert.equal(queue, EMPTY_AI_ENRICHMENT_BURST_QUEUE);
+});
+
+test('remapAiEnrichmentDispatchIds re-keys a pending id onto its rehomed id, preserving order (#692)', () => {
+  // Reproduces: an anonymous bookmark staged for staggered auto-dispatch
+  // under its anon-scoped id, still pending when the user signs in and it's
+  // carried over (rehomed) onto a freshly-minted id.
+  let queue = enqueueAiEnrichmentDispatch(EMPTY_AI_ENRICHMENT_BURST_QUEUE, 'anon-1');
+  queue = enqueueAiEnrichmentDispatch(queue, 'anon-2');
+  queue = enqueueAiEnrichmentDispatch(queue, 'unrelated');
+
+  const idMap = new Map([
+    ['anon-1', 'real-1'],
+    ['anon-2', 'real-2'],
+  ]);
+  queue = remapAiEnrichmentDispatchIds(queue, idMap);
+  assert.deepEqual(queue.pending, ['real-1', 'real-2', 'unrelated']);
+});
+
+test('remapAiEnrichmentDispatchIds does not touch completedInBurst', () => {
+  // Unlike an account boundary (drop), a rehome doesn't invalidate a burst
+  // already in progress under the SAME session — the carried-over id is
+  // still part of it, not a different account's leftover.
+  let queue = enqueueAiEnrichmentDispatch(EMPTY_AI_ENRICHMENT_BURST_QUEUE, 'anon-1');
+  queue = enqueueAiEnrichmentDispatch(queue, 'anon-2');
+  queue = dequeueAiEnrichmentDispatch(queue).queue; // 'anon-1' dispatched
+  queue = recordAiEnrichmentDispatchSettled(queue);
+  assert.equal(queue.completedInBurst, 1);
+
+  queue = remapAiEnrichmentDispatchIds(queue, new Map([['anon-2', 'real-2']]));
+  assert.deepEqual(queue.pending, ['real-2']);
+  assert.equal(queue.completedInBurst, 1);
+});
+
+test('remapAiEnrichmentDispatchIds is a no-op (same reference) when nothing pending matches the map', () => {
+  let queue = enqueueAiEnrichmentDispatch(EMPTY_AI_ENRICHMENT_BURST_QUEUE, 'unrelated');
+  const before = queue;
+
+  queue = remapAiEnrichmentDispatchIds(queue, new Map([['anon-1', 'real-1']]));
+  assert.equal(queue, before);
+
+  queue = remapAiEnrichmentDispatchIds(queue, new Map());
+  assert.equal(queue, before);
+
+  queue = remapAiEnrichmentDispatchIds(EMPTY_AI_ENRICHMENT_BURST_QUEUE, new Map([['anon-1', 'real-1']]));
   assert.equal(queue, EMPTY_AI_ENRICHMENT_BURST_QUEUE);
 });
