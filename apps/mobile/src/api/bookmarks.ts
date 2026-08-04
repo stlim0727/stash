@@ -794,6 +794,53 @@ export class BookmarkApi {
   }
 
   /**
+   * Restore an AI enrichment snapshot from a Stash JSON backup (#671), without
+   * clobbering a bookmark that already has one. Unlike updateAIEnrichment
+   * (which always overwrites — correct for the live generation path, where a
+   * fresh model result should win), a restore must only ever fill a bookmark
+   * that has none yet: canonical duplicate-adoption or an account merge can
+   * point the queued restore at an existing bookmark that already carries
+   * real (possibly newer) enrichment, and that must never be replaced by a
+   * potentially-stale imported snapshot.
+   *
+   * A plain INSERT with `resolution=ignore-duplicates` and an explicit
+   * `on_conflict=bookmark_id` (same idiom as enqueuePendingEnrichment) makes
+   * the non-clobber check atomic against a concurrent write (e.g. the server
+   * trigger enriching this same bookmark) instead of a separate
+   * check-then-insert that could race it. `return=representation` on an
+   * ignored conflict comes back empty, which is how the caller tells "already
+   * had one, restore skipped" apart from "created" — both are success: the
+   * queued restore's job (make sure *some* enrichment exists) is satisfied
+   * either way, so it's safe to drop from the outbox on either outcome.
+   */
+  async restoreAIEnrichment(input: UpdateAIEnrichmentInput): Promise<AIEnrichment | null> {
+    const timestamp = nowIso();
+    const rows = await this.client.request<RemoteAIEnrichment[]>(
+      '/rest/v1/ai_enrichments?on_conflict=bookmark_id',
+      {
+        method: 'POST',
+        accessToken: this.session.access_token,
+        headers: { Prefer: 'resolution=ignore-duplicates, return=representation' },
+        body: {
+          user_id: this.session.user.id,
+          bookmark_id: input.bookmark_id,
+          summary: input.summary ?? null,
+          topics: input.topics ?? [],
+          suggested_tags: input.suggested_tags ?? [],
+          suggested_collection_id: input.suggested_collection_id ?? null,
+          status: input.status,
+          model: input.model ?? null,
+          confidence: input.confidence ?? null,
+          created_at: timestamp,
+          updated_at: timestamp,
+        },
+      },
+    );
+    const created = rows[0];
+    return created ? enrichmentFromRemote(created) : null;
+  }
+
+  /**
    * Ask the backend `ai-enrich` edge function to (re)generate suggestions for a
    * bookmark. The function writes the `ai_enrichments` row and returns it, so
    * the caller can surface results without waiting for the next pull sync.

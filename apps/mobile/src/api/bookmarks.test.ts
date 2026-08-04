@@ -225,3 +225,67 @@ test('enqueuePendingEnrichment targets bookmark_id for conflict resolution and r
   assert.equal(seenPath, '/rest/v1/pending_ai_enrichment?on_conflict=bookmark_id');
   assert.equal(seenHeaders?.Prefer, 'resolution=ignore-duplicates, return=minimal');
 });
+
+test('restoreAIEnrichment creates a row and targets bookmark_id for conflict resolution (#671)', async () => {
+  let seenPath: string | undefined;
+  let seenHeaders: Record<string, string> | undefined;
+  let seenBody: Record<string, unknown> | undefined;
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      seenPath = path;
+      seenHeaders = options.headers as Record<string, string>;
+      seenBody = options.body as Record<string, unknown>;
+      return [
+        {
+          id: '00000000-0000-4000-8000-000000000055',
+          bookmark_id: '00000000-0000-4000-8000-000000000001',
+          user_id: 'user-1',
+          summary: 'restored summary',
+          topics: ['a'],
+          suggested_tags: [],
+          suggested_collection_id: null,
+          suggested_collection_name: null,
+          model: 'gpt-5',
+          status: 'complete',
+          confidence: 0.5,
+          degraded: false,
+          degraded_reason: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        },
+      ];
+    },
+  };
+
+  const api = new BookmarkApi(SESSION, client as never);
+  const result = await api.restoreAIEnrichment({
+    bookmark_id: '00000000-0000-4000-8000-000000000001',
+    summary: 'restored summary',
+    topics: ['a'],
+    status: 'complete',
+    model: 'gpt-5',
+    confidence: 0.5,
+  });
+
+  assert.equal(seenPath, '/rest/v1/ai_enrichments?on_conflict=bookmark_id');
+  assert.equal(seenHeaders?.Prefer, 'resolution=ignore-duplicates, return=representation');
+  assert.equal(seenBody?.bookmark_id, '00000000-0000-4000-8000-000000000001');
+  assert.equal(result?.summary, 'restored summary');
+});
+
+test('restoreAIEnrichment returns null (not an error) when the bookmark already has an enrichment', async () => {
+  // PostgREST returns an empty array for an ignored ON CONFLICT row when
+  // return=representation is set — this must read as "already had one, skip",
+  // not as a failure that would mark the durable outbox entry failed forever.
+  const client = {
+    request: async () => [],
+  };
+
+  const api = new BookmarkApi(SESSION, client as never);
+  const result = await api.restoreAIEnrichment({
+    bookmark_id: '00000000-0000-4000-8000-000000000001',
+    status: 'complete',
+  });
+
+  assert.equal(result, null);
+});

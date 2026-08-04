@@ -86,6 +86,14 @@ import {
   rekeyPendingImportCollections,
   type PendingImportCollection,
 } from "@/domain/pending-import-collections";
+import {
+  PENDING_ENRICHMENT_RESTORE_KEY,
+  dropPendingEnrichmentRestores,
+  enqueuePendingEnrichmentRestore,
+  parsePendingEnrichmentRestores,
+  rekeyPendingEnrichmentRestores,
+  type PendingEnrichmentRestore,
+} from "@/domain/pending-enrichment-restore";
 import { useI18n } from "@/i18n";
 import { recordLog } from "@/observability/log-buffer";
 import { armHydrationWatchdog } from "@/observability/hydration-watchdog";
@@ -890,6 +898,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     PendingImportCollection[]
   >([]);
   const pendingImportCollectionsRef = useRef<PendingImportCollection[]>([]);
+  // Durable outbox for restoring a Stash JSON backup's AI enrichment snapshot
+  // (#671) — same shape/lifecycle as pendingImportCollections above.
+  const [pendingEnrichmentRestores, setPendingEnrichmentRestores] = useState<
+    PendingEnrichmentRestore[]
+  >([]);
+  const pendingEnrichmentRestoresRef = useRef<PendingEnrichmentRestore[]>([]);
   // Bookmark ids whose AI suggestions arrived unwitnessed (drives the Inbox
   // banner). The ref mirrors state so the arrival paths (auto enrichment, pull)
   // can read-modify-write synchronously across back-to-back updates.
@@ -1149,6 +1163,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           ),
         )
         .catch((error) => logStorageError("import collection ops", error));
+    },
+    [],
+  );
+
+  const applyPendingEnrichmentRestores = useCallback(
+    (next: PendingEnrichmentRestore[]) => {
+      pendingEnrichmentRestoresRef.current = next;
+      setPendingEnrichmentRestores(next);
+      ensureRepositoryReady()
+        .then(() =>
+          repository.setMeta(
+            PENDING_ENRICHMENT_RESTORE_KEY,
+            JSON.stringify(next),
+          ),
+        )
+        .catch((error) => logStorageError("enrichment restore ops", error));
     },
     [],
   );
@@ -1920,6 +1950,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             storedPulledAt,
             storedTagOpsRaw,
             storedImportCollectionsRaw,
+            storedEnrichmentRestoresRaw,
             storedAiTriggerRaw,
             storedAiRetryRaw,
             storedAiServerQueuedRaw,
@@ -1937,6 +1968,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             repository.getMeta(LAST_PULLED_AT_KEY),
             repository.getMeta(PENDING_TAG_OPS_KEY),
             repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
+            repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY),
             repository.getMeta(PENDING_AI_TRIGGER_KEY),
             repository.getMeta(AI_RETRY_STATE_KEY),
             repository.getMeta(AI_SERVER_QUEUED_KEY),
@@ -2152,6 +2184,26 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             }
             pendingImportCollectionsRef.current = storedImportCollections;
             setPendingImportCollections(storedImportCollections);
+            const parsedEnrichmentRestores = parsePendingEnrichmentRestores(
+              storedEnrichmentRestoresRaw,
+            );
+            const storedEnrichmentRestores = parsedEnrichmentRestores.filter(
+              (item) => storedBookmarkIds.has(item.bookmark_id),
+            );
+            if (
+              storedEnrichmentRestores.length !== parsedEnrichmentRestores.length
+            ) {
+              void repository
+                .setMeta(
+                  PENDING_ENRICHMENT_RESTORE_KEY,
+                  JSON.stringify(storedEnrichmentRestores),
+                )
+                .catch((error) =>
+                  logStorageError("orphan enrichment restore ops", error),
+                );
+            }
+            pendingEnrichmentRestoresRef.current = storedEnrichmentRestores;
+            setPendingEnrichmentRestores(storedEnrichmentRestores);
             tagDataRef.current = applyPendingTagOps(
               cleanTagData,
               storedOps,
@@ -2672,6 +2724,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       let nextTagData = tagDataRef.current;
       let nextTagOps = pendingTagOpsRef.current;
       let nextImportCollections = pendingImportCollectionsRef.current;
+      let nextEnrichmentRestores = pendingEnrichmentRestoresRef.current;
       let organizationChanged = false;
       let imported = 0;
       let duplicates = 0;
@@ -2778,6 +2831,26 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           );
           organizationChanged = true;
         }
+        // #671: a Stash JSON backup restore carries the bookmark's own AI
+        // enrichment snapshot (parseJsonBackup, #678). Queue it durably so a
+        // later sync pass restores it losslessly instead of the bookmark
+        // going through fresh (paid) AI enrichment. Safe to enqueue even for
+        // a dedupe-matched existing bookmark — restoreAIEnrichment's
+        // ON-CONFLICT-ignore write never clobbers a real enrichment already
+        // there, so the worst case is a harmless no-op upload.
+        if (item.source === "stash-backup" && item.enrichment) {
+          nextEnrichmentRestores = enqueuePendingEnrichmentRestore(
+            nextEnrichmentRestores,
+            {
+              bookmark_id: id,
+              enrichment: item.enrichment,
+              status: "pending",
+              last_error: null,
+              created_at: now,
+            },
+          );
+          organizationChanged = true;
+        }
       }
 
       if (organizationChanged) {
@@ -2787,6 +2860,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         setTagData(nextTagData);
         pendingImportCollectionsRef.current = nextImportCollections;
         setPendingImportCollections(nextImportCollections);
+        pendingEnrichmentRestoresRef.current = nextEnrichmentRestores;
+        setPendingEnrichmentRestores(nextEnrichmentRestores);
       }
 
       if (newBookmarks.length > 0 || organizationChanged) {
@@ -2823,6 +2898,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   [PENDING_TAG_OPS_KEY]: JSON.stringify(nextTagOps),
                   [PENDING_IMPORT_COLLECTIONS_KEY]: JSON.stringify(
                     nextImportCollections,
+                  ),
+                  [PENDING_ENRICHMENT_RESTORE_KEY]: JSON.stringify(
+                    nextEnrichmentRestores,
                   ),
                 }
               : undefined;
@@ -3120,6 +3198,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           [id],
         ),
       );
+      applyPendingEnrichmentRestores(
+        dropPendingEnrichmentRestores(
+          pendingEnrichmentRestoresRef.current,
+          [id],
+        ),
+      );
       applyTagData({
         ...tagDataRef.current,
         bookmarkTags: tagDataRef.current.bookmarkTags.filter(
@@ -3165,6 +3249,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [
       applyPendingImportCollections,
+      applyPendingEnrichmentRestores,
       applyTagData,
       applyTagOps,
       enqueueMutation,
@@ -3196,6 +3281,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     );
     applyPendingImportCollections(
       dropPendingImportCollections(pendingImportCollectionsRef.current, ids),
+    );
+    applyPendingEnrichmentRestores(
+      dropPendingEnrichmentRestores(pendingEnrichmentRestoresRef.current, ids),
     );
     applyTagData({
       ...tagDataRef.current,
@@ -3239,6 +3327,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .catch((error) => logStorageError("empty trash", error));
   }, [
     applyPendingImportCollections,
+    applyPendingEnrichmentRestores,
     applyTagData,
     applyTagOps,
     dropAiRetryBookkeeping,
@@ -3326,6 +3415,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       applyUnseenSuggestions(new Set());
       applyTagOps([]);
       applyPendingImportCollections([]);
+      applyPendingEnrichmentRestores([]);
       applyTagData(EMPTY_TAG_DATA);
       setBookmarks([]);
       setQueue([]);
@@ -3339,6 +3429,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, [
     auth,
     applyPendingImportCollections,
+    applyPendingEnrichmentRestores,
     applyTagData,
     applyTagOps,
     applyUnseenSuggestions,
@@ -4256,6 +4347,91 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     return mutationsPushed;
   }, [auth.session, hasSyncedOnce]);
 
+  // Durable outbox drive for restoring a Stash JSON backup's AI enrichment
+  // snapshot (#671) — same shape as syncPendingImportCollections above, and
+  // for the same reason: a bookmark must exist remotely (hasSyncedOnce)
+  // before an ai_enrichments row can reference it by bookmark_id. Unlike the
+  // collection outbox, there's no remote lookup/create step: restoreAIEnrichment
+  // is a single atomic ON-CONFLICT-ignore write, so either outcome (created or
+  // "already had one") satisfies this entry's job and it's dropped either way.
+  const syncPendingEnrichmentRestores = useCallback(async (): Promise<boolean> => {
+    if (!auth.session || syncPausedRef.current) {
+      return false;
+    }
+    const eligible = pendingEnrichmentRestoresRef.current.filter((item) =>
+      hasSyncedOnce(item.bookmark_id),
+    );
+    if (eligible.length === 0) {
+      return false;
+    }
+
+    const api = createSyncApi(auth.session);
+    let mutationsPushed = false;
+    for (const item of eligible) {
+      try {
+        const created = await api.restoreAIEnrichment({
+          bookmark_id: item.bookmark_id,
+          summary: item.enrichment.summary,
+          topics: item.enrichment.topics,
+          suggested_tags: item.enrichment.suggested_tags,
+          status: item.enrichment.status,
+          model: item.enrichment.model,
+          confidence: item.enrichment.confidence,
+        });
+        mutationsPushed = true;
+        if (created) {
+          // Newest enrichment for this bookmark wins (mirrors requestAiEnrichment's
+          // settle handler) — safe here too since a non-null result only ever
+          // means this call actually created the row (nothing else existed yet).
+          setEnrichments((current) => [
+            created,
+            ...current.filter((row) => row.bookmark_id !== created.bookmark_id),
+          ]);
+          try {
+            await ensureRepositoryReady();
+            await repository.upsertEnrichments([created]);
+          } catch (error) {
+            logStorageError("enrichment restore persist", error);
+          }
+        }
+
+        const remaining = pendingEnrichmentRestoresRef.current.filter(
+          (candidate) => candidate.bookmark_id !== item.bookmark_id,
+        );
+        await ensureRepositoryReady();
+        await repository.setMeta(
+          PENDING_ENRICHMENT_RESTORE_KEY,
+          JSON.stringify(remaining),
+        );
+        pendingEnrichmentRestoresRef.current = remaining;
+        setPendingEnrichmentRestores(remaining);
+      } catch (error) {
+        const failed = pendingEnrichmentRestoresRef.current.map((candidate) =>
+          candidate.bookmark_id === item.bookmark_id
+            ? {
+                ...candidate,
+                status: "failed" as const,
+                last_error:
+                  error instanceof Error ? error.message : String(error),
+              }
+            : candidate,
+        );
+        await ensureRepositoryReady();
+        await repository.setMeta(
+          PENDING_ENRICHMENT_RESTORE_KEY,
+          JSON.stringify(failed),
+        );
+        pendingEnrichmentRestoresRef.current = failed;
+        setPendingEnrichmentRestores(failed);
+        recordLog(
+          "warn",
+          `enrichment restore sync failed (${item.bookmark_id}): ${String(error)}`,
+        );
+      }
+    }
+    return mutationsPushed;
+  }, [auth.session, hasSyncedOnce]);
+
   // STASH #573 auto_accept mode: apply an enrichment's tag/folder suggestions
   // automatically, with no review step. Reuses the exact same eligibility
   // rules (`pendingSuggestions`'s SUGGESTION_MIN_CONFIDENCE filter,
@@ -4365,6 +4541,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         pendingImportCollectionsRef.current,
         idMap,
       );
+      // #671: an enrichment restore queued against a local id must follow the
+      // bookmark to its resolved remote id the same way — otherwise a
+      // duplicate-adoption or account rehome strands the restore on a dead id
+      // that syncPendingEnrichmentRestores's hasSyncedOnce check can never see.
+      const rekeyedEnrichmentRestores = rekeyPendingEnrichmentRestores(
+        pendingEnrichmentRestoresRef.current,
+        idMap,
+      );
       const links = tagDataRef.current.bookmarkTags.map((link) => {
         const newId = idMap.get(link.bookmark_id);
         return newId ? { ...link, bookmark_id: newId } : link;
@@ -4374,6 +4558,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setPendingTagOps(rekeyedTagOps);
       pendingImportCollectionsRef.current = rekeyedImportCollections;
       setPendingImportCollections(rekeyedImportCollections);
+      pendingEnrichmentRestoresRef.current = rekeyedEnrichmentRestores;
+      setPendingEnrichmentRestores(rekeyedEnrichmentRestores);
       tagDataRef.current = rekeyedTagData;
       setTagData(rekeyedTagData);
       remapAiRetryIdentity(idMap);
@@ -4383,6 +4569,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           [PENDING_TAG_OPS_KEY]: JSON.stringify(rekeyedTagOps),
           [PENDING_IMPORT_COLLECTIONS_KEY]: JSON.stringify(
             rekeyedImportCollections,
+          ),
+          [PENDING_ENRICHMENT_RESTORE_KEY]: JSON.stringify(
+            rekeyedEnrichmentRestores,
           ),
         },
         tagData: rekeyedTagData,
@@ -4449,6 +4638,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   ids,
                 ),
               );
+              // #671: A's queued enrichment restores are dead the same way —
+              // never let them upload against a bookmark id B's session no
+              // longer owns.
+              applyPendingEnrichmentRestores(
+                dropPendingEnrichmentRestores(
+                  pendingEnrichmentRestoresRef.current,
+                  ids,
+                ),
+              );
               const dropped = new Set(ids);
               const links = tagDataRef.current.bookmarkTags.filter(
                 (link) => !dropped.has(link.bookmark_id),
@@ -4466,26 +4664,38 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         logStorageError("account transition", error);
         try {
           await ensureRepositoryReady();
-          const [storedBookmarks, storedQueue, storedTagData, rawTagOps, rawCollections] =
-            await Promise.all([
+          const [
+            storedBookmarks,
+            storedQueue,
+            storedTagData,
+            rawTagOps,
+            rawCollections,
+            rawEnrichmentRestores,
+          ] = await Promise.all([
               repository.listBookmarks(),
               repository.listQueue(),
               repository.listTagData(),
               repository.getMeta(PENDING_TAG_OPS_KEY),
               repository.getMeta(PENDING_IMPORT_COLLECTIONS_KEY),
+              repository.getMeta(PENDING_ENRICHMENT_RESTORE_KEY),
             ]);
           const storedTagOps = parseTagOps(rawTagOps);
           const storedCollections = parsePendingImportCollections(rawCollections);
+          const storedEnrichmentRestores = parsePendingEnrichmentRestores(
+            rawEnrichmentRestores,
+          );
           bookmarksRef.current = storedBookmarks;
           queueRef.current = storedQueue;
           tagDataRef.current = storedTagData;
           pendingTagOpsRef.current = storedTagOps;
           pendingImportCollectionsRef.current = storedCollections;
+          pendingEnrichmentRestoresRef.current = storedEnrichmentRestores;
           setBookmarks(storedBookmarks);
           setQueue(storedQueue);
           setTagData(storedTagData);
           setPendingTagOps(storedTagOps);
           setPendingImportCollections(storedCollections);
+          setPendingEnrichmentRestores(storedEnrichmentRestores);
         } catch (reloadError) {
           logStorageError("account transition recovery", reloadError);
         }
@@ -4494,6 +4704,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     },
     [
       applyPendingImportCollections,
+      applyPendingEnrichmentRestores,
       applyTagOps,
       applyTagData,
       dropAiRetryBookkeeping,
@@ -5627,6 +5838,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         mutationsPushed = true;
       }
 
+      // Same reasoning, same seam: a restored AI enrichment snapshot (#671)
+      // needs its bookmark's remote id resolved first too.
+      const enrichmentRestoresSynced = await syncPendingEnrichmentRestores();
+      if (enrichmentRestoresSynced) {
+        mutationsPushed = true;
+      }
+
       // Upload any queued local-first tag ops before pulling, so the pull's
       // server snapshot already reflects them.
       const tagsSynced = await syncTagOps();
@@ -5841,6 +6059,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     requestAiEnrichment,
     syncTagOps,
     syncPendingImportCollections,
+    syncPendingEnrichmentRestores,
     noteUnseenSuggestions,
     reconcileAccountTransition,
   ]);
@@ -6385,6 +6604,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         pendingImportCollections.some(
           (item) =>
             item.status === "pending" && hasSyncedOnce(item.bookmark_id),
+        ) ||
+        // #671: the enrichment-restore outbox needs the same re-arm once its
+        // bookmark's own create clears the queue above — otherwise a restore
+        // queued alongside a collection-less import (no other pending work)
+        // never gets a follow-up syncNow pass to actually upload.
+        pendingEnrichmentRestores.some(
+          (item) =>
+            item.status === "pending" && hasSyncedOnce(item.bookmark_id),
         ));
 
     if (isSyncNeeded) {
@@ -6417,6 +6644,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     auth.status,
     queue,
     pendingImportCollections,
+    pendingEnrichmentRestores,
     isSyncingState,
     syncNow,
     hasSyncedOnce,
@@ -6596,6 +6824,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   ids,
                 ),
               );
+              applyPendingEnrichmentRestores(
+                dropPendingEnrichmentRestores(
+                  pendingEnrichmentRestoresRef.current,
+                  ids,
+                ),
+              );
               const dropped = new Set(ids);
               const links = tagDataRef.current.bookmarkTags.filter(
                 (link) => !dropped.has(link.bookmark_id),
@@ -6623,6 +6857,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     auth.status,
     bookmarks,
     applyPendingImportCollections,
+    applyPendingEnrichmentRestores,
     applyTagOps,
     applyTagData,
   ]);
