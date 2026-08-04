@@ -975,6 +975,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const [aiServerQueuedIds, setAiServerQueuedIds] = useState<
     ReadonlySet<string>
   >(new Set());
+  // Account-wide, ground-truth count of rows still pending/processing in the
+  // server-side `pending_ai_enrichment` overflow queue (see
+  // `fetchAiServerBacklogCount` below) — unlike every set above, this is not
+  // built from local events this device witnessed, so it also covers a
+  // bookmark created on another device, a server-side dispatch trigger, or a
+  // direct backfill this device never learned about. `null` means "not
+  // fetched yet" (or the account just changed); `diagnosticStats.ai` treats
+  // that as "nothing extra known beyond aiServerQueuedIds", which matches the
+  // pre-fetch/offline behavior exactly (no regression before the first load).
+  const [aiServerBacklogCount, setAiServerBacklogCount] = useState<
+    number | null
+  >(null);
   // Reactive mirror of `aiEnriching` so the UI can show an ambient "filling in"
   // placeholder while a request (auto-triggered or manual) is in flight.
   const [enrichingIds, setEnrichingIds] = useState<ReadonlySet<string>>(
@@ -3471,6 +3483,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       void persistPendingAiTrigger();
       syncAiRetryIds();
       syncAiServerQueuedIds();
+      // The remote wipe above cascades pending_ai_enrichment rows away with
+      // their bookmarks, so the account's true server-side backlog is known
+      // to be 0 now — set it directly rather than nulling it out to "not yet
+      // fetched" (resetLibrary doesn't change auth.userId, so the
+      // account-switch effect that would otherwise re-fetch it never fires).
+      setAiServerBacklogCount(0);
       applyUnseenSuggestions(new Set());
       applyTagOps([]);
       applyPendingImportCollections([]);
@@ -6660,6 +6678,70 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     };
   }, [reconcileAiServerQueued]);
 
+  // Account-wide AI overflow backlog count (fixes the Settings "AI
+  // suggestions" counter reading 0 while the server-side worker is actively
+  // draining a real backlog it never learned about — e.g. a direct
+  // `pending_ai_enrichment` backfill, another device's 429, or the
+  // server-side dispatch trigger). Purely a diagnostic/display read: never
+  // throws, never blocks anything, and on failure just leaves the last known
+  // value in place rather than blanking an already-correct display.
+  const fetchAiServerBacklogCount = useCallback(async () => {
+    if (!auth.session) {
+      return;
+    }
+    // Diagnostic/display-only, but reuses the same "ensure a fresh token
+    // first" pattern as syncNow/requestAiEnrichment (rather than trusting the
+    // possibly-stale reactive `auth.session` directly) — a soon-to-expire
+    // token would otherwise just fail this GET for no reason. Wrapped in
+    // try/catch so neither the ensure call nor the fetch itself can ever
+    // throw out of this fire-and-forget helper.
+    try {
+      const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+      if (!session) {
+        return;
+      }
+      const count = await createSyncApi(session).fetchAiBacklogCount();
+      setAiServerBacklogCount(count);
+    } catch (error) {
+      recordLog(
+        "warn",
+        `AI server backlog count fetch failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }, [auth]);
+
+  // Same foreground + periodic-tick shape as checkAiRetries/
+  // reconcileAiServerQueued above — reuses AI_RETRY_CHECK_INTERVAL_MS rather
+  // than a new interval constant, since this is the same class of "keep a
+  // background diagnostic in sync every few minutes" work.
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const stopInterval = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+    const startInterval = () => {
+      if (interval) {
+        return;
+      }
+      interval = setInterval(fetchAiServerBacklogCount, AI_RETRY_CHECK_INTERVAL_MS);
+    };
+    const unregister = registerForForegroundState({
+      onForeground: () => {
+        void fetchAiServerBacklogCount();
+        startInterval();
+      },
+      onBackground: stopInterval,
+    });
+    startInterval(); // the app is foregrounded when this first mounts
+    return () => {
+      unregister();
+      stopInterval();
+    };
+  }, [fetchAiServerBacklogCount]);
+
   // Background sync: upload as soon as auth and local data are ready, and
   // whenever a new pending entry appears. Failed entries are retried on the
   // next save or via the manual Sync now action, not in a hot loop.
@@ -6839,9 +6921,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // work for no reason.
       aiQuotaCooldownUntil.current = 0;
       setAiQuotaExceeded(null);
+      // Reset before re-fetching: a stale total from the PREVIOUS account
+      // must never leak into this one's display, even for the instant before
+      // the new account's own fetch resolves (`diagnosticStats.ai` treats
+      // `null` as "nothing extra known yet", so this can't undercount either
+      // — same reasoning as the aiQuotaExceeded reset just above).
+      setAiServerBacklogCount(null);
+      void fetchAiServerBacklogCount();
       void syncNow();
     }
-  }, [bookmarks, auth.userId, auth.status, isSyncing, syncNow]);
+  }, [
+    bookmarks,
+    auth.userId,
+    auth.status,
+    isSyncing,
+    syncNow,
+    fetchAiServerBacklogCount,
+  ]);
 
   // Codex review, PR #664: the account-switch clear above only fires when a
   // NEW user id shows up. Two cases it misses, both cleared independently
@@ -6908,6 +7004,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // Reset the pull effect's guard so the next user (lazily minted) triggers a
     // fresh pull rather than being treated as "already synced".
     lastSyncedUserId.current = null;
+    // The departed real account's server-side backlog total must not linger
+    // and be misread as the next (different) session's — null it out now
+    // rather than waiting for that next session's own account-switch effect
+    // to fire (there's a real gap here: no session at all until the lazy
+    // mint below completes).
+    setAiServerBacklogCount(null);
     void (async () => {
       try {
         await ensureRepositoryReady();
@@ -7025,7 +7127,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ...aiRetryIds,
       ...aiServerQueuedIds,
     ]);
-    const aiTodo = uniqueAiTodoIds.size;
+    // True account-wide server-side backlog (fixes the counter reading 0 for
+    // a real backlog this device never witnessed locally — another device's
+    // 429, the server-side dispatch trigger, or a direct
+    // `pending_ai_enrichment` backfill: `aiServerQueuedIds` above is only
+    // ever populated by THIS device's own 429s, see
+    // `fetchAiServerBacklogCount`). `null` (not fetched yet, or the account
+    // just changed) floors at `aiServerQueuedIds.size` — exactly the old
+    // local-only value, so display is unchanged until the first successful
+    // fetch. Once loaded, floor at `aiServerQueuedIds.size` too: a fetch
+    // that's merely a tick stale must never show FEWER than what this device
+    // already confirmed for certain.
+    const serverBacklogTotal =
+      aiServerBacklogCount !== null
+        ? Math.max(aiServerBacklogCount, aiServerQueuedIds.size)
+        : aiServerQueuedIds.size;
+    // The slice of that total NOT already represented inside
+    // uniqueAiTodoIds/aiServerQueuedIds above. This — not the raw total — is
+    // what gets added on top of the existing id-based union: adding the raw
+    // total back in would double-count every id already unioned in via
+    // aiServerQueuedIds (a 429 arms BOTH the generic `aiRetryIds` marker AND
+    // the confirmed-enqueue `aiServerQueuedIds` marker for the very same
+    // bookmark, see the 429 branch in `requestAiEnrichment`). Always 0 before
+    // the first successful fetch.
+    const unseenServerBacklog = serverBacklogTotal - aiServerQueuedIds.size;
+    const aiTodo = uniqueAiTodoIds.size + unseenServerBacklog;
     const aiDone = enrichments.length;
 
     return {
@@ -7034,14 +7160,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       ai: {
         todo: aiTodo,
         done: aiDone,
-        // serverQueued is the confirmed-overflow-queue subset alone (not the
-        // full union above) — the only part of the backlog still moving when
-        // aiSuggestionsMode is "off": the worker keeps draining these
-        // regardless of the local pause, while the trigger/dispatch/retry
-        // portions are genuinely frozen. Settings uses this to stay honest in
-        // that mode instead of hiding real in-flight server work (Codex
-        // review, PR #656).
-        serverQueued: aiServerQueuedIds.size,
+        // serverQueued is the confirmed-overflow-queue count alone (not the
+        // trigger/dispatch/retry portion of the union above) — the only part
+        // of the backlog still moving when aiSuggestionsMode is "off": the
+        // worker keeps draining these regardless of the local pause, while
+        // the trigger/dispatch/retry portions are genuinely frozen. Settings
+        // uses this to stay honest in that mode instead of hiding real
+        // in-flight server work (Codex review, PR #656). Now the account-wide
+        // total (`serverBacklogTotal`) rather than just this device's own
+        // `aiServerQueuedIds.size`, for the same reason as `aiTodo` above.
+        serverQueued: serverBacklogTotal,
         // The pipeline breakdown's own count (Codex review, PR #670,
         // replacing an additive `todo + manualInFlight` model that both
         // double-counted a bookmark present in both sets AND dropped an
@@ -7052,20 +7180,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // manual and auto in-flight requests — nothing about pause or
         // aiSuggestionsMode cancels a request already in progress, so it
         // always counts. `activeUnblocked` is the normal-case total,
-        // deduplicated by construction (Set union, not addition).
-        activeUnblocked: new Set<string>([...uniqueAiTodoIds, ...enrichingIds])
-          .size,
+        // deduplicated by construction (Set union, not addition) plus the
+        // same unseen-server-backlog slice as `aiTodo`.
+        activeUnblocked:
+          new Set<string>([...uniqueAiTodoIds, ...enrichingIds]).size +
+          unseenServerBacklog,
         // When local dispatch is genuinely frozen (aiSuggestionsMode ===
         // "off", or paused with a pending/syncing queue — see the drain
         // loop's own gate), the not-yet-dispatched backlog
         // (trigger/dispatch/retry) is excluded, but server-queued work and
         // anything already executing keep counting: a already-dispatched
         // request can't be un-started by either freeze.
-        activeBlocked: new Set<string>([...aiServerQueuedIds, ...enrichingIds])
-          .size,
+        activeBlocked:
+          new Set<string>([...aiServerQueuedIds, ...enrichingIds]).size +
+          unseenServerBacklog,
       },
     };
-  }, [bookmarks, queue, enrichments, aiRetryIds, aiServerQueuedIds, enrichingIds]);
+  }, [
+    bookmarks,
+    queue,
+    enrichments,
+    aiRetryIds,
+    aiServerQueuedIds,
+    aiServerBacklogCount,
+    enrichingIds,
+  ]);
 
   const value = useMemo<BookmarksContextValue>(
     () => ({

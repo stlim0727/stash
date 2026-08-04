@@ -114,6 +114,87 @@ test('request() carries the response body\'s reason onto SupabaseRequestError', 
   }
 });
 
+test('requestCount() issues a HEAD request with Prefer: count=exact and reads the total off Content-Range', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    // PostgREST answers a HEAD request with an empty body and the exact total
+    // in Content-Range — the response never carries the rows themselves.
+    return new Response(null, {
+      status: 200,
+      headers: { 'content-range': '*/1101' },
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    const count = await client.requestCount('/rest/v1/pending_ai_enrichment?select=id', {
+      accessToken: 'access-token',
+    });
+    assert.equal(count, 1101);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://proj.supabase.co/rest/v1/pending_ai_enrichment?select=id');
+  assert.equal(calls[0].init.method, 'HEAD');
+  assert.equal((calls[0].init.headers as Record<string, string>).Prefer, 'count=exact');
+  assert.equal(
+    (calls[0].init.headers as Record<string, string>).Authorization,
+    'Bearer access-token',
+  );
+});
+
+test('requestCount() throws a SupabaseRequestError when Content-Range is missing or unparseable', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(null, { status: 200 })) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    await assert.rejects(
+      client.requestCount('/rest/v1/pending_ai_enrichment?select=id'),
+      (error: unknown) => {
+        assert.ok(error instanceof SupabaseRequestError);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('requestCount() surfaces a non-2xx response the same way request() does', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ message: 'permission denied' }), { status: 403 })) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    await assert.rejects(
+      client.requestCount('/rest/v1/pending_ai_enrichment?select=id'),
+      (error: unknown) => {
+        assert.ok(error instanceof SupabaseRequestError);
+        assert.equal((error as SupabaseRequestError).status, 403);
+        assert.equal((error as SupabaseRequestError).message, 'permission denied');
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('request() leaves reason undefined when the response body has none', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () =>
