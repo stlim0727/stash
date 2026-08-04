@@ -97,6 +97,34 @@ test('dropAiEnrichmentDispatchIds removes a stale id left behind by an account s
   assert.deepEqual(queue.pending, ['b-bookmark']);
 });
 
+test('dropAiEnrichmentDispatchIds zeroes completedInBurst so account A\'s settled count cannot surface in account B\'s toast', () => {
+  // Reproduces: account A enqueues 3 items, 2 settle (completedInBurst = 2,
+  // still below AI_ENRICHMENT_BURST_TOAST_MIN's threshold — no toast yet),
+  // then the user switches to account B before the 3rd drains. Without
+  // zeroing, B enqueueing and settling just 1 of its own bookmarks would push
+  // completedInBurst to 3 and fire a completion toast under B that's really
+  // reporting A's dispatches.
+  let queue = enqueueAiEnrichmentDispatch(EMPTY_AI_ENRICHMENT_BURST_QUEUE, 'a-1');
+  queue = enqueueAiEnrichmentDispatch(queue, 'a-2');
+  queue = enqueueAiEnrichmentDispatch(queue, 'a-3');
+  queue = dequeueAiEnrichmentDispatch(queue).queue; // 'a-1' dispatched
+  queue = recordAiEnrichmentDispatchSettled(queue);
+  queue = dequeueAiEnrichmentDispatch(queue).queue; // 'a-2' dispatched
+  queue = recordAiEnrichmentDispatchSettled(queue);
+  assert.equal(queue.completedInBurst, 2);
+  assert.deepEqual(queue.pending, ['a-3']);
+
+  queue = dropAiEnrichmentDispatchIds(queue, ['a-3']); // account switch drops what's left of A
+  assert.equal(queue.completedInBurst, 0);
+  assert.deepEqual(queue.pending, []);
+
+  queue = enqueueAiEnrichmentDispatch(queue, 'b-1');
+  queue = dequeueAiEnrichmentDispatch(queue).queue;
+  queue = recordAiEnrichmentDispatchSettled(queue);
+  assert.equal(queue.completedInBurst, 1); // not 3 — A's settled count didn't carry over
+  assert.equal(isBurstComplete(queue), true); // drained, but below the toast minimum
+});
+
 test('dropAiEnrichmentDispatchIds is a no-op (same reference) when nothing pending matches', () => {
   let queue = enqueueAiEnrichmentDispatch(EMPTY_AI_ENRICHMENT_BURST_QUEUE, 'b-bookmark');
   const before = queue;
