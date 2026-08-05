@@ -2023,6 +2023,7 @@ export default function InboxScreen() {
       sliding={sliding}
     >
       <WebCrispAnimatedSurface
+        testID="inbox-header-surface"
         // The cluster is absolutely positioned so it floats over the list and
         // can translate out of view. It needs an opaque background so list rows
         // sliding underneath stay hidden while it is partly collapsed.
@@ -2057,7 +2058,16 @@ export default function InboxScreen() {
         // from under the user mid-search, matching the web-side guard in the
         // scroll listener above. `headerTranslate` keeps updating live off
         // `scrollY` underneath, so un-pinning on close has no jump to correct.
-        animatedStyle={{ transform: [{ translateY: isWeb || searchOpen ? 0 : headerTranslate }] }}
+        // Do not leave an identity transform on web. The hero is structurally
+        // pinned there, so translateY(0) has no visual purpose, but it still
+        // promotes this absolute header to a composited layer. The RN-web
+        // Image inside the hero paints through a negative-z background child;
+        // keeping that image inside the unnecessary transformed layer caused
+        // intermittent Chrome paint loss even though onLoad and layout both
+        // reported success (STASH-53).
+        animatedStyle={
+          isWeb ? null : { transform: [{ translateY: searchOpen ? 0 : headerTranslate }] }
+        }
       >
         <View
           onLayout={(event) => setHeroHeight(event.nativeEvent.layout.height)}

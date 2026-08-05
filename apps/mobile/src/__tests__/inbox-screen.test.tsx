@@ -163,6 +163,16 @@ test('renders stored bookmarks with their titles', async () => {
   expect(screen.getByText('Raindrop review')).toBeTruthy();
 });
 
+test('web keeps the pinned hero outside a transformed compositing layer', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  fakeRepo.__reset([]);
+
+  const screen = await renderInbox();
+
+  const header = await waitFor(() => screen.getByTestId('inbox-header-surface'));
+  expect(StyleSheet.flatten(header.props.style).transform).toBeUndefined();
+});
+
 test('exposes each bookmark row as a button labelled by its title', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
