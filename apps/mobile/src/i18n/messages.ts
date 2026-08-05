@@ -377,10 +377,22 @@ export const en = {
     one: '{count} bookmark · {quotaReason}',
     other: '{count} bookmarks · {quotaReason}',
   },
-  // The Activity strip's distinct quota-reached chip (design doc §2/§5):
-  // static reason text, no reset time (the chip has no room for it) and no
-  // numeric count (how many items is not the useful fact once blocked).
+  // The Activity strip's distinct quota-reached chip (design doc §2/§5): no
+  // numeric count (how many items is not the useful fact once blocked). The
+  // reset time (always accurate — `request_ai_enrichment_slot`'s
+  // `retry_after`, STASH-4P follow-up) is worth the pill's space, but the
+  // hourly/daily/generic reason text isn't, so `chipQuotaReachedWithTime` is
+  // the normal case and this static fallback only covers the (practically
+  // unreachable) case of a quota cooldown with no reset time to show.
   'settings.syncBreakdown.aiSuggestions.chipQuotaReached': 'AI suggestions · quota reached',
+  'settings.syncBreakdown.aiSuggestions.chipQuotaReachedWithTime':
+    'AI suggestions · resumes at {resetTime}',
+  // Gemini itself hit its own rate limit (RESOURCE_EXHAUSTED, separate from
+  // the user quota chip above) and the server served heuristic suggestions
+  // instead — reuses `detail.aiDegradedBasic`'s "basic suggestions" wording.
+  // `quiet`, not `highlight`: nothing is blocked, the server already
+  // auto-requeued these for a real-model retry.
+  'settings.syncBreakdown.degradedResults.label': 'Basic suggestions shown',
   'settings.trash.label': 'Trash',
   'settings.trash.value': '{count} items',
   'settings.report.label': 'Report a problem',

@@ -151,6 +151,23 @@ const AI_SUGGESTIONS_MODE_OPTIONS: {
   labelKey: `settings.aiSuggestions.${mode}` as MessageKey,
 }));
 
+/** "5:41 PM" for a reset later today, "Aug 3, 5:41 PM" otherwise — a bare
+ *  time for a reset on a different day would misread as already past once
+ *  it's tomorrow's clock time (restored from PR #664 for the Activity chip's
+ *  quota-reached text, dropped by the #698 chip-strip pass). */
+function formatQuotaResetTime(
+  retryAt: number,
+  formatDate: ReturnType<typeof useI18n>["formatDate"],
+): string {
+  const isToday = new Date(retryAt).toDateString() === new Date().toDateString();
+  return formatDate(
+    retryAt,
+    isToday
+      ? { hour: "numeric", minute: "2-digit" }
+      : { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
+  );
+}
+
 export default function SettingsScreen() {
   const palette = usePalette();
   const styles = makeStyles(palette);
@@ -804,6 +821,14 @@ export default function SettingsScreen() {
   // cooldown itself is still worth surfacing).
   const aiChipRawVisible = cloudAvailable && (aiActiveCount > 0 || aiQuotaExceeded !== null);
   const aiIcon: IoniconName = aiQuotaExceeded ? "timer-outline" : "hourglass-outline";
+  // Reset time only — the chip pill has no room for the hourly/daily/generic
+  // reason text the old sentence-form copy carried (`settings.aiQuotaExceeded.*`,
+  // still used elsewhere), and `request_ai_enrichment_slot`'s `retry_after` is
+  // always computed from the real rolling window regardless of reason, so the
+  // time alone is trustworthy on its own (STASH-4P follow-up).
+  const aiQuotaResetTime = aiQuotaExceeded
+    ? formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate)
+    : null;
   // Debounced chip visibility (design doc §2.1): a genuine 0↔positive flap on
   // either pipeline's count must not surface as a chip mount/unmount — show
   // instantly on the way up, hold for ~2s of sustained zero before hiding.
@@ -816,7 +841,18 @@ export default function SettingsScreen() {
   const aiChipVisible = useDebouncedFlag(aiChipRawVisible, {
     hideDelayMs: ACTIVITY_CHIP_HIDE_DELAY_MS,
   });
-  const showActivityStrip = metadataChipVisible || aiChipVisible;
+  // Degraded-results chip: the Gemini provider itself hit its own rate limit
+  // (RESOURCE_EXHAUSTED, separate from the user's own quota gate above) and
+  // the server silently served heuristic suggestions instead. Unlike the
+  // other two chips this doesn't gate on `cloudAvailable` explicitly —
+  // `degradedRateLimited` can only be nonzero from a synced `AIEnrichment`
+  // row, which requires a cloud account already.
+  const degradedRateLimitedCount = diagnosticStats.ai.degradedRateLimited;
+  const degradedChipVisible = useDebouncedFlag(degradedRateLimitedCount > 0, {
+    hideDelayMs: ACTIVITY_CHIP_HIDE_DELAY_MS,
+  });
+  const showActivityStrip =
+    metadataChipVisible || aiChipVisible || degradedChipVisible;
 
   const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
@@ -989,7 +1025,10 @@ export default function SettingsScreen() {
           aiVisible={aiChipVisible}
           aiIcon={aiIcon}
           aiQuotaReached={aiQuotaExceeded !== null}
+          aiQuotaResetTime={aiQuotaResetTime}
           aiCount={aiActiveCount}
+          degradedVisible={degradedChipVisible}
+          degradedCount={degradedRateLimitedCount}
         />
       </Group>
 
@@ -1651,8 +1690,8 @@ function Row({
  * breakdown (docs/design/settings-activity-status.md). Sits directly under
  * the sync headline row, inset to align with that row's TEXT column (not its
  * icon), so it reads as a detail of the Sync row rather than an independent
- * row of its own. Renders nothing when neither chip has anything to show —
- * no empty reserved slot.
+ * row of its own. Renders nothing when none of its (up to three: metadata,
+ * AI, degraded-results) chips has anything to show — no empty reserved slot.
  *
  * Two independent animation mechanisms, per the design doc's §2.1:
  *  - The strip's own mount/unmount (0 visible chips ↔ the first chip
@@ -1675,7 +1714,10 @@ function ActivitySyncStrip({
   aiVisible,
   aiIcon,
   aiQuotaReached,
+  aiQuotaResetTime,
   aiCount,
+  degradedVisible,
+  degradedCount,
 }: {
   styles: ReturnType<typeof makeStyles>;
   t: ReturnType<typeof useI18n>["t"];
@@ -1685,9 +1727,12 @@ function ActivitySyncStrip({
   aiVisible: boolean;
   aiIcon: IoniconName;
   aiQuotaReached: boolean;
+  aiQuotaResetTime: string | null;
   aiCount: number;
+  degradedVisible: boolean;
+  degradedCount: number;
 }) {
-  const anyVisible = metadataVisible || aiVisible;
+  const anyVisible = metadataVisible || aiVisible || degradedVisible;
   const [rendered, setRendered] = useState(anyVisible);
   const progress = useRef(new Animated.Value(anyVisible ? 1 : 0)).current;
 
@@ -1721,7 +1766,7 @@ function ActivitySyncStrip({
   // strip is about to unmount) belongs to the Animated fade/height mechanism
   // above, not this one — without the gate, both would fire on that same
   // render.
-  const signature = `${metadataVisible}|${aiVisible}|${aiQuotaReached}|${Math.round(width)}`;
+  const signature = `${metadataVisible}|${aiVisible}|${aiQuotaReached}|${degradedVisible}|${Math.round(width)}`;
   const prevSignature = useRef(signature);
   if (rendered && anyVisible && prevSignature.current !== signature && Platform.OS !== "web") {
     LayoutAnimation.configureNext(LayoutAnimation.create(180, "easeInEaseOut", "opacity"));
@@ -1755,13 +1800,27 @@ function ActivitySyncStrip({
         {aiVisible ? (
           aiQuotaReached ? (
             <Chip testID="activity-chip-ai" icon={aiIcon} variant="highlight">
-              {t("settings.syncBreakdown.aiSuggestions.chipQuotaReached")}
+              {aiQuotaResetTime
+                ? t("settings.syncBreakdown.aiSuggestions.chipQuotaReachedWithTime", {
+                    resetTime: aiQuotaResetTime,
+                  })
+                : t("settings.syncBreakdown.aiSuggestions.chipQuotaReached")}
             </Chip>
           ) : (
             <Chip testID="activity-chip-ai" icon={aiIcon} quiet count={aiCount}>
               {t("settings.activity.aiSuggestions.label")}
             </Chip>
           )
+        ) : null}
+        {degradedVisible ? (
+          <Chip
+            testID="activity-chip-degraded"
+            icon="refresh-outline"
+            quiet
+            count={degradedCount}
+          >
+            {t("settings.syncBreakdown.degradedResults.label")}
+          </Chip>
         ) : null}
       </View>
     </Animated.View>

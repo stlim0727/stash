@@ -1125,6 +1125,69 @@ test('diagnosticStats.ai.todo does not double-count a bookmark this device alrea
   expect(store.current!.diagnosticStats.ai.serverQueued).toBe(1);
 });
 
+test('diagnosticStats.ai.degradedRateLimited counts only rate_limited-degraded enrichments, not timeout/provider_error/not_configured or non-degraded rows', async () => {
+  // The Gemini provider (not the user's own quota gate) hit RESOURCE_EXHAUSTED
+  // for these — the server silently served heuristic suggestions and
+  // requeued them into `pending_ai_enrichment` for a real-model retry (only
+  // `rate_limited` gets that auto-requeue in `ai-enrich/index.ts`). This is
+  // the fact the Settings "Basic suggestions shown" chip surfaces.
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({ id: 'bm-rate-limited-1' }),
+      makeStoredBookmark({ id: 'bm-rate-limited-2' }),
+      makeStoredBookmark({ id: 'bm-timeout' }),
+      makeStoredBookmark({ id: 'bm-provider-error' }),
+      makeStoredBookmark({ id: 'bm-not-configured' }),
+      makeStoredBookmark({ id: 'bm-clean' }),
+    ],
+    undefined,
+    [
+      makeEnrichment({
+        id: 'enr-1',
+        bookmark_id: 'bm-rate-limited-1',
+        degraded: true,
+        degraded_reason: 'rate_limited',
+      }),
+      makeEnrichment({
+        id: 'enr-2',
+        bookmark_id: 'bm-rate-limited-2',
+        degraded: true,
+        degraded_reason: 'rate_limited',
+      }),
+      // Real failures with no automatic-retry promise — must not count.
+      makeEnrichment({
+        id: 'enr-3',
+        bookmark_id: 'bm-timeout',
+        degraded: true,
+        degraded_reason: 'timeout',
+      }),
+      makeEnrichment({
+        id: 'enr-4',
+        bookmark_id: 'bm-provider-error',
+        degraded: true,
+        degraded_reason: 'provider_error',
+      }),
+      makeEnrichment({
+        id: 'enr-5',
+        bookmark_id: 'bm-not-configured',
+        degraded: true,
+        degraded_reason: 'not_configured',
+      }),
+      // A normal, non-degraded completed enrichment — must not count either.
+      makeEnrichment({
+        id: 'enr-6',
+        bookmark_id: 'bm-clean',
+        degraded: false,
+        degraded_reason: null,
+      }),
+    ],
+  );
+  const store = renderStore();
+  await waitFor(() => expect(store.current?.isLoading).toBe(false));
+
+  expect(store.current!.diagnosticStats.ai.degradedRateLimited).toBe(2);
+});
+
 test('a 429 whose enqueue call REJECTS does not mark the bookmark as server-queued', async () => {
   // No false promise: falls back to the generic armAiRetry treatment alone.
   const store = await renderReady();
