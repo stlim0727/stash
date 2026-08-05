@@ -115,6 +115,22 @@ test("a terminal server failure is not actionable after a result already exists"
   assert.equal(result.details.ai.serverFailed, 1);
 });
 
+test("a permanently unsyncable legacy URL stays diagnostic-only", () => {
+  const result = stats({
+    queue: [queued("too-long", "failed")],
+    permanentlyUnsyncableIds: new Set(["too-long"]),
+  });
+
+  assert.equal(result.remaining, 0);
+  assert.deepEqual(result.stages, {
+    cloud: 0,
+    metadata: 0,
+    ai: 0,
+    attention: 0,
+  });
+  assert.equal(result.details.sync.failed, 1);
+});
+
 test("diagnostic counters preserve raw overlapping causes", () => {
   const result = stats({
     bookmarks: [bookmark("same", "pending"), bookmark("metadata-failed", "failed")],

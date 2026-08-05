@@ -87,7 +87,10 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
 
   const syncFailedIds = new Set(
     activeQueue
-      .filter((entry) => entry.sync_status === "failed" || permanentIds.has(entry.local_id))
+      .filter(
+        (entry) =>
+          entry.sync_status === "failed" && !permanentIds.has(entry.local_id),
+      )
       .map((entry) => entry.local_id),
   );
   const cloudCandidateIds = new Set(
@@ -95,6 +98,7 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
       .filter(
         (entry) =>
           (entry.sync_status === "pending" || entry.sync_status === "syncing") &&
+          !permanentIds.has(entry.local_id) &&
           !syncFailedIds.has(entry.local_id),
       )
       .map((entry) => entry.local_id),
@@ -156,7 +160,8 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
       sync: {
         pending: activeQueue.filter((entry) => entry.sync_status === "pending").length,
         syncing: activeQueue.filter((entry) => entry.sync_status === "syncing").length,
-        failed: syncFailedIds.size,
+        failed: activeQueue.filter((entry) => entry.sync_status === "failed")
+          .length,
         operations,
         maxRetries: activeQueue.reduce(
           (highest, entry) => Math.max(highest, entry.retry_count),

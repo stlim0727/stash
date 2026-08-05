@@ -33,6 +33,11 @@ Pause, AI-off, quota, and degraded fallback are **modifiers or diagnostic
 causes**, not additional user-facing totals. This prevents a bookmark from
 looking like several different bookmarks.
 
+Legacy URLs already classified as permanently unsyncable are also
+diagnostic-only. They remain visible in the raw failed count but are excluded
+from **Needs attention**, because the app has no retry or user-resolution path
+for them.
+
 ## Projection from concurrent state
 
 The underlying pipelines remain concurrent. Settings projects each bookmark
