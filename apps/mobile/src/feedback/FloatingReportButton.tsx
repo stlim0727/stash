@@ -1,10 +1,20 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
+import {
+  getHeroDiagnosticsSnapshot,
+  getHeroDomDiagnostics,
+} from '@/feedback/hero-diagnostics-session';
 import { captureFeedbackScreenshot } from '@/feedback/screenshot';
 import {
   setPendingFeedbackScreenshot,
@@ -74,13 +84,15 @@ function shouldHide(pathname: string | null): boolean {
   return pathname === '/report' || pathname === '/auth/callback';
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+type TimedResult<T> = { status: 'resolved'; value: T } | { status: 'timed_out' };
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<TimedResult<T>> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      promise,
-      new Promise<null>((resolve) => {
-        timeout = setTimeout(() => resolve(null), timeoutMs);
+      promise.then((value) => ({ status: 'resolved' as const, value })),
+      new Promise<{ status: 'timed_out' }>((resolve) => {
+        timeout = setTimeout(() => resolve({ status: 'timed_out' }), timeoutMs);
       }),
     ]);
   } finally {
@@ -148,6 +160,7 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
       return;
     }
     setCapturing(true);
+    let captureStartedAt: number | null = null;
     try {
       const source = feedbackSourceFromPath(pathname);
       setPendingFeedbackSource(source);
@@ -157,15 +170,47 @@ export function FloatingReportButton({ children }: FloatingReportButtonProps) {
       const heroSnapshot = getHeroDiagnosticsSnapshot();
       if (heroSnapshot) {
         console.info('feedback: inbox hero snapshot', JSON.stringify(heroSnapshot));
+        if (Platform.OS === 'web') {
+          console.info('feedback: inbox hero DOM', JSON.stringify(getHeroDomDiagnostics()));
+        }
       }
-      setPendingFeedbackScreenshot(
-        await withTimeout(
-          captureFeedbackScreenshot(captureRef, source.surface),
-          SCREENSHOT_CAPTURE_TIMEOUT_MS,
-        ),
+      captureStartedAt = Date.now();
+      console.info(
+        'feedback: screenshot capture start',
+        JSON.stringify({ surface: source.surface, timeoutMs: SCREENSHOT_CAPTURE_TIMEOUT_MS }),
       );
+      const captureResult = await withTimeout(
+        captureFeedbackScreenshot(captureRef, source.surface),
+        SCREENSHOT_CAPTURE_TIMEOUT_MS,
+      );
+      const durationMs = Date.now() - captureStartedAt;
+      if (captureResult.status === 'timed_out') {
+        console.warn(
+          'feedback: screenshot capture timed out',
+          JSON.stringify({ surface: source.surface, durationMs }),
+        );
+        setPendingFeedbackScreenshot(null);
+      } else {
+        const screenshot = captureResult.value;
+        console.info(
+          'feedback: screenshot capture finished',
+          JSON.stringify({
+            surface: source.surface,
+            durationMs,
+            outcome: screenshot ? 'captured' : 'empty',
+            dataUrlLength: screenshot?.dataUrl.length ?? 0,
+          }),
+        );
+        setPendingFeedbackScreenshot(screenshot);
+      }
     } catch (error) {
-      console.warn('feedback screenshot capture failed', error);
+      console.warn(
+        'feedback: screenshot capture failed',
+        JSON.stringify({
+          durationMs: captureStartedAt === null ? null : Date.now() - captureStartedAt,
+        }),
+        error,
+      );
       setPendingFeedbackScreenshot(null);
     } finally {
       setCapturing(false);
