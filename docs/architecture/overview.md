@@ -84,6 +84,10 @@ Suggested copy:
 
 The app should treat local save as the source of immediate user confirmation. Cloud sync is eventually consistent.
 
+For the current client/server state model—including the local sync outbox,
+metadata fetch, AI scheduler, server overflow queue, and the display-only
+Settings projection—see [Bookmark Processing Statechart](bookmark-processing-statechart.md).
+
 1. Receive shared content.
 2. Normalize the payload.
 3. Generate a local ID.
