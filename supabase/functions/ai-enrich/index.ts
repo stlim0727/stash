@@ -383,12 +383,15 @@ async function refundEnrichmentQuotaSlot(userId: string): Promise<void> {
  * Best-effort: never throws (a ledger failure must not fail the enrichment
  * itself), but always logs, so a broken ledger doesn't go unnoticed.
  */
+type EnrichmentCallSource = 'client_direct' | 'server_trigger' | 'batch_worker';
+
 async function recordEnrichmentCall(entry: {
   bookmarkId: string;
   userId: string;
   usage: EnrichmentOutput['usage'];
   degraded: boolean;
   degradedReason: DegradedReason | null;
+  source: EnrichmentCallSource;
 }): Promise<void> {
   if (provider === fallbackProvider || !SERVICE_ROLE_KEY) {
     return;
@@ -405,6 +408,7 @@ async function recordEnrichmentCall(entry: {
         total_tokens: entry.usage?.total_tokens ?? null,
         degraded: entry.degraded,
         degraded_reason: entry.degradedReason,
+        source: entry.source,
       }),
     });
     if (!res.ok) {
@@ -503,6 +507,7 @@ async function processEnrichmentRow(
     usage,
     degraded,
     degradedReason,
+    source: 'batch_worker',
   });
 
   if (!output) {
@@ -1173,6 +1178,7 @@ Deno.serve(async (req) => {
       usage,
       degraded,
       degradedReason,
+      source: serverPath ? 'server_trigger' : 'client_direct',
     });
 
     // Atomic single-row upsert keyed by the unique ai_enrichments.bookmark_id.
