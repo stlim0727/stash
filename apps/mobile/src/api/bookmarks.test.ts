@@ -273,31 +273,31 @@ test('restoreAIEnrichment creates a row and targets bookmark_id for conflict res
   assert.equal(result?.summary, 'restored summary');
 });
 
-test('fetchAiBacklogCount counts pending/processing rows account-wide via a count-only request', async () => {
-  // The core regression this guards: the account-wide total must come from a
-  // server-side query, not any locally-tracked id set — a bookmark another
-  // device 429'd, or one the server-side dispatch trigger (or a direct
-  // backfill) enqueued, is invisible to this device's own local markers, but
-  // must still be visible here.
-  let seenPath: string | undefined;
-  let seenOptions: Record<string, unknown> | undefined;
+test('fetchAiQueueSnapshot returns bookmark-addressable active and failed server work', async () => {
+  const seenPaths: string[] = [];
   const client = {
-    requestCount: async (path: string, options: Record<string, unknown> = {}) => {
-      seenPath = path;
-      seenOptions = options;
-      return 1101;
+    request: async (path: string) => {
+      seenPaths.push(path);
+      return [
+        {
+          bookmark_id: '00000000-0000-4000-8000-000000000001',
+          status: 'processing',
+          attempts: 2,
+          created_at: '2026-08-05T00:00:00.000Z',
+          updated_at: '2026-08-05T00:01:00.000Z',
+        },
+      ];
     },
   };
 
   const api = new BookmarkApi(SESSION, client as never);
-  const count = await api.fetchAiBacklogCount();
+  const rows = await api.fetchAiQueueSnapshot();
 
-  assert.equal(count, 1101);
-  assert.equal(seenOptions?.accessToken, 'token');
-  assert.match(seenPath ?? '', /^\/rest\/v1\/pending_ai_enrichment\?/);
-  const params = new URLSearchParams((seenPath ?? '').split('?')[1]);
-  assert.equal(params.get('status'), 'in.(pending,processing)');
-  assert.equal(params.get('select'), 'id');
+  assert.equal(rows.length, 1);
+  const params = new URLSearchParams(seenPaths[0].split('?')[1]);
+  assert.equal(params.get('select'), 'bookmark_id,status,attempts,created_at,updated_at');
+  assert.equal(params.get('status'), 'in.(pending,processing,failed)');
+  assert.equal(params.get('order'), 'created_at.asc,bookmark_id.asc');
 });
 
 test('restoreAIEnrichment returns null (not an error) when the bookmark already has an enrichment', async () => {

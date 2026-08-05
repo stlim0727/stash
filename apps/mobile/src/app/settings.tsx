@@ -5,8 +5,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Animated,
-  LayoutAnimation,
   Linking,
   Platform,
   Pressable,
@@ -25,9 +23,7 @@ import { usePalette } from "@/theme";
 import { BookmarkletButton } from "@/ui/BookmarkletButton";
 import { Button } from "@/ui/Button";
 import { Card } from "@/ui/Card";
-import { Chip } from "@/ui/Chip";
 import { ActionSheet } from "@/ui/ActionSheet";
-import { useDebouncedFlag } from "@/hooks/useDebouncedFlag";
 import { describeBuild, getBuildInfo } from "@/domain/build-info";
 import {
   DEFAULT_SHARE_BEHAVIOR,
@@ -79,23 +75,6 @@ import {
 } from "@/notifications/push-token-registration";
 
 const DEVELOPER_MODE_PREF_KEY = "settings.developer-mode";
-
-// Activity chip strip tuning (docs/design/settings-activity-status.md §2.1).
-// A genuine 0↔positive flap must not surface as a mount/unmount, so each
-// chip's visibility is debounced: show instantly, hide only after this many
-// ms of sustained zero.
-const ACTIVITY_CHIP_HIDE_DELAY_MS = 2000;
-// Mirrors SearchSuggestionShelf's reveal/dismiss timings (§6 of its own
-// design doc) so status-strip transitions feel consistent with the rest of
-// the app's non-Reanimated fades.
-const ACTIVITY_STRIP_REVEAL_MS = 140;
-const ACTIVITY_STRIP_DISMISS_MS = 120;
-// 8px top padding + up to two 34px-tall chip rows + 8px row gap (the wrap
-// fallback's second line) + 8px bottom padding ≈ 92px; rounded up for
-// headroom. Caps the strip's animated height so the enter/exit transition
-// has a fixed target without measuring layout, while still leaving room for
-// the bounded (max 2-line) wrap fallback described in the design doc.
-const ACTIVITY_STRIP_MAX_HEIGHT = 100;
 
 // Web only: Settings is a `transparentModal`, so the Inbox stays mounted behind
 // it. On mobile browsers, dragging the scroll past its end rubber-bands the
@@ -200,9 +179,11 @@ export default function SettingsScreen() {
     aiSuggestionsMode,
     setAiSuggestionsMode,
     diagnosticStats,
+    processingStats,
     aiQuotaExceeded,
   } = useBookmarks();
   const [aiSuggestionsSheetOpen, setAiSuggestionsSheetOpen] = useState(false);
+  const [processingDetailsOpen, setProcessingDetailsOpen] = useState(false);
   const auth = useSupabaseAuth();
   const analytics = useAnalytics();
   const [analyticsBusy, setAnalyticsBusy] = useState(false);
@@ -760,99 +741,51 @@ export default function SettingsScreen() {
     !isResettingLibrary &&
     !syncPaused;
 
-  const syncSummary = syncPaused
-    ? hasPending
-      ? t("settings.sync.pausedWaiting", { count: waiting })
-      : t("settings.sync.paused")
-    : isSyncing
-      ? t("settings.sync.syncing", { count: waiting })
-      : !cloudAvailable
-        ? t("settings.sync.localOnly")
-        : hasPending
-          ? t("settings.sync.waiting", { count: waiting })
-          : t("settings.sync.allBackedUp");
-
-  // Activity chip strip (Sentry STASH-4W, redesigned per
-  // docs/design/settings-activity-status.md): the headline row above only
-  // ever reports the upload queue, which reads as "stuck" when metadata
-  // enrichment or AI tagging is still working (or stalled on quota) after
-  // uploads finish. The strip surfaces each pipeline's own count
-  // independently — they are NOT a partition of one total, a bookmark can be
-  // counted in more than one stage at once (e.g. freshly captured is both
-  // upload-pending and metadata-pending). An upload stage is deliberately
-  // NOT part of this strip: the headline already reports that exact count in
-  // every state it can appear in, so a third "waiting to upload" chip would
-  // just repeat it (§1 of the design doc — this was the user-reported
-  // duplicate-counter bug).
-  const fetchingInfoCount = diagnosticStats.metadata.todo;
-  // The AI dispatch loop won't start new local (trigger/dispatch/retry) work
-  // while any queue entry is pending or syncing (see the loop's own queue
-  // check in store/bookmarks.tsx) — and a paused sync can never clear that
-  // gate for such entries. Checked against those two statuses specifically,
-  // not the broader `waiting` (which also includes 'failed' entries that do
-  // NOT block the drain loop) — a queue holding only failed entries while
-  // paused doesn't actually block local AI work (Codex review, PR #670).
+  // A bookmark may be uploading, fetching metadata, and queued for AI at the
+  // same time. `processingStats` assigns it to exactly one display stage
+  // (attention > cloud > metadata > AI), so these rows add up to `remaining`
+  // instead of exposing overlapping pipeline totals.
   const queueBlocksAiDispatch = queue.some(
     (entry) =>
       entry.sync_status === "pending" || entry.sync_status === "syncing",
   );
-  // Local (trigger/dispatch/retry) AI dispatch is frozen by any of three
-  // independent causes: aiSuggestionsMode === "off", a paused sync with a
-  // pending/syncing queue (Codex review, PR #670), or a live 429 cooldown
-  // (`aiQuotaExceeded`, STASH quota/count-mismatch fix) — the drain loop's
-  // own gate (store/bookmarks.tsx) checks all three before dispatching new
-  // work. In every case, `activeBlocked` already accounts for the only work
-  // that keeps moving regardless (server-queued, and anything already
-  // executing, manual or auto — a request in flight can't be un-started by
-  // any of the three freezes). `activeUnblocked` is the deduplicated total
-  // for the normal case. Using the store's own Set-union fields here (rather
-  // than adding separate counts) is what makes this structurally immune to
-  // double-counting a bookmark present in more than one source set.
-  const isAiBlocked =
-    aiSuggestionsMode === "off" ||
-    (syncPaused && queueBlocksAiDispatch) ||
-    aiQuotaExceeded !== null;
-  const aiActiveCount = isAiBlocked
-    ? diagnosticStats.ai.activeBlocked
-    : diagnosticStats.ai.activeUnblocked;
-  // The AI chip is visible whenever there's active/blocked local work OR a
-  // live quota cooldown to report, even with zero count (a quota exceeded by
-  // a manual "Suggest with AI" tap can leave aiActiveCount at 0 while the
-  // cooldown itself is still worth surfacing).
-  const aiChipRawVisible = cloudAvailable && (aiActiveCount > 0 || aiQuotaExceeded !== null);
-  const aiIcon: IoniconName = aiQuotaExceeded ? "timer-outline" : "hourglass-outline";
-  // Reset time only — the chip pill has no room for the hourly/daily/generic
-  // reason text the old sentence-form copy carried (`settings.aiQuotaExceeded.*`,
-  // still used elsewhere), and `request_ai_enrichment_slot`'s `retry_after` is
-  // always computed from the real rolling window regardless of reason, so the
-  // time alone is trustworthy on its own (STASH-4P follow-up).
   const aiQuotaResetTime = aiQuotaExceeded
     ? formatQuotaResetTime(aiQuotaExceeded.retryAt, formatDate)
     : null;
-  // Debounced chip visibility (design doc §2.1): a genuine 0↔positive flap on
-  // either pipeline's count must not surface as a chip mount/unmount — show
-  // instantly on the way up, hold for ~2s of sustained zero before hiding.
-  // The strip's own mount/unmount is exactly the 0-chips↔1-chip edge of this
-  // same debounced pair, so no separate flag is needed for it.
-  const metadataChipVisible = useDebouncedFlag(
-    cloudAvailable && fetchingInfoCount > 0,
-    { hideDelayMs: ACTIVITY_CHIP_HIDE_DELAY_MS },
-  );
-  const aiChipVisible = useDebouncedFlag(aiChipRawVisible, {
-    hideDelayMs: ACTIVITY_CHIP_HIDE_DELAY_MS,
-  });
-  // Degraded-results chip: the Gemini provider itself hit its own rate limit
-  // (RESOURCE_EXHAUSTED, separate from the user's own quota gate above) and
-  // the server silently served heuristic suggestions instead. Unlike the
-  // other two chips this doesn't gate on `cloudAvailable` explicitly —
-  // `degradedRateLimited` can only be nonzero from a synced `AIEnrichment`
-  // row, which requires a cloud account already.
-  const degradedRateLimitedCount = diagnosticStats.ai.degradedRateLimited;
-  const degradedChipVisible = useDebouncedFlag(degradedRateLimitedCount > 0, {
-    hideDelayMs: ACTIVITY_CHIP_HIDE_DELAY_MS,
-  });
-  const showActivityStrip =
-    metadataChipVisible || aiChipVisible || degradedChipVisible;
+  const processingSummary =
+    processingStats.remaining === 0
+      ? t("settings.processing.complete")
+      : processingStats.stages.attention > 0
+        ? t("settings.processing.remainingWithAttention", {
+            count: processingStats.remaining,
+            attention: processingStats.stages.attention,
+          })
+        : t("settings.processing.remaining", { count: processingStats.remaining });
+  const cloudStageValue = !cloudAvailable
+    ? t("settings.processing.cloud.localOnly", {
+        count: processingStats.stages.cloud,
+      })
+    : syncPaused
+      ? t("settings.processing.cloud.paused", {
+          count: processingStats.stages.cloud,
+        })
+      : isSyncing
+        ? t("settings.processing.cloud.syncing", {
+            count: processingStats.stages.cloud,
+          })
+        : t("settings.processing.count", { count: processingStats.stages.cloud });
+  const aiStageValue = aiQuotaResetTime
+    ? t("settings.processing.ai.quota", {
+        count: processingStats.stages.ai,
+        resetTime: aiQuotaResetTime,
+      })
+    : aiSuggestionsMode === "off"
+      ? t("settings.processing.ai.off", { count: processingStats.stages.ai })
+      : syncPaused && queueBlocksAiDispatch
+        ? t("settings.processing.ai.localPaused", {
+            count: processingStats.stages.ai,
+          })
+        : t("settings.processing.count", { count: processingStats.stages.ai });
 
   const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
@@ -948,26 +881,25 @@ export default function SettingsScreen() {
         </Card>
       </View>
 
-      {/* Activity — sync/metadata/AI status, formerly split across the
-          Account card's breakdown and two separate Preferences rows (STASH
-          settings counter cleanup). One card: the sync headline row plus up
-          to three conditional pipeline rows (upload / metadata / AI). */}
+      {/* Activity — one deduplicated user total plus four mutually-exclusive
+          bookmark stages. Raw overlapping pipeline counters stay available
+          under Processing details for diagnosis. */}
       <Group styles={styles} title={t("settings.section.activity")}>
-        {/* Sync — one status-led row: label/value carry the state (incl. the
-          waiting count, even while paused), and the trailing controls are
-          the actions — tap-to-sync-now when there's queued work, and a
-          pause/resume toggle (Sentry STASH-3K follow-up: a safety valve for
-          right after a large import — while paused, nothing uploads or
-          pulls, giving time to delete unwanted rows before they ever reach
-          the network; a still-local, never-synced delete drops out of the
-          queue for free, see deleteBookmark). */}
         <Row
           styles={styles}
           palette={palette}
-          icon={syncPaused ? "pause-circle-outline" : "sync"}
-          label={t("settings.sync.label")}
-          value={syncSummary}
-          last={!showActivityStrip}
+          icon="pulse-outline"
+          label={t("settings.processing.label")}
+          value={processingSummary}
+          testID="processing-summary"
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon={syncPaused ? "pause-circle-outline" : "cloud-upload-outline"}
+          label={t("settings.processing.cloud.label")}
+          value={cloudStageValue}
+          testID="processing-stage-cloud"
           right={
             <View style={styles.syncActions}>
               {isSyncing ? (
@@ -1016,20 +948,127 @@ export default function SettingsScreen() {
             </View>
           }
         />
-        <ActivitySyncStrip
+        <Row
           styles={styles}
-          t={t}
-          width={width}
-          metadataVisible={metadataChipVisible}
-          metadataCount={fetchingInfoCount}
-          aiVisible={aiChipVisible}
-          aiIcon={aiIcon}
-          aiQuotaReached={aiQuotaExceeded !== null}
-          aiQuotaResetTime={aiQuotaResetTime}
-          aiCount={aiActiveCount}
-          degradedVisible={degradedChipVisible}
-          degradedCount={degradedRateLimitedCount}
+          palette={palette}
+          icon="document-text-outline"
+          label={t("settings.processing.metadata.label")}
+          value={t("settings.processing.count", {
+            count: processingStats.stages.metadata,
+          })}
+          testID="processing-stage-metadata"
         />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon={aiQuotaResetTime ? "hourglass-outline" : "sparkles-outline"}
+          label={t("settings.processing.ai.label")}
+          value={aiStageValue}
+          testID="processing-stage-ai"
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon={
+            processingStats.stages.attention > 0
+              ? "warning-outline"
+              : "checkmark-circle-outline"
+          }
+          label={t("settings.processing.attention.label")}
+          value={t("settings.processing.count", {
+            count: processingStats.stages.attention,
+          })}
+          accent={processingStats.stages.attention > 0}
+          testID="processing-stage-attention"
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="analytics-outline"
+          label={t("settings.processing.details.label")}
+          value={t(
+            processingDetailsOpen
+              ? "settings.processing.details.hide"
+              : "settings.processing.details.show",
+          )}
+          last={!processingDetailsOpen}
+          onPress={() => setProcessingDetailsOpen((open) => !open)}
+          right={
+            <Ionicons
+              name={processingDetailsOpen ? "chevron-up" : "chevron-down"}
+              size={18}
+              color={palette.textSecondary}
+            />
+          }
+        />
+        {processingDetailsOpen ? (
+          <>
+            <InfoRow
+              styles={styles}
+              label={t("settings.processing.details.syncStates.label")}
+              value={t("settings.processing.details.syncStates.value", {
+                pending: processingStats.details.sync.pending,
+                syncing: processingStats.details.sync.syncing,
+                failed: processingStats.details.sync.failed,
+              })}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.processing.details.syncOps.label")}
+              value={t("settings.processing.details.syncOps.value", {
+                create: processingStats.details.sync.operations.create,
+                update: processingStats.details.sync.operations.update,
+                delete: processingStats.details.sync.operations.delete,
+              })}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.processing.details.syncHealth.label")}
+              value={t("settings.processing.details.syncHealth.value", {
+                retries: processingStats.details.sync.maxRetries,
+                oldest: processingStats.details.sync.oldestCreatedAt
+                  ? formatDate(processingStats.details.sync.oldestCreatedAt)
+                  : t("settings.processing.details.none"),
+              })}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.processing.details.metadata.label")}
+              value={t("settings.processing.details.metadata.value", {
+                pending: processingStats.details.metadata.pending,
+                failed: processingStats.details.metadata.failed,
+                skipped: processingStats.details.metadata.skipped,
+              })}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.processing.details.aiLocal.label")}
+              value={t("settings.processing.details.aiLocal.value", {
+                trigger: processingStats.details.ai.trigger,
+                dispatch: processingStats.details.ai.dispatch,
+                retry: processingStats.details.ai.retry,
+                active: processingStats.details.ai.inFlight,
+              })}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.processing.details.aiServer.label")}
+              value={t("settings.processing.details.aiServer.value", {
+                pending: processingStats.details.ai.serverPending,
+                processing: processingStats.details.ai.serverProcessing,
+                failed: processingStats.details.ai.serverFailed,
+              })}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.processing.details.degraded.label")}
+              value={t("settings.processing.details.degraded.value", {
+                count: processingStats.details.ai.degradedRateLimited,
+              })}
+              last
+            />
+          </>
+        ) : null}
       </Group>
 
       {/* Library — navigation into the user's own content. Reviewing AI
@@ -1592,6 +1631,7 @@ function Row({
   last,
   disabled,
   accessibilityLabel,
+  testID,
 }: {
   styles: ReturnType<typeof makeStyles>;
   palette: AppPalette;
@@ -1607,6 +1647,7 @@ function Row({
    *  dims the row and announces a disabled button to assistive tech. */
   disabled?: boolean;
   accessibilityLabel?: string;
+  testID?: string;
 }) {
   const rowStyle: StyleProp<ViewStyle> = [styles.row, !last && styles.divider];
   const labelColor = accent ? palette.accent : palette.text;
@@ -1661,6 +1702,7 @@ function Row({
     if (disabled) {
       return (
         <View
+          testID={testID}
           accessibilityRole="button"
           accessibilityLabel={accessibilityLabel ?? label}
           accessibilityState={{ disabled: true }}
@@ -1670,11 +1712,16 @@ function Row({
         </View>
       );
     }
-    return <View style={rowStyle}>{content}</View>;
+    return (
+      <View testID={testID} style={rowStyle}>
+        {content}
+      </View>
+    );
   }
 
   return (
     <Pressable
+      testID={testID}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label}
       onPress={onPress}
@@ -1685,160 +1732,20 @@ function Row({
   );
 }
 
-/**
- * The compact "Activity" chip strip — replaces the old stacked-`Row` sync
- * breakdown (docs/design/settings-activity-status.md). Sits directly under
- * the sync headline row, inset to align with that row's TEXT column (not its
- * icon), so it reads as a detail of the Sync row rather than an independent
- * row of its own. Renders nothing when none of its (up to three: metadata,
- * AI, degraded-results) chips has anything to show — no empty reserved slot.
- *
- * Two independent animation mechanisms, per the design doc's §2.1:
- *  - The strip's own mount/unmount (0 visible chips ↔ the first chip
- *    becoming visible) fades + height-collapses via a scoped `Animated`
- *    value, matching `SearchSuggestionShelf`'s precedent. Scoped rather than
- *    a `LayoutAnimation` so it never accidentally animates unrelated pending
- *    layout elsewhere on the screen.
- *  - A chip inserting/removing/reflowing (wrapping) while the strip STAYS
- *    mounted goes through `LayoutAnimation.configureNext` instead, called
- *    during render (not an effect) so it lands before the commit it's meant
- *    to animate — the same pattern the Inbox header's collapse reflow uses
- *    (`app/index.tsx`).
- */
-function ActivitySyncStrip({
-  styles,
-  t,
-  width,
-  metadataVisible,
-  metadataCount,
-  aiVisible,
-  aiIcon,
-  aiQuotaReached,
-  aiQuotaResetTime,
-  aiCount,
-  degradedVisible,
-  degradedCount,
-}: {
-  styles: ReturnType<typeof makeStyles>;
-  t: ReturnType<typeof useI18n>["t"];
-  width: number;
-  metadataVisible: boolean;
-  metadataCount: number;
-  aiVisible: boolean;
-  aiIcon: IoniconName;
-  aiQuotaReached: boolean;
-  aiQuotaResetTime: string | null;
-  aiCount: number;
-  degradedVisible: boolean;
-  degradedCount: number;
-}) {
-  const anyVisible = metadataVisible || aiVisible || degradedVisible;
-  const [rendered, setRendered] = useState(anyVisible);
-  const progress = useRef(new Animated.Value(anyVisible ? 1 : 0)).current;
-
-  useEffect(() => {
-    if (anyVisible) {
-      setRendered(true);
-    }
-    const animation = Animated.timing(progress, {
-      toValue: anyVisible ? 1 : 0,
-      duration: anyVisible ? ACTIVITY_STRIP_REVEAL_MS : ACTIVITY_STRIP_DISMISS_MS,
-      useNativeDriver: false,
-    });
-    animation.start(({ finished }) => {
-      if (finished && !anyVisible) {
-        setRendered(false);
-      }
-    });
-    // Explicitly stop (not just let run to completion) on unmount/re-trigger,
-    // so a torn-down component (or a same-direction re-render) never leaves a
-    // real timer chain running past its own lifetime — the pending finish
-    // callback above would otherwise still fire and call setState later.
-    return () => {
-      animation.stop();
-    };
-  }, [anyVisible, progress]);
-
-  // Chip insert/remove/wrap reflow within an already-mounted strip. `width`
-  // is included so a rotation/resize that changes whether the two chips wrap
-  // to a second line also animates instead of snapping. Gated on `anyVisible`
-  // too, not just `rendered`: the render where the LAST chip disappears (the
-  // strip is about to unmount) belongs to the Animated fade/height mechanism
-  // above, not this one — without the gate, both would fire on that same
-  // render.
-  const signature = `${metadataVisible}|${aiVisible}|${aiQuotaReached}|${degradedVisible}|${Math.round(width)}`;
-  const prevSignature = useRef(signature);
-  if (rendered && anyVisible && prevSignature.current !== signature && Platform.OS !== "web") {
-    LayoutAnimation.configureNext(LayoutAnimation.create(180, "easeInEaseOut", "opacity"));
-  }
-  prevSignature.current = signature;
-
-  if (!rendered) {
-    return null;
-  }
-
-  return (
-    <Animated.View
-      testID="activity-strip"
-      style={[
-        styles.activityStrip,
-        {
-          opacity: progress,
-          maxHeight: progress.interpolate({
-            inputRange: [0, 1],
-            outputRange: [0, ACTIVITY_STRIP_MAX_HEIGHT],
-          }),
-        },
-      ]}
-    >
-      <View style={styles.activityStripChips}>
-        {metadataVisible ? (
-          <Chip testID="activity-chip-metadata" icon="document-text-outline" quiet count={metadataCount}>
-            {t("settings.syncBreakdown.fetchingInfo.label")}
-          </Chip>
-        ) : null}
-        {aiVisible ? (
-          aiQuotaReached ? (
-            <Chip testID="activity-chip-ai" icon={aiIcon} variant="highlight">
-              {aiQuotaResetTime
-                ? t("settings.syncBreakdown.aiSuggestions.chipQuotaReachedWithTime", {
-                    resetTime: aiQuotaResetTime,
-                  })
-                : t("settings.syncBreakdown.aiSuggestions.chipQuotaReached")}
-            </Chip>
-          ) : (
-            <Chip testID="activity-chip-ai" icon={aiIcon} quiet count={aiCount}>
-              {t("settings.activity.aiSuggestions.label")}
-            </Chip>
-          )
-        ) : null}
-        {degradedVisible ? (
-          <Chip
-            testID="activity-chip-degraded"
-            icon="refresh-outline"
-            quiet
-            count={degradedCount}
-          >
-            {t("settings.syncBreakdown.degradedResults.label")}
-          </Chip>
-        ) : null}
-      </View>
-    </Animated.View>
-  );
-}
-
 /** Compact label/value row used for read-only diagnostics. */
 function InfoRow({
   styles,
   label,
   value,
+  last,
 }: {
   styles: ReturnType<typeof makeStyles>;
   label: string;
   value: string;
+  last?: boolean;
 }) {
   return (
-    <View style={[styles.infoRow, styles.divider]}>
+    <View style={[styles.infoRow, !last && styles.divider]}>
       <Text style={styles.infoLabel}>{label}</Text>
       <Text style={styles.infoValue} numberOfLines={2}>
         {value}
@@ -1972,26 +1879,6 @@ const makeStyles = (palette: AppPalette) =>
     },
     syncIconButton: {
       padding: 4,
-    },
-    // The Activity chip strip (docs/design/settings-activity-status.md §2):
-    // clipped so the Animated mount/unmount height interpolation (0 →
-    // ACTIVITY_STRIP_MAX_HEIGHT) never shows overflow mid-transition.
-    activityStrip: {
-      overflow: "hidden",
-    },
-    activityStripChips: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "center",
-      rowGap: 8,
-      columnGap: 10,
-      // Left inset = the headline row's icon width (32) + row gap (12) + the
-      // row's own paddingHorizontal (14) = 58px, so the strip aligns under
-      // the headline's TEXT column rather than starting at the card edge.
-      paddingLeft: 58,
-      paddingRight: 14,
-      paddingTop: 8,
-      paddingBottom: 8,
     },
     divider: {
       borderBottomWidth: StyleSheet.hairlineWidth,

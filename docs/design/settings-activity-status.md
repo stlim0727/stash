@@ -1,5 +1,8 @@
 # Settings — Activity status redesign (jitter, compact strip, diagnostics)
 
+> Historical design. The compact chip presentation was superseded on
+> 2026-08-05 by [Settings background-processing counters](settings-processing-counters.md).
+
 Status: **specced, ready for mobile-ui-engineer**
 Owner: Product & UX
 Surface: `apps/mobile/src/app/settings.tsx` — the "Account & sync" card's
