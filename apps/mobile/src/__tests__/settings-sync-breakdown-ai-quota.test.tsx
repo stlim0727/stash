@@ -140,6 +140,21 @@ const METADATA_PENDING_ID = '7e64cf1e-0000-4000-8000-000000000002';
 
 type Store = ReturnType<typeof useBookmarks>;
 
+/** Mirrors settings.tsx's formatQuotaResetTime (not exported) so the
+ *  quota-reached chip's reset-time text can be asserted without duplicating
+ *  its own display-formatting decision as a second, possibly-drifting
+ *  implementation. Locale is fixed 'en' — these tests never set a language
+ *  preference, so the store falls back to it. */
+function expectedResetTime(retryAt: number): string {
+  const isToday = new Date(retryAt).toDateString() === new Date().toDateString();
+  return new Date(retryAt).toLocaleString(
+    'en',
+    isToday
+      ? { hour: 'numeric', minute: '2-digit' }
+      : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' },
+  );
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   fakeRepo.__reset([]);
@@ -201,7 +216,12 @@ test('AI quota reached: the AI chip swaps to a visually distinct quota-reached c
   // reached, swapping to the distinct chip's own copy — so only the
   // Preferences mode-selector row's own label matches "AI suggestions" now.
   await waitFor(() => expect(screen.getAllByText('AI suggestions')).toHaveLength(1));
-  expect(screen.getByText('AI suggestions · quota reached')).toBeTruthy();
+  // The chip is a single pill (no room for the hourly/daily/generic reason
+  // text), but the reset time itself is always accurate
+  // (`request_ai_enrichment_slot`'s `retry_after`, STASH-4P follow-up) and
+  // small enough to fit — restored after a #698 regression dropped it.
+  const resetTime = expectedResetTime(storeRef.current!.aiQuotaExceeded!.retryAt);
+  expect(screen.getByText(`AI suggestions · resumes at ${resetTime}`)).toBeTruthy();
   // Distinct icon (not the normal hourglass) confirms the visually-different
   // chip, not just different text on the same neutral pill.
   expect(screen.getByTestId('chip-icon-timer-outline')).toBeTruthy();
@@ -423,4 +443,209 @@ test('a chip inserting into an already-mounted strip animates via LayoutAnimatio
   // put) goes through LayoutAnimation, not the strip's own scoped `Animated`
   // mount transition.
   expect(configureNextSpy).toHaveBeenCalled();
+});
+
+test('a rate-limited-degraded enrichment surfaces the "Basic suggestions shown" chip, with the reused wording, refresh icon, and no other chip active', async () => {
+  const DEGRADED_ID = '7e64cf1e-0000-4000-8000-000000000009';
+  fakeRepo.__reset([makeStoredBookmark({ id: DEGRADED_ID, metadata_status: 'complete' })]);
+  // The Gemini provider itself hit RESOURCE_EXHAUSTED — the server served
+  // heuristic suggestions but still returns HTTP 200, so `aiQuotaExceeded`
+  // (429-only) never fires; this is a *separate* signal carried on the
+  // enrichment row itself.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) => ({
+    id: 'enrichment-degraded',
+    bookmark_id: bookmarkId,
+    user_id: 'user-test',
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection_id: null,
+    suggested_collection_name: null,
+    model: 'heuristic-v0',
+    status: 'complete',
+    confidence: null,
+    degraded: true,
+    degraded_reason: 'rate_limited',
+    created_at: '2026-08-03T00:00:00.000Z',
+    updated_at: '2026-08-03T00:00:00.000Z',
+  }));
+
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const screen = await render(
+    <BookmarksProvider>
+      <Probe />
+      <SettingsScreen />
+    </BookmarksProvider>,
+  );
+
+  await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
+  await waitFor(() => expect(storeRef.current?.lastPulledAt).not.toBeNull());
+  expect(screen.queryByTestId('activity-chip-degraded')).toBeNull();
+
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(DEGRADED_ID);
+  });
+
+  await waitFor(() =>
+    expect(storeRef.current!.diagnosticStats.ai.degradedRateLimited).toBe(1),
+  );
+  await waitFor(() => expect(screen.getByTestId('activity-chip-degraded')).toBeTruthy());
+  expect(screen.getByText('Basic suggestions shown')).toBeTruthy();
+  expect(screen.getByText('· 1')).toBeTruthy();
+  expect(screen.getByTestId('chip-icon-refresh-outline')).toBeTruthy();
+});
+
+test('the degraded-results chip hides again ~2s after the count returns to 0, the same debounce every other Activity chip uses', async () => {
+  jest.useFakeTimers();
+  const DEGRADED_ID = '7e64cf1e-0000-4000-8000-000000000010';
+  fakeRepo.__reset([makeStoredBookmark({ id: DEGRADED_ID, metadata_status: 'complete' })]);
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) => ({
+    id: 'enrichment-degraded',
+    bookmark_id: bookmarkId,
+    user_id: 'user-test',
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection_id: null,
+    suggested_collection_name: null,
+    model: 'heuristic-v0',
+    status: 'complete',
+    confidence: null,
+    degraded: true,
+    degraded_reason: 'rate_limited',
+    created_at: '2026-08-03T00:00:00.000Z',
+    updated_at: '2026-08-03T00:00:00.000Z',
+  }));
+
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const screen = await render(
+    <BookmarksProvider>
+      <Probe />
+      <SettingsScreen />
+    </BookmarksProvider>,
+  );
+
+  await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
+  await waitFor(() => expect(storeRef.current?.lastPulledAt).not.toBeNull());
+
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(DEGRADED_ID);
+  });
+  await waitFor(() =>
+    expect(storeRef.current!.diagnosticStats.ai.degradedRateLimited).toBe(1),
+  );
+  await waitFor(() => expect(screen.getByTestId('activity-chip-degraded')).toBeTruthy());
+
+  // The background worker's real-model retry lands: same bookmark, this time
+  // clean (not degraded) — the count drops back to 0.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) => ({
+    id: 'enrichment-clean',
+    bookmark_id: bookmarkId,
+    user_id: 'user-test',
+    summary: 'Real summary',
+    topics: [],
+    suggested_tags: [],
+    suggested_collection_id: null,
+    suggested_collection_name: null,
+    model: 'dummy-v0',
+    status: 'complete',
+    confidence: 0.9,
+    degraded: false,
+    degraded_reason: null,
+    created_at: '2026-08-03T00:05:00.000Z',
+    updated_at: '2026-08-03T00:05:00.000Z',
+  }));
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(DEGRADED_ID);
+  });
+  await waitFor(() =>
+    expect(storeRef.current!.diagnosticStats.ai.degradedRateLimited).toBe(0),
+  );
+
+  // Immediately after the count drops, the chip is still visible (debounced,
+  // not an instant unmount).
+  expect(screen.getByTestId('activity-chip-degraded')).toBeTruthy();
+
+  await act(async () => {
+    jest.advanceTimersByTime(1999);
+  });
+  expect(screen.getByTestId('activity-chip-degraded')).toBeTruthy();
+
+  await act(async () => {
+    jest.advanceTimersByTime(1);
+  });
+  await waitFor(() => expect(screen.queryByTestId('activity-chip-degraded')).toBeNull());
+
+  jest.useRealTimers();
+});
+
+test('all three Activity chips (metadata, AI, degraded-results) can be visible together without breaking the wrap layout', async () => {
+  const METADATA_ID = '7e64cf1e-0000-4000-8000-000000000011';
+  const AI_TRIGGER_ID_2 = '7e64cf1e-0000-4000-8000-000000000012';
+  const DEGRADED_ID = '7e64cf1e-0000-4000-8000-000000000013';
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: METADATA_ID, metadata_status: 'pending' }),
+    makeStoredBookmark({ id: AI_TRIGGER_ID_2, metadata_status: 'complete' }),
+    makeStoredBookmark({ id: DEGRADED_ID, metadata_status: 'complete' }),
+  ]);
+  await fakeRepo.repository.setMeta('pending_ai_trigger', JSON.stringify([AI_TRIGGER_ID_2]));
+  // The auto-trigger for AI_TRIGGER_ID_2 429s (sets aiQuotaExceeded, driving
+  // the AI chip); a manual request for DEGRADED_ID comes back degraded
+  // (driving the new chip) — both alongside the pending-metadata chip.
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async () => {
+    throw new SupabaseRequestError('Supabase request failed with HTTP 429', 429, 'hourly_limit', 30);
+  });
+  apiMock.__spies.requestEnrichment.mockImplementationOnce(async (bookmarkId: string) => ({
+    id: 'enrichment-degraded',
+    bookmark_id: bookmarkId,
+    user_id: 'user-test',
+    summary: null,
+    topics: [],
+    suggested_tags: [],
+    suggested_collection_id: null,
+    suggested_collection_name: null,
+    model: 'heuristic-v0',
+    status: 'complete',
+    confidence: null,
+    degraded: true,
+    degraded_reason: 'rate_limited',
+    created_at: '2026-08-03T00:00:00.000Z',
+    updated_at: '2026-08-03T00:00:00.000Z',
+  }));
+
+  const storeRef: { current: Store | null } = { current: null };
+  function Probe() {
+    storeRef.current = useBookmarks();
+    return null;
+  }
+
+  const screen = await render(
+    <BookmarksProvider>
+      <Probe />
+      <SettingsScreen />
+    </BookmarksProvider>,
+  );
+
+  await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
+  await waitFor(() => expect(storeRef.current?.lastPulledAt).not.toBeNull());
+  await waitFor(() => expect(storeRef.current!.aiQuotaExceeded).not.toBeNull());
+
+  await act(async () => {
+    void storeRef.current!.requestAiEnrichment(DEGRADED_ID);
+  });
+
+  await waitFor(() => expect(screen.getByTestId('activity-chip-metadata')).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId('activity-chip-ai')).toBeTruthy());
+  await waitFor(() => expect(screen.getByTestId('activity-chip-degraded')).toBeTruthy());
+  expect(screen.getByTestId('activity-strip')).toBeTruthy();
 });

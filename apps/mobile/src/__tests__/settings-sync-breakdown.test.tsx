@@ -46,8 +46,8 @@ jest.mock('@/share/export-data', () => ({ deliverExport: jest.fn(async () => {})
 import SettingsScreen from '@/app/settings';
 import { AI_SUGGESTIONS_MODE_PREF_KEY } from '@/domain/ai-suggestions-pref';
 import { BookmarksProvider } from '@/store/bookmarks';
-import { makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
-import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { makeEnrichment, makeStoredBookmark, type FakeRepositoryModule } from './helpers/fake-repository';
+import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
 import type { TagData } from '@/storage/types';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
@@ -92,8 +92,9 @@ async function seed(options: {
   seedTagData?: TagData;
   queue?: LocalPendingBookmark[];
   meta?: Record<string, string>;
+  enrichments?: AIEnrichment[];
 }) {
-  fakeRepo.__reset(options.rows ?? [], options.seedTagData);
+  fakeRepo.__reset(options.rows ?? [], options.seedTagData, options.enrichments ?? []);
   for (const entry of options.queue ?? []) {
     await fakeRepo.repository.enqueue(entry);
   }
@@ -301,4 +302,42 @@ test('AI suggestions off excludes the AI chip but still shows the metadata chip 
   expect(screen.getByText('· 1')).toBeTruthy();
   // Only the mode-selector row's own label remains — no AI chip in the strip.
   expect(screen.getAllByText('AI suggestions')).toHaveLength(1);
+});
+
+test('no rate-limited-degraded enrichments leaves the degraded-results chip absent', async () => {
+  await seed({
+    rows: [makeStoredBookmark({ id: 'bm-clean' })],
+    enrichments: [
+      makeEnrichment({ id: 'enr-clean', bookmark_id: 'bm-clean', degraded: false, degraded_reason: null }),
+    ],
+  });
+
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
+
+  expect(screen.queryByTestId('activity-chip-degraded')).toBeNull();
+  expect(screen.queryByTestId('activity-strip')).toBeNull();
+});
+
+test('a rate-limited-degraded enrichment on load shows the degraded-results chip on its own, with no other pipeline active', async () => {
+  await seed({
+    rows: [makeStoredBookmark({ id: 'bm-degraded' })],
+    enrichments: [
+      makeEnrichment({
+        id: 'enr-degraded',
+        bookmark_id: 'bm-degraded',
+        degraded: true,
+        degraded_reason: 'rate_limited',
+      }),
+    ],
+  });
+
+  const screen = await renderSettings();
+  await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
+
+  expect(screen.getByTestId('activity-chip-degraded')).toBeTruthy();
+  expect(screen.getByText('Basic suggestions shown')).toBeTruthy();
+  expect(screen.getByText('· 1')).toBeTruthy();
+  expect(screen.queryByTestId('activity-chip-ai')).toBeNull();
+  expect(screen.queryByTestId('activity-chip-metadata')).toBeNull();
 });

@@ -246,6 +246,8 @@ export const ko: Catalog = {
     other: '{count}개 · {quotaReason}',
   },
   'settings.syncBreakdown.aiSuggestions.chipQuotaReached': 'AI 추천 · 할당량 초과',
+  'settings.syncBreakdown.aiSuggestions.chipQuotaReachedWithTime': 'AI 추천 · {resetTime}에 재개',
+  'settings.syncBreakdown.degradedResults.label': '기본 제안 표시 중',
   'settings.trash.label': '휴지통',
   'settings.trash.value': '{count}개 항목',
   'settings.report.label': '문제 신고',

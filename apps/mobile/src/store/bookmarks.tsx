@@ -455,6 +455,16 @@ interface BookmarksContextValue {
       serverQueued: number;
       activeUnblocked: number;
       activeBlocked: number;
+      /** Completed enrichments that fell back to the heuristic provider
+       *  because the Gemini provider itself hit RESOURCE_EXHAUSTED
+       *  (`degraded_reason === 'rate_limited'`) — the server auto-requeues
+       *  these into `pending_ai_enrichment` for a real-model retry, so this
+       *  count is "basic suggestions shown, better ones coming shortly", not
+       *  a stuck state. Deliberately excludes `timeout`/`provider_error`/
+       *  `not_configured`: only `rate_limited` gets that automatic requeue
+       *  (`supabase/functions/ai-enrich/index.ts`), so the others carry no
+       *  such promise. */
+      degradedRateLimited: number;
     };
   };
   /** The most recent AI-enrichment 429's reason and accurate reset time, for
@@ -7178,6 +7188,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const unseenServerBacklog = serverBacklogTotal - aiServerQueuedIds.size;
     const aiTodo = uniqueAiTodoIds.size + unseenServerBacklog;
     const aiDone = enrichments.length;
+    // Only `rate_limited` gets the server's automatic requeue (see the
+    // `diagnosticStats.ai.degradedRateLimited` doc comment above) — a
+    // `timeout`/`provider_error`/`not_configured` degrade is a real failure
+    // with no such promise, so it's excluded here.
+    const aiDegradedRateLimited = enrichments.filter(
+      (enrichment) =>
+        enrichment.degraded && enrichment.degraded_reason === "rate_limited",
+    ).length;
 
     return {
       sync: { todo: syncTodo, done: syncDone, syncedOnce, syncingTwice },
@@ -7219,6 +7237,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         activeBlocked:
           new Set<string>([...aiServerQueuedIds, ...enrichingIds]).size +
           unseenServerBacklog,
+        degradedRateLimited: aiDegradedRateLimited,
       },
     };
   }, [
