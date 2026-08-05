@@ -344,6 +344,72 @@ export const en = {
   },
   'settings.sync.pauseButton': 'Pause sync',
   'settings.sync.resumeButton': 'Resume sync',
+  'settings.processing.label': 'Background processing',
+  'settings.processing.complete': 'All work complete',
+  'settings.processing.remaining': {
+    one: '{count} bookmark remaining',
+    other: '{count} bookmarks remaining',
+  },
+  'settings.processing.remainingWithAttention': {
+    one: '{count} bookmark remaining · {attention} needs attention',
+    other: '{count} bookmarks remaining · {attention} need attention',
+  },
+  'settings.processing.count': {
+    one: '{count} bookmark',
+    other: '{count} bookmarks',
+  },
+  'settings.processing.cloud.label': 'Saving to cloud',
+  'settings.processing.cloud.localOnly': {
+    one: '{count} bookmark · local only',
+    other: '{count} bookmarks · local only',
+  },
+  'settings.processing.cloud.paused': {
+    one: '{count} bookmark · sync paused',
+    other: '{count} bookmarks · sync paused',
+  },
+  'settings.processing.cloud.syncing': {
+    one: '{count} bookmark · saving now',
+    other: '{count} bookmarks · saving now',
+  },
+  'settings.processing.metadata.label': 'Fetching information',
+  'settings.processing.ai.label': 'Preparing AI suggestions',
+  'settings.processing.ai.off': {
+    one: '{count} bookmark · AI suggestions off',
+    other: '{count} bookmarks · AI suggestions off',
+  },
+  'settings.processing.ai.localPaused': {
+    one: '{count} bookmark · local AI waiting',
+    other: '{count} bookmarks · local AI waiting',
+  },
+  'settings.processing.ai.quota': {
+    one: '{count} bookmark · resumes {resetTime}',
+    other: '{count} bookmarks · resumes {resetTime}',
+  },
+  'settings.processing.attention.label': 'Needs attention',
+  'settings.processing.details.label': 'Processing details',
+  'settings.processing.details.show': 'Show diagnostic counters',
+  'settings.processing.details.hide': 'Hide diagnostic counters',
+  'settings.processing.details.none': 'none',
+  'settings.processing.details.syncStates.label': 'Cloud queue states',
+  'settings.processing.details.syncStates.value':
+    'pending {pending} · syncing {syncing} · failed {failed}',
+  'settings.processing.details.syncOps.label': 'Cloud queue operations',
+  'settings.processing.details.syncOps.value':
+    'create {create} · update {update} · delete {delete}',
+  'settings.processing.details.syncHealth.label': 'Cloud queue health',
+  'settings.processing.details.syncHealth.value':
+    'max retries {retries} · oldest {oldest}',
+  'settings.processing.details.metadata.label': 'Information pipeline',
+  'settings.processing.details.metadata.value':
+    'pending {pending} · failed {failed} · skipped {skipped}',
+  'settings.processing.details.aiLocal.label': 'AI local pipeline',
+  'settings.processing.details.aiLocal.value':
+    'trigger {trigger} · dispatch {dispatch} · retry {retry} · active {active}',
+  'settings.processing.details.aiServer.label': 'AI server pipeline',
+  'settings.processing.details.aiServer.value':
+    'pending {pending} · processing {processing} · failed {failed}',
+  'settings.processing.details.degraded.label': 'Fallback suggestions',
+  'settings.processing.details.degraded.value': '{count} rate-limited',
   'settings.syncBreakdown.uploading.label': 'Waiting to upload',
   'settings.syncBreakdown.uploading.value': {
     one: '{count} bookmark',

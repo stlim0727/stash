@@ -141,12 +141,12 @@ jest.mock('@/api/bookmarks', () => {
     async (bookmarkIds: string[]) =>
       bookmarkIds.map((bookmark_id) => ({ bookmark_id, status: 'pending' })),
   );
-  // Account-wide server-side AI backlog count (fetchAiServerBacklogCount in
-  // store/bookmarks.tsx). Defaults to 0 — the neutral "nothing extra beyond
+  // Account-wide server-side AI queue snapshot (fetchAiServerQueueSnapshot in
+  // store/bookmarks.tsx). Defaults to [] — the neutral "nothing extra beyond
   // what this device already knows about" value — so every pre-existing test
   // that never seeds this keeps seeing exactly its old local-only
   // diagnosticStats.ai numbers.
-  const fetchAiBacklogCount = jest.fn(async () => 0);
+  const fetchAiQueueSnapshot = jest.fn(async () => []);
   // Spied on its `session` arg (rather than ignoring it) so a test can assert
   // WHICH session object backed a given call — e.g. that the 429-overflow
   // enqueue used the same freshly-ensured session as the request itself,
@@ -165,7 +165,7 @@ jest.mock('@/api/bookmarks', () => {
     listCollections: empty,
     enqueuePendingEnrichment,
     fetchPendingEnrichmentStatuses,
-    fetchAiBacklogCount,
+    fetchAiQueueSnapshot,
   }));
   return {
     __spies: {
@@ -178,7 +178,7 @@ jest.mock('@/api/bookmarks', () => {
       listEnrichmentsUpdatedSince,
       enqueuePendingEnrichment,
       fetchPendingEnrichmentStatuses,
-      fetchAiBacklogCount,
+      fetchAiQueueSnapshot,
       createBookmarkApi,
     },
     createBookmarkApi,
@@ -205,7 +205,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
     listEnrichmentsUpdatedSince: jest.Mock;
     enqueuePendingEnrichment: jest.Mock;
     fetchPendingEnrichmentStatuses: jest.Mock;
-    fetchAiBacklogCount: jest.Mock;
+    fetchAiQueueSnapshot: jest.Mock;
     createBookmarkApi: jest.Mock;
   };
 };
@@ -299,8 +299,8 @@ beforeEach(() => {
     async (bookmarkIds: string[]) =>
       bookmarkIds.map((bookmark_id) => ({ bookmark_id, status: 'pending' })),
   );
-  apiMock.__spies.fetchAiBacklogCount.mockReset();
-  apiMock.__spies.fetchAiBacklogCount.mockResolvedValue(0);
+  apiMock.__spies.fetchAiQueueSnapshot.mockReset();
+  apiMock.__spies.fetchAiQueueSnapshot.mockResolvedValue([]);
   apiMock.__spies.createBookmarkApi.mockClear();
 });
 
@@ -1075,7 +1075,7 @@ test('the server-queued flag survives exhausting the local retry cap, unlike isA
 });
 
 test('diagnosticStats.ai.todo surfaces a real account-wide server backlog this device never locally triggered', async () => {
-  // The core bug this regression guards: before fetchAiServerBacklogCount,
+  // The core bug this regression guards: before fetchAiServerQueueSnapshot,
   // `ai.todo` was a pure union of local-event sets (pendingAiTrigger, the
   // dispatch queue, aiRetryIds, aiServerQueuedIds) — every one of which is
   // only ever populated by THIS device's own actions. A bookmark another
@@ -1085,7 +1085,15 @@ test('diagnosticStats.ai.todo surfaces a real account-wide server backlog this d
   // counter read 0 even with a real, actively-processing backlog. No local
   // trigger/dispatch/retry/enqueue call happens anywhere in this test — the
   // only thing that changes is the server's own count.
-  apiMock.__spies.fetchAiBacklogCount.mockResolvedValue(1101);
+  apiMock.__spies.fetchAiQueueSnapshot.mockResolvedValue(
+    Array.from({ length: 1101 }, (_, index) => ({
+      bookmark_id: `server-${index}`,
+      status: 'pending',
+      attempts: 0,
+      created_at: '2026-08-05T00:00:00.000Z',
+      updated_at: '2026-08-05T00:00:00.000Z',
+    })),
+  );
   const store = await renderReady();
 
   await waitFor(() => expect(store.current!.diagnosticStats.ai.todo).toBe(1101));
@@ -1111,7 +1119,15 @@ test('diagnosticStats.ai.todo does not double-count a bookmark this device alrea
   expect(store.current!.diagnosticStats.ai.todo).toBe(1);
 
   // The server confirms exactly this one row is outstanding — nothing extra.
-  apiMock.__spies.fetchAiBacklogCount.mockResolvedValue(1);
+  apiMock.__spies.fetchAiQueueSnapshot.mockResolvedValue([
+    {
+      bookmark_id: SYNCED_ID,
+      status: 'pending',
+      attempts: 0,
+      created_at: '2026-08-05T00:00:00.000Z',
+      updated_at: '2026-08-05T00:00:00.000Z',
+    },
+  ]);
   await act(async () => {
     fireForeground();
   });
@@ -1119,7 +1135,7 @@ test('diagnosticStats.ai.todo does not double-count a bookmark this device alrea
   // Still 1, not 2: the fetched total is entirely explained by the id this
   // device already knows about.
   await waitFor(() =>
-    expect(apiMock.__spies.fetchAiBacklogCount).toHaveBeenCalled(),
+    expect(apiMock.__spies.fetchAiQueueSnapshot).toHaveBeenCalled(),
   );
   expect(store.current!.diagnosticStats.ai.todo).toBe(1);
   expect(store.current!.diagnosticStats.ai.serverQueued).toBe(1);

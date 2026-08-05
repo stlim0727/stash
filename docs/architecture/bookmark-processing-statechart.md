@@ -72,7 +72,7 @@ No single field currently contains this entire state.
 | Page metadata | `metadata_status` | Client and `bookmarks` | `failed` and `skipped` are settled states, not active work. |
 | Automatic-AI intent | `enrichment_policy` | `bookmarks` | This per-bookmark server value is distinct from the client-global AI preference. |
 | Client AI work | Trigger, dispatch, retry, in-flight, and confirmed-server-queued ID sets | Client memory and meta store | It is deliberately distributed rather than represented by one enum. |
-| Server overflow work | `pending_ai_enrichment.status` | Postgres | The client only reconciles rows for IDs it already marked as server-queued. |
+| Server overflow work | `pending_ai_enrichment.status` | Postgres | Settings fetches an account-wide ID/status snapshot; it is eventually consistent between refreshes. |
 | AI result validity | `ai_enrichments.status` plus `degraded` fields | Server result; cached locally | This is a result state, not the server worker's progress state. |
 
 ## 1. Cloud Synchronization Region
@@ -282,14 +282,14 @@ display stage per bookmark using a documented precedence:
 
 ```mermaid
 flowchart TD
-  start[For each locally known bookmark]
-  qFailed{Sync outbox failed?}
+  start[For each bookmark ID observed<br/>locally or in the server AI queue]
+  qFailed{Sync outbox failed or unresolved<br/>server AI job failed?}
   qActive{Sync outbox pending or syncing?}
   metadata{Metadata pending?}
   ai{Any observed AI trigger, dispatch, retry, in-flight, or server-queued marker?}
 
   start --> qFailed
-  qFailed -->|yes| syncError[Sync problem]
+  qFailed -->|yes| syncError[Needs attention]
   qFailed -->|no| qActive
   qActive -->|yes| cloud[Saving to cloud]
   qActive -->|no| metadata
@@ -306,15 +306,18 @@ bookmark counts. Examples include `Saving to cloud · paused` and
 This projection has three useful properties:
 
 1. Each bookmark contributes to at most one visible stage.
-2. The sum of stage counts equals the displayed locally observed total.
+2. The sum of stage counts equals the displayed observed total.
 3. Internal state remains lossless; the simplified stage exists only for UX.
 
-It does **not** make the total globally exact across client and server. That
-requires closing the server-observability gap described above.
+Settings closes the count-only server-observability gap by fetching an
+account-wide, bookmark-addressable snapshot of pending, processing, and failed
+AI jobs. It is still eventually consistent between refreshes; it is not a
+Realtime subscription.
 
 ## Implementation References
 
 - Domain state types: `apps/mobile/src/domain/types.ts`
+- Exclusive Settings projection: `apps/mobile/src/domain/processing-status.ts`
 - Client orchestration and diagnostic unions: `apps/mobile/src/store/bookmarks.tsx`
 - Sync-outbox transitions: `apps/mobile/src/sync/sync-bookmarks.ts`
 - Server bookmark and AI-result schema: `supabase/migrations/20260611000000_initial_schema.sql`
@@ -322,3 +325,4 @@ requires closing the server-observability gap described above.
 - Server metadata-settled trigger: `supabase/migrations/20260803215821_bookmarks_enrichment_policy.sql`
 - AI direct and worker paths: `supabase/functions/ai-enrich/index.ts`
 - Overflow retry cap: `supabase/functions/ai-enrich/batch-worker.ts`
+- Counter UX contract: `docs/design/settings-processing-counters.md`

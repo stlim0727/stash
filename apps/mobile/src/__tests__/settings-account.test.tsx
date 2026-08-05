@@ -54,12 +54,12 @@ beforeEach(() => {
   mockAuth.isSignedIn = true;
 });
 
-test('anonymous: shows Sign In with provider buttons, and "all backed up" sync', async () => {
+test('anonymous: shows Sign In with provider buttons and complete processing', async () => {
   const screen = await renderSettings();
 
   expect(screen.getByText('Sign In')).toBeTruthy();
-  // Nothing queued + a cloud session (anonymous counts) → backed up, not "local only".
-  await waitFor(() => expect(screen.getByText('All backed up')).toBeTruthy());
+  // Nothing queued + a cloud session (anonymous counts) → all work complete.
+  await waitFor(() => expect(screen.getByText('All work complete')).toBeTruthy());
 
   await act(async () => {
     fireEvent.press(screen.getByLabelText('Sign in with Google'));
@@ -122,12 +122,14 @@ test('authenticated: cancelling the confirm does not sign out', async () => {
   alertSpy.mockRestore();
 });
 
-test('not configured: sync is local-only and no sign-in buttons are shown', async () => {
+test('not configured: cloud processing is local-only and no sign-in buttons are shown', async () => {
   mockAuth.status = 'not_configured';
   mockAuth.isSignedIn = false;
   const screen = await renderSettings();
 
-  await waitFor(() => expect(screen.getByText('Local only')).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText('0 bookmarks · local only')).toBeTruthy(),
+  );
   expect(screen.queryByLabelText('Sign in with Apple')).toBeNull();
   expect(screen.queryByText('Sign out')).toBeNull();
 });
