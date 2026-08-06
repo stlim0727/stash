@@ -1180,22 +1180,41 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   // Apply + persist a new tag-data snapshot in one step. The ref is updated
   // synchronously so a follow-up tag op in the same tick reads the latest.
-  const applyTagData = useCallback((next: TagData) => {
-    tagDataRef.current = next;
-    setTagData(next);
-    ensureRepositoryReady()
-      .then(() => repository.replaceTagData(next))
-      .catch((error) => logStorageError("tag data", error));
-  }, []);
+  // `persist: false` updates the in-memory ref/state only, skipping the
+  // SQLite write — see applyTagOps below for why (same syncTagOps hot loop).
+  const applyTagData = useCallback(
+    (next: TagData, options?: { persist?: boolean }) => {
+      tagDataRef.current = next;
+      setTagData(next);
+      if (options?.persist === false) {
+        return;
+      }
+      ensureRepositoryReady()
+        .then(() => repository.replaceTagData(next))
+        .catch((error) => logStorageError("tag data", error));
+    },
+    [],
+  );
 
   // Persist the local-first tag-op queue (ref updated synchronously).
-  const applyTagOps = useCallback((next: PendingTagOp[]) => {
-    pendingTagOpsRef.current = next;
-    setPendingTagOps(next);
-    ensureRepositoryReady()
-      .then(() => repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)))
-      .catch((error) => logStorageError("tag ops", error));
-  }, []);
+  // `persist: false` updates the in-memory ref/state only, skipping the
+  // SQLite write — used by syncTagOps' per-op loop so a bulk import's ~300
+  // sequential tag uploads don't each re-serialize and persist the whole
+  // (shrinking) array, which was contending with the main sync queue's own
+  // writes (Sentry: bli9833 import backlog, sqlite tail-wait depth 22).
+  const applyTagOps = useCallback(
+    (next: PendingTagOp[], options?: { persist?: boolean }) => {
+      pendingTagOpsRef.current = next;
+      setPendingTagOps(next);
+      if (options?.persist === false) {
+        return;
+      }
+      ensureRepositoryReady()
+        .then(() => repository.setMeta(PENDING_TAG_OPS_KEY, JSON.stringify(next)))
+        .catch((error) => logStorageError("tag ops", error));
+    },
+    [],
+  );
 
   const applyPendingImportCollections = useCallback(
     (next: PendingImportCollection[]) => {
@@ -3574,8 +3593,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               (tag) => normalizeTag(tag.name) === normalizeTag(op.tag_name),
             ) ?? ensured[0];
           if (serverTag) {
+            // persist: false — see the batch persist after this loop. A bulk
+            // import's ~300 sequential ops must not each re-serialize and
+            // write the whole tag catalog/queue to SQLite (that's what was
+            // contending with the main sync queue's own writes).
             applyTagData(
               reconcileSyncedAdd(tagDataRef.current, op.tag_name, serverTag),
+              { persist: false },
             );
           }
         } else {
@@ -3586,6 +3610,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         applyTagOps(
           dequeueTagOp(pendingTagOpsRef.current, op.bookmark_id, op.tag_name),
+          { persist: false },
         );
         mutationsPushed = true;
       } catch (error) {
@@ -3597,6 +3622,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
     }
     if (mutationsPushed) {
+      // One persist for the whole batch instead of one per op (see above).
+      try {
+        await ensureRepositoryReady();
+        await repository.replaceTagData(tagDataRef.current);
+        await repository.setMeta(
+          PENDING_TAG_OPS_KEY,
+          JSON.stringify(pendingTagOpsRef.current),
+        );
+      } catch (error) {
+        logStorageError("tag ops", error);
+      }
       broadcastSyncNudgeRef.current?.();
     }
     return mutationsPushed;
@@ -4326,12 +4362,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           (bookmark) => bookmark.id === item.bookmark_id,
         );
         if (currentBookmark?.collection_id) {
+          // Ref/state updated immediately; the SQLite write is batched once
+          // after the loop (see below) — a bulk import's ~300 entries here
+          // must not each persist the whole shrinking list individually.
           const remaining = pendingImportCollectionsRef.current.filter(
             (candidate) => candidate.bookmark_id !== item.bookmark_id,
-          );
-          await repository.setMeta(
-            PENDING_IMPORT_COLLECTIONS_KEY,
-            JSON.stringify(remaining),
           );
           pendingImportCollectionsRef.current = remaining;
           setPendingImportCollections(remaining);
@@ -4411,10 +4446,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const remaining = pendingImportCollectionsRef.current.filter(
           (candidate) => candidate.bookmark_id !== item.bookmark_id,
         );
-        await repository.setMeta(
-          PENDING_IMPORT_COLLECTIONS_KEY,
-          JSON.stringify(remaining),
-        );
         pendingImportCollectionsRef.current = remaining;
         setPendingImportCollections(remaining);
       } catch (error) {
@@ -4428,10 +4459,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               }
             : candidate,
         );
-        await repository.setMeta(
-          PENDING_IMPORT_COLLECTIONS_KEY,
-          JSON.stringify(failed),
-        );
         pendingImportCollectionsRef.current = failed;
         setPendingImportCollections(failed);
         recordLog(
@@ -4439,6 +4466,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           `import collection sync failed (${item.collection_name}): ${String(error)}`,
         );
       }
+    }
+    // One persist for the whole batch instead of one per item (see above).
+    try {
+      await repository.setMeta(
+        PENDING_IMPORT_COLLECTIONS_KEY,
+        JSON.stringify(pendingImportCollectionsRef.current),
+      );
+    } catch (error) {
+      logStorageError("import collection ops", error);
     }
     return mutationsPushed;
   }, [auth.session, hasSyncedOnce]);
