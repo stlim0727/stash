@@ -307,10 +307,18 @@ export async function applyAccountTransition(
     // and syncTagOps uploads them as B.
     await tagState.drop?.(plan.drop);
     await ensureRepositoryReady();
-    await Promise.all(plan.drop.map((id) => repository.deleteBookmark(id)));
+    // Sequential, not Promise.all: fanning many simultaneous calls onto the
+    // single serialized SQLite connection stalls it for seconds on a large
+    // library (docs/architecture/sqlite-write-contention.md — the same "fan-
+    // out onto one actor" bug already fixed 4x elsewhere for this reason).
+    for (const id of plan.drop) {
+      await repository.deleteBookmark(id);
+    }
     // Remove the queue entries durably too, not just in memory — otherwise the
     // next launch re-loads them from the repository and fires them under the new
     // identity.
-    await Promise.all([...droppedQueue].map((localId) => repository.removeQueueEntry(localId)));
+    for (const localId of droppedQueue) {
+      await repository.removeQueueEntry(localId);
+    }
   }
 }

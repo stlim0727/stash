@@ -8,7 +8,7 @@ next — turns a large backlog into dozens of simultaneous native calls piling
 up behind that one queue. The tell in logs/diagnostics is `"sqlite tail wait
 (depth N)"` climbing into the tens, with multi-second stalls.
 
-This has recurred four times. Each time, the fix is the same: make the loop
+This has recurred five times. Each time, the fix is the same: make the loop
 genuinely sequential (`await` each call before starting the next).
 
 1. **STASH-3B** — bulk import's local write loop.
@@ -50,6 +50,15 @@ genuinely sequential (`await` each call before starting the next).
      wrong on restart (a stale row for updates; a resurrected row for
      deletes, since deletes only remove the row once the corresponding queue
      entry actually syncs).
+5. **STASH-57** — `sync/account-transition.ts`'s real-account-switch/logout
+   drop path (`applyAccountTransition`) fanned `repository.deleteBookmark`
+   out over the previous account's full local cache via `Promise.all`, plus a
+   second `Promise.all` removing their queue entries. On a large library
+   (this report: 703 local bookmarks) that's ~700+ simultaneous native calls.
+   Written in the very commit that authored this doc's original "4 times" —
+   it just wasn't caught by that pass. A report showed `maxDepth: 744,
+   maxWaitMs: 31845, waitCount: 843` — the worst instance recorded so far.
+   Fixed the same way: both loops made sequential.
 
 **Before adding any new bulk write path**, grep for `Promise.all` **and**
 un-awaited calls inside `for` loops that touch `repository.*`.
