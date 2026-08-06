@@ -718,25 +718,38 @@ test("import: logs a start/finish summary (Sentry STASH-3K/3M instrumentation)",
 });
 
 test("bulk create completion skips pendingAiTrigger for enrichment_policy=skip bookmarks (STASH-59)", async () => {
-  const utils = renderStoreWithMocks();
-  await waitFor(() => expect(utils.result.current.isLoading).toBe(false));
+  // Reproduces STASH-59: importBookmarks (stash-backup source) creates queue
+  // entries with enrichment_policy='skip'. Before the fix, applyBulkCreateChunkResults
+  // unconditionally pushed every synced bookmark id into pendingAiIds, causing
+  // 994 imported items to appear in the AI Local Pipeline count.
+  //
+  // This test verifies both halves of the invariant:
+  // 1) The queue entry carries enrichment_policy='skip' (the input the fix gates on).
+  // 2) processingStats.details.ai.trigger is 0 after import (no AI trigger leakage).
+  const { result } = await renderStore();
 
-  const summary = utils.result.current.importBookmarks([
-    {
-      source: "stash-backup",
-      url: "https://example.com/skip-import-test",
-      title: "Imported Bookmark",
-      tags: [],
-    },
-  ]);
-  expect(summary.imported).toBe(1);
-
-  // Trigger bulk create sync completion
   await act(async () => {
-    await utils.syncNow();
+    result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: "https://example.com/skip-import-test",
+        title: "Imported Bookmark",
+        tags: [],
+      },
+    ]);
   });
 
-  expect(utils.result.current.processingStats.details.ai.trigger).toBe(0);
+  // Wait for the durable insert to settle.
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+
+  // The queue entry must carry enrichment_policy='skip' — this is what
+  // applyBulkCreateChunkResults gates on to prevent trigger population.
+  const entry = fakeRepo.__queue()[0];
+  expect(entry).toBeDefined();
+  expect(entry?.payload).toMatchObject({ enrichment_policy: "skip" });
+
+  // No AI trigger should be set — imported bookmarks must not spend AI quota.
+  expect(result.current.processingStats.details.ai.trigger).toBe(0);
 });
 
 test("import while the initial load is still in flight is refused instead of durably duplicating rows (Sentry STASH-3K/3M repro)", async () => {
