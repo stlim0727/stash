@@ -25,6 +25,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
       url: bookmark.url,
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
+      ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
       client_id: clientId,
     };
   }
@@ -33,6 +34,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
     title: bookmark.title ?? undefined,
     notes: bookmark.notes ?? undefined,
     shared_text: bookmark.description ?? undefined,
+    ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
     client_id: clientId,
   };
 }

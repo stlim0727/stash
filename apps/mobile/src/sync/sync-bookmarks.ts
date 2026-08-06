@@ -183,6 +183,7 @@ function createUploadPayload(
     ...entry.payload,
     title: latestAtUpload.title ?? undefined,
     notes: latestAtUpload.notes ?? undefined,
+    ...(latestAtUpload.deleted_at ? { deleted_at: latestAtUpload.deleted_at } : {}),
   };
   if (latestAtUpload.site_name !== null) {
     payload.site_name = latestAtUpload.site_name;
