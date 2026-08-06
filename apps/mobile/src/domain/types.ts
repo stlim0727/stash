@@ -206,6 +206,10 @@ export interface CreateBookmarkInput {
    */
   enrichment_policy?: EnrichmentPolicy;
   /**
+   * ISO timestamp when this bookmark was moved to the trash. Null/undefined = active.
+   */
+  deleted_at?: string | null;
+  /**
    * Stable device-generated capture id (see {@link Bookmark.client_id}). Carried
    * in the queue payload so an interrupted upload's retry reuses the same id and
    * the server dedupes instead of inserting a second row — the only idempotency

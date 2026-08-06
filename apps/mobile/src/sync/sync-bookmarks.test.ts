@@ -935,7 +935,7 @@ test('create→sync round-trip: a trashed-before-remote-id create lands deleted_
   const persisted = created.bookmarkUpdate;
   assert.ok(persisted);
   assert.equal(persisted.deleted_at, '2026-06-24T00:00:00.000Z');
-  assert.equal('deleted_at' in (createReceived[0] as object), false);
+  assert.equal('deleted_at' in (createReceived[0] as object), true);
 
   // The store's reconcile decides a follow-up update is needed (the fix), and
   // enqueues makeMutationEntry(persisted.id, 'update').
