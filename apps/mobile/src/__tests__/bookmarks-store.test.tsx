@@ -734,7 +734,9 @@ test("bulk create completion skips pendingAiTrigger for enrichment_policy=skip b
         source: "stash-backup",
         url: "https://example.com/skip-import-test",
         title: "Imported Bookmark",
+        notes: null,
         tags: [],
+        collection: null,
       },
     ]);
   });
