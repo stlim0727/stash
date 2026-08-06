@@ -196,6 +196,9 @@ function createUploadPayload(
   if (latestAtUpload.metadata_status !== 'pending') {
     payload.metadata_status = latestAtUpload.metadata_status;
   }
+  if (entry.payload.enrichment_policy) {
+    payload.enrichment_policy = entry.payload.enrichment_policy;
+  }
   return payload;
 }
 

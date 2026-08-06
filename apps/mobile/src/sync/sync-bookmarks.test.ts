@@ -370,6 +370,36 @@ test('bulk create: uploads latest titles and replaces local rows with returned r
   assert.equal(calls.length, 0);
 });
 
+test('bulk create: preserves enrichment_policy skip from entry payload in uploaded payload', async () => {
+  const skipEntry = makeCreateEntry({
+    local_id: 'local-skip',
+    payload: {
+      url: 'https://example.com/skip',
+      client_id: '33333333-3333-4333-8333-333333333333',
+      enrichment_policy: 'skip',
+    },
+  });
+  let sent: unknown[] = [];
+  const api = fakeApi({
+    createBookmarks: async (payloads: CreateBookmarkInput[]) => {
+      sent = payloads;
+      return [
+        {
+          bookmark_id: '00000000-0000-4000-8000-000000000103',
+          status: 'created',
+          client_id: '33333333-3333-4333-8333-333333333333',
+        },
+      ];
+    },
+  });
+  const latest = (id: string) => makeBookmark({ id, url: 'https://example.com/skip' });
+
+  const results = await syncCreateQueueEntryBatch(api, [skipEntry], latest);
+
+  assert.equal((sent[0] as { enrichment_policy?: string }).enrichment_policy, 'skip');
+  assert.equal(results[0]?.uploadedPayload?.enrichment_policy, 'skip');
+});
+
 test('bulk create: rejects non-create queue entries', async () => {
   const update = makeMutationEntry('00000000-0000-4000-8000-000000000001', 'update');
 
