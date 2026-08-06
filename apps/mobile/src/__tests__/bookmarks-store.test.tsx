@@ -627,6 +627,28 @@ test('import: logs a start/finish summary (Sentry STASH-3K/3M instrumentation)',
   await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(2));
 });
 
+test('bulk create completion skips pendingAiTrigger for enrichment_policy=skip bookmarks (STASH-59)', async () => {
+  const utils = renderStoreWithMocks();
+  await waitFor(() => expect(utils.result.current.isLoading).toBe(false));
+
+  const summary = utils.result.current.importBookmarks([
+    {
+      source: 'stash-backup',
+      url: 'https://example.com/skip-import-test',
+      title: 'Imported Bookmark',
+      tags: [],
+    },
+  ]);
+  expect(summary.imported).toBe(1);
+
+  // Trigger bulk create sync completion
+  await act(async () => {
+    await utils.syncNow();
+  });
+
+  expect(utils.result.current.processingStats.details.ai.trigger).toBe(0);
+});
+
 test('import while the initial load is still in flight is refused instead of durably duplicating rows (Sentry STASH-3K/3M repro)', async () => {
   // Reproduces the reported "561 -> 1122" doubling directly: importBookmarks
   // dedupes against bookmarksRef.current, which is empty until the initial

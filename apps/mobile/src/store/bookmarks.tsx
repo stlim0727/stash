@@ -5480,7 +5480,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             }
             pendingUserTitleEdits.current.delete(lookupId);
             pendingUserTitleEdits.current.delete(merged.id);
-            pendingAiIds.push(merged.id);
+            if (uploadedPayload.enrichment_policy !== 'skip') {
+              pendingAiIds.push(merged.id);
+            }
           }
         }
         bookmarksRef.current = nextBookmarks;
