@@ -3448,7 +3448,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // just-deleted data. If the local clear fails the cloud is already empty and
   // the RPC is idempotent, so the explicit recovery is to run the reset again.
   const resetLibrary = useCallback(async (): Promise<ResetLibraryResult> => {
-    if (syncInFlight.current) {
+    // If sync is paused, syncNow calls made while paused set syncInFlight
+    // or syncPendingRef. Bypass syncInFlight so user can reset while paused.
+    if (syncInFlight.current && !syncPausedRef.current) {
       return { ok: false, reason: "busy" };
     }
     // An import's sequential durable-write loop (Sentry: user-reported "reset

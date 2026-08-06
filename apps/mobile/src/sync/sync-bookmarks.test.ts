@@ -16,7 +16,7 @@ import {
 } from './sync-bookmarks.ts';
 import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
-import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
 import type { BookmarkRepository } from '@/storage/types';
 import { SupabaseRequestError } from '@/supabase/client';
 
