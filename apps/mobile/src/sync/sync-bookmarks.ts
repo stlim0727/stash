@@ -1,13 +1,23 @@
-import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE, createBookmarkApi } from '@/api/bookmarks';
-import type { BookmarkApi } from '@/api/bookmarks';
-import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
-import { isTransientNetworkError } from '@/domain/network-errors';
-import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
-import { canonicalizeUrl } from '@/domain/urls';
-import { recordLog } from '@/observability/log-buffer';
-import type { BookmarkRepository } from '@/storage/types';
-import { SupabaseRequestError } from '@/supabase/client';
-import type { SupabaseAuthSession } from '@/supabase/types';
+import {
+  BOOKMARK_NOT_FOUND_ERROR_MESSAGE,
+  createBookmarkApi,
+} from "@/api/bookmarks";
+import type { BookmarkApi } from "@/api/bookmarks";
+import {
+  createPayloadFromBookmark,
+  isUploadableCreate,
+} from "@/domain/create-payload";
+import { isTransientNetworkError } from "@/domain/network-errors";
+import type {
+  Bookmark,
+  CreateBookmarkInput,
+  LocalPendingBookmark,
+} from "@/domain/types";
+import { canonicalizeUrl } from "@/domain/urls";
+import { recordLog } from "@/observability/log-buffer";
+import type { BookmarkRepository } from "@/storage/types";
+import { SupabaseRequestError } from "@/supabase/client";
+import type { SupabaseAuthSession } from "@/supabase/types";
 
 export interface EntrySyncResult {
   entry: LocalPendingBookmark;
@@ -38,12 +48,14 @@ export interface EntrySyncResult {
 export const BULK_CREATE_SYNC_CHUNK_SIZE = 50;
 
 export function hasBulkCreateResultKey(entry: LocalPendingBookmark): boolean {
-  if (entry.operation !== 'create') {
+  if (entry.operation !== "create") {
     return false;
   }
   return (
-    (typeof entry.payload.client_id === 'string' && entry.payload.client_id.trim().length > 0) ||
-    (typeof entry.payload.url === 'string' && entry.payload.url.trim().length > 0)
+    (typeof entry.payload.client_id === "string" &&
+      entry.payload.client_id.trim().length > 0) ||
+    (typeof entry.payload.url === "string" &&
+      entry.payload.url.trim().length > 0)
   );
 }
 
@@ -54,11 +66,13 @@ export function hasBulkCreateResultKey(entry: LocalPendingBookmark): boolean {
  * request that threw it was already scoped to the current user's own id.
  */
 function isBookmarkGoneRemotely(error: unknown): boolean {
-  return error instanceof Error && error.message === BOOKMARK_NOT_FOUND_ERROR_MESSAGE;
+  return (
+    error instanceof Error && error.message === BOOKMARK_NOT_FOUND_ERROR_MESSAGE
+  );
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'Sync failed.';
+  return error instanceof Error ? error.message : "Sync failed.";
 }
 
 /**
@@ -102,7 +116,7 @@ export async function removeQueueEntryIfNotSuperseded(
   if (
     !stored ||
     stored.operation === entry.operation ||
-    (stored.operation === 'update' && entry.operation === 'create')
+    (stored.operation === "update" && entry.operation === "create")
   ) {
     await repository.removeQueueEntry(entry.local_id);
   }
@@ -116,7 +130,7 @@ async function failEntry(
 ): Promise<LocalPendingBookmark> {
   const failedEntry: LocalPendingBookmark = {
     ...entry,
-    sync_status: 'failed',
+    sync_status: "failed",
     retry_count: entry.retry_count + 1,
     last_error: errorMessage(error),
     last_attempt_at: now,
@@ -128,7 +142,7 @@ async function failEntry(
   if (
     stored &&
     (stored.operation === entry.operation ||
-      (stored.operation === 'update' && entry.operation === 'create')) &&
+      (stored.operation === "update" && entry.operation === "create")) &&
     stored.updated_at === entry.updated_at
   ) {
     await repository.updateQueueEntry(failedEntry);
@@ -138,18 +152,22 @@ async function failEntry(
 }
 
 const OPTIONAL_BOOKMARK_UPDATE_COLUMNS = [
-  'dismissed_suggested_tags',
-  'dismissed_suggested_folders',
-  'reviewed_summary_tokens',
+  "dismissed_suggested_tags",
+  "dismissed_suggested_folders",
+  "reviewed_summary_tokens",
 ] as const;
 
-type BookmarkUpdatePayload = Parameters<BookmarkApi['updateBookmark']>[1];
+type BookmarkUpdatePayload = Parameters<BookmarkApi["updateBookmark"]>[1];
 
 function isMissingOptionalBookmarkColumnError(
   error: unknown,
   payload: BookmarkUpdatePayload,
 ): boolean {
-  if (!(error instanceof SupabaseRequestError) || error.status < 400 || error.status >= 500) {
+  if (
+    !(error instanceof SupabaseRequestError) ||
+    error.status < 400 ||
+    error.status >= 500
+  ) {
     return false;
   }
   const message = error.message.toLowerCase();
@@ -157,7 +175,7 @@ function isMissingOptionalBookmarkColumnError(
     (column) =>
       Object.prototype.hasOwnProperty.call(payload, column) &&
       message.includes(column.toLowerCase()) &&
-      message.includes('schema cache'),
+      message.includes("schema cache"),
   );
 }
 
@@ -193,7 +211,7 @@ function createUploadPayload(
   if (latestAtUpload.preview_image_url !== null) {
     payload.preview_image_url = latestAtUpload.preview_image_url;
   }
-  if (latestAtUpload.metadata_status !== 'pending') {
+  if (latestAtUpload.metadata_status !== "pending") {
     payload.metadata_status = latestAtUpload.metadata_status;
   }
   if (entry.payload.enrichment_policy) {
@@ -210,18 +228,22 @@ export async function syncCreateQueueEntryBatch(
   if (entries.length === 0) {
     return [];
   }
-  if (entries.some((entry) => entry.operation !== 'create')) {
-    throw new Error('Bulk create sync only accepts create queue entries.');
+  if (entries.some((entry) => entry.operation !== "create")) {
+    throw new Error("Bulk create sync only accepts create queue entries.");
   }
   if (entries.some((entry) => !hasBulkCreateResultKey(entry))) {
-    throw new Error('Bulk create sync requires a client_id or URL mapping key.');
+    throw new Error(
+      "Bulk create sync requires a client_id or URL mapping key.",
+    );
   }
 
   const now = new Date().toISOString();
-  const uploadedPayloads = entries.map((entry) => createUploadPayload(entry, getBookmark));
+  const uploadedPayloads = entries.map((entry) =>
+    createUploadPayload(entry, getBookmark),
+  );
   const created = await api.createBookmarks(uploadedPayloads);
   if (created.length !== entries.length) {
-    throw new Error('Bulk create sync returned the wrong number of results.');
+    throw new Error("Bulk create sync returned the wrong number of results.");
   }
 
   const results: EntrySyncResult[] = [];
@@ -231,7 +253,7 @@ export async function syncCreateQueueEntryBatch(
     const syncedEntry: LocalPendingBookmark = {
       ...entry,
       remote_id: output.bookmark_id,
-      sync_status: 'synced',
+      sync_status: "synced",
       last_error: null,
       updated_at: now,
     };
@@ -242,14 +264,14 @@ export async function syncCreateQueueEntryBatch(
     // EntrySyncResult.originalLocalId / STASH-3Q) — the one remaining case a
     // bookmark's id changes after capture, alongside account rehoming.
     const isDuplicateSwap =
-      output.status === 'duplicate' &&
+      output.status === "duplicate" &&
       Boolean(output.bookmark_id) &&
       output.bookmark_id !== entry.local_id;
     if (localBookmark) {
       const syncedBookmark: Bookmark = {
         ...localBookmark,
         id: isDuplicateSwap ? output.bookmark_id : localBookmark.id,
-        sync_status: 'synced',
+        sync_status: "synced",
         ever_synced: true,
         updated_at: now,
       };
@@ -266,7 +288,8 @@ export async function syncCreateQueueEntryBatch(
     results.push({
       entry: syncedEntry,
       uploadedPayload: uploadedPayloads[index],
-      originalLocalId: output.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+      originalLocalId:
+        output.bookmark_id !== entry.local_id ? entry.local_id : undefined,
       removeEntry: true,
     });
   }
@@ -292,13 +315,16 @@ export async function syncQueueEntry(
 ): Promise<EntrySyncResult> {
   const now = new Date().toISOString();
 
-  if (entry.operation === 'update') {
+  if (entry.operation === "update") {
     const bookmark = getBookmark(entry.local_id);
     if (!bookmark) {
       // The bookmark is gone locally; nothing left to update remotely. A
       // durable delete may have replaced this row — leave that intact.
       await removeQueueEntryIfNotSuperseded(repository, entry);
-      return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
+      return {
+        entry: { ...entry, sync_status: "synced", updated_at: now },
+        removeEntry: true,
+      };
     }
     const updatePayload: BookmarkUpdatePayload = {
       title: bookmark.title,
@@ -331,30 +357,36 @@ export async function syncQueueEntry(
           throw error;
         }
         recordLog(
-          'warn',
+          "warn",
           `sync update: optional bookmark dismissal column missing; retrying without AI dismissal fields (${error instanceof Error ? error.message : String(error)})`,
         );
-        await api.updateBookmark(entry.local_id, withoutOptionalBookmarkUpdateColumns(updatePayload));
+        await api.updateBookmark(
+          entry.local_id,
+          withoutOptionalBookmarkUpdateColumns(updatePayload),
+        );
         throw new Error(
-          'Optional AI dismissal fields are waiting for the Supabase schema to update.',
+          "Optional AI dismissal fields are waiting for the Supabase schema to update.",
         );
       }
       await removeQueueEntryIfNotSuperseded(repository, entry);
-      if (bookmark.sync_status !== 'synced') {
+      if (bookmark.sync_status !== "synced") {
         const syncedBookmark: Bookmark = {
           ...bookmark,
-          sync_status: 'synced',
+          sync_status: "synced",
           ever_synced: true,
           updated_at: now,
         };
         await repository.updateBookmark(syncedBookmark);
         return {
-          entry: { ...entry, sync_status: 'synced', updated_at: now },
+          entry: { ...entry, sync_status: "synced", updated_at: now },
           bookmarkUpdate: syncedBookmark,
           removeEntry: true,
         };
       }
-      return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
+      return {
+        entry: { ...entry, sync_status: "synced", updated_at: now },
+        removeEntry: true,
+      };
     } catch (error) {
       if (isBookmarkGoneRemotely(error)) {
         // Deleted on another device while this device still had a queued
@@ -367,13 +399,13 @@ export async function syncQueueEntry(
         // a crash in between still self-heals via the "bookmark gone
         // locally" branch above on the next pass).
         recordLog(
-          'info',
+          "info",
           `sync: removing local row ${entry.local_id} — deleted on another device (queued update could not land)`,
         );
         await repository.deleteBookmark(entry.local_id);
         await removeQueueEntryIfNotSuperseded(repository, entry);
         return {
-          entry: { ...entry, sync_status: 'synced', updated_at: now },
+          entry: { ...entry, sync_status: "synced", updated_at: now },
           removeEntry: true,
           removedBookmarkId: entry.local_id,
         };
@@ -382,11 +414,14 @@ export async function syncQueueEntry(
     }
   }
 
-  if (entry.operation === 'delete') {
+  if (entry.operation === "delete") {
     try {
       await api.deleteBookmark(entry.remote_id ?? entry.local_id, true);
       await removeQueueEntryIfNotSuperseded(repository, entry);
-      return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
+      return {
+        entry: { ...entry, sync_status: "synced", updated_at: now },
+        removeEntry: true,
+      };
     } catch (error) {
       return { entry: await failEntry(repository, entry, error, now) };
     }
@@ -401,7 +436,7 @@ export async function syncQueueEntry(
     const syncedEntry: LocalPendingBookmark = {
       ...entry,
       remote_id: result.bookmark_id,
-      sync_status: 'synced',
+      sync_status: "synced",
       last_error: null,
       updated_at: now,
     };
@@ -424,11 +459,13 @@ export async function syncQueueEntry(
     // next pull fetches that existing row separately and the library doubles.
     if (localBookmark) {
       const isDuplicateSwap =
-        result.status === 'duplicate' && Boolean(result.bookmark_id) && result.bookmark_id !== entry.local_id;
+        result.status === "duplicate" &&
+        Boolean(result.bookmark_id) &&
+        result.bookmark_id !== entry.local_id;
       const syncedBookmark: Bookmark = {
         ...localBookmark,
         id: isDuplicateSwap ? result.bookmark_id : localBookmark.id,
-        sync_status: 'synced',
+        sync_status: "synced",
         ever_synced: true,
         updated_at: now,
       };
@@ -456,14 +493,18 @@ export async function syncQueueEntry(
     return {
       entry: syncedEntry,
       uploadedPayload: payload,
-      originalLocalId: result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
+      originalLocalId:
+        result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
       removeEntry,
     };
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
     const localBookmark = getBookmark(entry.local_id);
-    if (localBookmark && localBookmark.sync_status !== 'failed') {
-      const failedBookmark: Bookmark = { ...localBookmark, sync_status: 'failed' };
+    if (localBookmark && localBookmark.sync_status !== "failed") {
+      const failedBookmark: Bookmark = {
+        ...localBookmark,
+        sync_status: "failed",
+      };
       await repository.updateBookmark(failedBookmark);
       return {
         entry: failedEntry,
@@ -516,7 +557,7 @@ export function createNeedsReconcileUpdate(
 /** Builds a pending mutation entry targeting a bookmark that exists remotely. */
 export function makeMutationEntry(
   bookmarkId: string,
-  operation: 'update' | 'delete',
+  operation: "update" | "delete",
 ): LocalPendingBookmark {
   const now = new Date().toISOString();
   return {
@@ -524,7 +565,7 @@ export function makeMutationEntry(
     remote_id: bookmarkId,
     operation,
     payload: {},
-    sync_status: 'pending',
+    sync_status: "pending",
     retry_count: 0,
     last_error: null,
     created_at: now,
@@ -532,7 +573,8 @@ export function makeMutationEntry(
   };
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * True when a bookmark id has the shape of a Supabase-generated UUID rather
@@ -565,7 +607,7 @@ export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
 // from its last failed attempt — checking that text (rather than requiring a
 // fresh failure to relabel it) lets an already-stuck entry stop being
 // retried the moment the app updates, with no further doomed request needed.
-const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
+const URL_TOO_LONG_ERROR_TEXT = "exceeds btree version";
 
 /** A bulk-chunk request fails as a whole even when only one row in it is
  *  actually bad (e.g. one legacy too-long URL), so the caller can't blindly
@@ -585,10 +627,12 @@ export function isRowSpecificPermanentSyncErrorText(message: string): boolean {
  *  `sync_status: 'failed'` in the queue forever, which every "waiting to
  *  sync" count (e.g. Settings) still counts as pending work that can never
  *  drain (caught in PR review). */
-export function isPermanentlyUnsyncableUrl(entry: LocalPendingBookmark): boolean {
+export function isPermanentlyUnsyncableUrl(
+  entry: LocalPendingBookmark,
+): boolean {
   return (
-    entry.sync_status === 'failed' &&
-    typeof entry.last_error === 'string' &&
+    entry.sync_status === "failed" &&
+    typeof entry.last_error === "string" &&
     isRowSpecificPermanentSyncErrorText(entry.last_error)
   );
 }
@@ -635,9 +679,14 @@ export function uploadRetryBackoffMs(entry: LocalPendingBookmark): number {
   if (entry.retry_count <= 0) {
     return 0;
   }
-  const index = Math.min(entry.retry_count - 1, UPLOAD_RETRY_BACKOFF_MS.length - 1);
+  const index = Math.min(
+    entry.retry_count - 1,
+    UPLOAD_RETRY_BACKOFF_MS.length - 1,
+  );
   const base = UPLOAD_RETRY_BACKOFF_MS[index]!;
-  return isTransientNetworkError(entry.last_error) ? base * TRANSIENT_NETWORK_BACKOFF_MULTIPLIER : base;
+  return isTransientNetworkError(entry.last_error)
+    ? base * TRANSIENT_NETWORK_BACKOFF_MULTIPLIER
+    : base;
 }
 
 export interface IsSyncableOptions {
@@ -656,14 +705,17 @@ export interface IsSyncableOptions {
   ignoreBackoff?: boolean;
 }
 
-export function isSyncable(entry: LocalPendingBookmark, options: IsSyncableOptions = {}): boolean {
+export function isSyncable(
+  entry: LocalPendingBookmark,
+  options: IsSyncableOptions = {},
+): boolean {
   // Anything not yet 'synced' is eligible. 'syncing' is included so an entry
   // that an interrupted run left in-flight (e.g. the app was backgrounded or a
   // storage write threw mid-upload) is retried rather than orphaned forever.
   // The one exception is a permanently-too-long URL (above): retrying it can
   // never succeed, so excluding it here stops both the automatic sync effect
   // and an explicit "Sync now" from hammering the same doomed request.
-  if (entry.sync_status === 'synced' || isPermanentlyUnsyncableUrl(entry)) {
+  if (entry.sync_status === "synced" || isPermanentlyUnsyncableUrl(entry)) {
     return false;
   }
   if (options.ignoreBackoff) {
@@ -674,11 +726,12 @@ export function isSyncable(entry: LocalPendingBookmark, options: IsSyncableOptio
   // eligible, and an entry with no `last_attempt_at` — never failed before,
   // or a pre-backoff queue row already on a device — is treated as
   // immediately retryable rather than blocked.
-  if (entry.sync_status !== 'failed' || !entry.last_attempt_at) {
+  if (entry.sync_status !== "failed" || !entry.last_attempt_at) {
     return true;
   }
   const now = options.now ?? Date.now();
-  const readyAt = new Date(entry.last_attempt_at).getTime() + uploadRetryBackoffMs(entry);
+  const readyAt =
+    new Date(entry.last_attempt_at).getTime() + uploadRetryBackoffMs(entry);
   return now >= readyAt;
 }
 
@@ -709,7 +762,7 @@ export function reconcileOrphanedQueueEntries(
   const now = new Date().toISOString();
   const entries: LocalPendingBookmark[] = [];
   for (const bookmark of bookmarks) {
-    if (bookmark.sync_status === 'synced' || queuedIds.has(bookmark.id)) {
+    if (bookmark.sync_status === "synced" || queuedIds.has(bookmark.id)) {
       continue;
     }
     // Was this row EVER confirmed synced (ever_synced), even though it now
@@ -723,7 +776,7 @@ export function reconcileOrphanedQueueEntries(
     // capture. The reverse mistake (re-`create`-ing an already-synced row) is
     // safe: the server's url_hash dedup resolves it as a duplicate.
     if (bookmark.ever_synced) {
-      entries.push(makeMutationEntry(bookmark.id, 'update'));
+      entries.push(makeMutationEntry(bookmark.id, "update"));
       continue;
     }
     // Rebuild the create payload from the stored row — for a URL-less text note
@@ -735,9 +788,9 @@ export function reconcileOrphanedQueueEntries(
     entries.push({
       local_id: bookmark.id,
       remote_id: null,
-      operation: 'create',
+      operation: "create",
       payload,
-      sync_status: 'pending',
+      sync_status: "pending",
       retry_count: 0,
       last_error: null,
       created_at: now,
