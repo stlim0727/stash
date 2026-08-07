@@ -199,7 +199,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         }
         await db.runAsync("INSERT INTO meta (key, value) VALUES ('seeded', '1')");
       }
-    });
+    }, 'init');
   }
 
   async listBookmarks(): Promise<Bookmark[]> {
@@ -208,7 +208,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         'SELECT * FROM bookmarks ORDER BY created_at DESC',
       );
       return rows.map((row) => JSON.parse(row.data) as Bookmark);
-    });
+    }, 'listBookmarks');
   }
 
   async getBookmark(id: string): Promise<Bookmark | null> {
@@ -217,11 +217,11 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         id,
       ]);
       return row ? (JSON.parse(row.data) as Bookmark) : null;
-    });
+    }, 'getBookmark');
   }
 
   async insertBookmark(bookmark: Bookmark): Promise<void> {
-    await this.connection.run((db) => writeBookmark(db, bookmark));
+    await this.connection.run((db) => writeBookmark(db, bookmark), 'insertBookmark');
   }
 
   async updateBookmark(bookmark: Bookmark): Promise<void> {
@@ -229,11 +229,13 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   }
 
   async replaceBookmark(previousId: string, bookmark: Bookmark): Promise<void> {
-    await this.connection.run((db) =>
-      db.withTransactionAsync(async () => {
-        await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
-        await writeBookmark(db, bookmark);
-      }),
+    await this.connection.run(
+      (db) =>
+        db.withTransactionAsync(async () => {
+          await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
+          await writeBookmark(db, bookmark);
+        }),
+      'replaceBookmark',
     );
   }
 
@@ -275,7 +277,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         }
         await writeTagData(db, state.tagData);
       }),
-    );
+    'replaceBookmarkIdentities');
   }
 
   async completeCreateSyncBatch(completions: CreateSyncCompletion[]): Promise<void> {
@@ -307,7 +309,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           ]);
         }
       }),
-    );
+    'completeCreateSyncBatch');
   }
 
   async insertImportBatch(
@@ -351,11 +353,14 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           );
         },
       });
-    });
+    }, 'insertImportBatch');
   }
 
   async deleteBookmark(id: string): Promise<void> {
-    await this.connection.run((db) => db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]));
+    await this.connection.run(
+      (db) => db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]),
+      'deleteBookmark',
+    );
   }
 
   async listQueue(): Promise<LocalPendingBookmark[]> {
@@ -375,28 +380,30 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         updated_at: row.updated_at,
         last_attempt_at: row.last_attempt_at ?? null,
       }));
-    });
+    }, 'listQueue');
   }
 
   async enqueue(entry: LocalPendingBookmark): Promise<void> {
-    await this.connection.run((db) =>
-      db.runAsync(
-        `INSERT OR REPLACE INTO local_pending_bookmarks
+    await this.connection.run(
+      (db) =>
+        db.runAsync(
+          `INSERT OR REPLACE INTO local_pending_bookmarks
         (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at, last_attempt_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          entry.local_id,
-          entry.remote_id,
-          entry.operation,
-          JSON.stringify(entry.payload),
-          entry.sync_status,
-          entry.retry_count,
-          entry.last_error,
-          entry.created_at,
-          entry.updated_at,
-          entry.last_attempt_at ?? null,
-        ],
-      ),
+          [
+            entry.local_id,
+            entry.remote_id,
+            entry.operation,
+            JSON.stringify(entry.payload),
+            entry.sync_status,
+            entry.retry_count,
+            entry.last_error,
+            entry.created_at,
+            entry.updated_at,
+            entry.last_attempt_at ?? null,
+          ],
+        ),
+      'enqueue',
     );
   }
 
@@ -405,8 +412,9 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   }
 
   async removeQueueEntry(localId: string): Promise<void> {
-    await this.connection.run((db) =>
-      db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [localId]),
+    await this.connection.run(
+      (db) => db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [localId]),
+      'removeQueueEntry',
     );
   }
 
@@ -417,12 +425,13 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         [key],
       );
       return row?.value ?? null;
-    });
+    }, 'getMeta');
   }
 
   async setMeta(key: string, value: string): Promise<void> {
-    await this.connection.run((db) =>
-      db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [key, value]),
+    await this.connection.run(
+      (db) => db.runAsync('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)', [key, value]),
+      'setMeta',
     );
   }
 
@@ -430,16 +439,17 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     return this.connection.run(async (db) => {
       const rows = await db.getAllAsync<{ data: string }>('SELECT data FROM enrichments');
       return rows.map((row) => JSON.parse(row.data) as AIEnrichment);
-    });
+    }, 'listEnrichments');
   }
 
   async upsertEnrichments(enrichments: AIEnrichment[]): Promise<void> {
-    await this.connection.run((db) => writeEnrichments(db, enrichments));
+    await this.connection.run((db) => writeEnrichments(db, enrichments), 'upsertEnrichments');
   }
 
   async deleteEnrichment(bookmarkId: string): Promise<void> {
-    await this.connection.run((db) =>
-      db.runAsync('DELETE FROM enrichments WHERE bookmark_id = ?', [bookmarkId]),
+    await this.connection.run(
+      (db) => db.runAsync('DELETE FROM enrichments WHERE bookmark_id = ?', [bookmarkId]),
+      'deleteEnrichment',
     );
   }
 
@@ -452,21 +462,26 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         bookmarkTags: JSON.parse(byKind.get('bookmarkTags') ?? '[]'),
         collections: JSON.parse(byKind.get('collections') ?? '[]'),
       };
-    });
+    }, 'listTagData');
   }
 
   async replaceTagData(data: TagData): Promise<void> {
-    await this.connection.run((db) => db.withTransactionAsync(() => writeTagData(db, data)));
+    await this.connection.run(
+      (db) => db.withTransactionAsync(() => writeTagData(db, data)),
+      'replaceTagData',
+    );
   }
 
   async clearAllData(): Promise<void> {
-    await this.connection.run((db) =>
-      db.withTransactionAsync(async () => {
-        await db.runAsync('DELETE FROM bookmarks');
-        await db.runAsync('DELETE FROM local_pending_bookmarks');
-        await db.runAsync('DELETE FROM enrichments');
-        await db.runAsync('DELETE FROM tag_data');
-      }),
+    await this.connection.run(
+      (db) =>
+        db.withTransactionAsync(async () => {
+          await db.runAsync('DELETE FROM bookmarks');
+          await db.runAsync('DELETE FROM local_pending_bookmarks');
+          await db.runAsync('DELETE FROM enrichments');
+          await db.runAsync('DELETE FROM tag_data');
+        }),
+      'clearAllData',
     );
   }
 }

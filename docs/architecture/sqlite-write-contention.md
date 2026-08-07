@@ -85,3 +85,18 @@ genuinely sequential (`await` each call before starting the next).
 un-awaited calls inside `for` loops that touch `repository.*`. Also check
 whether each iteration persists only its own delta, or redundantly
 re-serializes/writes the whole collection it belongs to.
+
+**Diagnosing a new report**: `storage.sqliteContention.labels` (added for
+Sentry STASH-5R) names the repository/session-storage method(s) queued on the
+connection actor at the moment the running max last advanced, e.g.
+`"replaceBookmark:20, getBookmark:1, pull:2"` — every `connection.run(...)`
+call site passes its own method name as a label (`sqlite-connection.ts`'s
+`run`/`serialize`). A bare depth/wait number only proves contention happened;
+the label breakdown says whether it's one runaway un-awaited loop (one label
+dominating the count, matching this doc's pattern) or several independently-
+sequential pipelines simply overlapping on a large library (several labels
+each with a small count). Also: `report.tsx`'s `recentLogLines` used to keep
+only the *first* `MAX_TAIL_WAIT_ENTRIES` "sqlite tail wait" log lines it saw,
+so an early mild burst (e.g. a startup reopen) could use up the cap before a
+much more severe wait later in the same session ever got a slot — it now
+keeps the most severe ones regardless of order.

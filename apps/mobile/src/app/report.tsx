@@ -42,17 +42,30 @@ import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { usePalette } from '@/theme';
 
+const TAIL_WAIT_MS_RE = /^sqlite tail wait (\d+)ms/;
+const MAX_TAIL_WAIT_ENTRIES = 5;
+
 /** Most recent log lines, formatted for the diagnostics payload. */
 function recentLogLines(limit = 150): string[] {
-  // Cap sqlite tail-wait entries at 5 so a burst on app foreground doesn't
-  // consume the entire window and hide sync/pull/enrich logs.
-  let tailWaitCount = 0;
-  const filtered = getLogEntries().filter((entry) => {
-    if (entry.message.startsWith('sqlite tail wait')) {
-      return ++tailWaitCount <= 5;
-    }
-    return true;
-  });
+  const allEntries = getLogEntries();
+  // Cap sqlite tail-wait entries at MAX_TAIL_WAIT_ENTRIES so a burst on app
+  // foreground doesn't consume the entire window and hide sync/pull/enrich
+  // logs — but keep the *most severe* ones, not the first ones seen. A real
+  // report showed an early, mild reopen burst (five ~300ms waits right at
+  // startup) using up the whole cap before a single much worse wait later in
+  // the same session (4061ms) ever got a slot — so the one line that would
+  // have explained the report was silently dropped every time. Ranking by
+  // wait time keeps the worst stalls regardless of when they happened.
+  const tailWaitIndexesBySeverity = allEntries
+    .map((entry, index) => ({ index, waitMs: Number(TAIL_WAIT_MS_RE.exec(entry.message)?.[1]) }))
+    .filter((item) => !Number.isNaN(item.waitMs))
+    .sort((a, b) => b.waitMs - a.waitMs)
+    .slice(0, MAX_TAIL_WAIT_ENTRIES)
+    .map((item) => item.index);
+  const keepTailWaitIndexes = new Set(tailWaitIndexesBySeverity);
+  const filtered = allEntries.filter(
+    (entry, index) => !entry.message.startsWith('sqlite tail wait') || keepTailWaitIndexes.has(index),
+  );
   return filtered
     .slice(-limit)
     .map((entry) => `${entry.t} [${entry.level}] ${entry.message}`);
