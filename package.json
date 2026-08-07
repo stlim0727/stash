@@ -22,6 +22,7 @@
     "test:functions": "node --no-warnings --experimental-transform-types --test \"supabase/functions/**/*.test.ts\"",
     "typecheck": "pnpm --filter mobile typecheck",
     "verify:supabase": "node --no-warnings --experimental-transform-types scripts/verify-supabase.mjs",
+    "check:migration-drift": "node scripts/check-migration-drift.mjs",
     "verify:sentry": "node --no-warnings --experimental-transform-types scripts/verify-sentry.mjs",
     "sentry:issue": "node scripts/sentry-issue.mjs",
     "sentry:sync-github-issues": "node scripts/sentry-to-github-issues.mjs",

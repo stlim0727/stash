@@ -49,6 +49,7 @@ When `CI_PROVIDER` is set to `github`:
    | `FIREBASE_TEST_CASES` / `FIREBASE_TEST_DEVICES` | apk (post-distribution App Testing) | both required to run the agent after a release build; `FIREBASE_TEST_NON_BLOCKING` / `FIREBASE_TEST_USERNAME` / `FIREBASE_TEST_PASSWORD` / `*_RESOURCE` optional |
    | `SENTRY_AUTH_TOKEN` / `SENTRY_ORG` / `SENTRY_PROJECT` | sentry release | release skips if token unset |
    | `GH_TOKEN` (or `GITHUB_TOKEN`) | apk | PAT with `contents:write`, used to publish the GitHub Release; the build still runs (APK in CircleCI artifacts) without it |
+   | `SUPABASE_ACCESS_TOKEN` | GitHub Actions `supabase-live-check.yml` (`migration-drift` job) only | a Supabase *account* personal access token (Dashboard → Account → Access Tokens, not the project anon/service key); used read-only via the Management API to list applied migrations. Job skips itself with a clear log message if unset. |
 
 ## What runs when
 
@@ -70,6 +71,19 @@ When `CI_PROVIDER` is set to `github`:
 > one heavy, infrequent job (release `v*` tags + manual dispatch), so it stays
 > on Actions while the every-push CI gate stays on CircleCI. Trigger it by
 > pushing a `v*` tag or via the workflow's `workflow_dispatch` (`version` input).
+
+> **Live production checks run on GitHub Actions only, on a schedule**
+> (`.github/workflows/supabase-live-check.yml`), independent of `CI_PROVIDER`
+> (this isn't ported to CircleCI — its scheduler doesn't work for this
+> standalone project, same limitation as `nightly-ops` above). It runs nightly,
+> on manual dispatch, and right after any push to `main` touching
+> `supabase/migrations/**`. Two jobs: `migration-drift` diffs local migration
+> files against what's actually applied on the live project (needs the
+> `SUPABASE_ACCESS_TOKEN` secret, see the table above), and `verify-supabase`
+> runs `pnpm verify:supabase` against production. This exists because a
+> migration (`20260712000000_realtime_broadcast_policies.sql`) was merged to
+> main but never applied live for weeks, silently breaking Realtime for every
+> user — nothing caught it until users hit the failure (STASH-5V/5T/5W).
 
 Trigger a manual CircleCI workflow from the CircleCI UI (*Trigger Pipeline* → add
 the parameter) or the API, e.g.:
