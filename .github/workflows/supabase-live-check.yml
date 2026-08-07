@@ -9,7 +9,8 @@ name: Supabase live check
 #
 # Two independent jobs:
 #   - migration-drift: compares supabase/migrations/*.sql against what the
-#     Management API says is actually applied. Needs a SUPABASE_ACCESS_TOKEN
+#     Management API says is actually applied. Read-only, no data created, so
+#     it's safe to run unattended on a schedule. Needs a SUPABASE_ACCESS_TOKEN
 #     secret (a Supabase *account* personal access token, Dashboard ->
 #     Account -> Access Tokens — not the project anon/service key). Skips
 #     itself with a clear message if that secret isn't set yet.
@@ -17,11 +18,24 @@ name: Supabase live check
 #     (16 checks against the real project, including a Realtime channel-join
 #     check per account type) using the EXPO_PUBLIC_SUPABASE_* secrets already
 #     used by android-apk.yml. This alone would have caught the Realtime bug.
+#     Deliberately workflow_dispatch-only, NOT scheduled: it creates real
+#     anonymous + real accounts (and a bookmark) in production each run and
+#     only signs them out afterward, it doesn't delete them. The
+#     `cleanup_anonymous_users` pg_cron job (20260628062523_anon_user_cleanup)
+#     can't reap them either — its eligibility check requires zero rows in
+#     public.bookmarks for the user, but this app's delete is archive-by-default
+#     (the row's `deleted_at` gets set, the row itself doesn't disappear), so
+#     the leftover archived bookmark permanently disqualifies the account. A
+#     nightly run would accumulate orphaned auth.users + bookmarks rows in
+#     prod forever. Run it by hand when you want the live signal; don't wire
+#     it to a schedule without first giving verify-supabase.mjs a real
+#     teardown path (needs a service-role key it doesn't currently have).
 #
-# Runs on a schedule (safety net) and right after anything touching
-# supabase/migrations/ merges to main (fast feedback), plus manual dispatch.
-# Independent of the CI_PROVIDER gate switch — this isn't ported to CircleCI
-# (whose scheduler doesn't work for this project; see docs/development/ci-circleci.md).
+# migration-drift runs on a schedule (safety net) and right after anything
+# touching supabase/migrations/ merges to main (fast feedback), plus manual
+# dispatch. Independent of the CI_PROVIDER gate switch — this isn't ported to
+# CircleCI (whose scheduler doesn't work for this project; see
+# docs/development/ci-circleci.md).
 
 on:
   schedule:
@@ -44,6 +58,12 @@ jobs:
         run: node scripts/check-migration-drift.mjs
 
   verify-supabase:
+    # Manual only — see the "deliberately workflow_dispatch-only" note above.
+    # Also skips (whole job, no runner spent) when the secrets aren't set.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      secrets.EXPO_PUBLIC_SUPABASE_URL != '' &&
+      secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,9 +77,4 @@ jobs:
         env:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
-        run: |
-          if [ -z "$EXPO_PUBLIC_SUPABASE_URL" ] || [ -z "$EXPO_PUBLIC_SUPABASE_ANON_KEY" ]; then
-            echo "EXPO_PUBLIC_SUPABASE_URL/ANON_KEY not set — skipping."
-            exit 0
-          fi
-          pnpm verify:supabase
+        run: pnpm verify:supabase

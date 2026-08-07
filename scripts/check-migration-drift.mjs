@@ -79,6 +79,31 @@ function localMigrations() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Matching by slug means N local files sharing a slug are indistinguishable
+// from 1 applied row — if they're genuinely the same migration re-stamped on
+// re-application (the common case here: a round-timestamp dev draft plus a
+// real-timestamp file from when it was actually run), that's harmless. But it
+// also means a genuinely unapplied file is invisible whenever its slug
+// collides with an already-applied one. This can't be resolved automatically
+// without assuming which is the case, so surface it instead of guessing.
+function warnOnDuplicateSlugs(local) {
+  const counts = new Map();
+  for (const migration of local) {
+    counts.set(migration.slug, (counts.get(migration.slug) ?? 0) + 1);
+  }
+  const duplicates = [...counts].filter(([, count]) => count > 1);
+  if (duplicates.length === 0) return;
+
+  console.warn(
+    `Note: ${duplicates.length} slug(s) appear in more than one local migration file. ` +
+      'One applied row marks ALL of them as applied — if these are not actually the same ' +
+      'migration re-stamped, drift on the others is invisible to this check:',
+  );
+  for (const [slug, count] of duplicates) {
+    console.warn(`  - ${slug} (${count} files)`);
+  }
+}
+
 async function appliedMigrationNames(token, ref) {
   const response = await fetch(`${MANAGEMENT_API}/projects/${ref}/database/migrations`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -105,6 +130,7 @@ async function main() {
 
   const ref = projectRefFromUrl(url);
   const local = localMigrations();
+  warnOnDuplicateSlugs(local);
   const applied = await appliedMigrationNames(token, ref);
 
   const pending = local.filter(
@@ -130,6 +156,13 @@ async function main() {
 }
 
 main().catch((error) => {
+  // Deliberately distinct wording from the "N migration(s) ... NOT applied"
+  // message above: this branch means the check itself failed (e.g. a
+  // Management API blip or bad token), not that drift was confirmed. Both
+  // exit non-zero — an unverifiable state is still not a state to trust —
+  // but conflating the two in an unattended nightly job is how a real drift
+  // alarm ends up ignored as "probably just flaky again."
+  console.error('Could not verify migration state (this is NOT a confirmed drift finding):');
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;
 });
