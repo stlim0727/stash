@@ -91,6 +91,37 @@ export interface RemoveTagsInput {
   tags: string[];
 }
 
+/**
+ * One bookmark's worth of work for `bulkAttachTagsAndCollections` (issue
+ * #713): the bookmark must already exist server-side (bulk-created
+ * separately). `tags` names are raw/unnormalized — the method normalizes and
+ * dedupes them via `uniqueNormalizedTags` before sending. `collection_name`
+ * mirrors `syncPendingImportCollections`'s single-collection-per-bookmark
+ * import model; pass `null` to attach tags only.
+ */
+export interface BulkAttachItem {
+  bookmark_id: string;
+  tags: Array<{ name: string; source: TagSource }>;
+  collection_name: string | null;
+}
+
+/**
+ * Per-bookmark result of `bulkAttachTagsAndCollections`. `collection` is the
+ * resolved-or-created collection row whenever `collection_name` was sent, even
+ * if `collection_attached` is false (the bookmark already had a different
+ * collection — see the RPC's `collection_id is null` guard) — callers still
+ * need it to keep their local collections cache complete. `bookmark_updated_at`
+ * is set only when the collection was actually attached (the RPC bumps it then,
+ * matching what a normal collection-assigning PATCH does).
+ */
+export interface BulkAttachResult {
+  bookmark_id: string;
+  tags: Tag[];
+  collection: Collection | null;
+  collection_attached: boolean;
+  bookmark_updated_at: string | null;
+}
+
 export interface UpdateAIEnrichmentInput {
   bookmark_id: string;
   summary?: string | null;
@@ -718,6 +749,49 @@ export class BookmarkApi {
     }
 
     return ensuredTags;
+  }
+
+  /**
+   * Batch equivalent of calling `addTags`/`updateBookmark({collection_id})` once
+   * per bookmark (issue #713 / Sentry STASH-5F/5G/5D): resolves-or-creates every
+   * tag and the (at most one) collection per bookmark, and links everything, in
+   * one Supabase RPC call instead of one HTTP round trip per (bookmark, tag)
+   * pair. Every bookmark in `items` must already exist server-side. Chunking
+   * (`BULK_CREATE_SYNC_CHUNK_SIZE`) is the caller's responsibility, same as
+   * `createBookmarks`.
+   */
+  async bulkAttachTagsAndCollections(items: BulkAttachItem[]): Promise<BulkAttachResult[]> {
+    if (items.length === 0) {
+      return [];
+    }
+
+    const payload = items.map((item) => {
+      const normalizedTags = uniqueNormalizedTags(item.tags.map((tag) => tag.name));
+      // uniqueNormalizedTags dedupes/normalizes name+slug but drops the
+      // per-tag `source`; resolve it back by slug (ops are already deduped
+      // per (bookmark, tag slug) by enqueueTagOp, so this is 1:1 in practice).
+      const sourceBySlug = new Map(
+        item.tags.map((tag) => [slugify(normalizeText(tag.name)), tag.source] as const),
+      );
+      return {
+        bookmark_id: item.bookmark_id,
+        tags: normalizedTags.map((tag) => ({
+          name: tag.name,
+          slug: tag.slug,
+          source: sourceBySlug.get(tag.slug) ?? ('user' as TagSource),
+        })),
+        collection_name: item.collection_name,
+      };
+    });
+
+    return this.client.request<BulkAttachResult[]>(
+      '/rest/v1/rpc/bulk_attach_bookmark_tags_and_collections',
+      {
+        method: 'POST',
+        accessToken: this.session.access_token,
+        body: { items: payload },
+      },
+    );
   }
 
   async removeTags(input: RemoveTagsInput): Promise<void> {

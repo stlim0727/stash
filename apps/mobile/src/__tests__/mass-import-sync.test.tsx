@@ -90,6 +90,67 @@ jest.mock("@/api/bookmarks", () => {
       created_at: new Date().toISOString(),
     })),
   );
+  // Fake for the batch-attach RPC (issue #713): resolves/creates each tag and
+  // the (at most one) collection per bookmark against the same `remoteCollections`
+  // store `__createCollectionMock` used to use, so collection ids keep the
+  // "collection-1", "collection-2", ... numbering the other assertions below
+  // rely on. Always reports the collection as attached — the real RPC's
+  // `collection_id is null` guard is a server-side detail; the client-side
+  // "did a manual move win the race" guarantee is enforced by the store's own
+  // intentIsCurrent/collection_id-null checks before it applies the result,
+  // which is what these tests actually verify.
+  const bulkAttachMock = jest.fn(
+    async (
+      items: Array<{
+        bookmark_id: string;
+        tags: Array<{ name: string; source: string }>;
+        collection_name: string | null;
+      }>,
+    ) =>
+      items.map((item) => {
+        const tags = item.tags.map((tag) => ({
+          id: `tag-${tag.name.toLowerCase()}`,
+          user_id: "real-user",
+          name: tag.name,
+          slug: tag.name.trim().toLowerCase().replace(/\s+/g, "-"),
+          source: tag.source,
+          created_at: new Date().toISOString(),
+        }));
+
+        let collection = null as null | (typeof remoteCollections)[number];
+        let collectionAttached = false;
+        let bookmarkUpdatedAt: string | null = null;
+        if (item.collection_name) {
+          const key = item.collection_name.trim().toLowerCase();
+          collection =
+            remoteCollections.find(
+              (candidate) => candidate.name.trim().toLowerCase() === key,
+            ) ?? null;
+          if (!collection) {
+            const now = new Date().toISOString();
+            collection = {
+              id: `collection-${remoteCollections.length + 1}`,
+              user_id: "real-user",
+              name: item.collection_name,
+              description: null,
+              created_at: now,
+              updated_at: now,
+            };
+            remoteCollections.push(collection);
+          }
+          collectionAttached = true;
+          bookmarkUpdatedAt = new Date().toISOString();
+        }
+
+        return {
+          bookmark_id: item.bookmark_id,
+          tags,
+          collection,
+          collection_attached: collectionAttached,
+          bookmark_updated_at: bookmarkUpdatedAt,
+        };
+      }),
+  );
   const restoreAIEnrichmentMock = jest.fn(
     async (input: { bookmark_id: string; [key: string]: unknown }) => ({
       id: `enrichment-${input.bookmark_id}`,
@@ -181,6 +242,7 @@ jest.mock("@/api/bookmarks", () => {
     __createCollectionMock: createCollectionMock,
     __updateBookmarkMock: updateBookmarkMock,
     __addTagsMock: addTagsMock,
+    __bulkAttachMock: bulkAttachMock,
     __restoreAIEnrichmentMock: restoreAIEnrichmentMock,
     createBookmarkApi: () => ({
       listBookmarksUpdatedSince,
@@ -195,6 +257,7 @@ jest.mock("@/api/bookmarks", () => {
       addTags: addTagsMock,
       removeTags: jest.fn(async () => undefined),
       createCollection: createCollectionMock,
+      bulkAttachTagsAndCollections: bulkAttachMock,
       resetLibrary: resetLibraryMock,
       restoreAIEnrichment: restoreAIEnrichmentMock,
     }),
@@ -224,6 +287,7 @@ const apiMock = jest.requireMock("@/api/bookmarks") as {
   __createCollectionMock: jest.Mock;
   __updateBookmarkMock: jest.Mock;
   __addTagsMock: jest.Mock;
+  __bulkAttachMock: jest.Mock;
   __restoreAIEnrichmentMock: jest.Mock;
 };
 const authMock = jest.requireMock("@/supabase/auth-provider") as {
@@ -265,6 +329,7 @@ beforeEach(() => {
   apiMock.__createCollectionMock.mockClear();
   apiMock.__updateBookmarkMock.mockClear();
   apiMock.__addTagsMock.mockClear();
+  apiMock.__bulkAttachMock.mockClear();
   apiMock.__restoreAIEnrichmentMock.mockClear();
   enrichmentMock.enrichBookmark.mockClear();
   authMock.__setAuth({
@@ -317,18 +382,11 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     });
 
     await waitFor(
-      () => expect(apiMock.__createCollectionMock).toHaveBeenCalledWith("Projects"),
+      () =>
+        expect(apiMock.__bulkAttachMock).toHaveBeenCalledWith([
+          expect.objectContaining({ collection_name: "Projects" }),
+        ]),
       { timeout: 5_000 },
-    );
-    const collectionId = apiMock.__createCollectionMock.mock.results[0]?.value
-      ? (await apiMock.__createCollectionMock.mock.results[0].value).id
-      : null;
-    expect(collectionId).toBe("collection-1");
-    await waitFor(() =>
-      expect(apiMock.__updateBookmarkMock).toHaveBeenCalledWith(
-        expect.any(String),
-        { collection_id: "collection-1" },
-      ),
     );
     await waitFor(() =>
       expect(result.current.inbox[0]?.collection_id).toBe("collection-1"),
@@ -612,7 +670,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
   });
 
   test("keeps a failed collection intent and retries it on manual sync", async () => {
-    apiMock.__createCollectionMock.mockRejectedValueOnce(
+    apiMock.__bulkAttachMock.mockRejectedValueOnce(
       new Error("temporary collection failure"),
     );
     const { result } = await renderReadyStore();
@@ -650,11 +708,12 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() =>
       expect(fakeRepo.__meta("pending_import_collections")).toBe("[]"),
     );
-    expect(apiMock.__createCollectionMock).toHaveBeenCalledTimes(2);
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(2);
+    expect(result.current.inbox[0]?.collection_id).toBe("collection-1");
   });
 
   test("a manual collection move supersedes a failed imported collection intent", async () => {
-    apiMock.__createCollectionMock.mockRejectedValueOnce(
+    apiMock.__bulkAttachMock.mockRejectedValueOnce(
       new Error("temporary collection failure"),
     );
     const { result } = await renderReadyStore();
@@ -687,24 +746,31 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() =>
       expect(fakeRepo.__meta("pending_import_collections")).toBe("[]"),
     );
-    expect(apiMock.__createCollectionMock).toHaveBeenCalledTimes(1);
-    expect(apiMock.__updateBookmarkMock).not.toHaveBeenCalledWith(
-      bookmarkId,
-      { collection_id: "collection-1" },
-    );
+    // The intent was dropped by the manual move before the retry pass, so the
+    // failed first attempt is the ONLY bulk-attach call — no retry ever fires.
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+    expect(result.current.inbox[0]?.collection_id).toBe("manual-collection");
   });
 
   test("a manual move during collection lookup wins over the in-flight import intent", async () => {
-    const collectionGate = deferred<{
-      id: string;
-      user_id: string;
-      name: string;
-      description: null;
-      created_at: string;
-      updated_at: string;
-    }>();
-    apiMock.__createCollectionMock.mockImplementationOnce(
-      async () => collectionGate.promise,
+    const bulkAttachGate = deferred<
+      Array<{
+        bookmark_id: string;
+        tags: unknown[];
+        collection: {
+          id: string;
+          user_id: string;
+          name: string;
+          description: null;
+          created_at: string;
+          updated_at: string;
+        };
+        collection_attached: boolean;
+        bookmark_updated_at: string;
+      }>
+    >();
+    apiMock.__bulkAttachMock.mockImplementationOnce(
+      async () => bulkAttachGate.promise,
     );
     const { result } = await renderReadyStore();
 
@@ -721,28 +787,37 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       ]);
     });
     await waitFor(() =>
-      expect(apiMock.__createCollectionMock).toHaveBeenCalledWith(
-        "Imported folder",
-      ),
+      expect(apiMock.__bulkAttachMock).toHaveBeenCalledWith([
+        expect.objectContaining({ collection_name: "Imported folder" }),
+      ]),
     );
     const bookmarkId = result.current.inbox[0]!.id;
     await act(async () => {
       result.current.assignCollection(bookmarkId, "manual-collection");
-      collectionGate.resolve({
-        id: "in-flight-imported-collection",
-        user_id: "real-user",
-        name: "Imported folder",
-        description: null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
+      // The batch RPC resolves AFTER the manual move already landed locally
+      // (and dropped the pending import intent) — the store's
+      // intentIsCurrent + collection_id-null re-check must refuse to apply
+      // this stale result on top of the manual assignment.
+      bulkAttachGate.resolve([
+        {
+          bookmark_id: bookmarkId,
+          tags: [],
+          collection: {
+            id: "in-flight-imported-collection",
+            user_id: "real-user",
+            name: "Imported folder",
+            description: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          collection_attached: true,
+          bookmark_updated_at: new Date().toISOString(),
+        },
+      ]);
     });
 
     await waitFor(() => expect(result.current.isSyncing).toBe(false));
     expect(result.current.inbox[0]?.collection_id).toBe("manual-collection");
-    expect(apiMock.__updateBookmarkMock).not.toHaveBeenCalledWith(bookmarkId, {
-      collection_id: "in-flight-imported-collection",
-    });
   });
 
   test("does not reuse a same-named collection owned by the previous account", async () => {
@@ -777,11 +852,18 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     });
 
     await waitFor(() =>
-      expect(apiMock.__createCollectionMock).toHaveBeenCalledWith("Projects"),
+      expect(apiMock.__bulkAttachMock).toHaveBeenCalledWith([
+        expect.objectContaining({ collection_name: "Projects" }),
+      ]),
     );
-    expect(apiMock.__updateBookmarkMock).not.toHaveBeenCalledWith(
-      expect.any(String),
-      { collection_id: "foreign-collection" },
+    // The RPC resolves collections scoped to the caller's own uid server-side,
+    // so a same-named collection owned by a different account can never match
+    // — the local cache seeded with "foreign-collection" above is never
+    // consulted for this resolution anymore.
+    await waitFor(() =>
+      expect(result.current.inbox[0]?.collection_id).not.toBe(
+        "foreign-collection",
+      ),
     );
   });
 
@@ -803,9 +885,11 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
 
     await waitFor(
       () =>
-        expect(apiMock.__addTagsMock).toHaveBeenCalledWith(
-          expect.objectContaining({ tags: ["Reading"] }),
-        ),
+        expect(apiMock.__bulkAttachMock).toHaveBeenCalledWith([
+          expect.objectContaining({
+            tags: [expect.objectContaining({ name: "Reading" })],
+          }),
+        ]),
       { timeout: 5_000 },
     );
     await waitFor(() =>
@@ -1051,9 +1135,13 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     expect(dupBookmark?.sync_status).toBe("synced");
     await waitFor(
       () =>
-        expect(apiMock.__updateBookmarkMock).toHaveBeenCalledWith(
-          EXISTING_SERVER_ID,
-          { collection_id: "collection-1" },
+        expect(apiMock.__bulkAttachMock).toHaveBeenCalledWith(
+          expect.arrayContaining([
+            expect.objectContaining({
+              bookmark_id: EXISTING_SERVER_ID,
+              collection_name: "Existing duplicate folder",
+            }),
+          ]),
         ),
       { timeout: 5_000 },
     );

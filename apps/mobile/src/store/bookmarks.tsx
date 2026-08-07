@@ -38,7 +38,7 @@ import type {
   Tag,
 } from "@/domain/types";
 import { sanitizeTagData } from "@/domain/tag-data";
-import { normalizeTag } from "@/domain/tag-input";
+import { tagSlug } from "@/domain/tag-input";
 import {
   addDismissedFolderToken,
   addReviewedNames,
@@ -117,7 +117,11 @@ import { reportSyncQueueHealthEscalation } from "@/observability/sentry";
 import { registerForForegroundState } from "@/storage/sqlite-app-lifecycle";
 import { repository } from "@/storage/repository";
 import { copyImageToLibrary } from "@/storage/image-store";
-import type { EnrichmentMetadataHint } from "@/api/bookmarks";
+import type {
+  BulkAttachItem,
+  BulkAttachResult,
+  EnrichmentMetadataHint,
+} from "@/api/bookmarks";
 import type {
   CreateSyncCompletion,
   IdentityRekeyState,
@@ -3557,7 +3561,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   // Push queued tag ops to the server when online: ensure tags exist, reconcile
   // the optimistic local tag id to the server one, and drop the op on success.
-  // Failures stay queued for the next sync.
+  // Failures stay queued for the next sync. "add" ops for bookmarks that have
+  // already synced are grouped by bookmark and pushed through the batch-attach
+  // RPC in chunks of BULK_CREATE_SYNC_CHUNK_SIZE (issue #713) instead of one
+  // `addTags` call per (bookmark, tag) pair — a bulk import's ~3 tags per
+  // bookmark used to mean 3,000+ sequential round trips for 1,000 bookmarks
+  // (Sentry STASH-5F/5G/5D). "remove" ops stay one-per-op, unchanged: imports
+  // never enqueue removes, and removes are always low-volume interactive edits.
   const syncTagOps = useCallback(async (): Promise<boolean> => {
     if (!auth.session) {
       return false;
@@ -3576,38 +3586,86 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
     let mutationsPushed = false;
     const api = createSyncApi(auth.session);
+
+    // The bookmark must exist remotely before its tags can be linked. Group
+    // eligible "add" ops by bookmark — enqueueTagOp already guarantees at
+    // most one queued op per (bookmark_id, tag slug), so each bookmark's
+    // group has no duplicate tag names to worry about.
+    const addOpsByBookmark = new Map<string, PendingTagOp[]>();
     for (const op of ops) {
-      // The bookmark must exist remotely before its tags can be linked.
-      if (!hasSyncedOnce(op.bookmark_id)) {
+      if (op.op !== "add" || !hasSyncedOnce(op.bookmark_id)) {
         continue;
       }
+      const list = addOpsByBookmark.get(op.bookmark_id);
+      if (list) {
+        list.push(op);
+      } else {
+        addOpsByBookmark.set(op.bookmark_id, [op]);
+      }
+    }
+    const addBookmarkIds = [...addOpsByBookmark.keys()];
+
+    for (let i = 0; i < addBookmarkIds.length; i += BULK_CREATE_SYNC_CHUNK_SIZE) {
+      const chunkIds = addBookmarkIds.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
+      const chunkItems: BulkAttachItem[] = chunkIds.map((bookmarkId) => ({
+        bookmark_id: bookmarkId,
+        tags: addOpsByBookmark.get(bookmarkId)!.map((op) => ({
+          name: op.tag_name,
+          source: op.source,
+        })),
+        collection_name: null,
+      }));
       try {
-        if (op.op === "add") {
-          const ensured = await api.addTags({
-            bookmark_id: op.bookmark_id,
-            tags: [op.tag_name],
-            source: op.source,
-          });
-          const serverTag =
-            ensured.find(
-              (tag) => normalizeTag(tag.name) === normalizeTag(op.tag_name),
-            ) ?? ensured[0];
-          if (serverTag) {
+        const results = await api.bulkAttachTagsAndCollections(chunkItems);
+        for (const result of results) {
+          const opsForBookmark = addOpsByBookmark.get(result.bookmark_id);
+          if (!opsForBookmark) {
+            continue;
+          }
+          for (const serverTag of result.tags) {
+            const matchingOp = opsForBookmark.find(
+              (op) => tagSlug(op.tag_name) === serverTag.slug,
+            );
+            if (!matchingOp) {
+              continue;
+            }
             // persist: false — see the batch persist after this loop. A bulk
             // import's ~300 sequential ops must not each re-serialize and
             // write the whole tag catalog/queue to SQLite (that's what was
             // contending with the main sync queue's own writes).
             applyTagData(
-              reconcileSyncedAdd(tagDataRef.current, op.tag_name, serverTag),
+              reconcileSyncedAdd(tagDataRef.current, matchingOp.tag_name, serverTag),
               { persist: false },
             );
+            applyTagOps(
+              dequeueTagOp(
+                pendingTagOpsRef.current,
+                result.bookmark_id,
+                matchingOp.tag_name,
+              ),
+              { persist: false },
+            );
+            mutationsPushed = true;
           }
-        } else {
-          await api.removeTags({
-            bookmark_id: op.bookmark_id,
-            tags: [op.tag_name],
-          });
         }
+      } catch (error) {
+        // Keep the ops queued; the next sync retries the whole chunk.
+        recordLog(
+          "warn",
+          `tag sync failed (bulk add, ${chunkIds.length} bookmarks): ${String(error)}`,
+        );
+      }
+    }
+
+    for (const op of ops) {
+      if (op.op !== "remove" || !hasSyncedOnce(op.bookmark_id)) {
+        continue;
+      }
+      try {
+        await api.removeTags({
+          bookmark_id: op.bookmark_id,
+          tags: [op.tag_name],
+        });
         applyTagOps(
           dequeueTagOp(pendingTagOpsRef.current, op.bookmark_id, op.tag_name),
           { persist: false },
@@ -3621,6 +3679,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         );
       }
     }
+
     if (mutationsPushed) {
       // One persist for the whole batch instead of one per op (see above).
       try {
@@ -4346,6 +4405,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [auth, applyTagData],
   );
 
+  // Same batch-attach RPC as syncTagOps above (issue #713): group eligible
+  // imported-collection intents by bookmark, chunk, and resolve-or-create each
+  // collection server-side in one call per chunk instead of one
+  // `createCollection`/`updateBookmark` round trip per bookmark.
   const syncPendingImportCollections =
     useCallback(async (): Promise<boolean> => {
       if (!auth.session || syncPausedRef.current) {
@@ -4359,104 +4422,114 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
 
       const api = createSyncApi(auth.session);
-      let remoteCollections: Collection[] | null = null;
       let mutationsPushed = false;
+
+      // Local fast-path: an import re-run, a restore, or a manual move that
+      // already landed locally must not clobber an existing assignment — drop
+      // those intents without a network call. Ref/state updated immediately;
+      // the SQLite write is batched once after the loop (see below) — a bulk
+      // import's ~300 entries here must not each persist the whole shrinking
+      // list individually.
+      const itemsByBookmark = new Map<string, PendingImportCollection>();
       for (const item of eligible) {
-        try {
-          const currentBookmark = bookmarksRef.current?.find(
-            (bookmark) => bookmark.id === item.bookmark_id,
-          );
-          if (currentBookmark?.collection_id) {
-            // Ref/state updated immediately; the SQLite write is batched once
-            // after the loop (see below) — a bulk import's ~300 entries here
-            // must not each persist the whole shrinking list individually.
-            const remaining = pendingImportCollectionsRef.current.filter(
-              (candidate) => candidate.bookmark_id !== item.bookmark_id,
-            );
-            pendingImportCollectionsRef.current = remaining;
-            setPendingImportCollections(remaining);
-            continue;
-          }
-          const key = normalizeTag(item.collection_name);
-          let collection = tagDataRef.current.collections.find(
-            (candidate) =>
-              candidate.user_id === auth.session!.user.id &&
-              normalizeTag(candidate.name) === key,
-          );
-          if (!collection) {
-            remoteCollections ??= await api.listCollections();
-            collection = remoteCollections.find(
-              (candidate) => normalizeTag(candidate.name) === key,
-            );
-          }
-          if (!collection) {
-            collection = await api.createCollection(item.collection_name);
-            remoteCollections ??= [];
-            remoteCollections.push(collection);
-            mutationsPushed = true;
-          }
-
-          const intentIsCurrent = () =>
-            pendingImportCollectionsRef.current.some(
-              (candidate) =>
-                candidate.bookmark_id === item.bookmark_id &&
-                candidate.created_at === item.created_at &&
-                candidate.collection_name === item.collection_name,
-            );
-          const latestBeforeUpdate = bookmarksRef.current?.find(
-            (bookmark) => bookmark.id === item.bookmark_id,
-          );
-          if (!intentIsCurrent() || latestBeforeUpdate?.collection_id) {
-            continue;
-          }
-
-          const remote = await api.updateBookmark(item.bookmark_id, {
-            collection_id: collection.id,
-          });
-          mutationsPushed = true;
-          const latest = bookmarksRef.current?.find(
-            (bookmark) => bookmark.id === item.bookmark_id,
-          );
-          if (latest && intentIsCurrent() && latest.collection_id === null) {
-            const updated: Bookmark = {
-              ...latest,
-              collection_id: collection.id,
-              updated_at: remote.updated_at,
-            };
-            await repository.updateBookmark(updated);
-            bookmarksRef.current = bookmarksRef.current!.map((bookmark) =>
-              bookmark.id === updated.id ? updated : bookmark,
-            );
-            setBookmarks(
-              (current) =>
-                current?.map((bookmark) =>
-                  bookmark.id === updated.id ? updated : bookmark,
-                ) ?? current,
-            );
-          }
-
-          if (
-            !tagDataRef.current.collections.some(
-              (candidate) => candidate.id === collection.id,
-            )
-          ) {
-            const nextTagData = {
-              ...tagDataRef.current,
-              collections: [...tagDataRef.current.collections, collection],
-            };
-            await repository.replaceTagData(nextTagData);
-            tagDataRef.current = nextTagData;
-            setTagData(nextTagData);
-          }
-
+        const currentBookmark = bookmarksRef.current?.find(
+          (bookmark) => bookmark.id === item.bookmark_id,
+        );
+        if (currentBookmark?.collection_id) {
           const remaining = pendingImportCollectionsRef.current.filter(
             (candidate) => candidate.bookmark_id !== item.bookmark_id,
           );
           pendingImportCollectionsRef.current = remaining;
           setPendingImportCollections(remaining);
+          continue;
+        }
+        itemsByBookmark.set(item.bookmark_id, item);
+      }
+      const bookmarkIds = [...itemsByBookmark.keys()];
+
+      for (let i = 0; i < bookmarkIds.length; i += BULK_CREATE_SYNC_CHUNK_SIZE) {
+        const chunkIds = bookmarkIds.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
+        const chunkItems: BulkAttachItem[] = chunkIds.map((bookmarkId) => ({
+          bookmark_id: bookmarkId,
+          tags: [],
+          collection_name: itemsByBookmark.get(bookmarkId)!.collection_name,
+        }));
+        try {
+          const results: BulkAttachResult[] =
+            await api.bulkAttachTagsAndCollections(chunkItems);
+          for (const result of results) {
+            const item = itemsByBookmark.get(result.bookmark_id);
+            if (!item || !result.collection) {
+              continue;
+            }
+
+            if (
+              !tagDataRef.current.collections.some(
+                (candidate) => candidate.id === result.collection!.id,
+              )
+            ) {
+              const nextTagData = {
+                ...tagDataRef.current,
+                collections: [...tagDataRef.current.collections, result.collection],
+              };
+              await repository.replaceTagData(nextTagData);
+              tagDataRef.current = nextTagData;
+              setTagData(nextTagData);
+            }
+
+            // A manual move can race an in-flight import: re-check the intent
+            // is still queued (assignCollection drops it synchronously on a
+            // manual reassignment) and the bookmark is still unassigned
+            // before applying the server's resolved collection locally. The
+            // RPC's own `collection_id is null` guard protects the remote row
+            // the same way; this mirrors it for the local optimistic write.
+            const intentIsCurrent = pendingImportCollectionsRef.current.some(
+              (candidate) =>
+                candidate.bookmark_id === item.bookmark_id &&
+                candidate.created_at === item.created_at &&
+                candidate.collection_name === item.collection_name,
+            );
+            const latest = bookmarksRef.current?.find(
+              (bookmark) => bookmark.id === item.bookmark_id,
+            );
+            if (
+              result.collection_attached &&
+              intentIsCurrent &&
+              latest &&
+              latest.collection_id === null
+            ) {
+              const updated: Bookmark = {
+                ...latest,
+                collection_id: result.collection.id,
+                updated_at: result.bookmark_updated_at ?? latest.updated_at,
+              };
+              await repository.updateBookmark(updated);
+              bookmarksRef.current = bookmarksRef.current!.map((bookmark) =>
+                bookmark.id === updated.id ? updated : bookmark,
+              );
+              setBookmarks(
+                (current) =>
+                  current?.map((bookmark) =>
+                    bookmark.id === updated.id ? updated : bookmark,
+                  ) ?? current,
+              );
+            }
+
+            mutationsPushed = true;
+            const remaining = pendingImportCollectionsRef.current.filter(
+              (candidate) => candidate.bookmark_id !== item.bookmark_id,
+            );
+            pendingImportCollectionsRef.current = remaining;
+            setPendingImportCollections(remaining);
+          }
         } catch (error) {
+          // Per-chunk failure: mark every item in this chunk failed rather
+          // than parse partial success out of the RPC's returned array —
+          // today's per-item failure tracking already just means "retry on
+          // the next sync," so this is an acceptable, simpler first cut.
+          const failedIds = new Set(chunkIds);
           const failed = pendingImportCollectionsRef.current.map((candidate) =>
-            candidate.bookmark_id === item.bookmark_id
+            failedIds.has(candidate.bookmark_id)
               ? {
                   ...candidate,
                   status: "failed" as const,
@@ -4469,7 +4542,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           setPendingImportCollections(failed);
           recordLog(
             "warn",
-            `import collection sync failed (${item.collection_name}): ${String(error)}`,
+            `import collection sync failed (${chunkIds.length} bookmarks): ${String(error)}`,
           );
         }
       }
