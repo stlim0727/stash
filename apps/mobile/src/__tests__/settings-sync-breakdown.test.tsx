@@ -103,12 +103,21 @@ function expectRow(
   expect(within(screen.getByTestId(testID)).getByText(value)).toBeTruthy();
 }
 
+// The four raw stage rows (and the "Processing details" diagnostic
+// breakdown) only render once Developer mode is on — the everyday screen
+// shows just the one-line summary (STASH counter refactor).
+async function enableDeveloperMode(screen: Awaited<ReturnType<typeof render>>) {
+  await waitFor(() => screen.getByLabelText('Developer mode'));
+  fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+  await waitFor(() => screen.getByTestId('processing-stage-cloud'));
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   fakeRepo.__reset([]);
 });
 
-test('the four exclusive stage counts add up to the headline total', async () => {
+test('the everyday Activity section shows only the one-line summary', async () => {
   await seed({
     rows: [makeStoredBookmark({ id: 'metadata', metadata_status: 'pending' })],
     queue: [queueEntry('cloud')],
@@ -117,6 +126,24 @@ test('the four exclusive stage counts add up to the headline total', async () =>
 
   const screen = await renderSettings();
   await waitFor(() => expectRow(screen, 'processing-summary', '3 bookmarks remaining'));
+
+  expect(screen.queryByTestId('processing-stage-cloud')).toBeNull();
+  expect(screen.queryByTestId('processing-stage-metadata')).toBeNull();
+  expect(screen.queryByTestId('processing-stage-ai')).toBeNull();
+  expect(screen.queryByTestId('processing-stage-attention')).toBeNull();
+  expect(screen.queryByText('Processing details')).toBeNull();
+});
+
+test('the four exclusive stage counts (Developer mode) add up to the headline total', async () => {
+  await seed({
+    rows: [makeStoredBookmark({ id: 'metadata', metadata_status: 'pending' })],
+    queue: [queueEntry('cloud')],
+    meta: { pending_ai_trigger: JSON.stringify(['ai']) },
+  });
+
+  const screen = await renderSettings();
+  await waitFor(() => expectRow(screen, 'processing-summary', '3 bookmarks remaining'));
+  await enableDeveloperMode(screen);
 
   expectRow(screen, 'processing-stage-cloud', /^1 bookmark(?: · saving now)?$/);
   expectRow(screen, 'processing-stage-metadata', '1 bookmark');
@@ -135,12 +162,13 @@ test('failed cloud work is surfaced as attention instead of ordinary progress', 
       '1 bookmark remaining · 1 needs attention',
     ),
   );
+  await enableDeveloperMode(screen);
 
   expectRow(screen, 'processing-stage-cloud', '0 bookmarks');
   expectRow(screen, 'processing-stage-attention', '1 bookmark');
 });
 
-test('processing details keep raw overlapping counters for diagnosis', async () => {
+test('processing details (Developer mode) keep raw overlapping counters for diagnosis', async () => {
   const id = 'overlap';
   await seed({
     rows: [makeStoredBookmark({ id, metadata_status: 'pending' })],
@@ -150,6 +178,7 @@ test('processing details keep raw overlapping counters for diagnosis', async () 
 
   const screen = await renderSettings();
   await waitFor(() => screen.getByTestId('processing-summary'));
+  await enableDeveloperMode(screen);
   await fireEvent.press(screen.getByText('Processing details'));
 
   await waitFor(() =>
@@ -161,7 +190,7 @@ test('processing details keep raw overlapping counters for diagnosis', async () 
   ).toBeTruthy();
 });
 
-test('sync pause is a modifier on the cloud count, not another counter', async () => {
+test('sync pause is a modifier on the summary row, not another counter', async () => {
   await seed({
     queue: [queueEntry('cloud')],
     meta: { 'pref.sync.paused': 'true' },
@@ -169,7 +198,8 @@ test('sync pause is a modifier on the cloud count, not another counter', async (
 
   const screen = await renderSettings();
   await waitFor(() =>
-    expectRow(screen, 'processing-stage-cloud', '1 bookmark · sync paused'),
+    expectRow(screen, 'processing-summary', '1 bookmark remaining'),
   );
-  expectRow(screen, 'processing-summary', '1 bookmark remaining');
+  await enableDeveloperMode(screen);
+  expectRow(screen, 'processing-stage-cloud', '1 bookmark · sync paused');
 });

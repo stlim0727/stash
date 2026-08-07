@@ -48,6 +48,32 @@ export interface ProcessingStats {
       degradedRateLimited: number;
     };
   };
+  /** Raw, non-exclusive pipeline totals for Developer-mode diagnostics — unlike
+   *  `stages`, a bookmark can count in more than one of these at once. Kept on
+   *  this same result (rather than a second, separately-computed object) so the
+   *  Settings summary and the developer diagnostics can never drift out of sync
+   *  with each other. */
+  diagnostics: {
+    sync: { todo: number; done: number; syncedOnce: number; syncingTwice: number };
+    metadata: { todo: number; done: number };
+    ai: {
+      todo: number;
+      done: number;
+      serverQueued: number;
+      activeUnblocked: number;
+      activeBlocked: number;
+      /** Completed enrichments that fell back to the heuristic provider
+       *  because the Gemini provider itself hit RESOURCE_EXHAUSTED
+       *  (`degraded_reason === 'rate_limited'`) — the server auto-requeues
+       *  these into `pending_ai_enrichment` for a real-model retry, so this
+       *  count is "basic suggestions shown, better ones coming shortly", not
+       *  a stuck state. Deliberately excludes `timeout`/`provider_error`/
+       *  `not_configured`: only `rate_limited` gets that automatic requeue
+       *  (`supabase/functions/ai-enrich/index.ts`), so the others carry no
+       *  such promise. */
+      degradedRateLimited: number;
+    };
+  };
 }
 
 interface BuildProcessingStatsInput {
@@ -61,6 +87,10 @@ interface BuildProcessingStatsInput {
   locallyConfirmedServerAiIds: ReadonlySet<string>;
   serverAiQueue: readonly AiServerQueueSnapshot[];
   permanentlyUnsyncableIds?: ReadonlySet<string>;
+  /** The sync pipeline's `diagnostics.sync` figures, precomputed by the caller:
+   *  they depend on `isSyncable`'s backoff-timing and `isBookmarkSyncedOnce`'s
+   *  remote-identity check, both outside domain/'s pure, platform-free scope. */
+  syncDiagnostics?: { todo: number; done: number; syncedOnce: number; syncingTwice: number };
 }
 
 function without(ids: ReadonlySet<string>, excluded: ReadonlySet<string>): Set<string> {
@@ -135,6 +165,22 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
   );
   const aiIds = without(aiCandidateIds, union(attentionIds, cloudIds, metadataIds));
 
+  const serverBacklogIds = union(input.locallyConfirmedServerAiIds, serverAiActiveIds);
+  // Deliberately excludes `aiInFlightIds`: this is a queued-only backlog
+  // figure (not yet dispatched), distinct from `aiCandidateIds` above, which
+  // is used for the user-facing `stages.ai` bucket and does include in-flight
+  // requests.
+  const aiQueuedOnlyIds = union(
+    input.pendingAiTriggerIds,
+    input.aiDispatchIds,
+    input.aiRetryIds,
+    input.locallyConfirmedServerAiIds,
+    serverAiActiveIds,
+  );
+  const degradedRateLimited = input.enrichments.filter(
+    (row) => row.degraded && row.degraded_reason === "rate_limited",
+  ).length;
+
   const operations: Record<QueueOperation, number> = {
     create: 0,
     update: 0,
@@ -186,9 +232,25 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
         serverProcessing: input.serverAiQueue.filter((row) => row.status === "processing")
           .length,
         serverFailed: input.serverAiQueue.filter((row) => row.status === "failed").length,
-        degradedRateLimited: input.enrichments.filter(
-          (row) => row.degraded && row.degraded_reason === "rate_limited",
+        degradedRateLimited,
+      },
+    },
+    diagnostics: {
+      sync: input.syncDiagnostics ?? { todo: 0, done: 0, syncedOnce: 0, syncingTwice: 0 },
+      metadata: {
+        todo: metadataCandidateIds.size,
+        done: activeBookmarks.filter(
+          (bookmark) =>
+            bookmark.metadata_status === "complete" || bookmark.metadata_status === "skipped",
         ).length,
+      },
+      ai: {
+        todo: aiQueuedOnlyIds.size,
+        done: input.enrichments.length,
+        serverQueued: serverBacklogIds.size,
+        activeUnblocked: union(aiQueuedOnlyIds, input.aiInFlightIds).size,
+        activeBlocked: union(serverBacklogIds, input.aiInFlightIds).size,
+        degradedRateLimited,
       },
     },
   };

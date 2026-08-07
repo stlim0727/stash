@@ -454,35 +454,8 @@ interface BookmarksContextValue {
   createCollection: (
     name: string,
   ) => Promise<{ collection?: Collection; error?: string }>;
-  /** Real-time diagnostic statistics for active pipelines (developer mode). */
-  diagnosticStats: {
-    sync: {
-      todo: number;
-      done: number;
-      syncedOnce: number;
-      syncingTwice: number;
-    };
-    metadata: { todo: number; done: number };
-    ai: {
-      todo: number;
-      done: number;
-      serverQueued: number;
-      activeUnblocked: number;
-      activeBlocked: number;
-      /** Completed enrichments that fell back to the heuristic provider
-       *  because the Gemini provider itself hit RESOURCE_EXHAUSTED
-       *  (`degraded_reason === 'rate_limited'`) — the server auto-requeues
-       *  these into `pending_ai_enrichment` for a real-model retry, so this
-       *  count is "basic suggestions shown, better ones coming shortly", not
-       *  a stuck state. Deliberately excludes `timeout`/`provider_error`/
-       *  `not_configured`: only `rate_limited` gets that automatic requeue
-       *  (`supabase/functions/ai-enrich/index.ts`), so the others carry no
-       *  such promise. */
-      degradedRateLimited: number;
-    };
-  };
   /** Mutually-exclusive user-facing stages plus overlapping raw diagnostic
-   *  counters for the Settings background-processing card. */
+   *  counters (developer mode) for the Settings background-processing card. */
   processingStats: ProcessingStats;
   /** The most recent AI-enrichment 429's reason and accurate reset time, for
    *  the Settings backlog row and feedback diagnostics. `null` once the
@@ -7180,9 +7153,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       setAiQuotaExceeded(null);
       // Reset before re-fetching: a stale total from the PREVIOUS account
       // must never leak into this one's display, even for the instant before
-      // the new account's own fetch resolves (`diagnosticStats.ai` treats
-      // `null` as "nothing extra known yet", so this can't undercount either
-      // — same reasoning as the aiQuotaExceeded reset just above).
+      // the new account's own fetch resolves (`processingStats.diagnostics.ai`
+      // treats `null` as "nothing extra known yet", so this can't undercount
+      // either — same reasoning as the aiQuotaExceeded reset just above).
       setAiServerQueueSnapshot(null);
       void fetchAiServerQueueSnapshot();
       void syncNow();
@@ -7340,7 +7313,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     applyTagData,
   ]);
 
-  const diagnosticStats = useMemo(() => {
+  // Everything the Settings screen shows about background work — the
+  // mutually-exclusive user-facing stages AND the raw, overlapping
+  // Developer-mode diagnostics — comes out of this single computation, so the
+  // two views can never drift out of sync with each other (they used to be
+  // two independently-computed objects). The AI trigger/dispatch/retry/
+  // server-queue union math (Codex review, PR #655/#670: dedup by bookmark id
+  // rather than adding set sizes, so a bookmark present in more than one set
+  // isn't double-counted, and an in-flight AUTOMATIC request doesn't vanish
+  // the instant local dispatch freezes) now lives in `buildProcessingStats`
+  // itself, fed by the same trigger/dispatch/retry/server-queue/in-flight
+  // sets passed in below.
+  const processingStats = useMemo(() => {
     const list = bookmarks ?? [];
     const syncTodo = queue.filter((entry) => isSyncable(entry)).length;
     const syncDone = list.filter((b) => isBookmarkSyncedOnce(b)).length;
@@ -7356,138 +7340,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ).length;
     const syncedOnce = Math.max(0, syncDone - syncingTwice);
 
-    const metadataTodo = list.filter(
-      (b) => b.metadata_status === "pending",
-    ).length;
-    const metadataDone = list.filter(
-      (b) =>
-        b.metadata_status === "complete" || b.metadata_status === "skipped",
-    ).length;
-
-    // AI pending = unique union of bookmarks in the trigger set, the dispatch
-    // queue, the retry set, and the confirmed server-queued set (Codex
-    // review, PR #655): a bookmark that exhausted its 6-attempt LOCAL retry
-    // cap drops out of aiRetryIds (by design — see AI_RETRY_MAX_ATTEMPTS),
-    // but its confirmed overflow-queue entry is still alive server-side and
-    // will still deliver, so it must not disappear from this count.
-    //
-    // Deliberately does NOT include `enrichingIds`/`manualEnrichingIds`: this
-    // `todo` count is a queued-only figure (not yet dispatched), now surfaced
-    // in Developer-mode diagnostics as the raw pipeline todo/done pair — the
-    // user-facing Activity row uses `activeUnblocked`/`activeBlocked` below
-    // instead, which does include in-flight requests (Codex review, PR #670,
-    // reverting the same PR's own earlier attempt at folding them into this
-    // count; STASH settings counter cleanup retired the Preferences row that
-    // used to consume this value directly).
-    const uniqueAiTodoIds = new Set<string>([
-      ...pendingAiTrigger.current,
-      ...aiDispatchQueueRef.current.pending,
-      ...aiRetryIds,
-      ...aiServerQueuedIds,
-      ...(aiServerQueueSnapshot ?? [])
-        .filter(
-          (row) => row.status === "pending" || row.status === "processing",
-        )
-        .map((row) => row.bookmark_id),
-    ]);
-    // Union the account-wide server snapshot with this device's confirmed IDs
-    // so an offline or slightly stale fetch never hides work known locally.
-    const serverBacklogIds = new Set<string>([
-      ...aiServerQueuedIds,
-      ...(aiServerQueueSnapshot ?? [])
-        .filter(
-          (row) => row.status === "pending" || row.status === "processing",
-        )
-        .map((row) => row.bookmark_id),
-    ]);
-    const aiTodo = uniqueAiTodoIds.size;
-    const aiDone = enrichments.length;
-    // Only `rate_limited` gets the server's automatic requeue (see the
-    // `diagnosticStats.ai.degradedRateLimited` doc comment above) — a
-    // `timeout`/`provider_error`/`not_configured` degrade is a real failure
-    // with no such promise, so it's excluded here.
-    const aiDegradedRateLimited = enrichments.filter(
-      (enrichment) =>
-        enrichment.degraded && enrichment.degraded_reason === "rate_limited",
-    ).length;
-
-    return {
-      sync: { todo: syncTodo, done: syncDone, syncedOnce, syncingTwice },
-      metadata: { todo: metadataTodo, done: metadataDone },
-      ai: {
-        todo: aiTodo,
-        done: aiDone,
-        // serverQueued is the confirmed-overflow-queue count alone (not the
-        // trigger/dispatch/retry portion of the union above) — the only part
-        // of the backlog still moving when aiSuggestionsMode is "off": the
-        // worker keeps draining these regardless of the local pause, while
-        // the trigger/dispatch/retry portions are genuinely frozen. Settings
-        // uses this to stay honest in that mode instead of hiding real
-        // in-flight server work (Codex review, PR #656). Uses the account-wide
-        // ID union rather than just this device's own markers.
-        serverQueued: serverBacklogIds.size,
-        // The pipeline breakdown's own count (Codex review, PR #670,
-        // replacing an additive `todo + manualInFlight` model that both
-        // double-counted a bookmark present in both sets AND dropped an
-        // already-executing AUTOMATIC request the instant local dispatch got
-        // frozen — two symptoms of the same modeling mistake: treating
-        // "queued" and "executing" as separately-counted buckets instead of
-        // a genuine union over bookmark ids). `enrichingIds` covers BOTH
-        // manual and auto in-flight requests — nothing about pause or
-        // aiSuggestionsMode cancels a request already in progress, so it
-        // always counts. `activeUnblocked` is the normal-case total,
-        // deduplicated by construction (Set union, not addition).
-        activeUnblocked: new Set<string>([...uniqueAiTodoIds, ...enrichingIds])
-          .size,
-        // When local dispatch is genuinely frozen (aiSuggestionsMode ===
-        // "off", or paused with a pending/syncing queue — see the drain
-        // loop's own gate), the not-yet-dispatched backlog
-        // (trigger/dispatch/retry) is excluded, but server-queued work and
-        // anything already executing keep counting: a already-dispatched
-        // request can't be un-started by either freeze.
-        activeBlocked: new Set<string>([...serverBacklogIds, ...enrichingIds])
-          .size,
-        degradedRateLimited: aiDegradedRateLimited,
-      },
-    };
+    return buildProcessingStats({
+      bookmarks: list,
+      queue,
+      enrichments,
+      pendingAiTriggerIds: pendingAiTrigger.current,
+      aiDispatchIds: new Set(aiDispatchQueueRef.current.pending),
+      aiRetryIds,
+      aiInFlightIds: enrichingIds,
+      locallyConfirmedServerAiIds: aiServerQueuedIds,
+      serverAiQueue: aiServerQueueSnapshot ?? [],
+      permanentlyUnsyncableIds: new Set(
+        queue
+          .filter((entry) => isPermanentlyUnsyncableUrl(entry))
+          .map((entry) => entry.local_id),
+      ),
+      syncDiagnostics: { todo: syncTodo, done: syncDone, syncedOnce, syncingTwice },
+    });
   }, [
     bookmarks,
     queue,
     enrichments,
     aiRetryIds,
+    enrichingIds,
     aiServerQueuedIds,
     aiServerQueueSnapshot,
-    enrichingIds,
   ]);
-
-  const processingStats = useMemo(
-    () =>
-      buildProcessingStats({
-        bookmarks: bookmarks ?? [],
-        queue,
-        enrichments,
-        pendingAiTriggerIds: pendingAiTrigger.current,
-        aiDispatchIds: new Set(aiDispatchQueueRef.current.pending),
-        aiRetryIds,
-        aiInFlightIds: enrichingIds,
-        locallyConfirmedServerAiIds: aiServerQueuedIds,
-        serverAiQueue: aiServerQueueSnapshot ?? [],
-        permanentlyUnsyncableIds: new Set(
-          queue
-            .filter((entry) => isPermanentlyUnsyncableUrl(entry))
-            .map((entry) => entry.local_id),
-        ),
-      }),
-    [
-      bookmarks,
-      queue,
-      enrichments,
-      aiRetryIds,
-      enrichingIds,
-      aiServerQueuedIds,
-      aiServerQueueSnapshot,
-    ],
-  );
 
   const value = useMemo<BookmarksContextValue>(
     () => ({
@@ -7511,7 +7389,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       emptyTrash,
       resetLibrary,
       isResettingLibrary,
-      diagnosticStats,
       processingStats,
       aiQuotaExceeded,
       updateBookmarkFields,
@@ -7569,7 +7446,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       emptyTrash,
       resetLibrary,
       isResettingLibrary,
-      diagnosticStats,
       processingStats,
       aiQuotaExceeded,
       updateBookmarkFields,

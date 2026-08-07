@@ -1,4 +1,4 @@
-import { render, waitFor, within } from '@testing-library/react-native';
+import { fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -134,6 +134,12 @@ test('AI quota is a modifier on the exclusive AI count and includes its reset ti
 
   await waitFor(() => expect(storeRef.current?.isLoading).toBe(false));
   await waitFor(() => expect(storeRef.current!.aiQuotaExceeded).not.toBeNull());
+
+  // The AI stage row only renders once Developer mode is on — the everyday
+  // screen shows just the one-line Activity summary (STASH counter refactor).
+  await waitFor(() => screen.getByLabelText('Developer mode'));
+  fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+  await waitFor(() => screen.getByTestId('processing-stage-ai'));
 
   const resetTime = expectedResetTime(storeRef.current!.aiQuotaExceeded!.retryAt);
   expect(

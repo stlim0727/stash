@@ -127,6 +127,12 @@ test('not configured: cloud processing is local-only and no sign-in buttons are 
   mockAuth.isSignedIn = false;
   const screen = await renderSettings();
 
+  // The cloud stage row (with its "local only" detail) only renders once
+  // Developer mode is on — the everyday screen shows just the one-line
+  // Activity summary (STASH counter refactor).
+  await waitFor(() => screen.getByLabelText('Developer mode'));
+  fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+
   await waitFor(() =>
     expect(screen.getByText('0 bookmarks · local only')).toBeTruthy(),
   );
