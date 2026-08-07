@@ -26,8 +26,17 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+const mockReplace = jest.fn();
+const mockBack = jest.fn();
+const mockCanGoBack = jest.fn(() => false);
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+  useRouter: () => ({
+    push: jest.fn(),
+    navigate: jest.fn(),
+    replace: mockReplace,
+    back: mockBack,
+    canGoBack: mockCanGoBack,
+  }),
 }));
 
 // Drive the responsive sheet rule off a controllable viewport.
@@ -62,11 +71,11 @@ test('phone viewport renders full-screen with no backdrop', async () => {
 
 test('close button replaces to root route when router.canGoBack is false', async () => {
   mockWindowSize.width = 1280;
+  mockCanGoBack.mockReturnValue(false);
   const screen = await renderSettings();
   const closeButton = screen.getByLabelText('Close');
   closeButton.props.onPress();
-  // Verify close button triggers replace('/') or back() depending on stack history
-  expect(closeButton).toBeTruthy();
+  expect(mockReplace).toHaveBeenCalledWith('/');
 });
 
 // Settings is a transparentModal with the Inbox mounted behind it. On web the
