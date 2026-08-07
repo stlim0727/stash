@@ -151,24 +151,31 @@ jest.mock("@/api/bookmarks", () => {
         };
       }),
   );
-  const restoreAIEnrichmentMock = jest.fn(
-    async (input: { bookmark_id: string; [key: string]: unknown }) => ({
-      id: `enrichment-${input.bookmark_id}`,
-      bookmark_id: input.bookmark_id,
-      user_id: "real-user",
-      summary: (input.summary as string | null) ?? null,
-      topics: (input.topics as string[]) ?? [],
-      suggested_tags: (input.suggested_tags as unknown[]) ?? [],
-      suggested_collection_id: null,
-      suggested_collection_name: null,
-      model: (input.model as string | null) ?? null,
-      status: input.status,
-      confidence: (input.confidence as number | null) ?? null,
-      degraded: false,
-      degraded_reason: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }),
+  // Fake for the bulk enrichment-restore endpoint (issue #719): mirrors the
+  // real bulkRestoreAIEnrichment's "one row per input, in the same order"
+  // shape. Tests below import a single bookmark at a time, so each chunk is
+  // an array of length 1 — the assertions wrap their expected input in `[...]`.
+  const bulkRestoreAIEnrichmentMock = jest.fn(
+    async (
+      inputs: Array<{ bookmark_id: string; [key: string]: unknown }>,
+    ) =>
+      inputs.map((input) => ({
+        id: `enrichment-${input.bookmark_id}`,
+        bookmark_id: input.bookmark_id,
+        user_id: "real-user",
+        summary: (input.summary as string | null) ?? null,
+        topics: (input.topics as string[]) ?? [],
+        suggested_tags: (input.suggested_tags as unknown[]) ?? [],
+        suggested_collection_id: null,
+        suggested_collection_name: null,
+        model: (input.model as string | null) ?? null,
+        status: input.status,
+        confidence: (input.confidence as number | null) ?? null,
+        degraded: false,
+        degraded_reason: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })),
   );
 
   const createBookmarkMock = jest.fn(
@@ -243,7 +250,7 @@ jest.mock("@/api/bookmarks", () => {
     __updateBookmarkMock: updateBookmarkMock,
     __addTagsMock: addTagsMock,
     __bulkAttachMock: bulkAttachMock,
-    __restoreAIEnrichmentMock: restoreAIEnrichmentMock,
+    __bulkRestoreAIEnrichmentMock: bulkRestoreAIEnrichmentMock,
     createBookmarkApi: () => ({
       listBookmarksUpdatedSince,
       listBookmarkIds,
@@ -259,7 +266,7 @@ jest.mock("@/api/bookmarks", () => {
       createCollection: createCollectionMock,
       bulkAttachTagsAndCollections: bulkAttachMock,
       resetLibrary: resetLibraryMock,
-      restoreAIEnrichment: restoreAIEnrichmentMock,
+      bulkRestoreAIEnrichment: bulkRestoreAIEnrichmentMock,
     }),
   };
 });
@@ -288,7 +295,7 @@ const apiMock = jest.requireMock("@/api/bookmarks") as {
   __updateBookmarkMock: jest.Mock;
   __addTagsMock: jest.Mock;
   __bulkAttachMock: jest.Mock;
-  __restoreAIEnrichmentMock: jest.Mock;
+  __bulkRestoreAIEnrichmentMock: jest.Mock;
 };
 const authMock = jest.requireMock("@/supabase/auth-provider") as {
   __setAuth: (next: Record<string, unknown>) => void;
@@ -330,7 +337,7 @@ beforeEach(() => {
   apiMock.__updateBookmarkMock.mockClear();
   apiMock.__addTagsMock.mockClear();
   apiMock.__bulkAttachMock.mockClear();
-  apiMock.__restoreAIEnrichmentMock.mockClear();
+  apiMock.__bulkRestoreAIEnrichmentMock.mockClear();
   enrichmentMock.enrichBookmark.mockClear();
   authMock.__setAuth({
     status: "authenticated",
@@ -420,14 +427,14 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
 
     await waitFor(
       () =>
-        expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledWith(
+        expect(apiMock.__bulkRestoreAIEnrichmentMock).toHaveBeenCalledWith([
           expect.objectContaining({
             bookmark_id: expect.any(String),
             summary: "A concise summary.",
             status: "complete",
             model: "gpt-5",
           }),
-        ),
+        ]),
       { timeout: 5_000 },
     );
     const bookmarkId = result.current.inbox[0]?.id;
@@ -440,7 +447,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
   });
 
   test("keeps a failed enrichment restore intent and retries it on manual sync (#671)", async () => {
-    apiMock.__restoreAIEnrichmentMock.mockRejectedValueOnce(
+    apiMock.__bulkRestoreAIEnrichmentMock.mockRejectedValueOnce(
       new Error("temporary enrichment restore failure"),
     );
     const { result } = await renderReadyStore();
@@ -488,25 +495,27 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() =>
       expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
     );
-    expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledTimes(2);
+    expect(apiMock.__bulkRestoreAIEnrichmentMock).toHaveBeenCalledTimes(2);
   });
 
   test("does not double-upload during an in-flight enrichment restore sync run (#671)", async () => {
     const gate = deferred<{ id: string }>();
-    apiMock.__restoreAIEnrichmentMock.mockImplementationOnce(async (input: any) => {
-      await gate.promise;
-      return {
-        id: "enrichment-id",
-        bookmark_id: input.bookmark_id,
-        user_id: "real-user",
-        summary: input.summary,
-        topics: [],
-        suggested_tags: [],
-        status: "complete",
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-    });
+    apiMock.__bulkRestoreAIEnrichmentMock.mockImplementationOnce(
+      async (inputs: any[]) => {
+        await gate.promise;
+        return inputs.map((input) => ({
+          id: "enrichment-id",
+          bookmark_id: input.bookmark_id,
+          user_id: "real-user",
+          summary: input.summary,
+          topics: [],
+          suggested_tags: [],
+          status: "complete",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }));
+      },
+    );
 
     const { result } = await renderReadyStore();
 
@@ -532,7 +541,9 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     });
 
     // Wait until the first sync attempts to upload the enrichment and is held open by our gate
-    await waitFor(() => expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(apiMock.__bulkRestoreAIEnrichmentMock).toHaveBeenCalledTimes(1),
+    );
 
     // Fire a second syncNow while the first one is pending
     await act(async () => {
@@ -546,7 +557,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() =>
       expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
     );
-    expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledTimes(1);
+    expect(apiMock.__bulkRestoreAIEnrichmentMock).toHaveBeenCalledTimes(1);
   });
 
   test("a Stash JSON backup restore with a metadata snapshot skips the client metadata fetch and marks enrichment_policy skip (#671)", async () => {
@@ -957,7 +968,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       userId: "anon-user",
     });
 
-    apiMock.__restoreAIEnrichmentMock.mockRejectedValueOnce(
+    apiMock.__bulkRestoreAIEnrichmentMock.mockRejectedValueOnce(
       new Error("temporary enrichment restore failure"),
     );
 
@@ -1016,7 +1027,9 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     expect(pending).toHaveLength(1);
     expect(pending[0].bookmark_id).toBe(newId);
 
-    apiMock.__restoreAIEnrichmentMock.mockResolvedValueOnce({ id: "enrichment-id" });
+    apiMock.__bulkRestoreAIEnrichmentMock.mockResolvedValueOnce([
+      { id: "enrichment-id", bookmark_id: newId },
+    ]);
     await act(async () => {
       await result.current.syncNow();
     });
@@ -1024,12 +1037,12 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() =>
       expect(fakeRepo.__meta("pending_enrichment_restore")).toBe("[]"),
     );
-    expect(apiMock.__restoreAIEnrichmentMock).toHaveBeenCalledWith(
+    expect(apiMock.__bulkRestoreAIEnrichmentMock).toHaveBeenCalledWith([
       expect.objectContaining({
         bookmark_id: newId,
         summary: "carryover summary",
       }),
-    );
+    ]);
   });
 
   test("drops pending enrichment restores on real-to-real account switch (#671)", async () => {
@@ -1056,7 +1069,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
       ]);
     });
 
-    apiMock.__restoreAIEnrichmentMock.mockRejectedValueOnce(new Error("fail"));
+    apiMock.__bulkRestoreAIEnrichmentMock.mockRejectedValueOnce(new Error("fail"));
 
     await waitFor(() => expect(result.current.queue).toHaveLength(0));
     await waitFor(() => {

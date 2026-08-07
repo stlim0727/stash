@@ -4569,6 +4569,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // collection outbox, there's no remote lookup/create step: restoreAIEnrichment
   // is a single atomic ON-CONFLICT-ignore write, so either outcome (created or
   // "already had one") satisfies this entry's job and it's dropped either way.
+  //
+  // Batched in chunks of BULK_CREATE_SYNC_CHUNK_SIZE via bulkRestoreAIEnrichment
+  // (issue #719 / Sentry STASH-5K) instead of one restoreAIEnrichment HTTP call
+  // + one repository.setMeta SQLite write per bookmark — a large backup import
+  // (700+ enrichment snapshots) used to trickle in one at a time. Same
+  // per-chunk-failure precedent as syncPendingImportCollections's #713 fix:
+  // one SQLite persist for the whole drive, not one per item.
   const syncPendingEnrichmentRestores =
     useCallback(async (): Promise<boolean> => {
       if (!auth.session || syncPausedRef.current) {
@@ -4583,50 +4590,65 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
       const api = createSyncApi(auth.session);
       let mutationsPushed = false;
-      for (const item of eligible) {
+
+      for (
+        let i = 0;
+        i < eligible.length;
+        i += BULK_CREATE_SYNC_CHUNK_SIZE
+      ) {
+        const chunk = eligible.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
+        const chunkIds = new Set(chunk.map((item) => item.bookmark_id));
         try {
-          const created = await api.restoreAIEnrichment({
-            bookmark_id: item.bookmark_id,
-            summary: item.enrichment.summary,
-            topics: item.enrichment.topics,
-            suggested_tags: item.enrichment.suggested_tags,
-            status: item.enrichment.status,
-            model: item.enrichment.model,
-            confidence: item.enrichment.confidence,
-          });
+          const created = await api.bulkRestoreAIEnrichment(
+            chunk.map((item) => ({
+              bookmark_id: item.bookmark_id,
+              summary: item.enrichment.summary,
+              topics: item.enrichment.topics,
+              suggested_tags: item.enrichment.suggested_tags,
+              status: item.enrichment.status,
+              model: item.enrichment.model,
+              confidence: item.enrichment.confidence,
+            })),
+          );
           mutationsPushed = true;
-          if (created) {
-            // Newest enrichment for this bookmark wins (mirrors requestAiEnrichment's
-            // settle handler) — safe here too since a non-null result only ever
-            // means this call actually created the row (nothing else existed yet).
+
+          if (created.length > 0) {
+            // Newest enrichment for each bookmark wins (mirrors
+            // requestAiEnrichment's settle handler) — safe here too since a
+            // row only ever appears in the response when this call actually
+            // created it (nothing else existed yet).
+            const createdByBookmark = new Map(
+              created.map((row) => [row.bookmark_id, row] as const),
+            );
             setEnrichments((current) => [
-              created,
+              ...created,
               ...current.filter(
-                (row) => row.bookmark_id !== created.bookmark_id,
+                (row) => !createdByBookmark.has(row.bookmark_id),
               ),
             ]);
             try {
               await ensureRepositoryReady();
-              await repository.upsertEnrichments([created]);
+              await repository.upsertEnrichments(created);
             } catch (error) {
               logStorageError("enrichment restore persist", error);
             }
           }
 
+          // Every item in the chunk is done either way (created, or "already
+          // had one" and silently dropped from the response) — same as the
+          // single-item path.
           const remaining = pendingEnrichmentRestoresRef.current.filter(
-            (candidate) => candidate.bookmark_id !== item.bookmark_id,
-          );
-          await ensureRepositoryReady();
-          await repository.setMeta(
-            PENDING_ENRICHMENT_RESTORE_KEY,
-            JSON.stringify(remaining),
+            (candidate) => !chunkIds.has(candidate.bookmark_id),
           );
           pendingEnrichmentRestoresRef.current = remaining;
           setPendingEnrichmentRestores(remaining);
         } catch (error) {
+          // Per-chunk failure: mark every item in this chunk failed rather
+          // than try to parse partial success out of a thrown bulk insert —
+          // matches syncPendingImportCollections's #713 precedent.
           const failed = pendingEnrichmentRestoresRef.current.map(
             (candidate) =>
-              candidate.bookmark_id === item.bookmark_id
+              chunkIds.has(candidate.bookmark_id)
                 ? {
                     ...candidate,
                     status: "failed" as const,
@@ -4635,18 +4657,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   }
                 : candidate,
           );
-          await ensureRepositoryReady();
-          await repository.setMeta(
-            PENDING_ENRICHMENT_RESTORE_KEY,
-            JSON.stringify(failed),
-          );
           pendingEnrichmentRestoresRef.current = failed;
           setPendingEnrichmentRestores(failed);
           recordLog(
             "warn",
-            `enrichment restore sync failed (${item.bookmark_id}): ${String(error)}`,
+            `enrichment restore sync failed (${chunk.length} bookmarks): ${String(error)}`,
           );
         }
+      }
+
+      // One persist for the whole batch instead of one per item (see above).
+      try {
+        await ensureRepositoryReady();
+        await repository.setMeta(
+          PENDING_ENRICHMENT_RESTORE_KEY,
+          JSON.stringify(pendingEnrichmentRestoresRef.current),
+        );
+      } catch (error) {
+        logStorageError("enrichment restore ops", error);
       }
       return mutationsPushed;
     }, [auth.session, hasSyncedOnce]);

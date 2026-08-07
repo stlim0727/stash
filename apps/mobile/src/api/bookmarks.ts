@@ -920,6 +920,52 @@ export class BookmarkApi {
   }
 
   /**
+   * Batch equivalent of `restoreAIEnrichment` (issue #719 / Sentry STASH-5K):
+   * restores many bookmarks' enrichment snapshots in one INSERT instead of one
+   * HTTP round trip per bookmark. Unlike the tag/collection bulk-attach case
+   * (#713), there's no cross-table linking here — `ai_enrichments` is a single
+   * table with a unique `bookmark_id` — so a plain array-body POST against the
+   * same `on_conflict=bookmark_id` + `resolution=ignore-duplicates` idiom as
+   * the single-item method above is enough; no new RPC or migration needed.
+   *
+   * `return=representation` on a bulk ignore-duplicates insert comes back with
+   * only the rows PostgREST actually inserted — a bookmark that already had an
+   * enrichment is silently dropped from the response, same "already had one,
+   * skip" semantics as the single-item method, just batched: a `bookmark_id`
+   * missing from the result is still a success (nothing to restore), not a
+   * failure. Chunking (`BULK_CREATE_SYNC_CHUNK_SIZE`) is the caller's
+   * responsibility, same as `createBookmarks`/`bulkAttachTagsAndCollections`.
+   */
+  async bulkRestoreAIEnrichment(inputs: UpdateAIEnrichmentInput[]): Promise<AIEnrichment[]> {
+    if (inputs.length === 0) {
+      return [];
+    }
+    const timestamp = nowIso();
+    const rows = await this.client.request<RemoteAIEnrichment[]>(
+      '/rest/v1/ai_enrichments?on_conflict=bookmark_id',
+      {
+        method: 'POST',
+        accessToken: this.session.access_token,
+        headers: { Prefer: 'resolution=ignore-duplicates, return=representation' },
+        body: inputs.map((input) => ({
+          user_id: this.session.user.id,
+          bookmark_id: input.bookmark_id,
+          summary: input.summary ?? null,
+          topics: input.topics ?? [],
+          suggested_tags: input.suggested_tags ?? [],
+          suggested_collection_id: input.suggested_collection_id ?? null,
+          status: input.status,
+          model: input.model ?? null,
+          confidence: input.confidence ?? null,
+          created_at: timestamp,
+          updated_at: timestamp,
+        })),
+      },
+    );
+    return rows.map(enrichmentFromRemote);
+  }
+
+  /**
    * Ask the backend `ai-enrich` edge function to (re)generate suggestions for a
    * bookmark. The function writes the `ai_enrichments` row and returns it, so
    * the caller can surface results without waiting for the next pull sync.
