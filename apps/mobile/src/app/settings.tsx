@@ -178,7 +178,6 @@ export default function SettingsScreen() {
     isResettingLibrary,
     aiSuggestionsMode,
     setAiSuggestionsMode,
-    diagnosticStats,
     processingStats,
     aiQuotaExceeded,
   } = useBookmarks();
@@ -881,9 +880,12 @@ export default function SettingsScreen() {
         </Card>
       </View>
 
-      {/* Activity — one deduplicated user total plus four mutually-exclusive
-          bookmark stages. Raw overlapping pipeline counters stay available
-          under Processing details for diagnosis. */}
+      {/* Activity — a single deduplicated summary line. The four raw
+          pipeline stages and their diagnostic breakdown moved to Developer
+          mode (below the Advanced toggle) so the everyday screen stays to
+          one row; the sync controls that used to live on the cloud-stage row
+          live here instead since they act on sync regardless of which stage
+          is showing. */}
       <Group styles={styles} title={t("settings.section.activity")}>
         <Row
           styles={styles}
@@ -891,15 +893,8 @@ export default function SettingsScreen() {
           icon="pulse-outline"
           label={t("settings.processing.label")}
           value={processingSummary}
+          last
           testID="processing-summary"
-        />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon={syncPaused ? "pause-circle-outline" : "cloud-upload-outline"}
-          label={t("settings.processing.cloud.label")}
-          value={cloudStageValue}
-          testID="processing-stage-cloud"
           right={
             <View style={styles.syncActions}>
               {isSyncing ? (
@@ -948,127 +943,6 @@ export default function SettingsScreen() {
             </View>
           }
         />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="document-text-outline"
-          label={t("settings.processing.metadata.label")}
-          value={t("settings.processing.count", {
-            count: processingStats.stages.metadata,
-          })}
-          testID="processing-stage-metadata"
-        />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon={aiQuotaResetTime ? "hourglass-outline" : "sparkles-outline"}
-          label={t("settings.processing.ai.label")}
-          value={aiStageValue}
-          testID="processing-stage-ai"
-        />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon={
-            processingStats.stages.attention > 0
-              ? "warning-outline"
-              : "checkmark-circle-outline"
-          }
-          label={t("settings.processing.attention.label")}
-          value={t("settings.processing.count", {
-            count: processingStats.stages.attention,
-          })}
-          accent={processingStats.stages.attention > 0}
-          testID="processing-stage-attention"
-        />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="analytics-outline"
-          label={t("settings.processing.details.label")}
-          value={t(
-            processingDetailsOpen
-              ? "settings.processing.details.hide"
-              : "settings.processing.details.show",
-          )}
-          last={!processingDetailsOpen}
-          onPress={() => setProcessingDetailsOpen((open) => !open)}
-          right={
-            <Ionicons
-              name={processingDetailsOpen ? "chevron-up" : "chevron-down"}
-              size={18}
-              color={palette.textSecondary}
-            />
-          }
-        />
-        {processingDetailsOpen ? (
-          <>
-            <InfoRow
-              styles={styles}
-              label={t("settings.processing.details.syncStates.label")}
-              value={t("settings.processing.details.syncStates.value", {
-                pending: processingStats.details.sync.pending,
-                syncing: processingStats.details.sync.syncing,
-                failed: processingStats.details.sync.failed,
-              })}
-            />
-            <InfoRow
-              styles={styles}
-              label={t("settings.processing.details.syncOps.label")}
-              value={t("settings.processing.details.syncOps.value", {
-                create: processingStats.details.sync.operations.create,
-                update: processingStats.details.sync.operations.update,
-                delete: processingStats.details.sync.operations.delete,
-              })}
-            />
-            <InfoRow
-              styles={styles}
-              label={t("settings.processing.details.syncHealth.label")}
-              value={t("settings.processing.details.syncHealth.value", {
-                retries: processingStats.details.sync.maxRetries,
-                oldest: processingStats.details.sync.oldestCreatedAt
-                  ? formatDate(processingStats.details.sync.oldestCreatedAt)
-                  : t("settings.processing.details.none"),
-              })}
-            />
-            <InfoRow
-              styles={styles}
-              label={t("settings.processing.details.metadata.label")}
-              value={t("settings.processing.details.metadata.value", {
-                pending: processingStats.details.metadata.pending,
-                failed: processingStats.details.metadata.failed,
-                skipped: processingStats.details.metadata.skipped,
-              })}
-            />
-            <InfoRow
-              styles={styles}
-              label={t("settings.processing.details.aiLocal.label")}
-              value={t("settings.processing.details.aiLocal.value", {
-                trigger: processingStats.details.ai.trigger,
-                dispatch: processingStats.details.ai.dispatch,
-                retry: processingStats.details.ai.retry,
-                active: processingStats.details.ai.inFlight,
-              })}
-            />
-            <InfoRow
-              styles={styles}
-              label={t("settings.processing.details.aiServer.label")}
-              value={t("settings.processing.details.aiServer.value", {
-                pending: processingStats.details.ai.serverPending,
-                processing: processingStats.details.ai.serverProcessing,
-                failed: processingStats.details.ai.serverFailed,
-              })}
-            />
-            <InfoRow
-              styles={styles}
-              label={t("settings.processing.details.degraded.label")}
-              value={t("settings.processing.details.degraded.value", {
-                count: processingStats.details.ai.degradedRateLimited,
-              })}
-              last
-            />
-          </>
-        ) : null}
       </Group>
 
       {/* Library — navigation into the user's own content. Reviewing AI
@@ -1315,6 +1189,7 @@ export default function SettingsScreen() {
           last
           right={
             <Switch
+              accessibilityLabel={t("settings.developer.label")}
               value={developerMode}
               onValueChange={setDeveloperMode}
               trackColor={{ true: palette.accent, false: palette.border }}
@@ -1326,6 +1201,142 @@ export default function SettingsScreen() {
 
       {developerMode ? (
         <>
+          {/* The four raw pipeline stages, relocated from the Activity
+              section (STASH counter refactor) — everyday Settings shows only
+              the one-line summary there; this expanded breakdown is for
+              debugging. */}
+          <Group styles={styles} title={t("settings.processing.label")}>
+            <Row
+              styles={styles}
+              palette={palette}
+              icon={syncPaused ? "pause-circle-outline" : "cloud-upload-outline"}
+              label={t("settings.processing.cloud.label")}
+              value={cloudStageValue}
+              testID="processing-stage-cloud"
+            />
+            <Row
+              styles={styles}
+              palette={palette}
+              icon="document-text-outline"
+              label={t("settings.processing.metadata.label")}
+              value={t("settings.processing.count", {
+                count: processingStats.stages.metadata,
+              })}
+              testID="processing-stage-metadata"
+            />
+            <Row
+              styles={styles}
+              palette={palette}
+              icon={aiQuotaResetTime ? "hourglass-outline" : "sparkles-outline"}
+              label={t("settings.processing.ai.label")}
+              value={aiStageValue}
+              testID="processing-stage-ai"
+            />
+            <Row
+              styles={styles}
+              palette={palette}
+              icon={
+                processingStats.stages.attention > 0
+                  ? "warning-outline"
+                  : "checkmark-circle-outline"
+              }
+              label={t("settings.processing.attention.label")}
+              value={t("settings.processing.count", {
+                count: processingStats.stages.attention,
+              })}
+              accent={processingStats.stages.attention > 0}
+              testID="processing-stage-attention"
+            />
+            <Row
+              styles={styles}
+              palette={palette}
+              icon="analytics-outline"
+              label={t("settings.processing.details.label")}
+              value={t(
+                processingDetailsOpen
+                  ? "settings.processing.details.hide"
+                  : "settings.processing.details.show",
+              )}
+              last={!processingDetailsOpen}
+              onPress={() => setProcessingDetailsOpen((open) => !open)}
+              right={
+                <Ionicons
+                  name={processingDetailsOpen ? "chevron-up" : "chevron-down"}
+                  size={18}
+                  color={palette.textSecondary}
+                />
+              }
+            />
+            {processingDetailsOpen ? (
+              <>
+                <InfoRow
+                  styles={styles}
+                  label={t("settings.processing.details.syncStates.label")}
+                  value={t("settings.processing.details.syncStates.value", {
+                    pending: processingStats.details.sync.pending,
+                    syncing: processingStats.details.sync.syncing,
+                    failed: processingStats.details.sync.failed,
+                  })}
+                />
+                <InfoRow
+                  styles={styles}
+                  label={t("settings.processing.details.syncOps.label")}
+                  value={t("settings.processing.details.syncOps.value", {
+                    create: processingStats.details.sync.operations.create,
+                    update: processingStats.details.sync.operations.update,
+                    delete: processingStats.details.sync.operations.delete,
+                  })}
+                />
+                <InfoRow
+                  styles={styles}
+                  label={t("settings.processing.details.syncHealth.label")}
+                  value={t("settings.processing.details.syncHealth.value", {
+                    retries: processingStats.details.sync.maxRetries,
+                    oldest: processingStats.details.sync.oldestCreatedAt
+                      ? formatDate(processingStats.details.sync.oldestCreatedAt)
+                      : t("settings.processing.details.none"),
+                  })}
+                />
+                <InfoRow
+                  styles={styles}
+                  label={t("settings.processing.details.metadata.label")}
+                  value={t("settings.processing.details.metadata.value", {
+                    pending: processingStats.details.metadata.pending,
+                    failed: processingStats.details.metadata.failed,
+                    skipped: processingStats.details.metadata.skipped,
+                  })}
+                />
+                <InfoRow
+                  styles={styles}
+                  label={t("settings.processing.details.aiLocal.label")}
+                  value={t("settings.processing.details.aiLocal.value", {
+                    trigger: processingStats.details.ai.trigger,
+                    dispatch: processingStats.details.ai.dispatch,
+                    retry: processingStats.details.ai.retry,
+                    active: processingStats.details.ai.inFlight,
+                  })}
+                />
+                <InfoRow
+                  styles={styles}
+                  label={t("settings.processing.details.aiServer.label")}
+                  value={t("settings.processing.details.aiServer.value", {
+                    pending: processingStats.details.ai.serverPending,
+                    processing: processingStats.details.ai.serverProcessing,
+                    failed: processingStats.details.ai.serverFailed,
+                  })}
+                />
+                <InfoRow
+                  styles={styles}
+                  label={t("settings.processing.details.degraded.label")}
+                  value={t("settings.processing.details.degraded.value", {
+                    count: processingStats.details.ai.degradedRateLimited,
+                  })}
+                  last
+                />
+              </>
+            ) : null}
+          </Group>
+
           <Group
             styles={styles}
             title={t("settings.diagnostics.title")}
@@ -1349,26 +1360,26 @@ export default function SettingsScreen() {
               styles={styles}
               label={t("settings.diagnostics.pipelineSync.label")}
               value={t("settings.diagnostics.pipelineSync.value", {
-                todo: diagnosticStats.sync.todo,
-                done: diagnosticStats.sync.done,
-                once: diagnosticStats.sync.syncedOnce,
-                twice: diagnosticStats.sync.syncingTwice,
+                todo: processingStats.diagnostics.sync.todo,
+                done: processingStats.diagnostics.sync.done,
+                once: processingStats.diagnostics.sync.syncedOnce,
+                twice: processingStats.diagnostics.sync.syncingTwice,
               })}
             />
             <InfoRow
               styles={styles}
               label={t("settings.diagnostics.pipelineMetadata.label")}
               value={t("settings.diagnostics.pipelineMetadata.value", {
-                todo: diagnosticStats.metadata.todo,
-                done: diagnosticStats.metadata.done,
+                todo: processingStats.diagnostics.metadata.todo,
+                done: processingStats.diagnostics.metadata.done,
               })}
             />
             <InfoRow
               styles={styles}
               label={t("settings.diagnostics.pipelineAi.label")}
               value={t("settings.diagnostics.pipelineAi.value", {
-                todo: diagnosticStats.ai.todo,
-                done: diagnosticStats.ai.done,
+                todo: processingStats.diagnostics.ai.todo,
+                done: processingStats.diagnostics.ai.done,
               })}
             />
             <InfoRow

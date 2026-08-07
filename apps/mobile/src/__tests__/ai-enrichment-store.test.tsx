@@ -171,7 +171,7 @@ jest.mock('@/api/bookmarks', () => {
   // store/bookmarks.tsx). Defaults to [] — the neutral "nothing extra beyond
   // what this device already knows about" value — so every pre-existing test
   // that never seeds this keeps seeing exactly its old local-only
-  // diagnosticStats.ai numbers.
+  // processingStats.diagnostics.ai numbers.
   const fetchAiQueueSnapshot = jest.fn(async () => []);
   // Spied on its `session` arg (rather than ignoring it) so a test can assert
   // WHICH session object backed a given call — e.g. that the 429-overflow
@@ -1098,13 +1098,13 @@ test('the server-queued flag survives exhausting the local retry cap, unlike isA
   expect(store.current!.hadPriorEnrichmentAttempt(SYNCED_ID)).toBe(false);
   // ...but the server-queued marker is untouched by that cap.
   expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true);
-  // Codex review (PR #655): diagnosticStats.ai.todo (Settings' backlog count)
+  // Codex review (PR #655): processingStats.diagnostics.ai.todo (Settings' backlog count)
   // must still count this bookmark — it's still legitimately waiting on the
   // server worker even though it dropped out of the local retry set.
-  expect(store.current!.diagnosticStats.ai.todo).toBeGreaterThanOrEqual(1);
+  expect(store.current!.processingStats.diagnostics.ai.todo).toBeGreaterThanOrEqual(1);
 });
 
-test('diagnosticStats.ai.todo surfaces a real account-wide server backlog this device never locally triggered', async () => {
+test('processingStats.diagnostics.ai.todo surfaces a real account-wide server backlog this device never locally triggered', async () => {
   // The core bug this regression guards: before fetchAiServerQueueSnapshot,
   // `ai.todo` was a pure union of local-event sets (pendingAiTrigger, the
   // dispatch queue, aiRetryIds, aiServerQueuedIds) — every one of which is
@@ -1126,13 +1126,13 @@ test('diagnosticStats.ai.todo surfaces a real account-wide server backlog this d
   );
   const store = await renderReady();
 
-  await waitFor(() => expect(store.current!.diagnosticStats.ai.todo).toBe(1101));
-  expect(store.current!.diagnosticStats.ai.serverQueued).toBe(1101);
-  expect(store.current!.diagnosticStats.ai.activeUnblocked).toBe(1101);
-  expect(store.current!.diagnosticStats.ai.activeBlocked).toBe(1101);
+  await waitFor(() => expect(store.current!.processingStats.diagnostics.ai.todo).toBe(1101));
+  expect(store.current!.processingStats.diagnostics.ai.serverQueued).toBe(1101);
+  expect(store.current!.processingStats.diagnostics.ai.activeUnblocked).toBe(1101);
+  expect(store.current!.processingStats.diagnostics.ai.activeBlocked).toBe(1101);
 });
 
-test('diagnosticStats.ai.todo does not double-count a bookmark this device already knows is server-queued', async () => {
+test('processingStats.diagnostics.ai.todo does not double-count a bookmark this device already knows is server-queued', async () => {
   // The other half of the fix: a bookmark THIS device 429'd already lands in
   // both aiRetryIds (the generic armAiRetry marker, armed unconditionally on
   // every failure) AND aiServerQueuedIds (the confirmed-enqueue marker) — so
@@ -1146,7 +1146,7 @@ test('diagnosticStats.ai.todo does not double-count a bookmark this device alrea
     await store.current!.requestAiEnrichment(SYNCED_ID);
   });
   await waitFor(() => expect(store.current!.isAiSuggestionServerQueued(SYNCED_ID)).toBe(true));
-  expect(store.current!.diagnosticStats.ai.todo).toBe(1);
+  expect(store.current!.processingStats.diagnostics.ai.todo).toBe(1);
 
   // The server confirms exactly this one row is outstanding — nothing extra.
   apiMock.__spies.fetchAiQueueSnapshot.mockResolvedValue([
@@ -1167,11 +1167,11 @@ test('diagnosticStats.ai.todo does not double-count a bookmark this device alrea
   await waitFor(() =>
     expect(apiMock.__spies.fetchAiQueueSnapshot).toHaveBeenCalled(),
   );
-  expect(store.current!.diagnosticStats.ai.todo).toBe(1);
-  expect(store.current!.diagnosticStats.ai.serverQueued).toBe(1);
+  expect(store.current!.processingStats.diagnostics.ai.todo).toBe(1);
+  expect(store.current!.processingStats.diagnostics.ai.serverQueued).toBe(1);
 });
 
-test('diagnosticStats.ai.degradedRateLimited counts only rate_limited-degraded enrichments, not timeout/provider_error/not_configured or non-degraded rows', async () => {
+test('processingStats.diagnostics.ai.degradedRateLimited counts only rate_limited-degraded enrichments, not timeout/provider_error/not_configured or non-degraded rows', async () => {
   // The Gemini provider (not the user's own quota gate) hit RESOURCE_EXHAUSTED
   // for these — the server silently served heuristic suggestions and
   // requeued them into `pending_ai_enrichment` for a real-model retry (only
@@ -1231,7 +1231,7 @@ test('diagnosticStats.ai.degradedRateLimited counts only rate_limited-degraded e
   const store = renderStore();
   await waitFor(() => expect(store.current?.isLoading).toBe(false));
 
-  expect(store.current!.diagnosticStats.ai.degradedRateLimited).toBe(2);
+  expect(store.current!.processingStats.diagnostics.ai.degradedRateLimited).toBe(2);
 });
 
 test('a 429 whose enqueue call REJECTS does not mark the bookmark as server-queued', async () => {
@@ -4070,7 +4070,7 @@ test('a bookmark still staged in the auto-dispatch burst queue keeps its place t
   // queue isn't re-keyed (the #692 bug), the stale old ANON_ID lingers in
   // aiDispatchQueueRef.pending forever — a ghost entry alongside the
   // (correctly re-keyed) pendingAiTrigger's new id — inflating
-  // diagnosticStats.ai.todo by one phantom bookmark that no longer exists.
+  // processingStats.diagnostics.ai.todo by one phantom bookmark that no longer exists.
   const ANON_SYNCED_ID = '4d4d4d4d-0000-4000-8000-000000000004';
   const ANON_TARGET_ID = '5e5e5e5e-0000-4000-8000-000000000005';
   apiMock.__spies.listBookmarkIds.mockResolvedValue([ANON_SYNCED_ID, ANON_TARGET_ID]);
@@ -4105,7 +4105,7 @@ test('a bookmark still staged in the auto-dispatch burst queue keeps its place t
   // rehoming — otherwise the assertions below would prove nothing.
   await new Promise((resolve) => setTimeout(resolve, 500));
   expect(apiMock.__spies.requestEnrichment).toHaveBeenCalledTimes(1);
-  expect(result.current.diagnosticStats.ai.todo).toBe(2);
+  expect(result.current.processingStats.diagnostics.ai.todo).toBe(2);
 
   // Sign in to a real account: both anon bookmarks carry over, re-homed onto
   // fresh ids.
@@ -4131,7 +4131,7 @@ test('a bookmark still staged in the auto-dispatch burst queue keeps its place t
   // The count must stay at 2 — the same two bookmarks, just re-keyed. A
   // stale old ANON_TARGET_ID left behind in aiDispatchQueueRef.pending would
   // inflate this to 3.
-  expect(result.current.diagnosticStats.ai.todo).toBe(2);
+  expect(result.current.processingStats.diagnostics.ai.todo).toBe(2);
 });
 
 test('a relaunch inside the backoff window does not bypass backoff via the deferred first-trigger effect', async () => {

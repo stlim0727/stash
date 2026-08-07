@@ -59,6 +59,14 @@ beforeEach(() => {
   fakeRepo.__reset([]);
 });
 
+// The AI stage row only renders once Developer mode is on — the everyday
+// screen shows just the one-line Activity summary (STASH counter refactor).
+async function enableDeveloperMode(screen: Awaited<ReturnType<typeof renderSettings>>) {
+  await waitFor(() => screen.getByLabelText('Developer mode'));
+  fireEvent(screen.getByLabelText('Developer mode'), 'valueChange', true);
+  await waitFor(() => screen.getByTestId('processing-stage-ai'));
+}
+
 test('the AI suggestions preference defaults to confirm mode', async () => {
   const screen = await renderSettings();
   await waitFor(() =>
@@ -87,6 +95,7 @@ test('picking Auto-apply updates the preference and persists it', async () => {
 
 test('the processing AI row is stable at zero with no backlog', async () => {
   const screen = await renderSettings();
+  await enableDeveloperMode(screen);
   await waitFor(() =>
     expect(
       within(screen.getByTestId('processing-stage-ai')).getByText('0 bookmarks'),
@@ -101,6 +110,7 @@ test('the processing AI row surfaces the full local backlog', async () => {
   );
 
   const screen = await renderSettings();
+  await enableDeveloperMode(screen);
   await waitFor(() =>
     expect(
       within(screen.getByTestId('processing-stage-ai')).getByText('3 bookmarks'),
@@ -116,6 +126,7 @@ test('AI off is shown as a modifier without hiding frozen local work', async () 
   );
 
   const screen = await renderSettings();
+  await enableDeveloperMode(screen);
   await waitFor(() =>
     expect(
       within(screen.getByTestId('processing-stage-ai')).getByText(
@@ -133,6 +144,7 @@ test('AI off also keeps already server-queued work visible', async () => {
   );
 
   const screen = await renderSettings();
+  await enableDeveloperMode(screen);
   await waitFor(() =>
     expect(
       within(screen.getByTestId('processing-stage-ai')).getByText(
