@@ -71,9 +71,9 @@ const baseInput = (overrides: Partial<ExportInput> = {}): ExportInput => ({
 });
 
 test('exportFilename uses a date-stamped, format-specific name', () => {
-  assert.equal(exportFilename('html', '2026-06-18T12:00:00.000Z'), 'stash-bookmarks-2026-06-18.html');
-  assert.equal(exportFilename('json', '2026-06-18T12:00:00.000Z'), 'stash-backup-2026-06-18.json');
-  assert.equal(exportFilename('csv', '2026-06-18T12:00:00.000Z'), 'stash-bookmarks-2026-06-18.csv');
+  assert.equal(exportFilename('html', '2026-06-18T12:00:00.000Z'), 'keepory-bookmarks-2026-06-18.html');
+  assert.equal(exportFilename('json', '2026-06-18T12:00:00.000Z'), 'keepory-backup-2026-06-18.json');
+  assert.equal(exportFilename('csv', '2026-06-18T12:00:00.000Z'), 'keepory-bookmarks-2026-06-18.csv');
 });
 
 test('buildJsonBackup captures tags, enrichment, and a collection name', () => {
@@ -123,7 +123,7 @@ test('toJsonBackup emits parseable, trailing-newline JSON', () => {
   const json = toJsonBackup(baseInput());
   assert.ok(json.endsWith('\n'));
   const parsed = JSON.parse(json);
-  assert.equal(parsed.app, 'stash');
+  assert.equal(parsed.app, 'keepory');
   assert.equal(parsed.bookmarks.length, 1);
 });
 

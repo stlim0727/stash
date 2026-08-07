@@ -118,7 +118,7 @@ test('exports an HTML bookmarks file assembled from the stored library', async (
     contents: string;
   };
   expect(file.mimeType).toBe('text/html');
-  expect(file.filename).toMatch(/^stash-bookmarks-\d{4}-\d{2}-\d{2}\.html$/);
+  expect(file.filename).toMatch(/^keepory-bookmarks-\d{4}-\d{2}-\d{2}\.html$/);
   expect(file.contents).toContain('<!DOCTYPE NETSCAPE-Bookmark-file-1>');
   expect(file.contents).toContain('Local-first software');
   expect(file.contents).toContain('<H3'); // collection rendered as a folder
@@ -158,7 +158,7 @@ test('exports a JSON backup with the bookmark and its tags', async () => {
   expect(file.mimeType).toBe('application/json');
 
   const parsed = JSON.parse(file.contents);
-  expect(parsed.app).toBe('stash');
+  expect(parsed.app).toBe('keepory');
   expect(parsed.counts.bookmarks).toBe(1);
   expect(parsed.bookmarks[0].title).toBe('Raindrop review');
   expect(parsed.bookmarks[0].tags.map((t: { name: string }) => t.name)).toContain('tools');
@@ -195,7 +195,7 @@ test('exports a CSV table assembled from the stored library', async () => {
     contents: string;
   };
   expect(file.mimeType).toBe('text/csv');
-  expect(file.filename).toMatch(/^stash-bookmarks-\d{4}-\d{2}-\d{2}\.csv$/);
+  expect(file.filename).toMatch(/^keepory-bookmarks-\d{4}-\d{2}-\d{2}\.csv$/);
   const [header, firstRow] = file.contents.split('\r\n');
   expect(header).toBe('url,title,notes,tags,collection,created_at,updated_at,is_archived');
   expect(firstRow).toContain('Local-first software');
@@ -257,8 +257,8 @@ describe('android delivery sheet', () => {
       contents: string;
     };
     expect(file.mimeType).toBe('application/json');
-    expect(file.filename).toMatch(/^stash-backup-\d{4}-\d{2}-\d{2}\.json$/);
-    expect(JSON.parse(file.contents).app).toBe('stash');
+    expect(file.filename).toMatch(/^keepory-backup-\d{4}-\d{2}-\d{2}\.json$/);
+    expect(JSON.parse(file.contents).app).toBe('keepory');
   });
 
   test('share keeps routing through the share-sheet delivery', async () => {

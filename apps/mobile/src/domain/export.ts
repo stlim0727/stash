@@ -45,7 +45,7 @@ interface JsonBackupBookmark extends Bookmark {
 }
 
 export interface JsonBackup {
-  app: 'stash';
+  app: 'keepory';
   schema_version: number;
   exported_at: string;
   app_version: string | null;
@@ -84,11 +84,11 @@ export function exportFilename(kind: 'html' | 'json' | 'csv', exportedAt?: strin
   const stamp = exportDateStamp(exportedAt);
   switch (kind) {
     case 'html':
-      return `stash-bookmarks-${stamp}.html`;
+      return `keepory-bookmarks-${stamp}.html`;
     case 'csv':
-      return `stash-bookmarks-${stamp}.csv`;
+      return `keepory-bookmarks-${stamp}.csv`;
     default:
-      return `stash-backup-${stamp}.json`;
+      return `keepory-backup-${stamp}.json`;
   }
 }
 
@@ -123,7 +123,7 @@ export function buildJsonBackup(input: ExportInput): JsonBackup {
   });
 
   return {
-    app: 'stash',
+    app: 'keepory',
     schema_version: EXPORT_SCHEMA_VERSION,
     exported_at: exportedAt,
     app_version: input.appVersion ?? null,
