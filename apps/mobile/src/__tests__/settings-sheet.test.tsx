@@ -73,8 +73,8 @@ test('close button replaces to root route when router.canGoBack is false', async
   mockWindowSize.width = 1280;
   mockCanGoBack.mockReturnValue(false);
   const screen = await renderSettings();
-  const closeButton = screen.getByLabelText('Close');
-  closeButton.props.onPress();
+  const closeButtons = screen.getAllByLabelText('Close');
+  closeButtons[0].props.onPress();
   expect(mockReplace).toHaveBeenCalledWith('/');
 });
 
