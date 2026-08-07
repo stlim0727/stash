@@ -2824,6 +2824,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           const clientId = makeClientId();
           const title = item.title?.trim() ? item.title.trim() : null;
           const notes = item.notes?.trim() ? item.notes.trim() : null;
+          const itemCreatedAt = item.createdAt ?? now;
           // #671: a Stash JSON backup restore carries its own generated
           // metadata snapshot (parseJsonBackup, #678) — restore it losslessly
           // instead of re-fetching. metadata_status is deliberately never
@@ -2861,7 +2862,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             collection_id: null,
             is_archived: false,
             deleted_at: null,
-            created_at: now,
+            created_at: itemCreatedAt,
             updated_at: now,
             last_saved_at: now,
             metadata_status: metadataStatus,
@@ -2885,6 +2886,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // #671: never let an imported/restored bookmark auto-spend AI
               // quota — only a fresh save/share gets automatic server-side AI.
               enrichment_policy: "skip",
+              created_at: itemCreatedAt,
             },
             sync_status: "pending",
             retry_count: 0,
