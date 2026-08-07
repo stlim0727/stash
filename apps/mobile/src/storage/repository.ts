@@ -241,6 +241,31 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(BOOKMARKS_KEY, this.bookmarks);
   }
 
+  // listBookmarks() always re-sorts by created_at, so the stored array's
+  // order is never observed — replacing existing rows in place and
+  // prepending brand-new ones (rather than replicating insertBookmark's
+  // per-call "move to front") is behaviorally equivalent and O(n) total.
+  async upsertBookmarks(bookmarks: Bookmark[]): Promise<void> {
+    if (bookmarks.length === 0) {
+      return;
+    }
+    const byId = new Map(bookmarks.map((bookmark) => [bookmark.id, bookmark]));
+    const existingIds = new Set(this.bookmarks.map((existing) => existing.id));
+    const brandNew = bookmarks.filter((bookmark) => !existingIds.has(bookmark.id));
+    const merged = this.bookmarks.map((existing) => byId.get(existing.id) ?? existing);
+    this.bookmarks = [...brandNew, ...merged];
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+  }
+
+  async deleteBookmarks(ids: string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+    const idSet = new Set(ids);
+    this.bookmarks = this.bookmarks.filter((existing) => !idSet.has(existing.id));
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+  }
+
   async listQueue(): Promise<LocalPendingBookmark[]> {
     return [...this.queue];
   }

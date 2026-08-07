@@ -62,7 +62,7 @@ function makeEnrichment(overrides: Partial<AIEnrichment> = {}): AIEnrichment {
   };
 }
 
-function fakeRepository(meta: Record<string, string> = {}) {
+function fakeRepository(meta: Record<string, string> = {}, options: { batched?: boolean } = {}) {
   const calls: string[] = [];
   const repository: BookmarkRepository = {
     init: async () => {},
@@ -97,6 +97,16 @@ function fakeRepository(meta: Record<string, string> = {}) {
     clearAllData: async () => {
       calls.push('clearAllData');
     },
+    ...(options.batched
+      ? {
+          upsertBookmarks: async (bookmarks) => {
+            calls.push(`upsertBookmarks:${bookmarks.map((b) => b.id).join(',')}`);
+          },
+          deleteBookmarks: async (ids) => {
+            calls.push(`deleteBookmarks:${ids.join(',')}`);
+          },
+        }
+      : {}),
   };
   return { calls, meta, repository };
 }
@@ -259,6 +269,29 @@ test('pull removes synced rows deleted remotely, keeps local-only rows', async (
   assert.deepEqual(result.deletions, [REMOTE_ID_B]);
   assert.ok(calls.includes(`deleteBookmark:${REMOTE_ID_B}`));
   assert.equal(calls.includes('deleteBookmark:local-abc123'), false);
+});
+
+test('pull uses the batch upsert/delete methods when the repository provides them (Sentry STASH-5X)', async () => {
+  // Looping insertBookmark/deleteBookmark per row re-serializes and writes
+  // the entire local array on the web backend on every call — a large pull
+  // (802 deletions against ~1800 local rows in one report) froze the JS
+  // thread for 15+ seconds. A repository that implements the batch methods
+  // must get exactly one call each, not one per row.
+  const { calls, repository } = fakeRepository({}, { batched: true });
+  const remote = makeBookmark();
+  const goneRemotely = makeBookmark({ id: REMOTE_ID_B });
+  const api = fakeApi({
+    listBookmarksUpdatedSince: async () => [remote],
+    listBookmarkIds: async () => [remote.id],
+  });
+
+  const result = await pullRemoteChanges(api, repository, () => [goneRemotely], () => false);
+
+  assert.deepEqual(result.deletions, [REMOTE_ID_B]);
+  assert.ok(calls.includes(`upsertBookmarks:${remote.id}`));
+  assert.ok(calls.includes(`deleteBookmarks:${REMOTE_ID_B}`));
+  assert.equal(calls.includes(`insertBookmark:${remote.id}`), false);
+  assert.equal(calls.includes(`deleteBookmark:${REMOTE_ID_B}`), false);
 });
 
 test('pull refreshes the enrichment cache', async () => {

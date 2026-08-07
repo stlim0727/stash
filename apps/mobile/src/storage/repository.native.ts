@@ -363,6 +363,41 @@ class SqliteBookmarkRepository implements BookmarkRepository {
     );
   }
 
+  // One transaction (one connection.run) for the whole batch instead of one
+  // per row — a large pull reconciling hundreds of rows otherwise stacks
+  // that many separate calls onto the single connection actor (Sentry
+  // STASH-5X: 802 deletions during one pull; see
+  // docs/architecture/sqlite-write-contention.md).
+  async upsertBookmarks(bookmarks: Bookmark[]): Promise<void> {
+    if (bookmarks.length === 0) {
+      return;
+    }
+    await this.connection.run(
+      (db) =>
+        db.withTransactionAsync(async () => {
+          for (const bookmark of bookmarks) {
+            await writeBookmark(db, bookmark);
+          }
+        }),
+      'upsertBookmarks',
+    );
+  }
+
+  async deleteBookmarks(ids: string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+    await this.connection.run(
+      (db) =>
+        db.withTransactionAsync(async () => {
+          for (const id of ids) {
+            await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]);
+          }
+        }),
+      'deleteBookmarks',
+    );
+  }
+
   async listQueue(): Promise<LocalPendingBookmark[]> {
     return this.connection.run(async (db) => {
       const rows = await db.getAllAsync<QueueRow>(
