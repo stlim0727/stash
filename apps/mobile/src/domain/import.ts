@@ -57,11 +57,12 @@ export interface ImportItem {
   /** Tag names parsed from the source (deduped, order preserved). */
   tags: string[];
   /** Folder (HTML) or collection name (JSON), when the source recorded one. */
-  collection: string | null;
   /** Generated metadata preserved from a Stash JSON backup, when present. */
   metadata?: ImportedMetadata;
   /** AI enrichment snapshot preserved from a Stash JSON backup, when present. */
   enrichment?: ImportedEnrichment;
+  /** Original creation timestamp (ISO string), when preserved from source. */
+  createdAt?: string | null;
 }
 
 /** Thrown when a file can't be understood as a supported import format. */
@@ -195,6 +196,7 @@ export function parseJsonBackup(text: string): ImportItem[] {
             .filter((name) => name.length > 0),
         )
       : [];
+    const rawCreatedAt = cleanString(entry.created_at);
     return {
       source: 'stash-backup',
       url: cleanString(entry.url),
@@ -208,15 +210,28 @@ export function parseJsonBackup(text: string): ImportItem[] {
       collection: cleanString(entry.collection_name),
       metadata: parseImportedMetadata(entry),
       enrichment: parseImportedEnrichment(entry.enrichment),
+      createdAt: rawCreatedAt ? new Date(rawCreatedAt).toISOString() : null,
     };
   });
 }
 
 const HREF_ATTR = /href\s*=\s*["']([^"']*)["']/i;
 const TAGS_ATTR = /tags\s*=\s*["']([^"']*)["']/i;
+const ADD_DATE_ATTR = /add_date\s*=\s*["']([^"']*)["']/i;
 // Anchor entries, folder headings, and list closes, matched in document order.
 const TOKEN =
   /<a\s+([^>]*)>([\s\S]*?)<\/a>|<h3[^>]*>([\s\S]*?)<\/h3>|<\/dl>/gi;
+
+function parseAddDate(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const sec = parseInt(raw, 10);
+  if (isNaN(sec) || sec <= 0) return null;
+  try {
+    return new Date(sec * 1000).toISOString();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Parse a Netscape bookmark HTML file. Walks the document in order, tracking a
@@ -249,6 +264,7 @@ export function parseNetscapeHtml(text: string): ImportItem[] {
       continue;
     }
     const tagsRaw = anchorAttrs?.match(TAGS_ATTR)?.[1];
+    const addDateRaw = anchorAttrs?.match(ADD_DATE_ATTR)?.[1];
     items.push({
       source: 'netscape-html',
       url: unescapeHtml(href).trim() || null,
@@ -256,6 +272,7 @@ export function parseNetscapeHtml(text: string): ImportItem[] {
       notes: null,
       tags: tagsRaw ? normalizeTags(unescapeHtml(tagsRaw).split(',')) : [],
       collection: folders.length > 0 ? (folders[folders.length - 1] ?? null) : null,
+      createdAt: parseAddDate(addDateRaw),
     });
   }
 
@@ -324,7 +341,7 @@ function parseCsv(text: string): string[][] {
  * Parse a Pocket CSV export (`getpocket.com/export`, the format the shutdown
  * data export produces). Columns are matched by header name so column order
  * doesn't matter: `url` (required), `title`, and `tags` (Pocket separates tags
- * with `|`). `time_added`/`status` are ignored — archived and unread items are
+ * with `|`). `time_added`/`status` are parsed: archived and unread items are
  * imported alike, as active bookmarks. Rows without a URL are skipped.
  */
 export function parsePocketCsv(text: string): ImportItem[] {
@@ -340,6 +357,7 @@ export function parsePocketCsv(text: string): ImportItem[] {
   }
   const titleIdx = header.indexOf('title');
   const tagsIdx = header.indexOf('tags');
+  const timeAddedIdx = header.indexOf('time_added');
 
   const items: ImportItem[] = [];
   for (let r = 1; r < rows.length; r++) {
@@ -349,6 +367,7 @@ export function parsePocketCsv(text: string): ImportItem[] {
       continue;
     }
     const rawTags = tagsIdx >= 0 ? (row[tagsIdx] ?? '') : '';
+    const rawTimeAdded = timeAddedIdx >= 0 ? cleanString(row[timeAddedIdx]) : null;
     items.push({
       source: 'pocket-csv',
       url,
@@ -357,6 +376,7 @@ export function parsePocketCsv(text: string): ImportItem[] {
       // Pocket delimits tags with a pipe within the single CSV field.
       tags: rawTags ? normalizeTags(rawTags.split('|')) : [],
       collection: null,
+      createdAt: parseAddDate(rawTimeAdded ?? undefined),
     });
   }
   return items;

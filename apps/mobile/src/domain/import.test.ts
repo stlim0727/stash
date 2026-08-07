@@ -358,6 +358,7 @@ test('parsePocketCsv maps url/title/tags by header and splits tags on a pipe', (
     notes: null,
     tags: ['reading', 'tech'],
     collection: null,
+    createdAt: new Date(1699999999 * 1000).toISOString(),
   });
   // Archived items are imported alike, with no tags.
   assert.equal(items[1]?.url, 'https://example.com/b');
