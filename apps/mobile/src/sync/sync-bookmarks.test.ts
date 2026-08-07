@@ -237,6 +237,33 @@ test('bulk create: a server-side duplicate adopts the existing row\'s id too (Se
   assert.equal(result?.originalLocalId, 'local-dup');
 });
 
+test('bulk create: carries inline tags and collection_name from entry payload', async () => {
+  const sentPayloads: CreateBookmarkInput[] = [];
+  const entry = makeCreateEntry({
+    local_id: 'local-tags',
+    payload: {
+      url: 'https://example.com/b',
+      tags: ['react', 'testing'],
+      collection_name: 'Tech',
+    },
+  });
+  const api = fakeApi({
+    createBookmarks: async (inputs: CreateBookmarkInput[]) => {
+      sentPayloads.push(...inputs);
+      return [
+        { bookmark_id: 'local-tags', status: 'created', metadata_status: 'complete' },
+      ];
+    },
+  });
+  const local = makeBookmark({ id: 'local-tags' });
+
+  const [result] = await syncCreateQueueEntryBatch(api, [entry], () => local);
+
+  assert.equal(result?.entry.sync_status, 'synced');
+  assert.deepEqual(sentPayloads[0]?.tags, ['react', 'testing']);
+  assert.equal(sentPayloads[0]?.collection_name, 'Tech');
+});
+
 test('create: uploads the LATEST title/notes, not the payload captured at save', async () => {
   const { repository } = fakeRepository();
   const sent: unknown[] = [];

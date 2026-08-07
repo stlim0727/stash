@@ -200,6 +200,12 @@ function createUploadPayload(
   if (entry.payload.enrichment_policy) {
     payload.enrichment_policy = entry.payload.enrichment_policy;
   }
+  if (entry.payload.tags && entry.payload.tags.length > 0) {
+    payload.tags = entry.payload.tags;
+  }
+  if (entry.payload.collection_name) {
+    payload.collection_name = entry.payload.collection_name;
+  }
   return payload;
 }
 

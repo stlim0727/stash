@@ -216,6 +216,14 @@ export interface CreateBookmarkInput {
    * key text notes have, since they carry no `url`.
    */
   client_id?: string;
+  /**
+   * Optional inline tag names (e.g. for bulk imports/restores).
+   */
+  tags?: string[];
+  /**
+   * Optional inline collection name (e.g. for bulk imports/restores).
+   */
+  collection_name?: string;
 }
 
 /** What a queue entry asks the sync service to do remotely. */
