@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -26,8 +26,17 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+const mockReplace = jest.fn();
+const mockBack = jest.fn();
+const mockCanGoBack = jest.fn(() => false);
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() }),
+  useRouter: () => ({
+    push: jest.fn(),
+    navigate: jest.fn(),
+    replace: mockReplace,
+    back: mockBack,
+    canGoBack: mockCanGoBack,
+  }),
 }));
 
 // Drive the responsive sheet rule off a controllable viewport.
@@ -58,6 +67,15 @@ test('phone viewport renders full-screen with no backdrop', async () => {
   mockWindowSize.width = 390;
   const screen = await renderSettings();
   expect(screen.queryByTestId('settings-sheet-backdrop')).toBeNull();
+});
+
+test('close button replaces to root route when router.canGoBack is false', async () => {
+  mockWindowSize.width = 1280;
+  mockCanGoBack.mockReturnValue(false);
+  const screen = await renderSettings();
+  const closeButtons = screen.getAllByLabelText('Close');
+  fireEvent.press(closeButtons[0]);
+  expect(mockReplace).toHaveBeenCalledWith('/');
 });
 
 // Settings is a transparentModal with the Inbox mounted behind it. On web the
