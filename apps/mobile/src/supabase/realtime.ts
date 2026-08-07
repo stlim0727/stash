@@ -14,11 +14,23 @@ interface RealtimeSyncProps {
   syncNow: () => Promise<boolean>;
 }
 
+// A burst of near-simultaneous sync completions (e.g. a backlog draining in
+// small chunks) must collapse to a single outbound nudge — the receiving
+// side already debounces incoming nudges by 3s (see triggerDebouncedSync
+// below), so sending the same "something changed" signal repeatedly within
+// a much shorter window adds no information. It does have a real cost: when
+// the channel can't push over the websocket, every send() falls back to an
+// actual REST POST (Sentry STASH-5S: ~90 of these fired within 7s on one
+// session, competing with the real pull/sync network traffic on a page that
+// was already stuck loading).
+const NUDGE_SEND_DEBOUNCE_MS = 1000;
+
 export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSyncProps) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const rtClientRef = useRef<RealtimeClient | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const nudgeSendTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Retrieve or generate install_device_id
   useEffect(() => {
@@ -52,6 +64,10 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
   }, [syncNow]);
 
   const disconnectSocket = useCallback(() => {
+    if (nudgeSendTimeoutRef.current) {
+      clearTimeout(nudgeSendTimeoutRef.current);
+      nudgeSendTimeoutRef.current = null;
+    }
     if (channelRef.current) {
       channelRef.current.unsubscribe();
       channelRef.current = null;
@@ -137,8 +153,17 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
   }, [connectSocket, disconnectSocket, syncNow]);
 
   const broadcastSyncNudge = useCallback(() => {
-    if (channelRef.current && deviceId) {
-      channelRef.current.send({
+    if (!channelRef.current || !deviceId) {
+      return;
+    }
+    // Coalesce: if a send is already scheduled, this call's intent is
+    // already covered — see NUDGE_SEND_DEBOUNCE_MS above.
+    if (nudgeSendTimeoutRef.current) {
+      return;
+    }
+    nudgeSendTimeoutRef.current = setTimeout(() => {
+      nudgeSendTimeoutRef.current = null;
+      channelRef.current?.send({
         type: 'broadcast',
         event: 'sync_nudge',
         payload: {
@@ -146,7 +171,7 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
           sent_at: new Date().toISOString(),
         },
       });
-    }
+    }, NUDGE_SEND_DEBOUNCE_MS);
   }, [deviceId]);
 
   return { broadcastSyncNudge };
