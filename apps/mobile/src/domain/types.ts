@@ -210,6 +210,11 @@ export interface CreateBookmarkInput {
    */
   deleted_at?: string | null;
   /**
+   * Optional original creation timestamp (ISO string). When provided (e.g. on
+   * bookmark import/restore), sent on creation instead of using the current clock.
+   */
+  created_at?: string;
+  /**
    * Stable device-generated capture id (see {@link Bookmark.client_id}). Carried
    * in the queue payload so an interrupted upload's retry reuses the same id and
    * the server dedupes instead of inserting a second row — the only idempotency

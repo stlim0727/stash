@@ -57,6 +57,7 @@ export interface ImportItem {
   /** Tag names parsed from the source (deduped, order preserved). */
   tags: string[];
   /** Folder (HTML) or collection name (JSON), when the source recorded one. */
+  collection: string | null;
   /** Generated metadata preserved from a Stash JSON backup, when present. */
   metadata?: ImportedMetadata;
   /** AI enrichment snapshot preserved from a Stash JSON backup, when present. */
