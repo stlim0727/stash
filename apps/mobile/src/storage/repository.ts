@@ -251,7 +251,13 @@ class WebBookmarkRepository implements BookmarkRepository {
     }
     const byId = new Map(bookmarks.map((bookmark) => [bookmark.id, bookmark]));
     const existingIds = new Set(this.bookmarks.map((existing) => existing.id));
-    const brandNew = bookmarks.filter((bookmark) => !existingIds.has(bookmark.id));
+    // Iterate the deduped map, not the raw `bookmarks` array — two input
+    // entries sharing an id neither of which is already local would
+    // otherwise both land in brandNew, landing two rows under one id
+    // (replaceBookmark's own comment above explains why that's a bug worth
+    // preventing). Not reachable via pullRemoteChanges's `upserts` today,
+    // but the dedup is free.
+    const brandNew = [...byId.values()].filter((bookmark) => !existingIds.has(bookmark.id));
     const merged = this.bookmarks.map((existing) => byId.get(existing.id) ?? existing);
     this.bookmarks = [...brandNew, ...merged];
     this.write(BOOKMARKS_KEY, this.bookmarks);

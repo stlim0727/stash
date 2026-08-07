@@ -163,6 +163,18 @@ test('upsertBookmarks replaces existing rows and adds new ones in a single write
   assert.ok(byId.has('remote-3'));
 });
 
+test('upsertBookmarks dedupes a batch with two entries sharing a new id', async () => {
+  await repository.init([]);
+
+  const first = makeBookmark('new-1');
+  const second = { ...makeBookmark('new-1'), title: 'Second copy wins' };
+  await repository.upsertBookmarks!([first, second]);
+
+  const all = await repository.listBookmarks();
+  assert.equal(all.length, 1, 'two entries sharing an id must land as one row, not two');
+  assert.equal(all[0]?.title, 'Second copy wins');
+});
+
 test('upsertBookmarks is a no-op for an empty batch', async () => {
   await repository.init([]);
   await repository.insertBookmark(makeBookmark('local-1'));
