@@ -1204,8 +1204,32 @@ export default function SettingsScreen() {
           {/* The four raw pipeline stages, relocated from the Activity
               section (STASH counter refactor) — everyday Settings shows only
               the one-line summary there; this expanded breakdown is for
-              debugging. */}
-          <Group styles={styles} title={t("settings.processing.label")}>
+              debugging. One group, one data source (`processingStats`): a
+              second "Pipeline: todo/done" group used to sit here with its own
+              independently-computed numbers, some of them exact duplicates
+              (e.g. metadata todo === the pending count below) — merged away,
+              keeping only the figures `details` doesn't already show
+              (sync-lifecycle once/twice, and the AI/metadata completed
+              totals). */}
+          <Group
+            styles={styles}
+            title={t("settings.diagnostics.title")}
+            footnote={t("settings.diagnostics.footnote")}
+          >
+            <InfoRow
+              styles={styles}
+              label={t("settings.diagnostics.supabaseAuth")}
+              value={auth.status}
+            />
+            <InfoRow
+              styles={styles}
+              label={t("settings.diagnostics.lastPulled")}
+              value={
+                lastPulledAt
+                  ? formatDate(lastPulledAt)
+                  : t("settings.diagnostics.lastPulledNever")
+              }
+            />
             <Row
               styles={styles}
               palette={palette}
@@ -1257,7 +1281,6 @@ export default function SettingsScreen() {
                   ? "settings.processing.details.hide"
                   : "settings.processing.details.show",
               )}
-              last={!processingDetailsOpen}
               onPress={() => setProcessingDetailsOpen((open) => !open)}
               right={
                 <Ionicons
@@ -1331,54 +1354,28 @@ export default function SettingsScreen() {
                   value={t("settings.processing.details.degraded.value", {
                     count: processingStats.details.ai.degradedRateLimited,
                   })}
-                  last
                 />
               </>
             ) : null}
-          </Group>
-
-          <Group
-            styles={styles}
-            title={t("settings.diagnostics.title")}
-            footnote={t("settings.diagnostics.footnote")}
-          >
             <InfoRow
               styles={styles}
-              label={t("settings.diagnostics.supabaseAuth")}
-              value={auth.status}
-            />
-            <InfoRow
-              styles={styles}
-              label={t("settings.diagnostics.lastPulled")}
-              value={
-                lastPulledAt
-                  ? formatDate(lastPulledAt)
-                  : t("settings.diagnostics.lastPulledNever")
-              }
-            />
-            <InfoRow
-              styles={styles}
-              label={t("settings.diagnostics.pipelineSync.label")}
-              value={t("settings.diagnostics.pipelineSync.value", {
-                todo: processingStats.diagnostics.sync.todo,
-                done: processingStats.diagnostics.sync.done,
+              label={t("settings.diagnostics.syncLifecycle.label")}
+              value={t("settings.diagnostics.syncLifecycle.value", {
                 once: processingStats.diagnostics.sync.syncedOnce,
                 twice: processingStats.diagnostics.sync.syncingTwice,
               })}
             />
             <InfoRow
               styles={styles}
-              label={t("settings.diagnostics.pipelineMetadata.label")}
-              value={t("settings.diagnostics.pipelineMetadata.value", {
-                todo: processingStats.diagnostics.metadata.todo,
+              label={t("settings.diagnostics.metadataDone.label")}
+              value={t("settings.diagnostics.metadataDone.value", {
                 done: processingStats.diagnostics.metadata.done,
               })}
             />
             <InfoRow
               styles={styles}
-              label={t("settings.diagnostics.pipelineAi.label")}
-              value={t("settings.diagnostics.pipelineAi.value", {
-                todo: processingStats.diagnostics.ai.todo,
+              label={t("settings.diagnostics.aiDone.label")}
+              value={t("settings.diagnostics.aiDone.value", {
                 done: processingStats.diagnostics.ai.done,
               })}
             />
