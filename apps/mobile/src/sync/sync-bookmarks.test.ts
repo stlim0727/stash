@@ -5,6 +5,7 @@ import {
   UPLOAD_RETRY_BACKOFF_MS,
   createNeedsReconcileUpdate,
   crossedHealthEscalationThreshold,
+  findStaleQueueEntries,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
   isSyncable,
@@ -1233,4 +1234,36 @@ test('crossedHealthEscalationThreshold does not re-fire on retries past the thre
 
 test('crossedHealthEscalationThreshold fires on a jump straight past the threshold (0 -> 4)', () => {
   assert.equal(crossedHealthEscalationThreshold(0, 4), true);
+});
+
+test('findStaleQueueEntries: empty when nothing is left queued', () => {
+  const stale = findStaleQueueEntries(['a', 'b'], new Set(), []);
+  assert.deepEqual(stale, []);
+});
+
+test('findStaleQueueEntries: flags a completed id still sitting in the queue (STASH-3Y)', () => {
+  const stale = findStaleQueueEntries(['a', 'b'], new Set(), ['a']);
+  assert.deepEqual(stale, ['a']);
+});
+
+test('findStaleQueueEntries: does not flag an id this chunk legitimately re-queued (mid-flight delete / reconcile)', () => {
+  const stale = findStaleQueueEntries(['a', 'b'], new Set(['a']), ['a']);
+  assert.deepEqual(stale, []);
+});
+
+test('findStaleQueueEntries: ignores queue entries outside this chunk\'s completed ids (e.g. an unrelated concurrent capture)', () => {
+  const stale = findStaleQueueEntries(['a'], new Set(), ['a', 'unrelated-concurrent-id']);
+  assert.deepEqual(stale, ['a']);
+});
+
+test('findStaleQueueEntries: a duplicate-swap re-queue under the NEW id does not mask a leftover under the OLD id', () => {
+  // STASH-3Q: a duplicate-swap re-queues under the resolved row's id, not the
+  // original local id — reenqueuedLocalIds correctly contains the new id, but
+  // that must not accidentally suppress a real leftover under the old one.
+  const stale = findStaleQueueEntries(
+    ['original-id'],
+    new Set(['new-resolved-id']),
+    ['original-id'],
+  );
+  assert.deepEqual(stale, ['original-id']);
 });

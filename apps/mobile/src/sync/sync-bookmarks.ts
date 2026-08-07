@@ -88,6 +88,38 @@ export function crossedHealthEscalationThreshold(
 }
 
 /**
+ * Detects the STASH-3Y symptom ("queue count bounces/grows during a big bulk
+ * sync"): a bulk-create chunk's own completed local ids that are STILL in the
+ * queue after the chunk finished processing, even though nothing in this
+ * chunk legitimately re-queued them.
+ *
+ * Deliberately id-scoped rather than a before/after total-length comparison —
+ * a bulk-create chunk's processing spans several awaited storage writes, a
+ * window long enough for unrelated capture/edit/delete activity elsewhere in
+ * the app to legitimately change the queue's total length. Comparing totals
+ * would make those false positives; comparing only this chunk's own
+ * completed ids against its own re-queued ids is immune to that.
+ *
+ * `reenqueuedLocalIds` is the set of ids this chunk itself called
+ * `enqueueMutation` for (mid-flight delete, reconcile follow-up) — those are
+ * expected to still be queued and must not be flagged.
+ */
+export function findStaleQueueEntries(
+  completedLocalIds: Iterable<string>,
+  reenqueuedLocalIds: ReadonlySet<string>,
+  queueLocalIds: Iterable<string>,
+): string[] {
+  const stillQueued = new Set(queueLocalIds);
+  const stale: string[] = [];
+  for (const id of completedLocalIds) {
+    if (!reenqueuedLocalIds.has(id) && stillQueued.has(id)) {
+      stale.push(id);
+    }
+  }
+  return stale;
+}
+
+/**
  * Removes a finished entry's queue row — unless a newer mutation (e.g. a
  * durable delete enqueued while this entry was in flight) has replaced the
  * row at the same key, in which case that newer work must survive.

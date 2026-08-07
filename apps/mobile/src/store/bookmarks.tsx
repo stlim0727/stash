@@ -113,7 +113,10 @@ import {
   describeRecentSegments,
   recordSlowSegment,
 } from "@/observability/slow-segment-log";
-import { reportSyncQueueHealthEscalation } from "@/observability/sentry";
+import {
+  reportQueueReconcileMismatch,
+  reportSyncQueueHealthEscalation,
+} from "@/observability/sentry";
 import { registerForForegroundState } from "@/storage/sqlite-app-lifecycle";
 import { repository } from "@/storage/repository";
 import { copyImageToLibrary } from "@/storage/image-store";
@@ -144,6 +147,7 @@ import {
   createNeedsReconcileUpdate,
   createSyncApi,
   crossedHealthEscalationThreshold,
+  findStaleQueueEntries,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
   isPermanentlyUnsyncableUrl,
@@ -5397,6 +5401,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           const deletedMidFlightIds: string[] = [];
           const followUpUpdates: Bookmark[] = [];
           const pendingAiIds: string[] = [];
+          // STASH-3Y guard: every id this chunk itself re-queues (mid-flight
+          // delete, reconcile follow-up) so findStaleQueueEntries below can
+          // tell "legitimately re-queued" apart from "leftover from a bug".
+          const reenqueuedIdsThisChunk = new Set<string>();
           // STASH-3Y diagnostics: which field(s) triggered createNeedsReconcileUpdate,
           // tallied (not per-row — this chunk can run hundreds of times in one
           // bulk import) so a future report shows WHY the queue grew back after
@@ -5505,6 +5513,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           setQueue((current) =>
             current.filter((queued) => !completedLocalIds.has(queued.local_id)),
           );
+          // Mirrored synchronously (same rationale as enqueueMutation's own
+          // queueRef write below) so findStaleQueueEntries reads an accurate
+          // queue at the end of this function instead of racing the `useEffect`
+          // that normally mirrors `queue` -> queueRef after the next render.
+          queueRef.current = queueRef.current.filter(
+            (queued) => !completedLocalIds.has(queued.local_id),
+          );
           recordSlowSegment("bulk-chunk-merge", Date.now() - mergeStartedAt);
           recordLog(
             "info",
@@ -5608,6 +5623,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   await ensureRepositoryReady();
                   await retryStorageWrite(() => repository.deleteBookmark(id));
                   enqueueMutation(id, "delete");
+                  reenqueuedIdsThisChunk.add(id);
                 } catch (error) {
                   logStorageError("post-delete sync cleanup", error);
                 }
@@ -5709,10 +5725,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     continue;
                   }
                   enqueueMutation(bookmark.id, "update");
+                  reenqueuedIdsThisChunk.add(bookmark.id);
                 } catch (error) {
                   logStorageError("post-sync reconcile persist", error);
                 }
               }
+            }
+            const staleQueueEntries = findStaleQueueEntries(
+              completedLocalIds,
+              reenqueuedIdsThisChunk,
+              queueRef.current.map((queued) => queued.local_id),
+            );
+            if (staleQueueEntries.length > 0) {
+              reportQueueReconcileMismatch({
+                staleCount: staleQueueEntries.length,
+                chunkCompletedCount: completedLocalIds.size,
+                reenqueuedCount: reenqueuedIdsThisChunk.size,
+              });
             }
           } finally {
             bulkReconcileInFlight.current -= 1;
