@@ -4461,6 +4461,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         try {
           const results: BulkAttachResult[] =
             await api.bulkAttachTagsAndCollections(chunkItems);
+          // Each bookmark's own SQLite row write stays immediate and
+          // sequential (one row at a time — see
+          // docs/architecture/sqlite-write-contention.md), but the React
+          // re-renders (setBookmarks/setTagData) and the collections
+          // catalog's SQLite write are batched to once per chunk instead of
+          // once per bookmark. Without this, a landed chunk of 50 still
+          // visibly trickles in one row at a time even though the network
+          // call and the per-row writes themselves are already batched/safe
+          // (bli9833 backlog, follow-up to #713/#719).
+          let chunkHasNewCollection = false;
+          const chunkBookmarkUpdates = new Map<string, Bookmark>();
           for (const result of results) {
             const item = itemsByBookmark.get(result.bookmark_id);
             if (!item || !result.collection) {
@@ -4472,13 +4483,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 (candidate) => candidate.id === result.collection!.id,
               )
             ) {
-              const nextTagData = {
+              tagDataRef.current = {
                 ...tagDataRef.current,
                 collections: [...tagDataRef.current.collections, result.collection],
               };
-              await repository.replaceTagData(nextTagData);
-              tagDataRef.current = nextTagData;
-              setTagData(nextTagData);
+              chunkHasNewCollection = true;
             }
 
             // A manual move can race an in-flight import: re-check the intent
@@ -4511,21 +4520,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               bookmarksRef.current = bookmarksRef.current!.map((bookmark) =>
                 bookmark.id === updated.id ? updated : bookmark,
               );
-              setBookmarks(
-                (current) =>
-                  current?.map((bookmark) =>
-                    bookmark.id === updated.id ? updated : bookmark,
-                  ) ?? current,
-              );
+              chunkBookmarkUpdates.set(updated.id, updated);
             }
 
             mutationsPushed = true;
-            const remaining = pendingImportCollectionsRef.current.filter(
-              (candidate) => candidate.bookmark_id !== item.bookmark_id,
-            );
-            pendingImportCollectionsRef.current = remaining;
-            setPendingImportCollections(remaining);
+            pendingImportCollectionsRef.current =
+              pendingImportCollectionsRef.current.filter(
+                (candidate) => candidate.bookmark_id !== item.bookmark_id,
+              );
           }
+
+          if (chunkHasNewCollection) {
+            await repository.replaceTagData(tagDataRef.current);
+            setTagData(tagDataRef.current);
+          }
+          if (chunkBookmarkUpdates.size > 0) {
+            setBookmarks(
+              (current) =>
+                current?.map((bookmark) =>
+                  chunkBookmarkUpdates.has(bookmark.id)
+                    ? chunkBookmarkUpdates.get(bookmark.id)!
+                    : bookmark,
+                ) ?? current,
+            );
+          }
+          setPendingImportCollections(pendingImportCollectionsRef.current);
         } catch (error) {
           // Per-chunk failure: mark every item in this chunk failed rather
           // than parse partial success out of the RPC's returned array —
