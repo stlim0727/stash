@@ -183,6 +183,28 @@ test('web keeps the pinned hero outside a transformed compositing layer', async 
   expect(StyleSheet.flatten(header.props.style).transform).toBeUndefined();
 });
 
+test('web falls back to the text wordmark when the image "loads" with no pixels (STASH-5J)', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  fakeRepo.__reset([]);
+
+  const screen = await renderInbox();
+
+  const image = await waitFor(() => screen.getByTestId('inbox-wordmark-image'));
+
+  await act(async () => {
+    fireEvent(image, 'load', { nativeEvent: { source: { width: 120, height: 28 } } });
+  });
+  expect(screen.queryByTestId('inbox-wordmark-fallback')).toBeNull();
+
+  // A later "load" that reports a 0x0 image (an aborted fetch that still
+  // fires `load` instead of `error`) must not stay treated as a success.
+  await act(async () => {
+    fireEvent(image, 'load', { nativeEvent: { source: { width: 0, height: 0 } } });
+  });
+
+  expect(screen.getByTestId('inbox-wordmark-fallback')).toBeTruthy();
+});
+
 test('exposes each bookmark row as a button labelled by its title', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
