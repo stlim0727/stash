@@ -1,0 +1,65 @@
+name: Supabase live check
+
+# Post-merge/scheduled health checks against the LIVE production Supabase
+# project — separate from the ci.yml/CircleCI gate, which never touches
+# production. Exists because STASH-5V/5T/5W traced back to a migration
+# (20260712000000_realtime_broadcast_policies.sql) that was merged to main
+# but never applied to production: nothing caught the drift until users hit
+# the resulting Realtime failure in the wild.
+#
+# Two independent jobs:
+#   - migration-drift: compares supabase/migrations/*.sql against what the
+#     Management API says is actually applied. Needs a SUPABASE_ACCESS_TOKEN
+#     secret (a Supabase *account* personal access token, Dashboard ->
+#     Account -> Access Tokens — not the project anon/service key). Skips
+#     itself with a clear message if that secret isn't set yet.
+#   - verify-supabase: runs the existing `pnpm verify:supabase` E2E script
+#     (16 checks against the real project, including a Realtime channel-join
+#     check per account type) using the EXPO_PUBLIC_SUPABASE_* secrets already
+#     used by android-apk.yml. This alone would have caught the Realtime bug.
+#
+# Runs on a schedule (safety net) and right after anything touching
+# supabase/migrations/ merges to main (fast feedback), plus manual dispatch.
+# Independent of the CI_PROVIDER gate switch — this isn't ported to CircleCI
+# (whose scheduler doesn't work for this project; see docs/development/ci-circleci.md).
+
+on:
+  schedule:
+    - cron: '30 5 * * *' # nightly, offset from the Firebase cleanup at 04:17
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+  workflow_dispatch: {}
+
+jobs:
+  migration-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for unapplied migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+        run: node scripts/check-migration-drift.mjs
+
+  verify-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify live Supabase behavior
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$EXPO_PUBLIC_SUPABASE_URL" ] || [ -z "$EXPO_PUBLIC_SUPABASE_ANON_KEY" ]; then
+            echo "EXPO_PUBLIC_SUPABASE_URL/ANON_KEY not set — skipping."
+            exit 0
+          fi
+          pnpm verify:supabase
