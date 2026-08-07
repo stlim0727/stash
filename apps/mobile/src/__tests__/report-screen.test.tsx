@@ -10,6 +10,11 @@ jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
 }));
 
+jest.mock('@/observability/log-buffer', () => {
+  const actual = jest.requireActual('@/observability/log-buffer');
+  return { ...actual, getLogEntries: jest.fn(actual.getLogEntries) };
+});
+
 const mockSession = {
   access_token: 'token',
   refresh_token: 'refresh',
@@ -74,10 +79,13 @@ import {
   setPendingFeedbackScreenshot,
 } from '@/feedback/screenshot-session';
 import { feedbackSourceFromPath } from '@/feedback/FloatingReportButton';
+import { getLogEntries } from '@/observability/log-buffer';
 import { BookmarksProvider } from '@/store/bookmarks';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
 
 const fakeRepo = jest.requireMock('@/storage/repository') as FakeRepositoryModule;
+const actualGetLogEntries =
+  jest.requireActual('@/observability/log-buffer').getLogEntries;
 
 function renderReport(createApi?: Parameters<typeof ReportScreen>[0]) {
   return render(
@@ -92,6 +100,7 @@ beforeEach(() => {
   clearPendingFeedbackScreenshot();
   mockBack.mockClear();
   mockPush.mockClear();
+  jest.mocked(getLogEntries).mockImplementation(actualGetLogEntries);
   mockWindowSize.width = 390;
   mockWindowSize.height = 844;
   mockAuth = {
@@ -179,6 +188,42 @@ test('submitting calls the feedback api with the message and redacted context', 
   expect(arg.context.route).toBe('/report');
 
   expect(screen.getByText('Thanks — your report was sent.')).toBeTruthy();
+});
+
+test('keeps the most severe sqlite tail-wait log lines, not just the first ones seen (Sentry STASH-5R)', async () => {
+  // A real report showed an early, mild reopen burst (five ~300ms waits at
+  // startup) filling the whole tail-wait cap before one much worse wait
+  // later in the same session (4061ms) ever got a slot — so the one line
+  // that would have explained the report was silently dropped. Keeping the
+  // most severe waits regardless of order fixes that.
+  jest.mocked(getLogEntries).mockReturnValue([
+    { t: '2026-08-07T06:38:00.000Z', level: 'info', message: 'sync: cycle done entries=1 failed=0' },
+    { t: '2026-08-07T06:38:53.417Z', level: 'info', message: 'sqlite tail wait 274ms (depth 16)' },
+    { t: '2026-08-07T06:38:53.422Z', level: 'info', message: 'sqlite tail wait 279ms (depth 15)' },
+    { t: '2026-08-07T06:38:53.458Z', level: 'info', message: 'sqlite tail wait 315ms (depth 14)' },
+    { t: '2026-08-07T06:38:53.470Z', level: 'info', message: 'sqlite tail wait 327ms (depth 13)' },
+    { t: '2026-08-07T06:38:53.472Z', level: 'info', message: 'sqlite tail wait 329ms (depth 12)' },
+    // The 6th and most severe tail-wait entry, well after the early burst.
+    { t: '2026-08-07T06:44:25.345Z', level: 'info', message: 'sqlite tail wait 4061ms (depth 23)' },
+  ]);
+
+  const submitReport = jest.fn(async (_input: unknown) => {});
+  const createApi = jest.fn(() => ({ submitReport }));
+  const screen = await renderReport({ createApi: createApi as never });
+
+  await waitFor(() => expect(screen.getByLabelText('Problem description')).toBeTruthy());
+  await fireEvent.changeText(screen.getByLabelText('Problem description'), 'Detail view feels slow');
+
+  await act(async () => {
+    await fireEvent.press(screen.getByLabelText('Submit report'));
+  });
+
+  const arg = submitReport.mock.calls[0]![0] as { context: { logs?: string[] } };
+  const tailWaitLines = (arg.context.logs ?? []).filter((line) => line.includes('sqlite tail wait'));
+  expect(tailWaitLines).toHaveLength(5);
+  expect(tailWaitLines.some((line) => line.includes('4061ms'))).toBe(true);
+  // The least severe of the six is the one that gets dropped.
+  expect(tailWaitLines.some((line) => line.includes('274ms'))).toBe(false);
 });
 
 test('shows a pending screenshot but keeps it excluded until the user opts in', async () => {

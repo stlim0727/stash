@@ -26,6 +26,17 @@ export interface SqliteContentionDiagnostics {
   maxDepth: number;
   /** How many waits crossed the "non-trivial" logging threshold. */
   waitCount: number;
+  /**
+   * The repository/session-storage operation label(s) queued on the
+   * connection actor at the moment `maxWaitMs`/`maxDepth` last advanced (see
+   * `sqlite-connection.ts`'s `serialize`). A bare max/count told us
+   * contention happened but not what collided — a real report showed severe
+   * contention (depth 23, 4061ms) with no way to tell whether that was one
+   * runaway caller or several legitimate pipelines (sync drain, pull,
+   * import reconcile) overlapping. Omitted when the caller didn't pass a
+   * label (older/untouched call sites default to 'unlabeled').
+   */
+  labels?: string;
   updatedAt: string;
 }
 
@@ -76,7 +87,7 @@ export function noteSqliteOpenFailure(phase: string, error: unknown): void {
  * not make that old severe event look contemporaneous with a report filed
  * around the routine one.
  */
-export function noteSqliteTailWait(waitMs: number, depth: number): void {
+export function noteSqliteTailWait(waitMs: number, depth: number, labels?: string): void {
   const prev = diagnostics.sqliteContention;
   const maxWaitMs = Math.max(prev?.maxWaitMs ?? 0, waitMs);
   const maxDepth = Math.max(prev?.maxDepth ?? 0, depth);
@@ -85,6 +96,7 @@ export function noteSqliteTailWait(waitMs: number, depth: number): void {
     maxWaitMs,
     maxDepth,
     waitCount: (prev?.waitCount ?? 0) + 1,
+    labels: advancedMax ? labels : prev?.labels,
     updatedAt: advancedMax ? new Date().toISOString() : prev!.updatedAt,
   };
 }
@@ -103,7 +115,7 @@ export function noteSqliteTailWait(waitMs: number, depth: number): void {
  * is filed must not make an hours-old severe-contention maximum look
  * contemporaneous with that report.
  */
-export function noteSqliteQueueDepth(depth: number): void {
+export function noteSqliteQueueDepth(depth: number, labels?: string): void {
   const prev = diagnostics.sqliteContention;
   if (prev && depth <= prev.maxDepth) {
     return;
@@ -112,6 +124,7 @@ export function noteSqliteQueueDepth(depth: number): void {
     maxWaitMs: prev?.maxWaitMs ?? 0,
     maxDepth: depth,
     waitCount: prev?.waitCount ?? 0,
+    labels,
     updatedAt: new Date().toISOString(),
   };
 }

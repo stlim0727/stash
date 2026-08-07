@@ -389,6 +389,43 @@ test('queue depth is recorded eagerly at enqueue time, even before a blocking op
   await Promise.all([first, second, third]);
 });
 
+test('run() labels are attributed on the contention snapshot, showing what collided', async () => {
+  // A bare depth/wait number says contention happened but not what caused
+  // it — a real report showed severe contention (depth 23) with no way to
+  // tell whether that was one runaway caller or several legitimate
+  // pipelines overlapping. `label` makes the colliding operations visible.
+  const { connection } = makeConnection();
+  // The contention diagnostic is a global running max shared across every
+  // connection in the process (including earlier tests in this file), so
+  // queue strictly more than whatever max is already recorded — otherwise
+  // this burst wouldn't be the one that sets (and labels) the new max.
+  const priorMaxDepth = getStorageDiagnostics()?.sqliteContention?.maxDepth ?? 0;
+  const replaceBookmarkCount = priorMaxDepth + 2;
+
+  let releaseFirst!: () => void;
+  const blocker = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const ops = [
+    connection.run(async () => {
+      await blocker;
+    }, 'pull'),
+  ];
+  for (let i = 0; i < replaceBookmarkCount; i++) {
+    ops.push(connection.run(async () => undefined, 'replaceBookmark'));
+  }
+
+  const diagnosticsSnapshot = getStorageDiagnostics();
+  assert.equal(diagnosticsSnapshot?.sqliteContention?.maxDepth, replaceBookmarkCount + 1);
+  assert.equal(
+    diagnosticsSnapshot?.sqliteContention?.labels,
+    `replaceBookmark:${replaceBookmarkCount}, pull:1`,
+  );
+
+  releaseFirst();
+  await Promise.all(ops);
+});
+
 test('a wait spanning a background/foreground transition is excluded from maxWaitMs (long or short)', async () => {
   // A duration-based cutoff can't tell a genuine long stall apart from a
   // short background blip — both just look like "a long wait" by elapsed

@@ -87,15 +87,16 @@ const legacySource: LegacySessionSource = {
         } catch {
           return null;
         }
-      });
+      }, 'auth:legacyRead');
     } catch {
       return null;
     }
   },
   async clear() {
     try {
-      await legacyConnection.run((db) =>
-        db.runAsync('DELETE FROM meta WHERE key = ?', [LEGACY_SESSION_KEY]),
+      await legacyConnection.run(
+        (db) => db.runAsync('DELETE FROM meta WHERE key = ?', [LEGACY_SESSION_KEY]),
+        'auth:legacyClear',
       );
     } catch {
       // Best-effort: a failed wipe just means migration retries next launch.

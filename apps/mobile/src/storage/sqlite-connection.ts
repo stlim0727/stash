@@ -156,6 +156,11 @@ export class SqliteConnection<DB> {
   // as a coarse depth when an op waits a non-trivial time, to make head-of-line
   // blocking visible.
   private pending = 0;
+  // Caller-supplied label per unit currently on the tail (queued + running),
+  // keyed by label with a count — so a contention snapshot can show *what*
+  // collided (e.g. "getBookmark:1, replaceBookmark:22") instead of only a
+  // bare depth number. See `run`'s `label` param.
+  private pendingLabels = new Map<string, number>();
   // Wall-clock of the last reopen, for the inter-reopen cadence in noteReopen
   // (rapid reopens = thrash, not normal lifecycle).
   private lastReopenAt: number | null = null;
@@ -248,9 +253,13 @@ export class SqliteConnection<DB> {
    * The retry is deliberately single-shot: a back-to-back invalidation is not the
    * failure mode this targets, and a loop could spin. A second consecutive death
    * is surfaced (and recorded) rather than retried again.
+   *
+   * `label` identifies the caller (e.g. the repository method name) purely for
+   * contention diagnostics — see `describePending`/`noteSqliteTailWait` — and
+   * has no effect on scheduling or retry behavior.
    */
-  run<T>(work: (db: DB) => Promise<T>): Promise<T> {
-    return this.serialize(() => this.runOnce(work));
+  run<T>(work: (db: DB) => Promise<T>, label = 'unlabeled'): Promise<T> {
+    return this.serialize(() => this.runOnce(work), label);
   }
 
   /**
@@ -269,11 +278,21 @@ export class SqliteConnection<DB> {
         this.db = null;
         this.nextReopenIsLifecycle = await this.closeQuietly(db);
       }
-    });
+    }, 'closeCurrent');
+  }
+
+  /** A stable, sorted snapshot of what's currently queued, e.g.
+   *  "getBookmark:1, replaceBookmark:22" — deterministic order so equal
+   *  snapshots compare equal in tests, most-frequent label first otherwise. */
+  private describePending(): string {
+    return [...this.pendingLabels.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([label, count]) => `${label}:${count}`)
+      .join(', ');
   }
 
   /** Chain a task onto the serialization tail so units of work never overlap. */
-  private serialize<T>(task: () => Promise<T>): Promise<T> {
+  private serialize<T>(task: () => Promise<T>, label = 'unlabeled'): Promise<T> {
     if (!this.foregroundStateRegistered) {
       this.foregroundStateRegistered = true;
       // Never unregistered — this connection lives for the app's session,
@@ -292,18 +311,20 @@ export class SqliteConnection<DB> {
     // prime freeze suspect (Sentry STASH-C/H). Record only a non-trivial wait so
     // the steady state stays silent; coarse numbers only, never bookmark content.
     this.pending += 1;
+    this.pendingLabels.set(label, (this.pendingLabels.get(label) ?? 0) + 1);
     if (this.pending > 1) {
       // Eager: depth is known now, even if this unit ends up stuck behind a
       // long-running or wedged one and its own wait is never measured (see
       // noteSqliteQueueDepth).
-      noteSqliteQueueDepth(this.pending);
+      noteSqliteQueueDepth(this.pending, this.describePending());
     }
     const enqueuedAt = this.now();
     const transitionsAtEnqueue = this.backgroundTransitions;
     const instrumented = () => {
       const waitMs = this.now() - enqueuedAt;
       if (waitMs >= TAIL_WAIT_LOG_MS) {
-        recordLog('info', `sqlite tail wait ${waitMs}ms (depth ${this.pending})`);
+        const queue = this.describePending();
+        recordLog('info', `sqlite tail wait ${waitMs}ms (depth ${this.pending}, op=${label}, queue=${queue})`);
         // Also a small persistent cumulative summary (STASH-3Y investigation)
         // so max contention survives even if this log line itself later gets
         // rotated out of the 300-entry ring buffer by further noise. Skipped
@@ -312,7 +333,7 @@ export class SqliteConnection<DB> {
         // was suspended, not real contention, regardless of whether that
         // duration happens to be short or long.
         if (this.backgroundTransitions === transitionsAtEnqueue) {
-          noteSqliteTailWait(waitMs, this.pending);
+          noteSqliteTailWait(waitMs, this.pending, queue);
         }
       }
       return task();
@@ -324,9 +345,15 @@ export class SqliteConnection<DB> {
       () => undefined,
       () => undefined,
     );
-    // Release the depth slot once this unit settles (either outcome).
+    // Release the depth/label slot once this unit settles (either outcome).
     const release = () => {
       this.pending -= 1;
+      const count = this.pendingLabels.get(label) ?? 0;
+      if (count <= 1) {
+        this.pendingLabels.delete(label);
+      } else {
+        this.pendingLabels.set(label, count - 1);
+      }
     };
     result.then(release, release);
     return result;
