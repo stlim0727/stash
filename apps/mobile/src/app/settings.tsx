@@ -1535,6 +1535,14 @@ export default function SettingsScreen() {
     </ScrollView>
   );
 
+  const dismissSettings = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/");
+    }
+  };
+
   // The Stack header is hidden for this screen, so Settings supplies its own
   // header row (title + close) for both layouts.
   const header = (
@@ -1543,7 +1551,7 @@ export default function SettingsScreen() {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t("common.close")}
-        onPress={() => router.back()}
+        onPress={dismissSettings}
         hitSlop={8}
         style={({ pressed }) => [
           styles.headerClose,
@@ -1571,7 +1579,7 @@ export default function SettingsScreen() {
           style={styles.sheetBackdrop}
           accessibilityRole="button"
           accessibilityLabel={t("common.close")}
-          onPress={() => router.back()}
+          onPress={dismissSettings}
         />
         <View style={styles.sheetPanel}>
           {header}

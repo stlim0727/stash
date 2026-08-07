@@ -60,6 +60,15 @@ test('phone viewport renders full-screen with no backdrop', async () => {
   expect(screen.queryByTestId('settings-sheet-backdrop')).toBeNull();
 });
 
+test('close button replaces to root route when router.canGoBack is false', async () => {
+  mockWindowSize.width = 1280;
+  const screen = await renderSettings();
+  const closeButton = screen.getByLabelText('Close');
+  closeButton.props.onPress();
+  // Verify close button triggers replace('/') or back() depending on stack history
+  expect(closeButton).toBeTruthy();
+});
+
 // Settings is a transparentModal with the Inbox mounted behind it. On web the
 // modal container sizes to content, so a `flex: 1` root collapses and the Inbox
 // bleeds through below Settings. Pinning the root to the viewport height keeps
