@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -74,7 +74,7 @@ test('close button replaces to root route when router.canGoBack is false', async
   mockCanGoBack.mockReturnValue(false);
   const screen = await renderSettings();
   const closeButtons = screen.getAllByLabelText('Close');
-  closeButtons[0].props.onPress();
+  fireEvent.press(closeButtons[0]);
   expect(mockReplace).toHaveBeenCalledWith('/');
 });
 
