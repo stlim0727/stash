@@ -210,7 +210,10 @@ export function parseJsonBackup(text: string): ImportItem[] {
       collection: cleanString(entry.collection_name),
       metadata: parseImportedMetadata(entry),
       enrichment: parseImportedEnrichment(entry.enrichment),
-      createdAt: rawCreatedAt ? new Date(rawCreatedAt).toISOString() : null,
+      createdAt:
+        rawCreatedAt && !isNaN(new Date(rawCreatedAt).getTime())
+          ? new Date(rawCreatedAt).toISOString()
+          : null,
     };
   });
 }

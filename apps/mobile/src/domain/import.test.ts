@@ -337,6 +337,12 @@ test('a Stash HTML export round-trips back through parseNetscapeHtml', () => {
   assert.equal(byTitle['Filed']?.collection, 'Research');
 });
 
+test('parseNetscapeHtml extracts ADD_DATE timestamp when present', () => {
+  const html = '<DL><p><DT><A HREF="https://example.com" ADD_DATE="1699999999">Example</A></DL>';
+  const [item] = parseNetscapeHtml(html);
+  assert.equal(item?.createdAt, new Date(1699999999 * 1000).toISOString());
+});
+
 test('parseImport dispatches to the right parser by kind', () => {
   assert.equal(parseImport('json', JSON.stringify({ bookmarks: [{ url: 'https://x' }] })).length, 1);
   assert.equal(parseImport('html', '<DL><p><DT><A HREF="https://x">X</A></DL><p>').length, 1);
