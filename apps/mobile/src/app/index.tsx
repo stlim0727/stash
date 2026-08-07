@@ -17,6 +17,7 @@ import {
   BackHandler,
   FlatList,
   Image,
+  type ImageLoadEventData,
   Keyboard,
   LayoutAnimation,
   Linking,
@@ -117,7 +118,7 @@ import {
   nextHeaderCollapseState,
   type HeaderCollapseState,
 } from '@/domain/header-collapse';
-import { shouldShowWordmarkFallback } from '@/domain/wordmark';
+import { didWordmarkImageLoad, shouldShowWordmarkFallback } from '@/domain/wordmark';
 import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 
 function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
@@ -2104,7 +2105,18 @@ export default function InboxScreen() {
                 testID="inbox-wordmark-image"
                 source={wordmark.source}
                 resizeMode="contain"
-                onLoad={() => setWordmarkLoaded(true)}
+                // A load can "succeed" with a 0x0 image — e.g. a fetch aborted
+                // mid-download under memory/CPU pressure still fires `load` on
+                // web instead of `error` (STASH-5J). Treat that the same as a
+                // real failure instead of latching wordmarkLoaded permanently.
+                onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                  if (!didWordmarkImageLoad(event.nativeEvent.source)) {
+                    setWordmarkFailed(true);
+                    setWordmarkLoaded(false);
+                    return;
+                  }
+                  setWordmarkLoaded(true);
+                }}
                 // If the asset can't be loaded, keep the text wordmark visible
                 // instead of leaving a blank space (see showWordmarkFallback).
                 onError={() => {
