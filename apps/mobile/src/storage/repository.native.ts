@@ -2,7 +2,7 @@ import * as SQLite from 'expo-sqlite';
 
 import type { AIEnrichment, Bookmark, LocalPendingBookmark } from '@/domain/types';
 import { noteSqliteOpenFailure } from '@/storage/diagnostics';
-import { runImportBatchTransactions } from '@/storage/import-batch';
+import { IMPORT_BATCH_SIZE, runImportBatchTransactions } from '@/storage/import-batch';
 import { ensureNativeSqliteDirectory } from '@/storage/sqlite-directory.native';
 import { registerForBackgroundClose } from '@/storage/sqlite-app-lifecycle';
 import { SqliteConnection } from '@/storage/sqlite-connection';
@@ -361,6 +361,45 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       (db) => db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]),
       'deleteBookmark',
     );
+  }
+
+  // Chunked transactions (one connection.run per IMPORT_BATCH_SIZE rows)
+  // instead of one call per row — a large pull reconciling hundreds of rows
+  // otherwise stacks that many separate calls onto the single connection
+  // actor (Sentry STASH-5X: 802 deletions during one pull; see
+  // docs/architecture/sqlite-write-contention.md). Bounded per the same
+  // IMPORT_BATCH_SIZE chunking runImportBatchTransactions already uses,
+  // rather than one unbounded transaction for the whole batch — a
+  // first-sync-sized pull holding the write lock for its full duration is
+  // exactly the failure mode this file has been burned by repeatedly.
+  async upsertBookmarks(bookmarks: Bookmark[]): Promise<void> {
+    for (let offset = 0; offset < bookmarks.length; offset += IMPORT_BATCH_SIZE) {
+      const chunk = bookmarks.slice(offset, offset + IMPORT_BATCH_SIZE);
+      await this.connection.run(
+        (db) =>
+          db.withTransactionAsync(async () => {
+            for (const bookmark of chunk) {
+              await writeBookmark(db, bookmark);
+            }
+          }),
+        'upsertBookmarks',
+      );
+    }
+  }
+
+  async deleteBookmarks(ids: string[]): Promise<void> {
+    for (let offset = 0; offset < ids.length; offset += IMPORT_BATCH_SIZE) {
+      const chunk = ids.slice(offset, offset + IMPORT_BATCH_SIZE);
+      await this.connection.run(
+        (db) =>
+          db.withTransactionAsync(async () => {
+            for (const id of chunk) {
+              await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [id]);
+            }
+          }),
+        'deleteBookmarks',
+      );
+    }
   }
 
   async listQueue(): Promise<LocalPendingBookmark[]> {

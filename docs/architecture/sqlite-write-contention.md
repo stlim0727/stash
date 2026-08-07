@@ -8,8 +8,11 @@ next — turns a large backlog into dozens of simultaneous native calls piling
 up behind that one queue. The tell in logs/diagnostics is `"sqlite tail wait
 (depth N)"` climbing into the tens, with multi-second stalls.
 
-This has recurred five times. Each time, the fix is the same: make the loop
-genuinely sequential (`await` each call before starting the next).
+This has recurred repeatedly (see the numbered list below). Each time on
+native, the fix is the same: make the loop genuinely sequential (`await`
+each call before starting the next) or persist only once per batch. The web
+backend variant (below) needs the batch fix even when the loop is already
+sequential — see #6.
 
 1. **STASH-3B** — bulk import's local write loop.
 2. **STASH-3N (first)** — the startup orphaned-queue-entry reconciliation
@@ -81,10 +84,31 @@ genuinely sequential (`await` each call before starting the next).
    **Being already sequential does not make a bulk loop safe** — check
    for O(n) full-state persistence per iteration too.
 
+6. **STASH-5X (web backend variant)** — same bug class, but not SQLite: on
+   web, `storage/repository.ts`'s `insertBookmark`/`deleteBookmark` each
+   `JSON.stringify` and `localStorage.setItem` the **entire** bookmarks
+   array. `sync/pull-bookmarks.ts`'s reconcile loop called `insertBookmark`/
+   `deleteBookmark` once per upserted/deleted row — genuinely sequential
+   (`for...await`), so no SQLite tail-wait signature at all, but each of the
+   802 deletions in one report re-serialized and wrote a ~1000-1800-row
+   array to `localStorage` synchronously. Unlike native's single-row SQL
+   `DELETE`, this is real O(n) work per call, and `localStorage.setItem` is
+   synchronous — 802 of them back-to-back blocked the JS thread for 15+
+   seconds (confirmed by the freeze-detector log and a `VirtualizedList`
+   slow-update warning with a matching `prevDt`). Fixed by adding
+   `upsertBookmarks`/`deleteBookmarks` batch methods to `BookmarkRepository`
+   (web: one filter/map + one write for the whole batch; native: the
+   existing per-row statements wrapped in one transaction instead of N
+   separate `connection.run` calls) and switching the pull reconcile loop to
+   call them once instead of per row.
+
 **Before adding any new bulk write path**, grep for `Promise.all` **and**
 un-awaited calls inside `for` loops that touch `repository.*`. Also check
 whether each iteration persists only its own delta, or redundantly
-re-serializes/writes the whole collection it belongs to.
+re-serializes/writes the whole collection it belongs to — **on web this
+applies even to a genuinely sequential `for...await` loop**, since
+`repository.ts` persists by re-writing the whole array to `localStorage` on
+every call, not a per-row SQL statement.
 
 **Diagnosing a new report**: `storage.sqliteContention.labels` (added for
 Sentry STASH-5R) names the repository/session-storage method(s) queued on the

@@ -83,6 +83,19 @@ export interface BookmarkRepository {
     options?: ImportBatchOptions,
   ): Promise<void>;
   deleteBookmark(id: string): Promise<void>;
+  /**
+   * Atomically persist many upserted rows in one call instead of one
+   * `insertBookmark` per row (Sentry STASH-5X: the web backend re-serializes
+   * and writes its *entire* bookmarks array to localStorage on every single
+   * `insertBookmark`/`deleteBookmark` call — looping that per row over a
+   * large pull turns an O(n) write into O(rows × n), which froze the JS
+   * thread for 15+ seconds reconciling 802 remote deletions against a
+   * ~1800-row local cache). Optional so a caller without this method can
+   * still fall back to the per-row loop.
+   */
+  upsertBookmarks?(bookmarks: Bookmark[]): Promise<void>;
+  /** Same batching rationale as {@link upsertBookmarks}, for deletions. */
+  deleteBookmarks?(ids: string[]): Promise<void>;
   listQueue(): Promise<LocalPendingBookmark[]>;
   enqueue(entry: LocalPendingBookmark): Promise<void>;
   updateQueueEntry(entry: LocalPendingBookmark): Promise<void>;

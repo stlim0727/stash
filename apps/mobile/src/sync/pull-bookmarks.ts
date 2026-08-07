@@ -195,11 +195,26 @@ export async function pullRemoteChanges(
     recordLog('info', `pull: removing ${deletions.length} row(s) deleted on another device`);
   }
 
-  for (const bookmark of upserts) {
-    await repository.insertBookmark(bookmark);
+  // Batched in one call instead of one repository call per row — looping
+  // insertBookmark/deleteBookmark per row re-serializes and writes the
+  // *entire* local bookmarks array on the web backend on every single call,
+  // turning an O(n) write into O(rows × n) (Sentry STASH-5X: 802 deletions
+  // against a ~1800-row cache froze the JS thread for 15+ seconds). Falls
+  // back to the per-row loop for a repository that doesn't implement the
+  // batch method.
+  if (repository.upsertBookmarks) {
+    await repository.upsertBookmarks(upserts);
+  } else {
+    for (const bookmark of upserts) {
+      await repository.insertBookmark(bookmark);
+    }
   }
-  for (const id of deletions) {
-    await repository.deleteBookmark(id);
+  if (repository.deleteBookmarks) {
+    await repository.deleteBookmarks(deletions);
+  } else {
+    for (const id of deletions) {
+      await repository.deleteBookmark(id);
+    }
   }
   if (enrichments.length > 0) {
     await repository.upsertEnrichments(enrichments);

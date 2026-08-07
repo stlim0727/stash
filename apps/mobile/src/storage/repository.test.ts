@@ -10,6 +10,7 @@ import { repository } from '@/storage/repository';
 class MemoryStorage {
   private store = new Map<string, string>();
   failNextWriteTo: string | null = null;
+  setItemCallCount = 0;
   getItem(key: string): string | null {
     return this.store.has(key) ? (this.store.get(key) as string) : null;
   }
@@ -18,6 +19,7 @@ class MemoryStorage {
       this.failNextWriteTo = null;
       throw new Error(`injected write failure: ${key}`);
     }
+    this.setItemCallCount += 1;
     this.store.set(key, String(value));
   }
   removeItem(key: string): void {
@@ -137,6 +139,79 @@ test('clearAllData wipes library data but keeps meta (and never re-seeds)', asyn
     0,
     'a post-reset init must not re-seed',
   );
+});
+
+test('upsertBookmarks replaces existing rows and adds new ones in a single write (Sentry STASH-5X)', async () => {
+  await repository.init([]);
+  await repository.insertBookmark(makeBookmark('local-1'));
+  await repository.insertBookmark(makeBookmark('local-2'));
+
+  const updatedLocal1 = { ...makeBookmark('local-1'), title: 'Updated title' };
+  memoryStorage.setItemCallCount = 0;
+  await repository.upsertBookmarks!([updatedLocal1, makeBookmark('remote-3')]);
+
+  // One localStorage write for the whole batch, not one per bookmark — this
+  // is what prevents the O(rows) full-array re-serialize that froze the JS
+  // thread for 15+ seconds reconciling a large pull.
+  assert.equal(memoryStorage.setItemCallCount, 1);
+
+  const all = await repository.listBookmarks();
+  assert.equal(all.length, 3);
+  const byId = new Map(all.map((bookmark) => [bookmark.id, bookmark]));
+  assert.equal(byId.get('local-1')?.title, 'Updated title');
+  assert.ok(byId.has('local-2'));
+  assert.ok(byId.has('remote-3'));
+});
+
+test('upsertBookmarks dedupes a batch with two entries sharing a new id', async () => {
+  await repository.init([]);
+
+  const first = makeBookmark('new-1');
+  const second = { ...makeBookmark('new-1'), title: 'Second copy wins' };
+  await repository.upsertBookmarks!([first, second]);
+
+  const all = await repository.listBookmarks();
+  assert.equal(all.length, 1, 'two entries sharing an id must land as one row, not two');
+  assert.equal(all[0]?.title, 'Second copy wins');
+});
+
+test('upsertBookmarks is a no-op for an empty batch', async () => {
+  await repository.init([]);
+  await repository.insertBookmark(makeBookmark('local-1'));
+  memoryStorage.setItemCallCount = 0;
+
+  await repository.upsertBookmarks!([]);
+
+  assert.equal(memoryStorage.setItemCallCount, 0);
+  assert.equal((await repository.listBookmarks()).length, 1);
+});
+
+test('deleteBookmarks removes exactly the given ids in a single write (Sentry STASH-5X)', async () => {
+  await repository.init([]);
+  await repository.insertBookmark(makeBookmark('local-1'));
+  await repository.insertBookmark(makeBookmark('local-2'));
+  await repository.insertBookmark(makeBookmark('local-3'));
+
+  memoryStorage.setItemCallCount = 0;
+  await repository.deleteBookmarks!(['local-1', 'local-3']);
+
+  assert.equal(memoryStorage.setItemCallCount, 1);
+  const remaining = await repository.listBookmarks();
+  assert.deepEqual(
+    remaining.map((bookmark) => bookmark.id).sort(),
+    ['local-2'],
+  );
+});
+
+test('deleteBookmarks is a no-op for an empty batch', async () => {
+  await repository.init([]);
+  await repository.insertBookmark(makeBookmark('local-1'));
+  memoryStorage.setItemCallCount = 0;
+
+  await repository.deleteBookmarks!([]);
+
+  assert.equal(memoryStorage.setItemCallCount, 0);
+  assert.equal((await repository.listBookmarks()).length, 1);
 });
 
 test('an interrupted web identity rekey is completed from its commit journal on reload', async () => {

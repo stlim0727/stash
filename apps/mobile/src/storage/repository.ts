@@ -241,6 +241,37 @@ class WebBookmarkRepository implements BookmarkRepository {
     this.write(BOOKMARKS_KEY, this.bookmarks);
   }
 
+  // listBookmarks() always re-sorts by created_at, so the stored array's
+  // order is never observed — replacing existing rows in place and
+  // prepending brand-new ones (rather than replicating insertBookmark's
+  // per-call "move to front") is behaviorally equivalent and O(n) total.
+  async upsertBookmarks(bookmarks: Bookmark[]): Promise<void> {
+    if (bookmarks.length === 0) {
+      return;
+    }
+    const byId = new Map(bookmarks.map((bookmark) => [bookmark.id, bookmark]));
+    const existingIds = new Set(this.bookmarks.map((existing) => existing.id));
+    // Iterate the deduped map, not the raw `bookmarks` array — two input
+    // entries sharing an id neither of which is already local would
+    // otherwise both land in brandNew, landing two rows under one id
+    // (replaceBookmark's own comment above explains why that's a bug worth
+    // preventing). Not reachable via pullRemoteChanges's `upserts` today,
+    // but the dedup is free.
+    const brandNew = [...byId.values()].filter((bookmark) => !existingIds.has(bookmark.id));
+    const merged = this.bookmarks.map((existing) => byId.get(existing.id) ?? existing);
+    this.bookmarks = [...brandNew, ...merged];
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+  }
+
+  async deleteBookmarks(ids: string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+    const idSet = new Set(ids);
+    this.bookmarks = this.bookmarks.filter((existing) => !idSet.has(existing.id));
+    this.write(BOOKMARKS_KEY, this.bookmarks);
+  }
+
   async listQueue(): Promise<LocalPendingBookmark[]> {
     return [...this.queue];
   }
