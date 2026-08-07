@@ -155,3 +155,30 @@ export function reportSyncQueueHealthEscalation(entry: {
     // Escalation reporting is best-effort; never let it break sync.
   }
 }
+
+/**
+ * Reports a bulk-create chunk that finished with completed local ids still
+ * sitting in the sync queue (see `findStaleQueueEntries` in
+ * sync/sync-bookmarks.ts) — the STASH-3Y "queue count bounces/grows" signature.
+ * Only counts, never bookmark ids/content, ride as `extra`. Fixed message so
+ * every occurrence groups into one recurring Sentry issue instead of one per
+ * chunk.
+ */
+export function reportQueueReconcileMismatch(entry: {
+  staleCount: number;
+  chunkCompletedCount: number;
+  reenqueuedCount: number;
+}): void {
+  try {
+    Sentry.captureMessage('Bulk create chunk left stale queue entries behind', {
+      level: 'warning',
+      extra: {
+        stale_count: entry.staleCount,
+        chunk_completed_count: entry.chunkCompletedCount,
+        reenqueued_count: entry.reenqueuedCount,
+      },
+    });
+  } catch {
+    // Escalation reporting is best-effort; never let it break sync.
+  }
+}
