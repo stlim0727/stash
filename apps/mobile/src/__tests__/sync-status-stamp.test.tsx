@@ -45,6 +45,25 @@ jest.mock('@/api/bookmarks', () => {
     input.tags.map((name) => ({ id: `tag-${name}`, name, slug: name })),
   );
   const removeTags = jest.fn(async () => {});
+  const bulkAttachTagsAndCollections = jest.fn(
+    async (
+      items: Array<{ bookmark_id: string; tags: Array<{ name: string; source: string }> }>,
+    ) =>
+      items.map((item) => ({
+        bookmark_id: item.bookmark_id,
+        tags: item.tags.map((tag) => ({
+          id: `tag-${tag.name}`,
+          user_id: 'real-user',
+          name: tag.name,
+          slug: tag.name,
+          source: tag.source,
+          created_at: new Date().toISOString(),
+        })),
+        collection: null,
+        collection_attached: false,
+        bookmark_updated_at: null,
+      })),
+  );
   const resetLibrary = jest.fn(async () => ({ bookmarks: 0 }));
   const empty = async () => [];
   return {
@@ -60,6 +79,7 @@ jest.mock('@/api/bookmarks', () => {
       createBookmark,
       addTags,
       removeTags,
+      bulkAttachTagsAndCollections,
       resetLibrary,
     }),
   };

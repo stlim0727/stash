@@ -48,6 +48,16 @@ jest.mock('@/api/bookmarks', () => {
     createBookmarkApi: () => ({
       requestEnrichment: async () => null,
       addTags: async () => [],
+      bulkAttachTagsAndCollections: async (
+        items: Array<{ bookmark_id: string }>,
+      ) =>
+        items.map((item) => ({
+          bookmark_id: item.bookmark_id,
+          tags: [],
+          collection: null,
+          collection_attached: false,
+          bookmark_updated_at: null,
+        })),
       createBookmark: async () => ({ bookmark_id: 'unused' }),
       listBookmarksUpdatedSince: empty,
       listBookmarkIds: empty,

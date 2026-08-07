@@ -52,6 +52,7 @@ jest.mock('@/api/bookmarks', () => {
   const createBookmarkApi = jest.fn(() => ({
     requestEnrichment,
     addTags: empty,
+    bulkAttachTagsAndCollections: jest.fn(async () => []),
     createBookmark: jest.fn(),
     createBookmarks: jest.fn(async () => []),
     updateBookmark: jest.fn(),

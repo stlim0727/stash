@@ -60,6 +60,32 @@ jest.mock('@/api/bookmarks', () => {
     input.tags.map((name) => ({ id: `tag-${name}`, name, slug: name })),
   );
   const removeTags = jest.fn(async () => {});
+  // Fake for the batch-attach RPC (issue #713) — the pause-guard tests below
+  // only care that no upload happens while paused, so this just echoes back
+  // resolved tags per item, same shape as the real RPC's response.
+  const bulkAttach = jest.fn(
+    async (
+      items: Array<{
+        bookmark_id: string;
+        tags: Array<{ name: string; source: string }>;
+        collection_name: string | null;
+      }>,
+    ) =>
+      items.map((item) => ({
+        bookmark_id: item.bookmark_id,
+        tags: item.tags.map((tag) => ({
+          id: `tag-${tag.name}`,
+          user_id: "real-user",
+          name: tag.name,
+          slug: tag.name.toLowerCase(),
+          source: tag.source,
+          created_at: new Date().toISOString(),
+        })),
+        collection: null,
+        collection_attached: false,
+        bookmark_updated_at: null,
+      })),
+  );
   const resetLibrary = jest.fn(async () => ({ bookmarks: 0 }));
   const empty = async () => [];
   // Ids the "server" knows about — so a seeded already-synced local bookmark
@@ -71,6 +97,7 @@ jest.mock('@/api/bookmarks', () => {
     __listBookmarksUpdatedSinceMock: listBookmarksUpdatedSince,
     __addTagsMock: addTags,
     __removeTagsMock: removeTags,
+    __bulkAttachMock: bulkAttach,
     __setRemoteIds: (ids: string[]) => {
       remoteIds = ids;
     },
@@ -84,6 +111,7 @@ jest.mock('@/api/bookmarks', () => {
       createBookmark,
       addTags,
       removeTags,
+      bulkAttachTagsAndCollections: bulkAttach,
       resetLibrary,
     }),
   };
@@ -102,6 +130,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
   __listBookmarksUpdatedSinceMock: jest.Mock;
   __addTagsMock: jest.Mock;
   __removeTagsMock: jest.Mock;
+  __bulkAttachMock: jest.Mock;
   __setRemoteIds: (ids: string[]) => void;
 };
 const authMock = jest.requireMock('@/supabase/auth-provider') as {
@@ -127,6 +156,7 @@ beforeEach(() => {
   apiMock.__listBookmarksUpdatedSinceMock.mockClear();
   apiMock.__addTagsMock.mockClear();
   apiMock.__removeTagsMock.mockClear();
+  apiMock.__bulkAttachMock.mockClear();
   apiMock.__setRemoteIds([]);
   authMock.__setAuth({ status: 'authenticated', session: mockRealSession, userId: 'real-user' });
 });
@@ -270,12 +300,12 @@ test('adding a tag while paused does not upload until sync resumes', async () =>
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
   });
-  expect(apiMock.__addTagsMock).not.toHaveBeenCalled();
+  expect(apiMock.__bulkAttachMock).not.toHaveBeenCalled();
 
   await act(async () => {
     result.current.setSyncPaused(false);
   });
-  await waitFor(() => expect(apiMock.__addTagsMock).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1));
 });
 
 test('resetLibrary succeeds even while a paused syncNow call is mid-check', async () => {

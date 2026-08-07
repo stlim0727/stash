@@ -104,6 +104,32 @@ jest.mock('@/api/bookmarks', () => {
       created_at: '2026-06-13T00:00:00.000Z',
     })),
   );
+  // Fake for the batch-attach RPC (issue #713) — syncTagOps now routes "add"
+  // ops through this instead of addTags. Same fake-server shape as
+  // mass-import-sync.test.tsx's bulkAttachMock.
+  const bulkAttachTagsAndCollections = jest.fn(
+    async (
+      items: Array<{
+        bookmark_id: string;
+        tags: Array<{ name: string; source: string }>;
+        collection_name: string | null;
+      }>,
+    ) =>
+      items.map((item) => ({
+        bookmark_id: item.bookmark_id,
+        tags: item.tags.map((tag) => ({
+          id: `tag-${tag.name}`,
+          user_id: 'user-test',
+          name: tag.name,
+          slug: tag.name,
+          source: tag.source,
+          created_at: '2026-06-13T00:00:00.000Z',
+        })),
+        collection: null,
+        collection_attached: false,
+        bookmark_updated_at: null,
+      })),
+  );
   // A create's follow-up reconcile update (e.g. once metadata settles); the
   // return value is unused by the caller.
   const updateBookmark = jest.fn(async () => undefined);
@@ -154,6 +180,7 @@ jest.mock('@/api/bookmarks', () => {
   const createBookmarkApi = jest.fn((_session: unknown) => ({
     requestEnrichment,
     addTags,
+    bulkAttachTagsAndCollections,
     createBookmark,
     createBookmarks,
     updateBookmark,
@@ -171,6 +198,7 @@ jest.mock('@/api/bookmarks', () => {
     __spies: {
       requestEnrichment,
       addTags,
+      bulkAttachTagsAndCollections,
       listBookmarkIds,
       createBookmark,
       createBookmarks,
@@ -198,6 +226,7 @@ const apiMock = jest.requireMock('@/api/bookmarks') as {
   __spies: {
     requestEnrichment: jest.Mock;
     addTags: jest.Mock;
+    bulkAttachTagsAndCollections: jest.Mock;
     listBookmarkIds: jest.Mock;
     createBookmark: jest.Mock;
     createBookmarks: jest.Mock;
@@ -277,6 +306,7 @@ beforeEach(() => {
   mockForegroundHandlers = [];
   apiMock.__spies.requestEnrichment.mockClear();
   apiMock.__spies.addTags.mockClear();
+  apiMock.__spies.bulkAttachTagsAndCollections.mockClear();
   apiMock.__spies.listBookmarkIds.mockReset();
   apiMock.__spies.listBookmarkIds.mockResolvedValue([]);
   apiMock.__spies.createBookmark.mockClear();
@@ -3397,9 +3427,12 @@ test('acceptSuggestedTags links the tag with source ai and its confidence', asyn
   });
 
   expect(error).toBeNull();
-  expect(apiMock.__spies.addTags).toHaveBeenCalledWith(
-    expect.objectContaining({ bookmark_id: SYNCED_ID, source: 'ai' }),
-  );
+  expect(apiMock.__spies.bulkAttachTagsAndCollections).toHaveBeenCalledWith([
+    expect.objectContaining({
+      bookmark_id: SYNCED_ID,
+      tags: [expect.objectContaining({ name: 'design', source: 'ai' })],
+    }),
+  ]);
   expect(store.current!.getTagsForBookmark(SYNCED_ID).map((tag) => tag.name)).toContain('design');
 });
 

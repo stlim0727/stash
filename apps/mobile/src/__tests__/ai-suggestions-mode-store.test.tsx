@@ -68,6 +68,25 @@ jest.mock('@/api/bookmarks', () => {
     created_at: '2026-06-13T00:00:00.000Z',
     updated_at: '2026-06-13T00:00:00.000Z',
   }));
+  const bulkAttachTagsAndCollections = jest.fn(
+    async (
+      items: Array<{ bookmark_id: string; tags: Array<{ name: string; source: string }> }>,
+    ) =>
+      items.map((item) => ({
+        bookmark_id: item.bookmark_id,
+        tags: item.tags.map((tag) => ({
+          id: `tag-${tag.name}`,
+          user_id: 'user-test',
+          name: tag.name,
+          slug: tag.name,
+          source: tag.source,
+          created_at: '2026-06-13T00:00:00.000Z',
+        })),
+        collection: null,
+        collection_attached: false,
+        bookmark_updated_at: null,
+      })),
+  );
   const listBookmarkIds = jest.fn(async () => [] as string[]);
   const createBookmark = jest.fn(async () => ({
     bookmark_id: '7e64cf1e-0000-4000-8000-0000000000aa',
@@ -78,6 +97,7 @@ jest.mock('@/api/bookmarks', () => {
       requestEnrichment,
       addTags,
       createCollection,
+      bulkAttachTagsAndCollections,
       listBookmarkIds,
       createBookmark,
       listEnrichmentsUpdatedSince,
@@ -86,6 +106,7 @@ jest.mock('@/api/bookmarks', () => {
       requestEnrichment,
       addTags,
       createCollection,
+      bulkAttachTagsAndCollections,
       createBookmark,
       listBookmarksUpdatedSince: empty,
       listBookmarkIds,
