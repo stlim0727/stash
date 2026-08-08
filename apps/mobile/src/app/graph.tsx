@@ -453,14 +453,18 @@ export default function GraphScreen() {
         });
       }
     }
-    // minSharedDegree: 2 keeps only tags shared by ≥2 bookmarks — the shared
-    // backbone — instead of a cloud of single-use tags. Bookmarks whose only tags
-    // were filtered out fall back to the untagged hub (handled in the domain layer).
+    // Scale the degree thresholds dynamically based on total bookmarks so large libraries
+    // (e.g. 200+ or 500+ items) simplify the tag graph and avoid SVG hairballs / render lag (STASH-52).
+    const count = committedData.inbox.length;
+    const minSharedDegree = count >= 300 ? 4 : count >= 100 ? 3 : 2;
+    const minSharedBookmarks = count >= 300 ? 4 : count >= 100 ? 3 : 2;
+
     return {
       bookmarks: committedData.inbox,
       tags: [...tagsById.values()],
       bookmarkTags,
-      minSharedDegree: 2,
+      minSharedDegree,
+      minSharedBookmarks,
     };
     // Intentionally keyed on `signature`, not the churning `inbox`/accessor refs.
   }, [signature]);
