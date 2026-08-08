@@ -27,8 +27,9 @@ do. This file, `CLAUDE.md`, `docs/`, `.claude/skills` mirrored as
   `play-store-release` for Google Play submission, `web-deploy`/`web-preview`
   for Cloudflare, `supabase-migration` for schema, `circleci-logs` for CI
   failures, `review-pr`/`pr-ready-check` for PR gates, `update-agents-md`/`retro`
-  to keep this memory fresh, `screenshot`/`ui-preview` for visuals, and
-  `user-bookmark-summary` for live DB status. The release
+  to keep this memory fresh, `screenshot`/`ui-preview` for visuals,
+  `user-bookmark-summary` for live DB status, and `fetch-sentry-issues` for
+  Sentry checks and issue listing. The release
   procedure itself lives in `docs/development/releasing.md`. Change both skill
   mirrors together or the toolbelts drift. Prefer these over ad-hoc steps.
 - **What is verified vs assumed vs stale** (do not trust silence as proof):
