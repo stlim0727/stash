@@ -327,6 +327,7 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
   committed. When not opening a PR, state the concrete reason.
 - Open PRs as ready for review by default. Use draft only when the user asks or
   the work is knowingly incomplete.
+- **Always rebase feature branches on the latest target branch (`main`) before opening or updating a PR** (`git fetch origin main && git rebase origin/main`). Ensure all local commits apply cleanly over the newest target HEAD prior to pushing or creating the PR.
 - After opening or updating a PR, keep watching while active for CI failures and
   human review activity. Ignore routine bot/status comments such as deploy
   preview success messages.
