@@ -90,6 +90,13 @@ const BOOKMARK_LABEL_MAX_CHARS = 18;
 // gesture-local bucket adds context around the user's initial touch focal point.
 const INTERACTION_PRIORITY_LABEL_LIMIT = 16;
 const INTERACTION_NEARBY_LABEL_LIMIT = 8;
+// Idle-state counterpart to the interaction-time bucketing above: one
+// <SvgText> per non-priority bookmark scales fine as circles but reads as
+// pure text clutter once a library is large (STASH-5Z/STASH-60 — "rendering
+// too complex"). Past this many bookmark nodes, skip the bulk label layer
+// entirely and show only the priority bucket's labels (already always
+// rendered) — every bookmark still renders as a node, just without a title.
+const BULK_LABEL_MAX_BOOKMARK_NODES = 150;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
 // the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
 // HUB_MAX_R, and its label sits below (or, after the render-side declutter,
@@ -1348,8 +1355,11 @@ export default function GraphScreen() {
     [priorityBookmarkNodes, renderBookmarkLabel],
   );
   const bulkBookmarkLabels = useMemo(
-    () => bulkBookmarkNodes.map(renderBookmarkLabel),
-    [bulkBookmarkNodes, renderBookmarkLabel],
+    () =>
+      bookmarkNodes.length > BULK_LABEL_MAX_BOOKMARK_NODES
+        ? []
+        : bulkBookmarkNodes.map(renderBookmarkLabel),
+    [bookmarkNodes.length, bulkBookmarkNodes, renderBookmarkLabel],
   );
   const nearbyBookmarkLabels = useMemo(
     () =>
