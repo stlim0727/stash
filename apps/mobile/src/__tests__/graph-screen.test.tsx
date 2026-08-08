@@ -1010,3 +1010,46 @@ test('co-occurrence with no qualifying tag-pairs shows an intentional empty stat
   expect(screen.getByTestId('graph-mode-bipartite')).toBeTruthy();
   expect(screen.queryByTestId('graph-tag-t-cooking')).toBeNull();
 });
+
+test('a large library omits bulk bookmark-title labels but still renders every bookmark node (STASH-5Z/STASH-60)', async () => {
+  // 200 bookmarks sharing one tag: well past the bulk-label suppression
+  // threshold, so this reproduces the "rendering too complex" report — one
+  // <SvgText> per bookmark would otherwise be pure clutter at this scale.
+  const at = '2026-06-12T00:00:00.000Z';
+  const bookmarks = Array.from({ length: 200 }, (_, i) =>
+    makeStoredBookmark({
+      id: `7e64cf1e-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`,
+      title: `Bookmark ${i}`,
+    }),
+  );
+  fakeRepo.__reset(bookmarks, {
+    tags: [makeTag('t-shared', 'shared')],
+    bookmarkTags: bookmarks.map((b) => ({
+      bookmark_id: b.id,
+      tag_id: 't-shared',
+      source: 'user',
+      confidence: null,
+      created_at: at,
+    })),
+    collections: [],
+  });
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+  await waitFor(() => expect(screen.getByTestId('graph-tag-t-shared')).toBeTruthy());
+
+  // Every bookmark is still a node on the map — nothing is dropped.
+  for (const b of bookmarks) {
+    expect(screen.getByTestId(`graph-bookmark-${b.id}`)).toBeTruthy();
+  }
+
+  // But only the small priority bucket keeps a visible title label — not one
+  // per bookmark.
+  const labelContents = collectNodesWithProp(screen.toJSON(), 'content')
+    .map((node) => node.props.content)
+    .filter((content): content is string => typeof content === 'string')
+    .filter((content) => content.startsWith('Bookmark '));
+  expect(labelContents.length).toBeGreaterThan(0);
+  expect(labelContents.length).toBeLessThan(bookmarks.length);
+});
