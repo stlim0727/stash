@@ -176,6 +176,20 @@ export function wheelZoomScale(startScale: number, deltaY: number): number {
   );
 }
 
+export function isPointInViewBox(
+  x: number,
+  y: number,
+  viewBoxRect: ViewBoxRect,
+  margin = 100,
+): boolean {
+  return (
+    x >= viewBoxRect.minX - margin &&
+    x <= viewBoxRect.minX + viewBoxRect.w + margin &&
+    y >= viewBoxRect.minY - margin &&
+    y <= viewBoxRect.minY + viewBoxRect.h + margin
+  );
+}
+
 // Caps a bookmark node's label so a long title can't sprawl across the
 // canvas; appends an ellipsis when it clips. Pure + exported for testing.
 export function truncateGraphLabel(text: string, maxChars: number): string {
@@ -1197,7 +1211,7 @@ export default function GraphScreen() {
   // the outer Animated.View/transform wrapper — NOT this whole vector tree. On a
   // hundreds-of-node stash reconciling every <Line>/<Circle> twice per gesture is
   // the very jank the raster hint is meant to hide. `interacting` is deliberately
-  // NOT a dep. Keyed on everything the JSX reads.
+  // NOT a dep. Keyed on everything the JSX reads + viewBoxRect for viewport culling.
   const svgChildren = useMemo(() => {
     if (!settled) {
       return null;
@@ -1208,6 +1222,13 @@ export default function GraphScreen() {
           const source = nodeById.get(edge.source);
           const target = nodeById.get(edge.target);
           if (!source || !target) {
+            return null;
+          }
+          // Spatial viewport culling: skip rendering lines that are entirely off-screen
+          if (
+            !isPointInViewBox(source.x, source.y, viewBoxRect, 100) &&
+            !isPointInViewBox(target.x, target.y, viewBoxRect, 100)
+          ) {
             return null;
           }
           return (
@@ -1224,6 +1245,10 @@ export default function GraphScreen() {
           );
         })}
         {settled.nodes.map((node) => {
+          // Spatial viewport culling: skip nodes outside visible viewBox area
+          if (!isPointInViewBox(node.x, node.y, viewBoxRect, 80)) {
+            return null;
+          }
           if (node.kind === "bookmark") {
             return (
               <Circle
@@ -1261,10 +1286,6 @@ export default function GraphScreen() {
                   ? t("graph.untaggedA11y", { count: node.degree })
                   : t("graph.tagA11y", { name: node.label, count: node.degree })
               }
-              // The untagged hub stays a no-op on tap: routing to the Inbox's
-              // "uncollected" facet would be semantically wrong (that's a
-              // collections concept, not a tag). The real fix is a dedicated
-              // untagged-tag facet, deferred.
               onPress={
                 isUntagged ? undefined : () => applyTagFacet(node.tag_id)
               }
@@ -1275,8 +1296,9 @@ export default function GraphScreen() {
           if (node.kind === "bookmark") {
             return null;
           }
-          // Decluttered placement (may sit above/nudged instead of the fixed
-          // below position); the baseline is already resolved for either side.
+          if (!isPointInViewBox(node.x, node.y, viewBoxRect, 100)) {
+            return null;
+          }
           const placement = labelById.get(node.id);
           if (!placement) {
             return null;
@@ -1299,7 +1321,7 @@ export default function GraphScreen() {
         })}
       </>
     );
-  }, [settled, nodeById, labelById, palette, t, openBookmark, applyTagFacet]);
+  }, [settled, nodeById, labelById, palette, t, openBookmark, applyTagFacet, viewBoxRect]);
 
   const renderBookmarkLabel = useCallback(
     (node: (typeof bookmarkNodes)[number]) => (
