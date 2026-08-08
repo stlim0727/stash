@@ -57,13 +57,32 @@ jobs:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
         run: node scripts/check-migration-drift.mjs
 
+  check-verify-secrets:
+    # Job-level `if:` can't reference `secrets` directly (not a valid context
+    # there — GitHub rejects the whole workflow file with a parse error, which
+    # silently failed every run, on every branch, regardless of trigger).
+    # Do the check in a step instead and expose it via `needs` for the real job.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      has-secrets: ${{ steps.check.outputs.has-secrets }}
+    steps:
+      - id: check
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -n "$EXPO_PUBLIC_SUPABASE_URL" ] && [ -n "$EXPO_PUBLIC_SUPABASE_ANON_KEY" ]; then
+            echo "has-secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-secrets=false" >> "$GITHUB_OUTPUT"
+          fi
+
   verify-supabase:
     # Manual only — see the "deliberately workflow_dispatch-only" note above.
     # Also skips (whole job, no runner spent) when the secrets aren't set.
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      secrets.EXPO_PUBLIC_SUPABASE_URL != '' &&
-      secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY != ''
+    needs: check-verify-secrets
+    if: needs.check-verify-secrets.outputs.has-secrets == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
