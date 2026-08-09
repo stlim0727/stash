@@ -84,6 +84,10 @@ jobs:
     needs: check-verify-secrets
     if: needs.check-verify-secrets.outputs.has-secrets == 'true'
     runs-on: ubuntu-latest
+    # The script normally finishes in well under a minute; without this,
+    # a hang (e.g. a lingering Realtime socket keeping Node's event loop
+    # alive) burns a runner for up to GitHub's 6h default job timeout.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
