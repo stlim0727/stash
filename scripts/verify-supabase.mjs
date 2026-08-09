@@ -468,3 +468,7 @@ try {
     console.log(`Cleanup: ${cleaned}/${cleanups.length} steps completed.`);
   }
 }
+
+// Realtime sockets/timers can outlive their disconnect() call and keep the
+// event loop alive, hanging the process (and the CI job) indefinitely.
+process.exit(process.exitCode ?? 0);
