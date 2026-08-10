@@ -99,6 +99,12 @@ beforeEach(() => {
   mockStorage = {};
   mockBaseAnalyticsEnabled = true;
   mockPathname = '/';
+  // `mockRejectedValue` (persistent, not `-Once`) survives `clearAllMocks()`
+  // above — clearAllMocks only resets call history, not implementations —
+  // so explicitly restore the working default each test.
+  mockSetPreference.mockImplementation(async (key: string, value: string) => {
+    mockStorage[key] = value;
+  });
 });
 
 test('with no build-time gate, ready flips true immediately and configured stays false', async () => {
@@ -179,7 +185,9 @@ test('setEnabled(true) rolls back (opts back out) if persisting the preference f
   // test's own setEnabled(true) rollback.
   mockOptOut.mockClear();
 
-  mockSetPreference.mockRejectedValueOnce(new Error('storage unavailable'));
+  // Persistent failure (not just-once) — writeVerifiedPreference retries up
+  // to 3 times, so a single rejection would just succeed on retry.
+  mockSetPreference.mockRejectedValue(new Error('storage unavailable'));
 
   await act(async () => {
     await expect(latest().setEnabled(true)).rejects.toThrow('storage unavailable');
@@ -188,6 +196,28 @@ test('setEnabled(true) rolls back (opts back out) if persisting the preference f
   expect(mockOptIn).toHaveBeenCalledTimes(1);
   // Rolled back: the client must not be left silently collecting while
   // Settings would report it as off.
+  expect(mockOptOut).toHaveBeenCalledTimes(1);
+  expect(mockReset).toHaveBeenCalledTimes(1);
+  expect(latest().enabled).toBe(false);
+});
+
+test('setEnabled(false) clears in-memory state immediately, even if persisting the revocation fails', async () => {
+  enableBuildGate();
+  mockStorage[POSTHOG_FULL_ENABLED_STORAGE_KEY] = 'true';
+  const { latest } = await renderProvider();
+  await waitFor(() => expect(latest().enabled).toBe(true));
+  mockOptOut.mockClear();
+
+  // Persistent failure — writeVerifiedPreference retries up to 3 times.
+  mockSetPreference.mockRejectedValue(new Error('storage unavailable'));
+
+  await act(async () => {
+    await expect(latest().setEnabled(false)).rejects.toThrow('storage unavailable');
+  });
+
+  // The client itself is already opted out and reset regardless of whether
+  // the durable write ever succeeds — the UI must never claim "enabled" once
+  // the SDK has already stopped collecting.
   expect(mockOptOut).toHaveBeenCalledTimes(1);
   expect(mockReset).toHaveBeenCalledTimes(1);
   expect(latest().enabled).toBe(false);

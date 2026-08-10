@@ -2867,7 +2867,11 @@ export default function InboxScreen() {
               >
                 <Ionicons name={tileIcon} size={26} color={palette.text} />
                 {item.kind === 'collection' ? (
-                  <PostHogMaskView>
+                  // `folderTileLabel`'s `maxWidth: '100%'` resolves against
+                  // its own immediate parent, which is now this wrapper (not
+                  // the tile) — apply the same constraint here too, or a long
+                  // unbroken name can overflow into the adjacent tile.
+                  <PostHogMaskView style={styles.maskMaxWidth}>
                     <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
                       {item.label}
                     </Text>
@@ -3346,6 +3350,11 @@ export default function InboxScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  // Applied to the PostHogMaskView wrapping the folder-tile label — see the
+  // usage site for why this needs to be forwarded onto the wrapper too.
+  maskMaxWidth: {
+    maxWidth: '100%',
   },
   header: {
     position: 'absolute',

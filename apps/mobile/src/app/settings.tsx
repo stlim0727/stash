@@ -851,13 +851,26 @@ export default function SettingsScreen() {
                   <Text style={styles.accountMeta}>
                     {t("settings.account.signedIn")}
                   </Text>
-                  <PostHogMaskView>
-                    <Text style={styles.accountName} numberOfLines={1}>
-                      {auth.email ??
-                        auth.displayName ??
-                        t("settings.account.signedIn")}
-                    </Text>
-                  </PostHogMaskView>
+                  {/* `accessible` + `accessibilityLabel` give VoiceOver/
+                      TalkBack the real identity as one announced unit — the
+                      masked Text below has no accessible ancestor of its own
+                      otherwise (standalone, not inside a Pressable). */}
+                  <View
+                    accessible
+                    accessibilityLabel={
+                      auth.email ??
+                      auth.displayName ??
+                      t("settings.account.signedIn")
+                    }
+                  >
+                    <PostHogMaskView>
+                      <Text style={styles.accountName} numberOfLines={1}>
+                        {auth.email ??
+                          auth.displayName ??
+                          t("settings.account.signedIn")}
+                      </Text>
+                    </PostHogMaskView>
+                  </View>
                 </View>
                 <Button
                   variant="ghost"

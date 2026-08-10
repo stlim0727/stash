@@ -270,20 +270,31 @@ export default function BrowseTagsScreen() {
       );
     }
     if (isSearchZero) {
+      const message = t('inbox.tagsSearchZero', { query: debouncedQuery.trim() });
       return (
-        <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
-          {t('inbox.tagsSearchZero', { query: debouncedQuery.trim() })}
-        </Text>
+        // Contains the user's own search text — masked, with an outer
+        // accessible label since it's standalone (no Pressable ancestor).
+        <View accessible accessibilityLabel={message}>
+          <PostHogMaskView>
+            <Text style={[styles.emptyText, { color: palette.textSecondary }]}>{message}</Text>
+          </PostHogMaskView>
+        </View>
       );
     }
     if (isScopedEmpty) {
+      const message =
+        scope.kind === 'uncollected'
+          ? t('inbox.tagsUncollectedEmpty')
+          : t('inbox.tagsScopedEmpty', { name: scopeName });
       return (
         <View style={styles.emptyState}>
-          <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
-            {scope.kind === 'uncollected'
-              ? t('inbox.tagsUncollectedEmpty')
-              : t('inbox.tagsScopedEmpty', { name: scopeName })}
-          </Text>
+          {/* Sometimes a fixed string (uncollected case), sometimes a
+              collection name — masked unconditionally either way. */}
+          <View accessible accessibilityLabel={message}>
+            <PostHogMaskView>
+              <Text style={[styles.emptyText, { color: palette.textSecondary }]}>{message}</Text>
+            </PostHogMaskView>
+          </View>
           <Pressable
             accessibilityRole="button"
             testID="browse-tags-browse-all"
@@ -482,9 +493,19 @@ export default function BrowseTagsScreen() {
   // row (title + close) for both layouts — matching Settings/Report/Review.
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + 12, borderBottomColor: palette.border, backgroundColor: palette.background }]}>
-      <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={1}>
-        {headerTitle}
-      </Text>
+      {/* `accessible` + `accessibilityLabel` give VoiceOver/TalkBack the real
+          title as one announced unit (standalone, no Pressable ancestor);
+          `headerTitle`'s flex: 1 also has to live on this wrapper since an
+          unstyled PostHogMaskView wouldn't inherit it. Masked unconditionally
+          even though it's sometimes the fixed "All Tags" string, since it's
+          also sometimes a collection name. */}
+      <View accessible accessibilityLabel={headerTitle} style={styles.headerTitle}>
+        <PostHogMaskView>
+          <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={1}>
+            {headerTitle}
+          </Text>
+        </PostHogMaskView>
+      </View>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t('common.close')}

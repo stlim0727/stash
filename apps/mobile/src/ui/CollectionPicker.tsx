@@ -154,9 +154,11 @@ export function CollectionPicker({
               }}
               style={styles.option}
             >
-              <Text style={[styles.optionLabel, { color: palette.accent }]} numberOfLines={1}>
-                {t('collectionPicker.create', { name: trimmed })}
-              </Text>
+              <PostHogMaskView style={styles.maskFlex}>
+                <Text style={[styles.optionLabel, { color: palette.accent }]} numberOfLines={1}>
+                  {t('collectionPicker.create', { name: trimmed })}
+                </Text>
+              </PostHogMaskView>
             </Pressable>
           ) : null}
         </View>

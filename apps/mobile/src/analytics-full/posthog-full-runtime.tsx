@@ -35,6 +35,24 @@ import { analyticsScreenForPath } from '@/analytics/route';
 import { getPostHogAnalyticsEnabled } from '@/analytics/posthog';
 import { getPreference, setPreference } from '@/storage/preferences';
 
+/** Write the preference, verifying the read-back and retrying a few times —
+ *  mirrors `writeVerifiedState` in `analytics/posthog.ts`. This matters most
+ *  for the "false" tombstone: an unverified failed write leaves the durable
+ *  preference stale at "true", which would silently re-opt the user back in
+ *  on the next launch despite their just having turned it off. */
+async function writeVerifiedPreference(value: 'true' | 'false'): Promise<void> {
+  let lastError: unknown = new Error('Session replay preference could not be verified');
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, value);
+      if ((await getPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY)) === value) return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 interface PostHogFullContextValue {
   enabled: boolean;
   ready: boolean;
@@ -127,7 +145,7 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
         if (next) {
           await client.optIn();
           try {
-            await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'true');
+            await writeVerifiedPreference('true');
           } catch (error) {
             // The persisted preference is the source of truth on the next
             // launch — if it can't be written, don't leave the client
@@ -144,8 +162,16 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
           // fresh identity, mirroring the hand-rolled transport's "fresh
           // opt-in never revives a pre-opt-out identity" guarantee.
           client.reset();
-          await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
+          // Reflect the actual (now opted-out) SDK state immediately, before
+          // attempting the durable write — so the UI can never claim
+          // "enabled" once the client itself has already opted out, even if
+          // the persistence attempt below fails.
           setEnabledState(false);
+          // Retried and read-back-verified: an unverified failed write here
+          // would leave the durable preference stale at "true", and the
+          // startup-restore effect would silently opt the user back in on
+          // the next launch despite their just having turned this off.
+          await writeVerifiedPreference('false');
         }
       });
     },
@@ -178,7 +204,7 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
           // Narrower consent (this preference) survived a revoked broader
           // one (base analytics) — e.g. the app closed before the Settings
           // cascade finished persisting. Self-heal the stale preference.
-          await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
+          await writeVerifiedPreference('false').catch(() => {});
         }
         return;
       }
