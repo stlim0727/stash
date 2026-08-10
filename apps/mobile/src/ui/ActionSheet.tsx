@@ -85,11 +85,18 @@ export function ActionSheet({
           <View style={[styles.grabber, { backgroundColor: palette.border }]} />
           {title ? (
             titleMask ? (
-              <PostHogMaskView>
-                <Text style={[styles.title, { color: palette.textSecondary }]} numberOfLines={2}>
-                  {title}
-                </Text>
-              </PostHogMaskView>
+              // `accessible` + `accessibilityLabel` give VoiceOver/TalkBack
+              // the real title as one announced unit — standalone (not
+              // inside a Pressable), and without it a screen-reader user has
+              // no way to tell which bookmark this sheet's generic action
+              // labels (Open/Share/Move/Trash) apply to.
+              <View accessible accessibilityLabel={title}>
+                <PostHogMaskView>
+                  <Text style={[styles.title, { color: palette.textSecondary }]} numberOfLines={2}>
+                    {title}
+                  </Text>
+                </PostHogMaskView>
+              </View>
             ) : (
               <Text style={[styles.title, { color: palette.textSecondary }]} numberOfLines={2}>
                 {title}

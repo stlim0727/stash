@@ -153,6 +153,17 @@ toggles on, seed realistic bookmark content, navigate through Inbox/Library/
 bookmark detail/search, then inspect the resulting recording in the PostHog
 dashboard for any unmasked title/URL/tag/note/image content.
 
+Consent durability has the same ceiling as the base analytics client's own
+`writeVerifiedState` (3 retries with a read-back verify, then give up —
+`posthog-full-runtime.tsx`'s `writeVerifiedPreference`): a disable that fails
+all 3 durable-write attempts still opts the in-memory client out immediately
+(so nothing records for the rest of that session) and surfaces a Settings
+error prompting a retry, but if the app is killed before the user retries,
+the next launch's stored preference could still read stale. As part of the
+manual pass, worth also killing the app immediately after a simulated
+preference-write failure on disable and confirming the next launch's
+behavior.
+
 ### OAuth sign-in (Apple / Google)
 
 Settings offers "Sign in with Apple / Google", which upgrades the anonymous account to a permanent one. The client uses a browser-based PKCE flow against GoTrue (`/auth/v1/authorize` → `grant_type=pkce`), so no `supabase-js` dependency or custom backend is needed. To enable it on a project:
