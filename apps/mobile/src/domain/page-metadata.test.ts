@@ -172,12 +172,15 @@ test('checkYoutubeAvailability reports unknown, not unavailable, on oEmbed 401 (
 // A share.google short link has no oEmbed endpoint directly, but is a known
 // YouTube share-sheet shortener (see urls.ts's stripsShareSi) — it must be
 // resolved via redirect before conceding to 'unknown', or every video shared
-// this way would silently never get checked.
-test('checkYoutubeAvailability resolves a share.google redirect before checking oEmbed', async () => {
+// this way would silently never get checked. Resolution must use HEAD (PR
+// review): RN's fetch polyfill only resolves once the full body has
+// downloaded, so a GET here would buffer the whole landed YouTube page just
+// to read `response.url`.
+test('checkYoutubeAvailability resolves a share.google redirect via HEAD before checking oEmbed', async () => {
   const originalFetch = globalThis.fetch;
-  const calls: string[] = [];
-  globalThis.fetch = (async (target: string) => {
-    calls.push(target);
+  const calls: Array<{ url: string; method?: string }> = [];
+  globalThis.fetch = (async (target: string, init?: RequestInit) => {
+    calls.push({ url: target, method: init?.method });
     if (target.startsWith('https://share.google/')) {
       return { url: 'https://www.youtube.com/shorts/MufIgnqP1vk' } as unknown as Response;
     }
@@ -188,7 +191,9 @@ test('checkYoutubeAvailability resolves a share.google redirect before checking 
       await checkYoutubeAvailability('https://share.google/bb3vpuiCbbyVhrpTp'),
       'unavailable',
     );
-    assert.ok(calls.some((c) => c.includes('youtube.com%2Fwatch%3Fv%3DMufIgnqP1vk')));
+    const shortenerCall = calls.find((c) => c.url.startsWith('https://share.google/'));
+    assert.equal(shortenerCall?.method, 'HEAD');
+    assert.ok(calls.some((c) => c.url.includes('youtube.com%2Fwatch%3Fv%3DMufIgnqP1vk')));
   } finally {
     globalThis.fetch = originalFetch;
   }

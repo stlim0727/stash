@@ -627,8 +627,13 @@ export function isYoutubeAvailabilityCandidate(rawUrl: string): boolean {
 }
 
 /**
- * Follows a known shortener (`share.google`) to its final landing URL, without
- * reading the landed page's body — we only need the URL, not its content.
+ * Follows a known shortener (`share.google`) to its final landing URL. Uses
+ * HEAD, not GET (same reasoning as `preferHiResYoutubeThumbnail`'s HEAD probe
+ * above): React Native's fetch polyfill resolves at XHR `onload`, i.e. only
+ * once the *entire* response body has downloaded, so a GET here would buffer
+ * the whole landed YouTube page just to read `response.url`, bypassing the
+ * size caps the rest of this module enforces on page fetches. A HEAD has no
+ * body to buffer, and redirect chains resolve identically for HEAD and GET.
  * Returns null on any failure/timeout/non-shortener host.
  */
 async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | null> {
@@ -638,7 +643,11 @@ async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | nu
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(rawUrl, { redirect: 'follow', signal: controller.signal });
+    const response = await fetch(rawUrl, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+    });
     return response.url || null;
   } catch {
     return null;

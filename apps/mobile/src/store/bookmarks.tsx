@@ -3304,6 +3304,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ? current
             : current.map((item) => (item.id === id ? updated : item)),
         );
+        // Keep the ref current immediately — same rationale as
+        // enrichInBackground's identical line: another local-only writer
+        // (checkVideoAvailability) reading bookmarksRef.current moments later
+        // must see this refreshed metadata, not a pre-refresh snapshot it
+        // would otherwise revert (PR review, STASH-61).
+        bookmarksRef.current = bookmarksRef.current
+          ? bookmarksRef.current.map((item) => (item.id === id ? updated : item))
+          : bookmarksRef.current;
         try {
           await ensureRepositoryReady();
           await repository.updateBookmark(updated);
