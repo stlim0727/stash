@@ -76,10 +76,15 @@ export function usePostHogFull(): PostHogFullContextValue {
 function PostHogFullScreenTracker() {
   const posthog = usePostHog();
   const pathname = usePathname();
+  // Re-fires when `enabled` flips true (not just when `pathname` changes) so
+  // the screen the user is already on when they opt in gets recorded — the
+  // pathname-only version would silently skip it until the next navigation.
+  const { enabled } = usePostHogFull();
   useEffect(() => {
+    if (!enabled) return;
     const screen = analyticsScreenForPath(pathname);
     if (screen) void posthog.screen(screen);
-  }, [posthog, pathname]);
+  }, [posthog, pathname, enabled]);
   return null;
 }
 
@@ -158,14 +163,22 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
         getPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY),
         getPostHogAnalyticsEnabled(),
       ]);
-      if (!active || stored !== 'true') return;
-      if (!baseEnabled) {
-        // The base analytics preference (ANALYTICS_STATE_KEY) was revoked
-        // without this preference being reconciled — e.g. the app closed
-        // before the Settings cascade finished persisting. Narrower
-        // consent must not survive a revoked broader consent: self-heal
-        // the stale preference and never opt in.
-        await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
+      const shouldRestore = stored === 'true' && baseEnabled;
+      if (!shouldRestore) {
+        // The native SDK persists its OWN opt-in state independently of this
+        // preference — `defaultOptIn: false` only supplies a default when no
+        // prior SDK-side state exists at all, so a session that called
+        // optIn() but was killed before this preference finished writing
+        // would otherwise load this new client instance already opted in.
+        // Force it back out explicitly rather than trusting whatever the SDK
+        // loaded, regardless of which condition failed.
+        await client.optOut();
+        if (stored === 'true' && !baseEnabled) {
+          // Narrower consent (this preference) survived a revoked broader
+          // one (base analytics) — e.g. the app closed before the Settings
+          // cascade finished persisting. Self-heal the stale preference.
+          await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
+        }
         return;
       }
       await client.optIn();

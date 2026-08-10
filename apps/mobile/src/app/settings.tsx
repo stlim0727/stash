@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { useRouter } from "expo-router";
+import { PostHogMaskView } from "posthog-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -850,11 +851,13 @@ export default function SettingsScreen() {
                   <Text style={styles.accountMeta}>
                     {t("settings.account.signedIn")}
                   </Text>
-                  <Text style={styles.accountName} numberOfLines={1}>
-                    {auth.email ??
-                      auth.displayName ??
-                      t("settings.account.signedIn")}
-                  </Text>
+                  <PostHogMaskView>
+                    <Text style={styles.accountName} numberOfLines={1}>
+                      {auth.email ??
+                        auth.displayName ??
+                        t("settings.account.signedIn")}
+                    </Text>
+                  </PostHogMaskView>
                 </View>
                 <Button
                   variant="ghost"

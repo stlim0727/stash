@@ -419,6 +419,7 @@ export const ko: Catalog = {
   'trash.emptyBody': '휴지통의 모든 항목이 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.',
   'trash.emptyConfirm': '모두 삭제',
   'trash.restore': '복원',
+  'trash.openA11y': '{title}(으)로 이동',
 
   'update.title': '업데이트 필요',
   'update.body': '이 버전의 Keepory는 더 이상 지원되지 않습니다. 계속하려면 최신 버전으로 업데이트하세요.',

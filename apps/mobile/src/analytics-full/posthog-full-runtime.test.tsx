@@ -129,14 +129,37 @@ test('does not restore, and self-heals the stale preference, when base analytics
   await waitFor(() => expect(latest().ready).toBe(true));
 
   expect(mockOptIn).not.toHaveBeenCalled();
+  // The native SDK persists its own opt-in state independently of this
+  // preference; force it back out explicitly rather than trusting whatever
+  // it loaded (see the runtime module's restore-effect comment).
+  expect(mockOptOut).toHaveBeenCalledTimes(1);
   expect(latest().enabled).toBe(false);
   expect(mockStorage[POSTHOG_FULL_ENABLED_STORAGE_KEY]).toBe('false');
+});
+
+test('on a fresh install (nothing stored at all), any SDK-persisted opt-in is still forced out', async () => {
+  enableBuildGate();
+  // No mockStorage entry at all — simulates a fresh install where the SDK's
+  // OWN persisted state (not this app's preference) could still say "opted
+  // in" from, e.g., a previous run of the SDK's test/demo mode. `optOut()`
+  // must run regardless of why restoration doesn't apply, not only for the
+  // "stale preference" branch.
+  const { latest } = await renderProvider();
+  await waitFor(() => expect(latest().ready).toBe(true));
+
+  expect(mockOptIn).not.toHaveBeenCalled();
+  expect(mockOptOut).toHaveBeenCalledTimes(1);
+  expect(latest().enabled).toBe(false);
 });
 
 test('setEnabled(true) rolls back (opts back out) if persisting the preference fails', async () => {
   enableBuildGate();
   const { latest } = await renderProvider();
   await waitFor(() => expect(latest().ready).toBe(true));
+  // Nothing was stored, so the restore effect already forced one optOut()
+  // call of its own — clear it so the assertions below count only this
+  // test's own setEnabled(true) rollback.
+  mockOptOut.mockClear();
 
   mockSetPreference.mockRejectedValueOnce(new Error('storage unavailable'));
 
@@ -172,6 +195,10 @@ test('a rapid enable-then-disable (the Settings cascade race) always ends opted 
   enableBuildGate();
   const { latest } = await renderProvider();
   await waitFor(() => expect(latest().ready).toBe(true));
+  // Nothing was stored, so the restore effect already forced one optOut()
+  // call of its own — clear it so this test's assertions count only the
+  // enable/disable calls under test.
+  mockOptOut.mockClear();
 
   // Artificially delay optIn so, without serialization, the disable call's
   // optOut() could physically land on the client before this pending optIn
@@ -209,17 +236,36 @@ test('a rapid enable-then-disable (the Settings cascade race) always ends opted 
 
 test('captures screen views only for allowlisted routes, through posthog.screen()', async () => {
   enableBuildGate();
+  mockStorage[POSTHOG_FULL_ENABLED_STORAGE_KEY] = 'true';
   mockPathname = '/bookmark/e7f2c1a0-0000-4000-8000-000000000001';
-  await renderProvider();
+  const { latest } = await renderProvider();
+  await waitFor(() => expect(latest().enabled).toBe(true));
 
   await waitFor(() => expect(mockScreen).toHaveBeenCalledWith('bookmark_detail'));
 });
 
 test('does not call posthog.screen() for a route outside the allowlist', async () => {
   enableBuildGate();
+  mockStorage[POSTHOG_FULL_ENABLED_STORAGE_KEY] = 'true';
   mockPathname = '/auth/callback?code=secret';
-  await renderProvider();
+  const { latest } = await renderProvider();
+  await waitFor(() => expect(latest().enabled).toBe(true));
 
-  await waitFor(() => expect(lastClientInstance).not.toBeNull());
   expect(mockScreen).not.toHaveBeenCalled();
+});
+
+test('emits the current screen immediately after opting in, not just on the next navigation', async () => {
+  enableBuildGate();
+  mockPathname = '/settings';
+  const { latest } = await renderProvider();
+  await waitFor(() => expect(latest().ready).toBe(true));
+  // The tracker's effect already ran once for '/settings' while disabled —
+  // confirm it was suppressed, then opt in without navigating anywhere.
+  expect(mockScreen).not.toHaveBeenCalled();
+
+  await act(async () => {
+    await latest().setEnabled(true);
+  });
+
+  await waitFor(() => expect(mockScreen).toHaveBeenCalledWith('settings'));
 });

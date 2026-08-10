@@ -462,7 +462,7 @@ export default function BrowseTagsScreen() {
                 style={({ pressed }) => [styles.listRow, { opacity: pressed ? 0.6 : 1 }]}
               >
                 <View style={[styles.listDot, { backgroundColor: color }]} />
-                <PostHogMaskView>
+                <PostHogMaskView style={styles.maskFlex}>
                   <Text style={[styles.listName, { color: palette.text }]} numberOfLines={1}>
                     {`#${item.name}`}
                   </Text>
@@ -547,6 +547,13 @@ const webOverscrollContain: StyleProp<ViewStyle> =
 
 const styles = StyleSheet.create({
   fullScreen: {
+    flex: 1,
+  },
+  // Applied to the PostHogMaskView wrapping the tag-name Text below — that
+  // Text's own `flex: 1` (in `listName`) no longer sizes the row once it's
+  // nested inside an unstyled wrapper View; the flex must live on the
+  // wrapper for a long tag name to still shrink to the space beside the count.
+  maskFlex: {
     flex: 1,
   },
   sheetOverlay: {

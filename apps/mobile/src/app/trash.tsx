@@ -53,6 +53,12 @@ export default function TrashScreen() {
         renderItem={({ item }) => (
           <Pressable
             style={[styles.card, { backgroundColor: palette.card }]}
+            // PostHogMaskView below forces its own wrapper accessibilityLabel
+            // ("ph-no-capture"), which would otherwise replace this card's
+            // auto content-derived accessible name — restore it explicitly.
+            accessibilityLabel={t('trash.openA11y', {
+              title: displayTitle(item) ?? t('common.untitled'),
+            })}
             onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
           >
             <PostHogMaskView style={styles.cardContent}>

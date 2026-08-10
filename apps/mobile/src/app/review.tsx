@@ -356,7 +356,7 @@ export default function ReviewScreen() {
             style={styles.titleRow}
             onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
           >
-            <PostHogMaskView>
+            <PostHogMaskView style={styles.maskFlex}>
               <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={2}>
                 {item.title}
               </Text>
@@ -546,6 +546,12 @@ export default function ReviewScreen() {
 
 const styles = StyleSheet.create({
   fullScreen: {
+    flex: 1,
+  },
+  // Applied to the PostHogMaskView wrapping cardTitle Text below — its own
+  // `flex: 1` no longer sizes the row once nested inside an unstyled wrapper
+  // View; the flex must live on the wrapper for the chevron to stay pinned.
+  maskFlex: {
     flex: 1,
   },
   sheetOverlay: {

@@ -69,7 +69,7 @@ export function CollectionPicker({
         onPress={() => setOpen((value) => !value)}
         style={[styles.row, { backgroundColor: palette.surface, borderColor: palette.border }]}
       >
-        <PostHogMaskView>
+        <PostHogMaskView style={styles.maskFlex}>
           <Text style={[styles.rowValue, { color: palette.text }]} numberOfLines={1}>
             {t('collectionPicker.current', { name: currentName ?? t('collectionPicker.inbox') })}
           </Text>
@@ -113,6 +113,10 @@ export function CollectionPicker({
             <Pressable
               key={collection.id}
               accessibilityRole="button"
+              // PostHogMaskView below forces its own wrapper accessibilityLabel
+              // ("ph-no-capture"), which would otherwise replace this row's
+              // auto content-derived accessible name — restore it explicitly.
+              accessibilityLabel={collection.name}
               disabled={busy}
               onPress={() => {
                 onSelect(collection.id);
@@ -126,7 +130,7 @@ export function CollectionPicker({
                 color={palette.textSecondary}
                 style={styles.optionIcon}
               />
-              <PostHogMaskView>
+              <PostHogMaskView style={styles.maskFlex}>
                 <Text style={[styles.optionLabel, { color: palette.text }]} numberOfLines={1}>
                   {collection.name}
                 </Text>
@@ -164,6 +168,12 @@ export function CollectionPicker({
 const styles = StyleSheet.create({
   wrapper: {
     gap: 8,
+  },
+  // Applied to the PostHogMaskView wrapping rowValue/optionLabel Text below —
+  // their own `flex: 1` no longer sizes the row once nested inside an
+  // unstyled wrapper View; the flex must live on the wrapper itself.
+  maskFlex: {
+    flex: 1,
   },
   row: {
     flexDirection: 'row',

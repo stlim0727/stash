@@ -608,6 +608,7 @@ export const en = {
   'trash.emptyBody': 'This permanently deletes all items in the trash. This cannot be undone.',
   'trash.emptyConfirm': 'Delete All',
   'trash.restore': 'Restore',
+  'trash.openA11y': 'Open {title}',
 
   'update.title': 'Update Required',
   'update.body': 'This version of Keepory is no longer supported. Please update to continue.',

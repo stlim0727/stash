@@ -1,5 +1,5 @@
 import { useMemo, type ComponentProps } from 'react';
-import { Text, type StyleProp, type TextStyle } from 'react-native';
+import { Text, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import { PostHogMaskView } from 'posthog-react-native';
 
 import { highlightSegments } from '@/domain/highlight';
@@ -25,19 +25,26 @@ interface HighlightedTextProps extends TextProps {
  * Every current use of this component renders bookmark-derived content
  * (title, site label, URL), so the output is unconditionally wrapped in
  * `PostHogMaskView` to hide it from PostHog session replay recordings.
+ * Callers use this in several different flex layouts (a fixed-width list row,
+ * a `flex: 1` card title, a `flexShrink: 1` card URL) — the wrapper View has
+ * no layout behavior of its own unless it carries the same layout-relevant
+ * style the Text would have had as a direct row child, so `textProps.style`
+ * is forwarded to it too (font/color properties in that style are simply
+ * ignored by the View; only the flex/sizing ones matter here).
  */
 export function HighlightedText({ text, query, highlightStyle, ...textProps }: HighlightedTextProps) {
   const segments = useMemo(() => highlightSegments(text, query), [text, query]);
+  const wrapperStyle = textProps.style as StyleProp<ViewStyle>;
   // Fast path: nothing matched (or no query) → a single plain run, no nesting.
   if (segments.length === 1 && !segments[0]!.match) {
     return (
-      <PostHogMaskView>
+      <PostHogMaskView style={wrapperStyle}>
         <Text {...textProps}>{text}</Text>
       </PostHogMaskView>
     );
   }
   return (
-    <PostHogMaskView>
+    <PostHogMaskView style={wrapperStyle}>
       <Text {...textProps}>
         {segments.map((segment, index) =>
           segment.match ? (
