@@ -168,6 +168,45 @@ test('setEnabled(false) opts out, resets identity, and persists', async () => {
   expect(latest().enabled).toBe(false);
 });
 
+test('a rapid enable-then-disable (the Settings cascade race) always ends opted out', async () => {
+  enableBuildGate();
+  const { latest } = await renderProvider();
+  await waitFor(() => expect(latest().ready).toBe(true));
+
+  // Artificially delay optIn so, without serialization, the disable call's
+  // optOut() could physically land on the client before this pending optIn
+  // resolves — exactly what a user rapidly turning replay on then off (or
+  // the Settings cascade turning off base analytics right after) can hit.
+  let releaseOptIn: (() => void) | undefined;
+  mockOptIn.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        releaseOptIn = resolve;
+      }),
+  );
+
+  const enablePromise = latest().setEnabled(true);
+  const disablePromise = latest().setEnabled(false);
+
+  // Let the queued enable task actually start (its `client.optIn()` call is
+  // what assigns `releaseOptIn`) before releasing it — otherwise there is
+  // nothing yet to release and both promises hang forever.
+  await waitFor(() => expect(mockOptIn).toHaveBeenCalledTimes(1));
+  // The disable call must not have started its own client work yet — it's
+  // queued behind the still-in-flight enable call, not racing it.
+  expect(mockOptOut).not.toHaveBeenCalled();
+
+  releaseOptIn?.();
+  await act(async () => {
+    await Promise.all([enablePromise, disablePromise]);
+  });
+
+  expect(mockOptIn).toHaveBeenCalledTimes(1);
+  expect(mockOptOut).toHaveBeenCalledTimes(1);
+  expect(latest().enabled).toBe(false);
+  expect(mockStorage[POSTHOG_FULL_ENABLED_STORAGE_KEY]).toBe('false');
+});
+
 test('captures screen views only for allowlisted routes, through posthog.screen()', async () => {
   enableBuildGate();
   mockPathname = '/bookmark/e7f2c1a0-0000-4000-8000-000000000001';

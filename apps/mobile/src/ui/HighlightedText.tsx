@@ -1,5 +1,6 @@
 import { useMemo, type ComponentProps } from 'react';
 import { Text, type StyleProp, type TextStyle } from 'react-native';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { highlightSegments } from '@/domain/highlight';
 
@@ -20,24 +21,34 @@ interface HighlightedTextProps extends TextProps {
  * literal highlighting is testable without a renderer. All other Text props
  * (style, numberOfLines, testID, …) pass straight through to the outer Text, so
  * this is a drop-in replacement for a plain `<Text>` label.
+ *
+ * Every current use of this component renders bookmark-derived content
+ * (title, site label, URL), so the output is unconditionally wrapped in
+ * `PostHogMaskView` to hide it from PostHog session replay recordings.
  */
 export function HighlightedText({ text, query, highlightStyle, ...textProps }: HighlightedTextProps) {
   const segments = useMemo(() => highlightSegments(text, query), [text, query]);
   // Fast path: nothing matched (or no query) → a single plain run, no nesting.
   if (segments.length === 1 && !segments[0]!.match) {
-    return <Text {...textProps}>{text}</Text>;
+    return (
+      <PostHogMaskView>
+        <Text {...textProps}>{text}</Text>
+      </PostHogMaskView>
+    );
   }
   return (
-    <Text {...textProps}>
-      {segments.map((segment, index) =>
-        segment.match ? (
-          <Text key={index} style={highlightStyle}>
-            {segment.text}
-          </Text>
-        ) : (
-          segment.text
-        ),
-      )}
-    </Text>
+    <PostHogMaskView>
+      <Text {...textProps}>
+        {segments.map((segment, index) =>
+          segment.match ? (
+            <Text key={index} style={highlightStyle}>
+              {segment.text}
+            </Text>
+          ) : (
+            segment.text
+          ),
+        )}
+      </Text>
+    </PostHogMaskView>
   );
 }

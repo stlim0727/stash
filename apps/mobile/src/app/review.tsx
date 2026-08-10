@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -355,9 +356,11 @@ export default function ReviewScreen() {
             style={styles.titleRow}
             onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
           >
-            <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={2}>
-              {item.title}
-            </Text>
+            <PostHogMaskView>
+              <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={2}>
+                {item.title}
+              </Text>
+            </PostHogMaskView>
             <Text style={[styles.titleChevron, { color: palette.textSecondary }]}>›</Text>
           </Pressable>
           {item.stale ? (
@@ -419,14 +422,16 @@ export default function ReviewScreen() {
                   disabled={busy}
                   onPress={() => acceptFolder(item)}
                 >
-                  <Text style={styles.chipLabel}>
-                    <FolderSuggestionLabel
-                      t={t}
-                      folder={item.folder}
-                      accentColor={palette.accent}
-                      secondaryColor={palette.textSecondary}
-                    />
-                  </Text>
+                  <PostHogMaskView>
+                    <Text style={styles.chipLabel}>
+                      <FolderSuggestionLabel
+                        t={t}
+                        folder={item.folder}
+                        accentColor={palette.accent}
+                        secondaryColor={palette.textSecondary}
+                      />
+                    </Text>
+                  </PostHogMaskView>
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
@@ -454,9 +459,11 @@ export default function ReviewScreen() {
                 style={[styles.chip, { borderColor: palette.accent }]}
                 onPress={() => accept(item.id, [suggestion])}
               >
-                <Text style={[styles.chipLabel, { color: palette.accent }]}>
-                  {t('review.tagChip', { name: suggestion.name })}
-                </Text>
+                <PostHogMaskView>
+                  <Text style={[styles.chipLabel, { color: palette.accent }]}>
+                    {t('review.tagChip', { name: suggestion.name })}
+                  </Text>
+                </PostHogMaskView>
                 <Text style={[styles.confidence, { color: palette.textSecondary }]}>
                   {t('review.confidence', { percent: Math.round(suggestion.confidence * 100) })}
                 </Text>

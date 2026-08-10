@@ -16,6 +16,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import { filterBookmarks } from '@/domain/search';
@@ -391,18 +392,20 @@ export default function BrowseTagsScreen() {
                   hitSlop={6}
                   onPress={() => onTagPress(entry)}
                 >
-                  <Text
-                    style={{
-                      color,
-                      fontSize: size,
-                      lineHeight: Math.round(size * 1.12),
-                      letterSpacing: -0.3,
-                      fontWeight: entry.weight > 0.66 ? '800' : entry.weight > 0.33 ? '700' : '600',
-                      opacity: 0.55 + 0.45 * entry.weight,
-                    }}
-                  >
-                    {`#${entry.name}`}
-                  </Text>
+                  <PostHogMaskView>
+                    <Text
+                      style={{
+                        color,
+                        fontSize: size,
+                        lineHeight: Math.round(size * 1.12),
+                        letterSpacing: -0.3,
+                        fontWeight: entry.weight > 0.66 ? '800' : entry.weight > 0.33 ? '700' : '600',
+                        opacity: 0.55 + 0.45 * entry.weight,
+                      }}
+                    >
+                      {`#${entry.name}`}
+                    </Text>
+                  </PostHogMaskView>
                 </Pressable>
               );
             })}
@@ -459,9 +462,11 @@ export default function BrowseTagsScreen() {
                 style={({ pressed }) => [styles.listRow, { opacity: pressed ? 0.6 : 1 }]}
               >
                 <View style={[styles.listDot, { backgroundColor: color }]} />
-                <Text style={[styles.listName, { color: palette.text }]} numberOfLines={1}>
-                  {`#${item.name}`}
-                </Text>
+                <PostHogMaskView>
+                  <Text style={[styles.listName, { color: palette.text }]} numberOfLines={1}>
+                    {`#${item.name}`}
+                  </Text>
+                </PostHogMaskView>
                 <Text style={[styles.listCount, { color: palette.textSecondary }]}>
                   {t('inbox.tagListCount', { count: item.count })}
                 </Text>

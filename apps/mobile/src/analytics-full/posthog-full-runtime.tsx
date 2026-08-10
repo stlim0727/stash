@@ -99,34 +99,52 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
   const [enabled, setEnabledState] = useState(false);
   const [ready, setReady] = useState(false);
 
+  // Every operation that changes the client's opt-in/opt-out state (the
+  // startup restore below, and every `setEnabled` call) is serialized through
+  // this queue — strictly in invocation order, never in whichever order their
+  // internal `await`s happen to resolve. Without this, a fast "turn replay on
+  // then immediately turn base analytics off" sequence could race: the
+  // pending `optIn()` from the first call could land on the client AFTER the
+  // second call's `optOut()`, silently leaving collection active even though
+  // the user's last action was to turn it off. Mirrors the persistence-queue
+  // pattern already used in the hand-rolled transport (`analytics/posthog.ts`).
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
+  const enqueue = useCallback((task: () => Promise<void>): Promise<void> => {
+    const run = queueRef.current.catch(() => undefined).then(task);
+    queueRef.current = run.catch(() => undefined);
+    return run;
+  }, []);
+
   const setEnabled = useCallback(
-    async (next: boolean) => {
-      if (!client) return;
-      if (next) {
-        await client.optIn();
-        try {
-          await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'true');
-        } catch (error) {
-          // The persisted preference is the source of truth on the next
-          // launch — if it can't be written, don't leave the client
-          // collecting while Settings reports it as off. Roll back so the
-          // in-memory and durable state can never diverge.
+    (next: boolean): Promise<void> => {
+      if (!client) return Promise.resolve();
+      return enqueue(async () => {
+        if (next) {
+          await client.optIn();
+          try {
+            await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'true');
+          } catch (error) {
+            // The persisted preference is the source of truth on the next
+            // launch — if it can't be written, don't leave the client
+            // collecting while Settings reports it as off. Roll back so the
+            // in-memory and durable state can never diverge.
+            await client.optOut();
+            client.reset();
+            throw error;
+          }
+          setEnabledState(true);
+        } else {
           await client.optOut();
+          // Drop the local distinct_id/session so a later re-opt-in starts a
+          // fresh identity, mirroring the hand-rolled transport's "fresh
+          // opt-in never revives a pre-opt-out identity" guarantee.
           client.reset();
-          throw error;
+          await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
+          setEnabledState(false);
         }
-        setEnabledState(true);
-      } else {
-        await client.optOut();
-        // Drop the local distinct_id/session so a later re-opt-in starts a
-        // fresh identity, mirroring the hand-rolled transport's "fresh
-        // opt-in never revives a pre-opt-out identity" guarantee.
-        client.reset();
-        await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
-        setEnabledState(false);
-      }
+      });
     },
-    [client],
+    [client, enqueue],
   );
 
   useEffect(() => {
@@ -135,25 +153,25 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
       setReady(true);
       return;
     }
-    void Promise.all([
-      getPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY),
-      getPostHogAnalyticsEnabled(),
-    ])
-      .then(async ([stored, baseEnabled]) => {
-        if (!active || stored !== 'true') return;
-        if (!baseEnabled) {
-          // The base analytics preference (ANALYTICS_STATE_KEY) was revoked
-          // without this preference being reconciled — e.g. the app closed
-          // before the Settings cascade finished persisting. Narrower
-          // consent must not survive a revoked broader consent: self-heal
-          // the stale preference and never opt in.
-          await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
-          return;
-        }
-        await client.optIn();
-        if (!active) return;
-        setEnabledState(true);
-      })
+    void enqueue(async () => {
+      const [stored, baseEnabled] = await Promise.all([
+        getPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY),
+        getPostHogAnalyticsEnabled(),
+      ]);
+      if (!active || stored !== 'true') return;
+      if (!baseEnabled) {
+        // The base analytics preference (ANALYTICS_STATE_KEY) was revoked
+        // without this preference being reconciled — e.g. the app closed
+        // before the Settings cascade finished persisting. Narrower
+        // consent must not survive a revoked broader consent: self-heal
+        // the stale preference and never opt in.
+        await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
+        return;
+      }
+      await client.optIn();
+      if (!active) return;
+      setEnabledState(true);
+    })
       .catch(() => {})
       .finally(() => {
         if (active) setReady(true);
@@ -164,7 +182,7 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
     // `client` is created once per provider mount and never replaced, so this
     // effect is meant to run exactly once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client]);
+  }, [client, enqueue]);
 
   const value = useMemo<PostHogFullContextValue>(
     () => ({ enabled, ready, configured: client !== null, setEnabled }),

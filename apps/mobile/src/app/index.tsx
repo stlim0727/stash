@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
+import { PostHogMaskView } from 'posthog-react-native';
 import {
   memo,
   useCallback,
@@ -448,6 +449,7 @@ const BrowseChip = memo(function BrowseChip({
   count,
   active,
   onSelect,
+  mask,
 }: {
   target: InboxFilter;
   label: string;
@@ -455,6 +457,9 @@ const BrowseChip = memo(function BrowseChip({
   count?: number;
   active: boolean;
   onSelect: (target: InboxFilter) => void;
+  /** True for a tag/collection name (bookmark-derived content); the two
+   *  fixed filters ("All", "No collection") pass nothing. */
+  mask?: boolean;
 }) {
   return (
     <Chip
@@ -465,6 +470,7 @@ const BrowseChip = memo(function BrowseChip({
       quiet={Platform.OS === 'web' && !active}
       icon={icon}
       count={count}
+      mask={mask}
     >
       {label}
     </Chip>
@@ -2496,6 +2502,7 @@ export default function InboxScreen() {
                   count={chip.count}
                   active={sameFilter(chip.filter, filter)}
                   onSelect={onSelectFilter}
+                  mask
                 />
               ))}
             </ScrollView>
@@ -2850,9 +2857,17 @@ export default function InboxScreen() {
                 style={[styles.folderTile, { backgroundColor: tileColor }]}
               >
                 <Ionicons name={tileIcon} size={26} color={palette.text} />
-                <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
-                  {item.label}
-                </Text>
+                {item.kind === 'collection' ? (
+                  <PostHogMaskView>
+                    <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
+                      {item.label}
+                    </Text>
+                  </PostHogMaskView>
+                ) : (
+                  <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
+                    {item.label}
+                  </Text>
+                )}
                 <Text style={[styles.folderTileCount, { color: palette.textSecondary }]}>
                   {t('inbox.collectionTileCount', { count: item.count ?? 0 })}
                 </Text>
@@ -3024,9 +3039,11 @@ export default function InboxScreen() {
                     />
                   ) : null}
                   {compactMeta ? (
-                    <Text style={[styles.compactMeta, { color: palette.accentText }]} numberOfLines={1}>
-                      {compactMeta}
-                    </Text>
+                    <PostHogMaskView>
+                      <Text style={[styles.compactMeta, { color: palette.accentText }]} numberOfLines={1}>
+                        {compactMeta}
+                      </Text>
+                    </PostHogMaskView>
                   ) : null}
                 </Pressable>
                 {suggestionCount > 0 ? (
@@ -3082,9 +3099,11 @@ export default function InboxScreen() {
                         hitSlop={6}
                         style={styles.previewRibbon}
                       >
-                        <Text style={styles.previewRibbonText} numberOfLines={1}>
-                          {siteLabel(item)}
-                        </Text>
+                        <PostHogMaskView>
+                          <Text style={styles.previewRibbonText} numberOfLines={1}>
+                            {siteLabel(item)}
+                          </Text>
+                        </PostHogMaskView>
                         <Ionicons name="open-outline" size={12} color="#ffffff" />
                       </Pressable>
                     ) : null}
@@ -3213,15 +3232,17 @@ export default function InboxScreen() {
                             : { backgroundColor: palette.mutedSurface },
                         ]}
                       >
-                        <Text
-                          style={[
-                            styles.metaChipLabel,
-                            { color: Platform.OS === 'web' ? palette.textSecondary : palette.accentText },
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {part}
-                        </Text>
+                        <PostHogMaskView>
+                          <Text
+                            style={[
+                              styles.metaChipLabel,
+                              { color: Platform.OS === 'web' ? palette.textSecondary : palette.accentText },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {part}
+                          </Text>
+                        </PostHogMaskView>
                       </View>
                     ))}
                   </View>
@@ -3253,7 +3274,12 @@ export default function InboxScreen() {
       <ActionSheet
         visible={menuItem !== null}
         title={menuTitle}
+        // Main mode's title is the bookmark's own title (content); move mode's
+        // title is a fixed string but its actions become collection names
+        // (content) instead — the two invert together.
+        titleMask={menuMode !== 'move'}
         actions={menuActions}
+        actionsMask={menuMode === 'move'}
         onClose={closeMenu}
       />
       <ActionSheet

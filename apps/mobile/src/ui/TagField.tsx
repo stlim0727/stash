@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -131,7 +132,9 @@ export function TagField({
               accessibilityLabel={t('tagField.browseA11y', { name: tag.name })}
               onPress={() => onBrowse(tag.id)}
             >
-              <Text style={[styles.chipLabel, { color: palette.accentText }]}>{tag.name}</Text>
+              <PostHogMaskView>
+                <Text style={[styles.chipLabel, { color: palette.accentText }]}>{tag.name}</Text>
+              </PostHogMaskView>
             </Pressable>
             {editable ? (
               <Pressable
@@ -187,8 +190,13 @@ export function TagField({
                 onPress={folderSuggestion.onAccept}
               >
                 {/* The label brings its own colors (file-in vs. move), so the
-                    wrapper Text sets none — unlike the accent tag chips below. */}
-                <Text style={styles.ghostLabel}>{folderSuggestion.label}</Text>
+                    wrapper Text sets none — unlike the accent tag chips below.
+                    Masked here (not inside FolderSuggestionLabel itself) since
+                    that component's output must nest inside a parent Text —
+                    a View-based PostHogMaskView can't nest inside Text. */}
+                <PostHogMaskView>
+                  <Text style={styles.ghostLabel}>{folderSuggestion.label}</Text>
+                </PostHogMaskView>
               </Pressable>
               <Pressable
                 accessibilityLabel={folderSuggestion.dismissA11y}
@@ -208,9 +216,11 @@ export function TagField({
                 disabled={busy}
                 onPress={() => onAcceptSuggestion(suggestion.name)}
               >
-                <Text style={[styles.ghostLabel, { color: palette.accent }]}>
-                  ＋ {suggestion.name}
-                </Text>
+                <PostHogMaskView>
+                  <Text style={[styles.ghostLabel, { color: palette.accent }]}>
+                    ＋ {suggestion.name}
+                  </Text>
+                </PostHogMaskView>
               </Pressable>
               <Pressable
                 accessibilityLabel={t('tagField.dismissSuggestionA11y', { name: suggestion.name })}

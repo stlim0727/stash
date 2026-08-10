@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -68,9 +69,11 @@ export function CollectionPicker({
         onPress={() => setOpen((value) => !value)}
         style={[styles.row, { backgroundColor: palette.surface, borderColor: palette.border }]}
       >
-        <Text style={[styles.rowValue, { color: palette.text }]} numberOfLines={1}>
-          {t('collectionPicker.current', { name: currentName ?? t('collectionPicker.inbox') })}
-        </Text>
+        <PostHogMaskView>
+          <Text style={[styles.rowValue, { color: palette.text }]} numberOfLines={1}>
+            {t('collectionPicker.current', { name: currentName ?? t('collectionPicker.inbox') })}
+          </Text>
+        </PostHogMaskView>
         <Text style={[styles.chevron, { color: palette.textSecondary }]}>{open ? '▾' : '›'}</Text>
       </Pressable>
 
@@ -123,9 +126,11 @@ export function CollectionPicker({
                 color={palette.textSecondary}
                 style={styles.optionIcon}
               />
-              <Text style={[styles.optionLabel, { color: palette.text }]} numberOfLines={1}>
-                {collection.name}
-              </Text>
+              <PostHogMaskView>
+                <Text style={[styles.optionLabel, { color: palette.text }]} numberOfLines={1}>
+                  {collection.name}
+                </Text>
+              </PostHogMaskView>
               {currentId === collection.id ? <Text style={{ color: palette.accent }}>✓</Text> : null}
             </Pressable>
           ))}

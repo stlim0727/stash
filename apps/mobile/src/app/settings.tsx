@@ -193,18 +193,16 @@ export default function SettingsScreen() {
   const handleAnalyticsChange = (enabled: boolean) => {
     if (!analytics.ready || analyticsBusy) return;
     setAnalyticsBusy(true);
-    void analytics
-      .setEnabled(enabled)
-      .then(async () => {
-        // Narrower consent (session replay) doesn't survive revoking the
-        // broader one (base analytics) — cascade the opt-out. Awaited (not
-        // fire-and-forget) so the durable preference is written before this
-        // handler resolves, minimizing the window where the app could close
-        // with the base preference off but session replay's still on.
-        if (!enabled && sessionReplay.enabled) {
-          await sessionReplay.setEnabled(false);
-        }
-      })
+    // Narrower consent (session replay) doesn't survive revoking the broader
+    // one (base analytics) — cascade the opt-out unconditionally (not gated
+    // on the current `sessionReplay.enabled` read, which can be stale if a
+    // replay opt-in is still in flight) and in parallel with the base call
+    // (not sequenced after it succeeds), so the cascade still runs even if
+    // the base call itself rejects after already flipping its own in-memory
+    // state to off. `PostHogFullProvider.setEnabled` internally serializes
+    // against any in-flight opt-in, so this can never race to a stale result.
+    const cascade = enabled ? Promise.resolve() : sessionReplay.setEnabled(false);
+    void Promise.all([analytics.setEnabled(enabled), cascade])
       .catch(() =>
         Alert.alert(
           t("settings.analytics.errorTitle"),

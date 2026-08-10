@@ -12,6 +12,7 @@
  * component only decides which label to show and fires the callbacks.
  */
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -60,7 +61,9 @@ export function ProposedSummary({
       <Text style={[styles.label, { color: palette.textSecondary }]}>
         {t('detail.summaryLabel')}
       </Text>
-      <Text style={[styles.body, { color: palette.text }]}>{summary}</Text>
+      <PostHogMaskView>
+        <Text style={[styles.body, { color: palette.text }]}>{summary}</Text>
+      </PostHogMaskView>
       <View style={styles.actions}>
         <Pressable
           accessibilityRole="button"

@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { useI18n } from '@/i18n';
 import { enrichmentDegradedLabel, metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
@@ -873,10 +874,12 @@ export default function BookmarkDetailScreen({
             <Image source={{ uri: bookmark.favicon_url }} style={styles.bylineFav} resizeMode="contain" />
           </View>
         ) : null}
-        <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
-          {host ?? t('detail.savedByline')}
-          {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
-        </Text>
+        <PostHogMaskView>
+          <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
+            {host ?? t('detail.savedByline')}
+            {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
+          </Text>
+        </PostHogMaskView>
       </View>
 
       {/* Title — tap to edit in place, auto-saved on blur. Overlong titles
@@ -903,33 +906,35 @@ export default function BookmarkDetailScreen({
             accessibilityHint={t('detail.editTitleHint')}
             onPress={() => setDraftTitle(bookmark.title ?? '')}
           >
-            <Text
-              style={[
-                styles.title,
-                {
-                  color: isTitleDerived(bookmark) ? palette.textSecondary : palette.text,
-                  fontWeight: isTitleDerived(bookmark) ? '500' : '800',
-                },
-              ]}
-              // Measure unclamped on first layout so overflow detection is
-              // reliable across platforms; clamp once we know the line count.
-              numberOfLines={
-                titleLineCount === null || titleExpanded ? undefined : TITLE_COLLAPSED_LINES
-              }
-              onTextLayout={(event) => {
-                // Only trust a real measurement. react-native-web can report an
-                // empty `lines` array; recording 0 would clamp the title to
-                // TITLE_COLLAPSED_LINES yet hide the toggle (0 is not > 4),
-                // stranding a long note with no way to see the full text ("long
-                // text silently cut off"). Staying null keeps it unclamped —
-                // the full text shows — until a trustworthy count arrives.
-                if (titleLineCount === null && event.nativeEvent.lines.length > 0) {
-                  setTitleLineCount(event.nativeEvent.lines.length);
+            <PostHogMaskView>
+              <Text
+                style={[
+                  styles.title,
+                  {
+                    color: isTitleDerived(bookmark) ? palette.textSecondary : palette.text,
+                    fontWeight: isTitleDerived(bookmark) ? '500' : '800',
+                  },
+                ]}
+                // Measure unclamped on first layout so overflow detection is
+                // reliable across platforms; clamp once we know the line count.
+                numberOfLines={
+                  titleLineCount === null || titleExpanded ? undefined : TITLE_COLLAPSED_LINES
                 }
-              }}
-            >
-              {displayedTitle}
-            </Text>
+                onTextLayout={(event) => {
+                  // Only trust a real measurement. react-native-web can report an
+                  // empty `lines` array; recording 0 would clamp the title to
+                  // TITLE_COLLAPSED_LINES yet hide the toggle (0 is not > 4),
+                  // stranding a long note with no way to see the full text ("long
+                  // text silently cut off"). Staying null keeps it unclamped —
+                  // the full text shows — until a trustworthy count arrives.
+                  if (titleLineCount === null && event.nativeEvent.lines.length > 0) {
+                    setTitleLineCount(event.nativeEvent.lines.length);
+                  }
+                }}
+              >
+                {displayedTitle}
+              </Text>
+            </PostHogMaskView>
           </Pressable>
           {titleLineCount !== null && titleLineCount > TITLE_COLLAPSED_LINES ? (
             <Pressable
@@ -1297,9 +1302,11 @@ export default function BookmarkDetailScreen({
                 ]}
               >
                 <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
-                <Text style={[styles.detailValue, { color: palette.text }]} selectable>
-                  {row.value}
-                </Text>
+                <PostHogMaskView>
+                  <Text style={[styles.detailValue, { color: palette.text }]} selectable>
+                    {row.value}
+                  </Text>
+                </PostHogMaskView>
               </View>
             ))}
           </Card>
