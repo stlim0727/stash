@@ -274,7 +274,11 @@ export default function BrowseTagsScreen() {
       return (
         // Contains the user's own search text — masked, with an outer
         // accessible label since it's standalone (no Pressable ancestor).
-        <View accessible accessibilityLabel={message}>
+        // `alignSelf: 'stretch'` overrides the parent's `alignItems: center`
+        // for this wrapper specifically, so it fills the available width
+        // (as a direct Text child implicitly would) instead of shrinking to
+        // the message's unwrapped intrinsic width and running off-screen.
+        <View accessible accessibilityLabel={message} style={styles.maskStretch}>
           <PostHogMaskView>
             <Text style={[styles.emptyText, { color: palette.textSecondary }]}>{message}</Text>
           </PostHogMaskView>
@@ -290,7 +294,7 @@ export default function BrowseTagsScreen() {
         <View style={styles.emptyState}>
           {/* Sometimes a fixed string (uncollected case), sometimes a
               collection name — masked unconditionally either way. */}
-          <View accessible accessibilityLabel={message}>
+          <View accessible accessibilityLabel={message} style={styles.maskStretch}>
             <PostHogMaskView>
               <Text style={[styles.emptyText, { color: palette.textSecondary }]}>{message}</Text>
             </PostHogMaskView>
@@ -576,6 +580,12 @@ const styles = StyleSheet.create({
   // wrapper for a long tag name to still shrink to the space beside the count.
   maskFlex: {
     flex: 1,
+  },
+  // Applied to a masked wrapper inside an `alignItems: 'center'` container —
+  // overrides that centering for this one child so it stretches to the
+  // available width instead of shrinking to its content's intrinsic width.
+  maskStretch: {
+    alignSelf: 'stretch',
   },
   sheetOverlay: {
     flex: 1,

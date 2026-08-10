@@ -135,8 +135,11 @@ export function CaptureToastProvider({ children }: { children: ReactNode }) {
               future call site to remember to opt in. `accessible` +
               `accessibilityLabel` on the outer View keep the real message
               available to VoiceOver/TalkBack (standalone, no Pressable
-              ancestor of its own). */}
-          <View accessible accessibilityLabel={toast.message}>
+              ancestor of its own). `flexShrink: 1` lets this wrapper shrink
+              to share the toast's horizontal row with the action button
+              instead of overflowing at its unwrapped intrinsic width, the
+              way a direct Text child implicitly would have. */}
+          <View accessible accessibilityLabel={toast.message} style={styles.toastTextWrap}>
             <PostHogMaskView>
               <Text style={[styles.toastText, { color: palette.text }]}>{toast.message}</Text>
             </PostHogMaskView>
@@ -197,6 +200,9 @@ const styles = StyleSheet.create({
       // underneath, e.g. the report button/nub's overlayLayer(50).
       default: {},
     }),
+  },
+  toastTextWrap: {
+    flexShrink: 1,
   },
   toastText: {
     fontSize: 15,

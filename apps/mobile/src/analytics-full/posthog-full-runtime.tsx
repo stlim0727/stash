@@ -203,7 +203,11 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
         if (stored === 'true' && !baseEnabled) {
           // Narrower consent (this preference) survived a revoked broader
           // one (base analytics) — e.g. the app closed before the Settings
-          // cascade finished persisting. Self-heal the stale preference.
+          // cascade finished persisting. Self-heal the stale preference AND
+          // drop the identity, matching the normal disable path — otherwise
+          // a later re-opt-in would revive the pre-revocation distinct_id
+          // instead of starting fresh.
+          client.reset();
           await writeVerifiedPreference('false').catch(() => {});
         }
         return;
@@ -230,7 +234,15 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
   );
   const providerAutocapture = useMemo(() => ({ ...POSTHOG_FULL_AUTOCAPTURE_OPTIONS }), []);
 
-  if (!client) {
+  // Children render immediately either way (capture/UI must never block on
+  // this) — but PostHogProvider/PostHogSurveyProvider (which expose the
+  // client to the SDK's own React tree and can trigger its own
+  // replay/survey/flag activity) only mount once the startup-restore effect
+  // has actually run and forced the client to a known state. Gating on just
+  // `client !== null` would mount them on the very first render, before that
+  // effect (which only runs after commit) has had a chance to force a stale
+  // SDK-persisted opt-in back out.
+  if (!client || !ready) {
     return (
       <PostHogFullContext.Provider value={value}>{children}</PostHogFullContext.Provider>
     );
