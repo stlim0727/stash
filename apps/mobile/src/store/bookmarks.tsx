@@ -17,7 +17,7 @@ import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
 import { createConcurrencyLimiter } from "@/domain/concurrency";
 import { enrichBookmark } from "@/domain/enrichment";
-import { checkYoutubeAvailability, youtubeVideoId } from "@/domain/page-metadata";
+import { checkYoutubeAvailability, isYoutubeAvailabilityCandidate } from "@/domain/page-metadata";
 import { isTransientNetworkError } from "@/domain/network-errors";
 import { jwtSubject } from "@/domain/jwt";
 import { planTitleBackfill } from "@/domain/title-backfill";
@@ -1974,6 +1974,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   item.id === updated.id ? updated : item,
                 ),
           );
+          // Keep the ref current immediately rather than waiting for the
+          // separate mirroring effect (which only runs on next render): other
+          // local-only writers (e.g. checkVideoAvailability) read
+          // bookmarksRef.current to build a full-row replacement, and any gap
+          // here is a window where such a write would revert these
+          // just-enriched fields (caught in PR review, STASH-61).
+          bookmarksRef.current = bookmarksRef.current
+            ? bookmarksRef.current.map((item) =>
+                item.id === updated.id ? updated : item,
+              )
+            : bookmarksRef.current;
           try {
             await ensureRepositoryReady();
             await repository.updateBookmark(updated);
@@ -3128,7 +3139,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   // self-healing status read, not user- or server-authored data, so it must
   // never flip sync_status, enqueue a sync mutation, or bump updated_at.
   const checkVideoAvailability = useCallback((id: string, url: string | null | undefined) => {
-    if (!url || !youtubeVideoId(url)) {
+    if (!url || !isYoutubeAvailabilityCandidate(url)) {
       return;
     }
     if (videoAvailabilityCheckingRef.current.has(id)) {

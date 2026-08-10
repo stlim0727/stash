@@ -143,6 +143,33 @@ test("checkVideoAvailability flags a confirmed-unavailable YouTube bookmark, loc
   expect(result.current.inbox[0]?.updated_at).toBe("2026-06-12T00:00:00.000Z");
 });
 
+test("checkVideoAvailability checks a share.google-wrapped YouTube bookmark (not just direct YouTube URLs)", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-shortlink",
+      url: "https://share.google/bb3vpuiCbbyVhrpTp",
+    }),
+  ]);
+  mockCheckYoutubeAvailability.mockResolvedValueOnce("unavailable");
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await act(async () => {
+    result.current.checkVideoAvailability(
+      "bm-shortlink",
+      "https://share.google/bb3vpuiCbbyVhrpTp",
+    );
+    await Promise.resolve();
+  });
+
+  expect(mockCheckYoutubeAvailability).toHaveBeenCalledWith(
+    "https://share.google/bb3vpuiCbbyVhrpTp",
+  );
+  await waitFor(() =>
+    expect(result.current.inbox[0]?.video_unavailable).toBe(true),
+  );
+});
+
 test("checkVideoAvailability is a no-op for a non-YouTube bookmark", async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: "bm-other", url: "https://example.com/article" }),

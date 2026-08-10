@@ -607,15 +607,65 @@ async function fetchKnownOembedMetadata(
 }
 
 /**
+ * True for hosts that are known short-link wrappers around a YouTube URL
+ * (currently just `share.google`, the Android share-sheet shortener) rather
+ * than YouTube itself. `youtubeVideoId`/`oembedEndpoint` can't recognize
+ * these directly since the video id only appears after following the
+ * redirect — see `resolveKnownYoutubeShortener` below.
+ */
+function isKnownYoutubeShortenerHost(rawUrl: string): boolean {
+  try {
+    return new URL(rawUrl).hostname.replace(/^www\./, '') === 'share.google';
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `checkYoutubeAvailability` can do anything useful with this URL. */
+export function isYoutubeAvailabilityCandidate(rawUrl: string): boolean {
+  return Boolean(youtubeVideoId(rawUrl)) || isKnownYoutubeShortenerHost(rawUrl);
+}
+
+/**
+ * Follows a known shortener (`share.google`) to its final landing URL, without
+ * reading the landed page's body — we only need the URL, not its content.
+ * Returns null on any failure/timeout/non-shortener host.
+ */
+async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | null> {
+  if (!isKnownYoutubeShortenerHost(rawUrl)) {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(rawUrl, { redirect: 'follow', signal: controller.signal });
+    return response.url || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Whether a saved YouTube video is still available, per its oEmbed endpoint
  * (STASH-61: videos can be deleted/made private sometime after capture).
- * YouTube's oEmbed answers 404 for a deleted/nonexistent video and 401 for a
- * private one — both unambiguous confirmations the content is gone. Any other
- * outcome (a real title, a non-YouTube URL, a 5xx, a timeout, a network
- * error) resolves to `'unknown'` rather than guessing, so a transient failure
- * can never mislabel a healthy video as unavailable. Note: a region-restricted
- * video's oEmbed typically still succeeds, so this check cannot detect that
- * case — deleted/private is the reliable, unambiguous subset it covers.
+ * YouTube's oEmbed answers 404 for a deleted/nonexistent video — an
+ * unambiguous confirmation the content is gone. A 401 is deliberately NOT
+ * treated as unavailable: it means this app-owned, unauthenticated request
+ * can't see a private video, but the signed-in owner opening the same link in
+ * their own YouTube app still can — so a 401 resolves to `'unknown'` rather
+ * than a false "unavailable" badge on a bookmark that's actually still
+ * playable for its owner. Any other non-404 outcome (a real title, a
+ * non-YouTube URL, a 5xx, a timeout, a network error) also resolves to
+ * `'unknown'` rather than guessing, so a transient failure can never mislabel
+ * a healthy video as unavailable. Note: a region-restricted video's oEmbed
+ * typically still succeeds, so this check cannot detect that case —
+ * deleted is the reliable, unambiguous subset it covers.
+ *
+ * Also resolves known share-link shorteners (`share.google`) to their
+ * underlying YouTube URL first, so a video shared via the Android share sheet
+ * still gets checked instead of silently being skipped.
  *
  * Callers are expected to invoke this on-demand (e.g. once when a bookmark's
  * Detail screen opens), never as background polling of the whole library —
@@ -624,7 +674,11 @@ async function fetchKnownOembedMetadata(
 export async function checkYoutubeAvailability(
   rawUrl: string,
 ): Promise<'available' | 'unavailable' | 'unknown'> {
-  const endpoint = oembedEndpoint(rawUrl);
+  let endpoint = oembedEndpoint(rawUrl);
+  if (!endpoint) {
+    const resolved = await resolveKnownYoutubeShortener(rawUrl);
+    endpoint = resolved ? oembedEndpoint(resolved) : null;
+  }
   if (!endpoint) {
     return 'unknown';
   }
@@ -635,7 +689,7 @@ export async function checkYoutubeAvailability(
       signal: controller.signal,
       headers: OEMBED_HEADERS,
     });
-    if (response.status === 404 || response.status === 401) {
+    if (response.status === 404) {
       return 'unavailable';
     }
     if (!response.ok) {
