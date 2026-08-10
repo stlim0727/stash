@@ -102,7 +102,10 @@ test('buildPostHogFullInitOptions asks for conservative masking and starts opted
   });
 });
 
-test('autocapture never captures touches, only screen names', () => {
-  assert.equal(POSTHOG_FULL_AUTOCAPTURE_OPTIONS.captureScreens, true);
+test('autocapture never captures touches or raw SDK screen names', () => {
+  // Screens are captured manually (see PostHogFullScreenTracker) through the
+  // same closed allowlist the base analytics client uses, not the SDK's own
+  // autocapture (which doesn't work for expo-router apps anyway).
+  assert.equal(POSTHOG_FULL_AUTOCAPTURE_OPTIONS.captureScreens, false);
   assert.equal(POSTHOG_FULL_AUTOCAPTURE_OPTIONS.captureTouches, false);
 });

@@ -122,7 +122,14 @@ export interface PostHogFullAutocaptureOptions {
 }
 
 export const POSTHOG_FULL_AUTOCAPTURE_OPTIONS: PostHogFullAutocaptureOptions = {
-  captureScreens: true,
+  // The SDK's own automatic screen capture only works with a
+  // @react-navigation NavigationContainer, which expo-router does not expose
+  // — the SDK's own docs say to disable this and call `posthog.screen()`
+  // manually for expo-router apps. Doing so also lets screen names be routed
+  // through the same closed allowlist (`analyticsScreenForPath`) the base
+  // analytics client uses, rather than the SDK autocapturing raw route
+  // strings. See `PostHogFullScreenTracker` in posthog-full-runtime.tsx.
+  captureScreens: false,
   // Explicit false: touch autocapture on a bookmark list/card UI would
   // signal which specific bookmark a user interacted with.
   captureTouches: false,

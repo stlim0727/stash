@@ -195,11 +195,14 @@ export default function SettingsScreen() {
     setAnalyticsBusy(true);
     void analytics
       .setEnabled(enabled)
-      .then(() => {
+      .then(async () => {
         // Narrower consent (session replay) doesn't survive revoking the
-        // broader one (base analytics) — cascade the opt-out.
+        // broader one (base analytics) — cascade the opt-out. Awaited (not
+        // fire-and-forget) so the durable preference is written before this
+        // handler resolves, minimizing the window where the app could close
+        // with the base preference off but session replay's still on.
         if (!enabled && sessionReplay.enabled) {
-          void sessionReplay.setEnabled(false);
+          await sessionReplay.setEnabled(false);
         }
       })
       .catch(() =>
@@ -212,7 +215,13 @@ export default function SettingsScreen() {
   };
 
   const handleSessionReplayChange = (enabled: boolean) => {
-    if (!analytics.enabled || !sessionReplay.ready || sessionReplayBusy) return;
+    if (
+      !sessionReplay.configured ||
+      !analytics.enabled ||
+      !sessionReplay.ready ||
+      sessionReplayBusy
+    )
+      return;
     setSessionReplayBusy(true);
     void sessionReplay
       .setEnabled(enabled)
@@ -1082,29 +1091,36 @@ export default function SettingsScreen() {
             />
           }
         />
-        <Row
-          styles={styles}
-          palette={palette}
-          icon="analytics-outline"
-          label={t("settings.sessionReplay.label")}
-          value={
-            sessionReplay.enabled
-              ? t("settings.sessionReplay.enabled")
-              : t("settings.sessionReplay.disabled")
-          }
-          right={
-            <Switch
-              accessibilityLabel={t("settings.sessionReplay.label")}
-              value={sessionReplay.enabled}
-              disabled={
-                !analytics.enabled || !sessionReplay.ready || sessionReplayBusy
-              }
-              onValueChange={handleSessionReplayChange}
-              trackColor={{ true: palette.accent, false: palette.border }}
-              thumbColor="#ffffff"
-            />
-          }
-        />
+        {/* Hidden entirely (not just disabled) when this build has no
+            build-time PostHog full-SDK gate — the toggle can never work in
+            that build, so showing a permanently-dimmed row would just be
+            confusing clutter on every build that hasn't opted into the
+            trial, which is the default/common case. */}
+        {sessionReplay.configured && (
+          <Row
+            styles={styles}
+            palette={palette}
+            icon="analytics-outline"
+            label={t("settings.sessionReplay.label")}
+            value={
+              sessionReplay.enabled
+                ? t("settings.sessionReplay.enabled")
+                : t("settings.sessionReplay.disabled")
+            }
+            right={
+              <Switch
+                accessibilityLabel={t("settings.sessionReplay.label")}
+                value={sessionReplay.enabled}
+                disabled={
+                  !analytics.enabled || !sessionReplay.ready || sessionReplayBusy
+                }
+                onValueChange={handleSessionReplayChange}
+                trackColor={{ true: palette.accent, false: palette.border }}
+                thumbColor="#ffffff"
+              />
+            }
+          />
+        )}
         {/* Clear search history (A3): the privacy escape hatch for the recents
             shelf. Disabled (no onPress) and reading "No recent searches" when
             there's nothing to clear. The a11y label is the reserved

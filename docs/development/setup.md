@@ -113,14 +113,18 @@ pnpm sentry:issue STASH-22 --resolve
 It reads `SENTRY_AUTH_TOKEN` plus optional `SENTRY_ORG` / `SENTRY_PROJECT` from
 the shell, `.env.local`, or the file pointed to by `SENTRY_ENV_FILE`.
 
-## Product analytics — full PostHog SDK (session replay, heatmaps, flags, surveys)
+## Product analytics — full PostHog SDK (session replay, flags, surveys)
 
 This is a **trial running alongside Sentry, not a replacement for it** —
 Sentry stays the crash/error monitor. It's a separate, heavier layer on top
 of the existing privacy-safe analytics client
 (`apps/mobile/src/analytics/`, unaffected by this): the official
 `posthog-react-native` SDK (`apps/mobile/src/analytics-full/`), adding
-session replay, heatmaps, richer feature flags, and in-app surveys.
+session replay, richer feature flags, and in-app surveys. Touch autocapture
+(`captureTouches`) is deliberately off — tapping a specific bookmark card
+would signal which bookmark a user interacted with — so this phase of the
+trial does not produce PostHog's interaction heatmaps; that would need a
+separate, privacy-safe touch-capture design as a follow-up.
 
 Two independent gates must both be on before anything is ever recorded:
 
@@ -146,8 +150,8 @@ exactly the content class session replay could otherwise expose, so
 Before enabling the build-time gate on any channel real users can reach
 (including internal/beta), do a manual pass: build with the gate and both
 toggles on, seed realistic bookmark content, navigate through Inbox/Library/
-bookmark detail/search, then inspect the resulting recording and heatmap in
-the PostHog dashboard for any unmasked title/URL/tag/note/image content.
+bookmark detail/search, then inspect the resulting recording in the PostHog
+dashboard for any unmasked title/URL/tag/note/image content.
 
 ### OAuth sign-in (Apple / Google)
 

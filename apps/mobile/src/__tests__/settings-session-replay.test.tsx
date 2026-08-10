@@ -45,7 +45,7 @@ jest.mock('@/analytics/provider', () => ({
 }));
 
 const mockSessionReplaySetEnabled = jest.fn(async () => {});
-const mockSessionReplayState = { enabled: false, ready: true };
+const mockSessionReplayState = { enabled: false, ready: true, configured: true };
 jest.mock('@/analytics-full/posthog-full-runtime', () => ({
   usePostHogFull: () => ({
     ...mockSessionReplayState,
@@ -72,6 +72,16 @@ beforeEach(() => {
   mockAnalyticsState.ready = true;
   mockSessionReplayState.enabled = false;
   mockSessionReplayState.ready = true;
+  mockSessionReplayState.configured = true;
+});
+
+test('the session replay row is hidden entirely in a build with no full-SDK build gate', async () => {
+  mockAnalyticsState.enabled = true;
+  mockSessionReplayState.configured = false;
+  const screen = await renderSettings();
+
+  await waitFor(() => expect(screen.getByText('Share privacy-safe usage analytics')).toBeTruthy());
+  expect(screen.queryByLabelText('Enable session replay & feature previews')).toBeNull();
 });
 
 test('the session replay row is disabled and off while base analytics is off', async () => {

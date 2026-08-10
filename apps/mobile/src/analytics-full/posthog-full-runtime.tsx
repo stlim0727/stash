@@ -12,6 +12,8 @@
  *  2. Runtime: the user's own Settings toggle, stored under
  *     `POSTHOG_FULL_ENABLED_STORAGE_KEY` — a key distinct from the base
  *     analytics client's, so the two never share consent state or identity.
+ *     Also requires the base analytics preference to still be enabled — see
+ *     the startup-restore effect below.
  *
  * The PostHog client is constructed once (only when the build-time gate is
  * enabled) with `defaultOptIn: false`, so no data can leave the device before
@@ -20,7 +22,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { PostHog, PostHogProvider, PostHogSurveyProvider } from 'posthog-react-native';
+import { usePathname } from 'expo-router';
+import { PostHog, PostHogProvider, PostHogSurveyProvider, usePostHog } from 'posthog-react-native';
 
 import {
   POSTHOG_FULL_AUTOCAPTURE_OPTIONS,
@@ -28,17 +31,25 @@ import {
   buildPostHogFullInitOptions,
   getPostHogFullConfigState,
 } from './posthog-full-config.ts';
+import { analyticsScreenForPath } from '@/analytics/route';
+import { getPostHogAnalyticsEnabled } from '@/analytics/posthog';
 import { getPreference, setPreference } from '@/storage/preferences';
 
 interface PostHogFullContextValue {
   enabled: boolean;
   ready: boolean;
+  /** Whether a client was constructed at all (build-time gate + config
+   *  present). When false, `setEnabled` is permanently a no-op — callers
+   *  should treat the toggle as unavailable, not just "off", to avoid an
+   *  interactive control that silently does nothing. */
+  configured: boolean;
   setEnabled(enabled: boolean): Promise<void>;
 }
 
 const disabledContext: PostHogFullContextValue = {
   enabled: false,
   ready: false,
+  configured: false,
   setEnabled: async () => {},
 };
 
@@ -50,6 +61,26 @@ const PostHogFullContext = createContext<PostHogFullContextValue>(disabledContex
  *  genuinely needed (e.g. reading a feature flag). */
 export function usePostHogFull(): PostHogFullContextValue {
   return useContext(PostHogFullContext);
+}
+
+/**
+ * Manual screen capture: the SDK's own autocapture (`captureScreens`) only
+ * works with a @react-navigation `NavigationContainer`, which expo-router
+ * doesn't expose (the SDK's own docs say to disable it and call
+ * `posthog.screen()` manually for expo-router apps — see
+ * `POSTHOG_FULL_AUTOCAPTURE_OPTIONS`). Reuses the same closed 9-screen
+ * allowlist (`analyticsScreenForPath`) the base analytics client uses, so
+ * only a known screen name is ever sent — never a raw path, param, or query
+ * string. Must render inside `PostHogProvider` (needs `usePostHog()`).
+ */
+function PostHogFullScreenTracker() {
+  const posthog = usePostHog();
+  const pathname = usePathname();
+  useEffect(() => {
+    const screen = analyticsScreenForPath(pathname);
+    if (screen) void posthog.screen(screen);
+  }, [posthog, pathname]);
+  return null;
 }
 
 export function PostHogFullProvider({ children }: { children: ReactNode }) {
@@ -73,7 +104,17 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
       if (!client) return;
       if (next) {
         await client.optIn();
-        await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'true');
+        try {
+          await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'true');
+        } catch (error) {
+          // The persisted preference is the source of truth on the next
+          // launch — if it can't be written, don't leave the client
+          // collecting while Settings reports it as off. Roll back so the
+          // in-memory and durable state can never diverge.
+          await client.optOut();
+          client.reset();
+          throw error;
+        }
         setEnabledState(true);
       } else {
         await client.optOut();
@@ -94,9 +135,21 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
       setReady(true);
       return;
     }
-    void getPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY)
-      .then(async (stored) => {
+    void Promise.all([
+      getPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY),
+      getPostHogAnalyticsEnabled(),
+    ])
+      .then(async ([stored, baseEnabled]) => {
         if (!active || stored !== 'true') return;
+        if (!baseEnabled) {
+          // The base analytics preference (ANALYTICS_STATE_KEY) was revoked
+          // without this preference being reconciled — e.g. the app closed
+          // before the Settings cascade finished persisting. Narrower
+          // consent must not survive a revoked broader consent: self-heal
+          // the stale preference and never opt in.
+          await setPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY, 'false');
+          return;
+        }
         await client.optIn();
         if (!active) return;
         setEnabledState(true);
@@ -113,7 +166,10 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
-  const value = useMemo(() => ({ enabled, ready, setEnabled }), [enabled, ready, setEnabled]);
+  const value = useMemo<PostHogFullContextValue>(
+    () => ({ enabled, ready, configured: client !== null, setEnabled }),
+    [client, enabled, ready, setEnabled],
+  );
   const providerAutocapture = useMemo(() => ({ ...POSTHOG_FULL_AUTOCAPTURE_OPTIONS }), []);
 
   if (!client) {
@@ -125,6 +181,7 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
   return (
     <PostHogFullContext.Provider value={value}>
       <PostHogProvider client={client} autocapture={providerAutocapture}>
+        <PostHogFullScreenTracker />
         <PostHogSurveyProvider client={client}>{children}</PostHogSurveyProvider>
       </PostHogProvider>
     </PostHogFullContext.Provider>
