@@ -874,12 +874,26 @@ export default function BookmarkDetailScreen({
             <Image source={{ uri: bookmark.favicon_url }} style={styles.bylineFav} resizeMode="contain" />
           </View>
         ) : null}
-        <PostHogMaskView>
-          <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
-            {host ?? t('detail.savedByline')}
-            {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
-          </Text>
-        </PostHogMaskView>
+        {/* `accessible` + `accessibilityLabel` on this outer View give
+            VoiceOver/TalkBack the real byline as one announced unit (the
+            masked Text below has no accessible ancestor of its own
+            otherwise) — and, since `bylineText` carries `flex: 1` for the
+            row layout, this View also carries that flex itself, since an
+            unstyled PostHogMaskView wrapper wouldn't inherit it. */}
+        <View
+          accessible
+          accessibilityLabel={`${host ?? t('detail.savedByline')}${
+            statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''
+          }`}
+          style={styles.bylineTextWrap}
+        >
+          <PostHogMaskView>
+            <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
+              {host ?? t('detail.savedByline')}
+              {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
+            </Text>
+          </PostHogMaskView>
+        </View>
       </View>
 
       {/* Title — tap to edit in place, auto-saved on blur. Overlong titles
@@ -1110,7 +1124,9 @@ export default function BookmarkDetailScreen({
                   style={styles.folderAccept}
                   onPress={folderSuggestionChip.onAccept}
                 >
-                  <Text style={styles.ghostLabel}>{folderSuggestionChip.label}</Text>
+                  <PostHogMaskView>
+                    <Text style={styles.ghostLabel}>{folderSuggestionChip.label}</Text>
+                  </PostHogMaskView>
                   <Text style={[styles.ghostAccept, { color: palette.accent }]}>{' ✓'}</Text>
                 </Pressable>
                 <Pressable
@@ -1126,9 +1142,23 @@ export default function BookmarkDetailScreen({
           </View>
         ) : null}
         {collection && !collections.some((item) => item.id === collection.id) ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            {t('detail.currentlyIn', { name: collection.name })}
-          </Text>
+          // `accessible` + `accessibilityLabel` on this outer View gives
+          // screen readers the real text as one announced unit; the masked
+          // Text below it still hides the collection name from replay
+          // recordings without also hiding it from VoiceOver/TalkBack (a
+          // standalone masked Text with no accessible ancestor of its own
+          // risks being skipped or announced as the mask's own sentinel
+          // label instead of its real content).
+          <View
+            accessible
+            accessibilityLabel={t('detail.currentlyIn', { name: collection.name })}
+          >
+            <PostHogMaskView>
+              <Text style={[styles.hint, { color: palette.textSecondary }]}>
+                {t('detail.currentlyIn', { name: collection.name })}
+              </Text>
+            </PostHogMaskView>
+          </View>
         ) : null}
       </View>
 
@@ -1294,6 +1324,13 @@ export default function BookmarkDetailScreen({
             {details.map((row, index) => (
               <View
                 key={row.label}
+                // `accessible` + `accessibilityLabel` combine the label and
+                // value into one announced unit for VoiceOver/TalkBack — the
+                // masked value Text below has no accessible ancestor of its
+                // own otherwise, and could be skipped or announced as the
+                // mask's own sentinel label instead of its real content.
+                accessible
+                accessibilityLabel={`${row.label}: ${row.value}`}
                 style={[
                   styles.detailRow,
                   index > 0
@@ -1434,6 +1471,9 @@ const styles = StyleSheet.create({
   bylineFav: {
     width: '72%',
     height: '72%',
+  },
+  bylineTextWrap: {
+    flex: 1,
   },
   bylineText: {
     flex: 1,

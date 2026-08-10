@@ -3212,19 +3212,32 @@ export default function InboxScreen() {
                   </Pressable>
                 </View>
                 {showUrlMatchLine && item.url ? (
-                  <HighlightedText
-                    style={[styles.cardUrl, { color: palette.textSecondary }]}
-                    numberOfLines={1}
-                    text={item.url}
-                    query={highlightQuery}
-                    highlightStyle={highlightStyle}
-                  />
+                  // Standalone (not inside a labeled Pressable, unlike the
+                  // title above) — `accessible` + `accessibilityLabel` give
+                  // VoiceOver/TalkBack the real URL as one announced unit;
+                  // the masked Text inside HighlightedText has no accessible
+                  // ancestor of its own otherwise.
+                  <View accessible accessibilityLabel={item.url}>
+                    <HighlightedText
+                      style={[styles.cardUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                  </View>
                 ) : null}
                 {visibleMetaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
                     {visibleMetaParts.map((part) => (
                       <View
                         key={part}
+                        // `accessible` + `accessibilityLabel` give VoiceOver/
+                        // TalkBack the real chip text as one announced unit —
+                        // the masked Text below has no accessible ancestor of
+                        // its own otherwise (this chip isn't interactive).
+                        accessible
+                        accessibilityLabel={part}
                         style={[
                           styles.metaChip,
                           Platform.OS === 'web'

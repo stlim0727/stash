@@ -52,8 +52,9 @@ jest.mock('@/storage/preferences', () => ({
 }));
 
 let mockBaseAnalyticsEnabled = true;
+const mockGetPostHogAnalyticsEnabled = jest.fn(async () => mockBaseAnalyticsEnabled);
 jest.mock('@/analytics/posthog', () => ({
-  getPostHogAnalyticsEnabled: async () => mockBaseAnalyticsEnabled,
+  getPostHogAnalyticsEnabled: () => mockGetPostHogAnalyticsEnabled(),
 }));
 
 import { PostHogFullProvider, usePostHogFull } from './posthog-full-runtime.tsx';
@@ -152,6 +153,23 @@ test('on a fresh install (nothing stored at all), any SDK-persisted opt-in is st
   expect(latest().enabled).toBe(false);
 });
 
+test('opts out before reading consent, so a read failure during restore cannot skip it', async () => {
+  enableBuildGate();
+  mockStorage[POSTHOG_FULL_ENABLED_STORAGE_KEY] = 'true';
+  mockGetPostHogAnalyticsEnabled.mockRejectedValueOnce(new Error('storage unavailable'));
+
+  const { latest } = await renderProvider();
+  await waitFor(() => expect(latest().ready).toBe(true));
+
+  // optOut() must have already run BEFORE the failing read, not only in a
+  // "should not restore" branch reached after a successful read — otherwise
+  // a previously-opted-in SDK client (it persists its own state) stays
+  // opted in whenever this restore's reads happen to throw.
+  expect(mockOptOut).toHaveBeenCalledTimes(1);
+  expect(mockOptIn).not.toHaveBeenCalled();
+  expect(latest().enabled).toBe(false);
+});
+
 test('setEnabled(true) rolls back (opts back out) if persisting the preference fails', async () => {
   enableBuildGate();
   const { latest } = await renderProvider();
@@ -180,6 +198,10 @@ test('setEnabled(false) opts out, resets identity, and persists', async () => {
   mockStorage[POSTHOG_FULL_ENABLED_STORAGE_KEY] = 'true';
   const { latest } = await renderProvider();
   await waitFor(() => expect(latest().enabled).toBe(true));
+  // The restore effect now unconditionally opts out before evaluating
+  // consent (and opts back in here since it was met) — clear that call so
+  // the assertions below count only this test's own setEnabled(false).
+  mockOptOut.mockClear();
 
   await act(async () => {
     await latest().setEnabled(false);

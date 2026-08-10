@@ -159,20 +159,21 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
       return;
     }
     void enqueue(async () => {
+      // Force the client to a known, opted-out state BEFORE evaluating our
+      // own consent gates — the native SDK persists its own opt-in flag
+      // independently of this preference (`defaultOptIn: false` only
+      // supplies a default when no prior SDK-side state exists at all), so
+      // a session that called optIn() but was killed before this
+      // preference finished writing would otherwise load this new client
+      // instance already opted in. Doing this first, rather than only in a
+      // "should not restore" branch below, also means a failure in the
+      // reads that follow can never skip it.
+      await client.optOut();
       const [stored, baseEnabled] = await Promise.all([
         getPreference(POSTHOG_FULL_ENABLED_STORAGE_KEY),
         getPostHogAnalyticsEnabled(),
       ]);
-      const shouldRestore = stored === 'true' && baseEnabled;
-      if (!shouldRestore) {
-        // The native SDK persists its OWN opt-in state independently of this
-        // preference — `defaultOptIn: false` only supplies a default when no
-        // prior SDK-side state exists at all, so a session that called
-        // optIn() but was killed before this preference finished writing
-        // would otherwise load this new client instance already opted in.
-        // Force it back out explicitly rather than trusting whatever the SDK
-        // loaded, regardless of which condition failed.
-        await client.optOut();
+      if (stored !== 'true' || !baseEnabled) {
         if (stored === 'true' && !baseEnabled) {
           // Narrower consent (this preference) survived a revoked broader
           // one (base analytics) — e.g. the app closed before the Settings

@@ -161,7 +161,11 @@ function ActionTextGroup({ action, mask }: { action: SheetAction; mask?: boolean
       ) : null}
     </View>
   );
-  return mask ? <PostHogMaskView>{group}</PostHogMaskView> : group;
+  // `styles.actionTextGroup`'s flex: 1 lives on the inner View above; an
+  // unstyled PostHogMaskView wrapper wouldn't inherit it, so a long label
+  // could take its intrinsic width and push/clip the trailing checkmark —
+  // apply the same style to the wrapper too.
+  return mask ? <PostHogMaskView style={styles.actionTextGroup}>{group}</PostHogMaskView> : group;
 }
 
 const styles = StyleSheet.create({
