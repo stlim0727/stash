@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Animated, Platform, Pressable, StyleSheet, Text } from 'react-native';
+import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { usePalette } from '@/theme';
 import { overlayLayer } from '@/ui/layering';
@@ -127,7 +128,19 @@ export function CaptureToastProvider({ children }: { children: ReactNode }) {
             },
           ]}
         >
-          <Text style={[styles.toastText, { color: palette.text }]}>{toast.message}</Text>
+          {/* This provider renders every toast message app-wide, most of
+              which are generic fixed UI copy, but some interpolate
+              user-authored content (e.g. a collection name in "Moved to
+              {name}") — masked unconditionally rather than requiring every
+              future call site to remember to opt in. `accessible` +
+              `accessibilityLabel` on the outer View keep the real message
+              available to VoiceOver/TalkBack (standalone, no Pressable
+              ancestor of its own). */}
+          <View accessible accessibilityLabel={toast.message}>
+            <PostHogMaskView>
+              <Text style={[styles.toastText, { color: palette.text }]}>{toast.message}</Text>
+            </PostHogMaskView>
+          </View>
           {toast.action ? (
             <Pressable
               accessibilityRole="button"

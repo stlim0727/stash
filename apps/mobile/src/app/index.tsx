@@ -2559,9 +2559,18 @@ export default function InboxScreen() {
         >
           <View style={[styles.filterBarInner, { backgroundColor: palette.accentSoft }]}>
             <Ionicons name={scope.icon} size={16} color={palette.accentText} style={styles.filterBarIcon} />
-            <Text style={[styles.filterBarText, { color: palette.accentText }]} numberOfLines={1}>
-              {scope.text}
-            </Text>
+            {/* `accessible` + `accessibilityLabel` give VoiceOver/TalkBack the
+                real filter text as one announced unit (standalone — not
+                inside a labeled Pressable, unlike the clear button beside
+                it); `styles.filterBarText`'s flex: 1 also has to live on this
+                wrapper since an unstyled PostHogMaskView wouldn't inherit it. */}
+            <View accessible accessibilityLabel={scope.text} style={styles.filterBarText}>
+              <PostHogMaskView>
+                <Text style={[styles.filterBarText, { color: palette.accentText }]} numberOfLines={1}>
+                  {scope.text}
+                </Text>
+              </PostHogMaskView>
+            </View>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={scope.a11y}
