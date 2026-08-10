@@ -67,6 +67,7 @@ import { isPermanentlyUnsyncableUrl } from "@/sync/sync-bookmarks";
 import { useSupabaseAuth } from "@/supabase/auth-provider";
 import type { OAuthProvider } from "@/supabase/types";
 import { useAnalytics } from "@/analytics/provider";
+import { usePostHogFull } from "@/analytics-full/posthog-full-runtime";
 import { requestPushPermissionAndToken } from "@/notifications/push-permission";
 import { createDefaultPushTokenWriter } from "@/notifications/push-token-client";
 import {
@@ -186,12 +187,21 @@ export default function SettingsScreen() {
   const auth = useSupabaseAuth();
   const analytics = useAnalytics();
   const [analyticsBusy, setAnalyticsBusy] = useState(false);
+  const sessionReplay = usePostHogFull();
+  const [sessionReplayBusy, setSessionReplayBusy] = useState(false);
 
   const handleAnalyticsChange = (enabled: boolean) => {
     if (!analytics.ready || analyticsBusy) return;
     setAnalyticsBusy(true);
     void analytics
       .setEnabled(enabled)
+      .then(() => {
+        // Narrower consent (session replay) doesn't survive revoking the
+        // broader one (base analytics) — cascade the opt-out.
+        if (!enabled && sessionReplay.enabled) {
+          void sessionReplay.setEnabled(false);
+        }
+      })
       .catch(() =>
         Alert.alert(
           t("settings.analytics.errorTitle"),
@@ -199,6 +209,20 @@ export default function SettingsScreen() {
         ),
       )
       .finally(() => setAnalyticsBusy(false));
+  };
+
+  const handleSessionReplayChange = (enabled: boolean) => {
+    if (!analytics.enabled || !sessionReplay.ready || sessionReplayBusy) return;
+    setSessionReplayBusy(true);
+    void sessionReplay
+      .setEnabled(enabled)
+      .catch(() =>
+        Alert.alert(
+          t("settings.sessionReplay.errorTitle"),
+          t("settings.sessionReplay.errorBody"),
+        ),
+      )
+      .finally(() => setSessionReplayBusy(false));
   };
 
   // Sign in / out happens inline in the account card (no separate screen).
@@ -1049,9 +1073,33 @@ export default function SettingsScreen() {
           }
           right={
             <Switch
+              accessibilityLabel={t("settings.analytics.label")}
               value={analytics.enabled}
               disabled={!analytics.ready || analyticsBusy}
               onValueChange={handleAnalyticsChange}
+              trackColor={{ true: palette.accent, false: palette.border }}
+              thumbColor="#ffffff"
+            />
+          }
+        />
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="analytics-outline"
+          label={t("settings.sessionReplay.label")}
+          value={
+            sessionReplay.enabled
+              ? t("settings.sessionReplay.enabled")
+              : t("settings.sessionReplay.disabled")
+          }
+          right={
+            <Switch
+              accessibilityLabel={t("settings.sessionReplay.label")}
+              value={sessionReplay.enabled}
+              disabled={
+                !analytics.enabled || !sessionReplay.ready || sessionReplayBusy
+              }
+              onValueChange={handleSessionReplayChange}
               trackColor={{ true: palette.accent, false: palette.border }}
               thumbColor="#ffffff"
             />

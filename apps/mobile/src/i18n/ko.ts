@@ -332,6 +332,13 @@ export const ko: Catalog = {
   'settings.analytics.errorTitle': '분석 설정을 저장하지 못했습니다',
   'settings.analytics.errorBody':
     '이번 실행에서는 분석이 꺼진 상태로 유지됩니다. 다음 실행에도 적용되도록 다시 시도해 주세요.',
+  'settings.sessionReplay.label': '세션 리플레이 및 기능 미리보기 사용',
+  'settings.sessionReplay.enabled':
+    '북마크 텍스트와 이미지를 가린 익명 화면 세션을 기록하고, 인앱 설문조사와 실험적 기능을 활성화합니다',
+  'settings.sessionReplay.disabled': '꺼짐 — 세션 기록, 설문조사, 실험 대상 지정이 없습니다',
+  'settings.sessionReplay.errorTitle': '세션 리플레이 설정을 저장하지 못했습니다',
+  'settings.sessionReplay.errorBody':
+    '이번 실행에서는 세션 리플레이가 꺼진 상태로 유지됩니다. 다음 실행에도 적용되도록 다시 시도해 주세요.',
   'settings.search.clearLabel': '검색 기록 지우기',
   'settings.search.clearValue': '최근 검색 {count}개',
   'settings.search.clearEmpty': '최근 검색 없음',

@@ -113,6 +113,42 @@ pnpm sentry:issue STASH-22 --resolve
 It reads `SENTRY_AUTH_TOKEN` plus optional `SENTRY_ORG` / `SENTRY_PROJECT` from
 the shell, `.env.local`, or the file pointed to by `SENTRY_ENV_FILE`.
 
+## Product analytics — full PostHog SDK (session replay, heatmaps, flags, surveys)
+
+This is a **trial running alongside Sentry, not a replacement for it** —
+Sentry stays the crash/error monitor. It's a separate, heavier layer on top
+of the existing privacy-safe analytics client
+(`apps/mobile/src/analytics/`, unaffected by this): the official
+`posthog-react-native` SDK (`apps/mobile/src/analytics-full/`), adding
+session replay, heatmaps, richer feature flags, and in-app surveys.
+
+Two independent gates must both be on before anything is ever recorded:
+
+1. **Build-time** — `EXPO_PUBLIC_POSTHOG_FULL_SDK_ENABLED=true`, alongside the
+   existing `EXPO_PUBLIC_POSTHOG_API_KEY` / `EXPO_PUBLIC_POSTHOG_HOST` (same
+   EU-hosted PostHog project the base analytics client uses). Unset in
+   production until the trial is deliberately turned on for a build/channel —
+   without it the SDK is never constructed.
+2. **Runtime** — a Settings toggle ("Enable session replay & feature
+   previews"), separate from and dependent on the base "Share privacy-safe
+   usage analytics" toggle (broader consent is a prerequisite; turning the
+   base toggle off also turns this one off). Off by default even once the
+   build-time gate is on.
+
+For local testing, set all three env vars in `.env.local` and opt in through
+both Settings toggles.
+
+**Masking is safety-critical and must be verified manually, not just by
+reading the code.** Bookmark titles, URLs, tags, notes, and images are
+exactly the content class session replay could otherwise expose, so
+`buildPostHogFullInitOptions` in `posthog-full-config.ts` pins conservative
+`sessionReplayConfig` masking explicitly rather than trusting SDK defaults.
+Before enabling the build-time gate on any channel real users can reach
+(including internal/beta), do a manual pass: build with the gate and both
+toggles on, seed realistic bookmark content, navigate through Inbox/Library/
+bookmark detail/search, then inspect the resulting recording and heatmap in
+the PostHog dashboard for any unmasked title/URL/tag/note/image content.
+
 ### OAuth sign-in (Apple / Google)
 
 Settings offers "Sign in with Apple / Google", which upgrades the anonymous account to a permanent one. The client uses a browser-based PKCE flow against GoTrue (`/auth/v1/authorize` → `grant_type=pkce`), so no `supabase-js` dependency or custom backend is needed. To enable it on a project:
