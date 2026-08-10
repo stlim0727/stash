@@ -1,5 +1,5 @@
 import { act, render, waitFor } from '@testing-library/react-native';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 
 // A fake PostHog client shared between the mocked class constructor and the
@@ -70,14 +70,34 @@ function StateProbe({ onState }: { onState: (state: ProbeState) => void }) {
   return null;
 }
 
+/** Mounts exactly once and never again if `children`'s position in the tree
+ *  stays stable across a `ready` transition — mount+unmount (a `useRef`
+ *  identity that resets, or the effect firing twice) means React tore down
+ *  and rebuilt the subtree, which is the exact "capture is sacred" bug this
+ *  guards against (e.g. it would discard ShareIntentHandler's in-flight
+ *  local state on a cold launch with the build gate on). */
+function MountProbe({ onMount }: { onMount: () => void }) {
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    if (mountedRef.current) {
+      throw new Error('MountProbe re-mounted — children were torn down and rebuilt');
+    }
+    mountedRef.current = true;
+    onMount();
+  }, [onMount]);
+  return null;
+}
+
 async function renderProvider() {
   const states: ProbeState[] = [];
+  let mountCount = 0;
   const screen = await render(
     <PostHogFullProvider>
       <StateProbe onState={(state) => states.push(state)} />
+      <MountProbe onMount={() => (mountCount += 1)} />
     </PostHogFullProvider>,
   );
-  return { screen, states, latest: () => states[states.length - 1] };
+  return { screen, states, latest: () => states[states.length - 1], mountCount: () => mountCount };
 }
 
 const ENV_KEYS = [
@@ -113,6 +133,23 @@ test('with no build-time gate, ready flips true immediately and configured stays
   expect(latest().configured).toBe(false);
   expect(latest().enabled).toBe(false);
   expect(lastClientInstance).toBeNull();
+});
+
+test('children never remount as `ready` transitions from false to true (capture must survive it)', async () => {
+  enableBuildGate();
+  mockStorage[POSTHOG_FULL_ENABLED_STORAGE_KEY] = 'true';
+
+  const { latest, mountCount } = await renderProvider();
+  // Caught immediately on the first render, before restoration even starts.
+  expect(mountCount()).toBe(1);
+
+  await waitFor(() => expect(latest().ready).toBe(true));
+  // Still exactly 1 after the client went from null to a real instance and
+  // `ready` flipped from false to true — if children's position in the tree
+  // had moved (e.g. gated behind `ready` instead of just `client`), React
+  // would have unmounted and rebuilt this subtree, and MountProbe's own
+  // effect would have thrown on the second mount.
+  expect(mountCount()).toBe(1);
 });
 
 test('restores session replay on startup when both the own and base consent are on', async () => {

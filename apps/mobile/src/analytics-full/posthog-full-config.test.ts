@@ -93,6 +93,7 @@ test('buildPostHogFullInitOptions asks for conservative masking and starts opted
   assert.equal(options.host, 'https://eu.i.posthog.com');
   assert.equal(options.disableGeoip, true);
   assert.equal(options.defaultOptIn, false);
+  assert.equal(options.captureAppLifecycleEvents, false);
   assert.equal(options.enableSessionReplay, true);
   assert.deepEqual(options.sessionReplayConfig, {
     maskAllTextInputs: true,

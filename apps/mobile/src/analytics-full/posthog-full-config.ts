@@ -79,6 +79,7 @@ export interface PostHogFullInitOptions {
   readonly host: string;
   readonly disableGeoip: boolean;
   readonly defaultOptIn: boolean;
+  readonly captureAppLifecycleEvents: boolean;
   readonly enableSessionReplay: boolean;
   readonly sessionReplayConfig: PostHogFullSessionReplayConfig;
 }
@@ -98,6 +99,12 @@ export function buildPostHogFullInitOptions(config: PostHogFullConfig): PostHogF
     // Start opted out; posthog-full-runtime.tsx only calls optIn() once the
     // user has explicitly turned on the Settings toggle.
     defaultOptIn: false,
+    // Defaults to true — the SDK would otherwise emit its own
+    // install/update/opened/backgrounded events with SDK-defined automatic
+    // properties, bypassing EVENT_CATALOG/sanitizeEvent the same way
+    // captureScreens/captureTouches would. app_open is already covered,
+    // through the allowlist, by the base analytics client.
+    captureAppLifecycleEvents: false,
     enableSessionReplay: true,
     sessionReplayConfig: {
       // The SDK's own current defaults for these are already `true`, but

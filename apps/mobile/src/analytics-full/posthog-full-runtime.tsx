@@ -234,15 +234,26 @@ export function PostHogFullProvider({ children }: { children: ReactNode }) {
   );
   const providerAutocapture = useMemo(() => ({ ...POSTHOG_FULL_AUTOCAPTURE_OPTIONS }), []);
 
-  // Children render immediately either way (capture/UI must never block on
-  // this) — but PostHogProvider/PostHogSurveyProvider (which expose the
-  // client to the SDK's own React tree and can trigger its own
-  // replay/survey/flag activity) only mount once the startup-restore effect
-  // has actually run and forced the client to a known state. Gating on just
-  // `client !== null` would mount them on the very first render, before that
-  // effect (which only runs after commit) has had a chance to force a stale
-  // SDK-persisted opt-in back out.
-  if (!client || !ready) {
+  // Gated on `client !== null` ONLY — never on `ready`. `client` is set once
+  // via useRef on the first render and never changes afterward, so this
+  // branch is stable for the component's whole lifetime and `children`'s
+  // position in the tree never moves. Gating this on `ready` (tried in an
+  // earlier revision) toggles from false to true shortly after mount, which
+  // changes children's ancestor chain (they'd go from a direct child of this
+  // context provider to being nested inside PostHogProvider/
+  // PostHogSurveyProvider) — React treats that as a full unmount+remount of
+  // the ENTIRE app tree below here, not a no-op, which is exactly the kind
+  // of capture-loss bug this codebase exists to prevent (e.g. it would
+  // discard in-flight local state in ShareIntentHandler on a cold launch).
+  //
+  // The actual "don't let the client act before we know its consent state"
+  // concern that motivated gating on `ready` is already handled at the
+  // client level: `defaultOptIn: false` plus the startup-restore effect's
+  // opt-out-before-reading-consent ordering (see below) keep the SDK's own
+  // opted-in/out state correct regardless of when PostHogProvider mounts —
+  // mounting it earlier only wires up React context and (already-disabled)
+  // autocapture, it doesn't independently start sending data.
+  if (!client) {
     return (
       <PostHogFullContext.Provider value={value}>{children}</PostHogFullContext.Provider>
     );
