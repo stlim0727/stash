@@ -35,6 +35,7 @@ export const ko: Catalog = {
   'status.failed': '실패',
   'status.complete': '완료',
   'status.skipped': '건너뜀',
+  'status.videoUnavailable': '동영상 재생 불가',
 
   'nav.addBookmark': '북마크 추가',
   'nav.settings': '설정',
@@ -453,6 +454,7 @@ export const ko: Catalog = {
   'detail.aiSuggest': 'AI로 제안받기',
   'detail.previewRefresh': '프리뷰',
   'detail.previewRefreshing': '새로고침 중…',
+  'detail.searchYoutube': 'YouTube에서 검색',
   'detail.aiNeedsSync': '이 북마크가 동기화되면 AI 제안을 사용할 수 있습니다.',
   'detail.aiPreviewFailed': '프리뷰 가져오기에 실패하여 AI 제안을 생성할 수 없습니다.',
   'detail.previewFailedNote': '프리뷰와 메타데이터를 불러오지 못했습니다.',

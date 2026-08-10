@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  checkYoutubeAvailability,
   detectCharset,
   fetchPageMetadata,
   htmlHeadSummary,
@@ -132,6 +133,63 @@ test('parseOembed ignores blank/non-string fields', () => {
   assert.equal(meta.title, undefined);
   assert.equal(meta.site_name, undefined);
   assert.equal(meta.preview_image_url, undefined);
+});
+
+// STASH-61: a saved YouTube video can be deleted/made private after capture.
+// oEmbed 404/401 are the unambiguous "gone" signals; everything else must stay
+// 'unknown' so a flaky network or an unrelated URL never mislabels a video.
+test('checkYoutubeAvailability reports unavailable on oEmbed 404 (deleted) and 401 (private)', async () => {
+  const originalFetch = globalThis.fetch;
+  for (const status of [404, 401]) {
+    globalThis.fetch = (async () => ({ ok: false, status }) as unknown as Response) as typeof fetch;
+    try {
+      assert.equal(
+        await checkYoutubeAvailability('https://youtube.com/shorts/PG7OUsiB6Qg'),
+        'unavailable',
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+});
+
+test('checkYoutubeAvailability reports available when oEmbed answers with a title', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    ({
+      ok: true,
+      status: 200,
+      json: async () => ({ title: 'Me at the zoo', provider_name: 'YouTube' }),
+    }) as unknown as Response) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://youtu.be/jNQXAC9IVRw'),
+      'available',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('checkYoutubeAvailability reports unknown on a non-YouTube URL, a 5xx, and a network error', async () => {
+  assert.equal(await checkYoutubeAvailability('https://example.com/article'), 'unknown');
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: false, status: 500 }) as unknown as Response) as typeof fetch;
+  try {
+    assert.equal(await checkYoutubeAvailability('https://youtu.be/jNQXAC9IVRw'), 'unknown');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  globalThis.fetch = (async () => {
+    throw new Error('network down');
+  }) as unknown as typeof fetch;
+  try {
+    assert.equal(await checkYoutubeAvailability('https://youtu.be/jNQXAC9IVRw'), 'unknown');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 // The oEmbed thumbnail is the soft 480×360 `hqdefault`; enrichment upgrades it

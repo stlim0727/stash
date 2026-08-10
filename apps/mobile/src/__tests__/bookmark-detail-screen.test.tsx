@@ -40,6 +40,14 @@ jest.mock('@/supabase/auth-provider', () => ({
 jest.mock('@/domain/enrichment', () => ({
   enrichBookmark: async () => ({ patch: {}, metadata_status: 'complete' }),
 }));
+const mockCheckYoutubeAvailability = jest.fn<
+  Promise<'available' | 'unavailable' | 'unknown'>,
+  [string]
+>(async () => 'unknown');
+jest.mock('@/domain/page-metadata', () => ({
+  ...jest.requireActual('@/domain/page-metadata'),
+  checkYoutubeAvailability: (url: string) => mockCheckYoutubeAvailability(url),
+}));
 
 // Stub the network API so a test that arms a real Supabase session (above)
 // doesn't hit a real backend for pull-sync's list calls; requestEnrichment is
@@ -180,6 +188,54 @@ test('tapping the preview image opens the bookmark link', async () => {
 
   expect(openURL).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
   openURL.mockRestore();
+});
+
+test('STASH-61: a confirmed-unavailable YouTube video shows the status chip and a Search YouTube action', async () => {
+  mockRouteId = SYNCED_ID;
+  const openURL = jest.spyOn(Linking, 'openURL').mockResolvedValue(undefined);
+  mockCheckYoutubeAvailability.mockResolvedValueOnce('unavailable');
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Never Gonna Give You Up',
+      url: 'https://youtube.com/shorts/PG7OUsiB6Qg',
+      url_hash: 'https://youtube.com/shorts/PG7OUsiB6Qg',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Never Gonna Give You Up')).toBeTruthy());
+
+  // The on-demand check fires from Detail's mount effect; wait for its result
+  // to land and the chip/action to appear.
+  await waitFor(() => expect(mockCheckYoutubeAvailability).toHaveBeenCalledWith(
+    'https://youtube.com/shorts/PG7OUsiB6Qg',
+  ));
+  await waitFor(() => expect(screen.getByText(/video unavailable/)).toBeTruthy());
+
+  await fireEvent.press(screen.getByLabelText('Search YouTube'));
+  expect(openURL).toHaveBeenCalledWith(
+    'https://www.youtube.com/results?search_query=Never%20Gonna%20Give%20You%20Up',
+  );
+  openURL.mockRestore();
+});
+
+test('a non-YouTube bookmark never triggers the availability check or shows the badge', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  expect(mockCheckYoutubeAvailability).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText('Search YouTube')).toBeNull();
 });
 
 test('copy link action copies the bookmark URL and confirms with a toast', async () => {

@@ -606,6 +606,50 @@ async function fetchKnownOembedMetadata(
   return { metadata: null, outcome: fromOembed ? 'no_title' : 'failed' };
 }
 
+/**
+ * Whether a saved YouTube video is still available, per its oEmbed endpoint
+ * (STASH-61: videos can be deleted/made private sometime after capture).
+ * YouTube's oEmbed answers 404 for a deleted/nonexistent video and 401 for a
+ * private one — both unambiguous confirmations the content is gone. Any other
+ * outcome (a real title, a non-YouTube URL, a 5xx, a timeout, a network
+ * error) resolves to `'unknown'` rather than guessing, so a transient failure
+ * can never mislabel a healthy video as unavailable. Note: a region-restricted
+ * video's oEmbed typically still succeeds, so this check cannot detect that
+ * case — deleted/private is the reliable, unambiguous subset it covers.
+ *
+ * Callers are expected to invoke this on-demand (e.g. once when a bookmark's
+ * Detail screen opens), never as background polling of the whole library —
+ * "Capture is sacred" and privacy/battery both rule that out.
+ */
+export async function checkYoutubeAvailability(
+  rawUrl: string,
+): Promise<'available' | 'unavailable' | 'unknown'> {
+  const endpoint = oembedEndpoint(rawUrl);
+  if (!endpoint) {
+    return 'unknown';
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(endpoint, {
+      signal: controller.signal,
+      headers: OEMBED_HEADERS,
+    });
+    if (response.status === 404 || response.status === 401) {
+      return 'unavailable';
+    }
+    if (!response.ok) {
+      return 'unknown';
+    }
+    const json = (await response.json()) as OembedResponse;
+    return parseOembed(json).title ? 'available' : 'unknown';
+  } catch {
+    return 'unknown';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchOembed(endpoint: string): Promise<FetchedMetadata | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
