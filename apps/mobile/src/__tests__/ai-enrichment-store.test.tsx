@@ -1426,6 +1426,7 @@ test('a bulk create sync failure records retry state instead of silently resetti
   // 'pending' with no record anything went wrong.
   fakeRepo.__reset([]);
   apiMock.__spies.createBookmarks.mockRejectedValueOnce(new Error('network down'));
+  clearLogEntries();
 
   const store = renderStore();
   await waitFor(() => expect(store.current?.isLoading).toBe(false));
@@ -1460,6 +1461,17 @@ test('a bulk create sync failure records retry state instead of silently resetti
   for (const id of ids) {
     expect(fakeRepo.__bookmarks().find((b) => b.id === id)?.sync_status).toBe('failed');
   }
+
+  // Sentry STASH-62: the cycle-done summary log must count this failure —
+  // `syncFailed` used to be dead code (declared, never incremented), so this
+  // line always read "failed=0" even on a real bulk-endpoint outage,
+  // undermining exactly the kind of triage this test's own diagnostics are
+  // meant to enable.
+  await waitFor(() =>
+    expect(
+      getLogEntries().some((entry) => /^sync: cycle done entries=2 failed=2$/.test(entry.message)),
+    ).toBe(true),
+  );
 });
 
 test('a bulk create failure keeps untried later chunks out of the single-entry fallback', async () => {

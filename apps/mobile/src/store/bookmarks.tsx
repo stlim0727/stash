@@ -5083,6 +5083,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           entry: LocalPendingBookmark,
           result: Awaited<ReturnType<typeof syncQueueEntry>>,
         ): Promise<boolean> => {
+          if (result.entry.sync_status === "failed") {
+            syncFailed += 1;
+          }
           if (
             crossedHealthEscalationThreshold(
               entry.retry_count,
@@ -5962,6 +5965,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     updated_at: failedAt,
                   });
                 }
+                syncFailed += failedEntries.size;
 
                 try {
                   await ensureRepositoryReady();
@@ -6108,6 +6112,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             await applySyncEntryResult(entry, result);
           } catch (error) {
             logStorageError("sync entry", error);
+            syncFailed += 1;
             const failedAt = new Date().toISOString();
             const failed: LocalPendingBookmark = {
               ...entry,
