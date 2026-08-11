@@ -35,6 +35,7 @@ function bookmark(id: string, metadata_status: Bookmark["metadata_status"] = "co
 function queued(
   id: string,
   sync_status: LocalPendingBookmark["sync_status"] = "pending",
+  last_error = sync_status === "failed" ? "network" : null,
 ): LocalPendingBookmark {
   return {
     local_id: id,
@@ -43,7 +44,7 @@ function queued(
     payload: { id, url: `https://example.com/${id}` },
     sync_status,
     retry_count: sync_status === "failed" ? 3 : 0,
-    last_error: sync_status === "failed" ? "network" : null,
+    last_error,
     created_at: NOW,
     updated_at: NOW,
   };
@@ -124,6 +125,27 @@ test("a permanently unsyncable legacy URL stays diagnostic-only", () => {
   assert.equal(result.remaining, 0);
   assert.deepEqual(result.stages, {
     cloud: 0,
+    metadata: 0,
+    ai: 0,
+    attention: 0,
+  });
+  assert.equal(result.details.sync.failed, 1);
+});
+
+test("a transient network failure keeps waiting in the cloud stage", () => {
+  const result = stats({
+    queue: [
+      queued(
+        "offline",
+        "failed",
+        'fetch failed: java.net.UnknownHostException: Unable to resolve host "example.supabase.co"',
+      ),
+    ],
+  });
+
+  assert.equal(result.remaining, 1);
+  assert.deepEqual(result.stages, {
+    cloud: 1,
     metadata: 0,
     ai: 0,
     attention: 0,

@@ -4,6 +4,7 @@ import type {
   LocalPendingBookmark,
   QueueOperation,
 } from "./types";
+import { isTransientNetworkError } from "./network-errors.ts";
 
 export type AiServerQueueStatus = "pending" | "processing" | "failed";
 
@@ -115,11 +116,13 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
   const activeQueue = input.queue.filter((entry) => entry.sync_status !== "synced");
   const permanentIds = input.permanentlyUnsyncableIds ?? new Set<string>();
 
-  const syncFailedIds = new Set(
+  const syncAttentionIds = new Set(
     activeQueue
       .filter(
         (entry) =>
-          entry.sync_status === "failed" && !permanentIds.has(entry.local_id),
+          entry.sync_status === "failed" &&
+          !isTransientNetworkError(entry.last_error) &&
+          !permanentIds.has(entry.local_id),
       )
       .map((entry) => entry.local_id),
   );
@@ -127,9 +130,12 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
     activeQueue
       .filter(
         (entry) =>
-          (entry.sync_status === "pending" || entry.sync_status === "syncing") &&
+          (entry.sync_status === "pending" ||
+            entry.sync_status === "syncing" ||
+            (entry.sync_status === "failed" &&
+              isTransientNetworkError(entry.last_error))) &&
           !permanentIds.has(entry.local_id) &&
-          !syncFailedIds.has(entry.local_id),
+          !syncAttentionIds.has(entry.local_id),
       )
       .map((entry) => entry.local_id),
   );
@@ -140,7 +146,7 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
       .filter((row) => row.status === "failed" && !enrichmentIds.has(row.bookmark_id))
       .map((row) => row.bookmark_id),
   );
-  const attentionIds = union(syncFailedIds, unresolvedServerFailedIds);
+  const attentionIds = union(syncAttentionIds, unresolvedServerFailedIds);
   const cloudIds = without(cloudCandidateIds, attentionIds);
 
   const metadataCandidateIds = new Set(

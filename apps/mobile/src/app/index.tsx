@@ -122,10 +122,10 @@ import {
 import { didWordmarkImageLoad, shouldShowWordmarkFallback } from '@/domain/wordmark';
 import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 
-function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
+function statusLabel(bookmark: Bookmark, t: TFunction, syncError?: string | null): string | null {
   const parts: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    parts.push(syncStatusLabel(t, bookmark.sync_status));
+    parts.push(syncStatusLabel(t, bookmark.sync_status, syncError));
   }
   if (bookmark.metadata_status === 'pending') {
     parts.push(metadataStatusLabel(t, 'pending'));
@@ -516,6 +516,7 @@ export default function InboxScreen() {
   }, [wordmark.source]);
   const {
     inbox,
+    queue,
     isLoading,
     isSyncing,
     loadError,
@@ -535,6 +536,10 @@ export default function InboxScreen() {
     markBookmarkAccessed,
     createCollection,
   } = useBookmarks();
+  const syncErrorByBookmarkId = useMemo(
+    () => new Map(queue.map((entry) => [entry.local_id, entry.last_error] as const)),
+    [queue],
+  );
   const { show: showToast } = useCaptureToast();
   const [query, setQuery] = useState('');
   // The TextInput stays bound to `query` (instant echo), but the derived work —
@@ -2893,7 +2898,7 @@ export default function InboxScreen() {
               </Pressable>
             );
           }
-          const status = statusLabel(item, t);
+          const status = statusLabel(item, t, syncErrorByBookmarkId.get(item.id));
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
           // Pending AI suggestions = high-confidence suggested tags not yet

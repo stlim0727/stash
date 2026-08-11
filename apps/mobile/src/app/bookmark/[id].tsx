@@ -78,6 +78,7 @@ export default function BookmarkDetailScreen({
   const { id: routeId } = useLocalSearchParams<{ id: string }>();
   const {
     getBookmark,
+    queue,
     getTagsForBookmark,
     getCollection,
     getEnrichment,
@@ -168,6 +169,9 @@ export default function BookmarkDetailScreen({
   const id = inlineId ?? routeId;
   const inline = inlineId !== undefined;
   const bookmark = id ? getBookmark(id) : undefined;
+  const syncError = bookmark
+    ? queue.find((entry) => entry.local_id === bookmark.id)?.last_error
+    : undefined;
 
   // The title shown when not editing. Background metadata enrichment can swap
   // this from the URL/"Untitled" to a long title while the screen stays
@@ -498,7 +502,7 @@ export default function BookmarkDetailScreen({
   // are noteworthy (not yet synced / still enriching), never as full cards.
   const statusChips: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    statusChips.push(syncStatusLabel(t, bookmark.sync_status));
+    statusChips.push(syncStatusLabel(t, bookmark.sync_status, syncError));
   }
   if (bookmark.metadata_status !== 'complete') {
     statusChips.push(metadataStatusLabel(t, bookmark.metadata_status));
