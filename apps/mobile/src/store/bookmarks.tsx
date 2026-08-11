@@ -149,9 +149,10 @@ import {
 } from "@/sync/pull-bookmarks";
 import {
   BULK_CREATE_SYNC_CHUNK_SIZE,
+  applySyncQueueHealthEscalation,
   createNeedsReconcileUpdate,
   createSyncApi,
-  crossedHealthEscalationThreshold,
+  didSyncQueueHealthEscalate,
   findStaleQueueEntries,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
@@ -5172,16 +5173,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (result.entry.sync_status === "failed") {
             syncFailed += 1;
           }
-          if (
-            crossedHealthEscalationThreshold(
-              entry.retry_count,
-              result.entry.retry_count,
-            )
-          ) {
+          if (didSyncQueueHealthEscalate(entry, result.entry)) {
             reportSyncQueueHealthEscalation({
               operation: entry.operation,
               retryCount: result.entry.retry_count,
               lastError: result.entry.last_error,
+              errorKind: result.entry.last_error_kind,
             });
           }
 
@@ -6028,7 +6025,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
                 const failedEntries = new Map<string, LocalPendingBookmark>();
                 for (const entry of chunk) {
-                  failedEntries.set(entry.local_id, {
+                  const failedEntry = applySyncQueueHealthEscalation(entry, {
                     ...entry,
                     sync_status: "failed",
                     retry_count: entry.retry_count + 1,
@@ -6042,10 +6039,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     // had instead of newly earning one.
                     last_attempt_at: failedAt,
                     updated_at: failedAt,
-                  });
+                  }, failedAt);
+                  failedEntries.set(entry.local_id, failedEntry);
                 }
                 for (const entry of untriedEntries) {
-                  failedEntries.set(entry.local_id, {
+                  const failedEntry = applySyncQueueHealthEscalation(entry, {
                     ...entry,
                     sync_status: "failed",
                     last_error:
@@ -6055,7 +6053,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     // application failure (PR #744 review).
                     last_error_kind: failureKind,
                     updated_at: failedAt,
-                  });
+                  }, failedAt);
+                  failedEntries.set(entry.local_id, failedEntry);
                 }
                 syncFailed += failedEntries.size;
 
@@ -6098,16 +6097,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     // outer catch and permanently lose this entry's one-time
                     // escalation even though its retry_count already persisted
                     // (caught in PR review).
-                    if (
-                      crossedHealthEscalationThreshold(
-                        entry.retry_count,
-                        failedEntry.retry_count,
-                      )
-                    ) {
+                    if (didSyncQueueHealthEscalate(entry, failedEntry)) {
                       reportSyncQueueHealthEscalation({
                         operation: failedEntry.operation,
                         retryCount: failedEntry.retry_count,
                         lastError: failedEntry.last_error,
+                        errorKind: failedEntry.last_error_kind,
                       });
                     }
                     const bookmark = getLatestBookmark(entry.local_id);

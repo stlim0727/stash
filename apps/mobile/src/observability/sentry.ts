@@ -12,6 +12,8 @@ import * as Sentry from '@sentry/react-native';
 import Constants from 'expo-constants';
 import type { ComponentType } from 'react';
 
+import type { SyncErrorKind } from '@/domain/types';
+
 import { onConsoleEntry, recordLog } from './log-buffer';
 import { buildSentryInitOptions, getSentryConfigState } from './sentry-config';
 import { buildConsoleErrorReport, scrubText } from './sentry-report';
@@ -126,7 +128,7 @@ export function setSentryUser(userId: string | null): void {
 
 /**
  * Escalates a sync-queue entry that just crossed the retry-health threshold
- * (see `crossedHealthEscalationThreshold` in sync/sync-bookmarks.ts) so a
+ * (see `applySyncQueueHealthEscalation` in sync/sync-bookmarks.ts) so a
  * systemic sync problem surfaces to the team without waiting for an in-app
  * feedback report.
  *
@@ -134,13 +136,14 @@ export function setSentryUser(userId: string | null): void {
  * groups events by message by default, so a fixed string lets every
  * occurrence across every device land in ONE recurring issue instead of a
  * new issue per bookmark. The variable, still non-content data (operation,
- * retry count, last error) rides as `extra` instead, since only the message
- * participates in that default grouping.
+ * retry count, error kind, last error) rides as `extra` instead, since only
+ * the message participates in that default grouping.
  */
 export function reportSyncQueueHealthEscalation(entry: {
   operation: string;
   retryCount: number;
   lastError: string | null;
+  errorKind: SyncErrorKind | null | undefined;
 }): void {
   try {
     Sentry.captureMessage('Sync queue entry crossed retry-health threshold', {
@@ -149,6 +152,7 @@ export function reportSyncQueueHealthEscalation(entry: {
         operation: entry.operation,
         retry_count: entry.retryCount,
         last_error: entry.lastError ? scrubText(entry.lastError) : entry.lastError,
+        error_kind: entry.errorKind ?? null,
       },
     });
   } catch {

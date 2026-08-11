@@ -77,8 +77,8 @@ export function syncErrorKind(error: unknown): SyncErrorKind {
 }
 
 /**
- * Retry count at which a stuck queue entry's health gets escalated (see
- * `crossedHealthEscalationThreshold` and its caller in store/bookmarks.tsx),
+ * Retry count at which an ordinary stuck queue entry's health gets escalated
+ * (see `applySyncQueueHealthEscalation` and its caller in store/bookmarks.tsx),
  * so a systemic sync problem — an API outage, a schema mismatch affecting
  * every upload — surfaces to the team without waiting for an in-app feedback
  * report. Deliberately low: 3 failed attempts already means automatic retry
@@ -86,19 +86,51 @@ export function syncErrorKind(error: unknown): SyncErrorKind {
  */
 export const SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD = 3;
 
+/** Offline/DNS failures are expected device state, not evidence of a broken
+ * server contract. Give connectivity time to recover before escalating, while
+ * still surfacing a genuinely prolonged outage. */
+export const TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD = 6;
+
 /**
- * True exactly when a failed attempt just crossed the escalation threshold —
- * the previous retry_count was below it, the new one is at/above it. Fires
- * once per entry at the crossing, not again on every retry past it (an entry
- * stuck at attempt 40 shouldn't re-escalate 37 more times).
+ * Persist the one-time health-escalation transition on the queue entry itself.
+ * Ordinary API/schema failures mark at retry 3; expected transport failures
+ * wait until retry 6 (STASH-4Z). Requiring retry_count to advance prevents an
+ * unattempted later bulk chunk from inheriting the attempted chunk's cause and
+ * falsely alerting. The durable marker prevents duplicate alerts when failure
+ * kinds change across retries or the app restarts.
  */
-export function crossedHealthEscalationThreshold(
-  previousRetryCount: number,
-  nextRetryCount: number,
+export function applySyncQueueHealthEscalation(
+  previousEntry: LocalPendingBookmark,
+  nextEntry: LocalPendingBookmark,
+  escalatedAt: string,
+): LocalPendingBookmark {
+  if (
+    previousEntry.health_escalated_at ||
+    nextEntry.health_escalated_at ||
+    nextEntry.sync_status !== 'failed' ||
+    nextEntry.retry_count <= previousEntry.retry_count
+  ) {
+    return nextEntry;
+  }
+  const nextThreshold =
+    nextEntry.last_error_kind === 'transient_network'
+      ? TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD
+      : SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD;
+  return nextEntry.retry_count >= nextThreshold
+    ? { ...nextEntry, health_escalated_at: escalatedAt }
+    : nextEntry;
+}
+
+/** True only for the write that first persisted the escalation marker. */
+export function didSyncQueueHealthEscalate(
+  previousEntry: LocalPendingBookmark,
+  nextEntry: LocalPendingBookmark,
 ): boolean {
   return (
-    previousRetryCount < SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD &&
-    nextRetryCount >= SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD
+    previousEntry.operation === nextEntry.operation &&
+    nextEntry.retry_count > previousEntry.retry_count &&
+    !previousEntry.health_escalated_at &&
+    Boolean(nextEntry.health_escalated_at)
   );
 }
 
@@ -161,7 +193,7 @@ async function failEntry(
   error: unknown,
   now: string,
 ): Promise<LocalPendingBookmark> {
-  const failedEntry: LocalPendingBookmark = {
+  const failedEntry = applySyncQueueHealthEscalation(entry, {
     ...entry,
     sync_status: 'failed',
     retry_count: entry.retry_count + 1,
@@ -169,7 +201,7 @@ async function failEntry(
     last_error_kind: syncErrorKind(error),
     last_attempt_at: now,
     updated_at: now,
-  };
+  }, now);
   const stored = (await repository.listQueue()).find(
     (queued) => queued.local_id === entry.local_id,
   );

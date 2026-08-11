@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-07-29 (root-caused and fixed the bulk-create sync path never clearing the queue, and the STASH-3Y reconcile follow-up's SQLite fan-out — see Known Traps).
+Last updated: 2026-08-11 (distinguished expected offline/DNS retries from actionable sync queue health failures — see Sync And Auth).
 
 ## Successor Agent Orientation
 
@@ -196,13 +196,18 @@ These are "do not break" rules, not just implementation notes.
   backend's `updateBookmark` only replaces a row already stored under that id
   (not an upsert, unlike native's SQLite `INSERT OR REPLACE`), so it silently
   no-ops for an id this device never wrote before.
-- **A sync-queue entry stuck failing escalates to Sentry automatically once,
-  at 3 retries** — `crossedHealthEscalationThreshold` (`sync/sync-bookmarks.ts`)
-  is checked in `applySyncEntryResult` (`store/bookmarks.tsx`) and reports via
+- **A sync-queue entry stuck failing escalates to Sentry automatically once:
+  ordinary failures at 3 retries, transient offline/DNS failures at 6** —
+  `applySyncQueueHealthEscalation` (`sync/sync-bookmarks.ts`) is checked in
+  `applySyncEntryResult` (`store/bookmarks.tsx`) and reports via
   `reportSyncQueueHealthEscalation` (`observability/sentry.ts`) so a systemic
-  sync problem (API outage, schema drift) surfaces without an in-app feedback
-  report. Fires once per entry at the crossing, not on every retry past it —
-  don't add a second ad hoc report for the same condition elsewhere.
+  sync problem (API outage, schema drift, or prolonged transport outage)
+  surfaces without an in-app feedback report. The higher transport threshold
+  prevents an ordinary offline spell from becoming an incident (STASH-4Z).
+  `LocalPendingBookmark.health_escalated_at` persists the one-time crossing
+  across failure-kind changes and restarts; retry count must advance before it
+  can be stamped, so unattempted bulk rows never alert. Don't add a second ad
+  hoc report for the same condition elsewhere.
 
 ### Metadata
 
