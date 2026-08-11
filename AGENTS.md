@@ -198,14 +198,16 @@ These are "do not break" rules, not just implementation notes.
   no-ops for an id this device never wrote before.
 - **A sync-queue entry stuck failing escalates to Sentry automatically once:
   ordinary failures at 3 retries, transient offline/DNS failures at 6** —
-  `shouldEscalateSyncQueueHealth` (`sync/sync-bookmarks.ts`) is checked in
+  `applySyncQueueHealthEscalation` (`sync/sync-bookmarks.ts`) is checked in
   `applySyncEntryResult` (`store/bookmarks.tsx`) and reports via
   `reportSyncQueueHealthEscalation` (`observability/sentry.ts`) so a systemic
   sync problem (API outage, schema drift, or prolonged transport outage)
   surfaces without an in-app feedback report. The higher transport threshold
   prevents an ordinary offline spell from becoming an incident (STASH-4Z).
-  Fires once per entry at the applicable crossing, not on every retry past it —
-  don't add a second ad hoc report for the same condition elsewhere.
+  `LocalPendingBookmark.health_escalated_at` persists the one-time crossing
+  across failure-kind changes and restarts; retry count must advance before it
+  can be stamped, so unattempted bulk rows never alert. Don't add a second ad
+  hoc report for the same condition elsewhere.
 
 ### Metadata
 

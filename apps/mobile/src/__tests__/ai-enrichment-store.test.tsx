@@ -1422,7 +1422,7 @@ test('a bulk create sync failure records retry state instead of silently resetti
   // A bulk-endpoint failure must behave like any other sync failure: mark the
   // entry 'failed' with an incremented retry_count and last_error, so it's
   // visible to the user and eligible for health escalation (see
-  // shouldEscalateSyncQueueHealth) — not just silently reset back to
+  // applySyncQueueHealthEscalation) — not just silently reset back to
   // 'pending' with no record anything went wrong.
   fakeRepo.__reset([]);
   apiMock.__spies.createBookmarks.mockRejectedValueOnce(new Error('network down'));

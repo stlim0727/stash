@@ -128,7 +128,7 @@ export function setSentryUser(userId: string | null): void {
 
 /**
  * Escalates a sync-queue entry that just crossed the retry-health threshold
- * (see `shouldEscalateSyncQueueHealth` in sync/sync-bookmarks.ts) so a
+ * (see `applySyncQueueHealthEscalation` in sync/sync-bookmarks.ts) so a
  * systemic sync problem surfaces to the team without waiting for an in-app
  * feedback report.
  *
@@ -136,8 +136,8 @@ export function setSentryUser(userId: string | null): void {
  * groups events by message by default, so a fixed string lets every
  * occurrence across every device land in ONE recurring issue instead of a
  * new issue per bookmark. The variable, still non-content data (operation,
- * retry count, last error) rides as `extra` instead, since only the message
- * participates in that default grouping.
+ * retry count, error kind, last error) rides as `extra` instead, since only
+ * the message participates in that default grouping.
  */
 export function reportSyncQueueHealthEscalation(entry: {
   operation: string;

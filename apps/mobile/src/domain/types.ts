@@ -258,6 +258,9 @@ export interface LocalPendingBookmark {
    * by builds before STASH-63; an absent value is treated conservatively as
    * `other`, never guessed from the message text. */
   last_error_kind?: SyncErrorKind | null;
+  /** ISO timestamp proving this queue entry already emitted its one allowed
+   * retry-health event. Optional for rows written before STASH-4Z. */
+  health_escalated_at?: string | null;
   created_at: string;
   updated_at: string;
   /**
