@@ -33,6 +33,7 @@ let mockStoreOverrides: Record<string, unknown> = {};
 jest.mock('@/store/bookmarks', () => ({
   useBookmarks: () => ({
     inbox: [],
+    queue: [],
     isLoading: false,
     isSyncing: false,
     loadError: false,

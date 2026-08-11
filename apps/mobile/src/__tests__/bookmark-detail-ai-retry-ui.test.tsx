@@ -33,6 +33,7 @@ jest.mock('@/store/bookmarks', () => {
     ...actual,
     useBookmarks: () => ({
       getBookmark: () => mockBookmark,
+      queue: [],
       getTagsForBookmark: () => [],
       getCollection: () => undefined,
       getEnrichment: () => undefined,
