@@ -29,6 +29,7 @@ interface QueueRow {
   sync_status: string;
   retry_count: number;
   last_error: string | null;
+  last_error_kind: string | null;
   created_at: string;
   updated_at: string;
   last_attempt_at: string | null;
@@ -73,6 +74,7 @@ const SCHEMA_SQL = `
     sync_status TEXT NOT NULL DEFAULT 'pending',
     retry_count INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
+    last_error_kind TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     last_attempt_at TEXT
@@ -178,6 +180,13 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       }
       try {
         await db.execAsync(
+          'ALTER TABLE local_pending_bookmarks ADD COLUMN last_error_kind TEXT DEFAULT NULL',
+        );
+      } catch {
+        // Column already exists.
+      }
+      try {
+        await db.execAsync(
           'ALTER TABLE local_pending_bookmarks ADD COLUMN last_attempt_at TEXT DEFAULT NULL',
         );
       } catch {
@@ -253,8 +262,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         for (const entry of entries) {
           await db.runAsync(
             `INSERT OR REPLACE INTO local_pending_bookmarks
-            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at, last_attempt_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, created_at, updated_at, last_attempt_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               entry.local_id,
               entry.remote_id,
@@ -263,6 +272,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
               entry.sync_status,
               entry.retry_count,
               entry.last_error,
+              entry.last_error_kind ?? null,
               entry.created_at,
               entry.updated_at,
               entry.last_attempt_at ?? null,
@@ -336,8 +346,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           await writeBookmark(db, bookmark);
           await db.runAsync(
             `INSERT OR REPLACE INTO local_pending_bookmarks
-            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at, last_attempt_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, created_at, updated_at, last_attempt_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               entry.local_id,
               entry.remote_id,
@@ -346,6 +356,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
               entry.sync_status,
               entry.retry_count,
               entry.last_error,
+              entry.last_error_kind ?? null,
               entry.created_at,
               entry.updated_at,
               entry.last_attempt_at ?? null,
@@ -415,6 +426,10 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         sync_status: row.sync_status as LocalPendingBookmark['sync_status'],
         retry_count: row.retry_count,
         last_error: row.last_error,
+        last_error_kind:
+          row.last_error_kind === 'transient_network' || row.last_error_kind === 'other'
+            ? row.last_error_kind
+            : null,
         created_at: row.created_at,
         updated_at: row.updated_at,
         last_attempt_at: row.last_attempt_at ?? null,
@@ -427,8 +442,8 @@ class SqliteBookmarkRepository implements BookmarkRepository {
       (db) =>
         db.runAsync(
           `INSERT OR REPLACE INTO local_pending_bookmarks
-        (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, created_at, updated_at, last_attempt_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (local_id, remote_id, operation, payload, sync_status, retry_count, last_error, last_error_kind, created_at, updated_at, last_attempt_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             entry.local_id,
             entry.remote_id,
@@ -437,6 +452,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
             entry.sync_status,
             entry.retry_count,
             entry.last_error,
+            entry.last_error_kind ?? null,
             entry.created_at,
             entry.updated_at,
             entry.last_attempt_at ?? null,

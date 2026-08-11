@@ -112,7 +112,7 @@ import { CreateCollectionDialog } from '@/ui/CreateCollectionDialog';
 import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
-import type { Bookmark } from '@/domain/types';
+import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import {
   INITIAL_HEADER_COLLAPSE_STATE,
@@ -122,10 +122,14 @@ import {
 import { didWordmarkImageLoad, shouldShowWordmarkFallback } from '@/domain/wordmark';
 import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 
-function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
+function statusLabel(
+  bookmark: Bookmark,
+  t: TFunction,
+  queueEntry?: LocalPendingBookmark | null,
+): string | null {
   const parts: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    parts.push(syncStatusLabel(t, bookmark.sync_status));
+    parts.push(syncStatusLabel(t, bookmark.sync_status, queueEntry));
   }
   if (bookmark.metadata_status === 'pending') {
     parts.push(metadataStatusLabel(t, 'pending'));
@@ -516,6 +520,7 @@ export default function InboxScreen() {
   }, [wordmark.source]);
   const {
     inbox,
+    queue,
     isLoading,
     isSyncing,
     loadError,
@@ -535,6 +540,10 @@ export default function InboxScreen() {
     markBookmarkAccessed,
     createCollection,
   } = useBookmarks();
+  const syncQueueEntryByBookmarkId = useMemo(
+    () => new Map(queue.map((entry) => [entry.local_id, entry] as const)),
+    [queue],
+  );
   const { show: showToast } = useCaptureToast();
   const [query, setQuery] = useState('');
   // The TextInput stays bound to `query` (instant echo), but the derived work —
@@ -2893,7 +2902,7 @@ export default function InboxScreen() {
               </Pressable>
             );
           }
-          const status = statusLabel(item, t);
+          const status = statusLabel(item, t, syncQueueEntryByBookmarkId.get(item.id));
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
           // Pending AI suggestions = high-confidence suggested tags not yet

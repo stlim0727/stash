@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildProcessingStats, type AiServerQueueSnapshot } from "./processing-status.ts";
-import type { AIEnrichment, Bookmark, LocalPendingBookmark } from "./types.ts";
+import type { AIEnrichment, Bookmark, LocalPendingBookmark, SyncErrorKind } from "./types.ts";
 
 const NOW = "2026-08-05T00:00:00.000Z";
 
@@ -35,6 +35,8 @@ function bookmark(id: string, metadata_status: Bookmark["metadata_status"] = "co
 function queued(
   id: string,
   sync_status: LocalPendingBookmark["sync_status"] = "pending",
+  last_error = sync_status === "failed" ? "network" : null,
+  last_error_kind?: SyncErrorKind | null,
 ): LocalPendingBookmark {
   return {
     local_id: id,
@@ -43,7 +45,8 @@ function queued(
     payload: { id, url: `https://example.com/${id}` },
     sync_status,
     retry_count: sync_status === "failed" ? 3 : 0,
-    last_error: sync_status === "failed" ? "network" : null,
+    last_error,
+    last_error_kind,
     created_at: NOW,
     updated_at: NOW,
   };
@@ -129,6 +132,37 @@ test("a permanently unsyncable legacy URL stays diagnostic-only", () => {
     attention: 0,
   });
   assert.equal(result.details.sync.failed, 1);
+});
+
+test("a transient network failure keeps waiting in the cloud stage", () => {
+  const result = stats({
+    queue: [
+      queued(
+        "offline",
+        "failed",
+        'fetch failed: java.net.UnknownHostException: Unable to resolve host "example.supabase.co"',
+        "transient_network",
+      ),
+    ],
+  });
+
+  assert.equal(result.remaining, 1);
+  assert.deepEqual(result.stages, {
+    cloud: 1,
+    metadata: 0,
+    ai: 0,
+    attention: 0,
+  });
+  assert.equal(result.details.sync.failed, 1);
+});
+
+test("transport-like HTTP response text stays in needs-attention without structured provenance", () => {
+  const result = stats({
+    queue: [queued("server", "failed", "The request timed out")],
+  });
+
+  assert.equal(result.stages.cloud, 0);
+  assert.equal(result.stages.attention, 1);
 });
 
 test("diagnostic counters preserve raw overlapping causes", () => {

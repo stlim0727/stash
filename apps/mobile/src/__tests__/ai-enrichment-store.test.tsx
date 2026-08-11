@@ -1589,9 +1589,13 @@ test('a bulk create failure marks untried later chunks failed too, so the auto-s
   // invariant that matters is that it happened at least once, not an exact
   // count.
   expect(attemptedEntries.every((entry) => entry.retry_count >= 1)).toBe(true);
+  expect(
+    attemptedEntries.every((entry) => entry.last_error_kind === 'other'),
+  ).toBe(true);
   // Never attempted this run (or any repeat of it), so its retry_count must
   // stay unchanged regardless of how many times chunk 1 above retries.
   expect(untriedEntry?.retry_count).toBe(0);
+  expect(untriedEntry?.last_error_kind).toBe('other');
   expect(apiMock.__spies.createBookmark).not.toHaveBeenCalled();
 });
 

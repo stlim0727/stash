@@ -12,6 +12,7 @@ import {
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
   syncCreateQueueEntryBatch,
+  syncErrorKind,
   syncQueueEntry,
   uploadRetryBackoffMs,
 } from './sync-bookmarks.ts';
@@ -461,10 +462,21 @@ test('create: failure stays retryable with the error recorded', async () => {
   assert.equal(result.entry.sync_status, 'failed');
   assert.equal(result.entry.retry_count, 1);
   assert.equal(result.entry.last_error, 'network down');
+  assert.equal(result.entry.last_error_kind, 'other');
   assert.equal(result.bookmarkUpdate?.sync_status, 'failed');
   // last_attempt_at is what the retry backoff (isSyncable/uploadRetryBackoffMs)
   // clocks from — a failure that doesn't record it would be retried instantly.
   assert.equal(typeof result.entry.last_attempt_at, 'string');
+});
+
+test('syncErrorKind preserves transport-vs-HTTP provenance before persistence', () => {
+  const dnsError = new Error(
+    'fetch failed: java.net.UnknownHostException: Unable to resolve host "example.supabase.co"',
+  );
+  const responseError = new SupabaseRequestError('The request timed out', 503);
+
+  assert.equal(syncErrorKind(dnsError), 'transient_network');
+  assert.equal(syncErrorKind(responseError), 'other');
 });
 
 test('update: sends the LATEST user-editable fields and leaves the queue', async () => {
@@ -1138,10 +1150,17 @@ test('uploadRetryBackoffMs follows the exponential schedule and caps at the last
 });
 
 test('uploadRetryBackoffMs waits longer for a transient network failure (DNS/offline) than an ordinary one', () => {
-  const ordinary = makeCreateEntry({ retry_count: 2, last_error: '500 Internal Server Error' });
+  const ordinary = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 2,
+    last_error: '500 Internal Server Error',
+    last_error_kind: 'other',
+  });
   const dnsFailure = makeCreateEntry({
+    sync_status: 'failed',
     retry_count: 2,
     last_error: 'UnknownHostException: stzutoejnhzxzhjsjtsi.supabase.co',
+    last_error_kind: 'transient_network',
   });
   assert.ok(uploadRetryBackoffMs(dnsFailure) > uploadRetryBackoffMs(ordinary));
 });

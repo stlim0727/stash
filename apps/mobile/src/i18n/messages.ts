@@ -51,6 +51,7 @@ export const en = {
   'status.synced': 'synced',
   'status.syncing': 'syncing',
   'status.failed': 'failed',
+  'status.waitingForConnection': 'waiting for connection',
   'status.complete': 'complete',
   'status.skipped': 'skipped',
   // STASH-61: an on-device check confirmed a saved YouTube video is gone
