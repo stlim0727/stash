@@ -77,8 +77,8 @@ export function syncErrorKind(error: unknown): SyncErrorKind {
 }
 
 /**
- * Retry count at which a stuck queue entry's health gets escalated (see
- * `crossedHealthEscalationThreshold` and its caller in store/bookmarks.tsx),
+ * Retry count at which an ordinary stuck queue entry's health gets escalated
+ * (see `shouldEscalateSyncQueueHealth` and its caller in store/bookmarks.tsx),
  * so a systemic sync problem — an API outage, a schema mismatch affecting
  * every upload — surfaces to the team without waiting for an in-app feedback
  * report. Deliberately low: 3 failed attempts already means automatic retry
@@ -86,20 +86,37 @@ export function syncErrorKind(error: unknown): SyncErrorKind {
  */
 export const SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD = 3;
 
+/** Offline/DNS failures are expected device state, not evidence of a broken
+ * server contract. Give connectivity time to recover before escalating, while
+ * still surfacing a genuinely prolonged outage. */
+export const TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD = 6;
+
 /**
- * True exactly when a failed attempt just crossed the escalation threshold —
- * the previous retry_count was below it, the new one is at/above it. Fires
- * once per entry at the crossing, not again on every retry past it (an entry
- * stuck at attempt 40 shouldn't re-escalate 37 more times).
+ * True exactly when a failed entry first crosses the threshold appropriate to
+ * its current failure kind. Ordinary API/schema failures alert at retry 3;
+ * expected transport failures wait until retry 6 (STASH-4Z).
+ *
+ * The previous entry's own threshold determines whether it already escalated.
+ * This matters when the cause changes: three offline attempts followed by a
+ * real HTTP failure should alert immediately, while an entry that already
+ * alerted must not alert again merely because its cause later changes.
  */
-export function crossedHealthEscalationThreshold(
-  previousRetryCount: number,
-  nextRetryCount: number,
+export function shouldEscalateSyncQueueHealth(
+  previousEntry: LocalPendingBookmark,
+  nextEntry: LocalPendingBookmark,
 ): boolean {
-  return (
-    previousRetryCount < SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD &&
-    nextRetryCount >= SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD
-  );
+  if (nextEntry.sync_status !== 'failed') {
+    return false;
+  }
+  const previousThreshold =
+    previousEntry.last_error_kind === 'transient_network'
+      ? TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD
+      : SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD;
+  const nextThreshold =
+    nextEntry.last_error_kind === 'transient_network'
+      ? TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD
+      : SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD;
+  return previousEntry.retry_count < previousThreshold && nextEntry.retry_count >= nextThreshold;
 }
 
 /**

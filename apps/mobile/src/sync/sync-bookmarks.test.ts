@@ -4,13 +4,13 @@ import { test } from 'node:test';
 import {
   UPLOAD_RETRY_BACKOFF_MS,
   createNeedsReconcileUpdate,
-  crossedHealthEscalationThreshold,
   findStaleQueueEntries,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
   reconcileOrphanedQueueEntries,
+  shouldEscalateSyncQueueHealth,
   syncCreateQueueEntryBatch,
   syncErrorKind,
   syncQueueEntry,
@@ -1239,20 +1239,77 @@ test('isSyncable: ignoreBackoff still excludes a permanently-unsyncable URL', ()
   assert.equal(isSyncable(stuck, { ignoreBackoff: true }), false);
 });
 
-test('crossedHealthEscalationThreshold fires exactly at the crossing (2 -> 3)', () => {
-  assert.equal(crossedHealthEscalationThreshold(2, 3), true);
+test('shouldEscalateSyncQueueHealth fires for an ordinary failure at 2 -> 3', () => {
+  const previous = makeCreateEntry({ sync_status: 'failed', retry_count: 2, last_error_kind: 'other' });
+  const next = makeCreateEntry({ sync_status: 'failed', retry_count: 3, last_error_kind: 'other' });
+  assert.equal(shouldEscalateSyncQueueHealth(previous, next), true);
 });
 
-test('crossedHealthEscalationThreshold does not fire before the threshold (1 -> 2)', () => {
-  assert.equal(crossedHealthEscalationThreshold(1, 2), false);
+test('shouldEscalateSyncQueueHealth does not fire before the ordinary threshold', () => {
+  const previous = makeCreateEntry({ sync_status: 'failed', retry_count: 1, last_error_kind: 'other' });
+  const next = makeCreateEntry({ sync_status: 'failed', retry_count: 2, last_error_kind: 'other' });
+  assert.equal(shouldEscalateSyncQueueHealth(previous, next), false);
 });
 
-test('crossedHealthEscalationThreshold does not re-fire on retries past the threshold (5 -> 6)', () => {
-  assert.equal(crossedHealthEscalationThreshold(5, 6), false);
+test('shouldEscalateSyncQueueHealth does not re-fire an ordinary failure past retry 3', () => {
+  const previous = makeCreateEntry({ sync_status: 'failed', retry_count: 5, last_error_kind: 'other' });
+  const next = makeCreateEntry({ sync_status: 'failed', retry_count: 6, last_error_kind: 'other' });
+  assert.equal(shouldEscalateSyncQueueHealth(previous, next), false);
 });
 
-test('crossedHealthEscalationThreshold fires on a jump straight past the threshold (0 -> 4)', () => {
-  assert.equal(crossedHealthEscalationThreshold(0, 4), true);
+test('shouldEscalateSyncQueueHealth fires when an ordinary failure jumps past retry 3', () => {
+  const previous = makeCreateEntry({ sync_status: 'pending', retry_count: 0 });
+  const next = makeCreateEntry({ sync_status: 'failed', retry_count: 4, last_error_kind: 'other' });
+  assert.equal(shouldEscalateSyncQueueHealth(previous, next), true);
+});
+
+test('shouldEscalateSyncQueueHealth delays transient network escalation until retry 6', () => {
+  const atTwo = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 2,
+    last_error_kind: 'transient_network',
+  });
+  const atThree = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 3,
+    last_error_kind: 'transient_network',
+  });
+  const atFive = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 5,
+    last_error_kind: 'transient_network',
+  });
+  const atSix = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 6,
+    last_error_kind: 'transient_network',
+  });
+  assert.equal(shouldEscalateSyncQueueHealth(atTwo, atThree), false);
+  assert.equal(shouldEscalateSyncQueueHealth(atFive, atSix), true);
+});
+
+test('shouldEscalateSyncQueueHealth alerts when transient failures become ordinary', () => {
+  const previous = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 3,
+    last_error_kind: 'transient_network',
+  });
+  const next = makeCreateEntry({ sync_status: 'failed', retry_count: 4, last_error_kind: 'other' });
+  assert.equal(shouldEscalateSyncQueueHealth(previous, next), true);
+});
+
+test('shouldEscalateSyncQueueHealth never alerts twice after either threshold', () => {
+  const alreadyEscalated = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 6,
+    last_error_kind: 'transient_network',
+  });
+  const changedCause = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 7,
+    last_error_kind: 'other',
+  });
+  assert.equal(shouldEscalateSyncQueueHealth(alreadyEscalated, changedCause), false);
 });
 
 test('findStaleQueueEntries: empty when nothing is left queued', () => {

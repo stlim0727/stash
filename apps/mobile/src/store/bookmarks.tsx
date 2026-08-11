@@ -151,7 +151,6 @@ import {
   BULK_CREATE_SYNC_CHUNK_SIZE,
   createNeedsReconcileUpdate,
   createSyncApi,
-  crossedHealthEscalationThreshold,
   findStaleQueueEntries,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
@@ -163,6 +162,7 @@ import {
   removeQueueEntryIfNotSuperseded,
   syncCreateQueueEntryBatch,
   syncErrorKind,
+  shouldEscalateSyncQueueHealth,
   syncQueueEntry,
 } from "@/sync/sync-bookmarks";
 import {
@@ -5172,16 +5172,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (result.entry.sync_status === "failed") {
             syncFailed += 1;
           }
-          if (
-            crossedHealthEscalationThreshold(
-              entry.retry_count,
-              result.entry.retry_count,
-            )
-          ) {
+          if (shouldEscalateSyncQueueHealth(entry, result.entry)) {
             reportSyncQueueHealthEscalation({
               operation: entry.operation,
               retryCount: result.entry.retry_count,
               lastError: result.entry.last_error,
+              errorKind: result.entry.last_error_kind,
             });
           }
 
@@ -6098,16 +6094,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     // outer catch and permanently lose this entry's one-time
                     // escalation even though its retry_count already persisted
                     // (caught in PR review).
-                    if (
-                      crossedHealthEscalationThreshold(
-                        entry.retry_count,
-                        failedEntry.retry_count,
-                      )
-                    ) {
+                    if (shouldEscalateSyncQueueHealth(entry, failedEntry)) {
                       reportSyncQueueHealthEscalation({
                         operation: failedEntry.operation,
                         retryCount: failedEntry.retry_count,
                         lastError: failedEntry.last_error,
+                        errorKind: failedEntry.last_error_kind,
                       });
                     }
                     const bookmark = getLatestBookmark(entry.local_id);
