@@ -17,7 +17,8 @@ name: Android APK
 # The APK is also uploaded as a run artifact for tooling that consumes it.
 #
 # Optional build-time config via repo secrets (absent ⇒ local-only build):
-#   EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, EXPO_PUBLIC_SENTRY_DSN
+#   EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, EXPO_PUBLIC_SENTRY_DSN,
+#   EXPO_PUBLIC_POSTHOG_API_KEY, EXPO_PUBLIC_POSTHOG_HOST, EXPO_PUBLIC_POSTHOG_FULL_SDK_ENABLED
 
 on:
   workflow_dispatch:
@@ -315,6 +316,12 @@ jobs:
           # Release APKs report under the "production" Sentry environment (the
           # SDK otherwise defaults to "development").
           EXPO_PUBLIC_SENTRY_ENVIRONMENT: production
+          # PostHog (both the base hand-rolled analytics client and the full
+          # SDK trial). Absent secrets ⇒ both stay no-ops, same pattern as
+          # Sentry above.
+          EXPO_PUBLIC_POSTHOG_API_KEY: ${{ secrets.EXPO_PUBLIC_POSTHOG_API_KEY }}
+          EXPO_PUBLIC_POSTHOG_HOST: ${{ secrets.EXPO_PUBLIC_POSTHOG_HOST }}
+          EXPO_PUBLIC_POSTHOG_FULL_SDK_ENABLED: ${{ secrets.EXPO_PUBLIC_POSTHOG_FULL_SDK_ENABLED }}
           # Build provenance — stamped into the config's `extra` (read at runtime
           # via Constants.expoConfig.extra) and shown in Settings so any installed
           # APK self-identifies which commit it was built from. NOT inlined into

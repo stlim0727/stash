@@ -509,6 +509,14 @@ export const en = {
   'settings.analytics.errorTitle': 'Could not save analytics preference',
   'settings.analytics.errorBody':
     'Analytics stays off for this session. Please try again so the choice is saved for the next launch.',
+  'settings.sessionReplay.label': 'Enable session replay & feature previews',
+  'settings.sessionReplay.enabled':
+    'Records anonymized screen sessions (with bookmark text and images hidden) and enables in-app surveys and experimental features',
+  'settings.sessionReplay.disabled':
+    'Off — no session recording, surveys, or experiment targeting',
+  'settings.sessionReplay.errorTitle': 'Could not save session replay preference',
+  'settings.sessionReplay.errorBody':
+    'Session replay stays off for this session. Please try again so the choice is saved for the next launch.',
   'settings.search.clearLabel': 'Clear search history',
   'settings.search.clearValue': '{count} recent searches',
   'settings.search.clearEmpty': 'No recent searches',
@@ -604,6 +612,7 @@ export const en = {
   'trash.emptyBody': 'This permanently deletes all items in the trash. This cannot be undone.',
   'trash.emptyConfirm': 'Delete All',
   'trash.restore': 'Restore',
+  'trash.openA11y': 'Open {title}',
 
   'update.title': 'Update Required',
   'update.body': 'This version of Keepory is no longer supported. Please update to continue.',

@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -39,12 +40,22 @@ export interface SheetAction {
 export function ActionSheet({
   visible,
   title,
+  titleMask,
   actions,
+  actionsMask,
   onClose,
 }: {
   visible: boolean;
   title?: string;
+  /** True when `title` is bookmark-derived content rather than a fixed menu
+   *  title (e.g. the Inbox long-press menu's title is the bookmark's own
+   *  title). Hides it from PostHog session replay recordings. */
+  titleMask?: boolean;
   actions: SheetAction[];
+  /** True when every action's `label`/`description` is bookmark-derived
+   *  content (e.g. the "move to collection" menu's actions are collection
+   *  names) rather than fixed menu labels like "Open"/"Delete". */
+  actionsMask?: boolean;
   onClose: () => void;
 }) {
   const palette = usePalette();
@@ -73,9 +84,24 @@ export function ActionSheet({
         >
           <View style={[styles.grabber, { backgroundColor: palette.border }]} />
           {title ? (
-            <Text style={[styles.title, { color: palette.textSecondary }]} numberOfLines={2}>
-              {title}
-            </Text>
+            titleMask ? (
+              // `accessible` + `accessibilityLabel` give VoiceOver/TalkBack
+              // the real title as one announced unit — standalone (not
+              // inside a Pressable), and without it a screen-reader user has
+              // no way to tell which bookmark this sheet's generic action
+              // labels (Open/Share/Move/Trash) apply to.
+              <View accessible accessibilityLabel={title}>
+                <PostHogMaskView>
+                  <Text style={[styles.title, { color: palette.textSecondary }]} numberOfLines={2}>
+                    {title}
+                  </Text>
+                </PostHogMaskView>
+              </View>
+            ) : (
+              <Text style={[styles.title, { color: palette.textSecondary }]} numberOfLines={2}>
+                {title}
+              </Text>
+            )
           ) : null}
           <ScrollView
             style={{ maxHeight: maxListHeight }}
@@ -106,25 +132,7 @@ export function ActionSheet({
                 ) : (
                   <View style={styles.actionIcon} />
                 )}
-                <View style={styles.actionTextGroup}>
-                  <Text
-                    style={[
-                      styles.actionLabel,
-                      { color: action.destructive ? palette.danger : palette.text },
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {action.label}
-                  </Text>
-                  {action.description ? (
-                    <Text
-                      style={[styles.actionDescription, { color: palette.textSecondary }]}
-                      numberOfLines={2}
-                    >
-                      {action.description}
-                    </Text>
-                  ) : null}
-                </View>
+                <ActionTextGroup action={action} mask={actionsMask} />
                 {action.selected ? <Text style={{ color: palette.accent }}>✓</Text> : null}
               </Pressable>
             ))}
@@ -141,6 +149,30 @@ export function ActionSheet({
       </Pressable>
     </Modal>
   );
+}
+
+function ActionTextGroup({ action, mask }: { action: SheetAction; mask?: boolean }) {
+  const palette = usePalette();
+  const group = (
+    <View style={styles.actionTextGroup}>
+      <Text
+        style={[styles.actionLabel, { color: action.destructive ? palette.danger : palette.text }]}
+        numberOfLines={1}
+      >
+        {action.label}
+      </Text>
+      {action.description ? (
+        <Text style={[styles.actionDescription, { color: palette.textSecondary }]} numberOfLines={2}>
+          {action.description}
+        </Text>
+      ) : null}
+    </View>
+  );
+  // `styles.actionTextGroup`'s flex: 1 lives on the inner View above; an
+  // unstyled PostHogMaskView wrapper wouldn't inherit it, so a long label
+  // could take its intrinsic width and push/clip the trailing checkmark —
+  // apply the same style to the wrapper too.
+  return mask ? <PostHogMaskView style={styles.actionTextGroup}>{group}</PostHogMaskView> : group;
 }
 
 const styles = StyleSheet.create({

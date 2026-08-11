@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
 import { useRouter } from "expo-router";
+import { PostHogMaskView } from "posthog-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -67,6 +68,7 @@ import { isPermanentlyUnsyncableUrl } from "@/sync/sync-bookmarks";
 import { useSupabaseAuth } from "@/supabase/auth-provider";
 import type { OAuthProvider } from "@/supabase/types";
 import { useAnalytics } from "@/analytics/provider";
+import { usePostHogFull } from "@/analytics-full/posthog-full-runtime";
 import { requestPushPermissionAndToken } from "@/notifications/push-permission";
 import { createDefaultPushTokenWriter } from "@/notifications/push-token-client";
 import {
@@ -186,12 +188,22 @@ export default function SettingsScreen() {
   const auth = useSupabaseAuth();
   const analytics = useAnalytics();
   const [analyticsBusy, setAnalyticsBusy] = useState(false);
+  const sessionReplay = usePostHogFull();
+  const [sessionReplayBusy, setSessionReplayBusy] = useState(false);
 
   const handleAnalyticsChange = (enabled: boolean) => {
     if (!analytics.ready || analyticsBusy) return;
     setAnalyticsBusy(true);
-    void analytics
-      .setEnabled(enabled)
+    // Narrower consent (session replay) doesn't survive revoking the broader
+    // one (base analytics) — cascade the opt-out unconditionally (not gated
+    // on the current `sessionReplay.enabled` read, which can be stale if a
+    // replay opt-in is still in flight) and in parallel with the base call
+    // (not sequenced after it succeeds), so the cascade still runs even if
+    // the base call itself rejects after already flipping its own in-memory
+    // state to off. `PostHogFullProvider.setEnabled` internally serializes
+    // against any in-flight opt-in, so this can never race to a stale result.
+    const cascade = enabled ? Promise.resolve() : sessionReplay.setEnabled(false);
+    void Promise.all([analytics.setEnabled(enabled), cascade])
       .catch(() =>
         Alert.alert(
           t("settings.analytics.errorTitle"),
@@ -199,6 +211,26 @@ export default function SettingsScreen() {
         ),
       )
       .finally(() => setAnalyticsBusy(false));
+  };
+
+  const handleSessionReplayChange = (enabled: boolean) => {
+    if (
+      !sessionReplay.configured ||
+      !analytics.enabled ||
+      !sessionReplay.ready ||
+      sessionReplayBusy
+    )
+      return;
+    setSessionReplayBusy(true);
+    void sessionReplay
+      .setEnabled(enabled)
+      .catch(() =>
+        Alert.alert(
+          t("settings.sessionReplay.errorTitle"),
+          t("settings.sessionReplay.errorBody"),
+        ),
+      )
+      .finally(() => setSessionReplayBusy(false));
   };
 
   // Sign in / out happens inline in the account card (no separate screen).
@@ -819,11 +851,26 @@ export default function SettingsScreen() {
                   <Text style={styles.accountMeta}>
                     {t("settings.account.signedIn")}
                   </Text>
-                  <Text style={styles.accountName} numberOfLines={1}>
-                    {auth.email ??
+                  {/* `accessible` + `accessibilityLabel` give VoiceOver/
+                      TalkBack the real identity as one announced unit — the
+                      masked Text below has no accessible ancestor of its own
+                      otherwise (standalone, not inside a Pressable). */}
+                  <View
+                    accessible
+                    accessibilityLabel={
+                      auth.email ??
                       auth.displayName ??
-                      t("settings.account.signedIn")}
-                  </Text>
+                      t("settings.account.signedIn")
+                    }
+                  >
+                    <PostHogMaskView>
+                      <Text style={styles.accountName} numberOfLines={1}>
+                        {auth.email ??
+                          auth.displayName ??
+                          t("settings.account.signedIn")}
+                      </Text>
+                    </PostHogMaskView>
+                  </View>
                 </View>
                 <Button
                   variant="ghost"
@@ -1049,6 +1096,7 @@ export default function SettingsScreen() {
           }
           right={
             <Switch
+              accessibilityLabel={t("settings.analytics.label")}
               value={analytics.enabled}
               disabled={!analytics.ready || analyticsBusy}
               onValueChange={handleAnalyticsChange}
@@ -1057,6 +1105,36 @@ export default function SettingsScreen() {
             />
           }
         />
+        {/* Hidden entirely (not just disabled) when this build has no
+            build-time PostHog full-SDK gate — the toggle can never work in
+            that build, so showing a permanently-dimmed row would just be
+            confusing clutter on every build that hasn't opted into the
+            trial, which is the default/common case. */}
+        {sessionReplay.configured && (
+          <Row
+            styles={styles}
+            palette={palette}
+            icon="analytics-outline"
+            label={t("settings.sessionReplay.label")}
+            value={
+              sessionReplay.enabled
+                ? t("settings.sessionReplay.enabled")
+                : t("settings.sessionReplay.disabled")
+            }
+            right={
+              <Switch
+                accessibilityLabel={t("settings.sessionReplay.label")}
+                value={sessionReplay.enabled}
+                disabled={
+                  !analytics.enabled || !sessionReplay.ready || sessionReplayBusy
+                }
+                onValueChange={handleSessionReplayChange}
+                trackColor={{ true: palette.accent, false: palette.border }}
+                thumbColor="#ffffff"
+              />
+            }
+          />
+        )}
         {/* Clear search history (A3): the privacy escape hatch for the recents
             shelf. Disabled (no onPress) and reading "No recent searches" when
             there's nothing to clear. The a11y label is the reserved

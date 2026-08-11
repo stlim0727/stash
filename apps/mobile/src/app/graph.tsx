@@ -23,6 +23,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Svg, { Circle, Line, Text as SvgText } from "react-native-svg";
+import { PostHogMaskView } from "posthog-react-native";
 
 import { nextFacetNonce } from "@/domain/facet-nonce";
 import {
@@ -1426,45 +1427,42 @@ export default function GraphScreen() {
       style={[styles.container, { backgroundColor: palette.background }]}
       onLayout={onLayout}
     >
-      <View
-        testID="graph-canvas"
-        style={[
-          StyleSheet.absoluteFill,
-          Platform.OS === "web" ? WEB_NO_TEXT_SELECT : null,
-        ]}
-        {...panResponder.panHandlers}
-      >
-        <Animated.View
-          // Promote this layer to its own GPU/composited texture ONLY while a gesture
-          // is active, so a pan/zoom composites the cached layer instead of repainting
-          // the vector SVG every frame (the web pinch stutter). The hint is dropped on
-          // settle so the static view re-renders as crisp vector SVG at the new zoom
-          // rather than scaling a stale cached bitmap (the zoom-in blur). Web uses
-          // `will-change: transform`; native uses the platform rasterization hints.
-          {...(interacting
-            ? { renderToHardwareTextureAndroid: true, shouldRasterizeIOS: true }
-            : null)}
+      {/*
+        The whole visualization (node labels AND the tag/bookmark graph shape
+        itself) is bookmark-derived content, but it's rendered as react-native-svg
+        primitives (<SvgText>, <Circle>, <Line>), which can't individually be
+        wrapped in PostHogMaskView the way plain RN <Text> elsewhere in this
+        app is — SVG children must stay direct descendants of <Svg>. Masking
+        the whole canvas as one native-view subtree, one level ABOVE the
+        gesture-handling `graph-canvas` View (left untouched — its testID and
+        panResponder wiring are unchanged), is the only masking mechanism this
+        screen can rely on; the manual replay-verification checklist
+        (docs/development/setup.md) must confirm it actually holds before this
+        gate is ever turned on for real users.
+      */}
+      <PostHogMaskView style={styles.container}>
+        <View
+          testID="graph-canvas"
           style={[
             StyleSheet.absoluteFill,
-            interacting && Platform.OS === "web" ? WEB_COMPOSITE_LAYER : null,
-            { transform: [{ translateX }, { translateY }, { scale }] },
+            Platform.OS === "web" ? WEB_NO_TEXT_SELECT : null,
           ]}
+          {...panResponder.panHandlers}
         >
-          <Svg
-            width={w}
-            height={h}
-            viewBox={viewBox}
-            preserveAspectRatio="xMidYMid meet"
-          >
-            {svgChildren}
-            {priorityBookmarkLabels}
-          </Svg>
-          <View
-            pointerEvents="none"
-            testID="graph-bookmark-labels-bulk"
+          <Animated.View
+            // Promote this layer to its own GPU/composited texture ONLY while a gesture
+            // is active, so a pan/zoom composites the cached layer instead of repainting
+            // the vector SVG every frame (the web pinch stutter). The hint is dropped on
+            // settle so the static view re-renders as crisp vector SVG at the new zoom
+            // rather than scaling a stale cached bitmap (the zoom-in blur). Web uses
+            // `will-change: transform`; native uses the platform rasterization hints.
+            {...(interacting
+              ? { renderToHardwareTextureAndroid: true, shouldRasterizeIOS: true }
+              : null)}
             style={[
               StyleSheet.absoluteFill,
-              interacting ? styles.hiddenLabelLayer : null,
+              interacting && Platform.OS === "web" ? WEB_COMPOSITE_LAYER : null,
+              { transform: [{ translateX }, { translateY }, { scale }] },
             ]}
           >
             <Svg
@@ -1473,28 +1471,46 @@ export default function GraphScreen() {
               viewBox={viewBox}
               preserveAspectRatio="xMidYMid meet"
             >
-              {bulkBookmarkLabels}
+              {svgChildren}
+              {priorityBookmarkLabels}
             </Svg>
-          </View>
-          <View
-            pointerEvents="none"
-            testID="graph-bookmark-labels-nearby"
-            style={[
-              StyleSheet.absoluteFill,
-              interacting ? null : styles.hiddenLabelLayer,
-            ]}
-          >
-            <Svg
-              width={w}
-              height={h}
-              viewBox={viewBox}
-              preserveAspectRatio="xMidYMid meet"
+            <View
+              pointerEvents="none"
+              testID="graph-bookmark-labels-bulk"
+              style={[
+                StyleSheet.absoluteFill,
+                interacting ? styles.hiddenLabelLayer : null,
+              ]}
             >
-              {nearbyBookmarkLabels}
-            </Svg>
-          </View>
-        </Animated.View>
-      </View>
+              <Svg
+                width={w}
+                height={h}
+                viewBox={viewBox}
+                preserveAspectRatio="xMidYMid meet"
+              >
+                {bulkBookmarkLabels}
+              </Svg>
+            </View>
+            <View
+              pointerEvents="none"
+              testID="graph-bookmark-labels-nearby"
+              style={[
+                StyleSheet.absoluteFill,
+                interacting ? null : styles.hiddenLabelLayer,
+              ]}
+            >
+              <Svg
+                width={w}
+                height={h}
+                viewBox={viewBox}
+                preserveAspectRatio="xMidYMid meet"
+              >
+                {nearbyBookmarkLabels}
+              </Svg>
+            </View>
+          </Animated.View>
+        </View>
+      </PostHogMaskView>
 
       {/* Mode toggle — box-none so taps outside the pill still reach the canvas. */}
       <View pointerEvents="box-none" style={styles.modeToggleWrap}>

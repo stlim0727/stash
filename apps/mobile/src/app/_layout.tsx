@@ -21,6 +21,7 @@ import { CaptureToastProvider } from '@/ui/capture-toast';
 import { FloatingReportButton } from '@/feedback/FloatingReportButton';
 import { UpdateRequired } from '@/ui/UpdateRequired';
 import { AnalyticsProvider } from '@/analytics/provider';
+import { PostHogFullProvider } from '@/analytics-full/posthog-full-runtime';
 
 // Capture console output into an in-memory buffer so the "Report a problem"
 // screen can attach real logs. Install before anything else so early errors
@@ -105,15 +106,17 @@ function RootLayout() {
             <SupabaseAuthProvider>
               <BookmarksProvider>
                 <AnalyticsProvider>
-                  <CaptureToastProvider>
-                    <ShareIntentHandler />
-                    <ShareConfirmHandler />
-                    <AiEnrichmentBurstToast />
-                    <FloatingReportButton>
-                      <RootStack />
-                    </FloatingReportButton>
-                    <StatusBar style="auto" />
-                  </CaptureToastProvider>
+                  <PostHogFullProvider>
+                    <CaptureToastProvider>
+                      <ShareIntentHandler />
+                      <ShareConfirmHandler />
+                      <AiEnrichmentBurstToast />
+                      <FloatingReportButton>
+                        <RootStack />
+                      </FloatingReportButton>
+                      <StatusBar style="auto" />
+                    </CaptureToastProvider>
+                  </PostHogFullProvider>
                 </AnalyticsProvider>
               </BookmarksProvider>
             </SupabaseAuthProvider>

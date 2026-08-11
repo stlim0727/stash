@@ -1,5 +1,6 @@
 import { useRouter } from 'expo-router';
 import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { displayTitle } from '@/domain/item-display';
 import { useT } from '@/i18n';
@@ -52,9 +53,15 @@ export default function TrashScreen() {
         renderItem={({ item }) => (
           <Pressable
             style={[styles.card, { backgroundColor: palette.card }]}
+            // PostHogMaskView below forces its own wrapper accessibilityLabel
+            // ("ph-no-capture"), which would otherwise replace this card's
+            // auto content-derived accessible name — restore it explicitly.
+            accessibilityLabel={t('trash.openA11y', {
+              title: displayTitle(item) ?? t('common.untitled'),
+            })}
             onPress={() => router.push({ pathname: '/bookmark/[id]', params: { id: item.id } })}
           >
-            <View style={styles.cardContent}>
+            <PostHogMaskView style={styles.cardContent}>
               <Text style={[styles.cardTitle, { color: palette.text }]} numberOfLines={1}>
                 {displayTitle(item) ?? t('common.untitled')}
               </Text>
@@ -63,7 +70,7 @@ export default function TrashScreen() {
                   {item.url}
                 </Text>
               ) : null}
-            </View>
+            </PostHogMaskView>
             <Pressable
               style={styles.restore}
               accessibilityLabel={t('trash.restore')}

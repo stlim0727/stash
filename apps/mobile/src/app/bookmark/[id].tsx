@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { useI18n } from '@/i18n';
 import {
@@ -907,10 +908,26 @@ export default function BookmarkDetailScreen({
             <Image source={{ uri: bookmark.favicon_url }} style={styles.bylineFav} resizeMode="contain" />
           </View>
         ) : null}
-        <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
-          {host ?? t('detail.savedByline')}
-          {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
-        </Text>
+        {/* `accessible` + `accessibilityLabel` on this outer View give
+            VoiceOver/TalkBack the real byline as one announced unit (the
+            masked Text below has no accessible ancestor of its own
+            otherwise) — and, since `bylineText` carries `flex: 1` for the
+            row layout, this View also carries that flex itself, since an
+            unstyled PostHogMaskView wrapper wouldn't inherit it. */}
+        <View
+          accessible
+          accessibilityLabel={`${host ?? t('detail.savedByline')}${
+            statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''
+          }`}
+          style={styles.bylineTextWrap}
+        >
+          <PostHogMaskView>
+            <Text style={[styles.bylineText, { color: palette.textSecondary }]} numberOfLines={1}>
+              {host ?? t('detail.savedByline')}
+              {statusChips.length > 0 ? `  ·  ${statusChips.join(' · ')}` : ''}
+            </Text>
+          </PostHogMaskView>
+        </View>
       </View>
 
       {/* Title — tap to edit in place, auto-saved on blur. Overlong titles
@@ -937,33 +954,35 @@ export default function BookmarkDetailScreen({
             accessibilityHint={t('detail.editTitleHint')}
             onPress={() => setDraftTitle(bookmark.title ?? '')}
           >
-            <Text
-              style={[
-                styles.title,
-                {
-                  color: isTitleDerived(bookmark) ? palette.textSecondary : palette.text,
-                  fontWeight: isTitleDerived(bookmark) ? '500' : '800',
-                },
-              ]}
-              // Measure unclamped on first layout so overflow detection is
-              // reliable across platforms; clamp once we know the line count.
-              numberOfLines={
-                titleLineCount === null || titleExpanded ? undefined : TITLE_COLLAPSED_LINES
-              }
-              onTextLayout={(event) => {
-                // Only trust a real measurement. react-native-web can report an
-                // empty `lines` array; recording 0 would clamp the title to
-                // TITLE_COLLAPSED_LINES yet hide the toggle (0 is not > 4),
-                // stranding a long note with no way to see the full text ("long
-                // text silently cut off"). Staying null keeps it unclamped —
-                // the full text shows — until a trustworthy count arrives.
-                if (titleLineCount === null && event.nativeEvent.lines.length > 0) {
-                  setTitleLineCount(event.nativeEvent.lines.length);
+            <PostHogMaskView>
+              <Text
+                style={[
+                  styles.title,
+                  {
+                    color: isTitleDerived(bookmark) ? palette.textSecondary : palette.text,
+                    fontWeight: isTitleDerived(bookmark) ? '500' : '800',
+                  },
+                ]}
+                // Measure unclamped on first layout so overflow detection is
+                // reliable across platforms; clamp once we know the line count.
+                numberOfLines={
+                  titleLineCount === null || titleExpanded ? undefined : TITLE_COLLAPSED_LINES
                 }
-              }}
-            >
-              {displayedTitle}
-            </Text>
+                onTextLayout={(event) => {
+                  // Only trust a real measurement. react-native-web can report an
+                  // empty `lines` array; recording 0 would clamp the title to
+                  // TITLE_COLLAPSED_LINES yet hide the toggle (0 is not > 4),
+                  // stranding a long note with no way to see the full text ("long
+                  // text silently cut off"). Staying null keeps it unclamped —
+                  // the full text shows — until a trustworthy count arrives.
+                  if (titleLineCount === null && event.nativeEvent.lines.length > 0) {
+                    setTitleLineCount(event.nativeEvent.lines.length);
+                  }
+                }}
+              >
+                {displayedTitle}
+              </Text>
+            </PostHogMaskView>
           </Pressable>
           {titleLineCount !== null && titleLineCount > TITLE_COLLAPSED_LINES ? (
             <Pressable
@@ -1147,7 +1166,9 @@ export default function BookmarkDetailScreen({
                   style={styles.folderAccept}
                   onPress={folderSuggestionChip.onAccept}
                 >
-                  <Text style={styles.ghostLabel}>{folderSuggestionChip.label}</Text>
+                  <PostHogMaskView>
+                    <Text style={styles.ghostLabel}>{folderSuggestionChip.label}</Text>
+                  </PostHogMaskView>
                   <Text style={[styles.ghostAccept, { color: palette.accent }]}>{' ✓'}</Text>
                 </Pressable>
                 <Pressable
@@ -1163,9 +1184,23 @@ export default function BookmarkDetailScreen({
           </View>
         ) : null}
         {collection && !collections.some((item) => item.id === collection.id) ? (
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            {t('detail.currentlyIn', { name: collection.name })}
-          </Text>
+          // `accessible` + `accessibilityLabel` on this outer View gives
+          // screen readers the real text as one announced unit; the masked
+          // Text below it still hides the collection name from replay
+          // recordings without also hiding it from VoiceOver/TalkBack (a
+          // standalone masked Text with no accessible ancestor of its own
+          // risks being skipped or announced as the mask's own sentinel
+          // label instead of its real content).
+          <View
+            accessible
+            accessibilityLabel={t('detail.currentlyIn', { name: collection.name })}
+          >
+            <PostHogMaskView>
+              <Text style={[styles.hint, { color: palette.textSecondary }]}>
+                {t('detail.currentlyIn', { name: collection.name })}
+              </Text>
+            </PostHogMaskView>
+          </View>
         ) : null}
       </View>
 
@@ -1331,6 +1366,13 @@ export default function BookmarkDetailScreen({
             {details.map((row, index) => (
               <View
                 key={row.label}
+                // `accessible` + `accessibilityLabel` combine the label and
+                // value into one announced unit for VoiceOver/TalkBack — the
+                // masked value Text below has no accessible ancestor of its
+                // own otherwise, and could be skipped or announced as the
+                // mask's own sentinel label instead of its real content.
+                accessible
+                accessibilityLabel={`${row.label}: ${row.value}`}
                 style={[
                   styles.detailRow,
                   index > 0
@@ -1339,9 +1381,11 @@ export default function BookmarkDetailScreen({
                 ]}
               >
                 <Text style={[styles.detailLabel, { color: palette.textSecondary }]}>{row.label}</Text>
-                <Text style={[styles.detailValue, { color: palette.text }]} selectable>
-                  {row.value}
-                </Text>
+                <PostHogMaskView>
+                  <Text style={[styles.detailValue, { color: palette.text }]} selectable>
+                    {row.value}
+                  </Text>
+                </PostHogMaskView>
               </View>
             ))}
           </Card>
@@ -1469,6 +1513,9 @@ const styles = StyleSheet.create({
   bylineFav: {
     width: '72%',
     height: '72%',
+  },
+  bylineTextWrap: {
+    flex: 1,
   },
   bylineText: {
     flex: 1,

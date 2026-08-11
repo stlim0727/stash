@@ -155,6 +155,9 @@ export function SearchSuggestionShelf({
               // Long-press a recent to remove just that entry (no destructive
               // confirm — it's one search string). Tags/folders have no remove.
               onLongPress={removable ? () => onRemoveRecent!(suggestion) : undefined}
+              // Every suggestion here is either user-typed search text or a
+              // bookmark-derived tag/collection name — always content.
+              mask
             >
               {suggestion.label}
             </Chip>

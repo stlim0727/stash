@@ -12,6 +12,7 @@
  * component only decides which label to show and fires the callbacks.
  */
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
@@ -60,7 +61,15 @@ export function ProposedSummary({
       <Text style={[styles.label, { color: palette.textSecondary }]}>
         {t('detail.summaryLabel')}
       </Text>
-      <Text style={[styles.body, { color: palette.text }]}>{summary}</Text>
+      {/* `accessible` + `accessibilityLabel` give VoiceOver/TalkBack the real
+          summary as one announced unit — the masked Text below has no
+          accessible ancestor of its own otherwise, and could be skipped or
+          announced as the mask's own sentinel label instead of its content. */}
+      <View accessible accessibilityLabel={`${t('detail.summaryLabel')}: ${summary}`}>
+        <PostHogMaskView>
+          <Text style={[styles.body, { color: palette.text }]}>{summary}</Text>
+        </PostHogMaskView>
+      </View>
       <View style={styles.actions}>
         <Pressable
           accessibilityRole="button"

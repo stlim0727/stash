@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
+import { PostHogMaskView } from 'posthog-react-native';
 import {
   memo,
   useCallback,
@@ -454,6 +455,7 @@ const BrowseChip = memo(function BrowseChip({
   count,
   active,
   onSelect,
+  mask,
 }: {
   target: InboxFilter;
   label: string;
@@ -461,6 +463,9 @@ const BrowseChip = memo(function BrowseChip({
   count?: number;
   active: boolean;
   onSelect: (target: InboxFilter) => void;
+  /** True for a tag/collection name (bookmark-derived content); the two
+   *  fixed filters ("All", "No collection") pass nothing. */
+  mask?: boolean;
 }) {
   return (
     <Chip
@@ -471,6 +476,7 @@ const BrowseChip = memo(function BrowseChip({
       quiet={Platform.OS === 'web' && !active}
       icon={icon}
       count={count}
+      mask={mask}
     >
       {label}
     </Chip>
@@ -2502,6 +2508,7 @@ export default function InboxScreen() {
                   count={chip.count}
                   active={sameFilter(chip.filter, filter)}
                   onSelect={onSelectFilter}
+                  mask
                 />
               ))}
             </ScrollView>
@@ -2558,9 +2565,18 @@ export default function InboxScreen() {
         >
           <View style={[styles.filterBarInner, { backgroundColor: palette.accentSoft }]}>
             <Ionicons name={scope.icon} size={16} color={palette.accentText} style={styles.filterBarIcon} />
-            <Text style={[styles.filterBarText, { color: palette.accentText }]} numberOfLines={1}>
-              {scope.text}
-            </Text>
+            {/* `accessible` + `accessibilityLabel` give VoiceOver/TalkBack the
+                real filter text as one announced unit (standalone — not
+                inside a labeled Pressable, unlike the clear button beside
+                it); `styles.filterBarText`'s flex: 1 also has to live on this
+                wrapper since an unstyled PostHogMaskView wouldn't inherit it. */}
+            <View accessible accessibilityLabel={scope.text} style={styles.filterBarText}>
+              <PostHogMaskView>
+                <Text style={[styles.filterBarText, { color: palette.accentText }]} numberOfLines={1}>
+                  {scope.text}
+                </Text>
+              </PostHogMaskView>
+            </View>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={scope.a11y}
@@ -2856,9 +2872,21 @@ export default function InboxScreen() {
                 style={[styles.folderTile, { backgroundColor: tileColor }]}
               >
                 <Ionicons name={tileIcon} size={26} color={palette.text} />
-                <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
-                  {item.label}
-                </Text>
+                {item.kind === 'collection' ? (
+                  // `folderTileLabel`'s `maxWidth: '100%'` resolves against
+                  // its own immediate parent, which is now this wrapper (not
+                  // the tile) — apply the same constraint here too, or a long
+                  // unbroken name can overflow into the adjacent tile.
+                  <PostHogMaskView style={styles.maskMaxWidth}>
+                    <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
+                      {item.label}
+                    </Text>
+                  </PostHogMaskView>
+                ) : (
+                  <Text style={[styles.folderTileLabel, { color: palette.text }]} numberOfLines={1}>
+                    {item.label}
+                  </Text>
+                )}
                 <Text style={[styles.folderTileCount, { color: palette.textSecondary }]}>
                   {t('inbox.collectionTileCount', { count: item.count ?? 0 })}
                 </Text>
@@ -3030,9 +3058,11 @@ export default function InboxScreen() {
                     />
                   ) : null}
                   {compactMeta ? (
-                    <Text style={[styles.compactMeta, { color: palette.accentText }]} numberOfLines={1}>
-                      {compactMeta}
-                    </Text>
+                    <PostHogMaskView>
+                      <Text style={[styles.compactMeta, { color: palette.accentText }]} numberOfLines={1}>
+                        {compactMeta}
+                      </Text>
+                    </PostHogMaskView>
                   ) : null}
                 </Pressable>
                 {suggestionCount > 0 ? (
@@ -3088,9 +3118,11 @@ export default function InboxScreen() {
                         hitSlop={6}
                         style={styles.previewRibbon}
                       >
-                        <Text style={styles.previewRibbonText} numberOfLines={1}>
-                          {siteLabel(item)}
-                        </Text>
+                        <PostHogMaskView>
+                          <Text style={styles.previewRibbonText} numberOfLines={1}>
+                            {siteLabel(item)}
+                          </Text>
+                        </PostHogMaskView>
                         <Ionicons name="open-outline" size={12} color="#ffffff" />
                       </Pressable>
                     ) : null}
@@ -3199,19 +3231,32 @@ export default function InboxScreen() {
                   </Pressable>
                 </View>
                 {showUrlMatchLine && item.url ? (
-                  <HighlightedText
-                    style={[styles.cardUrl, { color: palette.textSecondary }]}
-                    numberOfLines={1}
-                    text={item.url}
-                    query={highlightQuery}
-                    highlightStyle={highlightStyle}
-                  />
+                  // Standalone (not inside a labeled Pressable, unlike the
+                  // title above) — `accessible` + `accessibilityLabel` give
+                  // VoiceOver/TalkBack the real URL as one announced unit;
+                  // the masked Text inside HighlightedText has no accessible
+                  // ancestor of its own otherwise.
+                  <View accessible accessibilityLabel={item.url}>
+                    <HighlightedText
+                      style={[styles.cardUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={item.url}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                  </View>
                 ) : null}
                 {visibleMetaParts.length > 0 ? (
                   <View style={styles.metaChipRow}>
                     {visibleMetaParts.map((part) => (
                       <View
                         key={part}
+                        // `accessible` + `accessibilityLabel` give VoiceOver/
+                        // TalkBack the real chip text as one announced unit —
+                        // the masked Text below has no accessible ancestor of
+                        // its own otherwise (this chip isn't interactive).
+                        accessible
+                        accessibilityLabel={part}
                         style={[
                           styles.metaChip,
                           Platform.OS === 'web'
@@ -3219,15 +3264,17 @@ export default function InboxScreen() {
                             : { backgroundColor: palette.mutedSurface },
                         ]}
                       >
-                        <Text
-                          style={[
-                            styles.metaChipLabel,
-                            { color: Platform.OS === 'web' ? palette.textSecondary : palette.accentText },
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {part}
-                        </Text>
+                        <PostHogMaskView>
+                          <Text
+                            style={[
+                              styles.metaChipLabel,
+                              { color: Platform.OS === 'web' ? palette.textSecondary : palette.accentText },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {part}
+                          </Text>
+                        </PostHogMaskView>
                       </View>
                     ))}
                   </View>
@@ -3259,7 +3306,12 @@ export default function InboxScreen() {
       <ActionSheet
         visible={menuItem !== null}
         title={menuTitle}
+        // Main mode's title is the bookmark's own title (content); move mode's
+        // title is a fixed string but its actions become collection names
+        // (content) instead — the two invert together.
+        titleMask={menuMode !== 'move'}
         actions={menuActions}
+        actionsMask={menuMode === 'move'}
         onClose={closeMenu}
       />
       <ActionSheet
@@ -3304,6 +3356,11 @@ export default function InboxScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  // Applied to the PostHogMaskView wrapping the folder-tile label — see the
+  // usage site for why this needs to be forwarded onto the wrapper too.
+  maskMaxWidth: {
+    maxWidth: '100%',
   },
   header: {
     position: 'absolute',

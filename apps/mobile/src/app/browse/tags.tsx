@@ -16,6 +16,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { PostHogMaskView } from 'posthog-react-native';
 
 import { nextFacetNonce } from '@/domain/facet-nonce';
 import { filterBookmarks } from '@/domain/search';
@@ -269,20 +270,35 @@ export default function BrowseTagsScreen() {
       );
     }
     if (isSearchZero) {
+      const message = t('inbox.tagsSearchZero', { query: debouncedQuery.trim() });
       return (
-        <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
-          {t('inbox.tagsSearchZero', { query: debouncedQuery.trim() })}
-        </Text>
+        // Contains the user's own search text — masked, with an outer
+        // accessible label since it's standalone (no Pressable ancestor).
+        // `alignSelf: 'stretch'` overrides the parent's `alignItems: center`
+        // for this wrapper specifically, so it fills the available width
+        // (as a direct Text child implicitly would) instead of shrinking to
+        // the message's unwrapped intrinsic width and running off-screen.
+        <View accessible accessibilityLabel={message} style={styles.maskStretch}>
+          <PostHogMaskView>
+            <Text style={[styles.emptyText, { color: palette.textSecondary }]}>{message}</Text>
+          </PostHogMaskView>
+        </View>
       );
     }
     if (isScopedEmpty) {
+      const message =
+        scope.kind === 'uncollected'
+          ? t('inbox.tagsUncollectedEmpty')
+          : t('inbox.tagsScopedEmpty', { name: scopeName });
       return (
         <View style={styles.emptyState}>
-          <Text style={[styles.emptyText, { color: palette.textSecondary }]}>
-            {scope.kind === 'uncollected'
-              ? t('inbox.tagsUncollectedEmpty')
-              : t('inbox.tagsScopedEmpty', { name: scopeName })}
-          </Text>
+          {/* Sometimes a fixed string (uncollected case), sometimes a
+              collection name — masked unconditionally either way. */}
+          <View accessible accessibilityLabel={message} style={styles.maskStretch}>
+            <PostHogMaskView>
+              <Text style={[styles.emptyText, { color: palette.textSecondary }]}>{message}</Text>
+            </PostHogMaskView>
+          </View>
           <Pressable
             accessibilityRole="button"
             testID="browse-tags-browse-all"
@@ -391,18 +407,20 @@ export default function BrowseTagsScreen() {
                   hitSlop={6}
                   onPress={() => onTagPress(entry)}
                 >
-                  <Text
-                    style={{
-                      color,
-                      fontSize: size,
-                      lineHeight: Math.round(size * 1.12),
-                      letterSpacing: -0.3,
-                      fontWeight: entry.weight > 0.66 ? '800' : entry.weight > 0.33 ? '700' : '600',
-                      opacity: 0.55 + 0.45 * entry.weight,
-                    }}
-                  >
-                    {`#${entry.name}`}
-                  </Text>
+                  <PostHogMaskView>
+                    <Text
+                      style={{
+                        color,
+                        fontSize: size,
+                        lineHeight: Math.round(size * 1.12),
+                        letterSpacing: -0.3,
+                        fontWeight: entry.weight > 0.66 ? '800' : entry.weight > 0.33 ? '700' : '600',
+                        opacity: 0.55 + 0.45 * entry.weight,
+                      }}
+                    >
+                      {`#${entry.name}`}
+                    </Text>
+                  </PostHogMaskView>
                 </Pressable>
               );
             })}
@@ -459,9 +477,11 @@ export default function BrowseTagsScreen() {
                 style={({ pressed }) => [styles.listRow, { opacity: pressed ? 0.6 : 1 }]}
               >
                 <View style={[styles.listDot, { backgroundColor: color }]} />
-                <Text style={[styles.listName, { color: palette.text }]} numberOfLines={1}>
-                  {`#${item.name}`}
-                </Text>
+                <PostHogMaskView style={styles.maskFlex}>
+                  <Text style={[styles.listName, { color: palette.text }]} numberOfLines={1}>
+                    {`#${item.name}`}
+                  </Text>
+                </PostHogMaskView>
                 <Text style={[styles.listCount, { color: palette.textSecondary }]}>
                   {t('inbox.tagListCount', { count: item.count })}
                 </Text>
@@ -477,9 +497,19 @@ export default function BrowseTagsScreen() {
   // row (title + close) for both layouts — matching Settings/Report/Review.
   const header = (
     <View style={[styles.header, { paddingTop: insets.top + 12, borderBottomColor: palette.border, backgroundColor: palette.background }]}>
-      <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={1}>
-        {headerTitle}
-      </Text>
+      {/* `accessible` + `accessibilityLabel` give VoiceOver/TalkBack the real
+          title as one announced unit (standalone, no Pressable ancestor);
+          `headerTitle`'s flex: 1 also has to live on this wrapper since an
+          unstyled PostHogMaskView wouldn't inherit it. Masked unconditionally
+          even though it's sometimes the fixed "All Tags" string, since it's
+          also sometimes a collection name. */}
+      <View accessible accessibilityLabel={headerTitle} style={styles.headerTitle}>
+        <PostHogMaskView>
+          <Text style={[styles.headerTitle, { color: palette.text }]} numberOfLines={1}>
+            {headerTitle}
+          </Text>
+        </PostHogMaskView>
+      </View>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t('common.close')}
@@ -543,6 +573,19 @@ const webOverscrollContain: StyleProp<ViewStyle> =
 const styles = StyleSheet.create({
   fullScreen: {
     flex: 1,
+  },
+  // Applied to the PostHogMaskView wrapping the tag-name Text below — that
+  // Text's own `flex: 1` (in `listName`) no longer sizes the row once it's
+  // nested inside an unstyled wrapper View; the flex must live on the
+  // wrapper for a long tag name to still shrink to the space beside the count.
+  maskFlex: {
+    flex: 1,
+  },
+  // Applied to a masked wrapper inside an `alignItems: 'center'` container —
+  // overrides that centering for this one child so it stretches to the
+  // available width instead of shrinking to its content's intrinsic width.
+  maskStretch: {
+    alignSelf: 'stretch',
   },
   sheetOverlay: {
     flex: 1,
