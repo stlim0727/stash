@@ -6,7 +6,9 @@
  */
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
-import type { EnrichmentDegradedReason, SyncErrorKind } from '@/domain/types';
+import type { EnrichmentDegradedReason, LocalPendingBookmark } from '@/domain/types';
+
+type SyncQueueState = Pick<LocalPendingBookmark, 'sync_status' | 'last_error_kind'>;
 
 const SYNC_STATUS_KEYS: Record<string, MessageKey> = {
   pending: 'status.pending',
@@ -30,10 +32,10 @@ function word(t: TFunction, map: Record<string, MessageKey>, value: string): str
 export function syncStatusLabel(
   t: TFunction,
   value: string,
-  errorKind?: SyncErrorKind | null,
+  queueState?: SyncQueueState | null,
 ): string {
   const status =
-    value === 'failed' && errorKind === 'transient_network'
+    queueState?.sync_status === 'failed' && queueState.last_error_kind === 'transient_network'
       ? t('status.waitingForConnection')
       : word(t, SYNC_STATUS_KEYS, value);
   return t('status.syncPrefix', { status });

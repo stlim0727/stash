@@ -169,8 +169,8 @@ export default function BookmarkDetailScreen({
   const id = inlineId ?? routeId;
   const inline = inlineId !== undefined;
   const bookmark = id ? getBookmark(id) : undefined;
-  const syncErrorKind = bookmark
-    ? queue.find((entry) => entry.local_id === bookmark.id)?.last_error_kind
+  const syncQueueEntry = bookmark
+    ? queue.find((entry) => entry.local_id === bookmark.id)
     : undefined;
 
   // The title shown when not editing. Background metadata enrichment can swap
@@ -502,7 +502,7 @@ export default function BookmarkDetailScreen({
   // are noteworthy (not yet synced / still enriching), never as full cards.
   const statusChips: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    statusChips.push(syncStatusLabel(t, bookmark.sync_status, syncErrorKind));
+    statusChips.push(syncStatusLabel(t, bookmark.sync_status, syncQueueEntry));
   }
   if (bookmark.metadata_status !== 'complete') {
     statusChips.push(metadataStatusLabel(t, bookmark.metadata_status));
