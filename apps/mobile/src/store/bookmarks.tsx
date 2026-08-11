@@ -162,6 +162,7 @@ import {
   reconcileOrphanedQueueEntries,
   removeQueueEntryIfNotSuperseded,
   syncCreateQueueEntryBatch,
+  syncErrorKind,
   syncQueueEntry,
 } from "@/sync/sync-bookmarks";
 import {
@@ -5996,6 +5997,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
               if (!isRowSpecificError) {
                 const failedAt = new Date().toISOString();
+                const failureKind = syncErrorKind(error);
                 recordLog(
                   "warn",
                   `bulk create sync failed for a chunk of ${chunk.length} (${message})`,
@@ -6031,6 +6033,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     sync_status: "failed",
                     retry_count: entry.retry_count + 1,
                     last_error: message,
+                    last_error_kind: failureKind,
                     // These entries were actually attempted (the failed bulk
                     // request), so the retry backoff clock starts now — see
                     // isSyncable/uploadRetryBackoffMs. The untried entries below
@@ -6047,6 +6050,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     sync_status: "failed",
                     last_error:
                       "Not attempted: an earlier chunk in this bulk sync failed.",
+                    // Preserve the attempted chunk's actual cause instead of
+                    // re-classifying this synthetic message as a separate
+                    // application failure (PR #744 review).
+                    last_error_kind: failureKind,
                     updated_at: failedAt,
                   });
                 }
@@ -6205,6 +6212,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               retry_count: entry.retry_count + 1,
               last_error:
                 error instanceof Error ? error.message : "Sync failed.",
+              last_error_kind: syncErrorKind(error),
               last_attempt_at: failedAt,
               updated_at: failedAt,
             };

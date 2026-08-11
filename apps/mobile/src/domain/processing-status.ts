@@ -4,7 +4,7 @@ import type {
   LocalPendingBookmark,
   QueueOperation,
 } from "./types";
-import { isTransientNetworkError } from "./network-errors.ts";
+import { isTransientSyncFailure } from "./network-errors.ts";
 
 export type AiServerQueueStatus = "pending" | "processing" | "failed";
 
@@ -121,7 +121,7 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
       .filter(
         (entry) =>
           entry.sync_status === "failed" &&
-          !isTransientNetworkError(entry.last_error) &&
+          !isTransientSyncFailure(entry) &&
           !permanentIds.has(entry.local_id),
       )
       .map((entry) => entry.local_id),
@@ -132,8 +132,7 @@ export function buildProcessingStats(input: BuildProcessingStatsInput): Processi
         (entry) =>
           (entry.sync_status === "pending" ||
             entry.sync_status === "syncing" ||
-            (entry.sync_status === "failed" &&
-              isTransientNetworkError(entry.last_error))) &&
+            isTransientSyncFailure(entry)) &&
           !permanentIds.has(entry.local_id) &&
           !syncAttentionIds.has(entry.local_id),
       )

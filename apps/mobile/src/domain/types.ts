@@ -238,6 +238,10 @@ export interface CreateBookmarkInput {
 /** What a queue entry asks the sync service to do remotely. */
 export type QueueOperation = 'create' | 'update' | 'delete';
 
+/** Persisted provenance for the latest sync failure. Unlike `last_error`, this
+ * never infers transport state from server-controlled response text. */
+export type SyncErrorKind = 'transient_network' | 'other';
+
 export interface LocalPendingBookmark {
   /** Generated on device. */
   local_id: string;
@@ -250,6 +254,10 @@ export interface LocalPendingBookmark {
   sync_status: SyncStatus;
   retry_count: number;
   last_error: string | null;
+  /** Structured provenance for `last_error`. Optional for queue rows written
+   * by builds before STASH-63; an absent value is treated conservatively as
+   * `other`, never guessed from the message text. */
+  last_error_kind?: SyncErrorKind | null;
   created_at: string;
   updated_at: string;
   /**

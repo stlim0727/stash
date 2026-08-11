@@ -37,3 +37,11 @@ export function isTransientNetworkError(error: unknown): boolean {
   }
   return TRANSIENT_NETWORK_SIGNATURES.some((signature) => message.includes(signature));
 }
+
+/** Queue-safe counterpart to `isTransientNetworkError`: uses provenance
+ * captured while the original runtime error type was available, never the
+ * persisted message text (which may have come from an HTTP response body). */
+export function isTransientSyncFailure(entry: LocalPendingBookmark): boolean {
+  return entry.sync_status === 'failed' && entry.last_error_kind === 'transient_network';
+}
+import type { LocalPendingBookmark } from '@/domain/types';

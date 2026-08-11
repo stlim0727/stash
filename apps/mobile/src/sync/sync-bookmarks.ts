@@ -1,8 +1,13 @@
 import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE, createBookmarkApi } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
-import { isTransientNetworkError } from '@/domain/network-errors';
-import type { Bookmark, CreateBookmarkInput, LocalPendingBookmark } from '@/domain/types';
+import { isTransientNetworkError, isTransientSyncFailure } from '@/domain/network-errors';
+import type {
+  Bookmark,
+  CreateBookmarkInput,
+  LocalPendingBookmark,
+  SyncErrorKind,
+} from '@/domain/types';
 import { canonicalizeUrl } from '@/domain/urls';
 import { recordLog } from '@/observability/log-buffer';
 import type { BookmarkRepository } from '@/storage/types';
@@ -59,6 +64,16 @@ function isBookmarkGoneRemotely(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Sync failed.';
+}
+
+/** Classify the failure while its runtime type is still available. A
+ * SupabaseRequestError proves the server returned an HTTP response, even when
+ * its body happens to contain transport-like wording such as "timed out". */
+export function syncErrorKind(error: unknown): SyncErrorKind {
+  if (error instanceof SupabaseRequestError) {
+    return 'other';
+  }
+  return isTransientNetworkError(error) ? 'transient_network' : 'other';
 }
 
 /**
@@ -151,6 +166,7 @@ async function failEntry(
     sync_status: 'failed',
     retry_count: entry.retry_count + 1,
     last_error: errorMessage(error),
+    last_error_kind: syncErrorKind(error),
     last_attempt_at: now,
     updated_at: now,
   };
@@ -266,6 +282,7 @@ export async function syncCreateQueueEntryBatch(
       remote_id: output.bookmark_id,
       sync_status: 'synced',
       last_error: null,
+      last_error_kind: null,
       updated_at: now,
     };
 
@@ -436,6 +453,7 @@ export async function syncQueueEntry(
       remote_id: result.bookmark_id,
       sync_status: 'synced',
       last_error: null,
+      last_error_kind: null,
       updated_at: now,
     };
     await repository.updateQueueEntry(syncedEntry);
@@ -560,6 +578,7 @@ export function makeMutationEntry(
     sync_status: 'pending',
     retry_count: 0,
     last_error: null,
+    last_error_kind: null,
     created_at: now,
     updated_at: now,
   };
@@ -670,7 +689,7 @@ export function uploadRetryBackoffMs(entry: LocalPendingBookmark): number {
   }
   const index = Math.min(entry.retry_count - 1, UPLOAD_RETRY_BACKOFF_MS.length - 1);
   const base = UPLOAD_RETRY_BACKOFF_MS[index]!;
-  return isTransientNetworkError(entry.last_error) ? base * TRANSIENT_NETWORK_BACKOFF_MULTIPLIER : base;
+  return isTransientSyncFailure(entry) ? base * TRANSIENT_NETWORK_BACKOFF_MULTIPLIER : base;
 }
 
 export interface IsSyncableOptions {
@@ -773,6 +792,7 @@ export function reconcileOrphanedQueueEntries(
       sync_status: 'pending',
       retry_count: 0,
       last_error: null,
+      last_error_kind: null,
       created_at: now,
       updated_at: now,
     });

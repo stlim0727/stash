@@ -112,7 +112,7 @@ import { CreateCollectionDialog } from '@/ui/CreateCollectionDialog';
 import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
-import type { Bookmark } from '@/domain/types';
+import type { Bookmark, SyncErrorKind } from '@/domain/types';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import {
   INITIAL_HEADER_COLLAPSE_STATE,
@@ -122,10 +122,14 @@ import {
 import { didWordmarkImageLoad, shouldShowWordmarkFallback } from '@/domain/wordmark';
 import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 
-function statusLabel(bookmark: Bookmark, t: TFunction, syncError?: string | null): string | null {
+function statusLabel(
+  bookmark: Bookmark,
+  t: TFunction,
+  syncErrorKind?: SyncErrorKind | null,
+): string | null {
   const parts: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    parts.push(syncStatusLabel(t, bookmark.sync_status, syncError));
+    parts.push(syncStatusLabel(t, bookmark.sync_status, syncErrorKind));
   }
   if (bookmark.metadata_status === 'pending') {
     parts.push(metadataStatusLabel(t, 'pending'));
@@ -536,8 +540,8 @@ export default function InboxScreen() {
     markBookmarkAccessed,
     createCollection,
   } = useBookmarks();
-  const syncErrorByBookmarkId = useMemo(
-    () => new Map(queue.map((entry) => [entry.local_id, entry.last_error] as const)),
+  const syncErrorKindByBookmarkId = useMemo(
+    () => new Map(queue.map((entry) => [entry.local_id, entry.last_error_kind] as const)),
     [queue],
   );
   const { show: showToast } = useCaptureToast();
@@ -2898,7 +2902,7 @@ export default function InboxScreen() {
               </Pressable>
             );
           }
-          const status = statusLabel(item, t, syncErrorByBookmarkId.get(item.id));
+          const status = statusLabel(item, t, syncErrorKindByBookmarkId.get(item.id));
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
           // Pending AI suggestions = high-confidence suggested tags not yet
