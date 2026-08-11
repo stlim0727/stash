@@ -103,7 +103,7 @@ import { syncFlush } from '@/ui/sync-flush';
 import { useT } from '@/i18n';
 import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
-import { metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
+import { metadataStatusLabel, syncStatusLabel, videoUnavailableLabel } from '@/i18n/status';
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
@@ -128,6 +128,12 @@ function statusLabel(bookmark: Bookmark, t: TFunction): string | null {
   }
   if (bookmark.metadata_status === 'pending') {
     parts.push(metadataStatusLabel(t, 'pending'));
+  }
+  // STASH-61: purely a read of the persisted flag — no network call from the
+  // card. Detection only ever happens on-demand from the Detail screen; this
+  // just surfaces a result that's already been found.
+  if (bookmark.video_unavailable) {
+    parts.push(videoUnavailableLabel(t));
   }
   return parts.length > 0 ? parts.join(' · ') : null;
 }

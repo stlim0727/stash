@@ -17,6 +17,7 @@ import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
 import { createConcurrencyLimiter } from "@/domain/concurrency";
 import { enrichBookmark } from "@/domain/enrichment";
+import { checkYoutubeAvailability, isYoutubeAvailabilityCandidate } from "@/domain/page-metadata";
 import { isTransientNetworkError } from "@/domain/network-errors";
 import { jwtSubject } from "@/domain/jwt";
 import { planTitleBackfill } from "@/domain/title-backfill";
@@ -297,6 +298,16 @@ interface BookmarksContextValue {
    * sort. Never synced and never bumps `updated_at`.
    */
   markBookmarkAccessed: (id: string) => void;
+  /**
+   * On-demand check (STASH-61) of whether a saved YouTube video is still
+   * available, via its oEmbed endpoint. Pass the bookmark's current `url`
+   * (the caller's own render-time value, not re-derived from the store) —
+   * no-op for a non-YouTube URL or null. Sets the local-only, self-healing
+   * `video_unavailable` flag; never synced and never bumps `updated_at`.
+   * Fire-and-forget — call once per Detail screen open, never as background
+   * polling of the whole library.
+   */
+  checkVideoAvailability: (id: string, url: string | null | undefined) => void;
   /** Permanently remove a bookmark and any pending queue entry for it. */
   deleteBookmark: (id: string) => void;
   /** True while the background sync service is uploading queue entries. */
@@ -1019,6 +1030,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     bookmarksRef.current = bookmarks;
   }, [bookmarks]);
+  // Guards checkVideoAvailability against firing twice for the same bookmark
+  // while its first check is still in flight (e.g. a rapid remount).
+  const videoAvailabilityCheckingRef = useRef<Set<string>>(new Set());
   const queueRef = useRef<LocalPendingBookmark[]>([]);
   useEffect(() => {
     queueRef.current = queue;
@@ -1960,6 +1974,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   item.id === updated.id ? updated : item,
                 ),
           );
+          // Keep the ref current immediately rather than waiting for the
+          // separate mirroring effect (which only runs on next render): other
+          // local-only writers (e.g. checkVideoAvailability) read
+          // bookmarksRef.current to build a full-row replacement, and any gap
+          // here is a window where such a write would revert these
+          // just-enriched fields (caught in PR review, STASH-61).
+          bookmarksRef.current = bookmarksRef.current
+            ? bookmarksRef.current.map((item) =>
+                item.id === updated.id ? updated : item,
+              )
+            : bookmarksRef.current;
           try {
             await ensureRepositoryReady();
             await repository.updateBookmark(updated);
@@ -3103,6 +3128,58 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .catch((error) => logStorageError("bookmark access", error));
   }, []);
 
+  // On-demand YouTube availability check (STASH-61). Takes the URL from the
+  // caller rather than re-reading it off `bookmarksRef` — the caller (a
+  // Detail-screen mount effect) already has the just-rendered bookmark in
+  // hand, whereas `bookmarksRef` is only mirrored from `bookmarks` state by a
+  // separate effect and can still be a render behind on the very first mount
+  // after the initial load, which would otherwise silently no-op the check.
+  // Deliberately NOT routed through applyBookmarkUpdate, for the same reason
+  // as markBookmarkAccessed above: video_unavailable is a local-only,
+  // self-healing status read, not user- or server-authored data, so it must
+  // never flip sync_status, enqueue a sync mutation, or bump updated_at.
+  const checkVideoAvailability = useCallback((id: string, url: string | null | undefined) => {
+    if (!url || !isYoutubeAvailabilityCandidate(url)) {
+      return;
+    }
+    if (videoAvailabilityCheckingRef.current.has(id)) {
+      return;
+    }
+    videoAvailabilityCheckingRef.current.add(id);
+    checkYoutubeAvailability(url)
+      .then((result) => {
+        if (result === "unknown") {
+          // Indeterminate (network error, timeout, non-OK status): leave the
+          // current flag as-is rather than guess.
+          return;
+        }
+        const unavailable = result === "unavailable";
+        const latest = bookmarksRef.current?.find(
+          (bookmark) => bookmark.id === id,
+        );
+        if (!latest || (latest.video_unavailable ?? false) === unavailable) {
+          // Already reflects this result (or the bookmark is gone) — no write.
+          return;
+        }
+        const updated: Bookmark = { ...latest, video_unavailable: unavailable };
+        setBookmarks((current) =>
+          current === null
+            ? current
+            : current.map((bookmark) => (bookmark.id === id ? updated : bookmark)),
+        );
+        bookmarksRef.current = bookmarksRef.current!.map((bookmark) =>
+          bookmark.id === id ? updated : bookmark,
+        );
+        return ensureRepositoryReady().then(() =>
+          repository.updateBookmark(updated),
+        );
+      })
+      .catch((error) => logStorageError("video availability check", error))
+      .finally(() => {
+        videoAvailabilityCheckingRef.current.delete(id);
+      });
+  }, []);
+
   const trashBookmark = useCallback(
     (id: string) => {
       applyBookmarkUpdate(id, { deleted_at: new Date().toISOString() });
@@ -3227,6 +3304,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ? current
             : current.map((item) => (item.id === id ? updated : item)),
         );
+        // Keep the ref current immediately — same rationale as
+        // enrichInBackground's identical line: another local-only writer
+        // (checkVideoAvailability) reading bookmarksRef.current moments later
+        // must see this refreshed metadata, not a pre-refresh snapshot it
+        // would otherwise revert (PR review, STASH-61).
+        bookmarksRef.current = bookmarksRef.current
+          ? bookmarksRef.current.map((item) => (item.id === id ? updated : item))
+          : bookmarksRef.current;
         try {
           await ensureRepositoryReady();
           await repository.updateBookmark(updated);
@@ -7395,6 +7480,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       aiQuotaExceeded,
       updateBookmarkFields,
       markBookmarkAccessed,
+      checkVideoAvailability,
       deleteBookmark,
       isSyncing,
       syncNow,
@@ -7452,6 +7538,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       aiQuotaExceeded,
       updateBookmarkFields,
       markBookmarkAccessed,
+      checkVideoAvailability,
       deleteBookmark,
       isSyncing,
       syncNow,

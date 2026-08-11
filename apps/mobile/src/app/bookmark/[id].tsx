@@ -18,7 +18,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useI18n } from '@/i18n';
-import { enrichmentDegradedLabel, metadataStatusLabel, syncStatusLabel } from '@/i18n/status';
+import {
+  enrichmentDegradedLabel,
+  metadataStatusLabel,
+  syncStatusLabel,
+  videoUnavailableLabel,
+} from '@/i18n/status';
 import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
@@ -79,6 +84,7 @@ export default function BookmarkDetailScreen({
     restoreBookmark,
     updateBookmarkFields,
     markBookmarkAccessed,
+    checkVideoAvailability,
     deleteBookmark,
     collections,
     addTagsToBookmark,
@@ -204,6 +210,16 @@ export default function BookmarkDetailScreen({
       markBookmarkAccessed(resolvedId);
     }
   }, [markAccessOnMount, resolvedId, markBookmarkAccessed]);
+  // STASH-61: opening Detail is also the one on-demand moment we check whether
+  // a saved YouTube video is still available — never background polling. The
+  // store no-ops for a non-YouTube bookmark, so this is safe to call for every
+  // bookmark opened. Once per id (a re-open remounts), mirroring the access
+  // tracking above.
+  useEffect(() => {
+    if (resolvedId) {
+      checkVideoAvailability(resolvedId, bookmark?.url);
+    }
+  }, [resolvedId, bookmark?.url, checkVideoAvailability]);
   // One breadcrumb on first mount so a freeze right after opening a
   // freshly-shared bookmark (Sentry STASH-H) places the Detail screen on the
   // event timeline. Coarse only: whether the row resolved from local state — a
@@ -486,6 +502,9 @@ export default function BookmarkDetailScreen({
   if (bookmark.metadata_status !== 'complete') {
     statusChips.push(metadataStatusLabel(t, bookmark.metadata_status));
   }
+  if (bookmark.video_unavailable) {
+    statusChips.push(videoUnavailableLabel(t));
+  }
 
   const host = hostFromUrl(bookmark.url);
 
@@ -761,6 +780,21 @@ export default function BookmarkDetailScreen({
     }
   };
 
+  // STASH-61 recovery action: the saved video is confirmed gone, so offer a
+  // one-tap YouTube search for its title — a re-upload or mirror is often
+  // findable even when the original link is dead.
+  const handleSearchYoutube = () => {
+    const query = displayedTitle.trim();
+    if (!query) {
+      return;
+    }
+    void Linking.openURL(
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+    ).catch(() => {
+      setOrganizeError(t('detail.errorOpen'));
+    });
+  };
+
   const handleDelete = () => {
     const remove = () => {
       deleteBookmark(bookmark.id);
@@ -961,6 +995,14 @@ export default function BookmarkDetailScreen({
       <View style={styles.actionBar}>
         {bookmark.url ? (
           <ActionButton icon="open-outline" label={t('common.open')} tint={palette.accent} onPress={handleOpenLink} />
+        ) : null}
+        {bookmark.video_unavailable ? (
+          <ActionButton
+            icon="search-outline"
+            label={t('detail.searchYoutube')}
+            tint={palette.text}
+            onPress={handleSearchYoutube}
+          />
         ) : null}
         {bookmark.url ? (
           <ActionButton icon="copy-outline" label={t('common.copy')} tint={palette.text} onPress={handleCopyLink} />

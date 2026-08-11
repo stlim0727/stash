@@ -36,6 +36,14 @@ export function metadataStatusLabel(t: TFunction, value: string): string {
 }
 
 /**
+ * The subtle status chip shown when an on-device check has confirmed a saved
+ * YouTube video is deleted/private (STASH-61). See `Bookmark.video_unavailable`.
+ */
+export function videoUnavailableLabel(t: TFunction): string {
+  return t('status.videoUnavailable');
+}
+
+/**
  * The non-error note shown when an AI enrichment came from the basic heuristics
  * instead of the model (M12). A transient rate-limit reads differently from a
  * general outage or a missing model key, so the cause is never hidden. Unknown

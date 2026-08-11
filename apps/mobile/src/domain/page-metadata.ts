@@ -606,6 +606,113 @@ async function fetchKnownOembedMetadata(
   return { metadata: null, outcome: fromOembed ? 'no_title' : 'failed' };
 }
 
+/**
+ * True for hosts that are known short-link wrappers around a YouTube URL
+ * (currently just `share.google`, the Android share-sheet shortener) rather
+ * than YouTube itself. `youtubeVideoId`/`oembedEndpoint` can't recognize
+ * these directly since the video id only appears after following the
+ * redirect — see `resolveKnownYoutubeShortener` below.
+ */
+function isKnownYoutubeShortenerHost(rawUrl: string): boolean {
+  try {
+    return new URL(rawUrl).hostname.replace(/^www\./, '') === 'share.google';
+  } catch {
+    return false;
+  }
+}
+
+/** Whether `checkYoutubeAvailability` can do anything useful with this URL. */
+export function isYoutubeAvailabilityCandidate(rawUrl: string): boolean {
+  return Boolean(youtubeVideoId(rawUrl)) || isKnownYoutubeShortenerHost(rawUrl);
+}
+
+/**
+ * Follows a known shortener (`share.google`) to its final landing URL. Uses
+ * HEAD, not GET (same reasoning as `preferHiResYoutubeThumbnail`'s HEAD probe
+ * above): React Native's fetch polyfill resolves at XHR `onload`, i.e. only
+ * once the *entire* response body has downloaded, so a GET here would buffer
+ * the whole landed YouTube page just to read `response.url`, bypassing the
+ * size caps the rest of this module enforces on page fetches. A HEAD has no
+ * body to buffer, and redirect chains resolve identically for HEAD and GET.
+ * Returns null on any failure/timeout/non-shortener host.
+ */
+async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | null> {
+  if (!isKnownYoutubeShortenerHost(rawUrl)) {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(rawUrl, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+    });
+    return response.url || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Whether a saved YouTube video is still available, per its oEmbed endpoint
+ * (STASH-61: videos can be deleted/made private sometime after capture).
+ * YouTube's oEmbed answers 404 for a deleted/nonexistent video — an
+ * unambiguous confirmation the content is gone. A 401 is deliberately NOT
+ * treated as unavailable: it means this app-owned, unauthenticated request
+ * can't see a private video, but the signed-in owner opening the same link in
+ * their own YouTube app still can — so a 401 resolves to `'unknown'` rather
+ * than a false "unavailable" badge on a bookmark that's actually still
+ * playable for its owner. Any other non-404 outcome (a real title, a
+ * non-YouTube URL, a 5xx, a timeout, a network error) also resolves to
+ * `'unknown'` rather than guessing, so a transient failure can never mislabel
+ * a healthy video as unavailable. Note: a region-restricted video's oEmbed
+ * typically still succeeds, so this check cannot detect that case —
+ * deleted is the reliable, unambiguous subset it covers.
+ *
+ * Also resolves known share-link shorteners (`share.google`) to their
+ * underlying YouTube URL first, so a video shared via the Android share sheet
+ * still gets checked instead of silently being skipped.
+ *
+ * Callers are expected to invoke this on-demand (e.g. once when a bookmark's
+ * Detail screen opens), never as background polling of the whole library —
+ * "Capture is sacred" and privacy/battery both rule that out.
+ */
+export async function checkYoutubeAvailability(
+  rawUrl: string,
+): Promise<'available' | 'unavailable' | 'unknown'> {
+  let endpoint = oembedEndpoint(rawUrl);
+  if (!endpoint) {
+    const resolved = await resolveKnownYoutubeShortener(rawUrl);
+    endpoint = resolved ? oembedEndpoint(resolved) : null;
+  }
+  if (!endpoint) {
+    return 'unknown';
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(endpoint, {
+      signal: controller.signal,
+      headers: OEMBED_HEADERS,
+    });
+    if (response.status === 404) {
+      return 'unavailable';
+    }
+    if (!response.ok) {
+      return 'unknown';
+    }
+    const json = (await response.json()) as OembedResponse;
+    return parseOembed(json).title ? 'available' : 'unknown';
+  } catch {
+    return 'unknown';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchOembed(endpoint: string): Promise<FetchedMetadata | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);

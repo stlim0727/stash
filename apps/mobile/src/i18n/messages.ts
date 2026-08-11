@@ -53,6 +53,10 @@ export const en = {
   'status.failed': 'failed',
   'status.complete': 'complete',
   'status.skipped': 'skipped',
+  // STASH-61: an on-device check confirmed a saved YouTube video is gone
+  // (deleted/private). Lowercase to match the other status words above, which
+  // this joins alongside via " · ".
+  'status.videoUnavailable': 'video unavailable',
 
   // Navigation / screen titles (expo-router Stack headers).
   'nav.addBookmark': 'Add Bookmark',
@@ -647,6 +651,10 @@ export const en = {
   'detail.aiSuggest': 'Suggest with AI',
   'detail.previewRefresh': 'Preview',
   'detail.previewRefreshing': 'Refreshing…',
+  // STASH-61: recovery action shown once a saved YouTube video is confirmed
+  // unavailable — searches YouTube for the bookmark's title, which often
+  // turns up a re-upload or mirror even when the original link is dead.
+  'detail.searchYoutube': 'Search YouTube',
   'detail.aiNeedsSync': 'AI suggestions are available once this bookmark has synced.',
   'detail.aiPreviewFailed': 'AI suggestions are unavailable because the preview could not be loaded.',
   'detail.previewFailedNote': 'Failed to load preview and metadata.',

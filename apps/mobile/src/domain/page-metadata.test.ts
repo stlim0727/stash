@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  checkYoutubeAvailability,
   detectCharset,
   fetchPageMetadata,
   htmlHeadSummary,
+  isYoutubeAvailabilityCandidate,
   normalizeCharsetLabel,
   oembedEndpoint,
   parseOembed,
@@ -132,6 +134,115 @@ test('parseOembed ignores blank/non-string fields', () => {
   assert.equal(meta.title, undefined);
   assert.equal(meta.site_name, undefined);
   assert.equal(meta.preview_image_url, undefined);
+});
+
+// STASH-61: a saved YouTube video can be deleted/made private after capture.
+// oEmbed 404 is the unambiguous "gone" signal; everything else must stay
+// 'unknown' so a flaky network or an unrelated URL never mislabels a video.
+test('checkYoutubeAvailability reports unavailable on oEmbed 404 (deleted)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: false, status: 404 }) as unknown as Response) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://youtube.com/shorts/PG7OUsiB6Qg'),
+      'unavailable',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// A 401 only means this unauthenticated, app-owned request can't see a
+// private video — the signed-in owner can still open the same link in their
+// own YouTube app, so it must NOT be reported as unavailable (would show a
+// false badge + search fallback on a still-playable bookmark).
+test('checkYoutubeAvailability reports unknown, not unavailable, on oEmbed 401 (private)', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: false, status: 401 }) as unknown as Response) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://youtube.com/shorts/PG7OUsiB6Qg'),
+      'unknown',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// A share.google short link has no oEmbed endpoint directly, but is a known
+// YouTube share-sheet shortener (see urls.ts's stripsShareSi) — it must be
+// resolved via redirect before conceding to 'unknown', or every video shared
+// this way would silently never get checked. Resolution must use HEAD (PR
+// review): RN's fetch polyfill only resolves once the full body has
+// downloaded, so a GET here would buffer the whole landed YouTube page just
+// to read `response.url`.
+test('checkYoutubeAvailability resolves a share.google redirect via HEAD before checking oEmbed', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; method?: string }> = [];
+  globalThis.fetch = (async (target: string, init?: RequestInit) => {
+    calls.push({ url: target, method: init?.method });
+    if (target.startsWith('https://share.google/')) {
+      return { url: 'https://www.youtube.com/shorts/MufIgnqP1vk' } as unknown as Response;
+    }
+    return { ok: false, status: 404 } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://share.google/bb3vpuiCbbyVhrpTp'),
+      'unavailable',
+    );
+    const shortenerCall = calls.find((c) => c.url.startsWith('https://share.google/'));
+    assert.equal(shortenerCall?.method, 'HEAD');
+    assert.ok(calls.some((c) => c.url.includes('youtube.com%2Fwatch%3Fv%3DMufIgnqP1vk')));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('checkYoutubeAvailability reports available when oEmbed answers with a title', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    ({
+      ok: true,
+      status: 200,
+      json: async () => ({ title: 'Me at the zoo', provider_name: 'YouTube' }),
+    }) as unknown as Response) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://youtu.be/jNQXAC9IVRw'),
+      'available',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('isYoutubeAvailabilityCandidate accepts direct YouTube URLs and the share.google shortener, rejects everything else', () => {
+  assert.equal(isYoutubeAvailabilityCandidate('https://youtu.be/dQw4w9WgXcQ'), true);
+  assert.equal(isYoutubeAvailabilityCandidate('https://share.google/bb3vpuiCbbyVhrpTp'), true);
+  assert.equal(isYoutubeAvailabilityCandidate('https://example.com/article'), false);
+  assert.equal(isYoutubeAvailabilityCandidate('not a url'), false);
+});
+
+test('checkYoutubeAvailability reports unknown on a non-YouTube URL, a 5xx, and a network error', async () => {
+  assert.equal(await checkYoutubeAvailability('https://example.com/article'), 'unknown');
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => ({ ok: false, status: 500 }) as unknown as Response) as typeof fetch;
+  try {
+    assert.equal(await checkYoutubeAvailability('https://youtu.be/jNQXAC9IVRw'), 'unknown');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  globalThis.fetch = (async () => {
+    throw new Error('network down');
+  }) as unknown as typeof fetch;
+  try {
+    assert.equal(await checkYoutubeAvailability('https://youtu.be/jNQXAC9IVRw'), 'unknown');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 // The oEmbed thumbnail is the soft 480×360 `hqdefault`; enrichment upgrades it

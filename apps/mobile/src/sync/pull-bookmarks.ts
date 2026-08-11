@@ -156,6 +156,11 @@ export async function pullRemoteChanges(
               local_image_uri: local.local_image_uri,
               title_is_derived:
                 remote.title === local.title ? local.title_is_derived : undefined,
+              // Also device-only (STASH-61): a live YouTube-availability check
+              // result the remote row can't carry, so a pull never silently
+              // clears a confirmed "unavailable" badge this device already
+              // found.
+              video_unavailable: local.video_unavailable,
             }
           : remote,
       );

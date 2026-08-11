@@ -116,6 +116,18 @@ export interface Bookmark {
   dismissed_suggested_tags?: string[];
   dismissed_suggested_folders?: string[];
   reviewed_summary_tokens?: string[];
+  /**
+   * Local-only, self-healing flag: true once an on-device check has confirmed
+   * a saved YouTube video is deleted/private (STASH-61). Set by
+   * `checkYoutubeAvailability`'s oEmbed check, triggered on-demand when the
+   * user opens the bookmark's Detail screen — never by background polling of
+   * the library. Absent/false means "not checked, or last checked as
+   * available"; a later check can clear it back to false if the video comes
+   * back. Never sent to the cloud and never bumps `updated_at` or enqueues
+   * sync (same rule as `last_accessed_at`/`title_is_derived`) — it is a live
+   * status read, not user- or server-authored data.
+   */
+  video_unavailable?: boolean;
 }
 
 export interface Tag {

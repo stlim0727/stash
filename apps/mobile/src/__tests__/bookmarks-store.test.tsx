@@ -25,6 +25,14 @@ jest.mock("@/domain/enrichment", () => ({
   enrichBookmark: (bookmark: Bookmark, fetcher?: unknown) =>
     mockEnrichBookmark(bookmark, fetcher),
 }));
+const mockCheckYoutubeAvailability = jest.fn<
+  Promise<"available" | "unavailable" | "unknown">,
+  [string]
+>(async () => "unknown");
+jest.mock("@/domain/page-metadata", () => ({
+  ...jest.requireActual("@/domain/page-metadata"),
+  checkYoutubeAvailability: (url: string) => mockCheckYoutubeAvailability(url),
+}));
 
 import { BookmarksProvider, useBookmarks } from "@/store/bookmarks";
 import {
@@ -55,6 +63,8 @@ beforeEach(() => {
     patch: {},
     metadata_status: "complete",
   });
+  mockCheckYoutubeAvailability.mockReset();
+  mockCheckYoutubeAvailability.mockResolvedValue("unknown");
 });
 
 test("addBookmark shows the bookmark immediately and queues a create", async () => {
@@ -94,6 +104,106 @@ test("markBookmarkAccessed sets last_accessed_at and persists it durably", async
   expect(persisted?.last_accessed_at).toEqual(expect.any(String));
 
   // It must not enqueue a sync mutation — last_accessed_at is local-only.
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
+test("checkVideoAvailability flags a confirmed-unavailable YouTube bookmark, local-only", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-yt",
+      url: "https://www.youtube.com/watch?v=PG7OUsiB6Qg",
+      updated_at: "2026-06-12T00:00:00.000Z",
+    }),
+  ]);
+  mockCheckYoutubeAvailability.mockResolvedValueOnce("unavailable");
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await act(async () => {
+    result.current.checkVideoAvailability(
+      "bm-yt",
+      "https://www.youtube.com/watch?v=PG7OUsiB6Qg",
+    );
+    await Promise.resolve();
+  });
+
+  expect(mockCheckYoutubeAvailability).toHaveBeenCalledWith(
+    "https://www.youtube.com/watch?v=PG7OUsiB6Qg",
+  );
+  await waitFor(() =>
+    expect(result.current.inbox[0]?.video_unavailable).toBe(true),
+  );
+  const persisted = (await fakeRepo.repository.listBookmarks()).find(
+    (b) => b.id === "bm-yt",
+  );
+  expect(persisted?.video_unavailable).toBe(true);
+
+  // Local-only: no sync mutation, no updated_at bump.
+  expect(fakeRepo.__queue()).toHaveLength(0);
+  expect(result.current.inbox[0]?.updated_at).toBe("2026-06-12T00:00:00.000Z");
+});
+
+test("checkVideoAvailability checks a share.google-wrapped YouTube bookmark (not just direct YouTube URLs)", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-shortlink",
+      url: "https://share.google/bb3vpuiCbbyVhrpTp",
+    }),
+  ]);
+  mockCheckYoutubeAvailability.mockResolvedValueOnce("unavailable");
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await act(async () => {
+    result.current.checkVideoAvailability(
+      "bm-shortlink",
+      "https://share.google/bb3vpuiCbbyVhrpTp",
+    );
+    await Promise.resolve();
+  });
+
+  expect(mockCheckYoutubeAvailability).toHaveBeenCalledWith(
+    "https://share.google/bb3vpuiCbbyVhrpTp",
+  );
+  await waitFor(() =>
+    expect(result.current.inbox[0]?.video_unavailable).toBe(true),
+  );
+});
+
+test("checkVideoAvailability is a no-op for a non-YouTube bookmark", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: "bm-other", url: "https://example.com/article" }),
+  ]);
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await act(async () => {
+    result.current.checkVideoAvailability("bm-other", "https://example.com/article");
+    await Promise.resolve();
+  });
+
+  expect(mockCheckYoutubeAvailability).not.toHaveBeenCalled();
+  expect(result.current.inbox[0]?.video_unavailable).toBeUndefined();
+});
+
+test("checkVideoAvailability leaves the flag untouched on an indeterminate result", async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: "bm-yt-2",
+      url: "https://youtu.be/jNQXAC9IVRw",
+    }),
+  ]);
+  mockCheckYoutubeAvailability.mockResolvedValueOnce("unknown");
+  const { result } = await renderStore();
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  await act(async () => {
+    result.current.checkVideoAvailability("bm-yt-2", "https://youtu.be/jNQXAC9IVRw");
+    await Promise.resolve();
+  });
+
+  expect(mockCheckYoutubeAvailability).toHaveBeenCalled();
+  expect(result.current.inbox[0]?.video_unavailable).toBeUndefined();
   expect(fakeRepo.__queue()).toHaveLength(0);
 });
 

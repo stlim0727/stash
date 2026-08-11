@@ -168,6 +168,9 @@ test('a winning remote upsert preserves device-only fields from the local row', 
     last_accessed_at: '2026-06-13T09:00:00.000Z',
     local_image_uri: 'file:///stash-images/x.jpg',
     title_is_derived: false,
+    // STASH-61: this device already confirmed the video is gone; a remote
+    // edit from elsewhere must not silently clear that finding.
+    video_unavailable: true,
   });
   const remote = makeBookmark({
     updated_at: '2026-06-12T01:00:00.000Z',
@@ -187,6 +190,7 @@ test('a winning remote upsert preserves device-only fields from the local row', 
   assert.equal(result.upserts[0]?.last_accessed_at, '2026-06-13T09:00:00.000Z');
   assert.equal(result.upserts[0]?.local_image_uri, 'file:///stash-images/x.jpg');
   assert.equal(result.upserts[0]?.title_is_derived, undefined);
+  assert.equal(result.upserts[0]?.video_unavailable, true);
 });
 
 test('a remote upsert preserves title provenance only when the title is unchanged', async () => {

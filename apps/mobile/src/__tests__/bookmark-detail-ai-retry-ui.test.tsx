@@ -40,6 +40,7 @@ jest.mock('@/store/bookmarks', () => {
       restoreBookmark: () => {},
       updateBookmarkFields: () => {},
       markBookmarkAccessed: () => {},
+      checkVideoAvailability: () => {},
       deleteBookmark: () => {},
       collections: [],
       addTagsToBookmark: async () => null,
