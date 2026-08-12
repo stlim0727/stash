@@ -21,12 +21,22 @@ const WATERMARK_OVERLAP_MS = 5 * 60 * 1000;
 
 /** The slice of the bookmark API that pull needs (kept narrow for testing). */
 export interface PullApi {
-  listBookmarksUpdatedSince(since: string | null): Promise<Bookmark[]>;
-  listBookmarkIds(): Promise<string[]>;
-  listEnrichmentsUpdatedSince(since: string | null): Promise<AIEnrichment[]>;
-  listTags(): Promise<Tag[]>;
-  listBookmarkTags(): Promise<BookmarkTag[]>;
-  listCollections(): Promise<Collection[]>;
+  listBookmarksUpdatedSince(since: string | null, beforePage?: () => void): Promise<Bookmark[]>;
+  listBookmarkIds(beforePage?: () => void): Promise<string[]>;
+  listEnrichmentsUpdatedSince(
+    since: string | null,
+    beforePage?: () => void,
+  ): Promise<AIEnrichment[]>;
+  listTags(beforePage?: () => void): Promise<Tag[]>;
+  listBookmarkTags(beforePage?: () => void): Promise<BookmarkTag[]>;
+  listCollections(beforePage?: () => void): Promise<Collection[]>;
+}
+
+export class PullPausedError extends Error {
+  constructor() {
+    super('Pull stopped because sync was paused.');
+    this.name = 'PullPausedError';
+  }
 }
 
 export interface PullResult {
@@ -67,6 +77,7 @@ export async function pullRemoteChanges(
   getLocalBookmarks: () => Bookmark[],
   hasQueuedWork: (bookmarkId: string) => boolean,
   currentUser?: PullUser | null,
+  shouldContinue: () => boolean = () => true,
 ): Promise<PullResult> {
   const previousUserId = currentUser ? await repository.getMeta(SYNCED_USER_ID_KEY) : null;
   const userChanged =
@@ -110,14 +121,22 @@ export async function pullRemoteChanges(
     'info',
     `pull: starting since=${since ? 'set' : 'null'} initialLocal=${initialLocals.length} initialLocalCloud=${initialLocalCloudRowCount}`,
   );
+  const beforePage = () => {
+    if (!shouldContinue()) {
+      throw new PullPausedError();
+    }
+  };
   const [remoteRows, remoteIds, enrichments, tags, bookmarkTags, collections] = await Promise.all([
-    api.listBookmarksUpdatedSince(since),
-    api.listBookmarkIds(),
-    api.listEnrichmentsUpdatedSince(since),
-    api.listTags(),
-    api.listBookmarkTags(),
-    api.listCollections(),
+    api.listBookmarksUpdatedSince(since, beforePage),
+    api.listBookmarkIds(beforePage),
+    api.listEnrichmentsUpdatedSince(since, beforePage),
+    api.listTags(beforePage),
+    api.listBookmarkTags(beforePage),
+    api.listCollections(beforePage),
   ]);
+  // The pause can land after every final page resolves but before this
+  // continuation runs. Never apply a partial or now-unwanted pull snapshot.
+  beforePage();
   recordLog(
     fullRefreshReason ? 'warn' : 'info',
     `pull: result initialLocal=${initialLocals.length} initialLocalCloud=${initialLocalCloudRowCount} remoteRows=${remoteRows.length} remoteIds=${remoteIds.length} since=${since ? 'set' : 'null'} fullRefresh=${fullRefreshReason ?? 'none'} userChanged=${userChanged}`,

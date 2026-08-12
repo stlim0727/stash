@@ -143,6 +143,7 @@ import {
 } from "@/sync/account-transition";
 import {
   LAST_PULLED_AT_KEY,
+  PullPausedError,
   SYNCED_USER_ANON_KEY,
   SYNCED_USER_ID_KEY,
   pullRemoteChanges,
@@ -3672,6 +3673,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const addBookmarkIds = [...addOpsByBookmark.keys()];
 
     for (let i = 0; i < addBookmarkIds.length; i += BULK_CREATE_SYNC_CHUNK_SIZE) {
+      if (syncPausedRef.current) {
+        break;
+      }
       const chunkIds = addBookmarkIds.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
       const chunkItems: BulkAttachItem[] = chunkIds.map((bookmarkId) => ({
         bookmark_id: bookmarkId,
@@ -3724,6 +3728,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
 
     for (const op of ops) {
+      if (syncPausedRef.current) {
+        break;
+      }
       if (op.op !== "remove" || !hasSyncedOnce(op.bookmark_id)) {
         continue;
       }
@@ -4514,6 +4521,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const bookmarkIds = [...itemsByBookmark.keys()];
 
       for (let i = 0; i < bookmarkIds.length; i += BULK_CREATE_SYNC_CHUNK_SIZE) {
+        if (syncPausedRef.current) {
+          break;
+        }
         const chunkIds = bookmarkIds.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
         const chunkItems: BulkAttachItem[] = chunkIds.map((bookmarkId) => ({
           bookmark_id: bookmarkId,
@@ -4677,6 +4687,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         i < eligible.length;
         i += BULK_CREATE_SYNC_CHUNK_SIZE
       ) {
+        if (syncPausedRef.current) {
+          break;
+        }
         const chunk = eligible.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
         const chunkIds = new Set(chunk.map((item) => item.bookmark_id));
         try {
@@ -6280,6 +6293,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     queued.sync_status !== "synced",
                 ),
               currentUser,
+              () => !syncPausedRef.current,
             );
             if (result.upserts.length > 0 || result.deletions.length > 0) {
               const upsertIds = new Set(
@@ -6432,7 +6446,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               }
             }
           } catch (error) {
-            logStorageError("pull", error);
+            if (error instanceof PullPausedError) {
+              recordLog("info", "pull: stopped after sync was paused");
+            } else {
+              logStorageError("pull", error);
+            }
           }
         }
 

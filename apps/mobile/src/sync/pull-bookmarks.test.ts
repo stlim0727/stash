@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   LAST_PULLED_AT_KEY,
+  PullPausedError,
   SYNCED_USER_ID_KEY,
   pullRemoteChanges,
 } from './pull-bookmarks.ts';
@@ -122,6 +123,38 @@ function fakeApi(overrides: Partial<PullApi> = {}): PullApi {
     ...overrides,
   };
 }
+
+test('a pause during pull pagination aborts without applying a partial snapshot', async () => {
+  const { calls, meta, repository } = fakeRepository();
+  const remote = makeBookmark();
+  let shouldContinue = true;
+  const api = fakeApi({
+    listBookmarksUpdatedSince: async (_since, beforePage) => {
+      beforePage?.();
+      shouldContinue = false;
+      return [remote];
+    },
+    listBookmarkIds: async (beforePage) => {
+      beforePage?.();
+      return [remote.id];
+    },
+  });
+
+  await assert.rejects(
+    pullRemoteChanges(
+      api,
+      repository,
+      () => [],
+      () => false,
+      null,
+      () => shouldContinue,
+    ),
+    PullPausedError,
+  );
+
+  assert.deepEqual(calls, []);
+  assert.equal(meta[LAST_PULLED_AT_KEY], undefined);
+});
 
 test('pull inserts new remote rows and persists them', async () => {
   const { calls, repository } = fakeRepository();

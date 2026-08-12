@@ -347,6 +347,64 @@ beforeEach(() => {
 });
 
 describe("Mass Import, Sync & Reset lifecycle", () => {
+  test("pausing during enrichment restore stops before the next chunk (STASH-5C)", async () => {
+    const { result } = await renderReadyStore();
+    const firstChunkStarted = deferred();
+    const releaseFirstChunk = deferred();
+    const originalBulkRestore =
+      apiMock.__bulkRestoreAIEnrichmentMock.getMockImplementation()!;
+    apiMock.__bulkRestoreAIEnrichmentMock.mockImplementationOnce(
+      async (items: unknown[]) => {
+        firstChunkStarted.resolve();
+        await releaseFirstChunk.promise;
+        return originalBulkRestore(items);
+      },
+    );
+
+    await act(async () => {
+      result.current.setSyncPaused(true);
+      result.current.importBookmarks(
+        Array.from({ length: 51 }, (_, i) => ({
+          source: "stash-backup" as const,
+          url: `https://example.com/pause-enrichment-${i}`,
+          title: `Pause enrichment ${i}`,
+          notes: null,
+          tags: [],
+          collection: null,
+          enrichment: {
+            summary: `Summary ${i}`,
+            topics: [],
+            suggested_tags: [],
+            status: "complete" as const,
+            model: null,
+            confidence: null,
+          },
+        })),
+      );
+    });
+    await waitFor(() => expect(result.current.queue).toHaveLength(51));
+
+    await act(async () => {
+      result.current.setSyncPaused(false);
+    });
+    await firstChunkStarted.promise;
+    await act(async () => {
+      result.current.setSyncPaused(true);
+    });
+    expect(result.current.syncPaused).toBe(true);
+    await act(async () => {
+      releaseFirstChunk.resolve();
+    });
+
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 10_000,
+    });
+    expect(apiMock.__bulkRestoreAIEnrichmentMock).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(fakeRepo.__meta("pending_enrichment_restore") ?? "[]"),
+    ).toHaveLength(1);
+  });
+
   test("mass imports 50 items, dedupes intra-batch, and flushes to local queue without blocking UI", async () => {
     const { result } = await renderReadyStore();
 
@@ -1208,6 +1266,102 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     expect(result.current.inbox.every((b) => b.sync_status === "synced")).toBe(
       true,
     );
+  });
+
+  test("pausing during imported folder attachment stops before the next chunk (STASH-5C)", async () => {
+    const { result } = await renderReadyStore();
+    const firstChunkStarted = deferred();
+    const releaseFirstChunk = deferred();
+    const originalBulkAttach =
+      apiMock.__bulkAttachMock.getMockImplementation()!;
+    apiMock.__bulkAttachMock.mockImplementationOnce(async (items: unknown[]) => {
+      firstChunkStarted.resolve();
+      await releaseFirstChunk.promise;
+      return originalBulkAttach(items);
+    });
+
+    await act(async () => {
+      result.current.setSyncPaused(true);
+      result.current.importBookmarks(
+        Array.from({ length: 51 }, (_, i) => ({
+          source: "stash-backup" as const,
+          url: `https://example.com/pause-folder-${i}`,
+          title: `Pause folder ${i}`,
+          notes: null,
+          tags: [],
+          collection: `Folder ${i}`,
+        })),
+      );
+    });
+    await waitFor(() => expect(result.current.queue).toHaveLength(51));
+
+    await act(async () => {
+      result.current.setSyncPaused(false);
+    });
+    await firstChunkStarted.promise;
+    await act(async () => {
+      result.current.setSyncPaused(true);
+    });
+    expect(result.current.syncPaused).toBe(true);
+    await act(async () => {
+      releaseFirstChunk.resolve();
+    });
+
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 10_000,
+    });
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(fakeRepo.__meta("pending_import_collections") ?? "[]"),
+    ).toHaveLength(1);
+  });
+
+  test("pausing during imported tag attachment stops before the next chunk (STASH-5C)", async () => {
+    const { result } = await renderReadyStore();
+    const firstChunkStarted = deferred();
+    const releaseFirstChunk = deferred();
+    const originalBulkAttach =
+      apiMock.__bulkAttachMock.getMockImplementation()!;
+    apiMock.__bulkAttachMock.mockImplementationOnce(async (items: unknown[]) => {
+      firstChunkStarted.resolve();
+      await releaseFirstChunk.promise;
+      return originalBulkAttach(items);
+    });
+
+    await act(async () => {
+      result.current.setSyncPaused(true);
+      result.current.importBookmarks(
+        Array.from({ length: 51 }, (_, i) => ({
+          source: "stash-backup" as const,
+          url: `https://example.com/pause-tag-${i}`,
+          title: `Pause tag ${i}`,
+          notes: null,
+          tags: [`Tag ${i}`],
+          collection: null,
+        })),
+      );
+    });
+    await waitFor(() => expect(result.current.queue).toHaveLength(51));
+
+    await act(async () => {
+      result.current.setSyncPaused(false);
+    });
+    await firstChunkStarted.promise;
+    await act(async () => {
+      result.current.setSyncPaused(true);
+    });
+    expect(result.current.syncPaused).toBe(true);
+    await act(async () => {
+      releaseFirstChunk.resolve();
+    });
+
+    await waitFor(() => expect(result.current.isSyncing).toBe(false), {
+      timeout: 10_000,
+    });
+    expect(apiMock.__bulkAttachMock).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(fakeRepo.__meta("pending_tag_ops") ?? "[]"),
+    ).toHaveLength(1);
   });
 
   test("reproduces STASH-3Y / STASH-41 counter bouncing: background metadata resolution during bulk create sync does NOT enqueue update operations", async () => {
