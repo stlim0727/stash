@@ -39,6 +39,7 @@ import {
 import { resolveHubLabels, type HubLabelInput } from "@/domain/graph-labels";
 import type { BookmarkTag, Tag } from "@/domain/types";
 import { useT } from "@/i18n";
+import { measureSyncSegment } from "@/observability/slow-segment-log";
 import { getPreference, setPreference } from "@/storage/preferences";
 import { useBookmarks } from "@/store/bookmarks";
 import { usePalette } from "@/theme";
@@ -433,10 +434,17 @@ export default function GraphScreen() {
 
   useEffect(() => {
     if (!interacting) {
-      const tagsMap = new Map<string, Tag[]>();
-      for (const b of inbox) {
-        tagsMap.set(b.id, getTagsForBookmark(b.id));
-      }
+      // Timed (STASH-64): this rebuild runs on every store update — including
+      // a background sync pull — while the user is on this screen. Diagnostics
+      // on a "graph rendering still slow" report only ever covered SQLite,
+      // never this screen's own JS-thread cost on a large library.
+      const tagsMap = measureSyncSegment("graph-committed-data-rebuild", () => {
+        const map = new Map<string, Tag[]>();
+        for (const b of inbox) {
+          map.set(b.id, getTagsForBookmark(b.id));
+        }
+        return map;
+      });
       setCommittedData({ inbox, tagsMap });
     }
   }, [inbox, getTagsForBookmark, interacting]);
@@ -444,16 +452,22 @@ export default function GraphScreen() {
   // Content signature of the tag topology: sorted bookmark ids each joined with
   // their sorted tag ids. Keying on this signature instead resettles ONLY when
   // the topology actually changes.
-  const signature = useMemo(() => {
-    const parts: string[] = [];
-    for (const bookmark of committedData.inbox) {
-      const tags = committedData.tagsMap.get(bookmark.id) ?? [];
-      const tagIds = tags.map((tag) => tag.id).sort();
-      parts.push(`${bookmark.id}:${tagIds.join(",")}`);
-    }
-    parts.sort();
-    return parts.join("|");
-  }, [committedData]);
+  const signature = useMemo(
+    () =>
+      // Timed (STASH-64): O(n log n) over the whole library on every
+      // committedData change — see the rebuild effect above.
+      measureSyncSegment("graph-topology-signature", () => {
+        const parts: string[] = [];
+        for (const bookmark of committedData.inbox) {
+          const tags = committedData.tagsMap.get(bookmark.id) ?? [];
+          const tagIds = tags.map((tag) => tag.id).sort();
+          parts.push(`${bookmark.id}:${tagIds.join(",")}`);
+        }
+        parts.sort();
+        return parts.join("|");
+      }),
+    [committedData],
+  );
 
   // Rebuild the derive-input from what the store exposes. deriveGraph only reads
   // bookmark_id/tag_id from links and id/name/slug from tags, so this is exact.

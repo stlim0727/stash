@@ -28,15 +28,28 @@ export interface SqliteContentionDiagnostics {
   waitCount: number;
   /**
    * The repository/session-storage operation label(s) queued on the
-   * connection actor at the moment `maxWaitMs`/`maxDepth` last advanced (see
-   * `sqlite-connection.ts`'s `serialize`). A bare max/count told us
+   * connection actor at the moment `maxDepth` last advanced (see
+   * `sqlite-connection.ts`'s `serialize`). A bare depth number told us
    * contention happened but not what collided — a real report showed severe
    * contention (depth 23, 4061ms) with no way to tell whether that was one
    * runaway caller or several legitimate pipelines (sync drain, pull,
    * import reconcile) overlapping. Omitted when the caller didn't pass a
    * label (older/untouched call sites default to 'unlabeled').
+   *
+   * Tracked separately from `maxWaitLabels` (STASH-64): the two used to
+   * share one `labels` field, so a *wait*-only advance (same or lower depth,
+   * but a slower single op) overwrote whatever labels the actual
+   * depth-driven max had recorded — a report showed `maxDepth: 22` but
+   * labels naming only a 2-deep queue, because the label snapshot was
+   * silently taken over by a later, shallower, merely-slower wait.
    */
-  labels?: string;
+  maxDepthLabels?: string;
+  /**
+   * The label(s) queued at the moment `maxWaitMs` last advanced. A high wait
+   * at a low depth means one op itself ran long (a single slow/wedged
+   * call), a different signature from a deep queue — see `maxDepthLabels`.
+   */
+  maxWaitLabels?: string;
   updatedAt: string;
 }
 
@@ -89,15 +102,15 @@ export function noteSqliteOpenFailure(phase: string, error: unknown): void {
  */
 export function noteSqliteTailWait(waitMs: number, depth: number, labels?: string): void {
   const prev = diagnostics.sqliteContention;
-  const maxWaitMs = Math.max(prev?.maxWaitMs ?? 0, waitMs);
-  const maxDepth = Math.max(prev?.maxDepth ?? 0, depth);
-  const advancedMax = !prev || maxWaitMs > prev.maxWaitMs || maxDepth > prev.maxDepth;
+  const depthAdvanced = !prev || depth > prev.maxDepth;
+  const waitAdvanced = !prev || waitMs > prev.maxWaitMs;
   diagnostics.sqliteContention = {
-    maxWaitMs,
-    maxDepth,
+    maxWaitMs: Math.max(prev?.maxWaitMs ?? 0, waitMs),
+    maxDepth: Math.max(prev?.maxDepth ?? 0, depth),
     waitCount: (prev?.waitCount ?? 0) + 1,
-    labels: advancedMax ? labels : prev?.labels,
-    updatedAt: advancedMax ? new Date().toISOString() : prev!.updatedAt,
+    maxDepthLabels: depthAdvanced ? labels : prev?.maxDepthLabels,
+    maxWaitLabels: waitAdvanced ? labels : prev?.maxWaitLabels,
+    updatedAt: depthAdvanced || waitAdvanced ? new Date().toISOString() : prev!.updatedAt,
   };
 }
 
@@ -124,7 +137,8 @@ export function noteSqliteQueueDepth(depth: number, labels?: string): void {
     maxWaitMs: prev?.maxWaitMs ?? 0,
     maxDepth: depth,
     waitCount: prev?.waitCount ?? 0,
-    labels,
+    maxDepthLabels: labels,
+    maxWaitLabels: prev?.maxWaitLabels,
     updatedAt: new Date().toISOString(),
   };
 }

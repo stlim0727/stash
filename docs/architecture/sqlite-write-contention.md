@@ -110,9 +110,10 @@ applies even to a genuinely sequential `for...await` loop**, since
 `repository.ts` persists by re-writing the whole array to `localStorage` on
 every call, not a per-row SQL statement.
 
-**Diagnosing a new report**: `storage.sqliteContention.labels` (added for
-Sentry STASH-5R) names the repository/session-storage method(s) queued on the
-connection actor at the moment the running max last advanced, e.g.
+**Diagnosing a new report**: `storage.sqliteContention.maxDepthLabels` /
+`.maxWaitLabels` (added for Sentry STASH-5R, split in STASH-64) name the
+repository/session-storage method(s) queued on the connection actor at the
+moment `maxDepth` / `maxWaitMs` respectively last advanced, e.g.
 `"replaceBookmark:20, getBookmark:1, pull:2"` — every `connection.run(...)`
 call site passes its own method name as a label (`sqlite-connection.ts`'s
 `run`/`serialize`). A bare depth/wait number only proves contention happened;
@@ -124,3 +125,14 @@ only the *first* `MAX_TAIL_WAIT_ENTRIES` "sqlite tail wait" log lines it saw,
 so an early mild burst (e.g. a startup reopen) could use up the cap before a
 much more severe wait later in the same session ever got a slot — it now
 keeps the most severe ones regardless of order.
+
+7. **STASH-64** — the two attributions above used to share one `labels`
+   field (`noteSqliteTailWait` in `storage/diagnostics.ts`). A *wait*-only
+   advance (a slower single op, same or lower depth) still counted as
+   "the max advanced" and overwrote whatever labels the actual depth-driven
+   max had recorded. A report showed `maxDepth: 22` but a `labels` snapshot
+   naming only a 2-deep queue — that snapshot belonged to a later, much
+   shallower, merely-slower wait, not the depth-22 moment, so the report
+   couldn't actually attribute the queue pile-up to a caller. Fixed by
+   tracking `maxDepthLabels` and `maxWaitLabels` independently, each only
+   overwritten when its own metric advances.
