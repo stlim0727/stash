@@ -557,18 +557,25 @@ test('a stalled operation is reported but left to finish on the same handle (nev
   // on a fresh connection would let the original land later and corrupt order.
   let resolveWork: () => void = () => {};
   let ran = 0;
-  const runPromise = connection.run((db) => {
-    ran += 1;
-    return new Promise<string>((res) => {
-      resolveWork = () => res(`done:${db.id}`);
-    });
-  });
+  const runPromise = connection.run(
+    (db) => {
+      ran += 1;
+      return new Promise<string>((res) => {
+        resolveWork = () => res(`done:${db.id}`);
+      });
+    },
+    'slowWrite',
+  );
 
   // Wait past the watchdog so its report fires while the op is still in flight.
   await new Promise((r) => setTimeout(r, 30));
   assert.ok(
-    getLogEntries().some((e) => e.level === 'error' && e.message.includes('still running after')),
-    'the stall is reported at error level',
+    getLogEntries().some(
+      (e) =>
+        e.level === 'error' &&
+        e.message.includes('operation slowWrite still running after 10ms'),
+    ),
+    'the stall is reported at error level with its caller label',
   );
   assert.equal(opensCount(), 1); // no reopen while the op is merely slow
   assert.equal(opened[0].closed, false); // the live handle was not closed out from under it
@@ -578,6 +585,41 @@ test('a stalled operation is reported but left to finish on the same handle (nev
   assert.equal(await runPromise, 'done:1');
   assert.equal(ran, 1);
   assert.equal(opensCount(), 1);
+});
+
+test('run can extend the reporting watchdog for a known bounded bulk unit', async () => {
+  clearLogEntries();
+  const { connection } = makeConnection({ workTimeoutMs: 10 });
+  let resolveWork: () => void = () => {};
+  const runPromise = connection.run(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveWork = resolve;
+      }),
+    'insertImportBatch',
+    { workTimeoutMs: 60 },
+  );
+
+  // The ordinary 10ms deadline would already have fired here; this bulk unit's
+  // explicit window must suppress that false positive.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(
+    getLogEntries().some((entry) => entry.message.includes('still running after')),
+    false,
+  );
+
+  // A genuinely stuck bulk unit is still reported, with its caller label.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(
+    getLogEntries().some(
+      (entry) =>
+        entry.level === 'error' &&
+        entry.message.includes('operation insertImportBatch still running after 60ms'),
+    ),
+  );
+
+  resolveWork();
+  await runPromise;
 });
 
 test('frequent reopens escalate to a tracked error past the threshold', async () => {

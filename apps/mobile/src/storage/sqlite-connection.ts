@@ -42,6 +42,15 @@ export interface SqliteConnectionOptions {
   registerForegroundState?: typeof registerForForegroundState;
 }
 
+export interface SqliteRunOptions {
+  /**
+   * Reporting-only watchdog for this unit. Use only for a known bounded bulk
+   * transaction whose legitimate runtime can exceed the connection default.
+   * Scheduling, cancellation, and retry behavior are unchanged.
+   */
+  workTimeoutMs?: number;
+}
+
 const DEFAULT_PROBE_TIMEOUT_MS = 2000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 1000;
 // Generous on purpose: a single statement on this tiny local DB is sub-millisecond,
@@ -254,12 +263,24 @@ export class SqliteConnection<DB> {
    * failure mode this targets, and a loop could spin. A second consecutive death
    * is surfaced (and recorded) rather than retried again.
    *
-   * `label` identifies the caller (e.g. the repository method name) purely for
-   * contention diagnostics — see `describePending`/`noteSqliteTailWait` — and
-   * has no effect on scheduling or retry behavior.
+   * `label` identifies the caller (e.g. the repository method name) for
+   * contention and stall diagnostics. `options.workTimeoutMs` may extend the
+   * reporting-only watchdog for a known bounded bulk transaction; it has no
+   * effect on scheduling, cancellation, or retry behavior.
    */
-  run<T>(work: (db: DB) => Promise<T>, label = 'unlabeled'): Promise<T> {
-    return this.serialize(() => this.runOnce(work), label);
+  run<T>(
+    work: (db: DB) => Promise<T>,
+    label = 'unlabeled',
+    options: SqliteRunOptions = {},
+  ): Promise<T> {
+    const workTimeoutMs = Math.max(
+      this.workTimeoutMs,
+      options.workTimeoutMs ?? this.workTimeoutMs,
+    );
+    return this.serialize(
+      () => this.runOnce(work, label, workTimeoutMs),
+      label,
+    );
   }
 
   /**
@@ -359,10 +380,14 @@ export class SqliteConnection<DB> {
     return result;
   }
 
-  private async runOnce<T>(work: (db: DB) => Promise<T>): Promise<T> {
+  private async runOnce<T>(
+    work: (db: DB) => Promise<T>,
+    label: string,
+    workTimeoutMs: number,
+  ): Promise<T> {
     const first = await this.get();
     try {
-      return await this.runWork(first, work);
+      return await this.runWork(first, work, label, workTimeoutMs);
     } catch (error) {
       // Retry only when the handle itself died; a still-live handle means the
       // error is real (constraint, bad SQL) and must not be replayed.
@@ -380,7 +405,7 @@ export class SqliteConnection<DB> {
     }
     const fresh = await this.get();
     try {
-      return await this.runWork(fresh, work);
+      return await this.runWork(fresh, work, label, workTimeoutMs);
     } catch (error) {
       // The replacement handle also died (rapid background/foreground thrash).
       // Surface it — the first reopen is logged in resolve(), so without this
@@ -406,13 +431,18 @@ export class SqliteConnection<DB> {
    * The report fires at most once per op (the tail is blocked meanwhile, so
    * there is nothing else to drown out).
    */
-  private async runWork<T>(db: DB, work: (db: DB) => Promise<T>): Promise<T> {
+  private async runWork<T>(
+    db: DB,
+    work: (db: DB) => Promise<T>,
+    label: string,
+    workTimeoutMs: number,
+  ): Promise<T> {
     const timer = setTimeout(() => {
       recordLog(
         'error',
-        `sqlite operation still running after ${this.workTimeoutMs}ms — possible wedged handle (the connection actor is blocked until it settles; the op is left to finish, never aborted)`,
+        `sqlite operation ${label} still running after ${workTimeoutMs}ms — possible wedged handle (the connection actor is blocked until it settles; the op is left to finish, never aborted)`,
       );
-    }, this.workTimeoutMs);
+    }, workTimeoutMs);
     try {
       return await work(db);
     } finally {

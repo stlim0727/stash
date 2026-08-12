@@ -36,6 +36,15 @@ interface QueueRow {
   last_attempt_at: string | null;
 }
 
+// A large JSON restore intentionally keeps its bookmark rows and organization
+// outboxes in one transaction (see runImportBatchTransactions). On a real
+// 997-bookmark restore that bounded unit took just over the connection's normal
+// 5s watchdog and produced STASH-4V even though the handle completed normally.
+// Keep the strict default for ordinary statements, but give this known bulk
+// transaction enough reporting headroom; it is still surfaced if it truly
+// remains stuck.
+const IMPORT_BATCH_WORK_TIMEOUT_MS = 30_000;
+
 /**
  * Idempotent schema applied on *every* open. Keeping it in the opener (rather
  * than only in `init`) means a transparently reopened — or freshly created —
@@ -375,7 +384,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           );
         },
       });
-    }, 'insertImportBatch');
+    }, 'insertImportBatch', { workTimeoutMs: IMPORT_BATCH_WORK_TIMEOUT_MS });
   }
 
   async deleteBookmark(id: string): Promise<void> {
