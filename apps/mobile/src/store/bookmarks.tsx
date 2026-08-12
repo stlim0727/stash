@@ -3672,6 +3672,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const addBookmarkIds = [...addOpsByBookmark.keys()];
 
     for (let i = 0; i < addBookmarkIds.length; i += BULK_CREATE_SYNC_CHUNK_SIZE) {
+      if (syncPausedRef.current) {
+        break;
+      }
       const chunkIds = addBookmarkIds.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
       const chunkItems: BulkAttachItem[] = chunkIds.map((bookmarkId) => ({
         bookmark_id: bookmarkId,
@@ -3724,6 +3727,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }
 
     for (const op of ops) {
+      if (syncPausedRef.current) {
+        break;
+      }
       if (op.op !== "remove" || !hasSyncedOnce(op.bookmark_id)) {
         continue;
       }
@@ -4514,6 +4520,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const bookmarkIds = [...itemsByBookmark.keys()];
 
       for (let i = 0; i < bookmarkIds.length; i += BULK_CREATE_SYNC_CHUNK_SIZE) {
+        if (syncPausedRef.current) {
+          break;
+        }
         const chunkIds = bookmarkIds.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
         const chunkItems: BulkAttachItem[] = chunkIds.map((bookmarkId) => ({
           bookmark_id: bookmarkId,
@@ -4677,6 +4686,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         i < eligible.length;
         i += BULK_CREATE_SYNC_CHUNK_SIZE
       ) {
+        if (syncPausedRef.current) {
+          break;
+        }
         const chunk = eligible.slice(i, i + BULK_CREATE_SYNC_CHUNK_SIZE);
         const chunkIds = new Set(chunk.map((item) => item.bookmark_id));
         try {
