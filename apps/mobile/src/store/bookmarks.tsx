@@ -143,6 +143,7 @@ import {
 } from "@/sync/account-transition";
 import {
   LAST_PULLED_AT_KEY,
+  PullPausedError,
   SYNCED_USER_ANON_KEY,
   SYNCED_USER_ID_KEY,
   pullRemoteChanges,
@@ -6292,6 +6293,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     queued.sync_status !== "synced",
                 ),
               currentUser,
+              () => !syncPausedRef.current,
             );
             if (result.upserts.length > 0 || result.deletions.length > 0) {
               const upsertIds = new Set(
@@ -6444,7 +6446,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               }
             }
           } catch (error) {
-            logStorageError("pull", error);
+            if (error instanceof PullPausedError) {
+              recordLog("info", "pull: stopped after sync was paused");
+            } else {
+              logStorageError("pull", error);
+            }
           }
         }
 

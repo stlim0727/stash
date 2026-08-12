@@ -49,6 +49,36 @@ function remoteBookmark(overrides: Partial<RemoteBookmark>): RemoteBookmark {
   } as RemoteBookmark;
 }
 
+test('paginated pull lists stop before requesting another page', async () => {
+  let requestCount = 0;
+  let pageCheckCount = 0;
+  const stopped = new Error('paused before next page');
+  const client = {
+    request: async (path: string) => {
+      requestCount += 1;
+      const url = new URL(path, 'https://example.test');
+      const pageSize = Number(url.searchParams.get('limit'));
+      return Array.from({ length: pageSize }, (_, index) => ({
+        id: `bookmark-${index}`,
+      }));
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await assert.rejects(
+    api.listBookmarkIds(() => {
+      pageCheckCount += 1;
+      if (pageCheckCount > 1) {
+        throw stopped;
+      }
+    }),
+    stopped,
+  );
+
+  assert.equal(requestCount, 1);
+  assert.equal(pageCheckCount, 2);
+});
+
 test('createBookmarks bulk-inserts only new rows and returns outputs in input order', async () => {
   const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
   const existing = remoteBookmark({

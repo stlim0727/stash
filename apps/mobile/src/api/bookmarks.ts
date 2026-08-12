@@ -550,57 +550,63 @@ export class BookmarkApi {
   }
 
   /** All bookmarks changed after `since` (all of them when null), oldest first. */
-  async listBookmarksUpdatedSince(since: string | null): Promise<Bookmark[]> {
+  async listBookmarksUpdatedSince(
+    since: string | null,
+    beforePage?: () => void,
+  ): Promise<Bookmark[]> {
     const rows = await this.fetchAllPages<RemoteBookmark>('/rest/v1/bookmarks', (query) => {
       query.set('order', 'updated_at.asc,id.asc');
       if (since) {
         query.set('updated_at', `gt.${since}`);
       }
-    });
+    }, beforePage);
     return rows.map(remoteToBookmark);
   }
 
   /** Every bookmark ID the user owns — used to detect remote deletions. */
-  async listBookmarkIds(): Promise<string[]> {
+  async listBookmarkIds(beforePage?: () => void): Promise<string[]> {
     const rows = await this.fetchAllPages<{ id: string }>('/rest/v1/bookmarks', (query) => {
       query.set('select', 'id');
       query.set('order', 'id.asc');
-    });
+    }, beforePage);
     return rows.map((row) => row.id);
   }
 
   /** AI enrichments changed after `since` (all of them when null), oldest first. */
-  async listEnrichmentsUpdatedSince(since: string | null): Promise<AIEnrichment[]> {
+  async listEnrichmentsUpdatedSince(
+    since: string | null,
+    beforePage?: () => void,
+  ): Promise<AIEnrichment[]> {
     const rows = await this.fetchAllPages<RemoteAIEnrichment>('/rest/v1/ai_enrichments', (query) => {
       query.set('order', 'updated_at.asc,id.asc');
       if (since) {
         query.set('updated_at', `gt.${since}`);
       }
-    });
+    }, beforePage);
     return rows.map(enrichmentFromRemote);
   }
 
   /** All of the user's tags. */
-  async listTags(): Promise<Tag[]> {
+  async listTags(beforePage?: () => void): Promise<Tag[]> {
     return this.fetchAllPages<Tag>('/rest/v1/tags', (query) => {
       query.set('order', 'name.asc,id.asc');
-    });
+    }, beforePage);
   }
 
   /** All tag links for the user's bookmarks (RLS scopes them to the owner). */
-  async listBookmarkTags(): Promise<BookmarkTag[]> {
+  async listBookmarkTags(beforePage?: () => void): Promise<BookmarkTag[]> {
     return this.fetchAllPages<BookmarkTag>('/rest/v1/bookmark_tags', (query) => {
       // bookmark_tags has no user_id column; RLS scopes rows to the owner.
       query.delete('user_id');
       query.set('order', 'bookmark_id.asc,tag_id.asc');
-    });
+    }, beforePage);
   }
 
   /** All of the user's collections. */
-  async listCollections(): Promise<Collection[]> {
+  async listCollections(beforePage?: () => void): Promise<Collection[]> {
     return this.fetchAllPages<Collection>('/rest/v1/collections', (query) => {
       query.set('order', 'name.asc,id.asc');
-    });
+    }, beforePage);
   }
 
   async createCollection(name: string, description?: string): Promise<Collection> {
@@ -627,9 +633,11 @@ export class BookmarkApi {
   private async fetchAllPages<T>(
     path: string,
     configure: (query: URLSearchParams) => void,
+    beforePage?: () => void,
   ): Promise<T[]> {
     const all: T[] = [];
     for (let offset = 0; ; offset += MAX_PAGE_SIZE) {
+      beforePage?.();
       const query = new URLSearchParams({
         select: '*',
         user_id: `eq.${this.session.user.id}`,
