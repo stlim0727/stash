@@ -45,12 +45,28 @@ export interface SqliteContentionDiagnostics {
    */
   maxDepthLabels?: string;
   /**
+   * When `maxDepth` (and `maxDepthLabels`) last advanced. Absent only if
+   * `maxDepth` has never actually been set by a tail-wait/queue-depth call
+   * (shouldn't happen once `sqliteContention` exists at all, but typed
+   * optional to avoid a fabricated timestamp for an unset metric).
+   */
+  maxDepthUpdatedAt?: string;
+  /**
    * The label(s) queued at the moment `maxWaitMs` last advanced. A high wait
    * at a low depth means one op itself ran long (a single slow/wedged
    * call), a different signature from a deep queue — see `maxDepthLabels`.
    */
   maxWaitLabels?: string;
-  updatedAt: string;
+  /**
+   * When `maxWaitMs` (and `maxWaitLabels`) last advanced — tracked
+   * separately from `maxDepthUpdatedAt` (STASH-64 review) so a depth spike
+   * from one session and a slower-but-shallower wait from a later one don't
+   * share a single timestamp that makes the stale one look contemporaneous
+   * with whichever report actually triggered the update. Absent until the
+   * first tail-wait call, since `noteSqliteQueueDepth` (the eager,
+   * depth-only path) never observes a wait.
+   */
+  maxWaitUpdatedAt?: string;
 }
 
 export interface StorageDiagnostics {
@@ -95,22 +111,24 @@ export function noteSqliteOpenFailure(phase: string, error: unknown): void {
  * guessing from elapsed time.
  *
  * `waitCount` increments on every call (it's a running tally, not a
- * maximum), but `updatedAt` only advances when `maxWaitMs` or `maxDepth`
- * actually does — a routine 300ms wait long after an hours-old 10s one must
- * not make that old severe event look contemporaneous with a report filed
- * around the routine one.
+ * maximum), but `maxDepthUpdatedAt`/`maxWaitUpdatedAt` each only advance
+ * when their own metric (`maxDepth`/`maxWaitMs`) actually does — a routine
+ * 300ms wait long after an hours-old 10s one must not make that old severe
+ * event look contemporaneous with a report filed around the routine one.
  */
 export function noteSqliteTailWait(waitMs: number, depth: number, labels?: string): void {
   const prev = diagnostics.sqliteContention;
   const depthAdvanced = !prev || depth > prev.maxDepth;
   const waitAdvanced = !prev || waitMs > prev.maxWaitMs;
+  const now = depthAdvanced || waitAdvanced ? new Date().toISOString() : undefined;
   diagnostics.sqliteContention = {
     maxWaitMs: Math.max(prev?.maxWaitMs ?? 0, waitMs),
     maxDepth: Math.max(prev?.maxDepth ?? 0, depth),
     waitCount: (prev?.waitCount ?? 0) + 1,
     maxDepthLabels: depthAdvanced ? labels : prev?.maxDepthLabels,
+    maxDepthUpdatedAt: depthAdvanced ? now! : prev!.maxDepthUpdatedAt,
     maxWaitLabels: waitAdvanced ? labels : prev?.maxWaitLabels,
-    updatedAt: depthAdvanced || waitAdvanced ? new Date().toISOString() : prev!.updatedAt,
+    maxWaitUpdatedAt: waitAdvanced ? now! : prev!.maxWaitUpdatedAt,
   };
 }
 
@@ -123,10 +141,10 @@ export function noteSqliteTailWait(waitMs: number, depth: number, labels?: strin
  * all despite the queue visibly growing. Wait time itself can't be known
  * this early (it's still unbounded), only depth.
  *
- * A no-op (including no `updatedAt` bump) when `depth` doesn't exceed the
- * already-recorded maximum — a routine depth-2 enqueue right before a report
- * is filed must not make an hours-old severe-contention maximum look
- * contemporaneous with that report.
+ * A no-op (including no `maxDepthUpdatedAt` bump) when `depth` doesn't
+ * exceed the already-recorded maximum — a routine depth-2 enqueue right
+ * before a report is filed must not make an hours-old severe-contention
+ * maximum look contemporaneous with that report.
  */
 export function noteSqliteQueueDepth(depth: number, labels?: string): void {
   const prev = diagnostics.sqliteContention;
@@ -138,8 +156,9 @@ export function noteSqliteQueueDepth(depth: number, labels?: string): void {
     maxDepth: depth,
     waitCount: prev?.waitCount ?? 0,
     maxDepthLabels: labels,
+    maxDepthUpdatedAt: new Date().toISOString(),
     maxWaitLabels: prev?.maxWaitLabels,
-    updatedAt: new Date().toISOString(),
+    maxWaitUpdatedAt: prev?.maxWaitUpdatedAt,
   };
 }
 

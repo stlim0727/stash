@@ -553,13 +553,18 @@ export default function GraphScreen() {
       // Derive first, then size the tick budget from the graph the user will
       // actually see. Co-occurrence can drop most historical tags as isolates,
       // so budgeting from raw input.tags would starve a small visible graph.
-      const graph =
+      // Timed separately (STASH-64 review): this is the screen's actual
+      // expensive synchronous path — deriving is O(n) topology work, layout
+      // is O(ticks·n²) force simulation — and neither was previously
+      // instrumented, unlike the committedData/signature rebuild above.
+      const graph = measureSyncSegment("graph-derive", () =>
         mode === "cooccurrence"
           ? deriveCoOccurrenceGraph(input)
-          : deriveGraph(input);
+          : deriveGraph(input),
+      );
       const options = { ticks: layoutTickBudget(graph.nodes.length) };
       // Same off-render-path settle for both views — only the derive differs.
-      const result = layoutGraph(graph, options);
+      const result = measureSyncSegment("graph-layout", () => layoutGraph(graph, options));
       if (!cancelled) {
         setSettled(result);
       }
