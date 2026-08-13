@@ -69,13 +69,20 @@ function parseGraphMode(raw: string | null | undefined): GraphMode {
 
 // Node sizing (in layout/viewBox units — the settled layout spans ~1000 units).
 // Hubs scale by degree with a sqrt so a very busy tag doesn't dwarf the canvas;
-// bookmark nodes stay small so hubs read as the anchors. The range is wide and
-// the coefficient steep so a popular tag reads visibly bigger than a lonely one
-// (the sqrt still keeps one giant tag from swallowing the canvas, and the clamp
-// pins the busiest hub to HUB_MAX_R). VIEWBOX_PAD below derives from HUB_MAX_R,
-// so the bounds padding tracks this max and the busiest hub never clips.
-const HUB_MIN_R = 18;
-const HUB_MAX_R = 54;
+// bookmark nodes stay small so hubs read as the anchors. The clamp pins the
+// busiest hub to HUB_MAX_R. VIEWBOX_PAD below derives from HUB_MAX_R, so the
+// bounds padding tracks this max and the busiest hub never clips.
+//
+// Previously 18/54 with a coefficient of 10 (6x BOOKMARK_R at the cap):
+// visibly too large in practice — a hub with only a handful of members still
+// swallowed its own nearby bookmark satellites and their labels, since a
+// satellite's base placement radius (`hubRadius + bookmarkRadius + 2`) put it
+// right at the edge of a circle that large, and MANY real tags (any with
+// degree >= 9) hit the same capped max, so most hubs in a real library ended
+// up rendering as identically oversized blobs rather than differentiating by
+// popularity. HUB_MAX_R now caps at ~3.6x BOOKMARK_R instead of 6x.
+const HUB_MIN_R = 13;
+const HUB_MAX_R = 32;
 const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
 const EDGE_OPACITY = 0.72;
@@ -175,7 +182,7 @@ export function graphCanvasSize(
 function hubRadius(degree: number): number {
   return Math.min(
     HUB_MAX_R,
-    Math.max(HUB_MIN_R, HUB_MIN_R + 10 * Math.sqrt(degree)),
+    Math.max(HUB_MIN_R, HUB_MIN_R + 6 * Math.sqrt(degree)),
   );
 }
 
