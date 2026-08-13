@@ -83,7 +83,14 @@ export function hubFootprintPassBudget(hubCount: number): number {
     return HUB_FOOTPRINT_MAX_PASSES;
   }
   const scaled = Math.floor(HUB_FOOTPRINT_PAIR_BUDGET / (hubCount * hubCount));
-  return Math.min(HUB_FOOTPRINT_MAX_PASSES, Math.max(0, scaled));
+  // Never taper all the way to 0: a floor of 1 still costs only a single
+  // O(hubCount^2) sweep (the same one-time cost layoutTickBudget already
+  // accepts for the force settle at comparable node counts), and a single
+  // pass makes real progress on every pair that's currently overlapping —
+  // unlike 0 passes, which is a hard no-op that leaves hub centers at
+  // whatever (possibly heavily overlapping) position the force settle left
+  // them, guaranteeing the exact hairball this module exists to prevent.
+  return Math.min(HUB_FOOTPRINT_MAX_PASSES, Math.max(1, scaled));
 }
 
 // Distance from the hub center to the FAR edge of the outermost satellite's

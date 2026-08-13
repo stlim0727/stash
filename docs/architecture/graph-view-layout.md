@@ -83,6 +83,24 @@ fixed 24-pass constant for the hub-footprint declutter (safe at the observed
 ~60-110 hub range, but O(24·h²) unbounded past it) — also caught in PR #749
 review.
 
+The scaled-down replacement had its own edge: at large enough hub counts
+(~981+, given the tuned budget constant) the formula rounded all the way down
+to a literal 0 passes — and 0 is not "less decluttering," it is a hard no-op
+(`resolveNodeOverlap` returns hub positions completely unchanged), leaving
+whatever the force settle produced. Measured on a 1,000-hub/5,000-node
+fixture: 0 passes left 142,757 overlapping circle pairs. The fix floors the
+budget at 1, never 0 — a single O(hubCount²) sweep still makes real progress
+on every currently-overlapping pair (down to 24,025 on that same fixture) and
+stays measured-safe even at 5,000 hubs (~1s), unlike 2+ passes at that scale
+(1.4s–3s+, measured to exceed the 2s hang budget). This doesn't make the
+declutter step scale-invariant — an even more extreme hub count (tens of
+thousands) would still be slow at exactly 1 pass, since the cost is O(h²)
+regardless of pass count — but that's far beyond anything a real tag-diverse
+library could plausibly produce (thousands of *distinct* tags each carried by
+≥4 bookmarks), so a genuinely sub-quadratic algorithm (e.g. spatial-grid
+bucketing) wasn't worth the added complexity for a scenario this far outside
+the reported problem.
+
 ### A rejected middle attempt: geometric label avoidance
 
 Hub labels (`graph-labels.ts`'s `resolveHubLabels`) render AFTER node
