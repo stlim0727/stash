@@ -36,7 +36,13 @@ import {
   type PositionedNode,
   type SettledGraph,
 } from "@/domain/graph";
+import {
+  declutterPassBudget,
+  resolveNodeOverlap,
+  type OverlapNode,
+} from "@/domain/graph-declutter";
 import { resolveHubLabels, type HubLabelInput } from "@/domain/graph-labels";
+import { placeBookmarkSatellites } from "@/domain/graph-satellite-layout";
 import type { BookmarkTag, Tag } from "@/domain/types";
 import { useT } from "@/i18n";
 import { getPreference, setPreference } from "@/storage/preferences";
@@ -170,6 +176,54 @@ function hubRadius(degree: number): number {
     HUB_MAX_R,
     Math.max(HUB_MIN_R, HUB_MIN_R + 10 * Math.sqrt(degree)),
   );
+}
+
+// Radius-aware declutter pass over the settled layout (domain/graph-declutter.ts):
+// nudges apart bookmark/hub circles that still overlap after the force settle's
+// (possibly very small, on a large stash — see layoutTickBudget) tick budget, so a
+// dense cluster of bookmark nodes around a busy tag hub reads as distinct circles
+// instead of an overlapping gray blob. Recomputes bounds from the adjusted
+// positions; edges keep referencing nodes by id, so they follow automatically.
+export function declutterSettledGraph(settled: SettledGraph): SettledGraph {
+  if (settled.nodes.length < 2) {
+    return settled;
+  }
+  const overlapNodes: OverlapNode[] = settled.nodes.map((node) => ({
+    id: node.id,
+    x: node.x,
+    y: node.y,
+    r: node.kind === "bookmark" ? BOOKMARK_R : hubRadius(node.degree),
+  }));
+  const resolved = resolveNodeOverlap(
+    overlapNodes,
+    declutterPassBudget(overlapNodes.length),
+  );
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const nodes: PositionedNode[] = settled.nodes.map((node) => {
+    const pos = resolved.get(node.id)!;
+    if (pos.x < minX) minX = pos.x;
+    if (pos.y < minY) minY = pos.y;
+    if (pos.x > maxX) maxX = pos.x;
+    if (pos.y > maxY) maxY = pos.y;
+    return { ...node, x: pos.x, y: pos.y };
+  });
+
+  return {
+    nodes,
+    edges: settled.edges,
+    bounds: {
+      min_x: minX,
+      min_y: minY,
+      max_x: maxX,
+      max_y: maxY,
+      width: maxX - minX,
+      height: maxY - minY,
+    },
+  };
 }
 
 export function clampToRange(value: number, min: number, max: number): number {
@@ -545,7 +599,21 @@ export default function GraphScreen() {
           : deriveGraph(input);
       const options = { ticks: layoutTickBudget(graph.nodes.length) };
       // Same off-render-path settle for both views — only the derive differs.
-      const result = layoutGraph(graph, options);
+      const raw = layoutGraph(graph, options);
+      // Bipartite only: a busy tag on a large library (see
+      // domain/graph-satellite-layout.ts) leaves the force settle's
+      // bookmark-node positions genuinely overlapping, not just visually
+      // dense — replace them with a deterministic, guaranteed-non-overlapping
+      // placement around each bookmark's primary tag hub. Co-occurrence has
+      // no bookmark nodes, so this is a no-op there anyway.
+      const placed =
+        mode === "cooccurrence"
+          ? raw
+          : placeBookmarkSatellites(raw, { bookmarkRadius: BOOKMARK_R, hubRadius });
+      // Final cheap safety-net pass for any small residual overlap left
+      // between neighboring hubs' rings (or, in co-occurrence, the hub
+      // settle itself).
+      const result = declutterSettledGraph(placed);
       if (!cancelled) {
         setSettled(result);
       }
