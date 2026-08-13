@@ -9,7 +9,11 @@ import {
   type PositionedNode,
   type SettledGraph,
 } from '@/domain/graph';
-import { placeBookmarkSatellites } from '@/domain/graph-satellite-layout';
+import {
+  hubFootprintPassBudget,
+  placeBookmarkSatellites,
+  ringOuterRadius,
+} from '@/domain/graph-satellite-layout';
 import type { Bookmark, BookmarkTag, Tag } from '@/domain/types';
 
 const NOW = '2026-06-12T00:00:00.000Z';
@@ -88,39 +92,52 @@ function settle(input: DeriveGraphInput): SettledGraph {
  * fully deterministic without depending on a PRNG seed.
  */
 function hairballFixture(): DeriveGraphInput {
-  const bookmarks: Bookmark[] = [];
-  const bookmarkTags: BookmarkTag[] = [];
-  const tagDegrees = [331, 263, 223, 83, 73, 68, 42, 35, 34, 32, 21, 21, 21, 21, 20];
-  let counter = 0;
-  const nextBookmark = () => {
-    const id = `bk${counter}`;
-    counter += 1;
-    const bookmark = makeBookmark(id);
-    bookmarks.push(bookmark);
-    return bookmark;
-  };
+  const N = 1035;
+  const bookmarks = Array.from({ length: N }, (_, i) => makeBookmark(`bk${i}`));
   const tags: Tag[] = [];
-  tagDegrees.forEach((degree, tagIndex) => {
+  const bookmarkTags: BookmarkTag[] = [];
+
+  // The top tags' degrees, exactly matching the live report. Members are
+  // OVERLAPPING windows into the shared `bookmarks` pool (each window starts
+  // half-way into the previous one), not disjoint slices — a real library's
+  // top tags routinely share bookmarks (the live account averages 2.71
+  // tags/bookmark; three tags at once is common), and the primary-hub
+  // tie-break logic under test needs bookmarks that are genuinely reachable
+  // from more than one of these big hubs to be exercised at all. Still fully
+  // deterministic (modulo arithmetic, no PRNG) so the fixture is auditable.
+  const topDegrees = [331, 263, 223, 83, 73, 68, 42, 35, 34, 32, 21, 21, 21, 21, 20];
+  let offset = 0;
+  topDegrees.forEach((degree, tagIndex) => {
     const tag = makeTag(`tag${tagIndex}`);
     tags.push(tag);
     for (let i = 0; i < degree; i += 1) {
-      const bookmark = nextBookmark();
+      const bookmark = bookmarks[(offset + i) % N];
       bookmarkTags.push(link(bookmark.id, tag.id));
     }
+    offset = (offset + Math.floor(degree / 2)) % N;
   });
-  // A long tail of small tags (2-3 each) padding the library out to ~1,035
-  // bookmarks total, mirroring the real library's overall size.
-  let tailTagIndex = tagDegrees.length;
-  while (counter < 1035) {
+
+  // Long tail of small tags (2-3 members each), spread across the whole pool
+  // with a stride coprime-ish to N so they land on different bookmarks than
+  // the top-tag windows above, until the total link count matches the live
+  // account's total_bookmark_tag_links (2,338) — pushing the average
+  // tags/bookmark up toward the real ~2.71, not just the top tags' own
+  // overlap.
+  const TARGET_LINKS = 2338;
+  let tailOffset = 17;
+  let tailTagIndex = topDegrees.length;
+  while (bookmarkTags.length < TARGET_LINKS) {
     const tag = makeTag(`tag${tailTagIndex}`);
     tags.push(tag);
-    tailTagIndex += 1;
-    const groupSize = Math.min(2, 1035 - counter);
-    for (let i = 0; i < groupSize; i += 1) {
-      const bookmark = nextBookmark();
+    const groupSize = 2 + (tailTagIndex % 2);
+    for (let i = 0; i < groupSize && bookmarkTags.length < TARGET_LINKS; i += 1) {
+      const bookmark = bookmarks[(tailOffset + i * 37) % N];
       bookmarkTags.push(link(bookmark.id, tag.id));
     }
+    tailOffset = (tailOffset + 53) % N;
+    tailTagIndex += 1;
   }
+
   return { bookmarks, tags, bookmarkTags, minSharedDegree: 4 };
 }
 
@@ -152,8 +169,10 @@ test('a small single-hub group places every bookmark distinctly around the hub, 
 
 test('the reported production shape (1,035 bookmarks, a 331-bookmark mega-tag) settles with (near) zero overlap', () => {
   const settled = settle(hairballFixture());
-  // Sanity: this reproduces the real reported scale.
-  assert.ok(settled.nodes.length > 700, `expected a large graph, got ${settled.nodes.length} nodes`);
+  // Sanity: this reproduces the real reported scale (the live account has
+  // 710 bookmarks with a tag surviving the same >=4 threshold, per the
+  // production query this fixture is modeled on).
+  assert.ok(settled.nodes.length > 600, `expected a large graph, got ${settled.nodes.length} nodes`);
 
   const beforeCircles = settled.nodes.map((node) => ({ x: node.x, y: node.y, r: radiusOf(node) }));
   const before = countOverlaps(beforeCircles);
@@ -165,10 +184,13 @@ test('the reported production shape (1,035 bookmarks, a 331-bookmark mega-tag) s
   const result = placeBookmarkSatellites(settled, { bookmarkRadius: BOOKMARK_R, hubRadius });
   const afterCircles = result.nodes.map((node) => ({ x: node.x, y: node.y, r: radiusOf(node) }));
   const after = countOverlaps(afterCircles);
-  // Not a full guarantee across DIFFERENT hubs' rings (only within a hub's
-  // own group is overlap mathematically impossible), but the footprint
-  // declutter step should leave only a small residual, not thousands.
-  assert.ok(after < 50, `expected the declutter+spiral pipeline to resolve nearly all overlap, got ${after} pairs (was ${before})`);
+  // Not a full mathematical guarantee across DIFFERENT hubs' rings (only
+  // within a hub's own group is overlap impossible by construction), but on
+  // this fixture the footprint declutter + spiral placement resolves every
+  // overlap — asserted as an exact 0, not just "small", so a regression in
+  // either the footprint radius or the pass budget shows up here instead of
+  // hiding under a loose threshold.
+  assert.equal(after, 0, `expected the declutter+spiral pipeline to resolve all overlap, got ${after} pairs (was ${before})`);
 
   // Every bookmark node is still present — the fix must not hide data.
   const bookmarkCountBefore = settled.nodes.filter((n) => n.kind === 'bookmark').length;
@@ -221,4 +243,43 @@ test('a multi-tag bookmark is still placed near its highest-degree tag, determin
 
   // Anchored near the higher-degree tag ("popular"), not the niche one.
   assert.ok(distance(multiNode, popularHub) < distance(multiNode, nicheHub));
+});
+
+test('ringOuterRadius reaches the outermost satellite\'s far EDGE, not just its center', () => {
+  // Direct regression for the footprint bug: the placement loop puts the
+  // outermost member's (index `memberCount - 1`) CENTER at
+  // `bookmarkRadius + 2 + spacing*sqrt(memberCount-1)` from the hub's own
+  // circle edge — that satellite's OWN circle then extends a further
+  // `bookmarkRadius` past its center. A footprint that only reaches the
+  // center (the pre-fix formula) lets a neighboring hub's declutter treat
+  // that gap as safe when it isn't. Checked at both the live report's
+  // biggest tag (331) and a couple of smaller sizes.
+  const spacing = BOOKMARK_R * 1.3;
+  for (const memberCount of [1, 2, 10, 331]) {
+    const lastSatelliteCenterDistance = BOOKMARK_R + 2 + spacing * Math.sqrt(memberCount - 1);
+    const footprint = ringOuterRadius(memberCount, BOOKMARK_R, spacing);
+    assert.ok(
+      footprint >= lastSatelliteCenterDistance + BOOKMARK_R,
+      `memberCount=${memberCount}: footprint ${footprint} must reach at least ${lastSatelliteCenterDistance + BOOKMARK_R}`,
+    );
+  }
+});
+
+test('hubFootprintPassBudget gives full quality at the observed production hub-count range', () => {
+  assert.equal(hubFootprintPassBudget(0), 24);
+  assert.equal(hubFootprintPassBudget(1), 24);
+  assert.equal(hubFootprintPassBudget(110), 24);
+  assert.equal(hubFootprintPassBudget(200), 24);
+});
+
+test('hubFootprintPassBudget tapers down for a pathologically tag-diverse library', () => {
+  // minSharedDegree only bounds how many bookmarks a tag needs (>=4), not how
+  // many DISTINCT tags can each clear that bar — a tag-diverse library could
+  // produce thousands of hub nodes, and the budget must not stay flat there.
+  const at1000 = hubFootprintPassBudget(1000);
+  const at5000 = hubFootprintPassBudget(5000);
+  assert.ok(at1000 < 24);
+  assert.ok(at1000 >= 0);
+  assert.ok(at5000 <= at1000);
+  assert.equal(hubFootprintPassBudget(50000), 0);
 });

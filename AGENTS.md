@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-08-11 (distinguished expected offline/DNS retries from actionable sync queue health failures — see Sync And Auth).
+Last updated: 2026-08-13 (graph view: bookmark-node hairball fix on large, heavily-shared-tag libraries — see Known Traps).
 
 ## Successor Agent Orientation
 
@@ -543,39 +543,17 @@ only, debug-signed, standalone, and includes build provenance in Settings.
     headless Chromium — an instant synthetic `.click()` never gave the
     deferred close a chance to run first, which is why it eluded PR #566's
     own repro.
-- Graph view (`app/graph.tsx`) bookmark-node "hairball" on a large, heavily-
-  shared-tag library (reported live on the ~1,035-bookmark production account,
-  whose most popular tag alone carries 331 bookmarks — verified via
-  `mcp__Supabase__execute_sql`, not guessed): `layoutTickBudget` deliberately
-  *shrinks* the force settle's tick count as node count grows (to keep the
-  O(ticks·n²) settle bounded), so at real scale it's as low as ~10-20 ticks —
-  nowhere near enough for all-pairs repulsion to separate hundreds of
-  bookmark-node circles clustered around a busy hub. Measured 1,900-3,400
-  *genuinely overlapping* circle pairs (not just visually dense — the
-  overlap is in raw layout-unit coordinates, so it persists at ANY zoom
-  level, since SVG viewBox zoom scales node position and radius together).
-  A naive post-hoc pairwise "nudge overlapping circles apart" pass
-  (`domain/graph-declutter.ts`'s `resolveNodeOverlap`) does NOT fix this
-  cheaply at that scale — empirically, 150 relaxation passes still left 467
-  pairs overlapping and took ~5s, over the app's 2s hang-detector budget.
-  The fix (`domain/graph-satellite-layout.ts`'s `placeBookmarkSatellites`):
-  don't try to repair the tick-starved bookmark positions at all — assign
-  each bookmark to its highest-degree tag and place it on a deterministic
-  golden-angle spiral around that hub (mathematically guaranteed no
-  same-hub overlap, O(n), no iteration), after first decluttering hub
-  *centers* apart using a footprint radius (own circle + the satellite
-  ring's extent) so neighboring hubs' rings don't collide either. Every
-  bookmark is still rendered — this doesn't hide data, matching the
-  STASH-5Z precedent (#735) that a large-library graph fix must decongest,
-  not drop, bookmarks. `resolveNodeOverlap` is still used, just at the
-  much smaller (tens, not hundreds) hub-node scale where it actually
-  converges, plus a final whole-graph safety-net pass for residual overlap.
-  Before implementing, verify against real numbers (`mcp__Supabase__execute_sql`
-  for actual tag-degree distribution) rather than a synthetic fixture — an
-  early synthetic random-tag-distribution simulation under-estimated how
-  concentrated real tagging habits are, and a fix validated only against
-  that would have looked adequate in tests while still failing in
-  production.
+- Graph view (`app/graph.tsx`) bookmark-node positions come from a
+  deterministic satellite placement (`domain/graph-satellite-layout.ts`),
+  not the raw force settle: `layoutTickBudget` shrinks ticks as node count
+  grows, and on a large, heavily-shared-tag library (verified live: a
+  1,035-bookmark account whose top tag alone carries 331) that leaves
+  bookmark-node circles genuinely overlapping — not just visually dense,
+  since SVG viewBox zoom scales position and radius together, so no amount
+  of zooming fixes it. A naive post-hoc pairwise nudge doesn't converge
+  cheaply at that scale (empirically ~5s for 150 passes, over the 2s hang
+  budget) — see `docs/architecture/graph-view-layout.md` for the full
+  investigation, the rejected fix, and the chosen design.
 - Graph view (`app/graph.tsx`) pan/zoom-release snap-back flash on Android
   (PR #561): resetting the `Animated` transform to identity right after
   scheduling a new baked `viewBox` raced React's async state commit against

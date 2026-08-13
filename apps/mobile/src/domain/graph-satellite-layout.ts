@@ -62,20 +62,42 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
  */
 const SPACING_FACTOR = 1.3;
 /**
- * Hub-center declutter gets a fixed, generous pass count rather than the
- * shared `declutterPassBudget` (tuned for graphs of hundreds-to-thousands
- * of nodes): hub count here is always small — bounded by the shared-tag
- * backbone's degree threshold, observed at ~60-110 even for a 1,000+
- * bookmark library — so many more passes are affordable and converge
- * cleanly (unlike the same primitive applied across every node).
+ * Hub-center declutter's own pass-count budget — same shape as
+ * `declutterPassBudget` (graph-declutter.ts), but with a higher full-quality
+ * ceiling: `minSharedDegree` only bounds how many bookmarks a tag needs to
+ * survive (≥4), not how many DISTINCT tags can each clear that bar, so a
+ * very tag-diverse library could in principle produce thousands of hub
+ * nodes — this must taper for that case exactly like the settle's own tick
+ * budget does, not assume hub count always stays in the observed ~60-110
+ * range. `HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT` (200) is comfortably above
+ * that observed range, so the realistic case still gets the full,
+ * empirically-verified 24 passes.
  */
-const HUB_FOOTPRINT_PASSES = 24;
+const HUB_FOOTPRINT_MAX_PASSES = 24;
+const HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT = 200;
+const HUB_FOOTPRINT_PAIR_BUDGET =
+  HUB_FOOTPRINT_MAX_PASSES * HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT * HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT;
 
-function ringOuterRadius(memberCount: number, bookmarkRadius: number, spacing: number): number {
+export function hubFootprintPassBudget(hubCount: number): number {
+  if (hubCount <= 1) {
+    return HUB_FOOTPRINT_MAX_PASSES;
+  }
+  const scaled = Math.floor(HUB_FOOTPRINT_PAIR_BUDGET / (hubCount * hubCount));
+  return Math.min(HUB_FOOTPRINT_MAX_PASSES, Math.max(0, scaled));
+}
+
+// Distance from the hub center to the FAR edge of the outermost satellite's
+// own circle — i.e. the true footprint the ring occupies, not just the
+// distance to that satellite's center. `baseR` below (the placement loop)
+// puts the outermost member's CENTER at `hubRadius + bookmarkRadius + 2 +
+// spacing*sqrt(memberCount-1)`; its circle then extends another
+// `bookmarkRadius` past that, or two hubs whose footprints are treated as
+// merely touching can still have their outermost satellites overlap.
+export function ringOuterRadius(memberCount: number, bookmarkRadius: number, spacing: number): number {
   if (memberCount <= 0) {
     return 0;
   }
-  return bookmarkRadius + 2 + spacing * Math.sqrt(memberCount - 1 + 0.5);
+  return bookmarkRadius + 2 + spacing * Math.sqrt(memberCount - 1 + 0.5) + bookmarkRadius;
 }
 
 /**
@@ -158,7 +180,7 @@ export function placeBookmarkSatellites(
     y: node.y,
     r: hubRadius(node.degree) + ringOuterRadius((groups.get(node.id) ?? []).length, bookmarkRadius, spacing),
   }));
-  const resolvedHubs = resolveNodeOverlap(hubOverlapNodes, HUB_FOOTPRINT_PASSES);
+  const resolvedHubs = resolveNodeOverlap(hubOverlapNodes, hubFootprintPassBudget(hubOverlapNodes.length));
 
   let minX = Infinity;
   let minY = Infinity;
