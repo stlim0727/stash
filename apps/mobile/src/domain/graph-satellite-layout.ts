@@ -45,7 +45,12 @@
  */
 
 import type { PositionedNode, SettledGraph } from '@/domain/graph';
-import { declutterPassBudget, resolveNodeOverlap, type OverlapNode } from '@/domain/graph-declutter';
+import {
+  declutterPassBudget,
+  resolveNodeOverlap,
+  SINGLE_PASS_SAFE_NODE_COUNT,
+  type OverlapNode,
+} from '@/domain/graph-declutter';
 
 export interface SatelliteLayoutOptions {
   /** Rendered bookmark-node circle radius (layout units). */
@@ -83,14 +88,21 @@ export function hubFootprintPassBudget(hubCount: number): number {
     return HUB_FOOTPRINT_MAX_PASSES;
   }
   const scaled = Math.floor(HUB_FOOTPRINT_PAIR_BUDGET / (hubCount * hubCount));
-  // Never taper all the way to 0: a floor of 1 still costs only a single
-  // O(hubCount^2) sweep (the same one-time cost layoutTickBudget already
-  // accepts for the force settle at comparable node counts), and a single
-  // pass makes real progress on every pair that's currently overlapping —
-  // unlike 0 passes, which is a hard no-op that leaves hub centers at
-  // whatever (possibly heavily overlapping) position the force settle left
-  // them, guaranteeing the exact hairball this module exists to prevent.
-  return Math.min(HUB_FOOTPRINT_MAX_PASSES, Math.max(1, scaled));
+  if (scaled >= 1) {
+    return Math.min(HUB_FOOTPRINT_MAX_PASSES, scaled);
+  }
+  // Never taper all the way to 0 within the safe range: 0 is a hard no-op
+  // that leaves hub centers at whatever (possibly heavily overlapping)
+  // position the force settle left them, guaranteeing the exact hairball
+  // this module exists to prevent — whereas 1 pass makes real progress on
+  // every currently-overlapping pair. But a single pass is still one full
+  // O(hubCount^2) sweep through the SAME `resolveNodeOverlap` primitive
+  // `declutterPassBudget` (graph-declutter.ts) uses, so it shares that
+  // function's measured-safe ceiling: past `SINGLE_PASS_SAFE_NODE_COUNT`
+  // hubs, even 1 pass risks the app's 2s hang budget, and this genuinely
+  // has no safe declutter left to offer (this is far beyond any hub count a
+  // real tag-diverse library could plausibly produce).
+  return hubCount <= SINGLE_PASS_SAFE_NODE_COUNT ? 1 : 0;
 }
 
 // Distance from the hub center to the FAR edge of the outermost satellite's

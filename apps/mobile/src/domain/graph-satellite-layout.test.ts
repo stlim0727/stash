@@ -9,6 +9,7 @@ import {
   type PositionedNode,
   type SettledGraph,
 } from '@/domain/graph';
+import { SINGLE_PASS_SAFE_NODE_COUNT } from '@/domain/graph-declutter';
 import {
   hubFootprintPassBudget,
   placeBookmarkSatellites,
@@ -273,23 +274,32 @@ test('hubFootprintPassBudget gives full quality at the observed production hub-c
   assert.equal(hubFootprintPassBudget(200), 24);
 });
 
-test('hubFootprintPassBudget tapers down for a pathologically tag-diverse library, but never to a hard 0', () => {
+test('hubFootprintPassBudget tapers down for a pathologically tag-diverse library, floored at 1 within the safe range', () => {
   // minSharedDegree only bounds how many bookmarks a tag needs (>=4), not how
   // many DISTINCT tags can each clear that bar — a tag-diverse library could
   // produce thousands of hub nodes, and the budget must not stay flat there.
   const at1000 = hubFootprintPassBudget(1000);
-  const at5000 = hubFootprintPassBudget(5000);
   assert.ok(at1000 < 24);
   assert.ok(at1000 >= 1);
-  assert.ok(at5000 <= at1000);
   // A literal 0 is a hard no-op (resolveNodeOverlap returns positions
   // unchanged) that leaves hub centers wherever the force settle left them —
   // a PR review finding on a 1,000-hub/5,000-node scenario, where that
   // produced 230,000+ residual overlaps. A floor of 1 still makes real
   // progress on every currently-overlapping pair (verified: 142,757 -> 24,025
-  // overlaps at hubCount=1,000 on the equivalent fixture), and stays cheap
-  // even at hubCount=5,000 (~1s for that single O(hubCount^2) pass,
-  // empirically measured, comfortably under the app's 2s hang budget) —
-  // unlike 2+ passes at that scale, which was measured to exceed it.
-  assert.equal(hubFootprintPassBudget(50000), 1);
+  // overlaps at hubCount=1,000 on the equivalent fixture), and both the
+  // reviewer's own reported scale and the "no PRNG, deterministic" fixture
+  // scale below sit well inside SINGLE_PASS_SAFE_NODE_COUNT.
+  assert.equal(hubFootprintPassBudget(5000), 1);
+  assert.equal(hubFootprintPassBudget(SINGLE_PASS_SAFE_NODE_COUNT), 1);
+});
+
+test('hubFootprintPassBudget gives up (0 passes) only once even a single pass would risk the hang budget', () => {
+  // A single pass is still one full O(hubCount^2) sweep through the same
+  // resolveNodeOverlap primitive declutterPassBudget (graph-declutter.ts)
+  // uses, empirically measured (see that module's test file) to approach
+  // the app's 2s hang budget around 8,000 nodes — so past
+  // SINGLE_PASS_SAFE_NODE_COUNT this genuinely has no safe declutter left to
+  // offer, same as the pre-existing behavior for an extreme node count.
+  assert.equal(hubFootprintPassBudget(SINGLE_PASS_SAFE_NODE_COUNT + 1), 0);
+  assert.equal(hubFootprintPassBudget(50000), 0);
 });

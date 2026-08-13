@@ -117,22 +117,41 @@ function accumulate(
  * (`graph.ts`): a fixed pair-work budget spent as fewer passes once node
  * count grows, so this stays a small, bounded addition on top of the
  * settle's own cost instead of an unbounded second O(passes·n²) pass.
- * Returns 0 (skip entirely) once even one pass would exceed the budget.
  *
  * `DECLUTTER_FULL_QUALITY_NODE_COUNT` (1200) is chosen well above the
  * largest real graph observed in production (~770 nodes for a ~1,000-
  * bookmark library after tag-degree filtering) so the reported hairball
  * gets the full 4 passes; past that the pass count tapers the same way the
  * settle's own tick budget does.
+ *
+ * The taper floors at 1 pass, never 0: 0 is a hard no-op (`resolveNodeOverlap`
+ * returns positions completely unchanged, a PR review finding — a
+ * 1,000-hub/5,000-node fixture left 230,000+ overlapping pairs at 0 passes),
+ * whereas even 1 pass makes real progress on every currently-overlapping
+ * pair. But a single pass is only cheap up to a point: it's still one full
+ * O(nodeCount²) sweep, empirically measured (see the test file) to reach
+ * ~1s at 6,000 nodes and ~1.9s at 8,000 — so past
+ * `SINGLE_PASS_SAFE_NODE_COUNT` even one pass risks the app's 2s hang budget
+ * and this genuinely has no safe declutter left to offer, preserving the
+ * original skip-entirely behavior for that (already extreme) range.
  */
 const DECLUTTER_FULL_QUALITY_NODE_COUNT = 1200;
 const DECLUTTER_PAIR_BUDGET =
   DEFAULT_PASSES * DECLUTTER_FULL_QUALITY_NODE_COUNT * DECLUTTER_FULL_QUALITY_NODE_COUNT;
+/**
+ * Shared with `graph-satellite-layout.ts`'s `hubFootprintPassBudget`, which
+ * feeds the same `resolveNodeOverlap` primitive (so has the same per-node
+ * cost) with a hub count instead of a full node count.
+ */
+export const SINGLE_PASS_SAFE_NODE_COUNT = 6000;
 
 export function declutterPassBudget(nodeCount: number): number {
   if (nodeCount <= 1) {
     return DEFAULT_PASSES;
   }
   const scaled = Math.floor(DECLUTTER_PAIR_BUDGET / (nodeCount * nodeCount));
-  return Math.min(DEFAULT_PASSES, Math.max(0, scaled));
+  if (scaled >= 1) {
+    return Math.min(DEFAULT_PASSES, scaled);
+  }
+  return nodeCount <= SINGLE_PASS_SAFE_NODE_COUNT ? 1 : 0;
 }

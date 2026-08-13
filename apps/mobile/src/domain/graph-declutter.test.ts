@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   declutterPassBudget,
   resolveNodeOverlap,
+  SINGLE_PASS_SAFE_NODE_COUNT,
   type OverlapNode,
 } from '@/domain/graph-declutter';
 
@@ -111,11 +112,28 @@ test('declutterPassBudget gives full quality well under the production node-coun
   assert.equal(declutterPassBudget(1200), 4);
 });
 
-test('declutterPassBudget tapers down, then skips, for very large graphs', () => {
+test('declutterPassBudget tapers down for large graphs, floored at 1 within the safe range', () => {
   const at2000 = declutterPassBudget(2000);
   const at3000 = declutterPassBudget(3000);
   assert.ok(at2000 < 4);
-  assert.ok(at2000 >= 0);
+  assert.ok(at2000 >= 1);
   assert.ok(at3000 <= at2000);
+  // A literal 0 is a hard no-op (resolveNodeOverlap returns positions
+  // unchanged) — a PR review finding on a 1,000-hub/5,000-node fixture,
+  // which left 230,000+ overlapping pairs. A floor of 1 still makes real
+  // progress on every currently-overlapping pair, and both this fixture's
+  // scale and the shared safe ceiling itself stay within
+  // SINGLE_PASS_SAFE_NODE_COUNT.
+  assert.equal(declutterPassBudget(5000), 1);
+  assert.equal(declutterPassBudget(SINGLE_PASS_SAFE_NODE_COUNT), 1);
+});
+
+test('declutterPassBudget gives up (0 passes) only once even a single pass would risk the hang budget', () => {
+  // A single pass is still one full O(nodeCount^2) sweep; empirically
+  // measured (this module's own primitive, `resolveNodeOverlap`) to reach
+  // ~1s at 6,000 nodes and ~1.9s at 8,000 — approaching the app's 2s hang
+  // budget. Past SINGLE_PASS_SAFE_NODE_COUNT this genuinely has no safe
+  // declutter left to offer.
+  assert.equal(declutterPassBudget(SINGLE_PASS_SAFE_NODE_COUNT + 1), 0);
   assert.equal(declutterPassBudget(50000), 0);
 });

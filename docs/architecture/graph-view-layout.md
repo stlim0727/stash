@@ -88,18 +88,38 @@ The scaled-down replacement had its own edge: at large enough hub counts
 to a literal 0 passes — and 0 is not "less decluttering," it is a hard no-op
 (`resolveNodeOverlap` returns hub positions completely unchanged), leaving
 whatever the force settle produced. Measured on a 1,000-hub/5,000-node
-fixture: 0 passes left 142,757 overlapping circle pairs. The fix floors the
-budget at 1, never 0 — a single O(hubCount²) sweep still makes real progress
-on every currently-overlapping pair (down to 24,025 on that same fixture) and
-stays measured-safe even at 5,000 hubs (~1s), unlike 2+ passes at that scale
-(1.4s–3s+, measured to exceed the 2s hang budget). This doesn't make the
-declutter step scale-invariant — an even more extreme hub count (tens of
-thousands) would still be slow at exactly 1 pass, since the cost is O(h²)
-regardless of pass count — but that's far beyond anything a real tag-diverse
-library could plausibly produce (thousands of *distinct* tags each carried by
-≥4 bookmarks), so a genuinely sub-quadratic algorithm (e.g. spatial-grid
-bucketing) wasn't worth the added complexity for a scenario this far outside
-the reported problem.
+fixture: 0 passes left 142,757 overlapping circle pairs.
+
+A first fix attempt floored the budget at a flat 1, unconditionally. That
+was itself incomplete: 1 pass is still one full O(n²) sweep through
+`resolveNodeOverlap`, and review flagged that the SAME zero-floor bug also
+existed in the pre-existing sibling `declutterPassBudget`
+(`graph-declutter.ts`, used for the final whole-graph safety-net pass) —
+which operates over ALL nodes (hubs + bookmarks), not just hub count, so it
+reaches its own zero-floor at a much more easily-reached ~2,400 total
+nodes. Timing a flat "always floor to 1" fix for `declutterPassBudget`
+specifically (not just the hub-only case) found it was NOT safe at the
+sizes review actually cares about: empirically, a single pass measures
+~715ms at 5,000 nodes (fine) but ~1.85s at 8,000 and ~3.1s at 10,000 —
+already over the 2s hang budget, at node counts a real (if large) library
+could plausibly reach, unlike the hub-only case where reaching that many
+DISTINCT surviving tags is far more extreme.
+
+The shipped fix instead floors at 1 only up to a shared, empirically
+measured `SINGLE_PASS_SAFE_NODE_COUNT` (6,000 — comfortably under the ~8,000
+mark where a single pass starts to bite, exported once from
+`graph-declutter.ts` and reused by `hubFootprintPassBudget` since both
+budgets feed the same `resolveNodeOverlap` primitive and therefore share the
+same per-node cost). Past that ceiling, both functions fall back to the
+pre-existing 0-pass skip — this is not a regression relative to before this
+PR, since 0 was already the behavior there; the fix's actual contribution is
+recovering real declutter work (down to 24,025 overlaps from 142,757 on the
+reviewer's 1,000-hub fixture) across the WIDE middle range that used to
+silently collapse to a no-op, while staying honest that a truly extreme
+node count (tens of thousands) is still out of budget for any O(n²)
+approach — a genuinely sub-quadratic algorithm (e.g. spatial-grid bucketing)
+wasn't worth the added complexity for a scenario this far beyond anything a
+real library, even a pathological one, could plausibly produce.
 
 ### A rejected middle attempt: geometric label avoidance
 
