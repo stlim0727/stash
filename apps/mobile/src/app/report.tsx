@@ -25,6 +25,7 @@ import { buildDiagnosticsContext, formatDiagnosticsReport } from '@/domain/diagn
 import type { DiagnosticsContext } from '@/domain/diagnostics';
 import { describeBuild, getBuildInfo } from '@/domain/build-info';
 import { getLogEntries } from '@/observability/log-buffer';
+import { describeRecentSegments } from '@/observability/slow-segment-log';
 import {
   clearPendingFeedbackScreenshot,
   getPendingFeedbackSource,
@@ -202,6 +203,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         lastError,
         build: buildLabel,
         logs: recentLogLines(),
+        recentSlowSegments: describeRecentSegments(),
         storage: getStorageDiagnostics(),
         syncReconcile: getReconcileDiagnostics(),
         shareAttempt: getShareDiagnostics(),

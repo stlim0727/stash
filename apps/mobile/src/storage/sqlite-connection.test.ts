@@ -418,7 +418,7 @@ test('run() labels are attributed on the contention snapshot, showing what colli
   const diagnosticsSnapshot = getStorageDiagnostics();
   assert.equal(diagnosticsSnapshot?.sqliteContention?.maxDepth, replaceBookmarkCount + 1);
   assert.equal(
-    diagnosticsSnapshot?.sqliteContention?.labels,
+    diagnosticsSnapshot?.sqliteContention?.maxDepthLabels,
     `replaceBookmark:${replaceBookmarkCount}, pull:1`,
   );
 
