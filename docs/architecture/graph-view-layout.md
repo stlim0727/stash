@@ -75,6 +75,26 @@ of the fix missed this (PR #749 review), which under-counted the footprint
 by exactly one `bookmarkRadius` and could leave two neighboring hubs' rings
 touching.
 
+`hubFootprintPassBudget` exists for the same reason `layoutTickBudget` does:
+`minSharedDegree` bounds how many bookmarks a tag needs to survive (≥4), not
+how many distinct tags can each clear that bar, so a tag-diverse library
+could in principle produce thousands of hub nodes. An early version used a
+fixed 24-pass constant for the hub-footprint declutter (safe at the observed
+~60-110 hub range, but O(24·h²) unbounded past it) — also caught in PR #749
+review.
+
+Hub labels (`graph-labels.ts`'s `resolveHubLabels`) render AFTER node
+circles (`app/graph.tsx`'s `svgChildren`), so a satellite placed directly
+under a hub's own text label is painted over even though it registers zero
+circle-to-circle overlap — a third PR #749 review finding, on a small hub
+with only a handful of bookmarks (the label's near-hub footprint is
+proportionally larger relative to a small ring). The fix reserves angular
+sectors centered on the label's two possible positions (straight below or
+straight above — `resolveHubLabels` never places one to the side), but only
+within a bounded radius of the hub (a label can never reach further than
+`maxLabelOffset` + the label's own height), so it doesn't meaningfully
+inflate `ringOuterRadius`'s footprint estimate for a large hub.
+
 ## Result
 
 On the reproduced production shape: raw settle overlap (1,900+ pairs) → 0,

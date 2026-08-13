@@ -609,7 +609,11 @@ export default function GraphScreen() {
       const placed =
         mode === "cooccurrence"
           ? raw
-          : placeBookmarkSatellites(raw, { bookmarkRadius: BOOKMARK_R, hubRadius });
+          : placeBookmarkSatellites(raw, {
+              bookmarkRadius: BOOKMARK_R,
+              hubRadius,
+              hubLabelSize: LABEL_SIZE,
+            });
       // Final cheap safety-net pass for any small residual overlap left
       // between neighboring hubs' rings (or, in co-occurrence, the hub
       // settle itself).
