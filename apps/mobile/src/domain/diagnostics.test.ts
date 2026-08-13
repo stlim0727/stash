@@ -74,6 +74,7 @@ test('buildDiagnosticsContext excludes user content — it only keeps known keys
     'lastError',
     'build',
     'logs',
+    'recentSlowSegments',
     'storage',
     'shareAttempt',
     'aiQuota',
@@ -175,6 +176,23 @@ test('build and logs are included when provided and formatted for sharing', () =
   assert.match(report, /sqlite open failed: boom/);
   // The logs array is rendered as a trailing block, not inside the JSON summary.
   assert.ok(!report.includes('"logs"'));
+});
+
+test('recentSlowSegments is included when provided and omitted when blank', () => {
+  const withSegments = buildDiagnosticsContext({
+    recentSlowSegments: 'graph-layout 820ms 300ms ago',
+  });
+  assert.equal(withSegments.recentSlowSegments, 'graph-layout 820ms 300ms ago');
+
+  const report = formatDiagnosticsReport(withSegments);
+  assert.match(report, /"recentSlowSegments"/);
+  assert.match(report, /graph-layout 820ms/);
+
+  const blank = buildDiagnosticsContext({ recentSlowSegments: '' });
+  assert.equal(blank.recentSlowSegments, undefined);
+
+  const missing = buildDiagnosticsContext({});
+  assert.equal(missing.recentSlowSegments, undefined);
 });
 
 test('buildDiagnosticsContext normalizes invalid queue depth and truncates long errors', () => {

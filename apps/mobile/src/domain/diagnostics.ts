@@ -57,6 +57,16 @@ export interface DiagnosticsInput {
   build?: string | null;
   /** Recent technical log lines to aid debugging (already formatted). */
   logs?: string[] | null;
+  /**
+   * Compact summary of recent slow (>=500ms) synchronous JS-thread segments
+   * (see `observability/slow-segment-log.ts`'s `describeRecentSegments`).
+   * Previously this only reached monitoring via the automatic loop-stall
+   * watchdog's report, so a manually-submitted "feels slow" report — the
+   * exact case a segment like this is meant to explain — carried none of it
+   * unless the same session also happened to trip a multi-second stall
+   * (STASH-64 review).
+   */
+  recentSlowSegments?: string | null;
   /** Structured storage diagnostics captured near the failure site. */
   storage?: DiagnosticsStorage | null;
   /** Cumulative-since-launch create-sync reconcile summary (STASH-3Y investigation). */
@@ -103,7 +113,10 @@ export interface DiagnosticsStorage {
     maxWaitMs: number;
     maxDepth: number;
     waitCount: number;
-    updatedAt: string;
+    maxDepthLabels?: string;
+    maxDepthUpdatedAt?: string;
+    maxWaitLabels?: string;
+    maxWaitUpdatedAt?: string;
   };
 }
 
@@ -121,6 +134,8 @@ export interface DiagnosticsContext {
   build?: string;
   /** Recent technical log lines (capped). Present only when captured. */
   logs?: string[];
+  /** Recent slow JS-thread segments (see `DiagnosticsInput.recentSlowSegments`). */
+  recentSlowSegments?: string;
   /** Structured storage diagnostics. Present only after storage code records it. */
   storage?: DiagnosticsStorage;
   /** Cumulative-since-launch create-sync reconcile summary (STASH-3Y investigation). */
@@ -206,6 +221,11 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.logs && input.logs.length > 0) {
     context.logs = input.logs.filter((line) => typeof line === 'string' && line.length > 0);
+  }
+
+  const recentSlowSegments = cleanString(input.recentSlowSegments);
+  if (recentSlowSegments) {
+    context.recentSlowSegments = recentSlowSegments;
   }
 
   if (input.storage && typeof input.storage === 'object') {

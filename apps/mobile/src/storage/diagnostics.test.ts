@@ -34,17 +34,17 @@ test('noteSqliteQueueDepth updates maxDepth without touching maxWaitMs/waitCount
   assert.equal(getStorageDiagnostics()!.sqliteContention!.maxDepth, after.maxDepth);
 });
 
-test('noteSqliteQueueDepth does not bump updatedAt when it does not advance the max', async () => {
+test('noteSqliteQueueDepth does not bump maxDepthUpdatedAt when it does not advance the max', async () => {
   noteSqliteQueueDepth(20);
   const before = getStorageDiagnostics()!.sqliteContention!;
 
   await new Promise((resolve) => setTimeout(resolve, 5));
   noteSqliteQueueDepth(1); // well below the current max — must be a true no-op
   const after = getStorageDiagnostics()!.sqliteContention!;
-  assert.equal(after.updatedAt, before.updatedAt);
+  assert.equal(after.maxDepthUpdatedAt, before.maxDepthUpdatedAt);
 });
 
-test('noteSqliteTailWait bumps waitCount but not updatedAt when neither maximum advances', async () => {
+test('noteSqliteTailWait bumps waitCount but not either timestamp when neither maximum advances', async () => {
   noteSqliteTailWait(10_000, 5); // sets a severe maximum
   const severe = getStorageDiagnostics()!.sqliteContention!;
 
@@ -56,10 +56,30 @@ test('noteSqliteTailWait bumps waitCount but not updatedAt when neither maximum 
   assert.equal(after.maxWaitMs, severe.maxWaitMs);
   assert.equal(after.maxDepth, severe.maxDepth);
   assert.equal(after.waitCount, severe.waitCount + 1);
-  assert.equal(after.updatedAt, severe.updatedAt);
+  assert.equal(after.maxDepthUpdatedAt, severe.maxDepthUpdatedAt);
+  assert.equal(after.maxWaitUpdatedAt, severe.maxWaitUpdatedAt);
 });
 
-test('noteSqliteTailWait records the labels queued at the new max, not a later non-advancing wait', () => {
+test('a depth spike and a later, separate wait spike (STASH-64 review) get independent timestamps', async () => {
+  const before = getStorageDiagnostics()!.sqliteContention!;
+  const severeDepth = before.maxDepth + 100;
+  // Advance only maxDepth first (a low wait, so maxWaitMs is untouched).
+  noteSqliteTailWait(1, severeDepth);
+  const depthOnly = getStorageDiagnostics()!.sqliteContention!;
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  // Now advance only maxWaitMs, at a shallow depth well below severeDepth.
+  noteSqliteTailWait(depthOnly.maxWaitMs + 5000, 1);
+  const after = getStorageDiagnostics()!.sqliteContention!;
+
+  // The depth max's own timestamp must not be dragged forward by a wait-only
+  // update that never touched maxDepth.
+  assert.equal(after.maxDepth, severeDepth);
+  assert.equal(after.maxDepthUpdatedAt, depthOnly.maxDepthUpdatedAt);
+  assert.notEqual(after.maxWaitUpdatedAt, after.maxDepthUpdatedAt);
+});
+
+test('noteSqliteTailWait records the labels queued at the new depth max, not a later non-advancing wait', () => {
   const before = getStorageDiagnostics()!.sqliteContention!;
   // A depth well past anything accumulated so far guarantees this call
   // advances the running max regardless of state left by earlier tests.
@@ -67,13 +87,13 @@ test('noteSqliteTailWait records the labels queued at the new max, not a later n
   noteSqliteTailWait(1, severeDepth, 'replaceBookmark:20, getBookmark:1, pull:2');
   const advanced = getStorageDiagnostics()!.sqliteContention!;
   assert.equal(advanced.maxDepth, severeDepth);
-  assert.equal(advanced.labels, 'replaceBookmark:20, getBookmark:1, pull:2');
+  assert.equal(advanced.maxDepthLabels, 'replaceBookmark:20, getBookmark:1, pull:2');
 
   // A later wait that doesn't advance either maximum must not overwrite the
   // labels recorded for the severe one.
   noteSqliteTailWait(1, 1, 'getMeta:3');
   const after = getStorageDiagnostics()!.sqliteContention!;
-  assert.equal(after.labels, 'replaceBookmark:20, getBookmark:1, pull:2');
+  assert.equal(after.maxDepthLabels, 'replaceBookmark:20, getBookmark:1, pull:2');
 });
 
 test('noteSqliteQueueDepth records labels only when it advances the max', () => {
@@ -84,5 +104,24 @@ test('noteSqliteQueueDepth records labels only when it advances the max', () => 
 
   const diagnostics = getStorageDiagnostics()!.sqliteContention!;
   assert.equal(diagnostics.maxDepth, severeDepth);
-  assert.equal(diagnostics.labels, 'insertImportBatch:5');
+  assert.equal(diagnostics.maxDepthLabels, 'insertImportBatch:5');
+});
+
+test('a wait-only advance (STASH-64) must not overwrite the depth-driven max labels', () => {
+  const before = getStorageDiagnostics()!.sqliteContention!;
+  // Establish a severe depth max with its own labels, via a low wait so the
+  // next call can advance maxWaitMs without also advancing maxDepth.
+  const severeDepth = before.maxDepth + 100;
+  noteSqliteTailWait(1, severeDepth, 'replaceTagData:20, setMeta:2');
+  const depthMax = getStorageDiagnostics()!.sqliteContention!;
+  assert.equal(depthMax.maxDepthLabels, 'replaceTagData:20, setMeta:2');
+
+  // A much slower wait, but at a shallow depth — a single long-running op,
+  // not a queue pile-up. Before the fix this clobbered maxDepthLabels with
+  // this shallow queue's contents even though depth never advanced.
+  noteSqliteTailWait(depthMax.maxWaitMs + 5000, 2, 'replaceTagData:1, setMeta:1');
+  const after = getStorageDiagnostics()!.sqliteContention!;
+  assert.equal(after.maxDepth, severeDepth);
+  assert.equal(after.maxDepthLabels, 'replaceTagData:20, setMeta:2');
+  assert.equal(after.maxWaitLabels, 'replaceTagData:1, setMeta:1');
 });
