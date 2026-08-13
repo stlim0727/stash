@@ -52,15 +52,6 @@ export interface SatelliteLayoutOptions {
   bookmarkRadius: number;
   /** Rendered hub-node circle radius for a given node degree. */
   hubRadius: (degree: number) => number;
-  /**
-   * Font size hub labels render at (layout units) — used only to size a
-   * conservative label-avoidance zone near each hub, so a close-in
-   * satellite doesn't land directly under the hub's own text label (hub
-   * labels render AFTER node circles, so they paint over anything beneath).
-   * Not needed for the non-overlap guarantee itself, which holds regardless
-   * of this value. Defaults to 24, matching the app's hub-label font size.
-   */
-  hubLabelSize?: number;
 }
 
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
@@ -93,38 +84,6 @@ export function hubFootprintPassBudget(hubCount: number): number {
   }
   const scaled = Math.floor(HUB_FOOTPRINT_PAIR_BUDGET / (hubCount * hubCount));
   return Math.min(HUB_FOOTPRINT_MAX_PASSES, Math.max(0, scaled));
-}
-
-/**
- * Hub labels (see `graph-labels.ts`'s `resolveHubLabels`) render AFTER node
- * circles (`app/graph.tsx`'s `svgChildren`), so a satellite placed directly
- * under a hub's text label is painted over even though it registers zero
- * circle-to-circle overlap. A label always sits either straight BELOW or
- * straight ABOVE its hub (`resolveHubLabels` never places one to the side),
- * so reserve angular sectors centered on those two directions, but ONLY out
- * to `labelDangerRadius` — a label's farthest possible edge is bounded
- * (`maxLabelOffset` in graph-labels.ts caps the nudge at `2 * fontSize`, and
- * the box itself is `fontSize` tall), so satellites beyond that radius are
- * never at risk and keep the full 360° — this keeps the exclusion local to
- * the first few close-in members, not the whole ring, so it doesn't
- * meaningfully inflate `ringOuterRadius`'s footprint estimate for a large
- * hub (only a handful of its many members ever fall inside the danger
- * radius).
- */
-const LABEL_AVOIDANCE_HALF_ANGLE = (65 * Math.PI) / 180;
-const SOUTH_ANGLE = Math.PI / 2;
-const NORTH_ANGLE = -Math.PI / 2;
-
-function angularDistance(a: number, b: number): number {
-  const diff = Math.abs(a - b) % (2 * Math.PI);
-  return Math.min(diff, 2 * Math.PI - diff);
-}
-
-function isAngleLabelSafe(angle: number): boolean {
-  return (
-    angularDistance(angle, SOUTH_ANGLE) > LABEL_AVOIDANCE_HALF_ANGLE &&
-    angularDistance(angle, NORTH_ANGLE) > LABEL_AVOIDANCE_HALF_ANGLE
-  );
 }
 
 // Distance from the hub center to the FAR edge of the outermost satellite's
@@ -241,37 +200,18 @@ export function placeBookmarkSatellites(
   });
   const hubPosById = new Map(nextHubNodes.map((node) => [node.id, node]));
 
-  const hubLabelSize = options.hubLabelSize ?? 24;
   const nextBookmarkNodes: PositionedNode[] = [];
   for (const [hubId, members] of groups) {
     const hub = hubPosById.get(hubId)!;
-    const hubR = hubRadius(hub.degree);
-    const baseR = hubR + bookmarkRadius + 2;
-    // See LABEL_AVOIDANCE_HALF_ANGLE's comment: only skip candidates within
-    // this radius of the hub — beyond it, a label can never reach, so every
-    // angle is used and the ring's outer extent (and therefore
-    // `ringOuterRadius`'s footprint estimate) is unaffected.
-    const labelDangerRadius = hubR + hubLabelSize * 3;
-    // rawK walks the golden-angle sequence; skipped (label-unsafe, in-range)
-    // indices are simply never used, which only WIDENS the gap to the next
-    // accepted member (radius grows monotonically with rawK) — so this can
-    // only make spacing safer, never violate the same-hub non-overlap
-    // guarantee `ringOuterRadius`/the spiral formula already provide.
-    let rawK = 0;
-    for (const member of members) {
-      let r = baseR + spacing * Math.sqrt(rawK);
-      let angle = rawK * GOLDEN_ANGLE;
-      while (r <= labelDangerRadius && !isAngleLabelSafe(angle)) {
-        rawK += 1;
-        r = baseR + spacing * Math.sqrt(rawK);
-        angle = rawK * GOLDEN_ANGLE;
-      }
+    const baseR = hubRadius(hub.degree) + bookmarkRadius + 2;
+    members.forEach((member, k) => {
+      const r = baseR + spacing * Math.sqrt(k);
+      const angle = k * GOLDEN_ANGLE;
       const x = hub.x + Math.cos(angle) * r;
       const y = hub.y + Math.sin(angle) * r;
       include(x, y);
       nextBookmarkNodes.push({ ...member, x, y });
-      rawK += 1;
-    }
+    });
   }
   for (const node of ungrouped) {
     include(node.x, node.y);

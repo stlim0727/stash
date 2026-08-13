@@ -432,9 +432,56 @@ test('bookmark labels ignore pointer events so an overlapping label never blocks
     expect(node.pointerEvents).toBe('none');
   }
   // The tag hub label is unrelated to this fix and keeps its default (it
-  // isn't the tap target either way — the hub circle sits under it).
+  // isn't the tap target either way — the hub circle paints on TOP of it,
+  // see the render-order test below).
   const hubLabelNode = textNodes.find((node) => node.content === 'cooking');
   expect(hubLabelNode?.pointerEvents).not.toBe('none');
+});
+
+// A Codex review finding on PR #749: hub labels used to render AFTER node
+// circles, so a bookmark satellite placed near a busy hub could land
+// directly under the hub's own label text and be visually/interactively
+// hidden, even though no CIRCLE-to-circle overlap was detected (labels
+// aren't modeled as circles). Fixed by rendering hub labels FIRST so node
+// circles always paint on top — a stronger, exact guarantee than trying to
+// geometrically steer satellite placement around the label's box (an
+// earlier attempt at that missed edge cases on small hubs with long
+// labels, per a follow-up review finding).
+test('hub labels render before node circles, so a circle always paints on top of any label it sits near', async () => {
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+  await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+
+  const events: Array<{ kind: 'circle' | 'text'; testID?: unknown; content?: string }> = [];
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    const current = node as { type?: string; props?: Record<string, unknown>; children?: unknown };
+    if (current.type === 'RNSVGCircle') {
+      events.push({ kind: 'circle', testID: current.props?.testID });
+    } else if (current.type === 'RNSVGText') {
+      const tspanContents = collectNodesWithProp(current.children, 'content')
+        .map((tspan) => tspan.props.content)
+        .filter((content): content is string => typeof content === 'string');
+      events.push({ kind: 'text', content: tspanContents[0] });
+    }
+    visit(current.children);
+  };
+  visit(screen.toJSON());
+
+  const hubLabelIndex = events.findIndex((e) => e.kind === 'text' && e.content === 'cooking');
+  const firstCircleIndex = events.findIndex((e) => e.kind === 'circle');
+  expect(hubLabelIndex).toBeGreaterThanOrEqual(0);
+  expect(firstCircleIndex).toBeGreaterThanOrEqual(0);
+  expect(hubLabelIndex).toBeLessThan(firstCircleIndex);
 });
 
 test('a title-only edit updates the bookmark label without a tag-topology change', async () => {

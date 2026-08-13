@@ -609,11 +609,7 @@ export default function GraphScreen() {
       const placed =
         mode === "cooccurrence"
           ? raw
-          : placeBookmarkSatellites(raw, {
-              bookmarkRadius: BOOKMARK_R,
-              hubRadius,
-              hubLabelSize: LABEL_SIZE,
-            });
+          : placeBookmarkSatellites(raw, { bookmarkRadius: BOOKMARK_R, hubRadius });
       // Final cheap safety-net pass for any small residual overlap left
       // between neighboring hubs' rings (or, in co-occurrence, the hub
       // settle itself).
@@ -1324,6 +1320,43 @@ export default function GraphScreen() {
             />
           );
         })}
+        {/* Hub labels render BEFORE node circles so a circle (a bookmark's
+            satellite included) always paints ON TOP of any hub label text it
+            happens to sit near — an interactive node must never be visually
+            or interactively occluded by a label. This is a stronger, exact
+            guarantee than trying to keep satellite placement out of the
+            label's (variably shaped, cross-hub-decluttered) box via
+            geometry: paint order can't miss an edge case the way an
+            approximate avoidance heuristic can. The trade-off is a small
+            dot can locally cover a glyph or two of a label's text, which
+            reads far better than a fully hidden, untappable bookmark. */}
+        {settled.nodes.map((node) => {
+          if (node.kind === "bookmark") {
+            return null;
+          }
+          if (!isPointInViewBox(node.x, node.y, viewBoxRect, 100)) {
+            return null;
+          }
+          const placement = labelById.get(node.id);
+          if (!placement) {
+            return null;
+          }
+          return (
+            <SvgText
+              key={`l${node.id}`}
+              x={placement.x}
+              y={placement.y}
+              fill={palette.text}
+              fontSize={LABEL_SIZE}
+              fontWeight="700"
+              textAnchor="middle"
+            >
+              {node.id === UNTAGGED_HUB_ID
+                ? t("graph.untaggedLabel")
+                : node.label}
+            </SvgText>
+          );
+        })}
         {settled.nodes.map((node) => {
           // Spatial viewport culling: skip nodes outside visible viewBox area
           if (!isPointInViewBox(node.x, node.y, viewBoxRect, 80)) {
@@ -1370,33 +1403,6 @@ export default function GraphScreen() {
                 isUntagged ? undefined : () => applyTagFacet(node.tag_id)
               }
             />
-          );
-        })}
-        {settled.nodes.map((node) => {
-          if (node.kind === "bookmark") {
-            return null;
-          }
-          if (!isPointInViewBox(node.x, node.y, viewBoxRect, 100)) {
-            return null;
-          }
-          const placement = labelById.get(node.id);
-          if (!placement) {
-            return null;
-          }
-          return (
-            <SvgText
-              key={`l${node.id}`}
-              x={placement.x}
-              y={placement.y}
-              fill={palette.text}
-              fontSize={LABEL_SIZE}
-              fontWeight="700"
-              textAnchor="middle"
-            >
-              {node.id === UNTAGGED_HUB_ID
-                ? t("graph.untaggedLabel")
-                : node.label}
-            </SvgText>
           );
         })}
       </>

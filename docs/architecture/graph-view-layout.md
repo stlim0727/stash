@@ -83,17 +83,48 @@ fixed 24-pass constant for the hub-footprint declutter (safe at the observed
 ~60-110 hub range, but O(24·h²) unbounded past it) — also caught in PR #749
 review.
 
+### A rejected middle attempt: geometric label avoidance
+
 Hub labels (`graph-labels.ts`'s `resolveHubLabels`) render AFTER node
-circles (`app/graph.tsx`'s `svgChildren`), so a satellite placed directly
-under a hub's own text label is painted over even though it registers zero
-circle-to-circle overlap — a third PR #749 review finding, on a small hub
-with only a handful of bookmarks (the label's near-hub footprint is
-proportionally larger relative to a small ring). The fix reserves angular
-sectors centered on the label's two possible positions (straight below or
-straight above — `resolveHubLabels` never places one to the side), but only
-within a bounded radius of the hub (a label can never reach further than
-`maxLabelOffset` + the label's own height), so it doesn't meaningfully
-inflate `ringOuterRadius`'s footprint estimate for a large hub.
+circles, so a satellite placed directly under a hub's own text label was
+painted over even though it registered zero circle-to-circle overlap — a
+third PR #749 review finding, on a small hub with only a handful of
+bookmarks (the label's near-hub footprint is proportionally larger relative
+to a small ring).
+
+The first fix attempt reserved a fixed ±65° angular sector around the
+label's two possible positions (straight below/above — `resolveHubLabels`
+never places one to the side), bounded to a radius near the hub so it
+wouldn't inflate `ringOuterRadius`'s footprint estimate. Review caught two
+more problems with this on the very next pass:
+
+- A fixed angle can't model a rectangle: a wide label (long tag name) on a
+  small hub needs a WIDER exclusion angle near its close top corner than a
+  short label does, and a constant angular half-width is wrong in one
+  direction or the other depending on hub size and label length. Concrete
+  counter-example: a 3-bookmark hub labeled `abcdefghij` still placed a
+  satellite whose circle clipped the label box, just outside the fixed
+  65° cutoff.
+- Worse: when label avoidance SKIPPED a spiral index, the accepted member
+  index (`rawK`) ran ahead of the plain member count, but `ringOuterRadius`
+  still sized the hub's footprint from `memberCount` alone — reintroducing
+  the exact "footprint under-counts the true ring extent" bug that had just
+  been fixed for the trailing-radius case, now via a different mechanism.
+  Two adjacent hubs could again end up with overlapping satellites.
+
+Rather than patch the angle heuristic a third time (chase the invariant one
+counter-example at a time, the mistake `CLAUDE.md`'s Behavioral Invariants
+section specifically warns against), the actual fix is architectural: SVG
+paints later JSX children on top of earlier ones, so `app/graph.tsx` now
+renders hub labels BEFORE node circles instead of after. Every circle —
+bookmark or hub — is then guaranteed to paint on top of any label it
+happens to sit near, by construction, with no geometry to get subtly wrong.
+The trade-off is a small dot can locally cover a glyph or two of label text,
+which is a strictly smaller defect than a fully hidden, untappable bookmark.
+This also let the satellite-placement code drop the whole label-avoidance
+mechanism (and its `ringOuterRadius`/footprint coupling risk) entirely,
+returning `placeBookmarkSatellites` to the simpler, already-proven-correct
+plain golden-angle spiral.
 
 ## Result
 
