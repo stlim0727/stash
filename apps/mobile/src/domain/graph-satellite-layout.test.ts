@@ -20,8 +20,8 @@ import type { Bookmark, BookmarkTag, Tag } from '@/domain/types';
 const NOW = '2026-06-12T00:00:00.000Z';
 const BOOKMARK_R = 9;
 // Matches app/graph.tsx's HUB_MIN_R/HUB_MAX_R/hubRadius.
-const HUB_MIN_R = 13;
-const HUB_MAX_R = 32;
+const HUB_MIN_R = 11;
+const HUB_MAX_R = 33;
 
 function hubRadius(degree: number): number {
   return Math.min(HUB_MAX_R, Math.max(HUB_MIN_R, HUB_MIN_R + 6 * Math.sqrt(degree)));

@@ -73,16 +73,23 @@ function parseGraphMode(raw: string | null | undefined): GraphMode {
 // busiest hub to HUB_MAX_R. VIEWBOX_PAD below derives from HUB_MAX_R, so the
 // bounds padding tracks this max and the busiest hub never clips.
 //
-// Previously 18/54 with a coefficient of 10 (6x BOOKMARK_R at the cap):
-// visibly too large in practice — a hub with only a handful of members still
-// swallowed its own nearby bookmark satellites and their labels, since a
-// satellite's base placement radius (`hubRadius + bookmarkRadius + 2`) put it
-// right at the edge of a circle that large, and MANY real tags (any with
-// degree >= 9) hit the same capped max, so most hubs in a real library ended
-// up rendering as identically oversized blobs rather than differentiating by
-// popularity. HUB_MAX_R now caps at ~3.6x BOOKMARK_R instead of 6x.
-const HUB_MIN_R = 13;
-const HUB_MAX_R = 32;
+// Previously 18/54 with a coefficient of 10 (6x BOOKMARK_R at the cap, 3.0x
+// MIN-to-MAX ratio, saturating at degree 13): visibly too large in practice —
+// a hub with only a handful of members still swallowed its own nearby
+// bookmark satellites and their labels, since a satellite's base placement
+// radius (`hubRadius + bookmarkRadius + 2`) put it right at the edge of a
+// circle that large, and MANY real tags (any with degree >= 13) hit the same
+// capped max, so most hubs in a real library ended up rendering as
+// identically oversized blobs rather than differentiating by popularity.
+// HUB_MAX_R now caps at 3x BOOKMARK_R instead of 6x, but keeps the SAME 3.0x
+// MIN-to-MAX ratio and near-identical degree-13-ish saturation point as
+// before (a review finding on the first pass at this: shrinking min and max
+// independently had dropped the ratio to 2.46x and pulled saturation in to
+// degree 11, discarding more of the popularity signal than the size fix
+// needed to give up) — so busier tags still read as visibly bigger than
+// quieter ones, just within a smaller overall footprint.
+const HUB_MIN_R = 11;
+const HUB_MAX_R = 33;
 const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
 const EDGE_OPACITY = 0.72;
