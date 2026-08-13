@@ -123,28 +123,56 @@ That's the real insight the first three attempts missed by tuning the same
 lever (how many passes): pass count was never going to be the fix, because
 convergence isn't guaranteed at any bounded pass count for adversarial
 input. The actual fix replaces the question entirely for the range where it
-matters. `packHubsOnGrid` places hub centers on a uniform grid sized to
-clear the single largest hub footprint present — an EXACT, structural
-guarantee (any two hubs are at least one cell apart on some axis, which is
-always ≥ the sum of their radii) instead of an iterative approximation, and
-O(n log n) (sort for determinism, one assignment pass) instead of
-O(passes·n²). `placeBookmarkSatellites` now uses ordinary iterative
-declutter up to `HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT` (200 — provably
-always the full 24 passes at that hub count, given the tuned budget
-constant, and already verified to converge well for realistic distributions
-via the production-shape fixture) and switches to the grid beyond it.
-Verified directly against the reviewer's fixture: 0 overlapping pairs at
-1,000 hubs (28ms) and still 0 at 5,000 hubs (78ms) — the guarantee holds
-regardless of scale, unlike every pass-count-tuning attempt before it.
+matters: `packHubsOnGrid` places hub centers with a structural, non-iterative
+guarantee instead of hoping enough relaxation passes happened.
 
-The trade-off, stated plainly: past 200 hubs the layout stops trying to
-preserve the force-settled topological arrangement (hubs that share
-bookmarks no longer cluster together) — a grid is topologically arbitrary.
-That's an accepted, deliberate cost specific to a tier real libraries never
-reach (observed ~60–110 hubs even for a 1,000+ bookmark library; 200+ needs
-that many DISTINCT tags each carried by ≥4 bookmarks), not a regression
-relative to the "hope enough passes happened" approach it replaces, which
-never actually delivered a legible layout at that scale either.
+Two more rounds refined HOW that guaranteed placement works, both from
+review catching a real cost of the first version:
+
+- **Uniform grid → shelf (row) packing.** The first version sized every
+  cell from the single LARGEST hub footprint present, so one very popular
+  tag inflated the spacing of every small hub too — a review finding on a
+  201-hub case (one 331-bookmark hub, 200 four-bookmark hubs) that blew the
+  bounds out to ~7,800 units wide, rendering bookmark circles at sub-pixel
+  size even at max zoom. `packHubsOnGrid` now sorts hubs largest-first and
+  packs them into rows (a target row width derived from the total footprint
+  "area," not a single global max), where each row's height is set by the
+  tallest hub actually in THAT row. Still an exact guarantee (proven
+  algebraically: a row's height is always ≥ 2× any of its members' radii
+  plus padding, so the vertical gap to the next row clears any pairing
+  regardless of that hub's own size — checked directly in the test file
+  with deliberately non-uniform radii, not just the tallest-vs-tallest
+  case). Verified on the reviewer's exact 201-hub case: bounds shrink from
+  ~7,800 to under 4,000 units, still zero overlap, 6ms.
+- **Hub-count threshold → verify, then fall back.** The 200-hub cutoff
+  itself turned out not to be a reliable predictor either: review found
+  that hub COUNT alone doesn't determine whether iterative declutter
+  converges — aggregate footprint magnitude does. Exactly
+  `HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT` (200) hubs stays on the "gets the
+  full 24 passes" iterative path by count, but with large-enough per-hub
+  membership (so large footprints) even 24 passes can leave real residual
+  overlap. Rather than chase a better threshold formula, `hasAnyOverlap`
+  checks the ACTUAL post-iteration result directly, and falls back to the
+  guaranteed grid whenever any pair is still overlapping — a runtime
+  verification instead of a heuristic prediction. The genuinely
+  discriminating test case turned out to be 200 hubs of VARIED footprint
+  size all seeded at the exact same coincident point (uniform-size
+  coincident circles converge cleanly via the tie-break logic; heterogeneous
+  sizes measurably don't: 159 residual pairs after the full 24 passes on
+  that construction, vs. 0 for a same-size version) — the reviewer's own
+  reported repro no longer reproduced against the smaller, since-retuned hub
+  radius constants, so the test needed its own harder case to actually
+  verify the fix rather than just the absence of a regression.
+
+The trade-off, stated plainly: when the grid fallback triggers, the layout
+stops trying to preserve the force-settled topological arrangement (hubs
+that share bookmarks no longer cluster together) — a grid is topologically
+arbitrary. That's an accepted, deliberate cost for a tier real libraries
+essentially never reach (observed ~60–110 hubs even for a 1,000+ bookmark
+library; 200+ needs that many DISTINCT tags each carried by ≥4 bookmarks),
+not a regression relative to the "hope enough passes happened" approach it
+replaces, which never actually delivered a legible layout at that scale
+either.
 
 ### A rejected middle attempt: geometric label avoidance
 
@@ -188,6 +216,38 @@ This also let the satellite-placement code drop the whole label-avoidance
 mechanism (and its `ringOuterRadius`/footprint coupling risk) entirely,
 returning `placeBookmarkSatellites` to the simpler, already-proven-correct
 plain golden-angle spiral.
+
+### Hub circle sizing
+
+Separate from the hairball overlap fix: user feedback reported the tag/hub
+node circle itself was "inadequately large." Confirmed with a rendered
+screenshot (60 sample bookmarks / 15 tags) — at the original `HUB_MIN_R`/
+`HUB_MAX_R` (18/54, up to 6× `BOOKMARK_R`), hub circles visibly swallowed
+their own nearby bookmark satellites and labels (a satellite's base
+placement radius sits right at the hub's edge), and any tag with degree ≥ 13
+already hit the same capped max, so most real tags rendered as identically
+oversized blobs instead of differentiating by popularity.
+
+Shrunk to 13/32 first, then retuned to 11/33 after review pointed out the
+first pass had shrunk the size RANGE faster than the max itself — dropping
+the original's 3.0× MIN-to-MAX ratio to 2.46× and pulling the saturation
+point in from degree 13 to 11, discarding more of the popularity signal
+than the size fix needed to give up. 11/33 restores the original's exact
+3.0× ratio and an equivalent (degree-14) saturation point, so a busy tag
+still reads as visibly bigger than a quiet one, within the smaller overall
+footprint (now ~3.6× `BOOKMARK_R` at the cap instead of 6×).
+
+Shrinking `HUB_MAX_R` had one side effect worth naming: `VIEWBOX_PAD` (the
+bounds padding that keeps hub circles and labels from clipping at the
+fit-to-bounds edge) was derived directly from `HUB_MAX_R`, so shrinking the
+circle silently shrank the padding too — even though a hub LABEL's width
+depends only on tag name length, not hub radius, and hadn't changed at all.
+A ~15+ character tag name centered on a boundary hub could clip. Fixed by
+decoupling the two: `VIEWBOX_PAD` now takes the max of the original
+radius-derived vertical clearance and a separate horizontal allowance sized
+for a generously long tag name (hub labels aren't length-capped the way
+bookmark titles are, so this is a practical assumption for typical tag
+names, not a hard guarantee for arbitrary input).
 
 ## Result
 

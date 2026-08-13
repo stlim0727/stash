@@ -119,51 +119,108 @@ export function ringOuterRadius(memberCount: number, bookmarkRadius: number, spa
   return bookmarkRadius + 2 + spacing * Math.sqrt(memberCount - 1 + 0.5) + bookmarkRadius;
 }
 
-/** Extra gap between adjacent grid cells in `packHubsOnGrid`, on top of the
- * cell size already sized to clear the largest hub's footprint. */
+/** Extra gap between adjacent hubs in `packHubsOnGrid`, on top of the sum of
+ * their own radii. */
 const GRID_CELL_PADDING = 4;
 
 /**
- * Guaranteed non-overlapping placement for hub centers, used once hub count
- * exceeds `HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT` — a PR review finding: no
- * fixed, safe-to-run pass count of the iterative `resolveNodeOverlap`
- * actually GUARANTEES full separation for an arbitrary configuration, only
- * makes probabilistic progress toward it. A synthetic 1,000-hub library
- * (disjoint 4-bookmark tags) left tens of thousands of overlapping pairs
- * even with several tapered-but-nonzero passes.
+ * Guaranteed non-overlapping placement for hub centers, used as a fallback
+ * whenever iterative declutter can't be trusted to fully converge — a PR
+ * review finding: no fixed, safe-to-run pass count of the iterative
+ * `resolveNodeOverlap` actually GUARANTEES full separation for an arbitrary
+ * configuration, only makes probabilistic progress toward it. A synthetic
+ * 1,000-hub library (disjoint 4-bookmark tags) left tens of thousands of
+ * overlapping pairs even with several tapered-but-nonzero passes.
  *
- * A uniform grid sidesteps the convergence question entirely: cell size is
- * set to clear the SINGLE LARGEST hub footprint present, so ANY two hubs —
- * adjacent cells or not — are guaranteed at least one cell's width apart on
- * at least one axis, which is always ≥ the sum of their radii. This is an
- * exact, structural guarantee, not an iterative approximation, and it's
- * O(n log n) (a sort for determinism, then a single assignment pass) rather
- * than O(passes·n²).
+ * Uses shelf (row) packing, not a uniform grid: hubs are sorted largest
+ * first and placed left-to-right into rows, wrapping to a new row once a
+ * target row width is exceeded; each row's height is set by the TALLEST hub
+ * actually placed in THAT row, not a single global maximum. A uniform grid
+ * (an earlier version of this fix) sized every cell from the single largest
+ * hub present, so one very popular tag inflated the spacing of every other
+ * hub too — a review finding on a 201-hub case (one 331-bookmark hub, 200
+ * four-bookmark hubs) that blew the bounds out to ~7,800 units wide, making
+ * the "legible fallback" render at sub-pixel size. Shelf packing keeps each
+ * row's footprint proportional to what's actually in it.
  *
- * The trade-off: this discards the force-settled topological arrangement
- * (hubs that share bookmarks no longer cluster near each other) for this
- * tier. That's an accepted cost, not a regression — real libraries never
- * reach this hub count (observed ~60–110 even for a 1,000+ bookmark
- * library; this needs hundreds of DISTINCT tags each carried by ≥4
- * bookmarks), and a grid of legible, fully separated circles reads far
- * better than a "natural-looking" layout a bounded algorithm can't actually
- * deliver at this scale.
+ * Still an EXACT structural guarantee, not an iterative approximation: for
+ * same-row neighbors, consecutive placement (left edge advances by each
+ * hub's own diameter + padding) keeps center-to-center distance at exactly
+ * `r_i + r_j + padding`, always ≥ the sum of radii. For hubs in different
+ * rows, row height is `max(2r + padding)` over that row's members, so any
+ * hub's vertical distance to the next row is at least `2 * its own radius`
+ * (worst case: the row's own tallest member, whose bottom edge exactly
+ * touches the next row's top) — algebraically that's always enough to clear
+ * `r_i + r_j` for ANY hub in the next row, regardless of that hub's own
+ * size (checked directly in the test file, including deliberately
+ * non-uniform radii, not just the tallest-vs-tallest case). O(n log n) (a
+ * sort, then one linear placement pass), not O(passes·n²).
+ *
+ * The trade-off: when this fallback triggers, it discards the force-settled
+ * topological arrangement (hubs that share bookmarks no longer cluster near
+ * each other). That's an accepted cost for the (rare) tier where iterative
+ * declutter can't be trusted to converge — a legible, fully separated
+ * layout beats a "natural-looking" one a bounded algorithm can't actually
+ * deliver.
  */
 export function packHubsOnGrid(hubs: readonly OverlapNode[]): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>();
   if (hubs.length === 0) {
     return positions;
   }
-  const maxRadius = Math.max(...hubs.map((hub) => hub.r));
-  const cellSize = maxRadius * 2 + GRID_CELL_PADDING;
-  const columns = Math.ceil(Math.sqrt(hubs.length));
-  const ordered = [...hubs].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  ordered.forEach((hub, i) => {
-    const column = i % columns;
-    const row = Math.floor(i / columns);
-    positions.set(hub.id, { x: column * cellSize, y: row * cellSize });
+  const ordered = [...hubs].sort((a, b) => {
+    if (b.r !== a.r) {
+      return b.r - a.r;
+    }
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+
+  // Target row width from the total footprint "area" (treating each hub as
+  // a square bounding box), aiming for a roughly square overall layout that
+  // scales with how much space the actual hub set needs — not a fixed
+  // constant that's wrong for both a handful of huge hubs and thousands of
+  // tiny ones.
+  const totalSquareArea = ordered.reduce((sum, hub) => {
+    const side = hub.r * 2 + GRID_CELL_PADDING;
+    return sum + side * side;
+  }, 0);
+  const largestDiameter = ordered[0].r * 2 + GRID_CELL_PADDING;
+  const targetRowWidth = Math.max(largestDiameter, Math.sqrt(totalSquareArea));
+
+  let cursorX = 0;
+  let cursorY = 0;
+  let rowHeight = 0;
+  for (const hub of ordered) {
+    const diameter = hub.r * 2 + GRID_CELL_PADDING;
+    if (cursorX > 0 && cursorX + diameter > targetRowWidth) {
+      cursorX = 0;
+      cursorY += rowHeight;
+      rowHeight = 0;
+    }
+    positions.set(hub.id, { x: cursorX + hub.r, y: cursorY + hub.r });
+    cursorX += diameter;
+    rowHeight = Math.max(rowHeight, diameter);
+  }
   return positions;
+}
+
+/** Whether any two nodes, at the given resolved positions, are still closer
+ * than the sum of their radii. Used to verify an iterative declutter
+ * attempt actually fully converged rather than trusting a hub-count
+ * threshold to predict it (a PR review finding: convergence depends on
+ * aggregate footprint magnitude, not just how many hubs there are). */
+function hasAnyOverlap(nodes: readonly OverlapNode[], positions: Map<string, { x: number; y: number }>): boolean {
+  for (let i = 0; i < nodes.length; i += 1) {
+    const a = positions.get(nodes[i].id)!;
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      const b = positions.get(nodes[j].id)!;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (dist < nodes[i].r + nodes[j].r) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -246,17 +303,25 @@ export function placeBookmarkSatellites(
     y: node.y,
     r: hubRadius(node.degree) + ringOuterRadius((groups.get(node.id) ?? []).length, bookmarkRadius, spacing),
   }));
-  // Below the full-quality ceiling, iterative declutter always gets the max
-  // pass count (guaranteed by hubFootprintPassBudget's own formula at this
-  // hub count) and reliably converges for realistic tag distributions
-  // (verified against the production-shape fixture, see the test file).
-  // Beyond it, no bounded pass count can be trusted to converge (a PR
-  // review finding), so switch to the grid packing's exact guarantee
-  // instead of hoping enough relaxation passes happened.
-  const resolvedHubs =
-    hubOverlapNodes.length <= HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT
-      ? resolveNodeOverlap(hubOverlapNodes, hubFootprintPassBudget(hubOverlapNodes.length))
-      : packHubsOnGrid(hubOverlapNodes);
+  // Above the full-quality ceiling, no bounded pass count can be trusted to
+  // converge (a PR review finding), so skip straight to the grid's exact
+  // guarantee rather than pay for an iterative attempt (and the O(h²)
+  // verification below) already known unlikely to succeed. AT or below it,
+  // hub COUNT alone still isn't a reliable predictor of convergence: a
+  // further review finding showed exactly 200 hubs with large-enough
+  // per-hub bookmark membership (so large footprints, not just many of
+  // them) can still leave residual overlap after the full 24 passes —
+  // convergence depends on aggregate footprint magnitude, not hub count.
+  // So verify the iterative result directly instead of trusting the
+  // threshold, and fall back to the guaranteed grid whenever it didn't
+  // fully separate everything.
+  const resolvedHubs = ((): Map<string, { x: number; y: number }> => {
+    if (hubOverlapNodes.length > HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT) {
+      return packHubsOnGrid(hubOverlapNodes);
+    }
+    const iterative = resolveNodeOverlap(hubOverlapNodes, hubFootprintPassBudget(hubOverlapNodes.length));
+    return hasAnyOverlap(hubOverlapNodes, iterative) ? packHubsOnGrid(hubOverlapNodes) : iterative;
+  })();
 
   let minX = Infinity;
   let minY = Infinity;

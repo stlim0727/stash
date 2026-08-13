@@ -120,13 +120,28 @@ const INTERACTION_NEARBY_LABEL_LIMIT = 8;
 // rendered) — every bookmark still renders as a node, just without a title.
 const BULK_LABEL_MAX_BOOKMARK_NODES = 150;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
-// the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
-// HUB_MAX_R, and its label sits below (or, after the render-side declutter,
-// ABOVE) the circle — one line-height plus up to the declutter's bounded nudge
-// (2*LABEL_SIZE, see maxLabelOffset). So the pad clears the radius plus a full
-// nudged label on EITHER side or an edge hub clips. The viewBox pads min and max
-// symmetrically, so this covers both an above- and a below-flipped edge label.
-const VIEWBOX_PAD = HUB_MAX_R + LABEL_SIZE * 3;
+// the fit-to-bounds edge. The viewBox pads min and max symmetrically on BOTH
+// axes, so one value has to cover the worse of two independent concerns:
+//
+//  - VERTICAL: a high-degree hub sitting on the boundary spans up to
+//    HUB_MAX_R, and its label sits below (or, after the render-side
+//    declutter, ABOVE) the circle — one line-height plus up to the
+//    declutter's bounded nudge (2*LABEL_SIZE, see maxLabelOffset).
+//  - HORIZONTAL: a hub label's width depends on tag NAME LENGTH, not hub
+//    radius — hub labels aren't length-capped the way bookmark titles are
+//    (truncateGraphLabel), so a long tag name centered on a boundary hub
+//    can reach further sideways than the vertical clearance covers. A
+//    review finding: tying this constant to HUB_MAX_R alone meant shrinking
+//    HUB_MAX_R (the "hub circle too large" fix) silently shrank this too,
+//    clipping a ~15+ char tag name even though label width hadn't changed.
+//
+// HUB_LABEL_MAX_HALF_WIDTH_ESTIMATE covers a generously long tag name
+// (~18 Latin characters, matching bookmark titles' own truncation cap, at
+// graph-labels.ts's ~0.65em/glyph estimate) — a practical assumption for
+// typical tag names, not a hard mathematical guarantee for arbitrary input
+// (nothing currently caps tag name length).
+const HUB_LABEL_MAX_HALF_WIDTH_ESTIMATE = 140;
+const VIEWBOX_PAD = Math.max(HUB_MAX_R + LABEL_SIZE * 3, HUB_LABEL_MAX_HALF_WIDTH_ESTIMATE);
 // Pinch-zoom clamps.
 export const MIN_SCALE = 0.4;
 export const MAX_SCALE = 6;

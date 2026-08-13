@@ -374,3 +374,90 @@ test('placeBookmarkSatellites reproduces the review report\'s exact scenario wit
   const overlaps = countOverlaps(result.nodes.map((node) => ({ x: node.x, y: node.y, r: radiusOf(node) })));
   assert.equal(overlaps, 0, `expected the grid-packed hub tier to leave zero overlap, got ${overlaps} pairs`);
 });
+
+test('packHubsOnGrid stays compact for a heterogeneous hub set, not inflated by the single largest one', () => {
+  // A PR review finding: a uniform grid (one earlier version of this fix)
+  // sized EVERY cell from the single largest hub present, so one popular
+  // tag inflated the spacing of every small hub too. Reproduced with the
+  // exact reported shape: one 331-bookmark hub + 200 four-bookmark hubs
+  // (201 total). The uniform-grid version measured ~7,800-unit-wide bounds
+  // for this; shelf packing should stay a small fraction of that, since
+  // only the (single) row containing the big hub needs to be that wide.
+  const bigFootprint = 265; // hubRadius(331) + ringOuterRadius(331, ...), see verify script
+  const smallFootprint = 65; // hubRadius(4) + ringOuterRadius(4, ...)
+  const hubs = [
+    { id: 'big', x: 0, y: 0, r: bigFootprint },
+    ...Array.from({ length: 200 }, (_, i) => ({ id: `small${i}`, x: 0, y: 0, r: smallFootprint })),
+  ];
+  const positions = packHubsOnGrid(hubs);
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const hub of hubs) {
+    const pos = positions.get(hub.id)!;
+    minX = Math.min(minX, pos.x - hub.r);
+    maxX = Math.max(maxX, pos.x + hub.r);
+  }
+  const width = maxX - minX;
+  // A uniform grid sized to the big hub would need columns=ceil(sqrt(201))=15
+  // cells of ~(2*265+pad) each, ~7,950 units wide. Shelf packing should stay
+  // well under half that.
+  assert.ok(width < 4000, `expected shelf packing to stay compact, got width=${width}`);
+
+  // Still fully non-overlapping despite the size disparity.
+  for (let i = 0; i < hubs.length; i += 1) {
+    for (let j = i + 1; j < hubs.length; j += 1) {
+      const a = positions.get(hubs[i].id)!;
+      const b = positions.get(hubs[j].id)!;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      assert.ok(dist >= hubs[i].r + hubs[j].r, `hubs ${hubs[i].id} and ${hubs[j].id} overlap`);
+    }
+  }
+});
+
+test('placeBookmarkSatellites falls back to the grid when hub count alone would look safe but footprints are too large to converge', () => {
+  // A PR review finding: hub COUNT alone isn't a reliable predictor of
+  // iterative convergence — the reviewer's own reported repro (200 hubs at
+  // 20 bookmarks each) didn't reproduce residual overlap against the
+  // CURRENT (smaller, since-retuned) hub-radius constants, so this uses a
+  // more direct worst case instead: many VARIED-size hubs all starting at
+  // the exact same coincident point (uniform-size coincident circles
+  // converge cleanly via the tie-break logic; heterogeneous sizes don't —
+  // verified directly against resolveNodeOverlap: 200 coincident circles
+  // with degrees cycling 4..80 left 159 overlapping pairs after the full 24
+  // passes, vs. 0 for 200 uniform-size ones). At exactly
+  // HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT (200) this stays on the "should
+  // get full quality" iterative path by count alone, so this exercises the
+  // verify-then-fallback logic specifically, not the hub-count threshold.
+  const HUB_COUNT = 200;
+  const hubs = Array.from({ length: HUB_COUNT }, (_, i) => {
+    const degree = 4 + (i % 20) * 4; // 4, 8, 12, ..., 80 -- varied footprints
+    return {
+      id: `t:tag${i}`,
+      kind: 'tag' as const,
+      tag_id: `tag${i}`,
+      slug: `tag${i}`,
+      label: `tag${i}`,
+      degree,
+      x: 0,
+      y: 0, // all coincident — the hard case for pairwise relaxation
+    };
+  });
+  const bookmarks: PositionedNode[] = [];
+  const edges: SettledGraph['edges'] = [];
+  hubs.forEach((hub, hubIndex) => {
+    for (let i = 0; i < hub.degree; i += 1) {
+      const id = `b:bk${hubIndex}_${i}`;
+      bookmarks.push({ id, kind: 'bookmark', bookmark_id: `bk${hubIndex}_${i}`, label: id, degree: 1, x: 0, y: 0 });
+      edges.push({ source: id, target: hub.id });
+    }
+  });
+  const settled: SettledGraph = {
+    nodes: [...hubs, ...bookmarks],
+    edges,
+    bounds: { min_x: 0, min_y: 0, max_x: 0, max_y: 0, width: 0, height: 0 },
+  };
+  const result = placeBookmarkSatellites(settled, { bookmarkRadius: BOOKMARK_R, hubRadius });
+  const overlaps = countOverlaps(result.nodes.map((node) => ({ x: node.x, y: node.y, r: radiusOf(node) })));
+  assert.equal(overlaps, 0, `expected the verify-then-fallback path to leave zero overlap, got ${overlaps} pairs`);
+});
