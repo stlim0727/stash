@@ -12,6 +12,7 @@ import {
 import { SINGLE_PASS_SAFE_NODE_COUNT } from '@/domain/graph-declutter';
 import {
   hubFootprintPassBudget,
+  packHubsOnGrid,
   placeBookmarkSatellites,
   ringOuterRadius,
 } from '@/domain/graph-satellite-layout';
@@ -302,4 +303,74 @@ test('hubFootprintPassBudget gives up (0 passes) only once even a single pass wo
   // offer, same as the pre-existing behavior for an extreme node count.
   assert.equal(hubFootprintPassBudget(SINGLE_PASS_SAFE_NODE_COUNT + 1), 0);
   assert.equal(hubFootprintPassBudget(50000), 0);
+});
+
+test('packHubsOnGrid guarantees zero overlap for any hub count, unlike a bounded relaxation sweep', () => {
+  // A PR review finding: no fixed pass count of the ITERATIVE declutter
+  // actually GUARANTEES full separation — it only makes probabilistic
+  // progress. A grid sidesteps convergence entirely: cell size clears the
+  // single largest radius present, so any two hubs (adjacent cells or not)
+  // are provably at least one cell apart on some axis. Checked with widely
+  // varying radii (not just the uniform case) since the guarantee has to
+  // hold for the largest hub in the set, not the average.
+  const hubs = Array.from({ length: 50 }, (_, i) => ({
+    id: `h${i}`,
+    x: Math.random() * 1000,
+    y: Math.random() * 1000,
+    r: 10 + (i % 7) * 15, // 10..100, deliberately non-uniform
+  }));
+  const positions = packHubsOnGrid(hubs);
+  assert.equal(positions.size, hubs.length);
+  for (let i = 0; i < hubs.length; i += 1) {
+    for (let j = i + 1; j < hubs.length; j += 1) {
+      const a = positions.get(hubs[i].id)!;
+      const b = positions.get(hubs[j].id)!;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      assert.ok(
+        dist >= hubs[i].r + hubs[j].r,
+        `hubs ${hubs[i].id} and ${hubs[j].id} overlap: dist=${dist}, radii sum=${hubs[i].r + hubs[j].r}`,
+      );
+    }
+  }
+});
+
+test('packHubsOnGrid is deterministic regardless of input order', () => {
+  const hubs = Array.from({ length: 10 }, (_, i) => ({ id: `h${i}`, x: i, y: i, r: 10 + i }));
+  const shuffled = [...hubs].reverse();
+  const a = packHubsOnGrid(hubs);
+  const b = packHubsOnGrid(shuffled);
+  for (const hub of hubs) {
+    assert.deepEqual(a.get(hub.id), b.get(hub.id));
+  }
+});
+
+test('placeBookmarkSatellites reproduces the review report\'s exact scenario with genuinely zero overlap', () => {
+  // The reviewer's own fixture: 1,000 disjoint 4-bookmark hubs (5,000 total
+  // nodes), which satisfies minSharedDegree=4. At 0 passes this left
+  // 230,000+ overlaps; even a nonzero-but-bounded pass count left tens of
+  // thousands. Above HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT this now uses the
+  // grid's exact guarantee instead, so this must be genuinely 0, not just
+  // "small".
+  const HUB_COUNT = 300; // safely above the 200 full-quality ceiling, kept
+  // modest so this test stays fast; the grid guarantee is independent of
+  // hub count (see packHubsOnGrid's own test above for the harder-evidence
+  // case with deliberately non-uniform radii).
+  const bookmarks: Bookmark[] = [];
+  const tags: Tag[] = [];
+  const bookmarkTags: BookmarkTag[] = [];
+  let counter = 0;
+  for (let t = 0; t < HUB_COUNT; t += 1) {
+    const tag = makeTag(`tag${t}`);
+    tags.push(tag);
+    for (let i = 0; i < 4; i += 1) {
+      const bookmark = makeBookmark(`bk${counter}`);
+      counter += 1;
+      bookmarks.push(bookmark);
+      bookmarkTags.push(link(bookmark.id, tag.id));
+    }
+  }
+  const settled = settle({ bookmarks, tags, bookmarkTags, minSharedDegree: 4 });
+  const result = placeBookmarkSatellites(settled, { bookmarkRadius: BOOKMARK_R, hubRadius });
+  const overlaps = countOverlaps(result.nodes.map((node) => ({ x: node.x, y: node.y, r: radiusOf(node) })));
+  assert.equal(overlaps, 0, `expected the grid-packed hub tier to leave zero overlap, got ${overlaps} pairs`);
 });

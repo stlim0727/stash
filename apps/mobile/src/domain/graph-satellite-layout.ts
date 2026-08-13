@@ -119,6 +119,53 @@ export function ringOuterRadius(memberCount: number, bookmarkRadius: number, spa
   return bookmarkRadius + 2 + spacing * Math.sqrt(memberCount - 1 + 0.5) + bookmarkRadius;
 }
 
+/** Extra gap between adjacent grid cells in `packHubsOnGrid`, on top of the
+ * cell size already sized to clear the largest hub's footprint. */
+const GRID_CELL_PADDING = 4;
+
+/**
+ * Guaranteed non-overlapping placement for hub centers, used once hub count
+ * exceeds `HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT` — a PR review finding: no
+ * fixed, safe-to-run pass count of the iterative `resolveNodeOverlap`
+ * actually GUARANTEES full separation for an arbitrary configuration, only
+ * makes probabilistic progress toward it. A synthetic 1,000-hub library
+ * (disjoint 4-bookmark tags) left tens of thousands of overlapping pairs
+ * even with several tapered-but-nonzero passes.
+ *
+ * A uniform grid sidesteps the convergence question entirely: cell size is
+ * set to clear the SINGLE LARGEST hub footprint present, so ANY two hubs —
+ * adjacent cells or not — are guaranteed at least one cell's width apart on
+ * at least one axis, which is always ≥ the sum of their radii. This is an
+ * exact, structural guarantee, not an iterative approximation, and it's
+ * O(n log n) (a sort for determinism, then a single assignment pass) rather
+ * than O(passes·n²).
+ *
+ * The trade-off: this discards the force-settled topological arrangement
+ * (hubs that share bookmarks no longer cluster near each other) for this
+ * tier. That's an accepted cost, not a regression — real libraries never
+ * reach this hub count (observed ~60–110 even for a 1,000+ bookmark
+ * library; this needs hundreds of DISTINCT tags each carried by ≥4
+ * bookmarks), and a grid of legible, fully separated circles reads far
+ * better than a "natural-looking" layout a bounded algorithm can't actually
+ * deliver at this scale.
+ */
+export function packHubsOnGrid(hubs: readonly OverlapNode[]): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>();
+  if (hubs.length === 0) {
+    return positions;
+  }
+  const maxRadius = Math.max(...hubs.map((hub) => hub.r));
+  const cellSize = maxRadius * 2 + GRID_CELL_PADDING;
+  const columns = Math.ceil(Math.sqrt(hubs.length));
+  const ordered = [...hubs].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  ordered.forEach((hub, i) => {
+    const column = i % columns;
+    const row = Math.floor(i / columns);
+    positions.set(hub.id, { x: column * cellSize, y: row * cellSize });
+  });
+  return positions;
+}
+
 /**
  * Replace a settled bipartite graph's bookmark-node positions with
  * deterministic, non-overlapping satellite placements around their primary
@@ -199,7 +246,17 @@ export function placeBookmarkSatellites(
     y: node.y,
     r: hubRadius(node.degree) + ringOuterRadius((groups.get(node.id) ?? []).length, bookmarkRadius, spacing),
   }));
-  const resolvedHubs = resolveNodeOverlap(hubOverlapNodes, hubFootprintPassBudget(hubOverlapNodes.length));
+  // Below the full-quality ceiling, iterative declutter always gets the max
+  // pass count (guaranteed by hubFootprintPassBudget's own formula at this
+  // hub count) and reliably converges for realistic tag distributions
+  // (verified against the production-shape fixture, see the test file).
+  // Beyond it, no bounded pass count can be trusted to converge (a PR
+  // review finding), so switch to the grid packing's exact guarantee
+  // instead of hoping enough relaxation passes happened.
+  const resolvedHubs =
+    hubOverlapNodes.length <= HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT
+      ? resolveNodeOverlap(hubOverlapNodes, hubFootprintPassBudget(hubOverlapNodes.length))
+      : packHubsOnGrid(hubOverlapNodes);
 
   let minX = Infinity;
   let minY = Infinity;

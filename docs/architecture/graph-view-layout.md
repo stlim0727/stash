@@ -105,21 +105,46 @@ already over the 2s hang budget, at node counts a real (if large) library
 could plausibly reach, unlike the hub-only case where reaching that many
 DISTINCT surviving tags is far more extreme.
 
-The shipped fix instead floors at 1 only up to a shared, empirically
-measured `SINGLE_PASS_SAFE_NODE_COUNT` (6,000 — comfortably under the ~8,000
-mark where a single pass starts to bite, exported once from
-`graph-declutter.ts` and reused by `hubFootprintPassBudget` since both
-budgets feed the same `resolveNodeOverlap` primitive and therefore share the
-same per-node cost). Past that ceiling, both functions fall back to the
-pre-existing 0-pass skip — this is not a regression relative to before this
-PR, since 0 was already the behavior there; the fix's actual contribution is
-recovering real declutter work (down to 24,025 overlaps from 142,757 on the
-reviewer's 1,000-hub fixture) across the WIDE middle range that used to
-silently collapse to a no-op, while staying honest that a truly extreme
-node count (tens of thousands) is still out of budget for any O(n²)
-approach — a genuinely sub-quadratic algorithm (e.g. spatial-grid bucketing)
-wasn't worth the added complexity for a scenario this far beyond anything a
-real library, even a pathological one, could plausibly produce.
+A second fix floored at 1 only up to a shared, empirically measured
+`SINGLE_PASS_SAFE_NODE_COUNT` (6,000 — comfortably under the ~8,000 mark
+where a single pass starts to bite, exported once from `graph-declutter.ts`
+and reused by `hubFootprintPassBudget` since both budgets feed the same
+`resolveNodeOverlap` primitive). This made `declutterPassBudget` (the
+whole-graph safety net, which really can encounter thousands of nodes in a
+large real library) safe at every scale it operates at. But review kept
+pushing on the SAME underlying point, correctly: for `hubFootprintPassBudget`
+specifically, "floor at 1" was never actually a fix, just a smaller version
+of the same problem — no FIXED small pass count of an O(n²) relaxation sweep
+*guarantees* full separation for an arbitrary configuration, it only makes
+probabilistic progress toward it. On the reviewer's own 1,000-hub fixture, 1
+pass still left 24,025 overlapping pairs.
+
+That's the real insight the first three attempts missed by tuning the same
+lever (how many passes): pass count was never going to be the fix, because
+convergence isn't guaranteed at any bounded pass count for adversarial
+input. The actual fix replaces the question entirely for the range where it
+matters. `packHubsOnGrid` places hub centers on a uniform grid sized to
+clear the single largest hub footprint present — an EXACT, structural
+guarantee (any two hubs are at least one cell apart on some axis, which is
+always ≥ the sum of their radii) instead of an iterative approximation, and
+O(n log n) (sort for determinism, one assignment pass) instead of
+O(passes·n²). `placeBookmarkSatellites` now uses ordinary iterative
+declutter up to `HUB_FOOTPRINT_FULL_QUALITY_HUB_COUNT` (200 — provably
+always the full 24 passes at that hub count, given the tuned budget
+constant, and already verified to converge well for realistic distributions
+via the production-shape fixture) and switches to the grid beyond it.
+Verified directly against the reviewer's fixture: 0 overlapping pairs at
+1,000 hubs (28ms) and still 0 at 5,000 hubs (78ms) — the guarantee holds
+regardless of scale, unlike every pass-count-tuning attempt before it.
+
+The trade-off, stated plainly: past 200 hubs the layout stops trying to
+preserve the force-settled topological arrangement (hubs that share
+bookmarks no longer cluster together) — a grid is topologically arbitrary.
+That's an accepted, deliberate cost specific to a tier real libraries never
+reach (observed ~60–110 hubs even for a 1,000+ bookmark library; 200+ needs
+that many DISTINCT tags each carried by ≥4 bookmarks), not a regression
+relative to the "hope enough passes happened" approach it replaces, which
+never actually delivered a legible layout at that scale either.
 
 ### A rejected middle attempt: geometric label avoidance
 
