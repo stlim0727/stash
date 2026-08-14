@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-08-11 (distinguished expected offline/DNS retries from actionable sync queue health failures — see Sync And Auth).
+Last updated: 2026-08-13 (graph view: bookmark-node hairball fix on large, heavily-shared-tag libraries — see Known Traps).
 
 ## Successor Agent Orientation
 
@@ -543,6 +543,17 @@ only, debug-signed, standalone, and includes build provenance in Settings.
     headless Chromium — an instant synthetic `.click()` never gave the
     deferred close a chance to run first, which is why it eluded PR #566's
     own repro.
+- Graph view (`app/graph.tsx`) bookmark-node positions come from a
+  deterministic satellite placement (`domain/graph-satellite-layout.ts`),
+  not the raw force settle: `layoutTickBudget` shrinks ticks as node count
+  grows, and on a large, heavily-shared-tag library (verified live: a
+  1,035-bookmark account whose top tag alone carries 331) that leaves
+  bookmark-node circles genuinely overlapping — not just visually dense,
+  since SVG viewBox zoom scales position and radius together, so no amount
+  of zooming fixes it. A naive post-hoc pairwise nudge doesn't converge
+  cheaply at that scale (empirically ~5s for 150 passes, over the 2s hang
+  budget) — see `docs/architecture/graph-view-layout.md` for the full
+  investigation, the rejected fix, and the chosen design.
 - Graph view (`app/graph.tsx`) pan/zoom-release snap-back flash on Android
   (PR #561): resetting the `Animated` transform to identity right after
   scheduling a new baked `viewBox` raced React's async state commit against

@@ -36,7 +36,13 @@ import {
   type PositionedNode,
   type SettledGraph,
 } from "@/domain/graph";
+import {
+  declutterPassBudget,
+  resolveNodeOverlap,
+  type OverlapNode,
+} from "@/domain/graph-declutter";
 import { resolveHubLabels, type HubLabelInput } from "@/domain/graph-labels";
+import { placeBookmarkSatellites } from "@/domain/graph-satellite-layout";
 import type { BookmarkTag, Tag } from "@/domain/types";
 import { useT } from "@/i18n";
 import { measureSyncSegment } from "@/observability/slow-segment-log";
@@ -63,13 +69,27 @@ function parseGraphMode(raw: string | null | undefined): GraphMode {
 
 // Node sizing (in layout/viewBox units — the settled layout spans ~1000 units).
 // Hubs scale by degree with a sqrt so a very busy tag doesn't dwarf the canvas;
-// bookmark nodes stay small so hubs read as the anchors. The range is wide and
-// the coefficient steep so a popular tag reads visibly bigger than a lonely one
-// (the sqrt still keeps one giant tag from swallowing the canvas, and the clamp
-// pins the busiest hub to HUB_MAX_R). VIEWBOX_PAD below derives from HUB_MAX_R,
-// so the bounds padding tracks this max and the busiest hub never clips.
-const HUB_MIN_R = 18;
-const HUB_MAX_R = 54;
+// bookmark nodes stay small so hubs read as the anchors. The clamp pins the
+// busiest hub to HUB_MAX_R. VIEWBOX_PAD below derives from HUB_MAX_R, so the
+// bounds padding tracks this max and the busiest hub never clips.
+//
+// Previously 18/54 with a coefficient of 10 (6x BOOKMARK_R at the cap, 3.0x
+// MIN-to-MAX ratio, saturating at degree 13): visibly too large in practice —
+// a hub with only a handful of members still swallowed its own nearby
+// bookmark satellites and their labels, since a satellite's base placement
+// radius (`hubRadius + bookmarkRadius + 2`) put it right at the edge of a
+// circle that large, and MANY real tags (any with degree >= 13) hit the same
+// capped max, so most hubs in a real library ended up rendering as
+// identically oversized blobs rather than differentiating by popularity.
+// HUB_MAX_R now caps at 3x BOOKMARK_R instead of 6x, but keeps the SAME 3.0x
+// MIN-to-MAX ratio and near-identical degree-13-ish saturation point as
+// before (a review finding on the first pass at this: shrinking min and max
+// independently had dropped the ratio to 2.46x and pulled saturation in to
+// degree 11, discarding more of the popularity signal than the size fix
+// needed to give up) — so busier tags still read as visibly bigger than
+// quieter ones, just within a smaller overall footprint.
+const HUB_MIN_R = 11;
+const HUB_MAX_R = 33;
 const BOOKMARK_R = 9;
 const EDGE_WIDTH = 1.4;
 const EDGE_OPACITY = 0.72;
@@ -100,13 +120,28 @@ const INTERACTION_NEARBY_LABEL_LIMIT = 8;
 // rendered) — every bookmark still renders as a node, just without a title.
 const BULK_LABEL_MAX_BOOKMARK_NODES = 150;
 // Padding around the settled bounds so hub circles + labels aren't clipped at
-// the fit-to-bounds edge. A high-degree hub sitting on the boundary spans up to
-// HUB_MAX_R, and its label sits below (or, after the render-side declutter,
-// ABOVE) the circle — one line-height plus up to the declutter's bounded nudge
-// (2*LABEL_SIZE, see maxLabelOffset). So the pad clears the radius plus a full
-// nudged label on EITHER side or an edge hub clips. The viewBox pads min and max
-// symmetrically, so this covers both an above- and a below-flipped edge label.
-const VIEWBOX_PAD = HUB_MAX_R + LABEL_SIZE * 3;
+// the fit-to-bounds edge. The viewBox pads min and max symmetrically on BOTH
+// axes, so one value has to cover the worse of two independent concerns:
+//
+//  - VERTICAL: a high-degree hub sitting on the boundary spans up to
+//    HUB_MAX_R, and its label sits below (or, after the render-side
+//    declutter, ABOVE) the circle — one line-height plus up to the
+//    declutter's bounded nudge (2*LABEL_SIZE, see maxLabelOffset).
+//  - HORIZONTAL: a hub label's width depends on tag NAME LENGTH, not hub
+//    radius — hub labels aren't length-capped the way bookmark titles are
+//    (truncateGraphLabel), so a long tag name centered on a boundary hub
+//    can reach further sideways than the vertical clearance covers. A
+//    review finding: tying this constant to HUB_MAX_R alone meant shrinking
+//    HUB_MAX_R (the "hub circle too large" fix) silently shrank this too,
+//    clipping a ~15+ char tag name even though label width hadn't changed.
+//
+// HUB_LABEL_MAX_HALF_WIDTH_ESTIMATE covers a generously long tag name
+// (~18 Latin characters, matching bookmark titles' own truncation cap, at
+// graph-labels.ts's ~0.65em/glyph estimate) — a practical assumption for
+// typical tag names, not a hard mathematical guarantee for arbitrary input
+// (nothing currently caps tag name length).
+const HUB_LABEL_MAX_HALF_WIDTH_ESTIMATE = 140;
+const VIEWBOX_PAD = Math.max(HUB_MAX_R + LABEL_SIZE * 3, HUB_LABEL_MAX_HALF_WIDTH_ESTIMATE);
 // Pinch-zoom clamps.
 export const MIN_SCALE = 0.4;
 export const MAX_SCALE = 6;
@@ -169,8 +204,56 @@ export function graphCanvasSize(
 function hubRadius(degree: number): number {
   return Math.min(
     HUB_MAX_R,
-    Math.max(HUB_MIN_R, HUB_MIN_R + 10 * Math.sqrt(degree)),
+    Math.max(HUB_MIN_R, HUB_MIN_R + 6 * Math.sqrt(degree)),
   );
+}
+
+// Radius-aware declutter pass over the settled layout (domain/graph-declutter.ts):
+// nudges apart bookmark/hub circles that still overlap after the force settle's
+// (possibly very small, on a large stash — see layoutTickBudget) tick budget, so a
+// dense cluster of bookmark nodes around a busy tag hub reads as distinct circles
+// instead of an overlapping gray blob. Recomputes bounds from the adjusted
+// positions; edges keep referencing nodes by id, so they follow automatically.
+export function declutterSettledGraph(settled: SettledGraph): SettledGraph {
+  if (settled.nodes.length < 2) {
+    return settled;
+  }
+  const overlapNodes: OverlapNode[] = settled.nodes.map((node) => ({
+    id: node.id,
+    x: node.x,
+    y: node.y,
+    r: node.kind === "bookmark" ? BOOKMARK_R : hubRadius(node.degree),
+  }));
+  const resolved = resolveNodeOverlap(
+    overlapNodes,
+    declutterPassBudget(overlapNodes.length),
+  );
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const nodes: PositionedNode[] = settled.nodes.map((node) => {
+    const pos = resolved.get(node.id)!;
+    if (pos.x < minX) minX = pos.x;
+    if (pos.y < minY) minY = pos.y;
+    if (pos.x > maxX) maxX = pos.x;
+    if (pos.y > maxY) maxY = pos.y;
+    return { ...node, x: pos.x, y: pos.y };
+  });
+
+  return {
+    nodes,
+    edges: settled.edges,
+    bounds: {
+      min_x: minX,
+      min_y: minY,
+      max_x: maxX,
+      max_y: maxY,
+      width: maxX - minX,
+      height: maxY - minY,
+    },
+  };
 }
 
 export function clampToRange(value: number, min: number, max: number): number {
@@ -564,7 +647,23 @@ export default function GraphScreen() {
       );
       const options = { ticks: layoutTickBudget(graph.nodes.length) };
       // Same off-render-path settle for both views — only the derive differs.
-      const result = measureSyncSegment("graph-layout", () => layoutGraph(graph, options));
+      const raw = measureSyncSegment("graph-layout", () => layoutGraph(graph, options));
+      // Bipartite only: a busy tag on a large library (see
+      // domain/graph-satellite-layout.ts) leaves the force settle's
+      // bookmark-node positions genuinely overlapping, not just visually
+      // dense — replace them with a deterministic, guaranteed-non-overlapping
+      // placement around each bookmark's primary tag hub. Co-occurrence has
+      // no bookmark nodes, so this is a no-op there anyway.
+      const placed =
+        mode === "cooccurrence"
+          ? raw
+          : measureSyncSegment("graph-satellite-placement", () =>
+              placeBookmarkSatellites(raw, { bookmarkRadius: BOOKMARK_R, hubRadius }),
+            );
+      // Final cheap safety-net pass for any small residual overlap left
+      // between neighboring hubs' rings (or, in co-occurrence, the hub
+      // settle itself).
+      const result = measureSyncSegment("graph-declutter", () => declutterSettledGraph(placed));
       if (!cancelled) {
         setSettled(result);
       }
@@ -1271,6 +1370,43 @@ export default function GraphScreen() {
             />
           );
         })}
+        {/* Hub labels render BEFORE node circles so a circle (a bookmark's
+            satellite included) always paints ON TOP of any hub label text it
+            happens to sit near — an interactive node must never be visually
+            or interactively occluded by a label. This is a stronger, exact
+            guarantee than trying to keep satellite placement out of the
+            label's (variably shaped, cross-hub-decluttered) box via
+            geometry: paint order can't miss an edge case the way an
+            approximate avoidance heuristic can. The trade-off is a small
+            dot can locally cover a glyph or two of a label's text, which
+            reads far better than a fully hidden, untappable bookmark. */}
+        {settled.nodes.map((node) => {
+          if (node.kind === "bookmark") {
+            return null;
+          }
+          if (!isPointInViewBox(node.x, node.y, viewBoxRect, 100)) {
+            return null;
+          }
+          const placement = labelById.get(node.id);
+          if (!placement) {
+            return null;
+          }
+          return (
+            <SvgText
+              key={`l${node.id}`}
+              x={placement.x}
+              y={placement.y}
+              fill={palette.text}
+              fontSize={LABEL_SIZE}
+              fontWeight="700"
+              textAnchor="middle"
+            >
+              {node.id === UNTAGGED_HUB_ID
+                ? t("graph.untaggedLabel")
+                : node.label}
+            </SvgText>
+          );
+        })}
         {settled.nodes.map((node) => {
           // Spatial viewport culling: skip nodes outside visible viewBox area
           if (!isPointInViewBox(node.x, node.y, viewBoxRect, 80)) {
@@ -1317,33 +1453,6 @@ export default function GraphScreen() {
                 isUntagged ? undefined : () => applyTagFacet(node.tag_id)
               }
             />
-          );
-        })}
-        {settled.nodes.map((node) => {
-          if (node.kind === "bookmark") {
-            return null;
-          }
-          if (!isPointInViewBox(node.x, node.y, viewBoxRect, 100)) {
-            return null;
-          }
-          const placement = labelById.get(node.id);
-          if (!placement) {
-            return null;
-          }
-          return (
-            <SvgText
-              key={`l${node.id}`}
-              x={placement.x}
-              y={placement.y}
-              fill={palette.text}
-              fontSize={LABEL_SIZE}
-              fontWeight="700"
-              textAnchor="middle"
-            >
-              {node.id === UNTAGGED_HUB_ID
-                ? t("graph.untaggedLabel")
-                : node.label}
-            </SvgText>
           );
         })}
       </>
