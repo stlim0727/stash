@@ -47,6 +47,7 @@ import GraphScreen, {
   pinchStartSnapshot,
   selectNearbyBookmarkLabelIds,
   selectPriorityBookmarkLabelIds,
+  settleStageMessageKey,
   touchCenterInViewport,
   truncateGraphLabel,
   wheelZoomScale,
@@ -177,6 +178,15 @@ async function flushSettle() {
     for (const task of tasks) {
       task();
     }
+    // The settle now runs as an async chain that yields to the event loop
+    // between stages (see `yieldToUI` in graph.tsx) so stage-progress text
+    // can actually paint before the next stage's heavy synchronous work
+    // blocks the JS thread again. Drain enough real macrotask ticks — more
+    // than the current stage count — for the whole chain to finish inside
+    // this `act()`, so the resulting `setSettled` lands inside it too.
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   });
 }
 
@@ -239,6 +249,72 @@ test('renders the shared-tag backbone and omits untagged bookmarks', async () =>
   expect(screen.queryByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a3')).toBeNull();
 });
 
+// The settle pipeline's four stages, in the order they run (graph.tsx's
+// SettleStage type + settleStageMessageKey) — bipartite mode runs all four.
+const SETTLE_STAGE_TEXTS = [
+  'Reading your bookmarks…',
+  'Positioning nodes…',
+  'Arranging bookmarks…',
+  'Polishing the layout…',
+];
+
+test('shows stage-specific progress text as the settle advances, instead of a bare spinner', async () => {
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  // Before the settle's InteractionManager callback has run at all, the
+  // generic message shows (no stage recorded yet).
+  expect(screen.getByText('Building your map…')).toBeTruthy();
+
+  const tasks = pendingInteractions;
+  pendingInteractions = [];
+  // Fake timers freeze the settle's chained `setTimeout(…, 0)` yields (see
+  // `yieldToUI` in graph.tsx) so invoking the task stops exactly at its
+  // first yield instead of racing on through — with real timers, even a
+  // single `act(async () => …)` call gives Node enough event-loop time to
+  // cascade through the WHOLE chain of zero-delay timeouts back-to-back,
+  // skipping past every intermediate stage straight to completion. Stays
+  // on fake timers for the rest of the test too: switching back to real
+  // timers mid-chain abandons the pending fake timer the suspended settle
+  // is awaiting, hanging it forever instead of letting it resume.
+  jest.useFakeTimers();
+  try {
+    // The ASYNC form of `act()` is required here, even though this callback
+    // has no `await` of its own: React 18+'s automatic batching defers a
+    // state update triggered from a promise/timer callback (as this settle
+    // chain is) to a microtask flush, and only `act()`'s async overload
+    // drains that before returning — the sync overload returns immediately,
+    // before the "deriving" stage text has actually committed.
+    await act(async () => {
+      for (const task of tasks) {
+        task();
+      }
+    });
+    // The settle's first stage is set synchronously by the task itself,
+    // before its first yield to the UI — this is enough to prove the
+    // loading text is no longer stuck on the generic "Building your map…"
+    // message the whole time. The remaining three stages' text mapping is
+    // covered directly and deterministically by the `settleStageMessageKey`
+    // unit tests below, rather than by stepping fake timers one real
+    // production stage at a time (which, empirically, either stalls or
+    // overshoots multiple stages per step in this environment).
+    expect(screen.getByText(SETTLE_STAGE_TEXTS[0])).toBeTruthy();
+
+    // Drain the rest of the chain (repeatedly — a single pass isn't
+    // guaranteed to pick up a timer only just scheduled by the previous
+    // one) so the settle completes and the real graph renders.
+    for (let i = 0; i < 10 && !screen.queryByTestId('graph-screen'); i += 1) {
+      await act(async () => {
+        await jest.runOnlyPendingTimersAsync();
+      });
+    }
+    await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+  } finally {
+    jest.useRealTimers();
+  }
+});
+
 test('renders graph edges with readable contrast', async () => {
   seedLibrary();
 
@@ -282,6 +358,19 @@ describe('truncateGraphLabel', () => {
     expect(truncated).toBe('A genuinely very…');
     expect(truncated.length).toBeLessThanOrEqual(18);
     expect(truncated.endsWith('…')).toBe(true);
+  });
+});
+
+describe('settleStageMessageKey', () => {
+  test('falls back to the generic building message before any stage runs', () => {
+    expect(settleStageMessageKey(null)).toBe('graph.building');
+  });
+
+  test('maps each settle stage to its own message key', () => {
+    expect(settleStageMessageKey('deriving')).toBe('graph.buildingStageDerive');
+    expect(settleStageMessageKey('layout')).toBe('graph.buildingStageLayout');
+    expect(settleStageMessageKey('placing')).toBe('graph.buildingStagePlacing');
+    expect(settleStageMessageKey('declutter')).toBe('graph.buildingStageDeclutter');
   });
 });
 
