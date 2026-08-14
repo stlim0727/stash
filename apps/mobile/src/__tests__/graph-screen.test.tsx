@@ -47,6 +47,7 @@ import GraphScreen, {
   pinchStartSnapshot,
   selectNearbyBookmarkLabelIds,
   selectPriorityBookmarkLabelIds,
+  settleStageMessageKey,
   touchCenterInViewport,
   truncateGraphLabel,
   wheelZoomScale,
@@ -177,6 +178,15 @@ async function flushSettle() {
     for (const task of tasks) {
       task();
     }
+    // The settle now runs as an async chain that yields to the event loop
+    // between stages (see `yieldToUI` in graph.tsx) so stage-progress text
+    // can actually paint before the next stage's heavy synchronous work
+    // blocks the JS thread again. Drain enough real macrotask ticks — more
+    // than the current stage count — for the whole chain to finish inside
+    // this `act()`, so the resulting `setSettled` lands inside it too.
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
   });
 }
 
@@ -239,6 +249,66 @@ test('renders the shared-tag backbone and omits untagged bookmarks', async () =>
   expect(screen.queryByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000a3')).toBeNull();
 });
 
+// The settle pipeline's four stages, in the order they run (graph.tsx's
+// SettleStage type + settleStageMessageKey) — bipartite mode runs all four.
+const SETTLE_STAGE_TEXTS = [
+  'Reading your bookmarks…',
+  'Positioning nodes…',
+  'Arranging bookmarks…',
+  'Polishing the layout…',
+];
+
+function currentSettleStageText(screen: { queryByText: (text: string) => unknown }): string | null {
+  for (const text of SETTLE_STAGE_TEXTS) {
+    if (screen.queryByText(text)) {
+      return text;
+    }
+  }
+  return null;
+}
+
+test('shows stage-specific progress text as the settle advances, instead of a bare spinner', async () => {
+  seedLibrary();
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  // Before the settle's InteractionManager callback has run at all, the
+  // generic message shows (no stage recorded yet).
+  expect(screen.getByText('Building your map…')).toBeTruthy();
+
+  const tasks = pendingInteractions;
+  pendingInteractions = [];
+  // Invoking the captured task runs the settle's async chain synchronously up
+  // to its first await, which is enough to observe the first stage change.
+  act(() => {
+    for (const task of tasks) {
+      task();
+    }
+  });
+
+  const seenStages: string[] = [];
+  const recordStage = () => {
+    const stage = currentSettleStageText(screen);
+    if (stage && seenStages[seenStages.length - 1] !== stage) {
+      seenStages.push(stage);
+    }
+  };
+  recordStage();
+
+  // Drain real macrotask ticks (see `yieldToUI` in graph.tsx) until the
+  // settle finishes, recording each distinct stage message observed along
+  // the way. Bounded loop: 20 ticks is generous headroom over the 4 stages.
+  for (let i = 0; i < 20 && !screen.queryByTestId('graph-screen'); i += 1) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    recordStage();
+  }
+
+  await waitFor(() => expect(screen.getByTestId('graph-screen')).toBeTruthy());
+  expect(seenStages).toEqual(SETTLE_STAGE_TEXTS);
+});
+
 test('renders graph edges with readable contrast', async () => {
   seedLibrary();
 
@@ -282,6 +352,19 @@ describe('truncateGraphLabel', () => {
     expect(truncated).toBe('A genuinely very…');
     expect(truncated.length).toBeLessThanOrEqual(18);
     expect(truncated.endsWith('…')).toBe(true);
+  });
+});
+
+describe('settleStageMessageKey', () => {
+  test('falls back to the generic building message before any stage runs', () => {
+    expect(settleStageMessageKey(null)).toBe('graph.building');
+  });
+
+  test('maps each settle stage to its own message key', () => {
+    expect(settleStageMessageKey('deriving')).toBe('graph.buildingStageDerive');
+    expect(settleStageMessageKey('layout')).toBe('graph.buildingStageLayout');
+    expect(settleStageMessageKey('placing')).toBe('graph.buildingStagePlacing');
+    expect(settleStageMessageKey('declutter')).toBe('graph.buildingStageDeclutter');
   });
 });
 

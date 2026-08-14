@@ -67,6 +67,46 @@ function parseGraphMode(raw: string | null | undefined): GraphMode {
   return raw === "cooccurrence" ? "cooccurrence" : "bipartite";
 }
 
+// The settle effect's stages, in the order they run (see the effect below).
+// `placing` only runs in bipartite mode (co-occurrence has no bookmark
+// satellites to place). Surfaced to the user as stage-specific loading text
+// so a slow settle on a large library reads as active progress rather than
+// an inert spinner — each stage is already bounded to low seconds by the
+// existing tick/pass budgets (layoutTickBudget, declutterPassBudget), so
+// this is honest progress, not a fake animation.
+type SettleStage = "deriving" | "layout" | "placing" | "declutter";
+
+const SETTLE_STAGE_MESSAGE_KEY: Record<
+  SettleStage,
+  | "graph.buildingStageDerive"
+  | "graph.buildingStageLayout"
+  | "graph.buildingStagePlacing"
+  | "graph.buildingStageDeclutter"
+> = {
+  deriving: "graph.buildingStageDerive",
+  layout: "graph.buildingStageLayout",
+  placing: "graph.buildingStagePlacing",
+  declutter: "graph.buildingStageDeclutter",
+};
+
+// Pure + exported for testing: `null` (no stage recorded yet, e.g. the first
+// render before the settle effect's InteractionManager callback runs) falls
+// back to the generic "Building your map…" message.
+export function settleStageMessageKey(
+  stage: SettleStage | null,
+): "graph.building" | (typeof SETTLE_STAGE_MESSAGE_KEY)[SettleStage] {
+  return stage === null ? "graph.building" : SETTLE_STAGE_MESSAGE_KEY[stage];
+}
+
+// Yields one macrotask so a `setState` call made just before this is awaited
+// gets a chance to commit and paint before the next synchronous, CPU-bound
+// settle stage blocks the JS thread again — otherwise React would batch the
+// state update behind the very computation it's meant to announce, and the
+// stage text would never actually appear before the layout finished.
+function yieldToUI(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 // Node sizing (in layout/viewBox units — the settled layout spans ~1000 units).
 // Hubs scale by degree with a sqrt so a very busy tag doesn't dwarf the canvas;
 // bookmark nodes stay small so hubs read as the anchors. The clamp pins the
@@ -620,6 +660,11 @@ export default function GraphScreen() {
   // `runAfterInteractions`, letting the screen paint and the navigation animation
   // finish first. Deterministic seeded layout, so it only runs once per topology.
   const [settled, setSettled] = useState<SettledGraph | null>(null);
+  // Which settle stage is currently running, so the loading state (rendered
+  // further down, while `settled === null`) can show what's actually
+  // happening instead of a bare spinner. See `yieldToUI` above for why each
+  // stage change is followed by a yield rather than running back-to-back.
+  const [settleStage, setSettleStage] = useState<SettleStage | null>(null);
   useEffect(() => {
     if (input.bookmarks.length === 0) {
       // Nothing to lay out — the empty state renders; skip the settle entirely.
@@ -629,44 +674,71 @@ export default function GraphScreen() {
     // Re-settling replaces every position, so show the loading state meanwhile
     // rather than a stale graph.
     setSettled(null);
+    setSettleStage(null);
     const handle = InteractionManager.runAfterInteractions(() => {
       if (cancelled) {
         return;
       }
-      // Derive first, then size the tick budget from the graph the user will
-      // actually see. Co-occurrence can drop most historical tags as isolates,
-      // so budgeting from raw input.tags would starve a small visible graph.
-      // Timed separately (STASH-64 review): this is the screen's actual
-      // expensive synchronous path — deriving is O(n) topology work, layout
-      // is O(ticks·n²) force simulation — and neither was previously
-      // instrumented, unlike the committedData/signature rebuild above.
-      const graph = measureSyncSegment("graph-derive", () =>
-        mode === "cooccurrence"
-          ? deriveCoOccurrenceGraph(input)
-          : deriveGraph(input),
-      );
-      const options = { ticks: layoutTickBudget(graph.nodes.length) };
-      // Same off-render-path settle for both views — only the derive differs.
-      const raw = measureSyncSegment("graph-layout", () => layoutGraph(graph, options));
-      // Bipartite only: a busy tag on a large library (see
-      // domain/graph-satellite-layout.ts) leaves the force settle's
-      // bookmark-node positions genuinely overlapping, not just visually
-      // dense — replace them with a deterministic, guaranteed-non-overlapping
-      // placement around each bookmark's primary tag hub. Co-occurrence has
-      // no bookmark nodes, so this is a no-op there anyway.
-      const placed =
-        mode === "cooccurrence"
-          ? raw
-          : measureSyncSegment("graph-satellite-placement", () =>
-              placeBookmarkSatellites(raw, { bookmarkRadius: BOOKMARK_R, hubRadius }),
-            );
-      // Final cheap safety-net pass for any small residual overlap left
-      // between neighboring hubs' rings (or, in co-occurrence, the hub
-      // settle itself).
-      const result = measureSyncSegment("graph-declutter", () => declutterSettledGraph(placed));
-      if (!cancelled) {
-        setSettled(result);
-      }
+      void (async () => {
+        // Derive first, then size the tick budget from the graph the user will
+        // actually see. Co-occurrence can drop most historical tags as isolates,
+        // so budgeting from raw input.tags would starve a small visible graph.
+        // Timed separately (STASH-64 review): this is the screen's actual
+        // expensive synchronous path — deriving is O(n) topology work, layout
+        // is O(ticks·n²) force simulation — and neither was previously
+        // instrumented, unlike the committedData/signature rebuild above.
+        setSettleStage("deriving");
+        await yieldToUI();
+        if (cancelled) {
+          return;
+        }
+        const graph = measureSyncSegment("graph-derive", () =>
+          mode === "cooccurrence"
+            ? deriveCoOccurrenceGraph(input)
+            : deriveGraph(input),
+        );
+
+        setSettleStage("layout");
+        await yieldToUI();
+        if (cancelled) {
+          return;
+        }
+        const options = { ticks: layoutTickBudget(graph.nodes.length) };
+        // Same off-render-path settle for both views — only the derive differs.
+        const raw = measureSyncSegment("graph-layout", () => layoutGraph(graph, options));
+
+        // Bipartite only: a busy tag on a large library (see
+        // domain/graph-satellite-layout.ts) leaves the force settle's
+        // bookmark-node positions genuinely overlapping, not just visually
+        // dense — replace them with a deterministic, guaranteed-non-overlapping
+        // placement around each bookmark's primary tag hub. Co-occurrence has
+        // no bookmark nodes, so this stage is skipped there entirely.
+        let placed = raw;
+        if (mode !== "cooccurrence") {
+          setSettleStage("placing");
+          await yieldToUI();
+          if (cancelled) {
+            return;
+          }
+          placed = measureSyncSegment("graph-satellite-placement", () =>
+            placeBookmarkSatellites(raw, { bookmarkRadius: BOOKMARK_R, hubRadius }),
+          );
+        }
+
+        // Final cheap safety-net pass for any small residual overlap left
+        // between neighboring hubs' rings (or, in co-occurrence, the hub
+        // settle itself).
+        setSettleStage("declutter");
+        await yieldToUI();
+        if (cancelled) {
+          return;
+        }
+        const result = measureSyncSegment("graph-declutter", () => declutterSettledGraph(placed));
+        if (!cancelled) {
+          setSettled(result);
+          setSettleStage(null);
+        }
+      })();
     });
     return () => {
       cancelled = true;
@@ -1532,8 +1604,11 @@ export default function GraphScreen() {
         style={[styles.emptyContainer, { backgroundColor: palette.background }]}
       >
         <ActivityIndicator color={palette.accent} />
-        <Text style={[styles.emptyHint, { color: palette.textSecondary }]}>
-          {t("graph.building")}
+        <Text
+          style={[styles.emptyHint, { color: palette.textSecondary }]}
+          testID="graph-loading-stage"
+        >
+          {t(settleStageMessageKey(settleStage))}
         </Text>
       </View>
     );

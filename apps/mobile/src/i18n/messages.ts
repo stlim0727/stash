@@ -76,6 +76,10 @@ export const en = {
   'graph.untaggedLabel': 'Untagged',
   'graph.untaggedHint': 'Add tags to your bookmarks to see how they connect.',
   'graph.building': 'Building your map…',
+  'graph.buildingStageDerive': 'Reading your bookmarks…',
+  'graph.buildingStageLayout': 'Positioning nodes…',
+  'graph.buildingStagePlacing': 'Arranging bookmarks…',
+  'graph.buildingStageDeclutter': 'Polishing the layout…',
   'graph.recenterA11y': 'Recenter the graph',
   'graph.openA11y': 'Open the tag graph',
   'graph.tagA11y': {
