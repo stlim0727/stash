@@ -23,7 +23,7 @@ import { createPayloadFromBookmark } from '@/domain/create-payload';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import { recordLog } from '@/observability/log-buffer';
 import type { BookmarkRepository, IdentityRekeyState } from '@/storage/types';
-import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
+import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 
 export interface SyncedUserRef {
   id: string;
@@ -68,10 +68,19 @@ export interface AccountTransitionPlan {
  * Re-home is deliberately `synced`-only: a not-yet-synced row has no confirmed
  * cloud copy under the anon account, and its create entry is still in the queue,
  * so leaving it untouched lets it upload under the new account as-is.
+ *
+ * `isLocalOnlyBookmark` excludes rows (e.g. image bookmarks) marked `synced`
+ * purely as local "nothing to upload" bookkeeping, never a real cloud row —
+ * same reasoning as the seed/sample exclusion above. Without it, re-homing
+ * would re-queue one as a `create` under the new account via
+ * `createPayloadFromBookmark`, which has no image-upload support (STASH-65).
  */
 function cloudOwnedRows(localBookmarks: Bookmark[]): Bookmark[] {
   return localBookmarks.filter(
-    (bookmark) => hasRemoteIdentity(bookmark.id) && bookmark.sync_status === 'synced',
+    (bookmark) =>
+      hasRemoteIdentity(bookmark.id) &&
+      bookmark.sync_status === 'synced' &&
+      !isLocalOnlyBookmark(bookmark),
   );
 }
 
@@ -97,14 +106,18 @@ function cloudOwnedRows(localBookmarks: Bookmark[]): Bookmark[] {
  * the bookmark itself is safe in that account's cloud, and keeping the queued
  * op would strand it under a different identity, so we drop the op.
  *
- * `hasRemoteIdentity` excludes seed/sample rows the same way `cloudOwnedRows`
- * does — see its comment.
+ * `hasRemoteIdentity` and `isLocalOnlyBookmark` exclude seed/sample and
+ * local-only rows the same way `cloudOwnedRows` does — see its comment.
+ * Without the latter exclusion here, a local-only image bookmark would be
+ * DROPPED (deleted) on logout / a real A→real B switch as if it were the
+ * departing account's cloud row, even though it was never uploaded (STASH-65).
  */
 function cloudRemoteRows(localBookmarks: Bookmark[]): Bookmark[] {
   return localBookmarks.filter(
     (bookmark) =>
       hasRemoteIdentity(bookmark.id) &&
-      (bookmark.sync_status === 'synced' || bookmark.ever_synced === true),
+      (bookmark.sync_status === 'synced' || bookmark.ever_synced === true) &&
+      !isLocalOnlyBookmark(bookmark),
   );
 }
 

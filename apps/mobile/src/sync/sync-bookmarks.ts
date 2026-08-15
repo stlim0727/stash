@@ -635,6 +635,34 @@ export function hasRemoteIdentity(bookmarkId: string): boolean {
   return UUID_PATTERN.test(bookmarkId);
 }
 
+/**
+ * True for a bookmark that is marked `sync_status: 'synced'` purely as a
+ * local "no cloud work pending" bookkeeping choice, NOT because it was ever
+ * actually confirmed by the server. Image bookmarks are the current case:
+ * their binary upload is deferred (see `Bookmark.local_image_uri`), so
+ * `addBookmark` marks them `synced` with a real UUID id and never enqueues
+ * them (store/bookmarks.tsx). That combination is otherwise indistinguishable
+ * from a genuinely cloud-confirmed row to `hasRemoteIdentity` + `sync_status`
+ * checks, which caused STASH-65: the pull's remote-deletion diff treated a
+ * freshly captured image bookmark — absent from the server by design — as
+ * "deleted on another device" and deleted it locally within seconds of
+ * capture. Every "is this row a confirmed cloud row" check must exclude
+ * these rows alongside the existing seed/sample-row exclusion.
+ *
+ * `content_type: 'image'` alone is NOT sufficient: the server schema and
+ * `RemoteBookmark` both allow an image row to be genuinely cloud-owned (an
+ * imported row, a public-api-created one, or a future synced-image row —
+ * `remoteToBookmark` in api/bookmarks.ts stamps any pulled row `ever_synced:
+ * true` regardless of content_type). `ever_synced` is only ever set by a
+ * confirmed pull or a confirmed upload response — never by local capture —
+ * so requiring it to be unset is what actually distinguishes "never touched
+ * the server" from "a real cloud image row this device just hasn't edited
+ * since its last confirmed sync."
+ */
+export function isLocalOnlyBookmark(bookmark: Bookmark): boolean {
+  return bookmark.content_type === 'image' && bookmark.ever_synced !== true;
+}
+
 export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
   return createBookmarkApi(session);
 }

@@ -308,6 +308,51 @@ test('pull removes synced rows deleted remotely, keeps local-only rows', async (
   assert.equal(calls.includes('deleteBookmark:local-abc123'), false);
 });
 
+test('pull never deletes a local-only image bookmark absent from the server (Sentry STASH-65)', async () => {
+  // Image bookmarks are captured with a real UUID id and sync_status:
+  // 'synced' even though the binary is never uploaded (cloud upload is
+  // deferred) — see addBookmark's image branch in store/bookmarks.tsx. That
+  // combination used to be indistinguishable from a genuinely cloud-confirmed
+  // row absent from a since-deleted-elsewhere row, so the very next pull
+  // after a share deleted the just-captured bookmark within seconds.
+  const { calls, repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    id: REMOTE_ID_B,
+    content_type: 'image',
+    sync_status: 'synced',
+    local_image_uri: 'file:///stash-images/shared.jpg',
+  });
+  const api = fakeApi({ listBookmarkIds: async () => [] });
+
+  const result = await pullRemoteChanges(api, repository, () => [imageBookmark], () => false);
+
+  assert.deepEqual(result.deletions, []);
+  assert.equal(calls.includes(`deleteBookmark:${REMOTE_ID_B}`), false);
+});
+
+test('pull still reconciles a genuinely cloud-synced image row deleted remotely', async () => {
+  // The local-only exclusion must be provenance-aware, not content-type-only:
+  // the server schema allows a real cloud row with content_type 'image' (an
+  // import, a public-api create, or a future synced-image row), and a pulled
+  // row is always stamped ever_synced: true (remoteToBookmark in
+  // api/bookmarks.ts). Such a row absent from the server must still be
+  // reconciled as a genuine remote deletion, unlike a never-uploaded local
+  // image bookmark (ever_synced unset).
+  const { calls, repository } = fakeRepository();
+  const cloudImage = makeBookmark({
+    id: REMOTE_ID_B,
+    content_type: 'image',
+    sync_status: 'synced',
+    ever_synced: true,
+  });
+  const api = fakeApi({ listBookmarkIds: async () => [] });
+
+  const result = await pullRemoteChanges(api, repository, () => [cloudImage], () => false);
+
+  assert.deepEqual(result.deletions, [REMOTE_ID_B]);
+  assert.ok(calls.includes(`deleteBookmark:${REMOTE_ID_B}`));
+});
+
 test('pull uses the batch upsert/delete methods when the repository provides them (Sentry STASH-5X)', async () => {
   // Looping insertBookmark/deleteBookmark per row re-serializes and writes
   // the entire local array on the web backend on every call — a large pull

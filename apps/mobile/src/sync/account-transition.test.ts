@@ -147,6 +147,45 @@ test('only cloud-owned rows are touched — local/seed rows are left alone', () 
   );
 });
 
+test('carry-over never re-homes a local-only image bookmark (Sentry STASH-65)', () => {
+  // Image bookmarks get a real UUID id and sync_status: 'synced' even though
+  // the binary was never uploaded (cloud upload of images is deferred). If
+  // carried over as a genuine cloud row, it would be re-queued as a `create`
+  // under the new account via createPayloadFromBookmark, which has no
+  // image-upload support.
+  const rows = [
+    bookmark({ id: REMOTE_A, sync_status: 'synced' }),
+    bookmark({ id: REMOTE_B, sync_status: 'synced', content_type: 'image' }),
+  ];
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    rows,
+  );
+  assert.deepEqual(
+    plan.rehome.map((b) => b.id),
+    [REMOTE_A],
+  );
+});
+
+test('carry-over still re-homes a genuinely cloud-synced image row (ever_synced: true)', () => {
+  // The local-only exclusion must be provenance-aware: a real cloud row can
+  // have content_type 'image' (an import, a public-api create, or a future
+  // synced-image row), and any row this device pulled from the server is
+  // always stamped ever_synced: true. Such a row must still carry over like
+  // any other genuinely cloud-owned row.
+  const rows = [bookmark({ id: REMOTE_A, sync_status: 'synced', content_type: 'image', ever_synced: true })];
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    rows,
+  );
+  assert.deepEqual(
+    plan.rehome.map((b) => b.id),
+    [REMOTE_A],
+  );
+});
+
 test('planLogoutCacheClear drops the logged-out account’s cloud rows', () => {
   const plan = planLogoutCacheClear([bookmark({ id: REMOTE_A }), bookmark({ id: REMOTE_B })]);
   assert.equal(plan.kind, 'logout');
@@ -170,6 +209,29 @@ test('planLogoutCacheClear leaves never-synced LOCAL captures in place but drops
   // Both cloud-identity rows drop; the local create and the seed survive.
   assert.deepEqual(plan.drop, [REMOTE_A, REMOTE_B]);
   assert.deepEqual(plan.dropQueue, [REMOTE_A, REMOTE_B]);
+});
+
+test('planLogoutCacheClear never drops a local-only image bookmark (Sentry STASH-65)', () => {
+  // Without excluding local-only rows, a logout (or a real A->real B switch,
+  // same cloudRemoteRows filter) would DELETE a never-uploaded image bookmark
+  // as if it were the departing account's confirmed cloud row.
+  const plan = planLogoutCacheClear([
+    bookmark({ id: REMOTE_A, sync_status: 'synced' }),
+    bookmark({ id: REMOTE_B, sync_status: 'synced', content_type: 'image' }),
+  ]);
+  assert.deepEqual(plan.drop, [REMOTE_A]);
+  assert.deepEqual(plan.dropQueue, [REMOTE_A]);
+});
+
+test('planLogoutCacheClear still drops a genuinely cloud-synced image row (ever_synced: true)', () => {
+  // Same provenance requirement as the pull deletion diff: a real cloud image
+  // row (ever_synced: true) must still be dropped on logout like any other
+  // cloud-owned row, not preserved as if it were local-only.
+  const plan = planLogoutCacheClear([
+    bookmark({ id: REMOTE_A, sync_status: 'synced', content_type: 'image', ever_synced: true }),
+  ]);
+  assert.deepEqual(plan.drop, [REMOTE_A]);
+  assert.deepEqual(plan.dropQueue, [REMOTE_A]);
 });
 
 test('applyAccountTransition (logout drop) removes only the dropped synced rows', async () => {
