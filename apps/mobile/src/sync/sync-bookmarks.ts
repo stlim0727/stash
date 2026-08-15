@@ -635,6 +635,24 @@ export function hasRemoteIdentity(bookmarkId: string): boolean {
   return UUID_PATTERN.test(bookmarkId);
 }
 
+/**
+ * True for a bookmark that is marked `sync_status: 'synced'` purely as a
+ * local "no cloud work pending" bookkeeping choice, NOT because it was ever
+ * actually confirmed by the server. Image bookmarks are the current case:
+ * their binary upload is deferred (see `Bookmark.local_image_uri`), so
+ * `addBookmark` marks them `synced` with a real UUID id and never enqueues
+ * them (store/bookmarks.tsx). That combination is otherwise indistinguishable
+ * from a genuinely cloud-confirmed row to `hasRemoteIdentity` + `sync_status`
+ * checks, which caused STASH-65: the pull's remote-deletion diff treated a
+ * freshly captured image bookmark — absent from the server by design — as
+ * "deleted on another device" and deleted it locally within seconds of
+ * capture. Every "is this row a confirmed cloud row" check must exclude
+ * these rows alongside the existing seed/sample-row exclusion.
+ */
+export function isLocalOnlyBookmark(bookmark: Bookmark): boolean {
+  return bookmark.content_type === 'image';
+}
+
 export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
   return createBookmarkApi(session);
 }

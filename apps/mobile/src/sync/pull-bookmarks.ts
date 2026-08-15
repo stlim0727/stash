@@ -3,7 +3,7 @@ import { recordLog } from '@/observability/log-buffer';
 import { recordSlowSegment } from '@/observability/slow-segment-log';
 import type { AIEnrichment, Bookmark, BookmarkTag, Collection, Tag } from '@/domain/types';
 import type { BookmarkRepository, TagData } from '@/storage/types';
-import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
+import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 
 export const LAST_PULLED_AT_KEY = 'last_pulled_at';
 /** The Supabase user id the local cache was last synced against. */
@@ -83,11 +83,15 @@ export async function pullRemoteChanges(
   const userChanged =
     currentUser != null && previousUserId != null && previousUserId !== currentUser.id;
   const initialLocals = getLocalBookmarks();
-  // hasRemoteIdentity excludes seed/sample rows, which are marked
+  // hasRemoteIdentity excludes seed/sample rows, and isLocalOnlyBookmark
+  // excludes local-only rows (e.g. image bookmarks) — both are marked
   // sync_status: 'synced' locally too even though they were never a real
   // cloud row (see hasSyncedOnce in store/bookmarks.tsx).
   const initialLocalCloudRowCount = initialLocals.filter(
-    (bookmark) => hasRemoteIdentity(bookmark.id) && bookmark.sync_status === 'synced',
+    (bookmark) =>
+      hasRemoteIdentity(bookmark.id) &&
+      bookmark.sync_status === 'synced' &&
+      !isLocalOnlyBookmark(bookmark),
   ).length;
   const hasLocalCloudRows = initialLocalCloudRowCount > 0;
   // STASH-22: stale sync metadata can survive an upgrade/session-recovery path
@@ -208,6 +212,7 @@ export async function pullRemoteChanges(
           (bookmark) =>
             hasRemoteIdentity(bookmark.id) &&
             bookmark.sync_status === 'synced' &&
+            !isLocalOnlyBookmark(bookmark) &&
             !remoteIdSet.has(bookmark.id) &&
             !hasQueuedWork(bookmark.id),
         )

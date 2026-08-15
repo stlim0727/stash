@@ -308,6 +308,28 @@ test('pull removes synced rows deleted remotely, keeps local-only rows', async (
   assert.equal(calls.includes('deleteBookmark:local-abc123'), false);
 });
 
+test('pull never deletes a local-only image bookmark absent from the server (Sentry STASH-65)', async () => {
+  // Image bookmarks are captured with a real UUID id and sync_status:
+  // 'synced' even though the binary is never uploaded (cloud upload is
+  // deferred) — see addBookmark's image branch in store/bookmarks.tsx. That
+  // combination used to be indistinguishable from a genuinely cloud-confirmed
+  // row absent from a since-deleted-elsewhere row, so the very next pull
+  // after a share deleted the just-captured bookmark within seconds.
+  const { calls, repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    id: REMOTE_ID_B,
+    content_type: 'image',
+    sync_status: 'synced',
+    local_image_uri: 'file:///stash-images/shared.jpg',
+  });
+  const api = fakeApi({ listBookmarkIds: async () => [] });
+
+  const result = await pullRemoteChanges(api, repository, () => [imageBookmark], () => false);
+
+  assert.deepEqual(result.deletions, []);
+  assert.equal(calls.includes(`deleteBookmark:${REMOTE_ID_B}`), false);
+});
+
 test('pull uses the batch upsert/delete methods when the repository provides them (Sentry STASH-5X)', async () => {
   // Looping insertBookmark/deleteBookmark per row re-serializes and writes
   // the entire local array on the web backend on every call — a large pull
