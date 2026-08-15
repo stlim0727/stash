@@ -474,6 +474,38 @@ test("editing title/notes marks a complete enrichment stale (locally + persisted
   );
 });
 
+test("editing a local-only image bookmark never queues a remote update (Sentry STASH-65)", async () => {
+  // Image bookmarks are captured with a real UUID id and sync_status: 'synced'
+  // even though the binary was never uploaded (cloud upload of images is
+  // deferred). Without excluding them from the sync-mutation gate, editing
+  // the title/notes would enqueue an update against a row that doesn't exist
+  // server-side — the API's not-found response then makes the sync engine
+  // treat it as "deleted on another device" and delete the local row too.
+  const IMAGE_ID = "7e64cf1e-0000-4000-8000-0000000000ff";
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: IMAGE_ID,
+      url: null,
+      content_type: "image",
+      sync_status: "synced",
+      local_image_uri: "file:///stash-images/shared.jpg",
+    }),
+  ]);
+
+  const { result } = await renderStore();
+
+  await act(async () => {
+    result.current.updateBookmarkFields(IMAGE_ID, { title: "New title" });
+  });
+
+  expect(fakeRepo.__queue()).toHaveLength(0);
+  const updated = result.current.getBookmark(IMAGE_ID);
+  expect(updated?.title).toBe("New title");
+  // Stays 'synced' (never flipped to 'pending' the way a real cloud row's
+  // edit would) since there is no remote row to reconcile against.
+  expect(updated?.sync_status).toBe("synced");
+});
+
 test("refreshBookmarkPreview replaces generated preview metadata and queues sync", async () => {
   const id = SYNCED_ID;
   fakeRepo.__reset([

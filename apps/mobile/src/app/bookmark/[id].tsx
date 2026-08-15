@@ -53,7 +53,7 @@ import {
   dismissSuggestionBundle,
   recordFolderSuggestionActedOn,
 } from '@/domain/suggestion-actions';
-import { hasRemoteIdentity } from '@/sync/sync-bookmarks';
+import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
@@ -281,11 +281,14 @@ export default function BookmarkDetailScreen({
   const tags = getTagsForBookmark(bookmark.id);
   const collection = getCollection(bookmark.collection_id);
   const enrichment = getEnrichment(bookmark.id);
-  // hasRemoteIdentity excludes seed/sample rows, which are marked
-  // sync_status: 'synced' locally too even though their bookmark-* id was
-  // never a real cloud row (see hasSyncedOnce in store/bookmarks.tsx).
+  // hasRemoteIdentity excludes seed/sample rows, and isLocalOnlyBookmark
+  // excludes local-only rows (e.g. a not-yet-uploaded image bookmark) — both
+  // are marked sync_status: 'synced' locally too even though they were never
+  // a real cloud row (see hasSyncedOnce in store/bookmarks.tsx).
   const canOrganizeRemotely =
-    hasRemoteIdentity(bookmark.id) && (bookmark.sync_status === 'synced' || bookmark.ever_synced === true);
+    hasRemoteIdentity(bookmark.id) &&
+    (bookmark.sync_status === 'synced' || bookmark.ever_synced === true) &&
+    !isLocalOnlyBookmark(bookmark);
   // Any enrichment in flight (auto-trigger or manual) → show the ambient
   // "filling in" skeleton. The manual-only flag drives the explicit button
   // state, so the auto-trigger never makes the section look like a blocking

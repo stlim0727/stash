@@ -157,6 +157,7 @@ import {
   findStaleQueueEntries,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
+  isLocalOnlyBookmark,
   isPermanentlyUnsyncableUrl,
   isRowSpecificPermanentSyncErrorText,
   isSyncable,
@@ -176,7 +177,14 @@ import {
 export function isBookmarkSyncedOnce(bookmark: Bookmark): boolean {
   return (
     hasRemoteIdentity(bookmark.id) &&
-    (bookmark.sync_status === "synced" || bookmark.ever_synced === true)
+    (bookmark.sync_status === "synced" || bookmark.ever_synced === true) &&
+    // Local-only rows (e.g. a not-yet-uploaded image bookmark) are marked
+    // `sync_status: 'synced'` as pure local bookkeeping, never confirmed by
+    // the server. Without this exclusion, editing/deleting/tagging one
+    // enqueued a remote mutation against a row that doesn't exist server-side;
+    // the API's not-found response then made syncQueueEntry treat it as
+    // "deleted on another device" and delete the local row too (STASH-65).
+    !isLocalOnlyBookmark(bookmark)
   );
 }
 

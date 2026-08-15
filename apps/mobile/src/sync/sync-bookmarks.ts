@@ -648,9 +648,19 @@ export function hasRemoteIdentity(bookmarkId: string): boolean {
  * "deleted on another device" and deleted it locally within seconds of
  * capture. Every "is this row a confirmed cloud row" check must exclude
  * these rows alongside the existing seed/sample-row exclusion.
+ *
+ * `content_type: 'image'` alone is NOT sufficient: the server schema and
+ * `RemoteBookmark` both allow an image row to be genuinely cloud-owned (an
+ * imported row, a public-api-created one, or a future synced-image row —
+ * `remoteToBookmark` in api/bookmarks.ts stamps any pulled row `ever_synced:
+ * true` regardless of content_type). `ever_synced` is only ever set by a
+ * confirmed pull or a confirmed upload response — never by local capture —
+ * so requiring it to be unset is what actually distinguishes "never touched
+ * the server" from "a real cloud image row this device just hasn't edited
+ * since its last confirmed sync."
  */
 export function isLocalOnlyBookmark(bookmark: Bookmark): boolean {
-  return bookmark.content_type === 'image';
+  return bookmark.content_type === 'image' && bookmark.ever_synced !== true;
 }
 
 export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
