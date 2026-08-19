@@ -23,3 +23,8 @@ export async function uploadImageFile(
 ): Promise<void> {
   throw new Error('Image upload is not supported on web.');
 }
+
+/** See module doc — never actually called on web. */
+export function localFileSizeBytes(_localUri: string): number {
+  throw new Error('Image upload is not supported on web.');
+}

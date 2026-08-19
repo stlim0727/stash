@@ -8,6 +8,25 @@ jest.mock('@/storage/repository', () =>
   require('./helpers/fake-repository').createFakeRepositoryModule(),
 );
 
+// Controllable image-store double: copyImageToLibrary only resolves once
+// `resolveCopyImageToLibrary` below is called, so a test can hold an image
+// capture's durable-write chain open deliberately.
+let resolveCopyImageToLibrary: ((uri: string) => void) | null = null;
+const mockCopyImageToLibrary = jest.fn(
+  (_sourceUri: string, fileName: string) =>
+    new Promise<string>((resolve) => {
+      resolveCopyImageToLibrary = (uri) => resolve(uri ?? `file:///docs/stash-images/${fileName}`);
+    }),
+);
+jest.mock('@/storage/image-store', () => ({
+  copyImageToLibrary: (sourceUri: string, fileName: string) =>
+    mockCopyImageToLibrary(sourceUri, fileName),
+  uploadImageFile: async () => {
+    throw new Error('not stubbed for this test — irrelevant to what it checks');
+  },
+  localFileSizeBytes: () => 1024,
+}));
+
 // Authenticated real account throughout; individual tests flip it to
 // signed_out to prove the reset is session-gated.
 const realSession = {
@@ -362,4 +381,63 @@ test('resetLibrary refuses while an import is still flushing in the background, 
   // failing update entry, an unrelated pre-existing retry-loop interaction
   // out of scope here).
   fakeRepo.repository.insertBookmark = originalInsertBookmark;
+});
+
+// Not really about resetLibrary — reuses this file's real-session/api-mock
+// harness (the closest already-working fixture for exercising syncNow, the
+// same shape reset's own busy-guard tests above already exercise) to prove
+// the image-capture-vs-syncNow race a Codex review round flagged as P1.
+test("syncNow defers while an image capture's durable write is still landing, instead of wiping it from state", async () => {
+  // The image copy is a real (and, for a large photo, potentially slow) file
+  // operation sitting between the optimistic setBookmarks/setQueue call and
+  // the durable insert+enqueue that follows it — unlike URL/text captures,
+  // which have no meaningful I/O in that gap. syncNow unconditionally
+  // reloads bookmarks/queue from the repository and REPLACES React state
+  // with that snapshot (deliberate, for account-transition correctness —
+  // see the comment above reconcileAccountTransition in syncNow). Without
+  // localCreateFlushesInFlight gating it here the same way it already gates
+  // a bulk import's own flush (see the busy-guard tests above), a syncNow
+  // landing mid-copy would wipe the just-captured image straight out of the
+  // UI — recoverable on disk, but gone from the screen and out of live sync
+  // tracking until the next full reload, which looks exactly like data loss.
+  const { result } = await mountSettled();
+
+  let addResult: ReturnType<typeof result.current.addBookmark> | undefined;
+  await act(async () => {
+    addResult = result.current.addBookmark({
+      image: { uri: 'file:///tmp/share/shot.png', mimeType: 'image/png', fileName: 'shot.png' },
+    });
+  });
+  if (!addResult || addResult.status !== 'created') {
+    throw new Error(`expected addBookmark to report 'created', got ${JSON.stringify(addResult)}`);
+  }
+  const imageId = addResult.bookmark.id;
+
+  // The image renders optimistically, but its durable write (the copy) is
+  // deliberately still in flight — resolveCopyImageToLibrary hasn't fired.
+  expect(result.current.inbox.map((b) => b.id)).toContain(imageId);
+
+  // A syncNow call landing in exactly this window must defer, not run.
+  let syncOutcome: boolean | null = null;
+  await act(async () => {
+    syncOutcome = await result.current.syncNow();
+  });
+  expect(syncOutcome).toBe(false);
+
+  // Critically: the just-captured image must still be there — syncNow did
+  // NOT reload from the repository and replace state with a snapshot that
+  // doesn't have it yet.
+  expect(result.current.inbox.map((b) => b.id)).toContain(imageId);
+
+  // Let the copy (and the durable insert+enqueue that follows it) finish.
+  await act(async () => {
+    resolveCopyImageToLibrary?.('file:///docs/stash-images/shot.png');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  // The row lands durably and stays visible, and its real create entry gets
+  // queued — nothing was lost, and sync self-resumes once it's safe to run.
+  await waitFor(() => expect(fakeRepo.__bookmarks().map((b) => b.id)).toContain(imageId));
+  await waitFor(() => expect(fakeRepo.__queue().some((e) => e.local_id === imageId)).toBe(true));
+  expect(result.current.inbox.map((b) => b.id)).toContain(imageId);
 });

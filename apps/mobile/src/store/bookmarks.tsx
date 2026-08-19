@@ -25,6 +25,7 @@ import type { TitleBackfillPatch } from "@/domain/title-backfill";
 import {
   imageTitleFromFileName,
   localImageFileName,
+  MAX_UPLOAD_IMAGE_BYTES,
   mimeTypeForImageUri,
   type SharedImage,
 } from "@/domain/image-share";
@@ -121,7 +122,11 @@ import {
 } from "@/observability/sentry";
 import { registerForForegroundState } from "@/storage/sqlite-app-lifecycle";
 import { repository } from "@/storage/repository";
-import { copyImageToLibrary, uploadImageFile } from "@/storage/image-store";
+import {
+  copyImageToLibrary,
+  localFileSizeBytes,
+  uploadImageFile,
+} from "@/storage/image-store";
 import type {
   BulkAttachItem,
   BulkAttachResult,
@@ -158,6 +163,7 @@ import {
   findStaleQueueEntries,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
+  IMAGE_TOO_LARGE_ERROR_TEXT,
   isLocalOnlyBookmark,
   isPermanentlyUnsyncableUrl,
   isRowSpecificPermanentSyncErrorText,
@@ -2558,6 +2564,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // Temporary share URI for the optimistic render; swapped for the
           // durable copy once `copyImageToLibrary` resolves below.
           local_image_uri: image.uri,
+          // The real MIME type the OS share sheet reported — recorded now
+          // because it's the only place this is ever known; the durable
+          // local file's own extension alone can't always be trusted to
+          // recover it later (see the field's doc comment in domain/types.ts).
+          local_image_mime_type: image.mimeType,
         };
 
         const imageEntry: LocalPendingBookmark = {
@@ -2584,6 +2595,26 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
         setBookmarks((current) => [imageBookmark, ...(current ?? [])]);
         setQueue((current) => [...current, imageEntry]);
+        // A real (potentially slow, for a large screenshot/photo) file copy
+        // sits between this optimistic update and the durable insert+enqueue
+        // below — unlike the URL/text capture paths, which have no
+        // meaningful I/O in that gap. That's long enough for the 250ms
+        // auto-sync debounce to fire syncNow first, and syncNow
+        // unconditionally reloads bookmarks/queue from the repository and
+        // REPLACES React state with that snapshot (deliberate, for
+        // account-transition correctness — see the comment above
+        // `reconcileAccountTransition` in syncNow). If that reload runs
+        // before this row durably lands, it wipes the just-captured image
+        // straight out of the UI — not off disk (the durable write still
+        // lands and the row is recovered on the NEXT full reload), but gone
+        // from the screen and out of live sync tracking until then, which
+        // looks exactly like data loss to the user. `localCreateFlushesInFlight`
+        // is the existing guard for precisely this shape of problem — see
+        // `importBookmarks` and docs/architecture/sync-pause-import-reset.md
+        // — `syncNow`/`resetLibrary` already defer while it's nonzero and
+        // self-retrigger once it clears, so reusing it here needs no changes
+        // to either of them.
+        localCreateFlushesInFlight.current += 1;
         const persisted = ensureRepositoryReady()
           .then(() => copyImageToLibrary(image.uri, fileName))
           .then((durableUri) => {
@@ -2615,6 +2646,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           .catch((error) => {
             logStorageError("new image bookmark", error);
             return false;
+          })
+          .finally(() => {
+            // Mirrors importBookmarks' own flush completion exactly: once
+            // the last in-flight local write clears, release any sync a
+            // debounce fired (and got deferred) during the window, and
+            // explicitly kick a fresh one so the just-landed row/entry
+            // actually gets picked up instead of waiting for the next
+            // unrelated trigger.
+            localCreateFlushesInFlight.current = Math.max(
+              0,
+              localCreateFlushesInFlight.current - 1,
+            );
+            if (localCreateFlushesInFlight.current === 0) {
+              syncPendingRef.current = false;
+              setTimeout(() => {
+                void syncNowRef.current?.().catch(() => {});
+              }, 50);
+            }
           });
 
         return { status: "created", bookmark: imageBookmark, persisted };
@@ -3460,18 +3509,23 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Same rationale as above: a permanently-gone row has nothing left to
       // wait for from the server-side overflow queue either.
       clearAiServerQueued(id);
-      // Best-effort: an image bookmark that ever actually uploaded owns a
-      // real object in the bookmark-images bucket. Permanently deleting the
-      // row must not leave that object behind — it would stay indefinitely
-      // public (this bucket is public-read by design) and keep counting
-      // against storage. Fire-and-forget, matching the existing best-effort
-      // network-call pattern elsewhere in this app (e.g.
-      // StashSupabaseClient.signOut's server-side revoke): a failure here
-      // just leaves an orphaned object, never blocks or retries the
+      // Best-effort: an image bookmark with a preview_image_url owns a real
+      // object in the bookmark-images bucket. Gated on the URL itself, NOT
+      // on hasSyncedOnce/ever_synced: the upload can succeed and durably set
+      // preview_image_url even when the FOLLOWING createBookmark call then
+      // fails (or is never retried again) — ever_synced only flips once the
+      // row itself is confirmed created, so that row would otherwise never
+      // be cleaned up despite genuinely owning an uploaded object.
+      // Permanently deleting the row must not leave that object behind — it
+      // would stay indefinitely public (this bucket is public-read by
+      // design) and keep counting against storage. Fire-and-forget, matching
+      // the existing best-effort network-call pattern elsewhere in this app
+      // (e.g. StashSupabaseClient.signOut's server-side revoke): a failure
+      // here just leaves an orphaned object, never blocks or retries the
       // bookmark delete itself. Never runs for a Trash move (trashBookmark,
       // a separate function, soft-deletes via deleted_at) — only this
       // permanent path.
-      if (bookmark?.content_type === "image" && hadSyncedOnce && auth.session) {
+      if (bookmark?.content_type === "image" && bookmark.preview_image_url && auth.session) {
         createSyncApi(auth.session)
           .deleteImages([id])
           .catch((error) =>
@@ -3552,9 +3606,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // Best-effort bulk cleanup of any uploaded bookmark-images objects —
     // same rationale as deleteBookmark's single-row cleanup above: emptying
     // Trash must not leave those objects behind (public, still counted
-    // against storage) even though this row is now gone for good.
+    // against storage) even though this row is now gone for good. Gated on
+    // preview_image_url itself, not isBookmarkSyncedOnce — an upload can
+    // durably succeed even when the row's own create never gets confirmed
+    // (ever_synced stays false), and that row still owns a real object.
     const imageIdsToDeleteFromStorage = trashed
-      .filter((bookmark) => bookmark.content_type === "image" && isBookmarkSyncedOnce(bookmark))
+      .filter((bookmark) => bookmark.content_type === "image" && bookmark.preview_image_url)
       .map((bookmark) => bookmark.id);
     if (imageIdsToDeleteFromStorage.length > 0 && auth.session) {
       createSyncApi(auth.session)
@@ -3631,8 +3688,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     setIsResettingLibrary(true);
     // Snapshot BEFORE the wipe below clears bookmarksRef — used only for the
     // best-effort Storage cleanup once the remote wipe actually succeeds.
+    // Gated on preview_image_url itself, not isBookmarkSyncedOnce/ever_synced
+    // — see deleteBookmark's identical comment above.
     const imageIdsToDeleteFromStorage = (bookmarksRef.current ?? [])
-      .filter((bookmark) => bookmark.content_type === "image" && isBookmarkSyncedOnce(bookmark))
+      .filter((bookmark) => bookmark.content_type === "image" && bookmark.preview_image_url)
       .map((bookmark) => bookmark.id);
     try {
       try {
@@ -5295,10 +5354,30 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (!bookmark.local_image_uri) {
             throw new Error("Image bookmark has no local file to upload.");
           }
-          const target = api.imageUploadTarget(
-            bookmark.id,
-            mimeTypeForImageUri(bookmark.local_image_uri),
-          );
+          // Checked BEFORE ever attempting the network call: the file's
+          // size can't change between retries, so if it's over the bucket's
+          // own limit it will fail identically forever. IMAGE_TOO_LARGE_ERROR_TEXT
+          // is what makes this a permanent (never-retried, drained-from-the-
+          // visible-queue) failure rather than an ordinary one — see
+          // isPermanentlyUnsyncableUrl in sync/sync-bookmarks.ts. The image
+          // itself is unaffected either way: it was already saved and
+          // renders locally the moment it was captured.
+          const sizeBytes = localFileSizeBytes(bookmark.local_image_uri);
+          if (sizeBytes > MAX_UPLOAD_IMAGE_BYTES) {
+            const sizeMb = (sizeBytes / (1024 * 1024)).toFixed(1);
+            const limitMb = (MAX_UPLOAD_IMAGE_BYTES / (1024 * 1024)).toFixed(0);
+            throw new Error(
+              `Image is ${sizeMb}MB, which ${IMAGE_TOO_LARGE_ERROR_TEXT} of ${limitMb}MB.`,
+            );
+          }
+          // The real MIME type recorded at capture time is authoritative —
+          // prefer it always. Only a row captured before that field existed
+          // falls back to guessing from the local file's extension, which
+          // can mislabel an unmapped format's Content-Type (acceptable only
+          // as a legacy-compat fallback, not the primary path).
+          const contentType =
+            bookmark.local_image_mime_type ?? mimeTypeForImageUri(bookmark.local_image_uri);
+          const target = api.imageUploadTarget(bookmark.id, contentType);
           await uploadImageFile(bookmark.local_image_uri, target.uploadUrl, target.headers);
           return target.publicUrl;
         };

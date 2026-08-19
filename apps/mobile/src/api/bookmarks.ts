@@ -18,6 +18,7 @@ import type { StashSupabaseClient } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
 // `local_image_uri` is a device-only field (a captured image's on-disk URI),
+// `local_image_mime_type` is the device-only MIME type recorded alongside it,
 // `last_accessed_at` is a device-only "last opened" timestamp,
 // `title_is_derived` is device-only title provenance, and `video_unavailable`
 // is a device-only, self-healing YouTube-availability check result (STASH-61),
@@ -26,6 +27,7 @@ export type RemoteBookmark = Omit<
   Bookmark,
   | 'sync_status'
   | 'local_image_uri'
+  | 'local_image_mime_type'
   | 'last_accessed_at'
   | 'title_is_derived'
   | 'video_unavailable'

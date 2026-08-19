@@ -718,6 +718,11 @@ describe('ShareIntentHandler', () => {
     expect(stored[0].local_image_uri).toBe(`file:///docs/stash-images/${fileName}`);
     // Title derived from the shared filename.
     expect(stored[0].title).toBe('IMG 0042');
+    // The real MIME type from the share sheet is recorded at capture time —
+    // the upload step uses this directly, never guessing from the local
+    // file's extension (which can mislabel an uncommon format's
+    // Content-Type; see mimeTypeForImageUri's doc comment).
+    expect(stored[0].local_image_mime_type).toBe('image/png');
     // Queued like any other create — honest 'pending' state (no fake
     // "already synced" bookkeeping), same shape as a text note capture.
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));

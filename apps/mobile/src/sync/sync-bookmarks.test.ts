@@ -1558,6 +1558,18 @@ test('isSyncable excludes a create that already failed with the permanent url_ha
   assert.equal(isSyncable(stuck), false);
 });
 
+test('isSyncable excludes a create that failed because the image exceeds the upload size limit', () => {
+  // uploadBookmarkImage (store/bookmarks.tsx) checks the file's size BEFORE
+  // ever attempting the network call and throws with IMAGE_TOO_LARGE_ERROR_TEXT
+  // when it's over the bucket's own file_size_limit — the file can't shrink
+  // between retries, so this is exactly as permanent as a too-long URL.
+  const stuck = makeCreateEntry({
+    sync_status: 'failed',
+    last_error: 'Image is 22.4MB, which exceeds the maximum upload size of 15MB.',
+  });
+  assert.equal(isSyncable(stuck), false);
+});
+
 test('isSyncable still retries an ordinary failure (e.g. a network blip)', () => {
   const transient = makeCreateEntry({ sync_status: 'failed', last_error: 'network down' });
   assert.equal(isSyncable(transient), true);

@@ -34,6 +34,16 @@ export async function copyImageToLibrary(sourceUri: string, fileName: string): P
 }
 
 /**
+ * The durable local image file's size in bytes (0 if it no longer exists),
+ * for the pre-upload size check in store/bookmarks.tsx — checked BEFORE
+ * `uploadImageFile` below so an oversized file never even attempts (and
+ * fails forever against) the bucket's own `file_size_limit`.
+ */
+export function localFileSizeBytes(localUri: string): number {
+  return new File(localUri).size;
+}
+
+/**
  * Uploads a durable local image file (a bookmark's `local_image_uri`) to
  * `uploadUrl` (a Supabase Storage object endpoint) with the given headers —
  * used by create-sync to push an image-only bookmark's binary to the cloud

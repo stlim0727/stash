@@ -117,6 +117,22 @@ export interface Bookmark {
    * migration.
    */
   local_image_uri?: string | null;
+  /**
+   * Local-only MIME type of the captured image, as reported by the OS share
+   * sheet at capture time (`SharedImage.mimeType`); never sent to the cloud.
+   * The upload step uses this as the Storage object's Content-Type — it's
+   * the only reliable source of the REAL type: the durable local file's own
+   * extension alone can't be trusted for an uncommon format (e.g.
+   * `image/jxl`, which still passes `isImageMime` and gets captured, but has
+   * no entry in `domain/image-share.ts`'s MIME_TO_EXT/EXT_TO_MIME maps).
+   * Absent on rows captured before this field existed — the upload step
+   * falls back to guessing from the local file's extension for those only
+   * (see `mimeTypeForImageUri`), which can mislabel an unmapped format's
+   * Content-Type; a genuinely unsupported format still uploads correctly
+   * labeled and is honestly rejected by the bucket's MIME allowlist rather
+   * than silently mislabeled as something it isn't.
+   */
+  local_image_mime_type?: string | null;
   dismissed_suggested_tags?: string[];
   dismissed_suggested_folders?: string[];
   reviewed_summary_tokens?: string[];

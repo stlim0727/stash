@@ -814,6 +814,17 @@ export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
 // retried the moment the app updates, with no further doomed request needed.
 const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
 
+/**
+ * The marker text `uploadBookmarkImage` (store/bookmarks.tsx) throws with
+ * when a captured image exceeds `MAX_UPLOAD_IMAGE_BYTES`
+ * (domain/image-share.ts) — checked BEFORE ever attempting the upload, so
+ * this is a client-thrown message, not a server response, but it plays
+ * exactly the same "permanent, will never succeed on retry" role as
+ * `URL_TOO_LONG_ERROR_TEXT` below: a captured image doesn't shrink between
+ * retries, so the bucket's `file_size_limit` will reject it every time.
+ */
+export const IMAGE_TOO_LARGE_ERROR_TEXT = 'exceeds the maximum upload size';
+
 /** A bulk-chunk request fails as a whole even when only one row in it is
  *  actually bad (e.g. one legacy too-long URL), so the caller can't blindly
  *  copy that shared error message onto every entry in the chunk — this text
@@ -821,9 +832,13 @@ const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
  *  failure handler can detect it BEFORE attributing an error to any entry,
  *  and fall back to per-entry sync to isolate which row actually caused it
  *  instead of misclassifying the rest of the chunk as permanently unsyncable
- *  too (caught in PR review). */
+ *  too (caught in PR review). Despite the name (predates the image case),
+ *  also recognizes an oversized image — harmlessly: image creates never
+ *  enter the bulk-chunk path at all (syncCreateQueueEntryBatch rejects them
+ *  outright), so this only ever matters for the single-entry syncQueueEntry
+ *  path below for that case. */
 export function isRowSpecificPermanentSyncErrorText(message: string): boolean {
-  return message.includes(URL_TOO_LONG_ERROR_TEXT);
+  return message.includes(URL_TOO_LONG_ERROR_TEXT) || message.includes(IMAGE_TOO_LARGE_ERROR_TEXT);
 }
 
 /** Exported so the caller can DRAIN these from the visible queue (see
@@ -831,7 +846,9 @@ export function isRowSpecificPermanentSyncErrorText(message: string): boolean {
  *  `isSyncable` stops the doomed retries but leaves the row sitting as
  *  `sync_status: 'failed'` in the queue forever, which every "waiting to
  *  sync" count (e.g. Settings) still counts as pending work that can never
- *  drain (caught in PR review). */
+ *  drain (caught in PR review). Despite the name, also covers a
+ *  permanently-too-large image (see IMAGE_TOO_LARGE_ERROR_TEXT above) —
+ *  same "will never succeed on retry" shape, same drain treatment. */
 export function isPermanentlyUnsyncableUrl(entry: LocalPendingBookmark): boolean {
   return (
     entry.sync_status === 'failed' &&

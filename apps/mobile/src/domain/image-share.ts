@@ -27,6 +27,17 @@ const MIME_TO_EXT: Record<string, string> = {
 const DEFAULT_IMAGE_EXT = 'jpg';
 
 /**
+ * Must match the `bookmark-images` Storage bucket's `file_size_limit` (see
+ * `supabase/migrations/20260819071500_bookmark_images_storage_bucket.sql`).
+ * Checked client-side before an upload attempt, the same way `isUrlTooLong`
+ * (domain/urls.ts) stops a doomed create before it's ever sent — without
+ * this, an oversized local capture (still saved and rendered fine locally;
+ * capture is sacred and never gated on this) would queue for upload and
+ * fail against the bucket's own limit on every retry, forever.
+ */
+export const MAX_UPLOAD_IMAGE_BYTES = 15 * 1024 * 1024;
+
+/**
  * The reverse of `MIME_TO_EXT`, for recovering a MIME type from a durable
  * local file's extension (the local copy's name is the only thing the
  * upload step has to go on — see `localImageFileName`). Where two MIME types
@@ -48,16 +59,22 @@ const EXT_TO_MIME: Record<string, string> = {
 };
 
 /**
- * Fallback MIME type when a local file's extension doesn't resolve one (an
- * unmapped format, e.g. `image/jxl`, that still passed `isImageMime` and got
- * captured under its own extension via the filename fallback in
- * `extensionForImage`). Must be one of the `bookmark-images` bucket's
- * `allowed_mime_types` (see the Storage migration) — falling back to a
- * non-image type like `application/octet-stream` would have Storage
- * permanently reject the upload's Content-Type on every retry forever, for
- * an image that captured and renders locally just fine. Matches
- * `DEFAULT_IMAGE_EXT`'s existing "assume the most common format when unsure"
- * convention in this same file.
+ * LAST-RESORT fallback MIME type, used only for a row captured before
+ * `Bookmark.local_image_mime_type` existed (see domain/types.ts) — every
+ * current capture records the OS share sheet's real MIME type at capture
+ * time and uploads under that, never this guess. For an old row with no
+ * recorded type, `mimeTypeForImageUri` below can only recover a MIME from
+ * the local file's own extension; for an unmapped format (e.g. `image/jxl`,
+ * which still passes `isImageMime` and gets captured under its own
+ * extension via the filename fallback in `extensionForImage`) that lookup
+ * fails and lands here. This is a deliberately narrow, honestly-labeled
+ * trade-off for that legacy-only case specifically: guessing an allowlisted
+ * type risks mislabeling the Content-Type for a format that turns out not
+ * to actually be JPEG, but the alternative (a non-image type like
+ * `application/octet-stream`) would have Storage permanently reject the
+ * upload on every retry forever, for an image that already captured and
+ * renders locally just fine. Matches `DEFAULT_IMAGE_EXT`'s existing "assume
+ * the most common format when unsure" convention in this same file.
  */
 const DEFAULT_UPLOAD_MIME = 'image/jpeg';
 
@@ -138,11 +155,13 @@ function extensionFromUri(uri: string): string {
 }
 
 /**
- * The MIME type to upload a durable local image file under, recovered from
- * its extension (`localImageFileName` always names the file `<id>.<ext>`
- * using `extensionForImage`, so this is the exact reverse lookup). Used at
- * sync time, when only the on-disk URI is available — the original share
- * payload's MIME type isn't persisted anywhere.
+ * Best-effort MIME type for a durable local image file, recovered from its
+ * extension (`localImageFileName` always names the file `<id>.<ext>` using
+ * `extensionForImage`, so this is the exact reverse lookup). This is a
+ * FALLBACK ONLY, for a row with no recorded `local_image_mime_type` (a
+ * capture from before that field existed) — every current capture records
+ * the OS share sheet's real MIME type directly and should use that instead
+ * of calling this at all (see the upload call site in store/bookmarks.tsx).
  */
 export function mimeTypeForImageUri(uri: string): string {
   return EXT_TO_MIME[extensionFromUri(uri)] ?? DEFAULT_UPLOAD_MIME;
