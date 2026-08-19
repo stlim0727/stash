@@ -907,6 +907,22 @@ function mergeById<T>(
 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
+  // Mirror of `auth` so an ALREADY-RUNNING async closure (syncNow and
+  // everything it calls, e.g. syncQueueEntry's injected getLiveUserId) can
+  // read the LATEST signed-in identity instead of the one captured when
+  // that invocation started. `syncNow` is a useCallback keyed on `auth`
+  // (among other deps) — React gives a brand NEW `syncNow` (closing over a
+  // fresh `auth`) on the render after sign-out, but an invocation of the
+  // OLD `syncNow` that's still executing keeps referencing whatever `auth`
+  // its own closure captured at creation time; it never sees the new one.
+  // Reading `authRef.current` instead — the same "ref mirrors state so an
+  // async loop reads live, not stale" pattern bookmarksRef/queueRef already
+  // use — closes that gap: the ref's `.current` is looked up fresh on every
+  // access, regardless of which render's closure is doing the looking up.
+  const authRef = useRef(auth);
+  useEffect(() => {
+    authRef.current = auth;
+  }, [auth]);
   const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -5536,6 +5552,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // delete that deletedIds.current's own check above didn't
               // catch for some other reason) — nothing to move, but the
               // now-permanently-stale queue entry must still not linger.
+              // Durable removal lives HERE (not inside syncQueueEntry, on
+              // purpose — see its own comment): there's no atomic replace
+              // happening alongside it in this branch to fold it into, so a
+              // plain standalone removal is safe and carries no crash-window
+              // risk the way removing it before an in-progress rehome would.
               setQueue((current) => {
                 const nextQueue = current.filter(
                   (queued) => queued.local_id !== entry.local_id,
@@ -5543,6 +5564,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 queueRef.current = nextQueue;
                 return nextQueue;
               });
+              ensureRepositoryReady()
+                .then(() => repository.removeQueueEntry(entry.local_id))
+                .catch((error) =>
+                  logStorageError(
+                    "post-landed-under-departed-identity queue cleanup",
+                    error,
+                  ),
+                );
             }
             return false;
           }
@@ -6281,9 +6310,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 api,
                 chunk,
                 getLatestBookmark,
-                // Same reasoning as the single-entry syncQueueEntry call
-                // below — see its own comment for the full race.
-                () => auth.session?.user.id ?? null,
+                // authRef, not `auth` — see authRef's own doc comment above
+                // for why: this closure can still be running long after the
+                // render that created it, and `auth` itself would stay
+                // frozen at whatever it was then. Same reasoning as the
+                // single-entry syncQueueEntry call below.
+                () => authRef.current.session?.user.id ?? null,
               );
               await applyBulkCreateChunkResults(chunk, results);
               for (const entry of chunk) {
@@ -6515,18 +6547,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               entry,
               getLatestBookmark,
               uploadBookmarkImage,
-              // P1, round 8: `api` (and its `.userId`) was built once at the
-              // top of this sync cycle — this reads the LIVE signed-in user
-              // id fresh, at the exact moment syncQueueEntry checks it, so a
-              // sign-out mid-flight (the logout effect runs independently
-              // and doesn't wait for an in-flight sync) is caught before a
-              // create ever gets durably confirmed under the departed
-              // identity. `auth.session` is the reactive value — see the
-              // STASH-4G/4H diagnostics earlier in this file (the
-              // requestAiEnrichment enqueue path) for why it, not a captured
-              // snapshot, is this codebase's established "what's actually
-              // live right now" source.
-              () => auth.session?.user.id ?? null,
+              // P1, round 8/10: `api` (and its `.userId`) was built once at
+              // the top of this sync cycle — this reads the LIVE signed-in
+              // user id fresh, at the exact moment syncQueueEntry checks it,
+              // so a sign-out mid-flight (the logout effect runs
+              // independently and doesn't wait for an in-flight sync) is
+              // caught before a create ever gets durably confirmed under the
+              // departed identity. `authRef.current`, NOT the closed-over
+              // `auth` — see authRef's own doc comment above for why a plain
+              // `auth` read here would silently defeat this whole check: this
+              // closure (and the syncNow invocation it belongs to) can still
+              // be running well after the render that created it, and `auth`
+              // itself stays frozen at whatever it was then.
+              () => authRef.current.session?.user.id ?? null,
             );
             await applySyncEntryResult(entry, result);
           } catch (error) {

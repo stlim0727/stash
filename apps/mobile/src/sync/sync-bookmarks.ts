@@ -583,30 +583,46 @@ export async function syncQueueEntry(
   // createBookmark call itself failing) sees it already set and moves
   // straight to create without re-uploading the same binary.
   //
-  // The second half of that condition — `local_image_uploaded_for_user_id`
-  // mismatching the CURRENT session's own user id — is the structural fix
-  // for a whole family of account-lifecycle races (sign-in carry-over,
-  // sign-out, a real A→real B switch): an image's binary uploads to Storage
-  // under whatever account is signed in AT UPLOAD TIME, and if the signed-in
-  // account changes before the row's create is ever confirmed, an
-  // already-set `preview_image_url` silently points at an object the NEW
-  // account can never manage. Rather than each transition needing its own
-  // bespoke "was this row affected" check, this single choke point
-  // re-validates ownership fresh, every retry, against whichever session is
-  // actually live right now — closing the whole class in one place instead
-  // of one instance at a time. A recorded id that's simply ABSENT (rows
-  // uploaded before this field existed) is deliberately treated as "unknown,
-  // trust the existing URL," not "known stale" — see the field's own doc
-  // comment in domain/types.ts.
+  // The second half of that condition — requiring an already-set
+  // `preview_image_url` to ALSO have a recorded owner matching the CURRENT
+  // session's own user id — is the structural fix for a whole family of
+  // account-lifecycle races (sign-in carry-over, sign-out, a real A→real B
+  // switch): an image's binary uploads to Storage under whatever account is
+  // signed in AT UPLOAD TIME, and if the signed-in account changes before
+  // the row's create is ever confirmed, an already-set `preview_image_url`
+  // silently points at an object the NEW account can never manage. Rather
+  // than each transition needing its own bespoke "was this row affected"
+  // check, this single choke point re-validates ownership fresh, every
+  // retry, against whichever session is actually live right now — closing
+  // the whole class in one place instead of one instance at a time.
+  //
+  // A recorded owner that's simply ABSENT is treated as "needs one-time
+  // re-upload," not "trust it" — a genuine, if narrow, sequencing gap: a
+  // row captured on an app version from BEFORE this field existed, whose
+  // account then changed on that SAME old version (before this whole
+  // account-transition cleanup shipped), never got a chance to either record
+  // an owner OR go through the proactive rehome that would have caught the
+  // switch. By the time the row reaches a version that CAN check ownership,
+  // there's nothing recorded to check against — silently trusting the URL
+  // would reuse an object under whatever account happened to upload it,
+  // possibly not the one this device is signed into by then. Every row this
+  // fix's own code ever creates stamps both fields together, atomically, in
+  // the same write (see the repository.updateBookmark calls below and in
+  // the catch blocks) — so this "absent" branch is unreachable for any row
+  // that has ever been through THIS version's own upload step; it only ever
+  // matters once, for a genuinely legacy row, and the cost of guessing wrong
+  // here is nothing worse than one redundant re-upload of a file already on
+  // disk.
   let uploadedImageUrl: string | undefined;
   const bookmarkForUpload = getBookmark(entry.local_id);
-  const uploadedImageIsStale =
+  const uploadedImageOwnerConfirmed =
+    Boolean(bookmarkForUpload?.preview_image_url) &&
     Boolean(bookmarkForUpload?.local_image_uploaded_for_user_id) &&
-    bookmarkForUpload?.local_image_uploaded_for_user_id !== api.userId;
+    bookmarkForUpload?.local_image_uploaded_for_user_id === api.userId;
   if (
     bookmarkForUpload?.content_type === 'image' &&
     bookmarkForUpload.local_image_uri &&
-    (!bookmarkForUpload.preview_image_url || uploadedImageIsStale)
+    !uploadedImageOwnerConfirmed
   ) {
     if (!uploadImage) {
       return {
@@ -721,16 +737,26 @@ export async function syncQueueEntry(
   // EVERY real getLiveUserId() unconditionally — "unknown, trust it" is the
   // same backward-compat stance local_image_uploaded_for_user_id takes.
   if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+    // Best-effort cleanup under the OLD (departing) api instance — it's the
+    // one with rights to its own Storage path. The local row below must
+    // never keep pointing at an object this call just attempted to delete:
+    // if the user later signs back into this SAME departed account,
+    // `uploadedImageOwnerConfirmed` above would otherwise see a matching
+    // owner and wrongly trust a URL to an object that may no longer exist —
+    // a permanently broken image, not just a wasted redundant re-upload.
+    // (Re-signing into a DIFFERENT account is already covered either way —
+    // the owner mismatch alone forces a re-upload.) So the URL/owner are
+    // cleared below unconditionally, regardless of whether this delete
+    // itself actually succeeded — a needless one-time re-upload of a file
+    // still on disk is the safe default either way.
     if (uploadedImageUrl) {
-      // Best-effort cleanup under the OLD (departing) api instance — it's
-      // the one with rights to its own Storage path. The NEXT retry, under
-      // whichever identity is live then, re-uploads fresh regardless (the
-      // staleness guard above already recorded local_image_uploaded_for_user_id
-      // as this departed identity moments ago), so this is optional tidiness,
-      // never load-bearing for correctness.
       try {
         await api.deleteImages([entry.local_id]);
       } catch (error) {
+        // Delete failed — unknown whether the object still exists. Treat
+        // the URL as no longer trustworthy either way: a needless one-time
+        // re-upload of a file still on disk is the safe default, not a
+        // silently broken image reference.
         recordLog(
           'warn',
           `sync: failed to delete Storage object uploaded under a departed identity for ${entry.local_id}: ${errorMessage(error)}`,
@@ -749,7 +775,7 @@ export async function syncQueueEntry(
         ...localBookmark,
         sync_status: 'failed',
         ...(uploadedImageUrl
-          ? { preview_image_url: uploadedImageUrl, local_image_uploaded_for_user_id: api.userId }
+          ? { preview_image_url: null, local_image_uploaded_for_user_id: null }
           : {}),
       };
       await repository.updateBookmark(failedBookmark);
@@ -773,11 +799,35 @@ export async function syncQueueEntry(
     // routing this correctly needs, so just signal it; the caller
     // (applySyncEntryResult in store/bookmarks.tsx) does the actual rehome.
     if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
-      await removeQueueEntryIfNotSuperseded(repository, entry);
+      // Deliberately NOT calling removeQueueEntryIfNotSuperseded here (round
+      // 8's "landed mid-flight, gone locally" abort above does — this
+      // differs on purpose). This row is being rehomed, not discarded — the
+      // caller (applySyncEntryResult) routes it through applyAccountTransition,
+      // whose rehome path removes the OLD queue entry INSIDE the same
+      // atomic replaceBookmarkIdentities commit that also writes the NEW
+      // one (see round 8's own fix for exactly this). Removing it here
+      // first would reopen that closed crash window: a process death
+      // between this call and the rehome actually running would leave the
+      // row with NO active queue entry at all — worse than the original
+      // primary-key-collision risk, since nothing would ever pick it back
+      // up without a separate orphan-reconcile pass rediscovering it.
       return {
-        entry: { ...entry, sync_status: 'synced', updated_at: now },
+        // remote_id: result.bookmark_id — NOT left null/whatever `entry`
+        // already had. If this row was ALSO deleted while in flight (races
+        // the same window this check exists for), applySyncEntryResult's
+        // "deleted mid-flight" branch runs BEFORE it ever reaches
+        // landedUnderDepartedIdentity below, and derives its own cleanup
+        // from THIS field via planDeletedMidFlightCleanup — an omitted or
+        // stale remote_id there would silently skip queuing the remote
+        // delete for a row that's now a REAL, orphaned cloud row under the
+        // departed identity.
+        entry: { ...entry, remote_id: result.bookmark_id, sync_status: 'synced', updated_at: now },
         removeEntry: true,
         landedUnderDepartedIdentity: true,
+        // Same reasoning as remote_id above, for the image-cleanup half of
+        // that same branch: without this, a landed image upload's Storage
+        // object would never get queued for deletion either.
+        uploadedImageUrl,
       };
     }
 
@@ -878,7 +928,8 @@ export async function syncQueueEntry(
         // just-persisted URL (and its owning-user stamp) back to null/stale,
         // and the next retry would see `!preview_image_url` and needlessly
         // re-upload — or, worse, wrongly treat this device's own just-landed
-        // upload as stale (see `uploadedImageIsStale` above).
+        // upload as unconfirmed all over again (see
+        // `uploadedImageOwnerConfirmed` above).
         ...(uploadedImageUrl
           ? { preview_image_url: uploadedImageUrl, local_image_uploaded_for_user_id: api.userId }
           : {}),

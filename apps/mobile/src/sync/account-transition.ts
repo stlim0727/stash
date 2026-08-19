@@ -117,13 +117,15 @@ function cloudOwnedRows(localBookmarks: Bookmark[]): Bookmark[] {
  * This is belt-and-suspenders alongside `syncQueueEntry`'s own
  * `local_image_uploaded_for_user_id` staleness guard (the general,
  * structural fix — see that field's doc comment in domain/types.ts), which
- * would independently catch the same staleness on the next retry for any
- * row uploaded after that field existed. This pass still matters for one
- * backward-compat gap that guard deliberately can't close on its own: a row
- * uploaded BEFORE that field existed has no recorded owner to compare
- * against, so the guard treats it as "unknown, trust it" rather than
- * forcing a re-upload — this proactive clear is what still catches that
- * one-time case, plus it avoids a redundant retry round-trip either way.
+ * independently catches the same staleness on the next retry for any row
+ * — including a row uploaded before that field existed, whose recorded
+ * owner is absent rather than mismatched; that guard treats an absent
+ * owner as needing a re-upload too, not as "unknown, trust it" (see its own
+ * comment for why an absent owner and a mismatched one both mean the same
+ * thing here). This pass still matters, but only as an optimization now:
+ * without it, the very next retry re-derives the same "this needs a fresh
+ * upload" conclusion on its own — this just avoids that one redundant
+ * retry round-trip by catching it proactively, right at the transition.
  *
  * These rows are folded into `rehome` — a fresh id, NOT just a cleared URL
  * with the existing id kept. It's tempting to assume no cloud row was ever

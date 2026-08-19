@@ -149,11 +149,18 @@ export interface Bookmark {
    * `preview_image_url`, and re-uploads instead of reusing it on a mismatch —
    * a single, self-healing choke point that catches every account-lifecycle
    * transition without each one needing its own bespoke check. Absent (not
-   * merely a stale/wrong value) is deliberately treated as "unknown, trust
-   * the existing URL" rather than "known stale" — rows uploaded before this
-   * field existed keep working exactly as before, at worst falling back to
-   * the account-transition-specific proactive cleanups (e.g. carry-over's
-   * `resetImageUrls`) for that one-time backward-compat gap.
+   * merely a stale/wrong value) is ALSO treated as needing a one-time
+   * re-upload, not as "known-fine, trust the existing URL": every row this
+   * fix's own code has ever touched stamps this field in the SAME write as
+   * `preview_image_url`, so the two are only ever out of sync for a row
+   * captured on an app version from before this field existed — and if that
+   * row's account also changed on that same old version (before this
+   * account-transition cleanup shipped), there was never a chance to record
+   * an owner OR catch the switch proactively. Silently trusting an
+   * unrecorded owner would risk reusing an object under whichever account
+   * happened to upload it, not necessarily this device's current one; a
+   * needless one-time re-upload of a file already on disk is the safe
+   * default instead.
    */
   local_image_uploaded_for_user_id?: string | null;
   dismissed_suggested_tags?: string[];

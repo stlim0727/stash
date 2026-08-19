@@ -251,7 +251,13 @@ jest.mock("@/api/bookmarks", () => {
     __addTagsMock: addTagsMock,
     __bulkAttachMock: bulkAttachMock,
     __bulkRestoreAIEnrichmentMock: bulkRestoreAIEnrichmentMock,
-    createBookmarkApi: () => ({
+    // Round 10: takes the session, matching the real createBookmarkApi/
+    // BookmarkApi — `userId` must reflect WHICHEVER session this specific
+    // syncNow() call built `api` with (a getter over that session, just
+    // like the real class), not a fixed value, so the mid-flight identity
+    // check tests below actually exercise the real semantics they're about.
+    createBookmarkApi: (session?: { user?: { id?: string } }) => ({
+      userId: session?.user?.id,
       listBookmarksUpdatedSince,
       listBookmarkIds,
       listEnrichmentsUpdatedSince: empty,
@@ -267,6 +273,7 @@ jest.mock("@/api/bookmarks", () => {
       bulkAttachTagsAndCollections: bulkAttachMock,
       resetLibrary: resetLibraryMock,
       bulkRestoreAIEnrichment: bulkRestoreAIEnrichmentMock,
+      deleteImages: jest.fn(async () => undefined),
     }),
   };
 });
@@ -964,6 +971,113 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
     await waitFor(() =>
       expect(fakeRepo.__meta("pending_tag_ops")).toBe("[]"),
     );
+  });
+
+  test("reads the LIVE auth identity via a ref, not the closure captured when syncNow started (P1, round 10)", async () => {
+    // The core race this closes, and the one the coordinator asked to get
+    // definitively right: `auth` itself (not just api.userId derived from
+    // it) is a value closed over by syncNow's own useCallback. React hands
+    // out a brand NEW `auth` (and a brand new syncNow) on the render after
+    // an account switch, but an invocation of the OLD syncNow that's still
+    // executing keeps referencing whatever `auth` ITS closure captured at
+    // creation time — it never sees the new one, no matter how many renders
+    // happen while it's in flight. If the post-response identity check read
+    // `auth` directly, this test would fail: the check would still see the
+    // OLD account and wrongly confirm the row. Reading `authRef.current`
+    // instead is what actually closes it.
+    const { result, rerender } = await renderReadyStore();
+
+    // Paused first (same pattern the account-switch test right below already
+    // relies on) so the create's own dispatch is fully under this test's
+    // control, not racing an automatic fire-and-forget trigger from
+    // addBookmark itself.
+    await act(async () => {
+      result.current.setSyncPaused(true);
+    });
+
+    const createGate = deferred<{
+      bookmark_id: string;
+      status: "created";
+      metadata_status: "complete";
+    }>();
+    apiMock.__createBookmarkMock.mockImplementationOnce(() => createGate.promise);
+
+    let bookmarkId = "";
+    await act(async () => {
+      const addResult = result.current.addBookmark({
+        url: "https://example.com/mid-flight-auth-ref",
+      });
+      if (addResult.status !== "created") {
+        throw new Error(
+          `expected addBookmark to report 'created', got ${JSON.stringify(addResult)}`,
+        );
+      }
+      bookmarkId = addResult.bookmark.id;
+    });
+    await waitFor(() =>
+      expect(fakeRepo.__queue().some((e) => e.local_id === bookmarkId)).toBe(
+        true,
+      ),
+    );
+
+    // Unpausing lets the store's own sync machinery dispatch the create — it
+    // passes the pre-dispatch identity check (auth hasn't changed yet) and
+    // then genuinely hangs, awaiting createGate's promise.
+    await act(async () => {
+      result.current.setSyncPaused(false);
+    });
+    await waitFor(() =>
+      expect(apiMock.__createBookmarkMock).toHaveBeenCalledTimes(1),
+    );
+    expect(result.current.isSyncing).toBe(true);
+
+    // WHILE the create is still in flight, the account switches — a brand
+    // new render with a DIFFERENT signed-in identity.
+    authMock.__setAuth({
+      status: "authenticated",
+      session: mockOtherRealSession,
+      userId: "other-real-user",
+    });
+    await act(async () => {
+      rerender(undefined);
+    });
+
+    // Now let the in-flight create's response actually land, landing under
+    // the OLD (real-user) identity's session that dispatched it.
+    await act(async () => {
+      createGate.resolve({
+        bookmark_id: bookmarkId,
+        status: "created",
+        metadata_status: "complete",
+      });
+    });
+    // Explicit real-timer flush, matching this codebase's own established
+    // discipline for a trailing background retrigger (mass-import-sync's
+    // own bulk tests, reset-library.test.tsx's image-capture race test) —
+    // without this, a background completion still settling can leak past
+    // this test into module teardown.
+    await waitFor(() => expect(result.current.isSyncing).toBe(false));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
+    await waitFor(() => expect(result.current.isSyncing).toBe(false));
+
+    // The load-bearing property: the row must never be left confirmed
+    // under `bookmarkId` — that would mean the response-side identity
+    // check either didn't run at all, or read a stale `auth` and saw no
+    // divergence. The post-response check must have caught the switch and
+    // routed it through rehome under a fresh id instead. (Once rehomed, a
+    // trailing background retry legitimately re-uploads and confirms the
+    // row again — now correctly under the NEW identity, which this flush
+    // gives a chance to happen; that eventual ever_synced: true is the
+    // fix working end to end, not a regression to assert against.)
+    const ids = fakeRepo.__bookmarks().map((b) => b.id);
+    expect(ids).not.toContain(bookmarkId);
+    const rehomed = fakeRepo
+      .__bookmarks()
+      .find((b) => b.url === "https://example.com/mid-flight-auth-ref");
+    expect(rehomed).toBeDefined();
+    expect(rehomed?.id).not.toBe(bookmarkId);
   });
 
   test("reconciles an account switch before uploading an in-flight import", async () => {
