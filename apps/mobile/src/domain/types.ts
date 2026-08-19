@@ -133,6 +133,29 @@ export interface Bookmark {
    * than silently mislabeled as something it isn't.
    */
   local_image_mime_type?: string | null;
+  /**
+   * Local-only record of WHICH signed-in user's session actually performed
+   * the Storage upload that `preview_image_url` points at (the session's own
+   * `user.id` — see `BookmarkApi.imageUploadTarget`'s path namespacing);
+   * never sent to the cloud. An image's binary uploads to Storage BEFORE its
+   * row is ever created, so `preview_image_url` can be genuinely set while
+   * the row itself is still unconfirmed (`createBookmark` still queued or
+   * failed) — and if the signed-in account changes before that create lands
+   * (sign-in carry-over, sign-out, or a real A→real B switch), the URL is
+   * left pointing at an object under the OLD account's own Storage path,
+   * which the new account can never manage and which can vanish if that old
+   * account is later cleaned up. `syncQueueEntry`'s pre-upload guard checks
+   * this against the CURRENT session before trusting an already-set
+   * `preview_image_url`, and re-uploads instead of reusing it on a mismatch —
+   * a single, self-healing choke point that catches every account-lifecycle
+   * transition without each one needing its own bespoke check. Absent (not
+   * merely a stale/wrong value) is deliberately treated as "unknown, trust
+   * the existing URL" rather than "known stale" — rows uploaded before this
+   * field existed keep working exactly as before, at worst falling back to
+   * the account-transition-specific proactive cleanups (e.g. carry-over's
+   * `resetImageUrls`) for that one-time backward-compat gap.
+   */
+  local_image_uploaded_for_user_id?: string | null;
   dismissed_suggested_tags?: string[];
   dismissed_suggested_folders?: string[];
   reviewed_summary_tokens?: string[];

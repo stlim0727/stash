@@ -113,6 +113,12 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
 
 function fakeApi(overrides: Partial<Record<keyof BookmarkApi, unknown>> = {}): BookmarkApi {
   return {
+    // Matches makeBookmark's default user_id — most tests exercise a single
+    // consistent session throughout, so this stays a no-op default for the
+    // local_image_uploaded_for_user_id staleness guard unless a test
+    // explicitly overrides it to simulate a DIFFERENT session (an account
+    // transition having happened).
+    userId: 'user-test',
     createBookmark: async () => ({
       bookmark_id: '00000000-0000-4000-8000-000000000001',
       status: 'created',
@@ -585,6 +591,10 @@ test('create: an image bookmark uploads its binary before creating the row, then
 });
 
 test('create: an image bookmark already uploaded (preview_image_url set) does not re-upload on retry', async () => {
+  // No local_image_uploaded_for_user_id override here — this doubles as the
+  // structural fix's backward-compat case: a row uploaded before that field
+  // existed has no recorded owner to compare against api.userId, and is
+  // deliberately treated as "unknown, trust it" rather than forced stale.
   const { repository } = fakeRepository();
   const alreadyUploaded = makeBookmark({
     content_type: 'image',
@@ -607,6 +617,70 @@ test('create: an image bookmark already uploaded (preview_image_url set) does no
 
   assert.equal(uploadCallCount, 0);
   assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+});
+
+test('create: an image already uploaded under the SAME session does not re-upload (structural fix, round 7)', async () => {
+  const { repository } = fakeRepository();
+  const alreadyUploaded = makeBookmark({
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc',
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+    local_image_uploaded_for_user_id: 'user-test', // matches fakeApi()'s default userId
+  });
+  let uploadCallCount = 0;
+  const uploadImage = async () => {
+    uploadCallCount += 1;
+    return 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  };
+
+  const result = await syncQueueEntry(
+    fakeApi(),
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => alreadyUploaded,
+    uploadImage,
+  );
+
+  assert.equal(uploadCallCount, 0);
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+});
+
+test('create: an image uploaded under a DIFFERENT (now-abandoned) session re-uploads under the current one (structural fix, round 7)', async () => {
+  // The single, general choke point this whole round's structural fix is
+  // about: whatever account-lifecycle event changed the signed-in session
+  // since this image uploaded (carry-over, logout, a real A→real B switch,
+  // or anything else), this guard re-validates ownership fresh against
+  // whichever session is live RIGHT NOW rather than trusting a recorded URL.
+  const { repository } = fakeRepository();
+  const staleUpload = makeBookmark({
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/old-user/local-abc',
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+    local_image_uploaded_for_user_id: 'old-user', // does NOT match fakeApi()'s default 'user-test'
+  });
+  let uploadCallCount = 0;
+  const uploadImage = async () => {
+    uploadCallCount += 1;
+    return 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  };
+
+  const result = await syncQueueEntry(
+    fakeApi(),
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => staleUpload,
+    uploadImage,
+  );
+
+  assert.equal(uploadCallCount, 1);
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+  // The re-upload's fresh URL (under the CURRENT session's own path) and its
+  // owner stamp both land on the confirmed row — not the stale old-user one.
+  assert.equal(
+    result.bookmarkUpdate?.preview_image_url,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+  assert.equal(result.bookmarkUpdate?.local_image_uploaded_for_user_id, 'user-test');
 });
 
 test('create: an image upload failure never calls createBookmark and stays retryable (STASH-65 invariant preserved)', async () => {
@@ -643,6 +717,13 @@ test('create: an image upload failure never calls createBookmark and stays retry
   // isLocalOnlyBookmark(bookmark) === true shape STASH-65 depends on to keep
   // this row excluded from the remote-deletion diff while it retries.
   assert.notEqual(result.bookmarkUpdate?.ever_synced, true);
+  // P1, round 7: the bookmark row's OWN sync_status must also flip to
+  // 'failed' here, mirroring the createBookmark-failure catch below —
+  // otherwise the Inbox/Detail "sync pending" chip (which reads the
+  // bookmark row, not the queue entry) stays stuck showing "still syncing"
+  // forever even though the queue entry itself is genuinely failed and
+  // backing off.
+  assert.equal(result.bookmarkUpdate?.sync_status, 'failed');
 });
 
 test('create: an image bookmark with no uploader available on this platform fails cleanly instead of mis-syncing', async () => {
@@ -1156,7 +1237,7 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.entry.last_error, 'timeout');
 });
 
-test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url for an image bookmark', () => {
+test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url (and its owner stamp) for an image bookmark', () => {
   // `latest` simulates in-memory state that has NOT caught up to the upload
   // step's direct repository write (still null) — this is the real shape
   // the bug hit.
@@ -1168,6 +1249,7 @@ test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url for
   const update = makeBookmark({
     content_type: 'image',
     preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc',
+    local_image_uploaded_for_user_id: 'user-test',
     sync_status: 'synced',
     ever_synced: true,
     updated_at: '2026-06-13T00:00:00.000Z',
@@ -1176,6 +1258,9 @@ test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url for
   const merged = mergeSyncedBookmarkFields(latest, update);
 
   assert.equal(merged.preview_image_url, 'https://storage.example.com/bookmark-images/user-test/local-abc');
+  // Round 7: dropping this here would defeat syncQueueEntry's own staleness
+  // guard on the very next retry — it reads off this in-memory row.
+  assert.equal(merged.local_image_uploaded_for_user_id, 'user-test');
   assert.equal(merged.sync_status, 'synced');
   assert.equal(merged.ever_synced, true);
   assert.equal(merged.updated_at, '2026-06-13T00:00:00.000Z');

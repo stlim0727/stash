@@ -286,6 +286,16 @@ export class BookmarkApi {
   ) {}
 
   /**
+   * This instance's own signed-in user id — the same id `imageUploadTarget`
+   * namespaces its Storage path by. Exposed so `sync/sync-bookmarks.ts` can
+   * verify an already-uploaded image actually belongs to the CURRENT session
+   * before trusting it on a retry (see `Bookmark.local_image_uploaded_for_user_id`).
+   */
+  get userId(): string {
+    return this.session.user.id;
+  }
+
+  /**
    * Computes where an image-only bookmark's binary should be uploaded: the
    * `bookmark-images` Storage bucket, at a path namespaced by this session's
    * own user id so the bucket's owner-scoped write policies accept it. Pure —

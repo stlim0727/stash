@@ -514,12 +514,31 @@ export async function syncQueueEntry(
   // idempotent across retries: once uploaded, a later retry (e.g. the
   // createBookmark call itself failing) sees it already set and moves
   // straight to create without re-uploading the same binary.
+  //
+  // The second half of that condition — `local_image_uploaded_for_user_id`
+  // mismatching the CURRENT session's own user id — is the structural fix
+  // for a whole family of account-lifecycle races (sign-in carry-over,
+  // sign-out, a real A→real B switch): an image's binary uploads to Storage
+  // under whatever account is signed in AT UPLOAD TIME, and if the signed-in
+  // account changes before the row's create is ever confirmed, an
+  // already-set `preview_image_url` silently points at an object the NEW
+  // account can never manage. Rather than each transition needing its own
+  // bespoke "was this row affected" check, this single choke point
+  // re-validates ownership fresh, every retry, against whichever session is
+  // actually live right now — closing the whole class in one place instead
+  // of one instance at a time. A recorded id that's simply ABSENT (rows
+  // uploaded before this field existed) is deliberately treated as "unknown,
+  // trust the existing URL," not "known stale" — see the field's own doc
+  // comment in domain/types.ts.
   let uploadedImageUrl: string | undefined;
   const bookmarkForUpload = getBookmark(entry.local_id);
+  const uploadedImageIsStale =
+    Boolean(bookmarkForUpload?.local_image_uploaded_for_user_id) &&
+    bookmarkForUpload?.local_image_uploaded_for_user_id !== api.userId;
   if (
     bookmarkForUpload?.content_type === 'image' &&
     bookmarkForUpload.local_image_uri &&
-    !bookmarkForUpload.preview_image_url
+    (!bookmarkForUpload.preview_image_url || uploadedImageIsStale)
   ) {
     if (!uploadImage) {
       return {
@@ -581,9 +600,27 @@ export async function syncQueueEntry(
       await repository.updateBookmark({
         ...freshestBookmark,
         preview_image_url: uploadedImageUrl,
+        local_image_uploaded_for_user_id: api.userId,
       });
     } catch (error) {
-      return { entry: await failEntry(repository, entry, error, now) };
+      const failedEntry = await failEntry(repository, entry, error, now);
+      // Mirror the createBookmark-failure catch below: without persisting a
+      // failed bookmark row here too, `bookmark.sync_status` stays stuck at
+      // whatever it was before (typically 'pending') forever — even though
+      // the queue entry itself is genuinely 'failed' and backing off. The
+      // Inbox/Detail "sync pending" chip reads the BOOKMARK row, not the
+      // queue, so a Storage rejection (403/5xx, size limit, ...) would
+      // otherwise look like it's still quietly in progress indefinitely.
+      const localBookmark = getBookmark(entry.local_id);
+      if (localBookmark && localBookmark.sync_status !== 'failed') {
+        const failedBookmark: Bookmark = {
+          ...localBookmark,
+          sync_status: 'failed',
+        };
+        await repository.updateBookmark(failedBookmark);
+        return { entry: failedEntry, bookmarkUpdate: failedBookmark };
+      }
+      return { entry: failedEntry };
     }
   }
 
@@ -637,7 +674,9 @@ export async function syncQueueEntry(
         // Guarantee the local row reflects what was actually just uploaded,
         // even if `localBookmark` (read from in-memory state) hadn't yet
         // caught up to the direct repository write above.
-        ...(uploadedImageUrl ? { preview_image_url: uploadedImageUrl } : {}),
+        ...(uploadedImageUrl
+          ? { preview_image_url: uploadedImageUrl, local_image_uploaded_for_user_id: api.userId }
+          : {}),
       };
       if (isDuplicateSwap) {
         // insertBookmark (not updateBookmark), since the existing row's id is
@@ -680,9 +719,13 @@ export async function syncQueueEntry(
         // in-memory snapshot, which never reflects the upload step's direct
         // repository write above (it wrote straight to storage, bypassing
         // React state) — without this, the write below would clobber that
-        // just-persisted URL back to null, and the next retry would see
-        // `!preview_image_url` and re-upload the whole image needlessly.
-        ...(uploadedImageUrl ? { preview_image_url: uploadedImageUrl } : {}),
+        // just-persisted URL (and its owning-user stamp) back to null/stale,
+        // and the next retry would see `!preview_image_url` and needlessly
+        // re-upload — or, worse, wrongly treat this device's own just-landed
+        // upload as stale (see `uploadedImageIsStale` above).
+        ...(uploadedImageUrl
+          ? { preview_image_url: uploadedImageUrl, local_image_uploaded_for_user_id: api.userId }
+          : {}),
       };
       await repository.updateBookmark(failedBookmark);
       return {
@@ -711,16 +754,20 @@ export async function syncQueueEntry(
  * meantime — see `applySyncEntryResult` in store/bookmarks.tsx, the sole
  * caller.
  *
- * `preview_image_url` is the one deliberate exception: for an image
- * bookmark specifically it IS sync-owned — an image bookmark never runs
- * enrichment (`metadata_status` stays `'skipped'`), so there is no
- * concurrent writer it could ever race — and `update.preview_image_url` is
- * exactly the URL this sync pass just uploaded/confirmed. Without carrying
- * it through here, `latest.preview_image_url` (still null — the upload step
- * writes straight to the repository, never to React state) would silently
- * drop the just-uploaded URL from both memory and the next durable write,
- * and the next title/notes edit's own update payload would then send
- * `preview_image_url: null` and wipe the image on every device.
+ * `preview_image_url` (and its `local_image_uploaded_for_user_id` owner
+ * stamp) is the one deliberate exception: for an image bookmark
+ * specifically it IS sync-owned — an image bookmark never runs enrichment
+ * (`metadata_status` stays `'skipped'`), so there is no concurrent writer it
+ * could ever race — and `update.preview_image_url` is exactly the URL this
+ * sync pass just uploaded/confirmed. Without carrying it through here,
+ * `latest.preview_image_url` (still null — the upload step writes straight
+ * to the repository, never to React state) would silently drop the
+ * just-uploaded URL from both memory and the next durable write, and the
+ * next title/notes edit's own update payload would then send
+ * `preview_image_url: null` and wipe the image on every device. Dropping
+ * `local_image_uploaded_for_user_id` here specifically would defeat
+ * `syncQueueEntry`'s own staleness guard on the very next retry — it reads
+ * off this in-memory row (via `getBookmark`), not the repository.
  */
 export function mergeSyncedBookmarkFields(latest: Bookmark, update: Bookmark): Bookmark {
   return {
@@ -729,7 +776,12 @@ export function mergeSyncedBookmarkFields(latest: Bookmark, update: Bookmark): B
     sync_status: update.sync_status,
     ever_synced: update.ever_synced,
     updated_at: update.updated_at,
-    ...(update.content_type === 'image' ? { preview_image_url: update.preview_image_url } : {}),
+    ...(update.content_type === 'image'
+      ? {
+          preview_image_url: update.preview_image_url,
+          local_image_uploaded_for_user_id: update.local_image_uploaded_for_user_id,
+        }
+      : {}),
   };
 }
 
