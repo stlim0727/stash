@@ -23,6 +23,7 @@ import { jwtSubject } from "@/domain/jwt";
 import { planTitleBackfill } from "@/domain/title-backfill";
 import type { TitleBackfillPatch } from "@/domain/title-backfill";
 import {
+  canonicalizeImageMimeType,
   imageTitleFromFileName,
   localImageFileName,
   MAX_UPLOAD_IMAGE_BYTES,
@@ -5375,8 +5376,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // falls back to guessing from the local file's extension, which
           // can mislabel an unmapped format's Content-Type (acceptable only
           // as a legacy-compat fallback, not the primary path).
-          const contentType =
+          const reportedContentType =
             bookmark.local_image_mime_type ?? mimeTypeForImageUri(bookmark.local_image_uri);
+          // canonicalizeImageMimeType normalizes a real-but-nonstandard alias
+          // (e.g. some providers report `image/jpg` for a plain JPEG) to the
+          // single form the bucket's allowlist actually contains — without
+          // this, an honestly-labeled but non-canonical Content-Type would
+          // still be permanently rejected by Storage on every retry.
+          const contentType = canonicalizeImageMimeType(reportedContentType);
           const target = api.imageUploadTarget(bookmark.id, contentType);
           await uploadImageFile(bookmark.local_image_uri, target.uploadUrl, target.headers);
           return target.publicUrl;

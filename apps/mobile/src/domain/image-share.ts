@@ -168,6 +168,36 @@ export function mimeTypeForImageUri(uri: string): string {
 }
 
 /**
+ * Normalizes a MIME type to the single form the `bookmark-images` bucket's
+ * `allowed_mime_types` allowlist actually contains, for any input
+ * `MIME_TO_EXT` already treats as an alias of a canonical type — e.g. some
+ * share providers report `image/jpg` (a real, if nonstandard, MIME) for a
+ * plain JPEG, which `MIME_TO_EXT` already maps to the same `jpg` extension
+ * as the standard `image/jpeg`. Recorded local metadata
+ * (`Bookmark.local_image_mime_type`) intentionally keeps whatever the OS
+ * actually reported — that's the whole point of preserving it instead of
+ * re-guessing from the file extension — but the value actually SENT as the
+ * upload's Content-Type must match the bucket's allowlist, or Storage
+ * rejects it identically on every retry forever, same failure class as an
+ * oversized image. Call this at the upload boundary specifically, not at
+ * capture time.
+ *
+ * Round-trips through the existing extension maps rather than a separate
+ * alias table, so it stays in sync with MIME_TO_EXT automatically: an input
+ * MIME_TO_EXT doesn't recognize is returned unchanged (still the real,
+ * honest type) — there's no established canonical form to normalize an
+ * unmapped format to, and `mimeTypeForImageUri`'s own fallback path already
+ * only ever produces canonical values (every EXT_TO_MIME entry, plus
+ * DEFAULT_UPLOAD_MIME, are canonical already), so this is a no-op for that
+ * branch and only actually changes anything for `local_image_mime_type`'s
+ * non-canonical aliases.
+ */
+export function canonicalizeImageMimeType(mime: string): string {
+  const ext = MIME_TO_EXT[mime.trim().toLowerCase()];
+  return ext ? (EXT_TO_MIME[ext] ?? mime) : mime;
+}
+
+/**
  * A readable title derived from a shared image's filename: the base name with
  * the extension dropped and separators tidied to spaces. Returns null when the
  * filename is missing or yields nothing usable, so the caller can fall back to

@@ -97,6 +97,14 @@ jest.mock('@/api/bookmarks', () => {
       updateBookmark: updateBookmarkMock,
       resetLibrary: resetLibraryMock,
       requestEnrichment: requestEnrichmentMock,
+      // Only exercised by the image-capture race test below, which expects
+      // this to fail fast (the point of that test is the capture/syncNow
+      // race, not a successful image upload) — explicit and synchronous, not
+      // an incidental "method doesn't exist" TypeError.
+      imageUploadTarget: () => {
+        throw new Error('image upload not stubbed for this test');
+      },
+      deleteImages: async () => {},
     }),
   };
 });
@@ -440,4 +448,25 @@ test("syncNow defers while an image capture's durable write is still landing, in
   await waitFor(() => expect(fakeRepo.__bookmarks().map((b) => b.id)).toContain(imageId));
   await waitFor(() => expect(fakeRepo.__queue().some((e) => e.local_id === imageId)).toBe(true));
   expect(result.current.inbox.map((b) => b.id)).toContain(imageId);
+
+  // The flush's own completion handler fires a REAL background syncNow()
+  // 50ms later (same self-retrigger importBookmarks already uses — see the
+  // busy-guard tests above). That call does real async work (a pull, and an
+  // upload attempt for this entry that fails fast against the stub above).
+  // Explicitly wait it all the way out — past the 50ms delay AND until
+  // isSyncing settles back to false — using the exact real-timer flush this
+  // codebase already relies on elsewhere (mass-import-sync.test.tsx) for the
+  // identical shape of trailing retrigger. Without this, that background
+  // call can still be in flight when this test (and eventually the whole
+  // file) finishes, and Jest tearing down the module environment out from
+  // under it surfaces as "trying to import a file after the Jest
+  // environment has been torn down" — a real leak, not a flake.
+  await waitFor(() => expect(result.current.isSyncing).toBe(false));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  });
+  await waitFor(() => expect(result.current.isSyncing).toBe(false));
+  await waitFor(() =>
+    expect(fakeRepo.__queue().find((e) => e.local_id === imageId)?.sync_status).toBe('failed'),
+  );
 });

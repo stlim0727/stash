@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  canonicalizeImageMimeType,
   extensionForImage,
   imageTitleFromFileName,
   isImageMime,
@@ -99,4 +100,21 @@ test('mimeTypeForImageUri recovers the MIME type from the durable local filename
 test('mimeTypeForImageUri falls back to an allowlisted image type for an unknown extension (never a non-image type the Storage bucket would permanently reject)', () => {
   assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123'), 'image/jpeg');
   assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123.xyz'), 'image/jpeg');
+});
+
+test('canonicalizeImageMimeType normalizes a real-but-nonstandard alias to the bucket-allowlisted form', () => {
+  // Some share providers report image/jpg (not image/jpeg) for a plain
+  // JPEG — MIME_TO_EXT already treats them as the same format, but the
+  // bucket's allowlist only contains the standard image/jpeg spelling.
+  assert.equal(canonicalizeImageMimeType('image/jpg'), 'image/jpeg');
+  assert.equal(canonicalizeImageMimeType('IMAGE/JPG'), 'image/jpeg');
+  assert.equal(canonicalizeImageMimeType('  image/jpg  '), 'image/jpeg');
+});
+
+test('canonicalizeImageMimeType leaves an already-canonical or unmapped type unchanged', () => {
+  assert.equal(canonicalizeImageMimeType('image/jpeg'), 'image/jpeg');
+  assert.equal(canonicalizeImageMimeType('image/png'), 'image/png');
+  // No established canonical form to normalize an unmapped format to — the
+  // real, honest type is preserved rather than guessed at.
+  assert.equal(canonicalizeImageMimeType('image/jxl'), 'image/jxl');
 });
