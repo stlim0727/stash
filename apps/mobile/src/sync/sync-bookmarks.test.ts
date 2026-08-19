@@ -248,6 +248,70 @@ test('bulk create: a server-side duplicate adopts the existing row\'s id too (Se
   assert.equal(result?.originalLocalId, 'local-dup');
 });
 
+test('bulk create: aborts BEFORE dispatch when the live identity has already diverged from api (P1, round 9)', async () => {
+  const entry = makeCreateEntry({ local_id: 'local-a', payload: { url: 'https://example.com/a' } });
+  let createBookmarksCalled = false;
+  const api = fakeApi({
+    createBookmarks: async () => {
+      createBookmarksCalled = true;
+      throw new Error('must never be called once the live identity has diverged');
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      syncCreateQueueEntryBatch(api, [entry], () => makeBookmark({ id: 'local-a' }), () => 'a-different-user'),
+    /identity changed/,
+  );
+  assert.equal(createBookmarksCalled, false);
+});
+
+test('bulk create: rejects when the live identity diverges DURING the awaited createBookmarks call (P1, round 9 — TOCTOU)', async () => {
+  // Same shape as the single-entry TOCTOU fix: the pre-dispatch check alone
+  // isn't sufficient for a bulk chunk either — createBookmarks can take
+  // real wall-clock time (potentially longer, being a whole batch), during
+  // which sign-out can still happen. The batch lands regardless; this must
+  // reject rather than let the caller confirm every row in it as synced
+  // under whichever identity happens to be live now.
+  const entry = makeCreateEntry({ local_id: 'local-a', payload: { url: 'https://example.com/a' } });
+  let liveUserIdCalls = 0;
+  const getLiveUserId = () => {
+    liveUserIdCalls += 1;
+    return liveUserIdCalls === 1 ? 'user-test' : 'a-different-now-live-user';
+  };
+  const api = fakeApi({
+    createBookmarks: async () => [
+      { bookmark_id: 'local-a', status: 'created' as const, metadata_status: 'pending' as const },
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      syncCreateQueueEntryBatch(api, [entry], () => makeBookmark({ id: 'local-a' }), getLiveUserId),
+    /identity changed/,
+  );
+  assert.equal(liveUserIdCalls, 2); // both checks actually ran
+});
+
+test('bulk create: proceeds normally when getLiveUserId confirms the identity has NOT changed (no false-positive abort)', async () => {
+  const entry = makeCreateEntry({ local_id: 'local-a', payload: { url: 'https://example.com/a' } });
+  const api = fakeApi({
+    createBookmarks: async () => [
+      { bookmark_id: 'local-a', status: 'created' as const, metadata_status: 'pending' as const },
+    ],
+  });
+
+  const results = await syncCreateQueueEntryBatch(
+    api,
+    [entry],
+    () => makeBookmark({ id: 'local-a' }),
+    () => 'user-test', // matches fakeApi()'s default userId — no divergence
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.bookmarkUpdate?.sync_status, 'synced');
+});
+
 test('create: uploads the LATEST title/notes, not the payload captured at save', async () => {
   const { repository } = fakeRepository();
   const sent: unknown[] = [];
@@ -1001,6 +1065,53 @@ test('create: proceeds normally when getLiveUserId confirms the identity has NOT
   assert.equal(createBookmarkCalled, true);
   assert.equal(result.entry.sync_status, 'synced');
   assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+});
+
+test('create: signals landedUnderDepartedIdentity when the identity changes DURING the awaited createBookmark call (P1, round 9 — TOCTOU)', async () => {
+  // The pre-dispatch check alone isn't sufficient: it passes here (identity
+  // still matches at dispatch time), but createBookmark is awaited and can
+  // take real wall-clock time — during which sign-out can still happen. The
+  // request lands regardless (the server already committed it under the
+  // DISPATCHING identity), so this must be caught on the response side too,
+  // or the row gets durably confirmed as if it belonged to whichever
+  // identity is live now.
+  const { repository } = fakeRepository();
+  const bookmark = makeBookmark({ url: 'https://example.com/a' });
+  let liveUserIdCalls = 0;
+  const getLiveUserId = () => {
+    liveUserIdCalls += 1;
+    // Matches at dispatch time (1st call, pre-dispatch check) — diverges by
+    // the time the response comes back (2nd call, post-response check).
+    return liveUserIdCalls === 1 ? 'user-test' : 'a-different-now-live-user';
+  };
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: 'local-abc',
+      status: 'created' as const,
+      metadata_status: 'pending' as const,
+    }),
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry(),
+    () => bookmark,
+    undefined,
+    getLiveUserId,
+  );
+
+  assert.equal(liveUserIdCalls, 2); // both checks actually ran
+  assert.equal(result.landedUnderDepartedIdentity, true);
+  assert.equal(result.removeEntry, true);
+  // Never confirmed as a normal synced row — that would durably misattribute
+  // a real cloud row (it DID land) to whichever identity is live now.
+  assert.equal(result.bookmarkUpdate, undefined);
+  // The QUEUE entry's own lifecycle is done (removeEntry: true) — matches
+  // the same "synced" convention this function uses elsewhere for "this
+  // attempt is finished, nothing more to retry for THIS entry" (a fresh one
+  // under a new id replaces it via applySyncEntryResult's rehome).
+  assert.equal(result.entry.sync_status, 'synced');
 });
 
 test('create: an image bookmark permanently deleted between a landed upload and a subsequent createBookmark failure still surfaces the uploaded URL for cleanup (P1)', async () => {

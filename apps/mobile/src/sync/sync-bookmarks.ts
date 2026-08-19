@@ -50,6 +50,21 @@ export interface EntrySyncResult {
    * local-id row that was never actually created server-side).
    */
   originalLocalId?: string;
+  /**
+   * True when a create's `api.createBookmark` request landed successfully,
+   * but the live signed-in identity changed WHILE that request was in
+   * flight (checked again after the response — the pre-dispatch check
+   * alone can't close this window, since the awaited network call itself
+   * is exactly where it can still happen). The row now has a REAL cloud
+   * identity, but under the DEPARTED identity, not whichever one is live
+   * now — `bookmarkUpdate` is never set in this case; the caller
+   * (applySyncEntryResult in store/bookmarks.tsx) must route `entry.local_id`
+   * through the same rehome machinery account transitions use (mint a fresh
+   * id, tag re-key, etc.) rather than trusting this as a normal confirmed
+   * sync. `removeEntry` is always true alongside this — the ORIGINAL queue
+   * entry is done; a fresh one under the new id replaces it.
+   */
+  landedUnderDepartedIdentity?: boolean;
 }
 
 export const BULK_CREATE_SYNC_CHUNK_SIZE = 50;
@@ -299,6 +314,33 @@ export async function syncCreateQueueEntryBatch(
   api: BookmarkApi,
   entries: LocalPendingBookmark[],
   getBookmark: (id: string) => Bookmark | undefined,
+  /**
+   * Same purpose as syncQueueEntry's own parameter of the same name — see
+   * its doc comment there for the full race. A bulk chunk's own
+   * api.createBookmarks call can take real wall-clock time (potentially
+   * longer than a single create — this is the mass-import path), so the
+   * SAME sign-out-mid-flight exposure applies here, just for every row in
+   * the chunk at once instead of one.
+   *
+   * Unlike syncQueueEntry, a post-response mismatch here does NOT route
+   * through the per-row rehome machinery — this function's caller
+   * (applyBulkCreateChunkResults in store/bookmarks.tsx) is an intricate,
+   * loop-stall-watchdog-sensitive hot path, and safely threading a
+   * per-row identity-mismatch branch through its batched dedup/reconcile
+   * logic is a meaningfully bigger, riskier change than this fix
+   * warranted attempting under the same pass as the single-entry fix.
+   * Instead this throws, which the call site's EXISTING try/catch already
+   * treats as an ordinary batch failure (every entry retries later) — so
+   * at minimum no row is ever durably misattributed to a departed
+   * identity's confirmation. The narrower residual: a retry reusing the
+   * SAME ids can still hit the primary-key-collision shape (STASH-3Q-
+   * adjacent) if the batch's create actually landed under the departed
+   * identity before this check catches it — the same PRE-EXISTING,
+   * already-accepted trade-off this codebase has for any lost-response/
+   * crash mid-bulk-create, identity change or not. Closing that
+   * completely is tracked as a known follow-up, not done here.
+   */
+  getLiveUserId?: () => string | null | undefined,
 ): Promise<EntrySyncResult[]> {
   if (entries.length === 0) {
     return [];
@@ -316,10 +358,16 @@ export async function syncCreateQueueEntryBatch(
   if (entries.some((entry) => entry.payload.content_type === 'image')) {
     throw new Error('Bulk create sync does not support image bookmarks; use syncQueueEntry.');
   }
+  if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+    throw new Error('Signed-in identity changed before this bulk create could be dispatched.');
+  }
 
   const now = new Date().toISOString();
   const uploadedPayloads = entries.map((entry) => createUploadPayload(entry, getBookmark));
   const created = await api.createBookmarks(uploadedPayloads);
+  if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+    throw new Error('Signed-in identity changed before this bulk create could be confirmed.');
+  }
   if (created.length !== entries.length) {
     throw new Error('Bulk create sync returned the wrong number of results.');
   }
@@ -712,6 +760,27 @@ export async function syncQueueEntry(
 
   try {
     const result = await api.createBookmark(payload);
+
+    // P1: the pre-dispatch check above narrows the race but can't close it
+    // — the awaited call itself is exactly where the live identity can
+    // still change (sign-out mid-flight doesn't wait for this request).
+    // The create landed regardless (result.bookmark_id is real), but it
+    // landed under api.userId, which is now the DEPARTED identity —
+    // confirming this row as `ever_synced: true` here would durably
+    // misattribute a real cloud row to whichever identity happens to be
+    // live now. This pure function has no access to the rehome machinery
+    // (makeBookmarkId, tag re-key, etc. — see applyAccountTransition) that
+    // routing this correctly needs, so just signal it; the caller
+    // (applySyncEntryResult in store/bookmarks.tsx) does the actual rehome.
+    if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+      await removeQueueEntryIfNotSuperseded(repository, entry);
+      return {
+        entry: { ...entry, sync_status: 'synced', updated_at: now },
+        removeEntry: true,
+        landedUnderDepartedIdentity: true,
+      };
+    }
+
     const syncedEntry: LocalPendingBookmark = {
       ...entry,
       remote_id: result.bookmark_id,

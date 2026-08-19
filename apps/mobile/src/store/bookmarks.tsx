@@ -5494,6 +5494,59 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             return false;
           }
 
+          // P1: the create's own request landed successfully, but the live
+          // identity changed WHILE it was in flight (checked again inside
+          // syncQueueEntry, after the response — see landedUnderDepartedIdentity's
+          // own doc comment for why the pre-dispatch check alone can't close
+          // this window). The row now has a REAL cloud identity, just under
+          // the DEPARTED account — route it through the exact same rehome
+          // machinery an account transition uses (fresh id, cleared image
+          // URL/owner, tag/import/enrichment/AI-retry re-key) instead of
+          // trusting this as a normal confirmed sync, which would durably
+          // misattribute a real cloud row to whichever identity is live now.
+          if (result.landedUnderDepartedIdentity) {
+            // Real durable work happened this pass (a fresh create was
+            // enqueued via rehome below), same as any other removeEntry
+            // case — matches the semantics mutationsPushed represents
+            // elsewhere for a broadcastSyncNudge and this pass's own
+            // return value.
+            mutationsPushed = true;
+            const staleRow = getLatestBookmark(entry.local_id);
+            if (staleRow) {
+              await applyAccountTransition(
+                {
+                  kind: "switch",
+                  rehome: [staleRow],
+                  drop: [],
+                  dropQueue: [],
+                  resetWatermark: false,
+                },
+                repository,
+                setBookmarks,
+                setQueue,
+                makeBookmarkId,
+                ensureRepositoryReady,
+                {
+                  rehome: (idMap) =>
+                    rekeyBookmarkIdentity(idMap, { persist: false }),
+                },
+              );
+            } else {
+              // No local row left to rehome (e.g. a separate concurrent
+              // delete that deletedIds.current's own check above didn't
+              // catch for some other reason) — nothing to move, but the
+              // now-permanently-stale queue entry must still not linger.
+              setQueue((current) => {
+                const nextQueue = current.filter(
+                  (queued) => queued.local_id !== entry.local_id,
+                );
+                queueRef.current = nextQueue;
+                return nextQueue;
+              });
+            }
+            return false;
+          }
+
           setQueue((current) => {
             const nextQueue = result.removeEntry
               ? current.filter((queued) => queued.local_id !== entry.local_id)
@@ -6228,6 +6281,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 api,
                 chunk,
                 getLatestBookmark,
+                // Same reasoning as the single-entry syncQueueEntry call
+                // below — see its own comment for the full race.
+                () => auth.session?.user.id ?? null,
               );
               await applyBulkCreateChunkResults(chunk, results);
               for (const entry of chunk) {
