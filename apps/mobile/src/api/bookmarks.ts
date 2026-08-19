@@ -305,6 +305,19 @@ export class BookmarkApi {
     });
   }
 
+  /**
+   * Deletes the uploaded `bookmark-images` objects for the given bookmark
+   * ids, scoped to this session's own user id (matches the path
+   * `imageUploadTarget` uploads to). Best-effort by design — see
+   * `StashSupabaseClient.removeStorageObjects`. Only meaningful for
+   * bookmarks that actually uploaded (deleting a path with no object at it
+   * is a harmless no-op), but callers don't need to filter for that.
+   */
+  async deleteImages(bookmarkIds: string[]): Promise<void> {
+    const paths = bookmarkIds.map((id) => `${this.session.user.id}/${id}`);
+    await this.client.removeStorageObjects('bookmark-images', paths, this.session.access_token);
+  }
+
   async createBookmark(input: CreateBookmarkInput): Promise<CreateBookmarkOutput> {
     const payload = requirePayload(input);
     const timestamp = nowIso();

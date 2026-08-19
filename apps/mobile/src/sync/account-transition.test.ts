@@ -186,6 +186,55 @@ test('carry-over still re-homes a genuinely cloud-synced image row (ever_synced:
   );
 });
 
+test("applyAccountTransition clears an already-uploaded image bookmark's preview_image_url on rehome (P2: the new account cannot manage the old owner's Storage object)", async () => {
+  // Rehoming mints a NEW local id under the NEW account. The old
+  // preview_image_url points at the OLD (now-abandoned anonymous) user's own
+  // Storage path — owner-scoped Storage RLS means the new account can never
+  // update or delete an object under someone else's path segment, and the
+  // object could vanish if the old anonymous user is later cleaned up. The
+  // URL must be cleared so create-sync re-uploads the same still-on-disk
+  // local file under the new account's own path.
+  const oldRow = bookmark({
+    id: REMOTE_A,
+    url: null,
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/anon-user/' + REMOTE_A,
+    local_image_uri: 'file:///stash-images/shared.jpg',
+    sync_status: 'synced',
+    ever_synced: true,
+  });
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [oldRow],
+  );
+  assert.equal(plan.rehome.length, 1); // sanity: this row IS in the rehome set
+
+  let rehomedBookmarks: Bookmark[] = [];
+  let rehomedEntries: LocalPendingBookmark[] = [];
+  await applyAccountTransition(
+    plan,
+    fakeRepository(),
+    (updater) => {
+      rehomedBookmarks = updater([oldRow]) ?? [];
+    },
+    (updater) => {
+      rehomedEntries = updater([]);
+    },
+    () => 'local-rehomed-image',
+    async () => {},
+  );
+
+  const rehomed = rehomedBookmarks.find((b) => b.id === 'local-rehomed-image');
+  assert.equal(rehomed?.preview_image_url, null);
+  // The local file itself is untouched — same device, still on disk.
+  assert.equal(rehomed?.local_image_uri, 'file:///stash-images/shared.jpg');
+
+  const entry = rehomedEntries.find((e) => e.local_id === 'local-rehomed-image');
+  assert.equal(entry?.payload.content_type, 'image');
+  assert.equal(entry?.payload.preview_image_url, undefined);
+});
+
 test('planLogoutCacheClear drops the logged-out account’s cloud rows', () => {
   const plan = planLogoutCacheClear([bookmark({ id: REMOTE_A }), bookmark({ id: REMOTE_B })]);
   assert.equal(plan.kind, 'logout');

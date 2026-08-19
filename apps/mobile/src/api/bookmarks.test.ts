@@ -325,6 +325,25 @@ test("imageUploadTarget scopes the object path to this session's own user id", (
   assert.equal(target.headers.Authorization, 'Bearer token');
 });
 
+test("deleteImages scopes each object path to this session's own user id", async () => {
+  let removed: { bucket: string; paths: string[]; accessToken: string } | undefined;
+  const client = {
+    request: async () => {
+      throw new Error('deleteImages must go through removeStorageObjects, not a raw request');
+    },
+    removeStorageObjects: async (bucket: string, paths: string[], accessToken: string) => {
+      removed = { bucket, paths, accessToken };
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.deleteImages(['b1', 'b2']);
+
+  assert.equal(removed?.bucket, 'bookmark-images');
+  assert.deepEqual(removed?.paths, ['user-1/b1', 'user-1/b2']);
+  assert.equal(removed?.accessToken, 'token');
+});
+
 test('enqueuePendingEnrichment targets bookmark_id for conflict resolution and requests a minimal response (STASH-4K)', async () => {
   // STASH-4K, verified live against production:
   //  - `on_conflict=bookmark_id` is required for `resolution=ignore-duplicates`

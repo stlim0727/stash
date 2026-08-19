@@ -352,6 +352,29 @@ export class StashSupabaseClient {
   }
 
   /**
+   * Bulk-deletes objects from a Storage bucket by their exact paths (the
+   * REST API's field is named `prefixes`, but each entry is matched as an
+   * exact object key, not a wildcard prefix). Used to clean up
+   * `bookmark-images` objects when their owning bookmark is permanently
+   * deleted (Trash empty, single permanent delete, or a full library
+   * reset) — never on a recoverable Trash move, which only sets
+   * `deleted_at` and must leave the object intact. Callers treat this as
+   * best-effort: a failure here leaves an orphaned (but still owner-scoped,
+   * RLS-protected against writes) object rather than blocking the delete
+   * itself.
+   */
+  async removeStorageObjects(bucket: string, paths: string[], accessToken: string): Promise<void> {
+    if (paths.length === 0) {
+      return;
+    }
+    await this.request(`/storage/v1/object/${bucket}`, {
+      method: 'DELETE',
+      accessToken,
+      body: { prefixes: paths },
+    });
+  }
+
+  /**
    * Best-effort per-sync stamp for the admin dashboard (GH #687): upsert the
    * authenticated user's `app_version` + `last_synced_at` row. `user_id` is
    * `user_sync_status`'s primary key, so a plain POST with

@@ -163,6 +163,7 @@ import {
   isRowSpecificPermanentSyncErrorText,
   isSyncable,
   makeMutationEntry,
+  mergeSyncedBookmarkFields,
   reconcileOrphanedQueueEntries,
   removeQueueEntryIfNotSuperseded,
   syncCreateQueueEntryBatch,
@@ -2595,10 +2596,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ? current
                 : current.map((b) => (b.id === id ? stored : b)),
             );
-            return Promise.all([
-              repository.insertBookmark(stored),
-              repository.enqueue(imageEntry),
-            ]);
+            // Sequential, not Promise.all: insert the bookmark row FIRST,
+            // then enqueue. A crash between the two durable writes must land
+            // on the side reconcileOrphanedQueueEntries already self-heals
+            // (a bookmark with no queue entry yet) — not a queue entry with
+            // no matching bookmark row, which would retry the create forever
+            // (requirePayload rejects an image create with no
+            // preview_image_url, and createUploadPayload's own "row is
+            // missing" guard returns the payload unchanged, so the image
+            // never re-uploads either). Running the two writes concurrently
+            // via Promise.all leaves the order — and therefore which of the
+            // two partial states a crash lands on — unspecified.
+            return repository
+              .insertBookmark(stored)
+              .then(() => repository.enqueue(imageEntry));
           })
           .then(() => true)
           .catch((error) => {
@@ -3416,6 +3427,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const deleteBookmark = useCallback(
     (id: string) => {
+      const bookmark = bookmarksRef.current?.find((b) => b.id === id);
       deletedIds.current.add(id);
       applyTagOps(
         dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, [id]),
@@ -3448,6 +3460,24 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Same rationale as above: a permanently-gone row has nothing left to
       // wait for from the server-side overflow queue either.
       clearAiServerQueued(id);
+      // Best-effort: an image bookmark that ever actually uploaded owns a
+      // real object in the bookmark-images bucket. Permanently deleting the
+      // row must not leave that object behind — it would stay indefinitely
+      // public (this bucket is public-read by design) and keep counting
+      // against storage. Fire-and-forget, matching the existing best-effort
+      // network-call pattern elsewhere in this app (e.g.
+      // StashSupabaseClient.signOut's server-side revoke): a failure here
+      // just leaves an orphaned object, never blocks or retries the
+      // bookmark delete itself. Never runs for a Trash move (trashBookmark,
+      // a separate function, soft-deletes via deleted_at) — only this
+      // permanent path.
+      if (bookmark?.content_type === "image" && hadSyncedOnce && auth.session) {
+        createSyncApi(auth.session)
+          .deleteImages([id])
+          .catch((error) =>
+            logStorageError("delete bookmark image object", error),
+          );
+      }
       if (hadSyncedOnce) {
         // The row exists remotely: replace any queued work with a durable
         // delete mutation so the removal reaches Supabase even after restart.
@@ -3472,6 +3502,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .catch((error) => logStorageError("delete bookmark", error));
     },
     [
+      auth,
       applyPendingImportCollections,
       applyPendingEnrichmentRestores,
       applyTagData,
@@ -3518,6 +3549,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const deleteEntries = trashed
       .filter((bookmark) => isBookmarkSyncedOnce(bookmark))
       .map((bookmark) => makeMutationEntry(bookmark.id, "delete"));
+    // Best-effort bulk cleanup of any uploaded bookmark-images objects —
+    // same rationale as deleteBookmark's single-row cleanup above: emptying
+    // Trash must not leave those objects behind (public, still counted
+    // against storage) even though this row is now gone for good.
+    const imageIdsToDeleteFromStorage = trashed
+      .filter((bookmark) => bookmark.content_type === "image" && isBookmarkSyncedOnce(bookmark))
+      .map((bookmark) => bookmark.id);
+    if (imageIdsToDeleteFromStorage.length > 0 && auth.session) {
+      createSyncApi(auth.session)
+        .deleteImages(imageIdsToDeleteFromStorage)
+        .catch((error) => logStorageError("empty trash image objects", error));
+    }
     const nextQueue = [
       ...queueRef.current.filter((entry) => !deleted.has(entry.local_id)),
       ...deleteEntries,
@@ -3549,6 +3592,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       })
       .catch((error) => logStorageError("empty trash", error));
   }, [
+    auth,
     applyPendingImportCollections,
     applyPendingEnrichmentRestores,
     applyTagData,
@@ -3585,12 +3629,30 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // mid-wipe; syncNow calls made meanwhile no-op onto syncPendingRef.
     syncInFlight.current = true;
     setIsResettingLibrary(true);
+    // Snapshot BEFORE the wipe below clears bookmarksRef — used only for the
+    // best-effort Storage cleanup once the remote wipe actually succeeds.
+    const imageIdsToDeleteFromStorage = (bookmarksRef.current ?? [])
+      .filter((bookmark) => bookmark.content_type === "image" && isBookmarkSyncedOnce(bookmark))
+      .map((bookmark) => bookmark.id);
     try {
       try {
         // Refresh a token that expired while the app stayed open, mirroring
         // syncNow — otherwise the RPC would 401 against a stale bearer.
         const session = (await auth.ensureAnonymousSession()) ?? auth.session;
         await createSyncApi(session).resetLibrary();
+        // Best-effort: the RPC wipes the bookmarks table (and everything
+        // that cascades from it), but bookmark-images objects live in
+        // Storage, outside that table's FK graph, so nothing cleans them up
+        // on its own. Fire-and-forget — never blocks or fails the reset
+        // itself; a failure here just leaves orphaned objects, same
+        // trade-off as deleteBookmark/emptyTrash's identical cleanup.
+        if (imageIdsToDeleteFromStorage.length > 0) {
+          createSyncApi(session)
+            .deleteImages(imageIdsToDeleteFromStorage)
+            .catch((error) =>
+              logStorageError("library reset image objects", error),
+            );
+        }
       } catch (error) {
         recordLog(
           "warn",
@@ -5346,13 +5408,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               (bookmark) => bookmark.id === lookupId,
             );
             const merged: Bookmark | null = latest
-              ? {
-                  ...latest,
-                  id: update.id,
-                  sync_status: update.sync_status,
-                  ever_synced: update.ever_synced,
-                  updated_at: update.updated_at,
-                }
+              ? mergeSyncedBookmarkFields(latest, update)
               : null;
             if (merged) {
               // Collapse onto the destination id: a pull that already inserted

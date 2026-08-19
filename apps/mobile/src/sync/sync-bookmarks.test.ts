@@ -11,6 +11,7 @@ import {
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
+  mergeSyncedBookmarkFields,
   reconcileOrphanedQueueEntries,
   syncCreateQueueEntryBatch,
   syncErrorKind,
@@ -663,6 +664,86 @@ test('create: an image bookmark with no uploader available on this platform fail
   assert.match(result.entry.last_error ?? '', /not available on this platform/);
 });
 
+test('create: an image bookmark permanently deleted mid-upload aborts instead of resurrecting the stale snapshot (P1)', async () => {
+  // On native, repository.updateBookmark is `INSERT OR REPLACE` (an upsert
+  // — see repository.native.ts). If a permanent delete removes the row
+  // WHILE its image is uploading, blindly persisting the pre-delete
+  // snapshot after the upload resolves would durably re-insert a row the
+  // user just deleted, reappearing after restart.
+  const { calls, repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    id: 'local-abc',
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let getBookmarkCalls = 0;
+  const getBookmark = () => {
+    getBookmarkCalls += 1;
+    // First read (top of the create branch, before the upload starts) still
+    // sees the row; every read after that simulates it having been
+    // permanently deleted while the upload was in flight.
+    return getBookmarkCalls === 1 ? imageBookmark : undefined;
+  };
+  let createBookmarkCalled = false;
+  const api = fakeApi({
+    createBookmark: async () => {
+      createBookmarkCalled = true;
+      throw new Error('must never be called for a row that no longer exists');
+    },
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    getBookmark,
+    uploadImage,
+  );
+
+  assert.equal(createBookmarkCalled, false);
+  // No insert/upsert of the stale pre-delete snapshot.
+  assert.equal(calls.some((call) => call.startsWith('insertBookmark:')), false);
+  assert.equal(calls.some((call) => call.startsWith('updateBookmark:')), false);
+  assert.equal(result.removeEntry, true);
+  assert.equal(result.entry.sync_status, 'synced');
+  assert.equal(result.bookmarkUpdate, undefined);
+});
+
+test('create: an image upload that succeeds right before createBookmark fails still carries the uploaded URL into the failed row (P2)', async () => {
+  // Without this, the failure-path write clobbers the just-persisted
+  // preview_image_url back to null (the in-memory `localBookmark` snapshot
+  // never reflects the upload step's direct repository write), so every
+  // retry re-uploads the whole image needlessly.
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  const api = fakeApi({
+    createBookmark: async () => {
+      throw new Error('the row itself failed to create, after a successful upload');
+    },
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+  );
+
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(
+    result.bookmarkUpdate?.preview_image_url,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+});
+
 test('create: failure stays retryable with the error recorded', async () => {
   const { repository } = fakeRepository();
   const api = fakeApi({
@@ -971,6 +1052,80 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.removeEntry, undefined);
   assert.equal(result.entry.sync_status, 'failed');
   assert.equal(result.entry.last_error, 'timeout');
+});
+
+test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url for an image bookmark', () => {
+  // `latest` simulates in-memory state that has NOT caught up to the upload
+  // step's direct repository write (still null) — this is the real shape
+  // the bug hit.
+  const latest = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    title: 'Screenshot',
+  });
+  const update = makeBookmark({
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc',
+    sync_status: 'synced',
+    ever_synced: true,
+    updated_at: '2026-06-13T00:00:00.000Z',
+  });
+
+  const merged = mergeSyncedBookmarkFields(latest, update);
+
+  assert.equal(merged.preview_image_url, 'https://storage.example.com/bookmark-images/user-test/local-abc');
+  assert.equal(merged.sync_status, 'synced');
+  assert.equal(merged.ever_synced, true);
+  assert.equal(merged.updated_at, '2026-06-13T00:00:00.000Z');
+  // Non-sync-owned fields still come from `latest`, not `update`.
+  assert.equal(merged.title, 'Screenshot');
+});
+
+test('mergeSyncedBookmarkFields: does NOT carry preview_image_url for a non-image bookmark (protects a concurrent enrichment write)', () => {
+  // A URL bookmark's `update` snapshot was taken before an on-device
+  // OpenGraph fetch may have completed — if it carried preview_image_url
+  // through unconditionally, a real scraped image that landed in `latest`
+  // while the create was uploading would be clobbered back to whatever
+  // (possibly null) the pre-upload snapshot had.
+  const latest = makeBookmark({
+    content_type: 'url',
+    preview_image_url: 'https://example.com/og-image-that-arrived-after-create-started.png',
+  });
+  const update = makeBookmark({
+    content_type: 'url',
+    preview_image_url: null,
+    sync_status: 'synced',
+    ever_synced: true,
+  });
+
+  const merged = mergeSyncedBookmarkFields(latest, update);
+
+  assert.equal(
+    merged.preview_image_url,
+    'https://example.com/og-image-that-arrived-after-create-started.png',
+  );
+});
+
+test('mergeSyncedBookmarkFields: id/sync_status/ever_synced/updated_at always come from `update`', () => {
+  const latest = makeBookmark({
+    id: 'local-abc',
+    sync_status: 'pending',
+    ever_synced: undefined,
+    updated_at: '2026-06-12T00:00:00.000Z',
+  });
+  const update = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000099',
+    sync_status: 'synced',
+    ever_synced: true,
+    updated_at: '2026-06-13T00:00:00.000Z',
+  });
+
+  const merged = mergeSyncedBookmarkFields(latest, update);
+
+  assert.equal(merged.id, '00000000-0000-4000-8000-000000000099');
+  assert.equal(merged.sync_status, 'synced');
+  assert.equal(merged.ever_synced, true);
+  assert.equal(merged.updated_at, '2026-06-13T00:00:00.000Z');
 });
 
 test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up', () => {

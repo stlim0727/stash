@@ -96,7 +96,7 @@ test('mimeTypeForImageUri recovers the MIME type from the durable local filename
   assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123.HEIC'), 'image/heic');
 });
 
-test('mimeTypeForImageUri falls back to a generic binary type for an unknown extension', () => {
-  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123'), 'application/octet-stream');
-  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123.xyz'), 'application/octet-stream');
+test('mimeTypeForImageUri falls back to an allowlisted image type for an unknown extension (never a non-image type the Storage bucket would permanently reject)', () => {
+  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123'), 'image/jpeg');
+  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123.xyz'), 'image/jpeg');
 });

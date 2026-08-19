@@ -254,3 +254,55 @@ test('storageUploadTarget percent-encodes path segments (defends the URL structu
     'https://proj.supabase.co/storage/v1/object/bookmark-images/user%201/bookmark%231',
   );
 });
+
+test('removeStorageObjects issues a DELETE with the exact paths as `prefixes`', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    await client.removeStorageObjects(
+      'bookmark-images',
+      ['user-1/bookmark-1', 'user-1/bookmark-2'],
+      'access-token',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://proj.supabase.co/storage/v1/object/bookmark-images');
+  assert.equal(calls[0].init.method, 'DELETE');
+  assert.equal((calls[0].init.headers as Record<string, string>).Authorization, 'Bearer access-token');
+  assert.deepEqual(JSON.parse(calls[0].init.body as string), {
+    prefixes: ['user-1/bookmark-1', 'user-1/bookmark-2'],
+  });
+});
+
+test('removeStorageObjects makes no request for an empty path list', async () => {
+  let called = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    called = true;
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    await client.removeStorageObjects('bookmark-images', [], 'access-token');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(called, false);
+});

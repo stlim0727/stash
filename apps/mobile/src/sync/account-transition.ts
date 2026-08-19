@@ -247,22 +247,37 @@ export async function applyAccountTransition(
       idMap.set(old.id, newId);
       // ever_synced resets: the new id has never synced under this account,
       // regardless of whether the old row (under the old id) ever had.
-      rehomedById.set(old.id, {
+      //
+      // An image's previously-uploaded object lives at the OLD account's own
+      // Storage path (`{old_user_id}/{old_bookmark_id}`, see
+      // api/bookmarks.ts's imageUploadTarget). Owner-scoped Storage RLS
+      // means the NEW account can never manage (update or delete) an object
+      // under a different user's path segment, and if the abandoned
+      // anonymous user is later cleaned up, that object could vanish out
+      // from under this now-real bookmark. Clear preview_image_url here so
+      // create-sync's normal "!preview_image_url" upload step (see
+      // syncQueueEntry in sync-bookmarks.ts) re-uploads the SAME local file
+      // — still on disk, this is the same device, only the signed-in
+      // identity changed — under the new account's own path from the start.
+      const rehomed: Bookmark = {
         ...old,
         id: newId,
+        ...(old.content_type === 'image' ? { preview_image_url: null } : {}),
         sync_status: 'pending',
         ever_synced: false,
         updated_at: now,
-      });
+      };
+      rehomedById.set(old.id, rehomed);
       newEntries.push({
         local_id: newId,
         remote_id: null,
         operation: 'create',
-        // Rebuild from the stored row, carrying a text note's body back as
-        // shared_text so URL-less notes still upload to the new account, under
-        // the freshly-minted id so the create uploads with a stable identity
-        // from the start (see createPayloadFromBookmark).
-        payload: { ...createPayloadFromBookmark(old), id: newId },
+        // Rebuild from the (already rehomed, image URL cleared) row,
+        // carrying a text note's body back as shared_text so URL-less notes
+        // still upload to the new account, under the freshly-minted id so
+        // the create uploads with a stable identity from the start (see
+        // createPayloadFromBookmark).
+        payload: { ...createPayloadFromBookmark(rehomed), id: newId },
         sync_status: 'pending',
         retry_count: 0,
         last_error: null,

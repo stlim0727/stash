@@ -727,6 +727,63 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('durably inserts the image bookmark row BEFORE enqueueing its create (not concurrently)', async () => {
+    // A crash between the two durable writes must always land on the side
+    // reconcileOrphanedQueueEntries already self-heals (a bookmark row with
+    // no queue entry yet) — never a queue entry with no matching bookmark
+    // row (which retries a create forever: there is no local row left to
+    // read local_image_uri/preview_image_url from). Proven with a genuine
+    // race, not just an after-the-fact call-order comparison: insertBookmark
+    // is made artificially slow, and enqueue is made to THROW if it fires
+    // before insertBookmark's promise has actually resolved. A naive
+    // `Promise.all([insertBookmark(...), enqueue(...)])` would let the
+    // (synchronous, real fast) enqueue fire immediately, well before the
+    // delayed insert resolves — this test only passes for genuinely
+    // sequential `insertBookmark().then(() => enqueue())` code.
+    fakeRepo.__reset([]);
+    const originalInsertBookmark = fakeRepo.repository.insertBookmark;
+    const originalEnqueue = fakeRepo.repository.enqueue;
+    let insertResolved = false;
+    fakeRepo.repository.insertBookmark = async (bookmark) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await originalInsertBookmark(bookmark);
+      insertResolved = true;
+    };
+    fakeRepo.repository.enqueue = async (entry) => {
+      if (!insertResolved) {
+        throw new Error('enqueue fired before insertBookmark resolved');
+      }
+      await originalEnqueue(entry);
+    };
+
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: null,
+        text: null,
+        files: [{ path: 'file:///tmp/share/race.png', mimeType: 'image/png', fileName: 'race.png' }],
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    try {
+      const { findByText, unmount } = await renderHandler();
+      await findByText('Saved to Keepory');
+      // addBookmark's own `persisted` chain catches a thrown enqueue and
+      // just logs it (capture must never crash the app) — so an early
+      // enqueue doesn't fail this test via an exception. It fails via THIS
+      // `waitFor` instead: if enqueue fired early, the injected throw means
+      // `originalEnqueue` never actually ran, the queue never reaches length
+      // 1, and this times out.
+      await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+      expect(insertResolved).toBe(true);
+      unmount();
+    } finally {
+      fakeRepo.repository.insertBookmark = originalInsertBookmark;
+      fakeRepo.repository.enqueue = originalEnqueue;
+    }
+  });
+
   it('inbox mode jumps to the Inbox and never dismisses the app', async () => {
     fakeRepo.__reset([]);
     await fakeRepo.repository.setMeta(SHARE_BEHAVIOR_PREF_KEY, 'inbox');

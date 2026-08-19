@@ -47,8 +47,19 @@ const EXT_TO_MIME: Record<string, string> = {
   svg: 'image/svg+xml',
 };
 
-/** Fallback MIME type when a local file's extension doesn't resolve one. */
-const DEFAULT_UPLOAD_MIME = 'application/octet-stream';
+/**
+ * Fallback MIME type when a local file's extension doesn't resolve one (an
+ * unmapped format, e.g. `image/jxl`, that still passed `isImageMime` and got
+ * captured under its own extension via the filename fallback in
+ * `extensionForImage`). Must be one of the `bookmark-images` bucket's
+ * `allowed_mime_types` (see the Storage migration) — falling back to a
+ * non-image type like `application/octet-stream` would have Storage
+ * permanently reject the upload's Content-Type on every retry forever, for
+ * an image that captured and renders locally just fine. Matches
+ * `DEFAULT_IMAGE_EXT`'s existing "assume the most common format when unsure"
+ * convention in this same file.
+ */
+const DEFAULT_UPLOAD_MIME = 'image/jpeg';
 
 /** True when `mime` names an image type (`image/...`). */
 export function isImageMime(mime: string | null | undefined): boolean {

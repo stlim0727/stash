@@ -528,9 +528,24 @@ export async function syncQueueEntry(
       // long enough for a concurrent title/notes edit to land in storage —
       // writing the stale snapshot here would silently revert it (see the
       // "full-row storage writes should re-read the freshest row" rule in
-      // AGENTS.md's Known Traps). Falls back to the snapshot only if the row
-      // is somehow gone from the live accessor by now.
-      const freshestBookmark = getBookmark(entry.local_id) ?? bookmarkForUpload;
+      // AGENTS.md's Known Traps).
+      const freshestBookmark = getBookmark(entry.local_id);
+      if (!freshestBookmark) {
+        // The row is genuinely gone (permanently deleted, e.g. emptying
+        // Trash or Reset Library) — a still-trashed row would still be
+        // returned here with deleted_at set, so this specifically means
+        // "no local row at all," not "moved to Trash." Falling back to the
+        // stale `bookmarkForUpload` snapshot would resurrect it: native's
+        // `updateBookmark` is `INSERT OR REPLACE` (see
+        // repository.native.ts), an upsert, so writing that snapshot back
+        // would durably re-insert a row the user just deleted. Abort
+        // instead — mirrors the identical "bookmark is gone locally"
+        // handling in the 'update' branch above. The now-orphaned uploaded
+        // object is left in Storage (same known cleanup gap permanent
+        // delete already has for every image bookmark's binary).
+        await removeQueueEntryIfNotSuperseded(repository, entry);
+        return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
+      }
       await repository.updateBookmark({
         ...freshestBookmark,
         preview_image_url: uploadedImageUrl,
@@ -623,7 +638,18 @@ export async function syncQueueEntry(
     const failedEntry = await failEntry(repository, entry, error, now);
     const localBookmark = getBookmark(entry.local_id);
     if (localBookmark && localBookmark.sync_status !== 'failed') {
-      const failedBookmark: Bookmark = { ...localBookmark, sync_status: 'failed' };
+      const failedBookmark: Bookmark = {
+        ...localBookmark,
+        sync_status: 'failed',
+        // The image (if any) already uploaded successfully before this
+        // createBookmark call itself failed. `localBookmark` is the
+        // in-memory snapshot, which never reflects the upload step's direct
+        // repository write above (it wrote straight to storage, bypassing
+        // React state) — without this, the write below would clobber that
+        // just-persisted URL back to null, and the next retry would see
+        // `!preview_image_url` and re-upload the whole image needlessly.
+        ...(uploadedImageUrl ? { preview_image_url: uploadedImageUrl } : {}),
+      };
       await repository.updateBookmark(failedBookmark);
       return {
         entry: failedEntry,
@@ -633,6 +659,38 @@ export async function syncQueueEntry(
 
     return { entry: failedEntry };
   }
+}
+
+/**
+ * Merges a just-synced Bookmark's sync-owned fields onto the freshest
+ * in-memory row, without overwriting anything that might have changed
+ * concurrently while the sync was in flight (enrichment settling, a user
+ * edit). `update` (the sync result's `bookmarkUpdate`) was built from a
+ * snapshot taken before the upload started, so blindly writing all of it
+ * back over `latest` would silently revert whatever changed in the
+ * meantime — see `applySyncEntryResult` in store/bookmarks.tsx, the sole
+ * caller.
+ *
+ * `preview_image_url` is the one deliberate exception: for an image
+ * bookmark specifically it IS sync-owned — an image bookmark never runs
+ * enrichment (`metadata_status` stays `'skipped'`), so there is no
+ * concurrent writer it could ever race — and `update.preview_image_url` is
+ * exactly the URL this sync pass just uploaded/confirmed. Without carrying
+ * it through here, `latest.preview_image_url` (still null — the upload step
+ * writes straight to the repository, never to React state) would silently
+ * drop the just-uploaded URL from both memory and the next durable write,
+ * and the next title/notes edit's own update payload would then send
+ * `preview_image_url: null` and wipe the image on every device.
+ */
+export function mergeSyncedBookmarkFields(latest: Bookmark, update: Bookmark): Bookmark {
+  return {
+    ...latest,
+    id: update.id,
+    sync_status: update.sync_status,
+    ever_synced: update.ever_synced,
+    updated_at: update.updated_at,
+    ...(update.content_type === 'image' ? { preview_image_url: update.preview_image_url } : {}),
+  };
 }
 
 /**
