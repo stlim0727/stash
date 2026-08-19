@@ -540,9 +540,29 @@ export async function syncQueueEntry(
         // repository.native.ts), an upsert, so writing that snapshot back
         // would durably re-insert a row the user just deleted. Abort
         // instead — mirrors the identical "bookmark is gone locally"
-        // handling in the 'update' branch above. The now-orphaned uploaded
-        // object is left in Storage (same known cleanup gap permanent
-        // delete already has for every image bookmark's binary).
+        // handling in the 'update' branch above.
+        //
+        // The upload above already landed, though (uploadedImageUrl is set)
+        // — a real, public object now exists at this bookmark's Storage
+        // path even though the row that owned it is gone. The normal
+        // deletion-cleanup path (deleteBookmark/emptyTrash/resetLibrary in
+        // store/bookmarks.tsx) can't catch this: it already ran, earlier,
+        // while preview_image_url was still null (before this upload
+        // finished), so its "does this row own an object" check saw
+        // nothing to clean up. Delete it here instead, best-effort — a
+        // failure just leaves an orphaned object (same bounded, non-
+        // catastrophic trade-off as every other Storage cleanup call in
+        // this app), never blocks the abort itself.
+        if (uploadedImageUrl) {
+          try {
+            await api.deleteImages([entry.local_id]);
+          } catch (error) {
+            recordLog(
+              'warn',
+              `sync: failed to delete orphaned Storage object for permanently-deleted image bookmark ${entry.local_id}: ${errorMessage(error)}`,
+            );
+          }
+        }
         await removeQueueEntryIfNotSuperseded(repository, entry);
         return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
       }

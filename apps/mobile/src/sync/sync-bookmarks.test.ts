@@ -686,10 +686,14 @@ test('create: an image bookmark permanently deleted mid-upload aborts instead of
     return getBookmarkCalls === 1 ? imageBookmark : undefined;
   };
   let createBookmarkCalled = false;
+  let deleteImagesCalledWith: string[] | undefined;
   const api = fakeApi({
     createBookmark: async () => {
       createBookmarkCalled = true;
       throw new Error('must never be called for a row that no longer exists');
+    },
+    deleteImages: async (ids: string[]) => {
+      deleteImagesCalledWith = ids;
     },
   });
   const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
@@ -709,6 +713,46 @@ test('create: an image bookmark permanently deleted mid-upload aborts instead of
   assert.equal(result.removeEntry, true);
   assert.equal(result.entry.sync_status, 'synced');
   assert.equal(result.bookmarkUpdate, undefined);
+  // The binary already landed in Storage before the row was discovered
+  // gone — the object must not be left behind, indefinitely public, just
+  // because the deletion-cleanup path (store/bookmarks.tsx) ran earlier,
+  // before preview_image_url existed to clean up.
+  assert.deepEqual(deleteImagesCalledWith, ['local-abc']);
+});
+
+test('create: a Storage cleanup failure for a permanently-deleted mid-upload image never blocks the abort itself', async () => {
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    id: 'local-abc',
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let getBookmarkCalls = 0;
+  const getBookmark = () => {
+    getBookmarkCalls += 1;
+    return getBookmarkCalls === 1 ? imageBookmark : undefined;
+  };
+  const api = fakeApi({
+    deleteImages: async () => {
+      throw new Error('network down mid-cleanup');
+    },
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    getBookmark,
+    uploadImage,
+  );
+
+  // Best-effort: a failed cleanup still lets the abort complete normally —
+  // never surfaces as a failed/retryable entry (there's nothing left to
+  // retry; the row is already gone).
+  assert.equal(result.removeEntry, true);
+  assert.equal(result.entry.sync_status, 'synced');
 });
 
 test('create: an image upload that succeeds right before createBookmark fails still carries the uploaded URL into the failed row (P2)', async () => {
