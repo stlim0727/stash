@@ -11,6 +11,8 @@ import {
   hasRemoteIdentity,
   isSyncable,
   makeMutationEntry,
+  mergeSyncedBookmarkFields,
+  planDeletedMidFlightCleanup,
   reconcileOrphanedQueueEntries,
   syncCreateQueueEntryBatch,
   syncErrorKind,
@@ -412,6 +414,20 @@ test('bulk create: rejects non-create queue entries', async () => {
   );
 });
 
+test('bulk create: rejects an image entry (needs the per-entry upload step, not the bulk endpoint)', async () => {
+  const imageEntry = makeCreateEntry({
+    payload: {
+      content_type: 'image',
+      client_id: '11111111-1111-4111-8111-111111111112',
+    },
+  });
+
+  await assert.rejects(
+    () => syncCreateQueueEntryBatch(fakeApi(), [imageEntry], () => undefined),
+    /does not support image bookmarks/,
+  );
+});
+
 test('bulk create eligibility excludes legacy URL-less creates without client_id', async () => {
   const legacyTextEntry = makeCreateEntry({
     payload: { shared_text: 'legacy note without an idempotency key' },
@@ -448,6 +464,386 @@ test('bulk create rejects unkeyed entries before calling the API', async () => {
     /requires a client_id or URL/,
   );
   assert.equal(called, false);
+});
+
+test('create: an image upload persists the FRESHEST row, not a stale pre-upload snapshot (concurrent edit must survive)', async () => {
+  // The upload can take real wall-clock time — long enough for a concurrent
+  // title/notes edit to land in durable storage while it's in flight. The
+  // upload-step's own repository.updateBookmark write must not clobber that
+  // edit by writing back a stale pre-upload snapshot (AGENTS.md's "full-row
+  // storage writes should re-read the freshest row" rule).
+  const persistedBookmarks: Bookmark[] = [];
+  const repository: BookmarkRepository = {
+    init: async () => {},
+    listBookmarks: async () => [],
+    getBookmark: async () => null,
+    insertBookmark: async () => {},
+    updateBookmark: async (bookmark) => {
+      persistedBookmarks.push(bookmark);
+    },
+    replaceBookmark: async () => {},
+    deleteBookmark: async () => {},
+    listQueue: async () => [],
+    enqueue: async () => {},
+    updateQueueEntry: async () => {},
+    removeQueueEntry: async () => {},
+    getMeta: async () => null,
+    setMeta: async () => {},
+    listEnrichments: async () => [],
+    upsertEnrichments: async () => {},
+    deleteEnrichment: async () => {},
+    listTagData: async () => ({ tags: [], bookmarkTags: [], collections: [] }),
+    replaceTagData: async () => {},
+    clearAllData: async () => {},
+  };
+
+  const staleBookmark = makeBookmark({
+    content_type: 'image',
+    title: 'Before edit',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  const editedBookmark: Bookmark = { ...staleBookmark, title: 'Edited mid-upload' };
+  let getBookmarkCalls = 0;
+  const getBookmark = () => {
+    getBookmarkCalls += 1;
+    // First read (before the upload starts) sees the pre-edit title; every
+    // read after that — including the one right before the upload-step's
+    // own persist — sees the edit that landed while the upload was in flight.
+    return getBookmarkCalls === 1 ? staleBookmark : editedBookmark;
+  };
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  await syncQueueEntry(
+    fakeApi(),
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    getBookmark,
+    uploadImage,
+  );
+
+  const uploadStepPersist = persistedBookmarks.find(
+    (bookmark) => bookmark.preview_image_url && bookmark.sync_status !== 'synced',
+  );
+  assert.equal(uploadStepPersist?.title, 'Edited mid-upload');
+});
+
+test('create: an image bookmark uploads its binary before creating the row, then becomes a confirmed synced row', async () => {
+  const { calls, repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  const uploadCalls: Bookmark[] = [];
+  const uploadImage = async (bookmark: Bookmark) => {
+    uploadCalls.push(bookmark);
+    return 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  };
+  let createdPayload: CreateBookmarkInput | undefined;
+  const api = fakeApi({
+    createBookmark: async (input: CreateBookmarkInput) => {
+      createdPayload = input;
+      return {
+        bookmark_id: '00000000-0000-4000-8000-000000000001',
+        status: 'created',
+        metadata_status: 'skipped',
+      };
+    },
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image', title: 'Screenshot' } }),
+    () => imageBookmark,
+    uploadImage,
+  );
+
+  // The binary uploads exactly once, before the row is created.
+  assert.equal(uploadCalls.length, 1);
+  assert.equal(uploadCalls[0]?.id, 'local-abc');
+  assert.equal(createdPayload?.content_type, 'image');
+  assert.equal(createdPayload?.preview_image_url, 'https://storage.example.com/bookmark-images/user-test/local-abc');
+  // The upload is persisted locally right away (not just carried in the
+  // outgoing payload), so a retry after this point never re-uploads.
+  assert.ok(
+    calls.some(
+      (call) => call.startsWith('updateBookmark:local-abc') && call !== 'updateBookmark:local-abc:pending',
+    ),
+  );
+  // The row only becomes a confirmed cloud row (ever_synced: true) once the
+  // upload AND the create both actually succeeded — this is what flips
+  // isLocalOnlyBookmark to false and makes the row eligible for the
+  // remote-deletion diff going forward.
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+  assert.equal(result.bookmarkUpdate?.ever_synced, true);
+  assert.equal(
+    result.bookmarkUpdate?.preview_image_url,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+});
+
+test('create: an image bookmark already uploaded (preview_image_url set) does not re-upload on retry', async () => {
+  const { repository } = fakeRepository();
+  const alreadyUploaded = makeBookmark({
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc',
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let uploadCallCount = 0;
+  const uploadImage = async () => {
+    uploadCallCount += 1;
+    return 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  };
+
+  const result = await syncQueueEntry(
+    fakeApi(),
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => alreadyUploaded,
+    uploadImage,
+  );
+
+  assert.equal(uploadCallCount, 0);
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+});
+
+test('create: an image upload failure never calls createBookmark and stays retryable (STASH-65 invariant preserved)', async () => {
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+    ever_synced: undefined,
+  });
+  let createBookmarkCalled = false;
+  const api = fakeApi({
+    createBookmark: async () => {
+      createBookmarkCalled = true;
+      throw new Error('should never be called before the image upload succeeds');
+    },
+  });
+  const uploadImage = async () => {
+    throw new Error('network down mid-upload');
+  };
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+  );
+
+  assert.equal(createBookmarkCalled, false);
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(result.entry.last_error, 'network down mid-upload');
+  // The bookmark itself is left with ever_synced still unset — exactly the
+  // isLocalOnlyBookmark(bookmark) === true shape STASH-65 depends on to keep
+  // this row excluded from the remote-deletion diff while it retries.
+  assert.notEqual(result.bookmarkUpdate?.ever_synced, true);
+});
+
+test('create: an image bookmark with no uploader available on this platform fails cleanly instead of mis-syncing', async () => {
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+
+  const result = await syncQueueEntry(
+    fakeApi(),
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    // uploadImage omitted entirely, as on web.
+  );
+
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.match(result.entry.last_error ?? '', /not available on this platform/);
+});
+
+test('create: an image bookmark permanently deleted mid-upload aborts instead of resurrecting the stale snapshot (P1)', async () => {
+  // On native, repository.updateBookmark is `INSERT OR REPLACE` (an upsert
+  // — see repository.native.ts). If a permanent delete removes the row
+  // WHILE its image is uploading, blindly persisting the pre-delete
+  // snapshot after the upload resolves would durably re-insert a row the
+  // user just deleted, reappearing after restart.
+  const { calls, repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    id: 'local-abc',
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let getBookmarkCalls = 0;
+  const getBookmark = () => {
+    getBookmarkCalls += 1;
+    // First read (top of the create branch, before the upload starts) still
+    // sees the row; every read after that simulates it having been
+    // permanently deleted while the upload was in flight.
+    return getBookmarkCalls === 1 ? imageBookmark : undefined;
+  };
+  let createBookmarkCalled = false;
+  let deleteImagesCalledWith: string[] | undefined;
+  const api = fakeApi({
+    createBookmark: async () => {
+      createBookmarkCalled = true;
+      throw new Error('must never be called for a row that no longer exists');
+    },
+    deleteImages: async (ids: string[]) => {
+      deleteImagesCalledWith = ids;
+    },
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    getBookmark,
+    uploadImage,
+  );
+
+  assert.equal(createBookmarkCalled, false);
+  // No insert/upsert of the stale pre-delete snapshot.
+  assert.equal(calls.some((call) => call.startsWith('insertBookmark:')), false);
+  assert.equal(calls.some((call) => call.startsWith('updateBookmark:')), false);
+  assert.equal(result.removeEntry, true);
+  assert.equal(result.entry.sync_status, 'synced');
+  assert.equal(result.bookmarkUpdate, undefined);
+  // The binary already landed in Storage before the row was discovered
+  // gone — the object must not be left behind, indefinitely public, just
+  // because the deletion-cleanup path (store/bookmarks.tsx) ran earlier,
+  // before preview_image_url existed to clean up.
+  assert.deepEqual(deleteImagesCalledWith, ['local-abc']);
+});
+
+test('create: a Storage cleanup failure for a permanently-deleted mid-upload image never blocks the abort itself', async () => {
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    id: 'local-abc',
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let getBookmarkCalls = 0;
+  const getBookmark = () => {
+    getBookmarkCalls += 1;
+    return getBookmarkCalls === 1 ? imageBookmark : undefined;
+  };
+  const api = fakeApi({
+    deleteImages: async () => {
+      throw new Error('network down mid-cleanup');
+    },
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    getBookmark,
+    uploadImage,
+  );
+
+  // Best-effort: a failed cleanup still lets the abort complete normally —
+  // never surfaces as a failed/retryable entry (there's nothing left to
+  // retry; the row is already gone).
+  assert.equal(result.removeEntry, true);
+  assert.equal(result.entry.sync_status, 'synced');
+});
+
+test('create: an image upload that succeeds right before createBookmark fails still carries the uploaded URL into the failed row (P2)', async () => {
+  // Without this, the failure-path write clobbers the just-persisted
+  // preview_image_url back to null (the in-memory `localBookmark` snapshot
+  // never reflects the upload step's direct repository write), so every
+  // retry re-uploads the whole image needlessly.
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  const api = fakeApi({
+    createBookmark: async () => {
+      throw new Error('the row itself failed to create, after a successful upload');
+    },
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+  );
+
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(
+    result.bookmarkUpdate?.preview_image_url,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+  // uploadedImageUrl must surface here too (P1, round 6): it's the only
+  // signal planDeletedMidFlightCleanup has that a real Storage object now
+  // exists from this attempt, independent of whether createBookmark itself
+  // went on to succeed or fail.
+  assert.equal(
+    result.uploadedImageUrl,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+});
+
+test('create: an image bookmark permanently deleted between a landed upload and a subsequent createBookmark failure still surfaces the uploaded URL for cleanup (P1)', async () => {
+  // The failure-path sibling of the mid-upload-abort test above: here the
+  // upload itself succeeds and createBookmark is dispatched, but the row is
+  // deleted before createBookmark rejects. By the time the catch block runs,
+  // getBookmark(entry.local_id) returns undefined (no local row to write the
+  // uploaded URL onto), so the OLD code fell through to a bare
+  // `{ entry: failedEntry }` with no way for applySyncEntryResult's deleted-
+  // mid-flight cleanup to learn a real Storage object exists. uploadedImageUrl
+  // must be set on this path regardless.
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    id: 'local-abc',
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let getBookmarkCalls = 0;
+  const getBookmark = () => {
+    getBookmarkCalls += 1;
+    // The three reads before createBookmark is dispatched (the pre-upload
+    // check, the post-upload "is the row still there" re-read, and
+    // createUploadPayload's own read) all still see the row — the delete
+    // lands only while createBookmark itself is in flight, so the catch
+    // block's read (the 4th) is the first to see it gone.
+    return getBookmarkCalls <= 3 ? imageBookmark : undefined;
+  };
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  const api = fakeApi({
+    createBookmark: async () => {
+      throw new Error('createBookmark failed after the row was deleted mid-flight');
+    },
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    getBookmark,
+    uploadImage,
+  );
+
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(result.bookmarkUpdate, undefined); // no local row to write onto
+  assert.equal(
+    result.uploadedImageUrl,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
 });
 
 test('create: failure stays retryable with the error recorded', async () => {
@@ -758,6 +1154,140 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.removeEntry, undefined);
   assert.equal(result.entry.sync_status, 'failed');
   assert.equal(result.entry.last_error, 'timeout');
+});
+
+test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url for an image bookmark', () => {
+  // `latest` simulates in-memory state that has NOT caught up to the upload
+  // step's direct repository write (still null) — this is the real shape
+  // the bug hit.
+  const latest = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    title: 'Screenshot',
+  });
+  const update = makeBookmark({
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc',
+    sync_status: 'synced',
+    ever_synced: true,
+    updated_at: '2026-06-13T00:00:00.000Z',
+  });
+
+  const merged = mergeSyncedBookmarkFields(latest, update);
+
+  assert.equal(merged.preview_image_url, 'https://storage.example.com/bookmark-images/user-test/local-abc');
+  assert.equal(merged.sync_status, 'synced');
+  assert.equal(merged.ever_synced, true);
+  assert.equal(merged.updated_at, '2026-06-13T00:00:00.000Z');
+  // Non-sync-owned fields still come from `latest`, not `update`.
+  assert.equal(merged.title, 'Screenshot');
+});
+
+test('mergeSyncedBookmarkFields: does NOT carry preview_image_url for a non-image bookmark (protects a concurrent enrichment write)', () => {
+  // A URL bookmark's `update` snapshot was taken before an on-device
+  // OpenGraph fetch may have completed — if it carried preview_image_url
+  // through unconditionally, a real scraped image that landed in `latest`
+  // while the create was uploading would be clobbered back to whatever
+  // (possibly null) the pre-upload snapshot had.
+  const latest = makeBookmark({
+    content_type: 'url',
+    preview_image_url: 'https://example.com/og-image-that-arrived-after-create-started.png',
+  });
+  const update = makeBookmark({
+    content_type: 'url',
+    preview_image_url: null,
+    sync_status: 'synced',
+    ever_synced: true,
+  });
+
+  const merged = mergeSyncedBookmarkFields(latest, update);
+
+  assert.equal(
+    merged.preview_image_url,
+    'https://example.com/og-image-that-arrived-after-create-started.png',
+  );
+});
+
+test('mergeSyncedBookmarkFields: id/sync_status/ever_synced/updated_at always come from `update`', () => {
+  const latest = makeBookmark({
+    id: 'local-abc',
+    sync_status: 'pending',
+    ever_synced: undefined,
+    updated_at: '2026-06-12T00:00:00.000Z',
+  });
+  const update = makeBookmark({
+    id: '00000000-0000-4000-8000-000000000099',
+    sync_status: 'synced',
+    ever_synced: true,
+    updated_at: '2026-06-13T00:00:00.000Z',
+  });
+
+  const merged = mergeSyncedBookmarkFields(latest, update);
+
+  assert.equal(merged.id, '00000000-0000-4000-8000-000000000099');
+  assert.equal(merged.sync_status, 'synced');
+  assert.equal(merged.ever_synced, true);
+  assert.equal(merged.updated_at, '2026-06-13T00:00:00.000Z');
+});
+
+test('planDeletedMidFlightCleanup: a normal same-id create that landed after local deletion still gets a remote delete queued', () => {
+  // The bug this fixes: a prior version only checked `remote_id !==
+  // entryLocalId` (the STASH-3Q duplicate-swap case), silently leaving the
+  // far more common same-id case's cloud row undeleted.
+  const plan = planDeletedMidFlightCleanup('local-abc', undefined, 'local-abc');
+  assert.equal(plan.remoteIdToDelete, 'local-abc');
+});
+
+test('planDeletedMidFlightCleanup: a STASH-3Q duplicate-swap create that landed after local deletion still gets the EXISTING row deleted', () => {
+  const plan = planDeletedMidFlightCleanup(
+    '00000000-0000-4000-8000-0000000000ee',
+    undefined,
+    'local-abc',
+  );
+  assert.equal(plan.remoteIdToDelete, '00000000-0000-4000-8000-0000000000ee');
+});
+
+test('planDeletedMidFlightCleanup: nothing to delete when the request never actually reached the server', () => {
+  const plan = planDeletedMidFlightCleanup(null, undefined, 'local-abc');
+  assert.equal(plan.remoteIdToDelete, null);
+});
+
+test('planDeletedMidFlightCleanup: an image whose upload already landed gets its Storage object cleaned up too', () => {
+  const plan = planDeletedMidFlightCleanup(
+    'local-abc',
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+    'local-abc',
+  );
+  assert.equal(plan.remoteIdToDelete, 'local-abc');
+  assert.equal(plan.imageIdToCleanUp, 'local-abc');
+});
+
+test('planDeletedMidFlightCleanup: the createBookmark call FAILING after a landed upload still gets the Storage object cleaned up (P1, round 6)', () => {
+  // uploadedImageUrl is set on both success and failure alike (see its own
+  // doc comment) — this is the exact case a prior version missed: the
+  // create call itself failed (so `uploadedPayload`, success-only, would
+  // have been undefined), but a real Storage object still exists from the
+  // upload step that ran before it.
+  const plan = planDeletedMidFlightCleanup(
+    null, // createBookmark never returned a remote id — it failed
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+    'local-abc',
+  );
+  assert.equal(plan.remoteIdToDelete, null); // nothing to delete server-side
+  assert.equal(plan.imageIdToCleanUp, 'local-abc'); // but the object still needs cleanup
+});
+
+test('planDeletedMidFlightCleanup: no image cleanup when nothing was ever uploaded (non-image create, or an image create whose upload never landed)', () => {
+  assert.equal(
+    planDeletedMidFlightCleanup('local-abc', undefined, 'local-abc').imageIdToCleanUp,
+    null,
+  );
+});
+
+test('planDeletedMidFlightCleanup: no image cleanup for an update (uploadedImageUrl is only ever set for a create)', () => {
+  const plan = planDeletedMidFlightCleanup('local-abc', undefined, 'local-abc');
+  assert.equal(plan.remoteIdToDelete, 'local-abc');
+  assert.equal(plan.imageIdToCleanUp, null);
 });
 
 test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up', () => {
@@ -1101,6 +1631,60 @@ test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its
   });
 });
 
+test('reconcileOrphanedQueueEntries re-creates a stranded image bookmark not yet uploaded', () => {
+  // The bookmark row landed but its enqueue step never persisted (a crash
+  // between the two writes) — same class of gap as the text-note case above.
+  // The rebuilt create carries content_type: 'image' (the signal
+  // requirePayload needs) with no preview_image_url yet; syncQueueEntry
+  // uploads the binary itself once this entry is actually picked up.
+  const orphan = makeBookmark({
+    id: 'local-img',
+    url: null,
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-img.jpg',
+    title: 'Screenshot',
+    client_id: 'cid-img',
+    sync_status: 'pending',
+  });
+
+  const entries = reconcileOrphanedQueueEntries([orphan], []);
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]?.operation, 'create');
+  assert.deepEqual(entries[0]?.payload, {
+    id: 'local-img',
+    content_type: 'image',
+    title: 'Screenshot',
+    notes: undefined,
+    preview_image_url: undefined,
+    client_id: 'cid-img',
+  });
+});
+
+test('reconcileOrphanedQueueEntries re-creates a stranded image bookmark whose upload already succeeded', () => {
+  // The upload landed (preview_image_url is set) but the create call or its
+  // queue-entry write never completed — the rebuilt payload carries the
+  // already-uploaded URL through so the row uploads without re-uploading the
+  // binary.
+  const orphan = makeBookmark({
+    id: 'local-img2',
+    url: null,
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/u1/local-img2',
+    local_image_uri: 'file:///stash-images/local-img2.jpg',
+    sync_status: 'pending',
+  });
+
+  const entries = reconcileOrphanedQueueEntries([orphan], []);
+
+  assert.equal(entries.length, 1);
+  assert.equal(
+    entries[0]?.payload.preview_image_url,
+    'https://storage.example.com/bookmark-images/u1/local-img2',
+  );
+});
+
 test('reconcileOrphanedQueueEntries leaves synced and already-queued bookmarks alone', () => {
   const synced = makeBookmark({ id: 'local-synced', sync_status: 'synced' });
   const alreadyQueued = makeBookmark({ id: 'local-queued', sync_status: 'pending' });
@@ -1132,6 +1716,18 @@ test('isSyncable excludes a create that already failed with the permanent url_ha
     sync_status: 'failed',
     last_error:
       'index row size 2888 exceeds btree version 4 maximum 2704 for index "bookmarks_user_url_hash_active_idx"',
+  });
+  assert.equal(isSyncable(stuck), false);
+});
+
+test('isSyncable excludes a create that failed because the image exceeds the upload size limit', () => {
+  // uploadBookmarkImage (store/bookmarks.tsx) checks the file's size BEFORE
+  // ever attempting the network call and throws with IMAGE_TOO_LARGE_ERROR_TEXT
+  // when it's over the bucket's own file_size_limit — the file can't shrink
+  // between retries, so this is exactly as permanent as a too-long URL.
+  const stuck = makeCreateEntry({
+    sync_status: 'failed',
+    last_error: 'Image is 22.4MB, which exceeds the maximum upload size of 15MB.',
   });
   assert.equal(isSyncable(stuck), false);
 });
