@@ -12,6 +12,7 @@ import {
   isSyncable,
   makeMutationEntry,
   mergeSyncedBookmarkFields,
+  planDeletedMidFlightCleanup,
   reconcileOrphanedQueueEntries,
   syncCreateQueueEntryBatch,
   syncErrorKind,
@@ -1170,6 +1171,59 @@ test('mergeSyncedBookmarkFields: id/sync_status/ever_synced/updated_at always co
   assert.equal(merged.sync_status, 'synced');
   assert.equal(merged.ever_synced, true);
   assert.equal(merged.updated_at, '2026-06-13T00:00:00.000Z');
+});
+
+test('planDeletedMidFlightCleanup: a normal same-id create that landed after local deletion still gets a remote delete queued', () => {
+  // The bug this fixes: a prior version only checked `remote_id !==
+  // entryLocalId` (the STASH-3Q duplicate-swap case), silently leaving the
+  // far more common same-id case's cloud row undeleted.
+  const plan = planDeletedMidFlightCleanup('local-abc', { url: 'https://example.com' }, 'local-abc');
+  assert.equal(plan.remoteIdToDelete, 'local-abc');
+});
+
+test('planDeletedMidFlightCleanup: a STASH-3Q duplicate-swap create that landed after local deletion still gets the EXISTING row deleted', () => {
+  const plan = planDeletedMidFlightCleanup(
+    '00000000-0000-4000-8000-0000000000ee',
+    { url: 'https://example.com' },
+    'local-abc',
+  );
+  assert.equal(plan.remoteIdToDelete, '00000000-0000-4000-8000-0000000000ee');
+});
+
+test('planDeletedMidFlightCleanup: nothing to delete when the request never actually reached the server', () => {
+  const plan = planDeletedMidFlightCleanup(null, { url: 'https://example.com' }, 'local-abc');
+  assert.equal(plan.remoteIdToDelete, null);
+});
+
+test('planDeletedMidFlightCleanup: an image whose upload already landed gets its Storage object cleaned up too', () => {
+  const plan = planDeletedMidFlightCleanup(
+    'local-abc',
+    { content_type: 'image', preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc' },
+    'local-abc',
+  );
+  assert.equal(plan.remoteIdToDelete, 'local-abc');
+  assert.equal(plan.imageIdToCleanUp, 'local-abc');
+});
+
+test('planDeletedMidFlightCleanup: no image cleanup for a non-image create, or an image create whose upload never actually landed', () => {
+  assert.equal(
+    planDeletedMidFlightCleanup('local-abc', { url: 'https://example.com' }, 'local-abc').imageIdToCleanUp,
+    null,
+  );
+  assert.equal(
+    planDeletedMidFlightCleanup(
+      'local-abc',
+      { content_type: 'image', preview_image_url: null },
+      'local-abc',
+    ).imageIdToCleanUp,
+    null,
+  );
+});
+
+test('planDeletedMidFlightCleanup: no image cleanup for an update (uploadedPayload is only ever set for a create)', () => {
+  const plan = planDeletedMidFlightCleanup('local-abc', undefined, 'local-abc');
+  assert.equal(plan.remoteIdToDelete, 'local-abc');
+  assert.equal(plan.imageIdToCleanUp, null);
 });
 
 test('createNeedsReconcileUpdate: a pristine just-created row needs no follow-up', () => {

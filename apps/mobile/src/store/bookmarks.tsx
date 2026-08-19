@@ -171,6 +171,7 @@ import {
   isSyncable,
   makeMutationEntry,
   mergeSyncedBookmarkFields,
+  planDeletedMidFlightCleanup,
   reconcileOrphanedQueueEntries,
   removeQueueEntryIfNotSuperseded,
   syncCreateQueueEntryBatch,
@@ -3527,11 +3528,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // a separate function, soft-deletes via deleted_at) — only this
       // permanent path.
       if (bookmark?.content_type === "image" && bookmark.preview_image_url && auth.session) {
-        createSyncApi(auth.session)
-          .deleteImages([id])
-          .catch((error) =>
-            logStorageError("delete bookmark image object", error),
-          );
+        // Refresh a token that expired while the app stayed open, mirroring
+        // syncNow/resetLibrary — otherwise this DELETE 401s, gets swallowed
+        // by the catch below, and is never retried or queued anywhere, so
+        // the object silently stays orphaned forever even though the
+        // bookmark deletion itself (a separately-refreshed sync pass) can
+        // still succeed.
+        void (async () => {
+          const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+          if (!session) {
+            return;
+          }
+          await createSyncApi(session).deleteImages([id]);
+        })().catch((error) =>
+          logStorageError("delete bookmark image object", error),
+        );
       }
       if (hadSyncedOnce) {
         // The row exists remotely: replace any queued work with a durable
@@ -3615,9 +3626,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       .filter((bookmark) => bookmark.content_type === "image" && bookmark.preview_image_url)
       .map((bookmark) => bookmark.id);
     if (imageIdsToDeleteFromStorage.length > 0 && auth.session) {
-      createSyncApi(auth.session)
-        .deleteImages(imageIdsToDeleteFromStorage)
-        .catch((error) => logStorageError("empty trash image objects", error));
+      // Refresh a token that expired while the app stayed open, mirroring
+      // syncNow/resetLibrary and deleteBookmark's identical fix above —
+      // otherwise this DELETE 401s and is silently lost.
+      void (async () => {
+        const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+        if (!session) {
+          return;
+        }
+        await createSyncApi(session).deleteImages(imageIdsToDeleteFromStorage);
+      })().catch((error) => logStorageError("empty trash image objects", error));
     }
     const nextQueue = [
       ...queueRef.current.filter((entry) => !deleted.has(entry.local_id)),
@@ -5438,15 +5456,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               .catch((error) =>
                 logStorageError("post-delete sync cleanup", error),
               );
-            if (
-              result.entry.remote_id &&
-              result.entry.remote_id !== entry.local_id
-            ) {
-              // The upload created a remote row for a bookmark the user already
-              // deleted. Enqueue a durable delete (not a best-effort request) so
-              // the removal survives app exit and request failures; the next
-              // sync pass processes it.
-              enqueueMutation(result.entry.remote_id, "delete");
+            // See planDeletedMidFlightCleanup's doc comment for the full
+            // reasoning — a prior version of this check only enqueued a
+            // remote delete for the STASH-3Q duplicate-swap case, silently
+            // leaving the far more common same-id case's cloud row
+            // undeleted and resurrectable by a later pull; and nothing at
+            // all cleaned up an already-uploaded image's Storage object.
+            const cleanupPlan = planDeletedMidFlightCleanup(
+              result.entry.remote_id,
+              result.uploadedPayload,
+              entry.local_id,
+            );
+            if (cleanupPlan.remoteIdToDelete) {
+              // Durable (not best-effort): survives app exit and request
+              // failures; the next sync pass processes it. enqueueMutation
+              // replaces any prior queue entry for this id rather than
+              // duplicating one (see its own comment), so this is safe
+              // even when deleteBookmark already queued its own delete
+              // moments ago (the already-synced-update case).
+              enqueueMutation(cleanupPlan.remoteIdToDelete, "delete");
+            }
+            if (cleanupPlan.imageIdToCleanUp) {
+              // Best-effort — a failure just leaves an orphaned object,
+              // never blocks this cleanup. `api` is this run's already
+              // session-refreshed instance (see the top of syncNow), not
+              // raw auth.session.
+              api
+                .deleteImages([cleanupPlan.imageIdToCleanUp])
+                .catch((error) =>
+                  logStorageError("post-delete sync image cleanup", error),
+                );
             }
             return false;
           }

@@ -713,6 +713,57 @@ export function mergeSyncedBookmarkFields(latest: Bookmark, update: Bookmark): B
   };
 }
 
+/** What to clean up when a create/update's request reached the server
+ *  successfully, but the bookmark was permanently deleted locally while it
+ *  was still in flight — see `applySyncEntryResult`'s "Deleted while a
+ *  create/update was in flight" handling in store/bookmarks.tsx, the sole
+ *  caller. Both fields are `null` when there is nothing to clean up. */
+export interface DeletedMidFlightCleanupPlan {
+  /** A remote id to send an explicit `delete` mutation for, or `null` when
+   *  the request never actually reached the server (e.g. it failed). */
+  remoteIdToDelete: string | null;
+  /** A bookmark id whose uploaded Storage object must be deleted, or `null`
+   *  when this wasn't an image create, or its upload never reached Storage. */
+  imageIdToCleanUp: string | null;
+}
+
+/**
+ * Pure decision logic for `planDeletedMidFlightCleanup`'s sole caller.
+ * Split out (mirroring this codebase's existing plan/apply split for
+ * account-transition) so the fix below is independently unit-tested rather
+ * than only reachable through a full sync-cycle integration test.
+ *
+ * `remoteIdToDelete`: a real cloud row now exists under `resultRemoteId`
+ * whenever it's set, regardless of WHY — its own stable id (the common
+ * case: `createBookmark` uses the client-supplied id as primary key, so a
+ * normal successful create's remote id equals the entry's own local id) or,
+ * via a server-side dedupe, an EXISTING different row's id (STASH-3Q
+ * duplicate-swap). A prior version of this check only handled the
+ * duplicate-swap case (`resultRemoteId !== entryLocalId`), silently leaving
+ * the far more common same-id case's cloud row undeleted and resurrectable
+ * by a later pull.
+ *
+ * `imageIdToCleanUp`: the image (if any) already uploaded successfully
+ * before the row was discovered deleted — the same underlying gap
+ * `syncQueueEntry`'s own mid-upload abort branch closes, just triggered at
+ * a later point: here the create call itself had already been dispatched
+ * (past that abort check) and landed anyway. A real, public Storage object
+ * exists and nothing else will ever clean it up.
+ */
+export function planDeletedMidFlightCleanup(
+  resultRemoteId: string | null | undefined,
+  uploadedPayload: CreateBookmarkInput | undefined,
+  entryLocalId: string,
+): DeletedMidFlightCleanupPlan {
+  return {
+    remoteIdToDelete: resultRemoteId ?? null,
+    imageIdToCleanUp:
+      uploadedPayload?.content_type === 'image' && Boolean(uploadedPayload.preview_image_url)
+        ? entryLocalId
+        : null,
+  };
+}
+
 /**
  * After a `create` uploads and the local row adopts its remote id, decide
  * whether a follow-up `update` is needed. The create payload only carries
