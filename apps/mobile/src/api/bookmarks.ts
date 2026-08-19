@@ -204,7 +204,17 @@ function requirePayload(input: CreateBookmarkInput): { url: string | null; conte
     return { url: null, contentType: 'text' };
   }
 
-  throw new Error('createBookmark requires either url or shared_text.');
+  // Image-only capture (a screenshot with no link): the client always
+  // uploads the binary to Storage and resolves its public URL BEFORE calling
+  // createBookmark, so this branch only ever sees an already-uploaded row —
+  // requiring preview_image_url here (rather than trusting content_type
+  // alone) is what stops a bookmark from ever being created server-side
+  // before its image binary has genuinely landed (STASH-65 invariant).
+  if (input.content_type === 'image' && input.preview_image_url?.trim()) {
+    return { url: null, contentType: 'image' };
+  }
+
+  throw new Error('createBookmark requires either url, shared_text, or an uploaded image.');
 }
 
 function remoteToBookmark(row: RemoteBookmark): Bookmark {
@@ -272,6 +282,28 @@ export class BookmarkApi {
     private readonly session: SupabaseAuthSession,
     private readonly client: StashSupabaseClient = createSupabaseClient(),
   ) {}
+
+  /**
+   * Computes where an image-only bookmark's binary should be uploaded: the
+   * `bookmark-images` Storage bucket, at a path namespaced by this session's
+   * own user id so the bucket's owner-scoped write policies accept it. Pure —
+   * makes no network call itself. The caller (a native-only file upload, see
+   * `storage/image-store.native.ts`) PUTs the file to `uploadUrl` with
+   * `headers`, then passes `publicUrl` to `createBookmark` as
+   * `preview_image_url` once the upload actually succeeds. Never call this
+   * before the binary is about to be uploaded — the returned `publicUrl` is
+   * only real once the object exists at that path.
+   */
+  imageUploadTarget(
+    bookmarkId: string,
+    contentType: string,
+  ): { uploadUrl: string; publicUrl: string; headers: Record<string, string> } {
+    const path = `${this.session.user.id}/${bookmarkId}`;
+    return this.client.storageUploadTarget('bookmark-images', path, {
+      accessToken: this.session.access_token,
+      contentType,
+    });
+  }
 
   async createBookmark(input: CreateBookmarkInput): Promise<CreateBookmarkOutput> {
     const payload = requirePayload(input);

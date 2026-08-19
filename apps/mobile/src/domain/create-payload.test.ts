@@ -69,6 +69,39 @@ test('carries the row client_id so a rebuilt create stays idempotent', () => {
   assert.equal(textPayload.client_id, 'cid-2');
 });
 
+test('rebuilds an image bookmark payload with content_type but no url/shared_text', () => {
+  const payload = createPayloadFromBookmark(
+    bookmark({
+      id: 'b1',
+      url: null,
+      content_type: 'image',
+      title: 'Screenshot',
+      preview_image_url: null,
+      client_id: 'cid-3',
+    }),
+  );
+  assert.deepEqual(payload, {
+    id: 'b1',
+    content_type: 'image',
+    title: 'Screenshot',
+    notes: undefined,
+    preview_image_url: undefined,
+    client_id: 'cid-3',
+  });
+});
+
+test('carries an already-uploaded preview_image_url through the rebuilt image payload', () => {
+  const payload = createPayloadFromBookmark(
+    bookmark({
+      id: 'b1',
+      url: null,
+      content_type: 'image',
+      preview_image_url: 'https://storage.example.com/bookmark-images/u1/b1',
+    }),
+  );
+  assert.equal(payload.preview_image_url, 'https://storage.example.com/bookmark-images/u1/b1');
+});
+
 test('isUploadableCreate accepts a URL payload', () => {
   assert.equal(isUploadableCreate({ url: 'https://example.com' }), true);
 });
@@ -77,7 +110,12 @@ test('isUploadableCreate accepts a shared_text payload', () => {
   assert.equal(isUploadableCreate({ shared_text: 'hello' }), true);
 });
 
-test('isUploadableCreate rejects a payload with neither url nor a non-empty body', () => {
+test('isUploadableCreate accepts an image payload even before it is uploaded', () => {
+  assert.equal(isUploadableCreate({ content_type: 'image' }), true);
+  assert.equal(isUploadableCreate({ content_type: 'image', preview_image_url: undefined }), true);
+});
+
+test('isUploadableCreate rejects a payload with neither url, a non-empty body, nor an image', () => {
   assert.equal(isUploadableCreate({ title: 'x' }), false);
   assert.equal(isUploadableCreate({ shared_text: '   ' }), false);
 });

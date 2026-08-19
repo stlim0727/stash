@@ -6,6 +6,7 @@ import {
   imageTitleFromFileName,
   isImageMime,
   localImageFileName,
+  mimeTypeForImageUri,
   pickSharedImage,
 } from './image-share.ts';
 
@@ -87,4 +88,15 @@ test('imageTitleFromFileName returns null when nothing usable remains', () => {
   assert.equal(imageTitleFromFileName(undefined), null);
   assert.equal(imageTitleFromFileName('.png'), null);
   assert.equal(imageTitleFromFileName('   '), null);
+});
+
+test('mimeTypeForImageUri recovers the MIME type from the durable local filename', () => {
+  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123.png'), 'image/png');
+  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123.jpg'), 'image/jpeg');
+  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123.HEIC'), 'image/heic');
+});
+
+test('mimeTypeForImageUri falls back to a generic binary type for an unknown extension', () => {
+  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123'), 'application/octet-stream');
+  assert.equal(mimeTypeForImageUri('file:///docs/stash-images/abc-123.xyz'), 'application/octet-stream');
 });

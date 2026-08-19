@@ -297,6 +297,13 @@ export async function syncCreateQueueEntryBatch(
   if (entries.some((entry) => !hasBulkCreateResultKey(entry))) {
     throw new Error('Bulk create sync requires a client_id or URL mapping key.');
   }
+  // Image creates need an upload-then-create step this bulk path has no room
+  // for (one request, no per-row side effect) — the caller must route them
+  // through syncQueueEntry instead. Fail loudly rather than let one slip
+  // through and get created without ever uploading its binary.
+  if (entries.some((entry) => entry.payload.content_type === 'image')) {
+    throw new Error('Bulk create sync does not support image bookmarks; use syncQueueEntry.');
+  }
 
   const now = new Date().toISOString();
   const uploadedPayloads = entries.map((entry) => createUploadPayload(entry, getBookmark));
@@ -371,6 +378,19 @@ export async function syncQueueEntry(
   repository: BookmarkRepository,
   entry: LocalPendingBookmark,
   getBookmark: (id: string) => Bookmark | undefined,
+  /**
+   * Uploads an image-only bookmark's binary to Storage and resolves its
+   * public URL — required only for a `create` entry whose bookmark is
+   * `content_type: 'image'` with a `local_image_uri` still needing upload
+   * (`preview_image_url` still null). Injected (rather than importing a
+   * native file API here) so this module stays platform-free and testable
+   * under the Node runner via a fake; the real implementation lives in
+   * `storage/image-store.native.ts` + `api/bookmarks.ts`'s
+   * `imageUploadTarget`, wired together in `store/bookmarks.tsx`. Omitted
+   * entirely on a platform with no uploader (web) — an image create that
+   * needs one then fails cleanly instead of silently mis-syncing.
+   */
+  uploadImage?: (bookmark: Bookmark) => Promise<string>,
 ): Promise<EntrySyncResult> {
   const now = new Date().toISOString();
 
@@ -475,9 +495,62 @@ export async function syncQueueEntry(
   }
 
   // operation === 'create'
+  // An image-only bookmark's row must never be created server-side before
+  // its binary has genuinely landed (STASH-65 invariant — see
+  // isLocalOnlyBookmark below). Upload first, splice the resulting URL into
+  // the payload, THEN create. `!preview_image_url` makes this step-and-skip
+  // idempotent across retries: once uploaded, a later retry (e.g. the
+  // createBookmark call itself failing) sees it already set and moves
+  // straight to create without re-uploading the same binary.
+  let uploadedImageUrl: string | undefined;
+  const bookmarkForUpload = getBookmark(entry.local_id);
+  if (
+    bookmarkForUpload?.content_type === 'image' &&
+    bookmarkForUpload.local_image_uri &&
+    !bookmarkForUpload.preview_image_url
+  ) {
+    if (!uploadImage) {
+      return {
+        entry: await failEntry(
+          repository,
+          entry,
+          new Error('Image upload is not available on this platform.'),
+          now,
+        ),
+      };
+    }
+    try {
+      uploadedImageUrl = await uploadImage(bookmarkForUpload);
+      // Persist immediately (not just carried in `payload` below) so a later
+      // retry never re-uploads the same binary even if the create call that
+      // follows fails. Re-read the row rather than reusing the pre-upload
+      // `bookmarkForUpload` snapshot: the upload can take several seconds,
+      // long enough for a concurrent title/notes edit to land in storage —
+      // writing the stale snapshot here would silently revert it (see the
+      // "full-row storage writes should re-read the freshest row" rule in
+      // AGENTS.md's Known Traps). Falls back to the snapshot only if the row
+      // is somehow gone from the live accessor by now.
+      const freshestBookmark = getBookmark(entry.local_id) ?? bookmarkForUpload;
+      await repository.updateBookmark({
+        ...freshestBookmark,
+        preview_image_url: uploadedImageUrl,
+      });
+    } catch (error) {
+      return { entry: await failEntry(repository, entry, error, now) };
+    }
+  }
+
   // Send the LATEST user-authored fields, not the payload captured at save
   // time: the user may have edited title/notes before this upload ran.
   const payload = createUploadPayload(entry, getBookmark);
+  if (uploadedImageUrl) {
+    // createUploadPayload's own getBookmark() re-read may not reflect the
+    // repository write above yet (it's backed by in-memory state, which can
+    // lag a direct repository write) — set explicitly rather than relying on
+    // that race resolving in our favor.
+    payload.preview_image_url = uploadedImageUrl;
+    payload.content_type = 'image';
+  }
   try {
     const result = await api.createBookmark(payload);
     const syncedEntry: LocalPendingBookmark = {
@@ -514,6 +587,10 @@ export async function syncQueueEntry(
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
+        // Guarantee the local row reflects what was actually just uploaded,
+        // even if `localBookmark` (read from in-memory state) hadn't yet
+        // caught up to the direct repository write above.
+        ...(uploadedImageUrl ? { preview_image_url: uploadedImageUrl } : {}),
       };
       if (isDuplicateSwap) {
         // insertBookmark (not updateBookmark), since the existing row's id is
@@ -809,9 +886,14 @@ export function isSyncable(entry: LocalPendingBookmark, options: IsSyncableOptio
  * Local-ID rows get a `create`; rows that already have a remote identity get an
  * `update`. Both are idempotent on the server (create dedupes on URL, update is
  * last-write-wins), so re-enqueuing a bookmark that actually did reach the
- * cloud is harmless. A local row with no URL is skipped: the create API needs a
- * URL (or shared text, which this app doesn't capture), so enqueuing one would
- * just swap "sync pending" for a permanently failed entry.
+ * cloud is harmless. A URL-less row is only skipped when it's ALSO not a text
+ * note and not an image: `isUploadableCreate`/`createPayloadFromBookmark`
+ * (domain/create-payload.ts) rebuild a text note's body as `shared_text` and
+ * an image row as `content_type: 'image'` (its binary, if not yet uploaded,
+ * is uploaded by `syncQueueEntry` itself once this entry is picked up — see
+ * its `uploadImage` parameter), so both are genuinely reconcilable. Only a
+ * row with none of url/shared_text-body/image is skipped, since enqueuing one
+ * would just swap "sync pending" for a permanently failed entry.
  */
 export function reconcileOrphanedQueueEntries(
   bookmarks: Bookmark[],

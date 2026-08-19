@@ -108,9 +108,13 @@ export interface Bookmark {
   /**
    * Local-only durable on-device URI of a captured image (content_type
    * 'image'). Set when an image is shared into the app; never sent to the
-   * cloud. Cloud upload of the binary (and the synced `image_path` it will map
-   * to) is deferred to 0.3.x — see docs/architecture/sync-account-switching.md.
-   * Optional so existing rows and remote-mapped rows need no migration.
+   * cloud. The sync engine uploads its binary to the `bookmark-images`
+   * Storage bucket and stores the resulting public URL in
+   * `preview_image_url` (see `sync/sync-bookmarks.ts`'s `syncQueueEntry` and
+   * `api/bookmarks.ts`'s `imageUploadTarget`) — this field stays local-only
+   * regardless, since it's an on-device file path meaningless on another
+   * device. Optional so existing rows and remote-mapped rows need no
+   * migration.
    */
   local_image_uri?: string | null;
   dismissed_suggested_tags?: string[];
@@ -207,6 +211,17 @@ export interface CreateBookmarkInput {
   notes?: string;
   source_app?: string;
   shared_text?: string;
+  /**
+   * Explicit content-type override for a create that carries neither `url`
+   * nor `shared_text` — currently only `'image'`, for an image-only capture
+   * (a screenshot shared with no link). `requirePayload` (api/bookmarks.ts)
+   * requires `preview_image_url` to already be a genuinely uploaded Storage
+   * URL whenever this is set: the row must never be created server-side
+   * before the binary itself has landed (see `isLocalOnlyBookmark`/STASH-65
+   * in sync/sync-bookmarks.ts). Every other content type is inferred from
+   * `url`/`shared_text` presence as before and never needs this field.
+   */
+  content_type?: 'image';
   site_name?: string | null;
   favicon_url?: string | null;
   preview_image_url?: string | null;

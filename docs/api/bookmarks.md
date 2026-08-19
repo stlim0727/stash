@@ -13,7 +13,7 @@ This contract describes the read/write/modify surface that the mobile app and fu
 
 ### createBookmark
 
-Creates or reuses a bookmark for a shared URL or text payload.
+Creates or reuses a bookmark for a shared URL, text payload, or image.
 
 Input:
 
@@ -27,6 +27,24 @@ Input:
   "shared_text": "Optional selected text"
 }
 ```
+
+An image-only bookmark (a screenshot shared with no link) has neither `url`
+nor `shared_text`. It carries an explicit `content_type: "image"` plus the
+already-uploaded image's `preview_image_url` instead:
+
+```json
+{
+  "content_type": "image",
+  "preview_image_url": "https://<project>.supabase.co/storage/v1/object/public/bookmark-images/<user_id>/<bookmark_id>",
+  "title": "Optional title"
+}
+```
+
+The client uploads the binary to the `bookmark-images` Storage bucket
+(public read, owner-scoped write — see `supabase/migrations`) before calling
+`createBookmark`; the server never accepts `content_type: "image"` without a
+non-empty `preview_image_url` already set, so a row is never created before
+its image has genuinely landed.
 
 Output:
 

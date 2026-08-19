@@ -9,3 +9,17 @@
 export async function copyImageToLibrary(sourceUri: string, _fileName: string): Promise<string> {
   return sourceUri;
 }
+
+/**
+ * Web has no image-only capture path to upload (see module doc), so this
+ * should never actually be called — it throws rather than silently no-op so
+ * a caller mistake is visible immediately instead of masquerading as a
+ * successful upload.
+ */
+export async function uploadImageFile(
+  _localUri: string,
+  _uploadUrl: string,
+  _headers: Record<string, string>,
+): Promise<void> {
+  throw new Error('Image upload is not supported on web.');
+}

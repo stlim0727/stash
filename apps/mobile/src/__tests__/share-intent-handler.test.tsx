@@ -42,8 +42,16 @@ jest.mock('@/domain/enrichment', () => ({
 const mockCopyImage = jest.fn(
   async (_sourceUri: string, fileName: string) => `file:///docs/stash-images/${fileName}`,
 );
+// This suite runs with no auth session (see the auth-provider mock below), so
+// sync never actually fires and uploadImageFile is never called for real —
+// mocked anyway so the module shape stays honest if a future test changes that.
+const mockUploadImageFile = jest.fn(
+  async (_localUri: string, _uploadUrl: string, _headers: Record<string, string>) => undefined,
+);
 jest.mock('@/storage/image-store', () => ({
   copyImageToLibrary: (sourceUri: string, fileName: string) => mockCopyImage(sourceUri, fileName),
+  uploadImageFile: (localUri: string, uploadUrl: string, headers: Record<string, string>) =>
+    mockUploadImageFile(localUri, uploadUrl, headers),
 }));
 const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -676,10 +684,12 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
-  it('captures a shared image as a local-only image bookmark', async () => {
+  it('captures a shared image as a bookmark, queued for a real background upload', async () => {
     // Sharing a screenshot/photo arrives as shareIntent.files (no webUrl). The
-    // handler copies it into durable storage and saves an image bookmark; cloud
-    // upload is deferred, so it is NOT enqueued for sync.
+    // handler copies it into durable storage, saves an image bookmark, and
+    // queues a real create — capture itself stays local-first/optimistic and
+    // renders immediately regardless of the (mocked-out, session-less in this
+    // test) network sync that follows.
     fakeRepo.__reset([]);
     mockShareIntent = {
       hasShareIntent: true,
@@ -708,9 +718,12 @@ describe('ShareIntentHandler', () => {
     expect(stored[0].local_image_uri).toBe(`file:///docs/stash-images/${fileName}`);
     // Title derived from the shared filename.
     expect(stored[0].title).toBe('IMG 0042');
-    // Local-only: nothing queued for cloud sync, and no misleading pending chip.
-    expect(fakeRepo.__queue()).toHaveLength(0);
-    expect(stored[0].sync_status).toBe('synced');
+    // Queued like any other create — honest 'pending' state (no fake
+    // "already synced" bookkeeping), same shape as a text note capture.
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    expect(fakeRepo.__queue()[0].operation).toBe('create');
+    expect(fakeRepo.__queue()[0].payload.content_type).toBe('image');
+    expect(stored[0].sync_status).toBe('pending');
     unmount();
   });
 

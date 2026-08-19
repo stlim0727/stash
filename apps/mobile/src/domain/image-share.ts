@@ -26,6 +26,30 @@ const MIME_TO_EXT: Record<string, string> = {
 /** Fallback extension when neither the MIME type nor the filename resolves one. */
 const DEFAULT_IMAGE_EXT = 'jpg';
 
+/**
+ * The reverse of `MIME_TO_EXT`, for recovering a MIME type from a durable
+ * local file's extension (the local copy's name is the only thing the
+ * upload step has to go on — see `localImageFileName`). Where two MIME types
+ * share an extension (`image/jpeg`/`image/jpg` both store as `.jpg`), the
+ * canonical `image/jpeg` wins for the upload's Content-Type header — the
+ * choice never affects local rendering, only what gets recorded server-side.
+ */
+const EXT_TO_MIME: Record<string, string> = {
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+  bmp: 'image/bmp',
+  tiff: 'image/tiff',
+  avif: 'image/avif',
+  svg: 'image/svg+xml',
+};
+
+/** Fallback MIME type when a local file's extension doesn't resolve one. */
+const DEFAULT_UPLOAD_MIME = 'application/octet-stream';
+
 /** True when `mime` names an image type (`image/...`). */
 export function isImageMime(mime: string | null | undefined): boolean {
   return typeof mime === 'string' && mime.trim().toLowerCase().startsWith('image/');
@@ -94,6 +118,23 @@ export function extensionForImage(image: Pick<SharedImage, 'mimeType' | 'fileNam
 /** Durable local filename for a captured image: `<bookmarkId>.<ext>`. */
 export function localImageFileName(bookmarkId: string, image: Pick<SharedImage, 'mimeType' | 'fileName'>): string {
   return `${bookmarkId}.${extensionForImage(image)}`;
+}
+
+/** Lowercased extension (no dot) from a local file URI, or '' when there is none. */
+function extensionFromUri(uri: string): string {
+  const match = /\.([a-z0-9]+)$/i.exec(uri.trim());
+  return match ? match[1].toLowerCase() : '';
+}
+
+/**
+ * The MIME type to upload a durable local image file under, recovered from
+ * its extension (`localImageFileName` always names the file `<id>.<ext>`
+ * using `extensionForImage`, so this is the exact reverse lookup). Used at
+ * sync time, when only the on-disk URI is available — the original share
+ * payload's MIME type isn't persisted anywhere.
+ */
+export function mimeTypeForImageUri(uri: string): string {
+  return EXT_TO_MIME[extensionFromUri(uri)] ?? DEFAULT_UPLOAD_MIME;
 }
 
 /**

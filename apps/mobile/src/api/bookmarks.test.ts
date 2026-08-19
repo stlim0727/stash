@@ -226,6 +226,105 @@ test('createBookmarks dedupes same-url inputs before the bulk POST', async () =>
   );
 });
 
+test('createBookmark accepts an image-only payload once its binary is already uploaded', async () => {
+  const calls: Array<{ path: string; options: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      calls.push({ path, options });
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks') {
+        assert.equal(options.method, 'POST');
+        const body = options.body as Record<string, unknown>;
+        assert.equal(body.url, null);
+        assert.equal(body.content_type, 'image');
+        assert.equal(body.preview_image_url, 'https://proj.supabase.co/storage/v1/object/public/bookmark-images/user-1/b1');
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: null,
+            content_type: 'image',
+            preview_image_url: 'https://proj.supabase.co/storage/v1/object/public/bookmark-images/user-1/b1',
+          }),
+        ];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    content_type: 'image',
+    preview_image_url: 'https://proj.supabase.co/storage/v1/object/public/bookmark-images/user-1/b1',
+    client_id: 'cid-img',
+  });
+
+  assert.equal(result.status, 'created');
+  assert.equal(result.bookmark_id, 'b1');
+});
+
+test('createBookmark rejects an image payload with no uploaded preview_image_url (STASH-65 invariant: never create before the binary lands)', async () => {
+  const client = {
+    request: async () => {
+      throw new Error('must never reach the network without an uploaded image');
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await assert.rejects(
+    api.createBookmark({ id: 'b1', content_type: 'image' }),
+    /requires either url, shared_text, or an uploaded image/,
+  );
+});
+
+test('createBookmark rejects a payload with neither url, shared_text, nor an image', async () => {
+  const client = {
+    request: async () => {
+      throw new Error('must never reach the network with an empty payload');
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await assert.rejects(
+    api.createBookmark({ id: 'b1', title: 'Untitled' }),
+    /requires either url, shared_text, or an uploaded image/,
+  );
+});
+
+test("imageUploadTarget scopes the object path to this session's own user id", () => {
+  const client = {
+    request: async () => {
+      throw new Error('imageUploadTarget must not make a network call');
+    },
+    storageUploadTarget: (
+      bucket: string,
+      path: string,
+      options: { accessToken: string; contentType: string },
+    ) => ({
+      uploadUrl: `https://proj.supabase.co/storage/v1/object/${bucket}/${path}`,
+      publicUrl: `https://proj.supabase.co/storage/v1/object/public/${bucket}/${path}`,
+      headers: {
+        apikey: 'anon-key',
+        Authorization: `Bearer ${options.accessToken}`,
+        'Content-Type': options.contentType,
+        'x-upsert': 'true',
+      },
+    }),
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const target = api.imageUploadTarget('b1', 'image/jpeg');
+
+  assert.equal(target.uploadUrl, 'https://proj.supabase.co/storage/v1/object/bookmark-images/user-1/b1');
+  assert.equal(
+    target.publicUrl,
+    'https://proj.supabase.co/storage/v1/object/public/bookmark-images/user-1/b1',
+  );
+  assert.equal(target.headers.Authorization, 'Bearer token');
+});
+
 test('enqueuePendingEnrichment targets bookmark_id for conflict resolution and requests a minimal response (STASH-4K)', async () => {
   // STASH-4K, verified live against production:
   //  - `on_conflict=bookmark_id` is required for `resolution=ignore-duplicates`

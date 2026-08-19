@@ -25,6 +25,7 @@ import type { TitleBackfillPatch } from "@/domain/title-backfill";
 import {
   imageTitleFromFileName,
   localImageFileName,
+  mimeTypeForImageUri,
   type SharedImage,
 } from "@/domain/image-share";
 import type { ImportItem } from "@/domain/import";
@@ -120,7 +121,7 @@ import {
 } from "@/observability/sentry";
 import { registerForForegroundState } from "@/storage/sqlite-app-lifecycle";
 import { repository } from "@/storage/repository";
-import { copyImageToLibrary } from "@/storage/image-store";
+import { copyImageToLibrary, uploadImageFile } from "@/storage/image-store";
 import type {
   BulkAttachItem,
   BulkAttachResult,
@@ -2504,23 +2505,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       image?: SharedImage;
     }): AddBookmarkResult => {
       // A shared image becomes an image bookmark: capture is local-first and
-      // local-only for now (cloud upload of the binary is deferred to 0.3.x), so
-      // it is never enqueued for sync. We mark it 'synced' precisely because
-      // there is no cloud work pending — that also keeps the startup orphan
-      // reconciler from re-enqueuing it and the Inbox/Detail from showing a
-      // misleading "sync pending" chip. Capture is sacred: the durable file copy
-      // is folded into `persisted` so the share handler only dismisses once it
+      // optimistic exactly like every other save, then queued for a real
+      // background upload (binary to Storage, then the row) — same shape as
+      // the text-note path below. sync_status starts 'pending' (not the old
+      // fake 'synced' bookkeeping trick) so the orphan reconciler and the
+      // Inbox/Detail "sync pending" chip both read it honestly; `local_image_uri`
+      // still keeps it rendering locally with zero dependency on the network
+      // the whole time (isLocalOnlyBookmark/STASH-65 continues to protect it
+      // from the remote-deletion diff until ever_synced actually flips true on
+      // a confirmed upload). Capture is sacred: the durable file copy is
+      // folded into `persisted` so the share handler only dismisses once it
       // has actually landed on disk.
       if (image) {
         const now = new Date().toISOString();
         const id = makeBookmarkId();
         const fileName = localImageFileName(id, image);
+        // Not a content key (there's no URL to dedupe on) — this capture's
+        // stable id, resent unchanged on every upload retry so an interrupted
+        // create dedupes against its own first attempt instead of inserting a
+        // twin, same role it plays for text notes.
+        const imageClientId = makeClientId();
         const imageBookmark: Bookmark = {
           id,
           user_id: mockUserId,
           url: null,
           canonical_url: null,
           url_hash: null,
+          client_id: imageClientId,
           // A title typed at capture is user-authored; otherwise derive a
           // readable one from the shared filename (may be null → "Untitled").
           title: title?.trim()
@@ -2542,13 +2553,36 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           last_saved_at: now,
           // No URL/text to derive metadata from — nothing to enrich.
           metadata_status: "skipped",
-          sync_status: "synced",
+          sync_status: "pending",
           // Temporary share URI for the optimistic render; swapped for the
           // durable copy once `copyImageToLibrary` resolves below.
           local_image_uri: image.uri,
         };
 
+        const imageEntry: LocalPendingBookmark = {
+          local_id: id,
+          remote_id: null,
+          operation: "create",
+          payload: {
+            id,
+            // The explicit signal requirePayload needs — there's no
+            // url/shared_text to infer content_type from for this row. The
+            // binary itself is uploaded by the sync engine right before it
+            // sends this create (see syncQueueEntry), never here.
+            content_type: "image",
+            title: imageBookmark.title ?? undefined,
+            notes: imageBookmark.notes ?? undefined,
+            client_id: imageClientId,
+          },
+          sync_status: "pending",
+          retry_count: 0,
+          last_error: null,
+          created_at: now,
+          updated_at: now,
+        };
+
         setBookmarks((current) => [imageBookmark, ...(current ?? [])]);
+        setQueue((current) => [...current, imageEntry]);
         const persisted = ensureRepositoryReady()
           .then(() => copyImageToLibrary(image.uri, fileName))
           .then((durableUri) => {
@@ -2561,7 +2595,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ? current
                 : current.map((b) => (b.id === id ? stored : b)),
             );
-            return repository.insertBookmark(stored);
+            return Promise.all([
+              repository.insertBookmark(stored),
+              repository.enqueue(imageEntry),
+            ]);
           })
           .then(() => true)
           .catch((error) => {
@@ -5187,6 +5224,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const createdIdsSyncedThisRun = new Set<string>();
         const getLatestBookmark = (id: string) =>
           bookmarksRef.current?.find((bookmark) => bookmark.id === id);
+        // Injected into syncQueueEntry's create branch for an image-only
+        // bookmark that still needs its binary uploaded. Reads straight off
+        // the durable local file (uploadImageFile streams it directly, never
+        // through this function's own memory) and resolves the public
+        // Storage URL syncQueueEntry then sends as preview_image_url.
+        const uploadBookmarkImage = async (bookmark: Bookmark): Promise<string> => {
+          if (!bookmark.local_image_uri) {
+            throw new Error("Image bookmark has no local file to upload.");
+          }
+          const target = api.imageUploadTarget(
+            bookmark.id,
+            mimeTypeForImageUri(bookmark.local_image_uri),
+          );
+          await uploadImageFile(bookmark.local_image_uri, target.uploadUrl, target.headers);
+          return target.publicUrl;
+        };
         const applySyncEntryResult = async (
           entry: LocalPendingBookmark,
           result: Awaited<ReturnType<typeof syncQueueEntry>>,
@@ -5954,6 +6007,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           (entry) =>
             entry.operation === "create" &&
             !deletedIds.current.has(entry.local_id) &&
+            // Image creates need an upload-then-create step the bulk batch
+            // endpoint has no room for — always routed through the per-entry
+            // loop below instead (see syncCreateQueueEntryBatch's own guard).
+            entry.payload.content_type !== "image" &&
             hasBulkCreateResultKey(entry) &&
             isSyncable(entry, { ignoreBackoff: force }),
         );
@@ -6216,6 +6273,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               repository,
               entry,
               getLatestBookmark,
+              uploadBookmarkImage,
             );
             await applySyncEntryResult(entry, result);
           } catch (error) {
