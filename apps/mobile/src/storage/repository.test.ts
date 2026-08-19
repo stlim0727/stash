@@ -256,3 +256,50 @@ test('an interrupted web identity rekey is completed from its commit journal on 
     '[{"bookmark_id":"new-id"}]',
   );
 });
+
+test('replaceBookmarkIdentities drops an EXISTING queue entry under the OLD id, in the same atomic write (P1, round 8)', async () => {
+  // A rehomed row can already have an active `create` queue entry under its
+  // OLD id (e.g. an image upload landed but createBookmark never confirmed —
+  // see staleUploadedImageRows in sync/account-transition.ts). Leaving that
+  // entry behind — even as a "removed in a separate follow-up call" step —
+  // risks it surviving a crash/reload between the two calls and retrying
+  // under the OLD id in parallel with the new entry, which can collide on a
+  // primary key if a real cloud row already exists under that id owned by a
+  // different account. It must be gone the instant this call resolves.
+  const old = makeBookmark('old-id');
+  await repository.init([]);
+  await repository.insertBookmark(old);
+  await repository.enqueue({
+    local_id: 'old-id',
+    remote_id: null,
+    operation: 'create',
+    payload: { id: 'old-id', content_type: 'image' },
+    sync_status: 'failed',
+    retry_count: 2,
+    last_error: 'stale',
+    created_at: old.created_at,
+    updated_at: old.updated_at,
+  });
+
+  const rehomed = { ...old, id: 'new-id', sync_status: 'pending' as const };
+  await repository.replaceBookmarkIdentities!(
+    [{ previousId: old.id, bookmark: rehomed }],
+    [
+      {
+        local_id: 'new-id',
+        remote_id: null,
+        operation: 'create',
+        payload: { id: 'new-id', content_type: 'image' },
+        sync_status: 'pending',
+        retry_count: 0,
+        last_error: null,
+        created_at: old.created_at,
+        updated_at: old.updated_at,
+      },
+    ],
+    { metaUpdates: {}, tagData: { tags: [], bookmarkTags: [], collections: [] } },
+  );
+
+  const queueIds = (await repository.listQueue()).map((queued) => queued.local_id);
+  assert.deepEqual(queueIds, ['new-id']);
+});

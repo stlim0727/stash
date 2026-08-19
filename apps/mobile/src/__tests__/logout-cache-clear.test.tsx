@@ -66,10 +66,17 @@ jest.mock('@/supabase/auth-provider', () => {
 // remote deletion before the test can act.
 jest.mock('@/api/bookmarks', () => {
   let remote: Array<{ id: string }> = [];
+  let createBookmarkHangs = false;
   const empty = async () => [];
   return {
     __setRemote: (rows: Array<{ id: string }>) => {
       remote = rows;
+    },
+    // Same "hang deliberately" pattern as updateBookmark below, for a
+    // seeded image row whose test wants to observe it BEFORE the auto-sync
+    // effect has a chance to actually confirm the create.
+    __setCreateBookmarkHangs: (hangs: boolean) => {
+      createBookmarkHangs = hangs;
     },
     createBookmarkApi: () => ({
       listBookmarksUpdatedSince: empty,
@@ -79,10 +86,12 @@ jest.mock('@/api/bookmarks', () => {
       listBookmarkTags: empty,
       listCollections: empty,
       // Used by the queue uploader for a create after the lazy mint.
-      createBookmark: async (payload: { url?: string | null }) => ({
-        id: 'new-remote-id',
-        url: payload.url ?? null,
-      }),
+      createBookmark: async (payload: { url?: string | null }) => {
+        if (createBookmarkHangs) {
+          return new Promise<never>(() => {});
+        }
+        return { id: 'new-remote-id', url: payload.url ?? null };
+      },
       // An update op for a previously-synced row. Hangs deliberately so a seeded
       // pending EDIT stays in-flight (its row stays `pending`) and isn't consumed
       // by the auto-sync before the test can log out and assert the drop.
@@ -106,6 +115,7 @@ const authMock = jest.requireMock('@/supabase/auth-provider') as {
 };
 const apiMock = jest.requireMock('@/api/bookmarks') as {
   __setRemote: (rows: Array<{ id: string }>) => void;
+  __setCreateBookmarkHangs: (hangs: boolean) => void;
 };
 
 const REMOTE_ID = '1a2b3c4d-0000-4000-8000-00000000abcd';
@@ -121,6 +131,7 @@ beforeEach(() => {
   fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
   fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-06-12T10:00:00.000Z');
   apiMock.__setRemote([{ id: REMOTE_ID }]);
+  apiMock.__setCreateBookmarkHangs(false);
   authMock.__setAuth({
     status: 'authenticated',
     session: realSession,
@@ -279,6 +290,82 @@ test('logout drops a pending EDIT to a synced row AND its update queue entry, pr
   const queueIds = fakeRepo.__queue().map((e) => e.local_id);
   expect(queueIds).not.toContain(REMOTE_EDITED_ID);
   expect(queueIds).toContain(LOCAL_CREATE_ID);
+});
+
+const STALE_IMAGE_ID = 'stale-image-not-yet-confirmed';
+
+test('logout rehomes an unconfirmed-but-uploaded image row AND re-keys its pending tag op onto the new id (P1, round 8)', async () => {
+  // A local-only image row (its upload landed but createBookmark never
+  // confirmed — content_type: image, preview_image_url set, ever_synced
+  // unset) survives logout ("capture is sacred") and gets rehomed under a
+  // fresh id (staleUploadedImageRows) so its retry doesn't collide with a
+  // real cloud row that may already exist under the old id. Without wiring
+  // tagState.rehome into the logout call site too, that rehome silently
+  // skips re-keying — a pending tag op queued against this row would stay
+  // pointed at the OLD (now-abandoned) id forever, never uploading.
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: STALE_IMAGE_ID,
+      url: null,
+      url_hash: null,
+      content_type: 'image',
+      preview_image_url: 'https://storage.example.com/bookmark-images/real-user/' + STALE_IMAGE_ID,
+      local_image_uri: 'file:///stash-images/shared.jpg',
+      sync_status: 'failed',
+      ever_synced: undefined,
+    }),
+  ]);
+  fakeRepo.__setMeta(SYNCED_USER_ID_KEY, 'real-user');
+  fakeRepo.__setMeta(LAST_PULLED_AT_KEY, '2026-06-12T10:00:00.000Z');
+  fakeRepo.__setMeta(
+    'pending_tag_ops',
+    JSON.stringify([
+      {
+        id: 'tagop-1',
+        bookmark_id: STALE_IMAGE_ID,
+        tag_name: 'reference',
+        op: 'add',
+        source: 'user',
+        confidence: null,
+        created_at: '2026-06-12T10:00:00.000Z',
+      },
+    ]),
+  );
+  apiMock.__setRemote([]);
+  // Without this, the store's orphan-reconciler self-heal notices this
+  // sync_status: 'failed' row has no active queue entry, re-enqueues its
+  // create, and the auto-sync effect actually CONFIRMS it (this mock's
+  // createBookmark otherwise succeeds quickly) before logout ever runs —
+  // defeating the whole premise (a row that's still genuinely unconfirmed).
+  // Hanging it keeps the row in exactly the shape this test needs.
+  apiMock.__setCreateBookmarkHangs(true);
+
+  const { result, rerender } = await renderHook(() => useBookmarks(), { wrapper });
+  await waitFor(() => expect(result.current.isLoading).toBe(false));
+  await waitFor(() => expect(result.current.inbox.map((b) => b.id)).toContain(STALE_IMAGE_ID));
+
+  authMock.__setAuth({ status: 'signed_out', session: null, userId: null });
+  await act(async () => {
+    rerender(undefined);
+  });
+
+  // Rehomed under a fresh id — the row survives (still exactly one image
+  // bookmark), but no longer under STALE_IMAGE_ID.
+  await waitFor(() => {
+    const ids = fakeRepo.__bookmarks().map((b) => b.id);
+    expect(ids).not.toContain(STALE_IMAGE_ID);
+    expect(ids).toHaveLength(1);
+  });
+  const newId = fakeRepo.__bookmarks()[0]!.id;
+  expect(newId).not.toBe(STALE_IMAGE_ID);
+
+  // The pending tag op must have followed it — re-keyed onto newId, not
+  // stranded under STALE_IMAGE_ID and not silently dropped.
+  const rekeyedOps = JSON.parse(fakeRepo.__meta('pending_tag_ops') ?? '[]') as Array<{
+    bookmark_id: string;
+  }>;
+  expect(rekeyedOps).toHaveLength(1);
+  expect(rekeyedOps[0]!.bookmark_id).toBe(newId);
 });
 
 test('the two signed_out effects (cache-clear + lazy-mint) do not fight: cache cleared, no premature mint', async () => {

@@ -403,6 +403,26 @@ export async function syncQueueEntry(
    * needs one then fails cleanly instead of silently mis-syncing.
    */
   uploadImage?: (bookmark: Bookmark) => Promise<string>,
+  /**
+   * Reads the CURRENTLY signed-in user id, fresh, at the moment it's called
+   * — never a value captured earlier. `api.userId` is fixed for this whole
+   * call (it's a property of the `api` instance `syncNow` built once at the
+   * TOP of this sync cycle — see store/bookmarks.tsx), but an image
+   * create's own upload step can take several seconds, long enough for the
+   * user to sign out (or otherwise change identity) mid-flight; the logout
+   * effect runs independently of this in-flight call and doesn't wait for
+   * it. Without re-checking here, right before the create is confirmed, a
+   * create that started under one identity can land AFTER that identity
+   * departed — permanently marking this row `ever_synced: true` under an
+   * account that's no longer live, so it's silently misfiled locally
+   * (looks "synced" but a future edit's `update` op 404s/RLS-fails against
+   * a row a different account owns) and Storage now holds an object under
+   * the departed account's own path that nothing else will ever manage or
+   * clean up. Optional/undefined in tests that don't exercise this —
+   * treated as "can't tell, trust `api`" rather than forcing every existing
+   * fake to supply one.
+   */
+  getLiveUserId?: () => string | null | undefined,
 ): Promise<EntrySyncResult> {
   const now = new Date().toISOString();
 
@@ -635,6 +655,61 @@ export async function syncQueueEntry(
     payload.preview_image_url = uploadedImageUrl;
     payload.content_type = 'image';
   }
+
+  // P1: re-validate the LIVE signed-in identity right before actually
+  // confirming this create — see getLiveUserId's own doc comment above for
+  // the full race (an image upload's multi-second gap is the main exposure,
+  // but this applies to every create). `api.userId` is fixed for this whole
+  // call; if the live identity has since diverged from it, DON'T call
+  // createBookmark under the departed identity — that would durably mark
+  // this row `ever_synced: true` against a real cloud row the CURRENT
+  // identity can never manage again. Fail this attempt instead so the
+  // identity that's actually live now picks it up on the next retry.
+  //
+  // `api.userId` must ALSO be truthy to fire: the real BookmarkApi always
+  // returns one (a session's user id is never empty), so this costs nothing
+  // in production, but a test double that hasn't implemented the getter
+  // (many pre-date it) would otherwise read `undefined` and mismatch
+  // EVERY real getLiveUserId() unconditionally — "unknown, trust it" is the
+  // same backward-compat stance local_image_uploaded_for_user_id takes.
+  if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+    if (uploadedImageUrl) {
+      // Best-effort cleanup under the OLD (departing) api instance — it's
+      // the one with rights to its own Storage path. The NEXT retry, under
+      // whichever identity is live then, re-uploads fresh regardless (the
+      // staleness guard above already recorded local_image_uploaded_for_user_id
+      // as this departed identity moments ago), so this is optional tidiness,
+      // never load-bearing for correctness.
+      try {
+        await api.deleteImages([entry.local_id]);
+      } catch (error) {
+        recordLog(
+          'warn',
+          `sync: failed to delete Storage object uploaded under a departed identity for ${entry.local_id}: ${errorMessage(error)}`,
+        );
+      }
+    }
+    const failedEntry = await failEntry(
+      repository,
+      entry,
+      new Error('Signed-in identity changed before this create could be confirmed.'),
+      now,
+    );
+    const localBookmark = getBookmark(entry.local_id);
+    if (localBookmark && (localBookmark.sync_status !== 'failed' || uploadedImageUrl)) {
+      const failedBookmark: Bookmark = {
+        ...localBookmark,
+        sync_status: 'failed',
+        ...(uploadedImageUrl
+          ? { preview_image_url: uploadedImageUrl, local_image_uploaded_for_user_id: api.userId }
+          : {}),
+      };
+      await repository.updateBookmark(failedBookmark);
+      return { entry: failedEntry, bookmarkUpdate: failedBookmark, uploadedImageUrl };
+    }
+    return { entry: failedEntry, uploadedImageUrl };
+  }
+
   try {
     const result = await api.createBookmark(payload);
     const syncedEntry: LocalPendingBookmark = {
@@ -710,7 +785,19 @@ export async function syncQueueEntry(
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
     const localBookmark = getBookmark(entry.local_id);
-    if (localBookmark && localBookmark.sync_status !== 'failed') {
+    // A retried entry's bookmark row is very often ALREADY `sync_status:
+    // 'failed'` from its own previous attempt — the `sync_status !==
+    // 'failed'` half of this guard exists to skip a redundant no-op write
+    // when nothing actually changed. But `uploadedImageUrl` being set means
+    // THIS attempt's upload genuinely landed (possibly a fresh re-upload the
+    // staleness guard above just forced) — that's a real change regardless
+    // of `sync_status`, and skipping the write would leave the in-memory row
+    // (and its `local_image_uploaded_for_user_id` stamp) pointing at the OLD
+    // URL/owner even though the repository already has the new one. The
+    // next retry would then read that stale in-memory owner and wrongly
+    // treat this device's own just-landed upload as stale all over again,
+    // re-uploading the same binary needlessly on every subsequent retry.
+    if (localBookmark && (localBookmark.sync_status !== 'failed' || uploadedImageUrl)) {
       const failedBookmark: Bookmark = {
         ...localBookmark,
         sync_status: 'failed',

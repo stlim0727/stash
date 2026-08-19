@@ -6459,6 +6459,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               entry,
               getLatestBookmark,
               uploadBookmarkImage,
+              // P1, round 8: `api` (and its `.userId`) was built once at the
+              // top of this sync cycle — this reads the LIVE signed-in user
+              // id fresh, at the exact moment syncQueueEntry checks it, so a
+              // sign-out mid-flight (the logout effect runs independently
+              // and doesn't wait for an in-flight sync) is caught before a
+              // create ever gets durably confirmed under the departed
+              // identity. `auth.session` is the reactive value — see the
+              // STASH-4G/4H diagnostics earlier in this file (the
+              // requestAiEnrichment enqueue path) for why it, not a captured
+              // snapshot, is this codebase's established "what's actually
+              // live right now" source.
+              () => auth.session?.user.id ?? null,
             );
             await applySyncEntryResult(entry, result);
           } catch (error) {
@@ -7617,6 +7629,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           makeBookmarkId,
           ensureRepositoryReady,
           {
+            // P1, round 8: plan.rehome can now be non-empty here too (a
+            // local-only image row whose upload landed but whose create was
+            // never confirmed — see staleUploadedImageRows). Without this,
+            // applyAccountTransition's rehome branch re-keys nothing —
+            // idAliases, pending tag ops, pending import collections,
+            // pending enrichment restores, tag links, and AI-retry
+            // bookkeeping all stay pointed at the OLD (now-deleted) id,
+            // stranding any pending work queued against this row. Same
+            // helper the account-transition caller already uses below.
+            rehome: (idMap) => rekeyBookmarkIdentity(idMap, { persist: false }),
             drop: (ids) => {
               // Purge the logged-out account's pending tag ops + links so they
               // can't leak into the next session's UI or upload under it.

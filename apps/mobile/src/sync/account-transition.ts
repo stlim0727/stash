@@ -406,21 +406,27 @@ export async function applyAccountTransition(
       bookmark,
     }));
     if (identityState && repository.replaceBookmarkIdentities) {
+      // Removing each previousId's stale queue entry is part of THIS atomic
+      // call (see its doc comment in storage/types.ts) — not a separate
+      // follow-up step. A crash between a follow-up call and this commit
+      // would otherwise let the old entry survive to retry under the OLD id
+      // after restart, in parallel with the freshly-enqueued one, and
+      // collide on its primary key if a real cloud row already exists under
+      // that id owned by a different account.
       await repository.replaceBookmarkIdentities(replacements, newEntries, identityState);
     } else {
+      // No shared transaction on this fallback path (BookmarkRepository
+      // doesn't require one), so remove each row's stale queue entry
+      // immediately after its own replace — same per-row atomicity this
+      // path already has for everything else, rather than leaving cleanup
+      // as one big separate step after every row has already committed.
       for (const { previousId, bookmark } of replacements) {
         await repository.replaceBookmark(previousId, bookmark);
+        await repository.removeQueueEntry(previousId);
       }
       for (const entry of newEntries) {
         await repository.enqueue(entry);
       }
-    }
-    // Same reasoning as the in-memory filter above, durably: a stale queue
-    // entry under an old id must never survive to retry after this device
-    // restarts. Sequential (not Promise.all), matching this file's existing
-    // single-SQLite-connection convention elsewhere in this function.
-    for (const old of plan.rehome) {
-      await repository.removeQueueEntry(old.id);
     }
   }
   if (plan.drop.length > 0) {

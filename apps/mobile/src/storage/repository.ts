@@ -152,8 +152,16 @@ class WebBookmarkRepository implements BookmarkRepository {
         .map((existing) => (existing.id === previousId ? bookmark : existing));
     }
     const entryIds = new Set(entries.map((entry) => entry.local_id));
+    // A queue entry still sitting under a rehomed row's OLD id (see this
+    // method's doc comment in storage/types.ts) must be dropped in this SAME
+    // atomic write, not a separate follow-up call — otherwise it survives to
+    // retry under the OLD id after a crash/reload, in parallel with the
+    // freshly-enqueued entry under the new id.
+    const previousIds = new Set(replacements.map((replacement) => replacement.previousId));
     const nextQueue = [
-      ...this.queue.filter((entry) => !entryIds.has(entry.local_id)),
+      ...this.queue.filter(
+        (entry) => !entryIds.has(entry.local_id) && !previousIds.has(entry.local_id),
+      ),
       ...entries,
     ];
     const commit: IdentityRekeyCommit = {

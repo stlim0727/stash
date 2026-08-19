@@ -878,6 +878,131 @@ test('create: an image upload that succeeds right before createBookmark fails st
   );
 });
 
+test('create: publishes the fresh upload owner even when the bookmark row was ALREADY failed (P2, round 8)', async () => {
+  // The bookmark is already sync_status: 'failed' from a PRIOR attempt (the
+  // realistic shape for a retry) — a re-upload just landed THIS attempt
+  // (uploadedImageUrl set) but createBookmark fails again. The
+  // sync_status !== 'failed' half of the guard alone would skip returning
+  // bookmarkUpdate here, leaving the in-memory row's owner stamp stale even
+  // though the repository already has the fresh one — the next retry would
+  // then see the stale in-memory owner and wrongly re-upload all over again.
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+    sync_status: 'failed', // already failed from a previous attempt
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  const api = fakeApi({
+    createBookmark: async () => {
+      throw new Error('createBookmark fails again on this retry');
+    },
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+  );
+
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(
+    result.bookmarkUpdate?.preview_image_url,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+  assert.equal(result.bookmarkUpdate?.local_image_uploaded_for_user_id, 'user-test');
+});
+
+test('create: aborts BEFORE calling createBookmark when the live signed-in identity has diverged from api (P1, round 8)', async () => {
+  // The core race this closes: an image upload can take several seconds,
+  // long enough for the user to sign out mid-flight. The logout effect runs
+  // independently and doesn't wait for this in-flight sync — so without
+  // re-checking the LIVE identity right before confirming, this create
+  // would land under a departed session, durably marking the row
+  // ever_synced: true against a cloud row the CURRENT identity can never
+  // manage again.
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let createBookmarkCalled = false;
+  let deleteImagesCalledWith: string[] | undefined;
+  const api = fakeApi({
+    createBookmark: async () => {
+      createBookmarkCalled = true;
+      throw new Error('must never be called once the live identity has diverged');
+    },
+    deleteImages: async (ids: string[]) => {
+      deleteImagesCalledWith = ids;
+    },
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+    () => 'a-different-now-live-user', // diverges from fakeApi()'s 'user-test'
+  );
+
+  assert.equal(createBookmarkCalled, false);
+  assert.equal(result.entry.sync_status, 'failed');
+  // The just-uploaded object (under the departed identity's own path) is
+  // best-effort cleaned up using that same departed api instance.
+  assert.deepEqual(deleteImagesCalledWith, ['local-abc']);
+  // The bookmark row itself is marked failed too (finding 3's consistency),
+  // still carrying the fresh URL/owner the upload step already persisted —
+  // the NEXT retry (under whichever identity is live then) re-validates
+  // ownership fresh via the staleness guard regardless.
+  assert.equal(result.bookmarkUpdate?.sync_status, 'failed');
+  assert.equal(
+    result.bookmarkUpdate?.preview_image_url,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+  assert.equal(result.bookmarkUpdate?.local_image_uploaded_for_user_id, 'user-test');
+});
+
+test('create: proceeds normally when getLiveUserId confirms the identity has NOT changed (no false-positive abort)', async () => {
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let createBookmarkCalled = false;
+  const api = fakeApi({
+    createBookmark: async () => {
+      createBookmarkCalled = true;
+      return {
+        bookmark_id: '00000000-0000-4000-8000-000000000001',
+        status: 'created' as const,
+        metadata_status: 'pending' as const,
+      };
+    },
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+    () => 'user-test', // matches fakeApi()'s default userId — no divergence
+  );
+
+  assert.equal(createBookmarkCalled, true);
+  assert.equal(result.entry.sync_status, 'synced');
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+});
+
 test('create: an image bookmark permanently deleted between a landed upload and a subsequent createBookmark failure still surfaces the uploaded URL for cleanup (P1)', async () => {
   // The failure-path sibling of the mid-upload-abort test above: here the
   // upload itself succeeds and createBookmark is dispatched, but the row is

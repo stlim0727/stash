@@ -276,6 +276,14 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         for (const { previousId, bookmark } of replacements) {
           await db.runAsync('DELETE FROM bookmarks WHERE id = ?', [previousId]);
           await writeBookmark(db, bookmark);
+          // Same transaction, not a follow-up call: a queue entry still
+          // sitting under the OLD id (see this method's doc comment in
+          // storage/types.ts) must never survive a crash between this
+          // commit and a separate cleanup step, or it retries under the OLD
+          // id after restart, in parallel with the newly-enqueued entry.
+          await db.runAsync('DELETE FROM local_pending_bookmarks WHERE local_id = ?', [
+            previousId,
+          ]);
         }
         for (const entry of entries) {
           await db.runAsync(
