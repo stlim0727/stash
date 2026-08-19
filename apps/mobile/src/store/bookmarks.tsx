@@ -907,6 +907,22 @@ function mergeById<T>(
 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
+  // Mirror of `auth` so an ALREADY-RUNNING async closure (syncNow and
+  // everything it calls, e.g. syncQueueEntry's injected getLiveUserId) can
+  // read the LATEST signed-in identity instead of the one captured when
+  // that invocation started. `syncNow` is a useCallback keyed on `auth`
+  // (among other deps) — React gives a brand NEW `syncNow` (closing over a
+  // fresh `auth`) on the render after sign-out, but an invocation of the
+  // OLD `syncNow` that's still executing keeps referencing whatever `auth`
+  // its own closure captured at creation time; it never sees the new one.
+  // Reading `authRef.current` instead — the same "ref mirrors state so an
+  // async loop reads live, not stale" pattern bookmarksRef/queueRef already
+  // use — closes that gap: the ref's `.current` is looked up fresh on every
+  // access, regardless of which render's closure is doing the looking up.
+  const authRef = useRef(auth);
+  useEffect(() => {
+    authRef.current = auth;
+  }, [auth]);
   const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -5494,6 +5510,72 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             return false;
           }
 
+          // P1: the create's own request landed successfully, but the live
+          // identity changed WHILE it was in flight (checked again inside
+          // syncQueueEntry, after the response — see landedUnderDepartedIdentity's
+          // own doc comment for why the pre-dispatch check alone can't close
+          // this window). The row now has a REAL cloud identity, just under
+          // the DEPARTED account — route it through the exact same rehome
+          // machinery an account transition uses (fresh id, cleared image
+          // URL/owner, tag/import/enrichment/AI-retry re-key) instead of
+          // trusting this as a normal confirmed sync, which would durably
+          // misattribute a real cloud row to whichever identity is live now.
+          if (result.landedUnderDepartedIdentity) {
+            // Real durable work happened this pass (a fresh create was
+            // enqueued via rehome below), same as any other removeEntry
+            // case — matches the semantics mutationsPushed represents
+            // elsewhere for a broadcastSyncNudge and this pass's own
+            // return value.
+            mutationsPushed = true;
+            const staleRow = getLatestBookmark(entry.local_id);
+            if (staleRow) {
+              await applyAccountTransition(
+                {
+                  kind: "switch",
+                  rehome: [staleRow],
+                  drop: [],
+                  dropQueue: [],
+                  resetWatermark: false,
+                },
+                repository,
+                setBookmarks,
+                setQueue,
+                makeBookmarkId,
+                ensureRepositoryReady,
+                {
+                  rehome: (idMap) =>
+                    rekeyBookmarkIdentity(idMap, { persist: false }),
+                },
+              );
+            } else {
+              // No local row left to rehome (e.g. a separate concurrent
+              // delete that deletedIds.current's own check above didn't
+              // catch for some other reason) — nothing to move, but the
+              // now-permanently-stale queue entry must still not linger.
+              // Durable removal lives HERE (not inside syncQueueEntry, on
+              // purpose — see its own comment): there's no atomic replace
+              // happening alongside it in this branch to fold it into, so a
+              // plain standalone removal is safe and carries no crash-window
+              // risk the way removing it before an in-progress rehome would.
+              setQueue((current) => {
+                const nextQueue = current.filter(
+                  (queued) => queued.local_id !== entry.local_id,
+                );
+                queueRef.current = nextQueue;
+                return nextQueue;
+              });
+              ensureRepositoryReady()
+                .then(() => repository.removeQueueEntry(entry.local_id))
+                .catch((error) =>
+                  logStorageError(
+                    "post-landed-under-departed-identity queue cleanup",
+                    error,
+                  ),
+                );
+            }
+            return false;
+          }
+
           setQueue((current) => {
             const nextQueue = result.removeEntry
               ? current.filter((queued) => queued.local_id !== entry.local_id)
@@ -6228,6 +6310,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 api,
                 chunk,
                 getLatestBookmark,
+                // authRef, not `auth` — see authRef's own doc comment above
+                // for why: this closure can still be running long after the
+                // render that created it, and `auth` itself would stay
+                // frozen at whatever it was then. Same reasoning as the
+                // single-entry syncQueueEntry call below.
+                () => authRef.current.session?.user.id ?? null,
               );
               await applyBulkCreateChunkResults(chunk, results);
               for (const entry of chunk) {
@@ -6459,6 +6547,19 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               entry,
               getLatestBookmark,
               uploadBookmarkImage,
+              // P1, round 8/10: `api` (and its `.userId`) was built once at
+              // the top of this sync cycle — this reads the LIVE signed-in
+              // user id fresh, at the exact moment syncQueueEntry checks it,
+              // so a sign-out mid-flight (the logout effect runs
+              // independently and doesn't wait for an in-flight sync) is
+              // caught before a create ever gets durably confirmed under the
+              // departed identity. `authRef.current`, NOT the closed-over
+              // `auth` — see authRef's own doc comment above for why a plain
+              // `auth` read here would silently defeat this whole check: this
+              // closure (and the syncNow invocation it belongs to) can still
+              // be running well after the render that created it, and `auth`
+              // itself stays frozen at whatever it was then.
+              () => authRef.current.session?.user.id ?? null,
             );
             await applySyncEntryResult(entry, result);
           } catch (error) {
@@ -7617,6 +7718,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           makeBookmarkId,
           ensureRepositoryReady,
           {
+            // P1, round 8: plan.rehome can now be non-empty here too (a
+            // local-only image row whose upload landed but whose create was
+            // never confirmed — see staleUploadedImageRows). Without this,
+            // applyAccountTransition's rehome branch re-keys nothing —
+            // idAliases, pending tag ops, pending import collections,
+            // pending enrichment restores, tag links, and AI-retry
+            // bookkeeping all stay pointed at the OLD (now-deleted) id,
+            // stranding any pending work queued against this row. Same
+            // helper the account-transition caller already uses below.
+            rehome: (idMap) => rekeyBookmarkIdentity(idMap, { persist: false }),
             drop: (ids) => {
               // Purge the logged-out account's pending tag ops + links so they
               // can't leak into the next session's UI or upload under it.

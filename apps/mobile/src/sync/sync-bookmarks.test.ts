@@ -113,6 +113,12 @@ function fakeRepository(storedQueue: LocalPendingBookmark[] = []) {
 
 function fakeApi(overrides: Partial<Record<keyof BookmarkApi, unknown>> = {}): BookmarkApi {
   return {
+    // Matches makeBookmark's default user_id — most tests exercise a single
+    // consistent session throughout, so this stays a no-op default for the
+    // local_image_uploaded_for_user_id staleness guard unless a test
+    // explicitly overrides it to simulate a DIFFERENT session (an account
+    // transition having happened).
+    userId: 'user-test',
     createBookmark: async () => ({
       bookmark_id: '00000000-0000-4000-8000-000000000001',
       status: 'created',
@@ -240,6 +246,70 @@ test('bulk create: a server-side duplicate adopts the existing row\'s id too (Se
 
   assert.equal(result?.bookmarkUpdate?.id, existingId);
   assert.equal(result?.originalLocalId, 'local-dup');
+});
+
+test('bulk create: aborts BEFORE dispatch when the live identity has already diverged from api (P1, round 9)', async () => {
+  const entry = makeCreateEntry({ local_id: 'local-a', payload: { url: 'https://example.com/a' } });
+  let createBookmarksCalled = false;
+  const api = fakeApi({
+    createBookmarks: async () => {
+      createBookmarksCalled = true;
+      throw new Error('must never be called once the live identity has diverged');
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      syncCreateQueueEntryBatch(api, [entry], () => makeBookmark({ id: 'local-a' }), () => 'a-different-user'),
+    /identity changed/,
+  );
+  assert.equal(createBookmarksCalled, false);
+});
+
+test('bulk create: rejects when the live identity diverges DURING the awaited createBookmarks call (P1, round 9 — TOCTOU)', async () => {
+  // Same shape as the single-entry TOCTOU fix: the pre-dispatch check alone
+  // isn't sufficient for a bulk chunk either — createBookmarks can take
+  // real wall-clock time (potentially longer, being a whole batch), during
+  // which sign-out can still happen. The batch lands regardless; this must
+  // reject rather than let the caller confirm every row in it as synced
+  // under whichever identity happens to be live now.
+  const entry = makeCreateEntry({ local_id: 'local-a', payload: { url: 'https://example.com/a' } });
+  let liveUserIdCalls = 0;
+  const getLiveUserId = () => {
+    liveUserIdCalls += 1;
+    return liveUserIdCalls === 1 ? 'user-test' : 'a-different-now-live-user';
+  };
+  const api = fakeApi({
+    createBookmarks: async () => [
+      { bookmark_id: 'local-a', status: 'created' as const, metadata_status: 'pending' as const },
+    ],
+  });
+
+  await assert.rejects(
+    () =>
+      syncCreateQueueEntryBatch(api, [entry], () => makeBookmark({ id: 'local-a' }), getLiveUserId),
+    /identity changed/,
+  );
+  assert.equal(liveUserIdCalls, 2); // both checks actually ran
+});
+
+test('bulk create: proceeds normally when getLiveUserId confirms the identity has NOT changed (no false-positive abort)', async () => {
+  const entry = makeCreateEntry({ local_id: 'local-a', payload: { url: 'https://example.com/a' } });
+  const api = fakeApi({
+    createBookmarks: async () => [
+      { bookmark_id: 'local-a', status: 'created' as const, metadata_status: 'pending' as const },
+    ],
+  });
+
+  const results = await syncCreateQueueEntryBatch(
+    api,
+    [entry],
+    () => makeBookmark({ id: 'local-a' }),
+    () => 'user-test', // matches fakeApi()'s default userId — no divergence
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0]?.bookmarkUpdate?.sync_status, 'synced');
 });
 
 test('create: uploads the LATEST title/notes, not the payload captured at save', async () => {
@@ -584,12 +654,50 @@ test('create: an image bookmark uploads its binary before creating the row, then
   );
 });
 
-test('create: an image bookmark already uploaded (preview_image_url set) does not re-upload on retry', async () => {
+test('create: a legacy image with an unrecorded owner (preview_image_url set, no stamp) re-uploads once (P2, round 10)', async () => {
+  // No local_image_uploaded_for_user_id override — this row predates that
+  // field. Every row THIS version's own code has ever touched stamps both
+  // fields together atomically, so an absent stamp can only mean a genuine
+  // legacy row — one whose account may already have changed on an OLDER app
+  // version, before this whole account-transition cleanup existed to catch
+  // it. Silently trusting the URL in that case would risk reusing an
+  // object under whatever account originally uploaded it. A needless
+  // one-time re-upload of a file still on disk is the safe default.
+  const { repository } = fakeRepository();
+  const legacyUpload = makeBookmark({
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc',
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let uploadCallCount = 0;
+  const uploadImage = async () => {
+    uploadCallCount += 1;
+    return 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  };
+
+  const result = await syncQueueEntry(
+    fakeApi(),
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => legacyUpload,
+    uploadImage,
+  );
+
+  assert.equal(uploadCallCount, 1);
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+  // Now correctly stamped, so this exact retry-avoidance no longer applies
+  // on any FUTURE retry — the row has graduated out of "legacy" once this
+  // version's own code has touched it.
+  assert.equal(result.bookmarkUpdate?.local_image_uploaded_for_user_id, 'user-test');
+});
+
+test('create: an image already uploaded under the SAME session does not re-upload (structural fix, round 7)', async () => {
   const { repository } = fakeRepository();
   const alreadyUploaded = makeBookmark({
     content_type: 'image',
     preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc',
     local_image_uri: 'file:///stash-images/local-abc.jpg',
+    local_image_uploaded_for_user_id: 'user-test', // matches fakeApi()'s default userId
   });
   let uploadCallCount = 0;
   const uploadImage = async () => {
@@ -607,6 +715,44 @@ test('create: an image bookmark already uploaded (preview_image_url set) does no
 
   assert.equal(uploadCallCount, 0);
   assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+});
+
+test('create: an image uploaded under a DIFFERENT (now-abandoned) session re-uploads under the current one (structural fix, round 7)', async () => {
+  // The single, general choke point this whole round's structural fix is
+  // about: whatever account-lifecycle event changed the signed-in session
+  // since this image uploaded (carry-over, logout, a real A→real B switch,
+  // or anything else), this guard re-validates ownership fresh against
+  // whichever session is live RIGHT NOW rather than trusting a recorded URL.
+  const { repository } = fakeRepository();
+  const staleUpload = makeBookmark({
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/old-user/local-abc',
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+    local_image_uploaded_for_user_id: 'old-user', // does NOT match fakeApi()'s default 'user-test'
+  });
+  let uploadCallCount = 0;
+  const uploadImage = async () => {
+    uploadCallCount += 1;
+    return 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  };
+
+  const result = await syncQueueEntry(
+    fakeApi(),
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => staleUpload,
+    uploadImage,
+  );
+
+  assert.equal(uploadCallCount, 1);
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+  // The re-upload's fresh URL (under the CURRENT session's own path) and its
+  // owner stamp both land on the confirmed row — not the stale old-user one.
+  assert.equal(
+    result.bookmarkUpdate?.preview_image_url,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+  assert.equal(result.bookmarkUpdate?.local_image_uploaded_for_user_id, 'user-test');
 });
 
 test('create: an image upload failure never calls createBookmark and stays retryable (STASH-65 invariant preserved)', async () => {
@@ -643,6 +789,13 @@ test('create: an image upload failure never calls createBookmark and stays retry
   // isLocalOnlyBookmark(bookmark) === true shape STASH-65 depends on to keep
   // this row excluded from the remote-deletion diff while it retries.
   assert.notEqual(result.bookmarkUpdate?.ever_synced, true);
+  // P1, round 7: the bookmark row's OWN sync_status must also flip to
+  // 'failed' here, mirroring the createBookmark-failure catch below —
+  // otherwise the Inbox/Detail "sync pending" chip (which reads the
+  // bookmark row, not the queue entry) stays stuck showing "still syncing"
+  // forever even though the queue entry itself is genuinely failed and
+  // backing off.
+  assert.equal(result.bookmarkUpdate?.sync_status, 'failed');
 });
 
 test('create: an image bookmark with no uploader available on this platform fails cleanly instead of mis-syncing', async () => {
@@ -794,6 +947,264 @@ test('create: an image upload that succeeds right before createBookmark fails st
   assert.equal(
     result.uploadedImageUrl,
     'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+});
+
+test('create: publishes the fresh upload owner even when the bookmark row was ALREADY failed (P2, round 8)', async () => {
+  // The bookmark is already sync_status: 'failed' from a PRIOR attempt (the
+  // realistic shape for a retry) — a re-upload just landed THIS attempt
+  // (uploadedImageUrl set) but createBookmark fails again. The
+  // sync_status !== 'failed' half of the guard alone would skip returning
+  // bookmarkUpdate here, leaving the in-memory row's owner stamp stale even
+  // though the repository already has the fresh one — the next retry would
+  // then see the stale in-memory owner and wrongly re-upload all over again.
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+    sync_status: 'failed', // already failed from a previous attempt
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  const api = fakeApi({
+    createBookmark: async () => {
+      throw new Error('createBookmark fails again on this retry');
+    },
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+  );
+
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(
+    result.bookmarkUpdate?.preview_image_url,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+  assert.equal(result.bookmarkUpdate?.local_image_uploaded_for_user_id, 'user-test');
+});
+
+test('create: aborts BEFORE calling createBookmark when the live signed-in identity has diverged from api (P1, round 8)', async () => {
+  // The core race this closes: an image upload can take several seconds,
+  // long enough for the user to sign out mid-flight. The logout effect runs
+  // independently and doesn't wait for this in-flight sync — so without
+  // re-checking the LIVE identity right before confirming, this create
+  // would land under a departed session, durably marking the row
+  // ever_synced: true against a cloud row the CURRENT identity can never
+  // manage again.
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let createBookmarkCalled = false;
+  let deleteImagesCalledWith: string[] | undefined;
+  const api = fakeApi({
+    createBookmark: async () => {
+      createBookmarkCalled = true;
+      throw new Error('must never be called once the live identity has diverged');
+    },
+    deleteImages: async (ids: string[]) => {
+      deleteImagesCalledWith = ids;
+    },
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+    () => 'a-different-now-live-user', // diverges from fakeApi()'s 'user-test'
+  );
+
+  assert.equal(createBookmarkCalled, false);
+  assert.equal(result.entry.sync_status, 'failed');
+  // The just-uploaded object (under the departed identity's own path) is
+  // best-effort cleaned up using that same departed api instance.
+  assert.deepEqual(deleteImagesCalledWith, ['local-abc']);
+  // The bookmark row itself is marked failed too (finding 3's consistency).
+  assert.equal(result.bookmarkUpdate?.sync_status, 'failed');
+  // P2, round 10: the URL/owner must be CLEARED, not carried forward — the
+  // object they'd point at was just deleted above. Persisting them anyway
+  // would let a later sign-back-into-this-SAME-departed-account wrongly
+  // trust a URL to an object that no longer exists (a permanently broken
+  // image), since the owner would then match again. uploadedImageUrl in the
+  // RESULT (a separate, still-correct signal — e.g. for a combined
+  // deleted-mid-flight cleanup) is unaffected; only the persisted BOOKMARK
+  // fields are cleared.
+  assert.equal(result.uploadedImageUrl, 'https://storage.example.com/bookmark-images/user-test/local-abc');
+  assert.equal(result.bookmarkUpdate?.preview_image_url, null);
+  assert.equal(result.bookmarkUpdate?.local_image_uploaded_for_user_id, null);
+});
+
+test('create: proceeds normally when getLiveUserId confirms the identity has NOT changed (no false-positive abort)', async () => {
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let createBookmarkCalled = false;
+  const api = fakeApi({
+    createBookmark: async () => {
+      createBookmarkCalled = true;
+      return {
+        bookmark_id: '00000000-0000-4000-8000-000000000001',
+        status: 'created' as const,
+        metadata_status: 'pending' as const,
+      };
+    },
+  });
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+    () => 'user-test', // matches fakeApi()'s default userId — no divergence
+  );
+
+  assert.equal(createBookmarkCalled, true);
+  assert.equal(result.entry.sync_status, 'synced');
+  assert.equal(result.bookmarkUpdate?.sync_status, 'synced');
+});
+
+test('create: signals landedUnderDepartedIdentity when the identity changes DURING the awaited createBookmark call (P1, round 9 — TOCTOU)', async () => {
+  // The pre-dispatch check alone isn't sufficient: it passes here (identity
+  // still matches at dispatch time), but createBookmark is awaited and can
+  // take real wall-clock time — during which sign-out can still happen. The
+  // request lands regardless (the server already committed it under the
+  // DISPATCHING identity), so this must be caught on the response side too,
+  // or the row gets durably confirmed as if it belonged to whichever
+  // identity is live now.
+  const { repository } = fakeRepository();
+  const bookmark = makeBookmark({ url: 'https://example.com/a' });
+  let liveUserIdCalls = 0;
+  const getLiveUserId = () => {
+    liveUserIdCalls += 1;
+    // Matches at dispatch time (1st call, pre-dispatch check) — diverges by
+    // the time the response comes back (2nd call, post-response check).
+    return liveUserIdCalls === 1 ? 'user-test' : 'a-different-now-live-user';
+  };
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: 'local-abc',
+      status: 'created' as const,
+      metadata_status: 'pending' as const,
+    }),
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry(),
+    () => bookmark,
+    undefined,
+    getLiveUserId,
+  );
+
+  assert.equal(liveUserIdCalls, 2); // both checks actually ran
+  assert.equal(result.landedUnderDepartedIdentity, true);
+  assert.equal(result.removeEntry, true);
+  // Never confirmed as a normal synced row — that would durably misattribute
+  // a real cloud row (it DID land) to whichever identity is live now.
+  assert.equal(result.bookmarkUpdate, undefined);
+  // P2, round 10: result.entry.remote_id must carry the REAL landed id, not
+  // stay null — if this row was ALSO deleted mid-flight (races the same
+  // window), applySyncEntryResult's deleted-mid-flight branch runs FIRST
+  // and derives its own cleanup via planDeletedMidFlightCleanup(
+  // result.entry.remote_id, ...) — an omitted id there would silently skip
+  // queuing the remote delete for what's now an orphaned cloud row.
+  assert.equal(result.entry.remote_id, 'local-abc');
+  // The QUEUE entry's own lifecycle is done (removeEntry: true) — matches
+  // the same "synced" convention this function uses elsewhere for "this
+  // attempt is finished, nothing more to retry for THIS entry" (a fresh one
+  // under a new id replaces it via applySyncEntryResult's rehome).
+  assert.equal(result.entry.sync_status, 'synced');
+});
+
+test('create: landedUnderDepartedIdentity for an IMAGE also carries uploadedImageUrl through, for combined delete-mid-flight cleanup (P2, round 10)', async () => {
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let liveUserIdCalls = 0;
+  const getLiveUserId = () => {
+    liveUserIdCalls += 1;
+    return liveUserIdCalls === 1 ? 'user-test' : 'a-different-now-live-user';
+  };
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: 'local-abc',
+      status: 'created' as const,
+      metadata_status: 'pending' as const,
+    }),
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    () => imageBookmark,
+    uploadImage,
+    getLiveUserId,
+  );
+
+  assert.equal(result.landedUnderDepartedIdentity, true);
+  assert.equal(result.entry.remote_id, 'local-abc');
+  assert.equal(
+    result.uploadedImageUrl,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+});
+
+test('create: landedUnderDepartedIdentity does NOT remove the queue entry itself — that stays with the caller\'s atomic rehome (P1, round 10)', async () => {
+  // Round 8 moved this exact removal INTO the atomic replaceBookmarkIdentities
+  // commit specifically to avoid a crash window where the old entry is gone
+  // but no new one has been created yet. Removing it here, before the
+  // caller (applySyncEntryResult) even gets a chance to run that atomic
+  // rehome, would reopen that same window — worse than the original
+  // primary-key-collision risk, since a crash in between would leave the
+  // row with NO active queue entry at all.
+  const { repository, calls } = fakeRepository();
+  const bookmark = makeBookmark({ url: 'https://example.com/a' });
+  let liveUserIdCalls = 0;
+  const getLiveUserId = () => {
+    liveUserIdCalls += 1;
+    return liveUserIdCalls === 1 ? 'user-test' : 'a-different-now-live-user';
+  };
+  const api = fakeApi({
+    createBookmark: async () => ({
+      bookmark_id: 'local-abc',
+      status: 'created' as const,
+      metadata_status: 'pending' as const,
+    }),
+  });
+
+  await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry(),
+    () => bookmark,
+    undefined,
+    getLiveUserId,
+  );
+
+  assert.equal(
+    calls.some((call) => call.startsWith('removeQueueEntry:')),
+    false,
   );
 });
 
@@ -1156,7 +1567,7 @@ test('delete: failure stays retryable', async () => {
   assert.equal(result.entry.last_error, 'timeout');
 });
 
-test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url for an image bookmark', () => {
+test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url (and its owner stamp) for an image bookmark', () => {
   // `latest` simulates in-memory state that has NOT caught up to the upload
   // step's direct repository write (still null) — this is the real shape
   // the bug hit.
@@ -1168,6 +1579,7 @@ test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url for
   const update = makeBookmark({
     content_type: 'image',
     preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc',
+    local_image_uploaded_for_user_id: 'user-test',
     sync_status: 'synced',
     ever_synced: true,
     updated_at: '2026-06-13T00:00:00.000Z',
@@ -1176,6 +1588,9 @@ test('mergeSyncedBookmarkFields: carries the just-uploaded preview_image_url for
   const merged = mergeSyncedBookmarkFields(latest, update);
 
   assert.equal(merged.preview_image_url, 'https://storage.example.com/bookmark-images/user-test/local-abc');
+  // Round 7: dropping this here would defeat syncQueueEntry's own staleness
+  // guard on the very next retry — it reads off this in-memory row.
+  assert.equal(merged.local_image_uploaded_for_user_id, 'user-test');
   assert.equal(merged.sync_status, 'synced');
   assert.equal(merged.ever_synced, true);
   assert.equal(merged.updated_at, '2026-06-13T00:00:00.000Z');

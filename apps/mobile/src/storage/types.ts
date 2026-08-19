@@ -59,7 +59,18 @@ export interface BookmarkRepository {
   updateBookmark(bookmark: Bookmark): Promise<void>;
   /** Atomically swap a row's identity, e.g. local ID -> remote ID after sync. */
   replaceBookmark(previousId: string, bookmark: Bookmark): Promise<void>;
-  /** Atomically rehome bookmark ids, their create queue, and id-keyed organization state. */
+  /**
+   * Atomically rehome bookmark ids, their create queue, and id-keyed
+   * organization state. Must also remove any EXISTING queue entry still
+   * sitting under each replacement's `previousId`, in the SAME atomic
+   * operation — not as a separate follow-up call. A rehomed row's old id can
+   * still have an active `create` entry (e.g. an image upload landed but
+   * `createBookmark` never confirmed); leaving it to survive a crash between
+   * this call and a later cleanup step would let it retry under the OLD id
+   * after restart, in parallel with the newly-enqueued entry, and — if a
+   * real cloud row already exists under that id owned by a different
+   * account — collide on its primary key and fail permanently.
+   */
   replaceBookmarkIdentities?(
     replacements: Array<{ previousId: string; bookmark: Bookmark }>,
     entries: LocalPendingBookmark[],

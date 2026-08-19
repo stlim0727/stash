@@ -34,7 +34,15 @@ export type AccountTransitionKind = 'first' | 'none' | 'carry-over' | 'switch' |
 
 export interface AccountTransitionPlan {
   kind: AccountTransitionKind;
-  /** Rows (owned by a previous ANONYMOUS user) to re-home as new local creates. */
+  /**
+   * Rows to re-home as new local creates under a freshly-minted id: either
+   * confirmed synced to a previous ANONYMOUS user's cloud (`cloudOwnedRows`,
+   * carry-over only), or a local-only image row whose binary already
+   * uploaded to the DEPARTING account's own Storage path but whose create
+   * was never confirmed (`staleUploadedImageRows`, all three transition
+   * kinds — see its own doc comment for why a fresh id, not just a cleared
+   * URL, is required here).
+   */
   rehome: Bookmark[];
   /** Row ids (owned by a previous REAL account) to drop from the local cache. */
   drop: string[];
@@ -49,20 +57,6 @@ export interface AccountTransitionPlan {
    * queue entries must be removed in lockstep. Always a subset of `drop`.
    */
   dropQueue: string[];
-  /**
-   * Local-only image rows (see `isLocalOnlyBookmark`) whose binary already
-   * uploaded to the departing ANONYMOUS account's own Storage path, but whose
-   * `createBookmark` call was never confirmed (still queued for retry, or
-   * gave up as `sync_status: 'failed'`) — so they're not in `rehome` either
-   * (that's deliberately synced-only). Unlike `rehome`, these keep their
-   * existing id and queue entry (no cloud row was ever created under either
-   * account for this id, so there's no conflict to avoid); only their stale
-   * `preview_image_url` needs clearing so the existing queued create's normal
-   * `!preview_image_url` upload step re-uploads the same still-on-disk file
-   * under the new account's own Storage path instead of retrying with the
-   * old account's URL baked in.
-   */
-  resetImageUrls: Bookmark[];
   /** Whether the pull watermark must be reset for a full refresh of the new user. */
   resetWatermark: boolean;
 }
@@ -104,24 +98,47 @@ function cloudOwnedRows(localBookmarks: Bookmark[]): Bookmark[] {
 
 /**
  * Local-only image rows (`isLocalOnlyBookmark`) that already have a real,
- * uploaded Storage object sitting at the departing ANONYMOUS account's own
- * path (`imageUploadTarget` keys the path by session user id — see
+ * uploaded Storage object sitting at the DEPARTING account's own path
+ * (`imageUploadTarget` keys the path by session user id — see
  * api/bookmarks.ts) — the binary upload landed but `createBookmark` was
  * never confirmed, so the row is still `pending` (mid-retry) or gave up as
- * `failed`. `cloudOwnedRows` misses these on purpose (re-home is
- * synced-only); without this separate pass, the still-queued `create` entry
- * retries as-is under the new account, and `syncQueueEntry`'s
+ * `failed`. `cloudOwnedRows`/`cloudRemoteRows` both miss these on purpose
+ * (isLocalOnlyBookmark excludes them, same "capture is sacred" reasoning as
+ * their own doc comments); without this separate pass — on ANY of the three
+ * account-lifecycle departures this file plans for (carry-over, logout,
+ * real A→real B switch) — the still-queued `create` entry retries as-is
+ * under whichever account comes next, and `syncQueueEntry`'s
  * `!preview_image_url` idempotency guard (see sync-bookmarks.ts) skips
  * re-uploading because a URL is already set — so the new account's row
- * would end up pointing at an object under the OLD anonymous user's path,
- * which it can never manage and which vanishes if that anon user is later
+ * would end up pointing at an object under the OLD account's own path,
+ * which it can never manage and which vanishes if that old account is later
  * cleaned up.
  *
- * Unlike `rehome`, these rows keep their existing id and queue entry: no
- * cloud row was ever created under this id by ANY account (the create call
- * itself is what's still pending/failed), so there's no id conflict to
- * avoid by minting a new one, and the existing queue entry already retries
- * this same bookmark. Only the stale URL needs clearing.
+ * This is belt-and-suspenders alongside `syncQueueEntry`'s own
+ * `local_image_uploaded_for_user_id` staleness guard (the general,
+ * structural fix — see that field's doc comment in domain/types.ts), which
+ * independently catches the same staleness on the next retry for any row
+ * — including a row uploaded before that field existed, whose recorded
+ * owner is absent rather than mismatched; that guard treats an absent
+ * owner as needing a re-upload too, not as "unknown, trust it" (see its own
+ * comment for why an absent owner and a mismatched one both mean the same
+ * thing here). This pass still matters, but only as an optimization now:
+ * without it, the very next retry re-derives the same "this needs a fresh
+ * upload" conclusion on its own — this just avoids that one redundant
+ * retry round-trip by catching it proactively, right at the transition.
+ *
+ * These rows are folded into `rehome` — a fresh id, NOT just a cleared URL
+ * with the existing id kept. It's tempting to assume no cloud row was ever
+ * created under this id, since `createBookmark` never confirmed — but that's
+ * an absence-of-evidence assumption, not a guarantee: the create call can
+ * commit successfully server-side (under the DEPARTING account) and then
+ * lose its response, or the app can crash, before `ever_synced` ever
+ * persists locally — leaving exactly this same shape. Retrying `create`
+ * with the SAME id under a DIFFERENT account in that case collides with a
+ * REAL row's primary key and fails permanently (every retry hits the same
+ * collision — no self-heal). A fresh id sidesteps that risk unconditionally,
+ * at the trivial cost of one extra UUID and requeue in the overwhelmingly
+ * common case where the create genuinely never landed.
  */
 function staleUploadedImageRows(localBookmarks: Bookmark[]): Bookmark[] {
   return localBookmarks.filter(
@@ -190,15 +207,20 @@ export function planLogoutCacheClear(localBookmarks: Bookmark[]): AccountTransit
   const dropIds = owned.map((bookmark) => bookmark.id);
   return {
     kind: 'logout',
-    rehome: [],
+    // Same gap as carry-over, different departure: an image row whose upload
+    // landed under this account but whose create was never confirmed
+    // survives logout (isLocalOnlyBookmark excludes it from `drop` above —
+    // capture is sacred), still queued to retry with the OLD account's URL
+    // (and possibly OLD account's id — see staleUploadedImageRows) baked in.
+    // No new account exists yet to re-home INTO (lazy anonymous creation),
+    // but re-homing now under a fresh local id still primes it correctly for
+    // whenever the next sync eventually does run, under whatever account
+    // gets minted next.
+    rehome: staleUploadedImageRows(localBookmarks),
     drop: dropIds,
     // Queue entries are keyed by local_id, which for a synced row equals its
     // remote UUID — so the dropped ids ARE the keys of their update/delete ops.
     dropQueue: dropIds,
-    // No new account exists yet to re-upload under (lazy anonymous creation),
-    // so there's nothing to reset here — see staleUploadedImageRows, only
-    // relevant to the carry-over case below.
-    resetImageUrls: [],
     resetWatermark: true,
   };
 }
@@ -209,35 +231,22 @@ export function planAccountTransition(
   localBookmarks: Bookmark[],
 ): AccountTransitionPlan {
   if (previous === null) {
-    return {
-      kind: 'first',
-      rehome: [],
-      drop: [],
-      dropQueue: [],
-      resetImageUrls: [],
-      resetWatermark: false,
-    };
+    return { kind: 'first', rehome: [], drop: [], dropQueue: [], resetWatermark: false };
   }
   if (previous.id === current.id) {
-    return {
-      kind: 'none',
-      rehome: [],
-      drop: [],
-      dropQueue: [],
-      resetImageUrls: [],
-      resetWatermark: false,
-    };
+    return { kind: 'none', rehome: [], drop: [], dropQueue: [], resetWatermark: false };
   }
 
   if (previous.isAnonymous) {
-    // Carry-over: re-home synced rows only (see cloudOwnedRows). Their create
-    // entries are re-issued under the new account, so nothing is queue-dropped.
-    // staleUploadedImageRows catches the separate not-yet-synced-row-but-
-    // already-uploaded-binary gap cloudOwnedRows deliberately doesn't cover.
+    // Carry-over: re-home synced rows (see cloudOwnedRows) AND local-only
+    // image rows whose upload already landed but whose create was never
+    // confirmed (see staleUploadedImageRows) — cloudOwnedRows deliberately
+    // doesn't cover the latter (it's synced-only). Their create entries are
+    // re-issued under the new account (see applyAccountTransition's rehome
+    // handling), so nothing is queue-dropped here.
     return {
       kind: 'carry-over',
-      rehome: cloudOwnedRows(localBookmarks),
-      resetImageUrls: staleUploadedImageRows(localBookmarks),
+      rehome: [...cloudOwnedRows(localBookmarks), ...staleUploadedImageRows(localBookmarks)],
       drop: [],
       dropQueue: [],
       resetWatermark: true,
@@ -251,19 +260,15 @@ export function planAccountTransition(
     // miss the auth layer couldn't classify as a real account). Dropping the
     // cache here destroyed the user's local view of data that is still theirs
     // (and still in their cloud) — the silent empty-Inbox "logged out" screen.
-    // So PRESERVE it: leave every row in place. The pull's deletion-skip guard
-    // (userChanged) already prevents these rows being wiped, and re-signing into
-    // the real account (same user id) restores full sync. Defense-in-depth
-    // alongside the auth layer's `session_expired` handling, which normally
-    // prevents this anonymous mint from happening at all.
-    return {
-      kind: 'none',
-      rehome: [],
-      drop: [],
-      dropQueue: [],
-      resetImageUrls: [],
-      resetWatermark: true,
-    };
+    // So PRESERVE it: leave every row in place, including any local-only
+    // image row's URL — a transient failed-restore isn't a genuine account
+    // departure, so there's no new owner to re-home under and no reason to
+    // touch anything here. The pull's deletion-skip guard (userChanged)
+    // already prevents these rows being wiped, and re-signing into the real
+    // account (same user id) restores full sync. Defense-in-depth alongside
+    // the auth layer's `session_expired` handling, which normally prevents
+    // this anonymous mint from happening at all.
+    return { kind: 'none', rehome: [], drop: [], dropQueue: [], resetWatermark: true };
   }
   // Real A → real B: drop ALL of A's cloud-identity rows (synced AND
   // pending-edit/delete) plus their queued ops, same data-loss reasoning as
@@ -273,10 +278,14 @@ export function planAccountTransition(
   const dropIds = owned.map((bookmark) => bookmark.id);
   return {
     kind: 'switch',
-    rehome: [],
+    // Same gap as logout/carry-over: an image row whose upload landed under
+    // A but whose create was never confirmed survives the drop above
+    // (isLocalOnlyBookmark excludes it — capture is sacred) and would
+    // otherwise retry create under B with A's Storage URL (and possibly A's
+    // id — see staleUploadedImageRows) baked in.
+    rehome: staleUploadedImageRows(localBookmarks),
     drop: dropIds,
     dropQueue: dropIds,
-    resetImageUrls: [],
     resetWatermark: true,
   };
 }
@@ -342,7 +351,9 @@ export async function applyAccountTransition(
       const rehomed: Bookmark = {
         ...old,
         id: newId,
-        ...(old.content_type === 'image' ? { preview_image_url: null } : {}),
+        ...(old.content_type === 'image'
+          ? { preview_image_url: null, local_image_uploaded_for_user_id: null }
+          : {}),
         sync_status: 'pending',
         ever_synced: false,
         updated_at: now,
@@ -369,7 +380,24 @@ export async function applyAccountTransition(
     setBookmarks((current) =>
       (current ?? []).map((bookmark) => rehomedById.get(bookmark.id) ?? bookmark),
     );
-    setQueue((current) => [...current, ...newEntries]);
+    // Drop any queue entry still sitting under an OLD rehomed id before
+    // adding the fresh ones under their new ids. A confirmed-synced row
+    // (the original, only-ever use of rehome) never has one — a harmless
+    // no-op here — but a `staleUploadedImageRows` row (folded in below,
+    // still `pending`/`failed`) does, and leaving it in place would let it
+    // keep retrying `createBookmark` under the OLD id in parallel with the
+    // new entry. That OLD id can ALREADY be a real cloud row server-side —
+    // its own create may have actually landed under the departing account
+    // before a lost response or a crash left `ever_synced` unset locally
+    // (the exact ambiguity `staleUploadedImageRows` can't resolve on its
+    // own) — so retrying it under a DIFFERENT owner would hit a primary-key
+    // collision on `id` and get stuck failing forever. Minting a fresh id
+    // for every rehomed row, with no exceptions, sidesteps that risk
+    // entirely rather than trying to detect which case this is.
+    setQueue((current) => [
+      ...current.filter((entry) => !idMap.has(entry.local_id)),
+      ...newEntries,
+    ]);
     // Re-key tag ops/links onto the new local ids so the carried-over tags
     // upload against the re-homed bookmark instead of an id the new account
     // never had.
@@ -380,39 +408,27 @@ export async function applyAccountTransition(
       bookmark,
     }));
     if (identityState && repository.replaceBookmarkIdentities) {
+      // Removing each previousId's stale queue entry is part of THIS atomic
+      // call (see its doc comment in storage/types.ts) — not a separate
+      // follow-up step. A crash between a follow-up call and this commit
+      // would otherwise let the old entry survive to retry under the OLD id
+      // after restart, in parallel with the freshly-enqueued one, and
+      // collide on its primary key if a real cloud row already exists under
+      // that id owned by a different account.
       await repository.replaceBookmarkIdentities(replacements, newEntries, identityState);
     } else {
+      // No shared transaction on this fallback path (BookmarkRepository
+      // doesn't require one), so remove each row's stale queue entry
+      // immediately after its own replace — same per-row atomicity this
+      // path already has for everything else, rather than leaving cleanup
+      // as one big separate step after every row has already committed.
       for (const { previousId, bookmark } of replacements) {
         await repository.replaceBookmark(previousId, bookmark);
+        await repository.removeQueueEntry(previousId);
       }
       for (const entry of newEntries) {
         await repository.enqueue(entry);
       }
-    }
-  }
-  if (plan.resetImageUrls.length > 0) {
-    // Unlike rehome above, these rows keep their existing id and queue entry
-    // (see staleUploadedImageRows) — only the stale, old-account-owned
-    // preview_image_url needs clearing so the already-queued create's normal
-    // "!preview_image_url" upload step re-uploads the same still-on-disk file
-    // under the new account's own Storage path.
-    const now = new Date().toISOString();
-    const resetById = new Map<string, Bookmark>();
-    for (const old of plan.resetImageUrls) {
-      resetById.set(old.id, { ...old, preview_image_url: null, updated_at: now });
-    }
-    recordLog(
-      'warn',
-      `account switch: clearing ${plan.resetImageUrls.length} stale anon-owned image URL(s) pending re-upload`,
-    );
-    setBookmarks((current) =>
-      (current ?? []).map((bookmark) => resetById.get(bookmark.id) ?? bookmark),
-    );
-    await ensureRepositoryReady();
-    // Sequential, not Promise.all — same single-SQLite-connection reasoning
-    // as the drop loop below.
-    for (const bookmark of resetById.values()) {
-      await repository.updateBookmark(bookmark);
     }
   }
   if (plan.drop.length > 0) {

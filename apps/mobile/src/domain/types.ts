@@ -133,6 +133,36 @@ export interface Bookmark {
    * than silently mislabeled as something it isn't.
    */
   local_image_mime_type?: string | null;
+  /**
+   * Local-only record of WHICH signed-in user's session actually performed
+   * the Storage upload that `preview_image_url` points at (the session's own
+   * `user.id` — see `BookmarkApi.imageUploadTarget`'s path namespacing);
+   * never sent to the cloud. An image's binary uploads to Storage BEFORE its
+   * row is ever created, so `preview_image_url` can be genuinely set while
+   * the row itself is still unconfirmed (`createBookmark` still queued or
+   * failed) — and if the signed-in account changes before that create lands
+   * (sign-in carry-over, sign-out, or a real A→real B switch), the URL is
+   * left pointing at an object under the OLD account's own Storage path,
+   * which the new account can never manage and which can vanish if that old
+   * account is later cleaned up. `syncQueueEntry`'s pre-upload guard checks
+   * this against the CURRENT session before trusting an already-set
+   * `preview_image_url`, and re-uploads instead of reusing it on a mismatch —
+   * a single, self-healing choke point that catches every account-lifecycle
+   * transition without each one needing its own bespoke check. Absent (not
+   * merely a stale/wrong value) is ALSO treated as needing a one-time
+   * re-upload, not as "known-fine, trust the existing URL": every row this
+   * fix's own code has ever touched stamps this field in the SAME write as
+   * `preview_image_url`, so the two are only ever out of sync for a row
+   * captured on an app version from before this field existed — and if that
+   * row's account also changed on that same old version (before this
+   * account-transition cleanup shipped), there was never a chance to record
+   * an owner OR catch the switch proactively. Silently trusting an
+   * unrecorded owner would risk reusing an object under whichever account
+   * happened to upload it, not necessarily this device's current one; a
+   * needless one-time re-upload of a file already on disk is the safe
+   * default instead.
+   */
+  local_image_uploaded_for_user_id?: string | null;
   dismissed_suggested_tags?: string[];
   dismissed_suggested_folders?: string[];
   reviewed_summary_tokens?: string[];
