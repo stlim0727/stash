@@ -787,6 +787,63 @@ test('create: an image upload that succeeds right before createBookmark fails st
     result.bookmarkUpdate?.preview_image_url,
     'https://storage.example.com/bookmark-images/user-test/local-abc',
   );
+  // uploadedImageUrl must surface here too (P1, round 6): it's the only
+  // signal planDeletedMidFlightCleanup has that a real Storage object now
+  // exists from this attempt, independent of whether createBookmark itself
+  // went on to succeed or fail.
+  assert.equal(
+    result.uploadedImageUrl,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
+});
+
+test('create: an image bookmark permanently deleted between a landed upload and a subsequent createBookmark failure still surfaces the uploaded URL for cleanup (P1)', async () => {
+  // The failure-path sibling of the mid-upload-abort test above: here the
+  // upload itself succeeds and createBookmark is dispatched, but the row is
+  // deleted before createBookmark rejects. By the time the catch block runs,
+  // getBookmark(entry.local_id) returns undefined (no local row to write the
+  // uploaded URL onto), so the OLD code fell through to a bare
+  // `{ entry: failedEntry }` with no way for applySyncEntryResult's deleted-
+  // mid-flight cleanup to learn a real Storage object exists. uploadedImageUrl
+  // must be set on this path regardless.
+  const { repository } = fakeRepository();
+  const imageBookmark = makeBookmark({
+    id: 'local-abc',
+    content_type: 'image',
+    preview_image_url: null,
+    local_image_uri: 'file:///stash-images/local-abc.jpg',
+  });
+  let getBookmarkCalls = 0;
+  const getBookmark = () => {
+    getBookmarkCalls += 1;
+    // The three reads before createBookmark is dispatched (the pre-upload
+    // check, the post-upload "is the row still there" re-read, and
+    // createUploadPayload's own read) all still see the row — the delete
+    // lands only while createBookmark itself is in flight, so the catch
+    // block's read (the 4th) is the first to see it gone.
+    return getBookmarkCalls <= 3 ? imageBookmark : undefined;
+  };
+  const uploadImage = async () => 'https://storage.example.com/bookmark-images/user-test/local-abc';
+  const api = fakeApi({
+    createBookmark: async () => {
+      throw new Error('createBookmark failed after the row was deleted mid-flight');
+    },
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { content_type: 'image' } }),
+    getBookmark,
+    uploadImage,
+  );
+
+  assert.equal(result.entry.sync_status, 'failed');
+  assert.equal(result.bookmarkUpdate, undefined); // no local row to write onto
+  assert.equal(
+    result.uploadedImageUrl,
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+  );
 });
 
 test('create: failure stays retryable with the error recorded', async () => {
@@ -1177,50 +1234,57 @@ test('planDeletedMidFlightCleanup: a normal same-id create that landed after loc
   // The bug this fixes: a prior version only checked `remote_id !==
   // entryLocalId` (the STASH-3Q duplicate-swap case), silently leaving the
   // far more common same-id case's cloud row undeleted.
-  const plan = planDeletedMidFlightCleanup('local-abc', { url: 'https://example.com' }, 'local-abc');
+  const plan = planDeletedMidFlightCleanup('local-abc', undefined, 'local-abc');
   assert.equal(plan.remoteIdToDelete, 'local-abc');
 });
 
 test('planDeletedMidFlightCleanup: a STASH-3Q duplicate-swap create that landed after local deletion still gets the EXISTING row deleted', () => {
   const plan = planDeletedMidFlightCleanup(
     '00000000-0000-4000-8000-0000000000ee',
-    { url: 'https://example.com' },
+    undefined,
     'local-abc',
   );
   assert.equal(plan.remoteIdToDelete, '00000000-0000-4000-8000-0000000000ee');
 });
 
 test('planDeletedMidFlightCleanup: nothing to delete when the request never actually reached the server', () => {
-  const plan = planDeletedMidFlightCleanup(null, { url: 'https://example.com' }, 'local-abc');
+  const plan = planDeletedMidFlightCleanup(null, undefined, 'local-abc');
   assert.equal(plan.remoteIdToDelete, null);
 });
 
 test('planDeletedMidFlightCleanup: an image whose upload already landed gets its Storage object cleaned up too', () => {
   const plan = planDeletedMidFlightCleanup(
     'local-abc',
-    { content_type: 'image', preview_image_url: 'https://storage.example.com/bookmark-images/user-test/local-abc' },
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
     'local-abc',
   );
   assert.equal(plan.remoteIdToDelete, 'local-abc');
   assert.equal(plan.imageIdToCleanUp, 'local-abc');
 });
 
-test('planDeletedMidFlightCleanup: no image cleanup for a non-image create, or an image create whose upload never actually landed', () => {
-  assert.equal(
-    planDeletedMidFlightCleanup('local-abc', { url: 'https://example.com' }, 'local-abc').imageIdToCleanUp,
-    null,
+test('planDeletedMidFlightCleanup: the createBookmark call FAILING after a landed upload still gets the Storage object cleaned up (P1, round 6)', () => {
+  // uploadedImageUrl is set on both success and failure alike (see its own
+  // doc comment) — this is the exact case a prior version missed: the
+  // create call itself failed (so `uploadedPayload`, success-only, would
+  // have been undefined), but a real Storage object still exists from the
+  // upload step that ran before it.
+  const plan = planDeletedMidFlightCleanup(
+    null, // createBookmark never returned a remote id — it failed
+    'https://storage.example.com/bookmark-images/user-test/local-abc',
+    'local-abc',
   );
+  assert.equal(plan.remoteIdToDelete, null); // nothing to delete server-side
+  assert.equal(plan.imageIdToCleanUp, 'local-abc'); // but the object still needs cleanup
+});
+
+test('planDeletedMidFlightCleanup: no image cleanup when nothing was ever uploaded (non-image create, or an image create whose upload never landed)', () => {
   assert.equal(
-    planDeletedMidFlightCleanup(
-      'local-abc',
-      { content_type: 'image', preview_image_url: null },
-      'local-abc',
-    ).imageIdToCleanUp,
+    planDeletedMidFlightCleanup('local-abc', undefined, 'local-abc').imageIdToCleanUp,
     null,
   );
 });
 
-test('planDeletedMidFlightCleanup: no image cleanup for an update (uploadedPayload is only ever set for a create)', () => {
+test('planDeletedMidFlightCleanup: no image cleanup for an update (uploadedImageUrl is only ever set for a create)', () => {
   const plan = planDeletedMidFlightCleanup('local-abc', undefined, 'local-abc');
   assert.equal(plan.remoteIdToDelete, 'local-abc');
   assert.equal(plan.imageIdToCleanUp, null);

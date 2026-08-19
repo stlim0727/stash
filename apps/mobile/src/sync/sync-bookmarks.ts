@@ -23,8 +23,20 @@ export interface EntrySyncResult {
   bookmarkUpdate?: Bookmark;
   /** True when the entry's work is finished and it can leave the queue. */
   removeEntry?: boolean;
-  /** For creates: what was actually sent, so callers can reconcile later edits. */
+  /** For creates: what was actually sent, so callers can reconcile later edits.
+   *  SUCCESS-ONLY — see the STASH-3Y "unconditional proof this create already
+   *  succeeded remotely" comment at its sole diagnostics call site
+   *  (store/bookmarks.tsx). Never repurpose this for a signal that must also
+   *  fire on failure; use `uploadedImageUrl` below for that. */
   uploadedPayload?: CreateBookmarkInput;
+  /** For creates: the Storage URL an image bookmark's binary uploaded to
+   *  during THIS attempt, if any — set on success AND on a subsequent
+   *  `createBookmark` failure alike (the upload step runs, and can succeed,
+   *  before the create call that follows it). Unlike `uploadedPayload`, this
+   *  is not proof the create itself succeeded — only that a real Storage
+   *  object now exists and needs tracking/cleanup regardless of how the
+   *  create call resolves (see `planDeletedMidFlightCleanup`, its only use). */
+  uploadedImageUrl?: string;
   /** Present when the local bookmark row was removed (deleted on another
    *  device while this device had a queued edit for it — see below). */
   removedBookmarkId?: string;
@@ -642,6 +654,7 @@ export async function syncQueueEntry(
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: payload,
+        uploadedImageUrl,
         originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
         removeEntry,
       };
@@ -651,6 +664,7 @@ export async function syncQueueEntry(
     return {
       entry: syncedEntry,
       uploadedPayload: payload,
+      uploadedImageUrl,
       originalLocalId: result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
       removeEntry,
     };
@@ -674,10 +688,16 @@ export async function syncQueueEntry(
       return {
         entry: failedEntry,
         bookmarkUpdate: failedBookmark,
+        uploadedImageUrl,
       };
     }
 
-    return { entry: failedEntry };
+    // No local row to write the uploaded URL onto (e.g. deleted mid-flight —
+    // see planDeletedMidFlightCleanup), but `uploadedImageUrl` must still
+    // surface here: it's the only signal the caller has that a real Storage
+    // object exists from THIS attempt and needs cleanup, regardless of the
+    // create call's own outcome.
+    return { entry: failedEntry, uploadedImageUrl };
   }
 }
 
@@ -748,19 +768,23 @@ export interface DeletedMidFlightCleanupPlan {
  * `syncQueueEntry`'s own mid-upload abort branch closes, just triggered at
  * a later point: here the create call itself had already been dispatched
  * (past that abort check) and landed anyway. A real, public Storage object
- * exists and nothing else will ever clean it up.
+ * exists and nothing else will ever clean it up. Deliberately keyed off
+ * `uploadedImageUrl`, NOT `uploadedPayload`: the upload step runs before
+ * `createBookmark`, so it can succeed even when that follow-up call then
+ * FAILS — `uploadedPayload` is only ever set on a successful create (see its
+ * own doc comment), so it would silently miss that failure case and leave
+ * the object orphaned forever. `uploadedImageUrl` is set on both outcomes
+ * alike (success and failure) precisely so this check doesn't have to care
+ * which one happened — only whether Storage now holds a real object.
  */
 export function planDeletedMidFlightCleanup(
   resultRemoteId: string | null | undefined,
-  uploadedPayload: CreateBookmarkInput | undefined,
+  uploadedImageUrl: string | undefined,
   entryLocalId: string,
 ): DeletedMidFlightCleanupPlan {
   return {
     remoteIdToDelete: resultRemoteId ?? null,
-    imageIdToCleanUp:
-      uploadedPayload?.content_type === 'image' && Boolean(uploadedPayload.preview_image_url)
-        ? entryLocalId
-        : null,
+    imageIdToCleanUp: uploadedImageUrl ? entryLocalId : null,
   };
 }
 

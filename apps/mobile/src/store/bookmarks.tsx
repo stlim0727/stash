@@ -5462,9 +5462,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // leaving the far more common same-id case's cloud row
             // undeleted and resurrectable by a later pull; and nothing at
             // all cleaned up an already-uploaded image's Storage object.
+            // `uploadedImageUrl` (unlike `uploadedPayload`) is set whether
+            // the create itself went on to succeed or fail — a createBookmark
+            // failure after a successful upload still leaves a real Storage
+            // object that needs the same cleanup.
             const cleanupPlan = planDeletedMidFlightCleanup(
               result.entry.remote_id,
-              result.uploadedPayload,
+              result.uploadedImageUrl,
               entry.local_id,
             );
             if (cleanupPlan.remoteIdToDelete) {
