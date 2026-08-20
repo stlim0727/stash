@@ -14,7 +14,7 @@ import { hydrateShareDiagnostics } from '@/share/share-diagnostics';
 import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { hydratePullDiagnostics } from '@/sync/pull-diagnostics';
-import { BookmarksProvider } from '@/store/bookmarks';
+import { BookmarksProvider, ensureRepositoryReady } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
 import { useAppConfig } from '@/supabase/use-min-app-version';
 import { AiEnrichmentBurstToast } from '@/ui/AiEnrichmentBurstToast';
@@ -46,8 +46,20 @@ void hydrateShareDiagnostics();
 
 // Load the durable "recent pull attempts" history (if any) so the Settings
 // diagnostics screen can show it before this session's first sync has even
-// run. Best-effort — a diagnostics screen without it is still usable.
-void hydratePullDiagnostics();
+// run. Sequenced strictly AFTER the shared repository init: on web the
+// repository's `getMeta` only reads an in-memory map that `init()` itself
+// populates from localStorage — reading it any earlier (module load always
+// runs before `BookmarksProvider` mounts and calls this) would see an empty
+// map and silently fail to restore the persisted history, which the next
+// pull would then overwrite with a fresh (shorter) one. Native's own
+// connection is self-sufficient and doesn't need this, but sequencing after
+// init is correct — and harmless — on both platforms; calling
+// `ensureRepositoryReady()` here starts the SAME shared init `BookmarksProvider`
+// would otherwise kick off on mount, just sooner. Best-effort either way — a
+// diagnostics screen without this history is still usable.
+void ensureRepositoryReady().finally(() => {
+  void hydratePullDiagnostics();
+});
 
 // The native module's own durable "last share intent seen" breadcrumb
 // (Android, Sentry STASH-2Q — see `hydrateNativeShareDebugLog`) is
