@@ -77,6 +77,7 @@ test('buildDiagnosticsContext excludes user content — it only keeps known keys
     'recentSlowSegments',
     'storage',
     'shareAttempt',
+    'pullHistory',
     'aiQuota',
     'capturedAt',
   ];
@@ -130,6 +131,33 @@ test('buildDiagnosticsContext includes the durable last share-attempt record whe
 
   const report = formatDiagnosticsReport(context);
   assert.match(report, /"shareAttempt"/);
+});
+
+test('buildDiagnosticsContext includes the durable recent-pulls history when provided', () => {
+  const context = buildDiagnosticsContext({
+    pullHistory: [
+      {
+        since: null,
+        fullRefreshReason: null,
+        remoteRowCount: 0,
+        outcome: 'failure',
+        errorMessage: 'Pull stopped because sync was paused.',
+        durationMs: 42,
+        timestamp: '2026-07-13T11:30:00.000Z',
+      },
+    ],
+  });
+
+  assert.equal(context.pullHistory?.length, 1);
+  assert.equal(context.pullHistory?.[0]?.outcome, 'failure');
+
+  const report = formatDiagnosticsReport(context);
+  assert.match(report, /"pullHistory"/);
+});
+
+test('buildDiagnosticsContext omits an empty/absent pullHistory', () => {
+  assert.equal(buildDiagnosticsContext({ pullHistory: [] }).pullHistory, undefined);
+  assert.equal(buildDiagnosticsContext({}).pullHistory, undefined);
 });
 
 test('buildDiagnosticsContext includes the active AI-quota cooldown when provided', () => {

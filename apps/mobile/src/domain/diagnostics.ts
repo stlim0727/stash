@@ -14,6 +14,7 @@
  */
 
 import type { ShareAttemptDiagnostics } from './share-diagnostics';
+import type { PullAttemptDiagnostics } from './pull-diagnostics';
 
 export type DiagnosticsAuthStatus =
   | 'not_configured'
@@ -77,6 +78,11 @@ export interface DiagnosticsInput {
    *  after a successful retry still shows an earlier failed attempt instead
    *  of only the working one (Sentry STASH-67). */
   shareAttemptHistory?: ShareAttemptDiagnostics[] | null;
+  /** Durable record of the last few sync pull attempts, if any (survives
+   *  restarts) — see `sync/pull-diagnostics.ts`. Included unconditionally
+   *  (not gated on Developer mode) so a report filed after a failed pull
+   *  preserves evidence of it even if the user never opened Settings. */
+  pullHistory?: PullAttemptDiagnostics[] | null;
   /** Optional user-approved screen capture from where feedback was opened. */
   screenshot?: DiagnosticsScreenshot | null;
   /** The most recent AI-enrichment 429's reason and reset time, if the quota
@@ -149,6 +155,9 @@ export interface DiagnosticsContext {
   /** Recent share-attempt history (oldest first). Present only when at least
    *  one attempt has happened. */
   shareAttemptHistory?: ShareAttemptDiagnostics[];
+  /** Durable record of the last few sync pull attempts. Present only once at
+   *  least one pull has run. */
+  pullHistory?: PullAttemptDiagnostics[];
   /** User-approved screenshot. May contain visible bookmark or account details. */
   screenshot?: DiagnosticsScreenshot;
   /** Present only when an AI-enrichment quota cooldown is currently active. */
@@ -249,6 +258,10 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.shareAttemptHistory && input.shareAttemptHistory.length > 0) {
     context.shareAttemptHistory = input.shareAttemptHistory;
+  }
+
+  if (Array.isArray(input.pullHistory) && input.pullHistory.length > 0) {
+    context.pullHistory = input.pullHistory;
   }
 
   const aiQuotaReason = cleanString(input.aiQuota?.reason);

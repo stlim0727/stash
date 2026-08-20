@@ -37,6 +37,7 @@ import {
   hydrateNativeShareDebugLog,
 } from '@/share/share-diagnostics';
 import { getStorageDiagnostics } from '@/storage/diagnostics';
+import { getPullDiagnostics } from '@/sync/pull-diagnostics';
 import { getReconcileDiagnostics } from '@/sync/reconcile-diagnostics';
 import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
 import { useT } from '@/i18n';
@@ -212,6 +213,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         syncReconcile: getReconcileDiagnostics(),
         shareAttempt: getShareDiagnostics(),
         shareAttemptHistory: getShareDiagnosticsHistory(),
+        pullHistory: getPullDiagnostics(),
         screenshot: includeScreenshot ? screenshot : null,
         aiQuota: aiQuotaExceeded
           ? {
