@@ -57,9 +57,15 @@ void hydrateShareDiagnostics();
 // `ensureRepositoryReady()` here starts the SAME shared init `BookmarksProvider`
 // would otherwise kick off on mount, just sooner. Best-effort either way — a
 // diagnostics screen without this history is still usable.
-void ensureRepositoryReady().finally(() => {
-  void hydratePullDiagnostics();
-});
+void ensureRepositoryReady()
+  .finally(() => {
+    void hydratePullDiagnostics();
+  })
+  // `.finally` re-throws the original rejection (it only observes it) — a
+  // failed init must not become an unhandled promise rejection at startup
+  // just because this diagnostics hydration is riding along on it. Every
+  // other step here is already best-effort; this keeps that true.
+  .catch(() => {});
 
 // The native module's own durable "last share intent seen" breadcrumb
 // (Android, Sentry STASH-2Q — see `hydrateNativeShareDebugLog`) is
