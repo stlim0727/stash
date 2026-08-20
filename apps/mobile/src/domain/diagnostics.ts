@@ -73,6 +73,10 @@ export interface DiagnosticsInput {
   syncReconcile?: DiagnosticsReconcile | null;
   /** Durable record of the last share-intent attempt, if any (survives restarts). */
   shareAttempt?: ShareAttemptDiagnostics | null;
+  /** Recent share-attempt history (oldest first), so a report filed right
+   *  after a successful retry still shows an earlier failed attempt instead
+   *  of only the working one (Sentry STASH-67). */
+  shareAttemptHistory?: ShareAttemptDiagnostics[] | null;
   /** Optional user-approved screen capture from where feedback was opened. */
   screenshot?: DiagnosticsScreenshot | null;
   /** The most recent AI-enrichment 429's reason and reset time, if the quota
@@ -142,6 +146,9 @@ export interface DiagnosticsContext {
   syncReconcile?: DiagnosticsReconcile;
   /** Durable record of the last share-intent attempt. Present only after a share runs. */
   shareAttempt?: ShareAttemptDiagnostics;
+  /** Recent share-attempt history (oldest first). Present only when at least
+   *  one attempt has happened. */
+  shareAttemptHistory?: ShareAttemptDiagnostics[];
   /** User-approved screenshot. May contain visible bookmark or account details. */
   screenshot?: DiagnosticsScreenshot;
   /** Present only when an AI-enrichment quota cooldown is currently active. */
@@ -238,6 +245,10 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.shareAttempt && typeof input.shareAttempt === 'object') {
     context.shareAttempt = input.shareAttempt;
+  }
+
+  if (input.shareAttemptHistory && input.shareAttemptHistory.length > 0) {
+    context.shareAttemptHistory = input.shareAttemptHistory;
   }
 
   const aiQuotaReason = cleanString(input.aiQuota?.reason);

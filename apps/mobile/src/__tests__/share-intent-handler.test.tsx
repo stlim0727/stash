@@ -131,7 +131,12 @@ jest.mock('expo-share-intent', () => ({
 
 import { SHARE_BEHAVIOR_PREF_KEY } from '@/domain/share-behavior';
 import { parsePendingShareConfirm, SHARE_CONFIRM_PREF_KEY } from '@/domain/share-confirm';
-import { parseShareAttemptDiagnostics, SHARE_DIAGNOSTICS_PREF_KEY } from '@/domain/share-diagnostics';
+import { parseShareAttemptHistory, SHARE_DIAGNOSTICS_PREF_KEY } from '@/domain/share-diagnostics';
+
+async function readLastShareAttempt(getMeta: (key: string) => Promise<string | null>) {
+  const history = parseShareAttemptHistory(await getMeta(SHARE_DIAGNOSTICS_PREF_KEY));
+  return history[history.length - 1];
+}
 import { ShareIntentHandler } from '@/share/share-intent-handler';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
@@ -320,9 +325,7 @@ describe('ShareIntentHandler', () => {
 
     await findByText('Saved to Keepory');
     await waitFor(async () => {
-      const record = parseShareAttemptDiagnostics(
-        await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
-      );
+      const record = await readLastShareAttempt((key) => fakeRepo.repository.getMeta(key));
       expect(typeof record?.loadWaitMs).toBe('number');
       expect(record?.loadWaitMs).toBeGreaterThanOrEqual(40);
     });
@@ -578,9 +581,7 @@ describe('ShareIntentHandler', () => {
     // extracted" shape is what those reports almost certainly hit, but the
     // in-memory log buffer reset before the user filed feedback, so nothing
     // proved it. The durable record now survives that restart.
-    const record = parseShareAttemptDiagnostics(
-      await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
-    );
+    const record = await readLastShareAttempt((key) => fakeRepo.repository.getMeta(key));
     expect(record).toMatchObject({ hasUrl: false, hasText: false, hasImage: false, result: 'invalid' });
     unmount();
   });
@@ -601,9 +602,7 @@ describe('ShareIntentHandler', () => {
 
     await findByText('Saved to Keepory');
     await waitFor(async () => {
-      const record = parseShareAttemptDiagnostics(
-        await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
-      );
+      const record = await readLastShareAttempt((key) => fakeRepo.repository.getMeta(key));
       expect(record).toMatchObject({
         attemptId: 'native-attempt-1',
         hasUrl: true,
@@ -614,6 +613,61 @@ describe('ShareIntentHandler', () => {
       });
       expect(record?.receivedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
       expect(record?.persistedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+    unmount();
+  });
+
+  it('keeps an earlier attempt in the durable history after a later one succeeds (Sentry STASH-67)', async () => {
+    // A report filed right after a successful retry must still be able to show
+    // what the earlier, failed attempt looked like — a single overwritten
+    // record can only ever show the latest attempt, hiding the one the report
+    // is actually about.
+    const freshTree = () => (
+      <BookmarksProvider>
+        <CaptureToastProvider>
+          <ShareIntentHandler />
+        </CaptureToastProvider>
+      </BookmarksProvider>
+    );
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: null, text: '   ', meta: { attemptId: 'attempt-failed' } },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, rerender, unmount } = await render(freshTree());
+    await findByText('No link found to save');
+
+    mockShareIntent = {
+      hasShareIntent: false,
+      shareIntent: { webUrl: null, text: null },
+      resetShareIntent: jest.fn(),
+    };
+    await act(async () => {
+      rerender(freshTree());
+    });
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: { webUrl: 'https://example.com/retry', text: null, meta: { attemptId: 'attempt-ok' } },
+      resetShareIntent: jest.fn(),
+    };
+    await act(async () => {
+      rerender(freshTree());
+    });
+
+    await findByText('Saved to Keepory');
+    await waitFor(async () => {
+      // The module-level history ring is shared (and not reset) across tests
+      // in this file, so assert on the trailing two entries this test itself
+      // produced rather than the ring's full contents.
+      const history = parseShareAttemptHistory(
+        await fakeRepo.repository.getMeta(SHARE_DIAGNOSTICS_PREF_KEY),
+      );
+      expect(history.slice(-2)).toMatchObject([
+        { attemptId: 'attempt-failed', result: 'invalid' },
+        { attemptId: 'attempt-ok', result: 'created' },
+      ]);
     });
     unmount();
   });
