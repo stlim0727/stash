@@ -834,8 +834,13 @@ async function retryStorageWrite<T>(op: () => Promise<T>): Promise<T> {
 
 // Single shared init so background writes can never race ahead of table
 // creation/seeding, even for saves made before the startup load finishes.
+// Exported so a startup-time reader outside this provider (e.g.
+// `_layout.tsx`'s durable-diagnostics hydration) can sequence itself after
+// the SAME shared init this component would otherwise kick off on mount —
+// calling it early just starts that shared promise sooner, it does not
+// duplicate work.
 let repositoryReady: Promise<void> | null = null;
-function ensureRepositoryReady(): Promise<void> {
+export function ensureRepositoryReady(): Promise<void> {
   if (!repositoryReady) {
     // A fresh install starts empty — no sample bookmarks/tags/collections are
     // seeded. `init` still runs to create the tables and mark the store seeded
