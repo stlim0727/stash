@@ -10,6 +10,7 @@ import {
 import type { PullApi } from './pull-bookmarks.ts';
 import type { AIEnrichment, Bookmark } from '@/domain/types';
 import type { BookmarkRepository, TagData } from '@/storage/types';
+import { getPullDiagnostics } from '@/sync/pull-diagnostics';
 
 const REMOTE_ID_A = '7e64cf1e-0000-4000-8000-00000000000a';
 const REMOTE_ID_B = '7e64cf1e-0000-4000-8000-00000000000b';
@@ -603,4 +604,51 @@ test('same user still reconciles genuine remote deletions', async () => {
   assert.equal(result.userChanged, false);
   assert.deepEqual(result.deletions, [REMOTE_ID_B]);
   assert.ok(calls.includes(`deleteBookmark:${REMOTE_ID_B}`));
+});
+
+test('a failure AFTER a successful fetch still records the real fetched row count, not zero', async () => {
+  const { repository } = fakeRepository();
+  const remote = makeBookmark();
+  const api = fakeApi({
+    listBookmarksUpdatedSince: async () => [remote],
+    listBookmarkIds: async () => [remote.id],
+  });
+  // The fetch succeeds (one row), but persisting the watermark afterward fails —
+  // a persistence failure must not look identical to "fetched nothing".
+  repository.setMeta = async (key) => {
+    if (key === LAST_PULLED_AT_KEY) {
+      throw new Error('watermark write failed');
+    }
+  };
+
+  await assert.rejects(pullRemoteChanges(api, repository, () => [], () => false));
+
+  const [latest] = getPullDiagnostics();
+  assert.equal(latest?.outcome, 'failure');
+  assert.equal(latest?.remoteRowCount, 1);
+  assert.match(latest?.errorMessage ?? '', /watermark write failed/);
+});
+
+test('a failure during the metadata preflight (before since/fullRefreshReason are known) still records an attempt', async () => {
+  const { repository } = fakeRepository();
+  // Fails on the very first repository call the function makes — nothing about
+  // since/fullRefreshReason/remoteRowCount has been computed yet.
+  repository.getMeta = async () => {
+    throw new Error('meta read failed');
+  };
+  const api = fakeApi();
+
+  await assert.rejects(
+    pullRemoteChanges(api, repository, () => [], () => false, {
+      id: 'user-1',
+      isAnonymous: false,
+    }),
+  );
+
+  const [latest] = getPullDiagnostics();
+  assert.equal(latest?.outcome, 'failure');
+  assert.equal(latest?.since, null);
+  assert.equal(latest?.fullRefreshReason, null);
+  assert.equal(latest?.remoteRowCount, 0);
+  assert.match(latest?.errorMessage ?? '', /meta read failed/);
 });

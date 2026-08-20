@@ -14,6 +14,7 @@
  */
 
 import type { ShareAttemptDiagnostics } from './share-diagnostics';
+import type { PullAttemptDiagnostics } from './pull-diagnostics';
 
 export type DiagnosticsAuthStatus =
   | 'not_configured'
@@ -73,6 +74,11 @@ export interface DiagnosticsInput {
   syncReconcile?: DiagnosticsReconcile | null;
   /** Durable record of the last share-intent attempt, if any (survives restarts). */
   shareAttempt?: ShareAttemptDiagnostics | null;
+  /** Durable record of the last few sync pull attempts, if any (survives
+   *  restarts) — see `sync/pull-diagnostics.ts`. Included unconditionally
+   *  (not gated on Developer mode) so a report filed after a failed pull
+   *  preserves evidence of it even if the user never opened Settings. */
+  pullHistory?: PullAttemptDiagnostics[] | null;
   /** Optional user-approved screen capture from where feedback was opened. */
   screenshot?: DiagnosticsScreenshot | null;
   /** The most recent AI-enrichment 429's reason and reset time, if the quota
@@ -142,6 +148,9 @@ export interface DiagnosticsContext {
   syncReconcile?: DiagnosticsReconcile;
   /** Durable record of the last share-intent attempt. Present only after a share runs. */
   shareAttempt?: ShareAttemptDiagnostics;
+  /** Durable record of the last few sync pull attempts. Present only once at
+   *  least one pull has run. */
+  pullHistory?: PullAttemptDiagnostics[];
   /** User-approved screenshot. May contain visible bookmark or account details. */
   screenshot?: DiagnosticsScreenshot;
   /** Present only when an AI-enrichment quota cooldown is currently active. */
@@ -238,6 +247,10 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.shareAttempt && typeof input.shareAttempt === 'object') {
     context.shareAttempt = input.shareAttempt;
+  }
+
+  if (Array.isArray(input.pullHistory) && input.pullHistory.length > 0) {
+    context.pullHistory = input.pullHistory;
   }
 
   const aiQuotaReason = cleanString(input.aiQuota?.reason);

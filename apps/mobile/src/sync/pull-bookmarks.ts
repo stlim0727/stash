@@ -4,6 +4,7 @@ import { recordSlowSegment } from '@/observability/slow-segment-log';
 import type { AIEnrichment, Bookmark, BookmarkTag, Collection, Tag } from '@/domain/types';
 import type { BookmarkRepository, TagData } from '@/storage/types';
 import { recordPullAttempt } from '@/sync/pull-diagnostics';
+import type { PullFullRefreshReason } from '@/domain/pull-diagnostics';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 
 export const LAST_PULLED_AT_KEY = 'last_pulled_at';
@@ -80,49 +81,61 @@ export async function pullRemoteChanges(
   currentUser?: PullUser | null,
   shouldContinue: () => boolean = () => true,
 ): Promise<PullResult> {
-  const previousUserId = currentUser ? await repository.getMeta(SYNCED_USER_ID_KEY) : null;
-  const userChanged =
-    currentUser != null && previousUserId != null && previousUserId !== currentUser.id;
-  const initialLocals = getLocalBookmarks();
-  // hasRemoteIdentity excludes seed/sample rows, and isLocalOnlyBookmark
-  // excludes local-only rows (e.g. image bookmarks) — both are marked
-  // sync_status: 'synced' locally too even though they were never a real
-  // cloud row (see hasSyncedOnce in store/bookmarks.tsx).
-  const initialLocalCloudRowCount = initialLocals.filter(
-    (bookmark) =>
-      hasRemoteIdentity(bookmark.id) &&
-      bookmark.sync_status === 'synced' &&
-      !isLocalOnlyBookmark(bookmark),
-  ).length;
-  const hasLocalCloudRows = initialLocalCloudRowCount > 0;
-  // STASH-22: stale sync metadata can survive an upgrade/session-recovery path
-  // even when the local cache is empty. A same-user incremental pull would then
-  // omit older cloud rows and leave the signed-in Inbox empty.
-  const emptyRealCacheWithSameUser =
-    currentUser?.isAnonymous === false &&
-    !hasLocalCloudRows &&
-    (previousUserId === null || previousUserId === currentUser.id);
-  const needsFullRefresh = userChanged || emptyRealCacheWithSameUser;
-  const fullRefreshReason = userChanged
-    ? 'user_changed'
-    : emptyRealCacheWithSameUser
-      ? 'empty_real_cache_same_user'
-      : null;
-
-  const watermark = needsFullRefresh ? null : await repository.getMeta(LAST_PULLED_AT_KEY);
-  const since = watermark
-    ? new Date(Date.parse(watermark) - WATERMARK_OVERLAP_MS).toISOString()
-    : null;
-  const pulledAt = new Date().toISOString();
-
-  // Diagnostics span the whole attempt (fetch + merge + persist), recorded on
-  // both the success path below and any failure/thrown-error path (a pull can
-  // legitimately throw — a network failure, or `PullPausedError` if the app
-  // backgrounds mid-pull). Fire-and-forget, and must never itself be able to
-  // slow down or break a pull — see `sync/pull-diagnostics.ts`.
+  // Diagnostics span the WHOLE attempt, including the metadata preflight
+  // below (previous-user / watermark reads) — a rejected `repository.getMeta`
+  // call, or a corrupt stored watermark that makes the `since` computation's
+  // `toISOString()` throw, is exactly the kind of failure this durable
+  // history exists to catch, so the boundary starts here, before any of that
+  // can run. `since`/`fullRefreshReason` start at their "not yet known"
+  // defaults and are filled in the instant each is actually computed, so an
+  // attempt that fails before reaching them still records a (less detailed)
+  // diagnostic entry rather than none at all. `fetchedRemoteRowCount`
+  // similarly updates the instant the fetch resolves, so a failure AFTER a
+  // successful fetch (e.g. persisting the merge) still reports the real row
+  // count instead of defaulting to zero and looking identical to "fetched
+  // nothing" — see `sync/pull-diagnostics.ts`. Fire-and-forget throughout:
+  // this bookkeeping must never itself be able to slow down or break a pull.
   const attemptStartedAt = Date.now();
+  let since: string | null = null;
+  let fullRefreshReason: PullFullRefreshReason = null;
+  let fetchedRemoteRowCount = 0;
 
   try {
+    const previousUserId = currentUser ? await repository.getMeta(SYNCED_USER_ID_KEY) : null;
+    const userChanged =
+      currentUser != null && previousUserId != null && previousUserId !== currentUser.id;
+    const initialLocals = getLocalBookmarks();
+    // hasRemoteIdentity excludes seed/sample rows, and isLocalOnlyBookmark
+    // excludes local-only rows (e.g. image bookmarks) — both are marked
+    // sync_status: 'synced' locally too even though they were never a real
+    // cloud row (see hasSyncedOnce in store/bookmarks.tsx).
+    const initialLocalCloudRowCount = initialLocals.filter(
+      (bookmark) =>
+        hasRemoteIdentity(bookmark.id) &&
+        bookmark.sync_status === 'synced' &&
+        !isLocalOnlyBookmark(bookmark),
+    ).length;
+    const hasLocalCloudRows = initialLocalCloudRowCount > 0;
+    // STASH-22: stale sync metadata can survive an upgrade/session-recovery path
+    // even when the local cache is empty. A same-user incremental pull would then
+    // omit older cloud rows and leave the signed-in Inbox empty.
+    const emptyRealCacheWithSameUser =
+      currentUser?.isAnonymous === false &&
+      !hasLocalCloudRows &&
+      (previousUserId === null || previousUserId === currentUser.id);
+    const needsFullRefresh = userChanged || emptyRealCacheWithSameUser;
+    fullRefreshReason = userChanged
+      ? 'user_changed'
+      : emptyRealCacheWithSameUser
+        ? 'empty_real_cache_same_user'
+        : null;
+
+    const watermark = needsFullRefresh ? null : await repository.getMeta(LAST_PULLED_AT_KEY);
+    since = watermark
+      ? new Date(Date.parse(watermark) - WATERMARK_OVERLAP_MS).toISOString()
+      : null;
+    const pulledAt = new Date().toISOString();
+
     if (userChanged) {
       recordLog(
         'warn',
@@ -147,6 +160,11 @@ export async function pullRemoteChanges(
       api.listBookmarkTags(beforePage),
       api.listCollections(beforePage),
     ]);
+    // Recorded the instant the fetch resolves (not just on the eventual
+    // success path) so a failure further down — persisting the merge, the
+    // watermark write — still reports the real fetched count in the catch
+    // block below instead of the "nothing fetched" default.
+    fetchedRemoteRowCount = remoteRows.length;
     // The pause can land after every final page resolves but before this
     // continuation runs. Never apply a partial or now-unwanted pull snapshot.
     beforePage();
@@ -299,7 +317,7 @@ export async function pullRemoteChanges(
     recordPullAttempt({
       since,
       fullRefreshReason,
-      remoteRowCount: 0,
+      remoteRowCount: fetchedRemoteRowCount,
       outcome: 'failure',
       errorMessage: error instanceof Error ? error.message : String(error),
       durationMs: Date.now() - attemptStartedAt,
