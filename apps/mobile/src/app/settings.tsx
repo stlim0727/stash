@@ -60,6 +60,7 @@ import {
 import { useI18n, SUPPORTED_LOCALES, type LocalePreference } from "@/i18n";
 import type { MessageKey } from "@/i18n/messages";
 import { getPreference, setPreference } from "@/storage/preferences";
+import { getPullDiagnostics } from "@/sync/pull-diagnostics";
 import { ResetLibraryDialog } from "@/ui/ResetLibraryDialog";
 import { deliverExport, saveExportToDevice } from "@/share/export-data";
 import { pickImportFile } from "@/share/import-data";
@@ -818,6 +819,11 @@ export default function SettingsScreen() {
           })
         : t("settings.processing.count", { count: processingStats.stages.ai });
 
+  // Recorded by `sync/pull-diagnostics.ts` on every pull attempt (success or
+  // failure), newest first, so a stuck/failed pull leaves durable evidence
+  // that survives a reload instead of only living in the session log buffer.
+  const recentPulls = getPullDiagnostics();
+
   const build = getBuildInfo(Constants.expoConfig?.extra);
   const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
     Constants.expoConfig?.sdkVersion ?? "56"
@@ -1308,6 +1314,42 @@ export default function SettingsScreen() {
                   : t("settings.diagnostics.lastPulledNever")
               }
             />
+            {recentPulls.length > 0 ? (
+              recentPulls.map((attempt, index) => (
+                <InfoRow
+                  key={attempt.timestamp}
+                  styles={styles}
+                  label={t("settings.diagnostics.recentPulls.entryLabel", {
+                    index: index + 1,
+                  })}
+                  value={
+                    attempt.outcome === "success"
+                      ? t("settings.diagnostics.recentPulls.success", {
+                          time: formatDate(attempt.timestamp, {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          }),
+                          rows: t("settings.diagnostics.recentPulls.rows", {
+                            count: attempt.remoteRowCount,
+                          }),
+                        })
+                      : t("settings.diagnostics.recentPulls.failure", {
+                          time: formatDate(attempt.timestamp, {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          }),
+                          error: attempt.errorMessage ?? "?",
+                        })
+                  }
+                />
+              ))
+            ) : (
+              <InfoRow
+                styles={styles}
+                label={t("settings.diagnostics.recentPulls.label")}
+                value={t("settings.diagnostics.recentPulls.none")}
+              />
+            )}
             <Row
               styles={styles}
               palette={palette}

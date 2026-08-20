@@ -13,6 +13,7 @@ import { compareSemver } from '@/domain/version';
 import { hydrateShareDiagnostics } from '@/share/share-diagnostics';
 import { ShareConfirmHandler } from '@/share/share-confirm-handler';
 import { ShareIntentHandler } from '@/share/share-intent-handler';
+import { hydratePullDiagnostics } from '@/sync/pull-diagnostics';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { SupabaseAuthProvider } from '@/supabase/auth-provider';
 import { useAppConfig } from '@/supabase/use-min-app-version';
@@ -42,6 +43,11 @@ installPwaHead();
 // even when that share happened in a prior process instance. Best-effort — a
 // report screen without it is still useful.
 void hydrateShareDiagnostics();
+
+// Load the durable "recent pull attempts" history (if any) so the Settings
+// diagnostics screen can show it before this session's first sync has even
+// run. Best-effort — a diagnostics screen without it is still usable.
+void hydratePullDiagnostics();
 
 // The native module's own durable "last share intent seen" breadcrumb
 // (Android, Sentry STASH-2Q — see `hydrateNativeShareDebugLog`) is
