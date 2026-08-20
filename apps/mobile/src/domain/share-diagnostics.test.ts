@@ -64,14 +64,32 @@ test('build keeps a valid loadWaitMs and rounds it, but drops a negative one', (
   assert.equal(negative.loadWaitMs, undefined);
 });
 
-test('parseShareAttemptHistory returns [] for missing, empty, or non-array input', () => {
+test('parseShareAttemptHistory returns [] for missing, empty, or unparseable input', () => {
   assert.deepEqual(parseShareAttemptHistory(null), []);
   assert.deepEqual(parseShareAttemptHistory(undefined), []);
   assert.deepEqual(parseShareAttemptHistory(''), []);
   assert.deepEqual(parseShareAttemptHistory('not json'), []);
-  // The pre-history format this key used to hold: a single object, not an array.
+});
+
+test('parseShareAttemptHistory normalizes the pre-history single-object format as a one-entry history', () => {
+  // Before this key held a history, it held one `ShareAttemptDiagnostics`
+  // object directly. An upgrading install still has that stored, and it must
+  // survive as evidence rather than being discarded as malformed.
+  const legacy = buildShareAttemptDiagnostics({
+    attemptId: 'legacy-attempt',
+    hasUrl: true,
+    hasText: false,
+    hasImage: false,
+    fileCount: 0,
+    fileMimeTypes: [],
+    result: 'created',
+  });
+  assert.deepEqual(parseShareAttemptHistory(JSON.stringify(legacy)), [legacy]);
+});
+
+test('parseShareAttemptHistory discards a legacy single object with an unrecognized result', () => {
   assert.deepEqual(
-    parseShareAttemptHistory(JSON.stringify({ result: 'created', updatedAt: '2026-07-13T00:00:00.000Z' })),
+    parseShareAttemptHistory(JSON.stringify({ result: 'bogus', updatedAt: '2026-07-13T00:00:00.000Z' })),
     [],
   );
 });

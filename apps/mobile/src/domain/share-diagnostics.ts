@@ -120,10 +120,15 @@ function normalizeShareAttempt(
 
 /**
  * Parse a stored history of recent attempts (oldest first, capped at
- * `MAX_SHARE_ATTEMPT_HISTORY`). Returns `[]` for missing, malformed, or
- * pre-history data (e.g. the old single-record format this key used to
- * hold) so callers can treat "no history" and "unreadable history"
- * identically — this diagnostics feature must never throw.
+ * `MAX_SHARE_ATTEMPT_HISTORY`). Returns `[]` for missing or malformed data
+ * so callers can treat "no history" and "unreadable history" identically —
+ * this diagnostics feature must never throw.
+ *
+ * An installation that upgraded from before this key held a history still
+ * has the old single-record object stored under it. Normalize that as a
+ * one-entry history instead of discarding it, so a report filed right after
+ * upgrading (before another share overwrites the key) still carries that
+ * pre-upgrade evidence.
  */
 export function parseShareAttemptHistory(raw: string | null | undefined): ShareAttemptDiagnostics[] {
   if (!raw) {
@@ -132,7 +137,8 @@ export function parseShareAttemptHistory(raw: string | null | undefined): ShareA
   try {
     const data = JSON.parse(raw);
     if (!Array.isArray(data)) {
-      return [];
+      const legacy = normalizeShareAttempt(data);
+      return legacy ? [legacy] : [];
     }
     return data
       .map((entry) => normalizeShareAttempt(entry))
