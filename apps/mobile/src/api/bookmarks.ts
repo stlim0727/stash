@@ -291,17 +291,29 @@ export class BookmarkApi {
    * (a truncated response on a flaky connection, a dropped `Prefer:
    * return=representation`) — `request` parses that as `null`, not `[]`
    * (STASH-4Z: this crashed `createBookmarks` with "Cannot read property
-   * 'filter' of null" instead of failing the sync entry cleanly). Callers
-   * that already handle "fewer rows than expected" — the duplicate-create
-   * paths, the bulk-create count mismatch check — turn that into the same
-   * clear, retryable error they'd raise for a short response instead of a
-   * raw TypeError.
+   * 'filter' of null" instead of failing the sync entry cleanly). A real
+   * zero-row PostgREST result is the literal JSON `[]`, never an empty body,
+   * so `null` here always means "we don't actually know what came back" —
+   * treating it as `[]` would be reading a truncated response as a confirmed
+   * empty one. That's silently wrong for the pull's list/pagination calls in
+   * particular: `listBookmarkIds` feeds the remote-deletion diff in
+   * `sync/pull-bookmarks.ts`, so a page that came back short would read as
+   * "these bookmarks no longer exist remotely" and delete them locally
+   * (caught in PR review — Codex). Throw instead: every caller already sits
+   * inside a catch-and-retry boundary (the sync entry's failEntry path, or
+   * pullRemoteChanges's outer try/catch, which persists nothing until every
+   * parallel fetch has resolved), so failing loud here just fails that one
+   * attempt cleanly instead of crashing on an unrelated array method or
+   * corrupting local state with a partial snapshot.
    */
   private async requestArray<T>(
     ...args: Parameters<StashSupabaseClient['request']>
   ): Promise<T[]> {
     const payload = await this.client.request<T[]>(...args);
-    return Array.isArray(payload) ? payload : [];
+    if (!Array.isArray(payload)) {
+      throw new Error(`Supabase returned a non-array response from ${args[0]}.`);
+    }
+    return payload;
   }
 
   /**
