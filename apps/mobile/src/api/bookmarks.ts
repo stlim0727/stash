@@ -286,6 +286,37 @@ export class BookmarkApi {
   ) {}
 
   /**
+   * Wraps `client.request` for PostgREST endpoints that always answer with a
+   * row array on success. A 2xx response can still arrive with an empty body
+   * (a truncated response on a flaky connection, a dropped `Prefer:
+   * return=representation`) — `request` parses that as `null`, not `[]`
+   * (STASH-4Z: this crashed `createBookmarks` with "Cannot read property
+   * 'filter' of null" instead of failing the sync entry cleanly). A real
+   * zero-row PostgREST result is the literal JSON `[]`, never an empty body,
+   * so `null` here always means "we don't actually know what came back" —
+   * treating it as `[]` would be reading a truncated response as a confirmed
+   * empty one. That's silently wrong for the pull's list/pagination calls in
+   * particular: `listBookmarkIds` feeds the remote-deletion diff in
+   * `sync/pull-bookmarks.ts`, so a page that came back short would read as
+   * "these bookmarks no longer exist remotely" and delete them locally
+   * (caught in PR review — Codex). Throw instead: every caller already sits
+   * inside a catch-and-retry boundary (the sync entry's failEntry path, or
+   * pullRemoteChanges's outer try/catch, which persists nothing until every
+   * parallel fetch has resolved), so failing loud here just fails that one
+   * attempt cleanly instead of crashing on an unrelated array method or
+   * corrupting local state with a partial snapshot.
+   */
+  private async requestArray<T>(
+    ...args: Parameters<StashSupabaseClient['request']>
+  ): Promise<T[]> {
+    const payload = await this.client.request<T[]>(...args);
+    if (!Array.isArray(payload)) {
+      throw new Error(`Supabase returned a non-array response from ${args[0]}.`);
+    }
+    return payload;
+  }
+
+  /**
    * This instance's own signed-in user id — the same id `imageUploadTarget`
    * namespaces its Storage path by. Exposed so `sync/sync-bookmarks.ts` can
    * verify an already-uploaded image actually belongs to the CURRENT session
@@ -399,7 +430,7 @@ export class BookmarkApi {
 
     let rows: RemoteBookmark[];
     try {
-      rows = await this.client.request<RemoteBookmark[]>('/rest/v1/bookmarks', {
+      rows = await this.requestArray<RemoteBookmark>('/rest/v1/bookmarks', {
         method: 'POST',
         accessToken: this.session.access_token,
         headers: { Prefer: 'return=representation' },
@@ -540,7 +571,7 @@ export class BookmarkApi {
     }
 
     if (inserts.length > 0) {
-      const rows = await this.client.request<RemoteBookmark[]>('/rest/v1/bookmarks', {
+      const rows = await this.requestArray<RemoteBookmark>('/rest/v1/bookmarks', {
         method: 'POST',
         accessToken: this.session.access_token,
         headers: { Prefer: 'return=representation' },
@@ -598,7 +629,7 @@ export class BookmarkApi {
     }
 
     const query = this.baseBookmarkListParams(params);
-    const rows = await this.client.request<RemoteBookmark[]>(
+    const rows = await this.requestArray<RemoteBookmark>(
       appendSearchParams('/rest/v1/bookmarks', query),
       { accessToken: this.session.access_token },
     );
@@ -668,7 +699,7 @@ export class BookmarkApi {
 
   async createCollection(name: string, description?: string): Promise<Collection> {
     const timestamp = nowIso();
-    const rows = await this.client.request<Collection[]>('/rest/v1/collections', {
+    const rows = await this.requestArray<Collection>('/rest/v1/collections', {
       method: 'POST',
       accessToken: this.session.access_token,
       headers: { Prefer: 'return=representation' },
@@ -702,7 +733,7 @@ export class BookmarkApi {
         offset: String(offset),
       });
       configure(query);
-      const page = await this.client.request<T[]>(appendSearchParams(path, query), {
+      const page = await this.requestArray<T>(appendSearchParams(path, query), {
         accessToken: this.session.access_token,
       });
       all.push(...page);
@@ -713,7 +744,7 @@ export class BookmarkApi {
   }
 
   async getBookmark(bookmarkId: string): Promise<BookmarkDetail | null> {
-    const bookmarkRows = await this.client.request<RemoteBookmark[]>(
+    const bookmarkRows = await this.requestArray<RemoteBookmark>(
       appendSearchParams(
         '/rest/v1/bookmarks',
         new URLSearchParams({
@@ -748,7 +779,7 @@ export class BookmarkApi {
     bookmarkId: string,
     input: UpdateBookmarkInput & { last_saved_at?: string },
   ): Promise<Bookmark> {
-    const rows = await this.client.request<RemoteBookmark[]>(
+    const rows = await this.requestArray<RemoteBookmark>(
       appendSearchParams(
         '/rest/v1/bookmarks',
         new URLSearchParams({
@@ -854,7 +885,7 @@ export class BookmarkApi {
       };
     });
 
-    return this.client.request<BulkAttachResult[]>(
+    return this.requestArray<BulkAttachResult>(
       '/rest/v1/rpc/bulk_attach_bookmark_tags_and_collections',
       {
         method: 'POST',
@@ -905,7 +936,7 @@ export class BookmarkApi {
     };
 
     if (!existing) {
-      const rows = await this.client.request<RemoteAIEnrichment[]>('/rest/v1/ai_enrichments', {
+      const rows = await this.requestArray<RemoteAIEnrichment>('/rest/v1/ai_enrichments', {
         method: 'POST',
         accessToken: this.session.access_token,
         headers: { Prefer: 'return=representation' },
@@ -919,7 +950,7 @@ export class BookmarkApi {
       return enrichmentFromRemote(created);
     }
 
-    const rows = await this.client.request<RemoteAIEnrichment[]>(
+    const rows = await this.requestArray<RemoteAIEnrichment>(
       appendSearchParams(
         '/rest/v1/ai_enrichments',
         new URLSearchParams({
@@ -964,7 +995,7 @@ export class BookmarkApi {
    */
   async restoreAIEnrichment(input: UpdateAIEnrichmentInput): Promise<AIEnrichment | null> {
     const timestamp = nowIso();
-    const rows = await this.client.request<RemoteAIEnrichment[]>(
+    const rows = await this.requestArray<RemoteAIEnrichment>(
       '/rest/v1/ai_enrichments?on_conflict=bookmark_id',
       {
         method: 'POST',
@@ -1011,7 +1042,7 @@ export class BookmarkApi {
       return [];
     }
     const timestamp = nowIso();
-    const rows = await this.client.request<RemoteAIEnrichment[]>(
+    const rows = await this.requestArray<RemoteAIEnrichment>(
       '/rest/v1/ai_enrichments?on_conflict=bookmark_id',
       {
         method: 'POST',
@@ -1133,7 +1164,7 @@ export class BookmarkApi {
     if (bookmarkIds.length === 0) {
       return [];
     }
-    return this.client.request<Array<{ bookmark_id: string; status: string }>>(
+    return this.requestArray<{ bookmark_id: string; status: string }>(
       appendSearchParams(
         '/rest/v1/pending_ai_enrichment',
         new URLSearchParams({
@@ -1181,7 +1212,7 @@ export class BookmarkApi {
   }
 
   private async findActiveBookmarkByUrlHash(urlHash: string): Promise<RemoteBookmark | null> {
-    const rows = await this.client.request<RemoteBookmark[]>(
+    const rows = await this.requestArray<RemoteBookmark>(
       appendSearchParams(
         '/rest/v1/bookmarks',
         new URLSearchParams({
@@ -1210,7 +1241,7 @@ export class BookmarkApi {
     if (unique.length === 0) {
       return new Map();
     }
-    const rows = await this.client.request<RemoteBookmark[]>(
+    const rows = await this.requestArray<RemoteBookmark>(
       appendSearchParams(
         '/rest/v1/bookmarks',
         new URLSearchParams({
@@ -1233,7 +1264,7 @@ export class BookmarkApi {
    * in between — re-inserting would violate the unique index anyway.
    */
   private async findBookmarkByClientId(clientId: string): Promise<RemoteBookmark | null> {
-    const rows = await this.client.request<RemoteBookmark[]>(
+    const rows = await this.requestArray<RemoteBookmark>(
       appendSearchParams(
         '/rest/v1/bookmarks',
         new URLSearchParams({
@@ -1254,7 +1285,7 @@ export class BookmarkApi {
     if (unique.length === 0) {
       return new Map();
     }
-    const rows = await this.client.request<RemoteBookmark[]>(
+    const rows = await this.requestArray<RemoteBookmark>(
       appendSearchParams(
         '/rest/v1/bookmarks',
         new URLSearchParams({
@@ -1326,7 +1357,7 @@ export class BookmarkApi {
 
   private async listBookmarksByTags(params: ListBookmarksParams): Promise<Bookmark[]> {
     const tagIds = params.tag_ids ?? [];
-    const bookmarkTagRows = await this.client.request<Array<Pick<BookmarkTag, 'bookmark_id'>>>(
+    const bookmarkTagRows = await this.requestArray<Pick<BookmarkTag, 'bookmark_id'>>(
       appendSearchParams(
         '/rest/v1/bookmark_tags',
         new URLSearchParams({
@@ -1343,7 +1374,7 @@ export class BookmarkApi {
 
     const query = this.baseBookmarkListParams(params);
     query.set('id', `in.${inFilter(bookmarkIds)}`);
-    const rows = await this.client.request<RemoteBookmark[]>(
+    const rows = await this.requestArray<RemoteBookmark>(
       appendSearchParams('/rest/v1/bookmarks', query),
       { accessToken: this.session.access_token },
     );
@@ -1352,7 +1383,7 @@ export class BookmarkApi {
   }
 
   private async getCollection(collectionId: string): Promise<Collection | null> {
-    const rows = await this.client.request<Collection[]>(
+    const rows = await this.requestArray<Collection>(
       appendSearchParams(
         '/rest/v1/collections',
         new URLSearchParams({
@@ -1369,7 +1400,7 @@ export class BookmarkApi {
   }
 
   private async listTagsForBookmark(bookmarkId: string): Promise<Tag[]> {
-    const links = await this.client.request<Array<Pick<BookmarkTag, 'tag_id'>>>(
+    const links = await this.requestArray<Pick<BookmarkTag, 'tag_id'>>(
       appendSearchParams(
         '/rest/v1/bookmark_tags',
         new URLSearchParams({
@@ -1384,7 +1415,7 @@ export class BookmarkApi {
       return [];
     }
 
-    return this.client.request<Tag[]>(
+    return this.requestArray<Tag>(
       appendSearchParams(
         '/rest/v1/tags',
         new URLSearchParams({
@@ -1414,7 +1445,7 @@ export class BookmarkApi {
   }
 
   private async getLatestEnrichment(bookmarkId: string): Promise<AIEnrichment | null> {
-    const rows = await this.client.request<RemoteAIEnrichment[]>(
+    const rows = await this.requestArray<RemoteAIEnrichment>(
       appendSearchParams(
         '/rest/v1/ai_enrichments',
         new URLSearchParams({
@@ -1439,7 +1470,7 @@ export class BookmarkApi {
 
     let rows: Tag[];
     try {
-      rows = await this.client.request<Tag[]>('/rest/v1/tags', {
+      rows = await this.requestArray<Tag>('/rest/v1/tags', {
         method: 'POST',
         accessToken: this.session.access_token,
         headers: { Prefer: 'return=representation' },
@@ -1473,7 +1504,7 @@ export class BookmarkApi {
       return [];
     }
 
-    return this.client.request<Tag[]>(
+    return this.requestArray<Tag>(
       appendSearchParams(
         '/rest/v1/tags',
         new URLSearchParams({
