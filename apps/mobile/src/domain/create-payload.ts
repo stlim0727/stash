@@ -11,6 +11,9 @@ import type { Bookmark, CreateBookmarkInput } from '@/domain/types';
  * reject it, and the row would never upload.
  */
 export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInput {
+  // A rebuilt create is the same saved item under a repaired/re-homed identity,
+  // not a newly saved item. Preserve its original date so the server response
+  // cannot make an old card jump to the top of the Newest sort on the next pull.
   // Carry the row's stable capture id so a rebuilt create stays idempotent: if
   // the original upload actually reached the cloud, resending the same client_id
   // dedupes against it instead of inserting a duplicate (the failure mode text
@@ -23,6 +26,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
   if (bookmark.url) {
     return {
       id: bookmark.id,
+      created_at: bookmark.created_at,
       url: bookmark.url,
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
@@ -40,6 +44,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
     // see isUploadableCreate below.
     return {
       id: bookmark.id,
+      created_at: bookmark.created_at,
       content_type: 'image',
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
@@ -50,6 +55,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
   }
   return {
     id: bookmark.id,
+    created_at: bookmark.created_at,
     title: bookmark.title ?? undefined,
     notes: bookmark.notes ?? undefined,
     shared_text: bookmark.description ?? undefined,

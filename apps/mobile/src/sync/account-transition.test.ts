@@ -605,6 +605,7 @@ test('applyAccountTransition re-keys pending tag ops from the old id to the new 
   assert.equal(queue.length, 1);
   assert.equal(queue[0]?.local_id, newId);
   assert.equal(queue[0]?.operation, 'create');
+  assert.equal(queue[0]?.payload.created_at, '2026-06-16T00:00:00.000Z');
 });
 
 test('applyAccountTransition commits rehomed rows and organization state through one repository call', async () => {
