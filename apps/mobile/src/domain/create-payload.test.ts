@@ -37,6 +37,7 @@ test('rebuilds a URL bookmark payload from its row', () => {
   );
   assert.deepEqual(payload, {
     id: 'b1',
+    created_at: '2026-06-20T00:00:00.000Z',
     url: 'https://example.com/x',
     title: 'T',
     notes: 'N',
@@ -50,6 +51,7 @@ test('carries a text note body back as shared_text (not url)', () => {
   );
   assert.deepEqual(payload, {
     id: 'b1',
+    created_at: '2026-06-20T00:00:00.000Z',
     title: 'Note',
     notes: undefined,
     shared_text: 'a thought',
@@ -82,6 +84,7 @@ test('rebuilds an image bookmark payload with content_type but no url/shared_tex
   );
   assert.deepEqual(payload, {
     id: 'b1',
+    created_at: '2026-06-20T00:00:00.000Z',
     content_type: 'image',
     title: 'Screenshot',
     notes: undefined,

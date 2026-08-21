@@ -1985,6 +1985,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded local bookmark', () =>
   assert.equal(entries[0]?.sync_status, 'pending');
   assert.deepEqual(entries[0]?.payload, {
     id: 'local-abc',
+    created_at: '2026-06-12T00:00:00.000Z',
     url: 'https://example.com/a',
     title: 'Stranded',
     notes: 'keep me',
@@ -2039,6 +2040,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its
   // actually reached the cloud resolves to a duplicate instead of a second row.
   assert.deepEqual(entries[0]?.payload, {
     id: 'local-note',
+    created_at: '2026-06-12T00:00:00.000Z',
     title: 'Reminder',
     notes: undefined,
     shared_text: '내일 3시에 회의 있습니다',
@@ -2069,6 +2071,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded image bookmark not yet
   assert.equal(entries[0]?.operation, 'create');
   assert.deepEqual(entries[0]?.payload, {
     id: 'local-img',
+    created_at: '2026-06-12T00:00:00.000Z',
     content_type: 'image',
     title: 'Screenshot',
     notes: undefined,
