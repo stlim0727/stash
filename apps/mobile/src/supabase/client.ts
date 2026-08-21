@@ -321,6 +321,60 @@ export class StashSupabaseClient {
   }
 
   /**
+   * Builds the request target for a direct-to-Storage object upload: the
+   * Storage REST endpoint URL, its auth/content-type headers, and the
+   * resulting public URL once the object exists there. Pure — makes no
+   * network call itself; the caller (a native file-upload API, since this
+   * project has no generic binary-upload helper here) performs the actual
+   * PUT/POST. `x-upsert: true` lets a retried upload after a partial prior
+   * attempt safely overwrite the same object instead of erroring, matching
+   * how every other queued mutation in this app is retry-safe.
+   */
+  storageUploadTarget(
+    bucket: string,
+    path: string,
+    options: { accessToken: string; contentType: string },
+  ): { uploadUrl: string; publicUrl: string; headers: Record<string, string> } {
+    const encodedPath = path
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+    return {
+      uploadUrl: `${this.config.url}/storage/v1/object/${bucket}/${encodedPath}`,
+      publicUrl: `${this.config.url}/storage/v1/object/public/${bucket}/${encodedPath}`,
+      headers: {
+        apikey: this.config.anonKey,
+        Authorization: `Bearer ${options.accessToken}`,
+        'Content-Type': options.contentType,
+        'x-upsert': 'true',
+      },
+    };
+  }
+
+  /**
+   * Bulk-deletes objects from a Storage bucket by their exact paths (the
+   * REST API's field is named `prefixes`, but each entry is matched as an
+   * exact object key, not a wildcard prefix). Used to clean up
+   * `bookmark-images` objects when their owning bookmark is permanently
+   * deleted (Trash empty, single permanent delete, or a full library
+   * reset) — never on a recoverable Trash move, which only sets
+   * `deleted_at` and must leave the object intact. Callers treat this as
+   * best-effort: a failure here leaves an orphaned (but still owner-scoped,
+   * RLS-protected against writes) object rather than blocking the delete
+   * itself.
+   */
+  async removeStorageObjects(bucket: string, paths: string[], accessToken: string): Promise<void> {
+    if (paths.length === 0) {
+      return;
+    }
+    await this.request(`/storage/v1/object/${bucket}`, {
+      method: 'DELETE',
+      accessToken,
+      body: { prefixes: paths },
+    });
+  }
+
+  /**
    * Best-effort per-sync stamp for the admin dashboard (GH #687): upsert the
    * authenticated user's `app_version` + `last_synced_at` row. `user_id` is
    * `user_sync_status`'s primary key, so a plain POST with

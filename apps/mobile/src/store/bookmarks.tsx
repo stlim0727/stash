@@ -23,8 +23,11 @@ import { jwtSubject } from "@/domain/jwt";
 import { planTitleBackfill } from "@/domain/title-backfill";
 import type { TitleBackfillPatch } from "@/domain/title-backfill";
 import {
+  canonicalizeImageMimeType,
   imageTitleFromFileName,
   localImageFileName,
+  MAX_UPLOAD_IMAGE_BYTES,
+  mimeTypeForImageUri,
   type SharedImage,
 } from "@/domain/image-share";
 import type { ImportItem } from "@/domain/import";
@@ -120,7 +123,11 @@ import {
 } from "@/observability/sentry";
 import { registerForForegroundState } from "@/storage/sqlite-app-lifecycle";
 import { repository } from "@/storage/repository";
-import { copyImageToLibrary } from "@/storage/image-store";
+import {
+  copyImageToLibrary,
+  localFileSizeBytes,
+  uploadImageFile,
+} from "@/storage/image-store";
 import type {
   BulkAttachItem,
   BulkAttachResult,
@@ -157,11 +164,14 @@ import {
   findStaleQueueEntries,
   hasBulkCreateResultKey,
   hasRemoteIdentity,
+  IMAGE_TOO_LARGE_ERROR_TEXT,
   isLocalOnlyBookmark,
   isPermanentlyUnsyncableUrl,
   isRowSpecificPermanentSyncErrorText,
   isSyncable,
   makeMutationEntry,
+  mergeSyncedBookmarkFields,
+  planDeletedMidFlightCleanup,
   reconcileOrphanedQueueEntries,
   removeQueueEntryIfNotSuperseded,
   syncCreateQueueEntryBatch,
@@ -824,8 +834,13 @@ async function retryStorageWrite<T>(op: () => Promise<T>): Promise<T> {
 
 // Single shared init so background writes can never race ahead of table
 // creation/seeding, even for saves made before the startup load finishes.
+// Exported so a startup-time reader outside this provider (e.g.
+// `_layout.tsx`'s durable-diagnostics hydration) can sequence itself after
+// the SAME shared init this component would otherwise kick off on mount —
+// calling it early just starts that shared promise sooner, it does not
+// duplicate work.
 let repositoryReady: Promise<void> | null = null;
-function ensureRepositoryReady(): Promise<void> {
+export function ensureRepositoryReady(): Promise<void> {
   if (!repositoryReady) {
     // A fresh install starts empty — no sample bookmarks/tags/collections are
     // seeded. `init` still runs to create the tables and mark the store seeded
@@ -897,6 +912,22 @@ function mergeById<T>(
 
 export function BookmarksProvider({ children }: { children: ReactNode }) {
   const auth = useSupabaseAuth();
+  // Mirror of `auth` so an ALREADY-RUNNING async closure (syncNow and
+  // everything it calls, e.g. syncQueueEntry's injected getLiveUserId) can
+  // read the LATEST signed-in identity instead of the one captured when
+  // that invocation started. `syncNow` is a useCallback keyed on `auth`
+  // (among other deps) — React gives a brand NEW `syncNow` (closing over a
+  // fresh `auth`) on the render after sign-out, but an invocation of the
+  // OLD `syncNow` that's still executing keeps referencing whatever `auth`
+  // its own closure captured at creation time; it never sees the new one.
+  // Reading `authRef.current` instead — the same "ref mirrors state so an
+  // async loop reads live, not stale" pattern bookmarksRef/queueRef already
+  // use — closes that gap: the ref's `.current` is looked up fresh on every
+  // access, regardless of which render's closure is doing the looking up.
+  const authRef = useRef(auth);
+  useEffect(() => {
+    authRef.current = auth;
+  }, [auth]);
   const broadcastSyncNudgeRef = useRef<(() => void) | null>(null);
   const syncPendingRef = useRef(false);
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -2504,23 +2535,33 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       image?: SharedImage;
     }): AddBookmarkResult => {
       // A shared image becomes an image bookmark: capture is local-first and
-      // local-only for now (cloud upload of the binary is deferred to 0.3.x), so
-      // it is never enqueued for sync. We mark it 'synced' precisely because
-      // there is no cloud work pending — that also keeps the startup orphan
-      // reconciler from re-enqueuing it and the Inbox/Detail from showing a
-      // misleading "sync pending" chip. Capture is sacred: the durable file copy
-      // is folded into `persisted` so the share handler only dismisses once it
+      // optimistic exactly like every other save, then queued for a real
+      // background upload (binary to Storage, then the row) — same shape as
+      // the text-note path below. sync_status starts 'pending' (not the old
+      // fake 'synced' bookkeeping trick) so the orphan reconciler and the
+      // Inbox/Detail "sync pending" chip both read it honestly; `local_image_uri`
+      // still keeps it rendering locally with zero dependency on the network
+      // the whole time (isLocalOnlyBookmark/STASH-65 continues to protect it
+      // from the remote-deletion diff until ever_synced actually flips true on
+      // a confirmed upload). Capture is sacred: the durable file copy is
+      // folded into `persisted` so the share handler only dismisses once it
       // has actually landed on disk.
       if (image) {
         const now = new Date().toISOString();
         const id = makeBookmarkId();
         const fileName = localImageFileName(id, image);
+        // Not a content key (there's no URL to dedupe on) — this capture's
+        // stable id, resent unchanged on every upload retry so an interrupted
+        // create dedupes against its own first attempt instead of inserting a
+        // twin, same role it plays for text notes.
+        const imageClientId = makeClientId();
         const imageBookmark: Bookmark = {
           id,
           user_id: mockUserId,
           url: null,
           canonical_url: null,
           url_hash: null,
+          client_id: imageClientId,
           // A title typed at capture is user-authored; otherwise derive a
           // readable one from the shared filename (may be null → "Untitled").
           title: title?.trim()
@@ -2542,13 +2583,61 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           last_saved_at: now,
           // No URL/text to derive metadata from — nothing to enrich.
           metadata_status: "skipped",
-          sync_status: "synced",
+          sync_status: "pending",
           // Temporary share URI for the optimistic render; swapped for the
           // durable copy once `copyImageToLibrary` resolves below.
           local_image_uri: image.uri,
+          // The real MIME type the OS share sheet reported — recorded now
+          // because it's the only place this is ever known; the durable
+          // local file's own extension alone can't always be trusted to
+          // recover it later (see the field's doc comment in domain/types.ts).
+          local_image_mime_type: image.mimeType,
+        };
+
+        const imageEntry: LocalPendingBookmark = {
+          local_id: id,
+          remote_id: null,
+          operation: "create",
+          payload: {
+            id,
+            // The explicit signal requirePayload needs — there's no
+            // url/shared_text to infer content_type from for this row. The
+            // binary itself is uploaded by the sync engine right before it
+            // sends this create (see syncQueueEntry), never here.
+            content_type: "image",
+            title: imageBookmark.title ?? undefined,
+            notes: imageBookmark.notes ?? undefined,
+            client_id: imageClientId,
+          },
+          sync_status: "pending",
+          retry_count: 0,
+          last_error: null,
+          created_at: now,
+          updated_at: now,
         };
 
         setBookmarks((current) => [imageBookmark, ...(current ?? [])]);
+        setQueue((current) => [...current, imageEntry]);
+        // A real (potentially slow, for a large screenshot/photo) file copy
+        // sits between this optimistic update and the durable insert+enqueue
+        // below — unlike the URL/text capture paths, which have no
+        // meaningful I/O in that gap. That's long enough for the 250ms
+        // auto-sync debounce to fire syncNow first, and syncNow
+        // unconditionally reloads bookmarks/queue from the repository and
+        // REPLACES React state with that snapshot (deliberate, for
+        // account-transition correctness — see the comment above
+        // `reconcileAccountTransition` in syncNow). If that reload runs
+        // before this row durably lands, it wipes the just-captured image
+        // straight out of the UI — not off disk (the durable write still
+        // lands and the row is recovered on the NEXT full reload), but gone
+        // from the screen and out of live sync tracking until then, which
+        // looks exactly like data loss to the user. `localCreateFlushesInFlight`
+        // is the existing guard for precisely this shape of problem — see
+        // `importBookmarks` and docs/architecture/sync-pause-import-reset.md
+        // — `syncNow`/`resetLibrary` already defer while it's nonzero and
+        // self-retrigger once it clears, so reusing it here needs no changes
+        // to either of them.
+        localCreateFlushesInFlight.current += 1;
         const persisted = ensureRepositoryReady()
           .then(() => copyImageToLibrary(image.uri, fileName))
           .then((durableUri) => {
@@ -2561,12 +2650,43 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ? current
                 : current.map((b) => (b.id === id ? stored : b)),
             );
-            return repository.insertBookmark(stored);
+            // Sequential, not Promise.all: insert the bookmark row FIRST,
+            // then enqueue. A crash between the two durable writes must land
+            // on the side reconcileOrphanedQueueEntries already self-heals
+            // (a bookmark with no queue entry yet) — not a queue entry with
+            // no matching bookmark row, which would retry the create forever
+            // (requirePayload rejects an image create with no
+            // preview_image_url, and createUploadPayload's own "row is
+            // missing" guard returns the payload unchanged, so the image
+            // never re-uploads either). Running the two writes concurrently
+            // via Promise.all leaves the order — and therefore which of the
+            // two partial states a crash lands on — unspecified.
+            return repository
+              .insertBookmark(stored)
+              .then(() => repository.enqueue(imageEntry));
           })
           .then(() => true)
           .catch((error) => {
             logStorageError("new image bookmark", error);
             return false;
+          })
+          .finally(() => {
+            // Mirrors importBookmarks' own flush completion exactly: once
+            // the last in-flight local write clears, release any sync a
+            // debounce fired (and got deferred) during the window, and
+            // explicitly kick a fresh one so the just-landed row/entry
+            // actually gets picked up instead of waiting for the next
+            // unrelated trigger.
+            localCreateFlushesInFlight.current = Math.max(
+              0,
+              localCreateFlushesInFlight.current - 1,
+            );
+            if (localCreateFlushesInFlight.current === 0) {
+              syncPendingRef.current = false;
+              setTimeout(() => {
+                void syncNowRef.current?.().catch(() => {});
+              }, 50);
+            }
           });
 
         return { status: "created", bookmark: imageBookmark, persisted };
@@ -3379,6 +3499,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
   const deleteBookmark = useCallback(
     (id: string) => {
+      const bookmark = bookmarksRef.current?.find((b) => b.id === id);
       deletedIds.current.add(id);
       applyTagOps(
         dropPendingTagOpsForBookmarks(pendingTagOpsRef.current, [id]),
@@ -3411,6 +3532,39 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       // Same rationale as above: a permanently-gone row has nothing left to
       // wait for from the server-side overflow queue either.
       clearAiServerQueued(id);
+      // Best-effort: an image bookmark with a preview_image_url owns a real
+      // object in the bookmark-images bucket. Gated on the URL itself, NOT
+      // on hasSyncedOnce/ever_synced: the upload can succeed and durably set
+      // preview_image_url even when the FOLLOWING createBookmark call then
+      // fails (or is never retried again) — ever_synced only flips once the
+      // row itself is confirmed created, so that row would otherwise never
+      // be cleaned up despite genuinely owning an uploaded object.
+      // Permanently deleting the row must not leave that object behind — it
+      // would stay indefinitely public (this bucket is public-read by
+      // design) and keep counting against storage. Fire-and-forget, matching
+      // the existing best-effort network-call pattern elsewhere in this app
+      // (e.g. StashSupabaseClient.signOut's server-side revoke): a failure
+      // here just leaves an orphaned object, never blocks or retries the
+      // bookmark delete itself. Never runs for a Trash move (trashBookmark,
+      // a separate function, soft-deletes via deleted_at) — only this
+      // permanent path.
+      if (bookmark?.content_type === "image" && bookmark.preview_image_url && auth.session) {
+        // Refresh a token that expired while the app stayed open, mirroring
+        // syncNow/resetLibrary — otherwise this DELETE 401s, gets swallowed
+        // by the catch below, and is never retried or queued anywhere, so
+        // the object silently stays orphaned forever even though the
+        // bookmark deletion itself (a separately-refreshed sync pass) can
+        // still succeed.
+        void (async () => {
+          const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+          if (!session) {
+            return;
+          }
+          await createSyncApi(session).deleteImages([id]);
+        })().catch((error) =>
+          logStorageError("delete bookmark image object", error),
+        );
+      }
       if (hadSyncedOnce) {
         // The row exists remotely: replace any queued work with a durable
         // delete mutation so the removal reaches Supabase even after restart.
@@ -3435,6 +3589,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         .catch((error) => logStorageError("delete bookmark", error));
     },
     [
+      auth,
       applyPendingImportCollections,
       applyPendingEnrichmentRestores,
       applyTagData,
@@ -3481,6 +3636,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     const deleteEntries = trashed
       .filter((bookmark) => isBookmarkSyncedOnce(bookmark))
       .map((bookmark) => makeMutationEntry(bookmark.id, "delete"));
+    // Best-effort bulk cleanup of any uploaded bookmark-images objects —
+    // same rationale as deleteBookmark's single-row cleanup above: emptying
+    // Trash must not leave those objects behind (public, still counted
+    // against storage) even though this row is now gone for good. Gated on
+    // preview_image_url itself, not isBookmarkSyncedOnce — an upload can
+    // durably succeed even when the row's own create never gets confirmed
+    // (ever_synced stays false), and that row still owns a real object.
+    const imageIdsToDeleteFromStorage = trashed
+      .filter((bookmark) => bookmark.content_type === "image" && bookmark.preview_image_url)
+      .map((bookmark) => bookmark.id);
+    if (imageIdsToDeleteFromStorage.length > 0 && auth.session) {
+      // Refresh a token that expired while the app stayed open, mirroring
+      // syncNow/resetLibrary and deleteBookmark's identical fix above —
+      // otherwise this DELETE 401s and is silently lost.
+      void (async () => {
+        const session = (await auth.ensureAnonymousSession()) ?? auth.session;
+        if (!session) {
+          return;
+        }
+        await createSyncApi(session).deleteImages(imageIdsToDeleteFromStorage);
+      })().catch((error) => logStorageError("empty trash image objects", error));
+    }
     const nextQueue = [
       ...queueRef.current.filter((entry) => !deleted.has(entry.local_id)),
       ...deleteEntries,
@@ -3512,6 +3689,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       })
       .catch((error) => logStorageError("empty trash", error));
   }, [
+    auth,
     applyPendingImportCollections,
     applyPendingEnrichmentRestores,
     applyTagData,
@@ -3548,12 +3726,32 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     // mid-wipe; syncNow calls made meanwhile no-op onto syncPendingRef.
     syncInFlight.current = true;
     setIsResettingLibrary(true);
+    // Snapshot BEFORE the wipe below clears bookmarksRef — used only for the
+    // best-effort Storage cleanup once the remote wipe actually succeeds.
+    // Gated on preview_image_url itself, not isBookmarkSyncedOnce/ever_synced
+    // — see deleteBookmark's identical comment above.
+    const imageIdsToDeleteFromStorage = (bookmarksRef.current ?? [])
+      .filter((bookmark) => bookmark.content_type === "image" && bookmark.preview_image_url)
+      .map((bookmark) => bookmark.id);
     try {
       try {
         // Refresh a token that expired while the app stayed open, mirroring
         // syncNow — otherwise the RPC would 401 against a stale bearer.
         const session = (await auth.ensureAnonymousSession()) ?? auth.session;
         await createSyncApi(session).resetLibrary();
+        // Best-effort: the RPC wipes the bookmarks table (and everything
+        // that cascades from it), but bookmark-images objects live in
+        // Storage, outside that table's FK graph, so nothing cleans them up
+        // on its own. Fire-and-forget — never blocks or fails the reset
+        // itself; a failure here just leaves orphaned objects, same
+        // trade-off as deleteBookmark/emptyTrash's identical cleanup.
+        if (imageIdsToDeleteFromStorage.length > 0) {
+          createSyncApi(session)
+            .deleteImages(imageIdsToDeleteFromStorage)
+            .catch((error) =>
+              logStorageError("library reset image objects", error),
+            );
+        }
       } catch (error) {
         recordLog(
           "warn",
@@ -5187,6 +5385,48 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const createdIdsSyncedThisRun = new Set<string>();
         const getLatestBookmark = (id: string) =>
           bookmarksRef.current?.find((bookmark) => bookmark.id === id);
+        // Injected into syncQueueEntry's create branch for an image-only
+        // bookmark that still needs its binary uploaded. Reads straight off
+        // the durable local file (uploadImageFile streams it directly, never
+        // through this function's own memory) and resolves the public
+        // Storage URL syncQueueEntry then sends as preview_image_url.
+        const uploadBookmarkImage = async (bookmark: Bookmark): Promise<string> => {
+          if (!bookmark.local_image_uri) {
+            throw new Error("Image bookmark has no local file to upload.");
+          }
+          // Checked BEFORE ever attempting the network call: the file's
+          // size can't change between retries, so if it's over the bucket's
+          // own limit it will fail identically forever. IMAGE_TOO_LARGE_ERROR_TEXT
+          // is what makes this a permanent (never-retried, drained-from-the-
+          // visible-queue) failure rather than an ordinary one — see
+          // isPermanentlyUnsyncableUrl in sync/sync-bookmarks.ts. The image
+          // itself is unaffected either way: it was already saved and
+          // renders locally the moment it was captured.
+          const sizeBytes = localFileSizeBytes(bookmark.local_image_uri);
+          if (sizeBytes > MAX_UPLOAD_IMAGE_BYTES) {
+            const sizeMb = (sizeBytes / (1024 * 1024)).toFixed(1);
+            const limitMb = (MAX_UPLOAD_IMAGE_BYTES / (1024 * 1024)).toFixed(0);
+            throw new Error(
+              `Image is ${sizeMb}MB, which ${IMAGE_TOO_LARGE_ERROR_TEXT} of ${limitMb}MB.`,
+            );
+          }
+          // The real MIME type recorded at capture time is authoritative —
+          // prefer it always. Only a row captured before that field existed
+          // falls back to guessing from the local file's extension, which
+          // can mislabel an unmapped format's Content-Type (acceptable only
+          // as a legacy-compat fallback, not the primary path).
+          const reportedContentType =
+            bookmark.local_image_mime_type ?? mimeTypeForImageUri(bookmark.local_image_uri);
+          // canonicalizeImageMimeType normalizes a real-but-nonstandard alias
+          // (e.g. some providers report `image/jpg` for a plain JPEG) to the
+          // single form the bucket's allowlist actually contains — without
+          // this, an honestly-labeled but non-canonical Content-Type would
+          // still be permanently rejected by Storage on every retry.
+          const contentType = canonicalizeImageMimeType(reportedContentType);
+          const target = api.imageUploadTarget(bookmark.id, contentType);
+          await uploadImageFile(bookmark.local_image_uri, target.uploadUrl, target.headers);
+          return target.publicUrl;
+        };
         const applySyncEntryResult = async (
           entry: LocalPendingBookmark,
           result: Awaited<ReturnType<typeof syncQueueEntry>>,
@@ -5237,15 +5477,106 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               .catch((error) =>
                 logStorageError("post-delete sync cleanup", error),
               );
-            if (
-              result.entry.remote_id &&
-              result.entry.remote_id !== entry.local_id
-            ) {
-              // The upload created a remote row for a bookmark the user already
-              // deleted. Enqueue a durable delete (not a best-effort request) so
-              // the removal survives app exit and request failures; the next
-              // sync pass processes it.
-              enqueueMutation(result.entry.remote_id, "delete");
+            // See planDeletedMidFlightCleanup's doc comment for the full
+            // reasoning — a prior version of this check only enqueued a
+            // remote delete for the STASH-3Q duplicate-swap case, silently
+            // leaving the far more common same-id case's cloud row
+            // undeleted and resurrectable by a later pull; and nothing at
+            // all cleaned up an already-uploaded image's Storage object.
+            // `uploadedImageUrl` (unlike `uploadedPayload`) is set whether
+            // the create itself went on to succeed or fail — a createBookmark
+            // failure after a successful upload still leaves a real Storage
+            // object that needs the same cleanup.
+            const cleanupPlan = planDeletedMidFlightCleanup(
+              result.entry.remote_id,
+              result.uploadedImageUrl,
+              entry.local_id,
+            );
+            if (cleanupPlan.remoteIdToDelete) {
+              // Durable (not best-effort): survives app exit and request
+              // failures; the next sync pass processes it. enqueueMutation
+              // replaces any prior queue entry for this id rather than
+              // duplicating one (see its own comment), so this is safe
+              // even when deleteBookmark already queued its own delete
+              // moments ago (the already-synced-update case).
+              enqueueMutation(cleanupPlan.remoteIdToDelete, "delete");
+            }
+            if (cleanupPlan.imageIdToCleanUp) {
+              // Best-effort — a failure just leaves an orphaned object,
+              // never blocks this cleanup. `api` is this run's already
+              // session-refreshed instance (see the top of syncNow), not
+              // raw auth.session.
+              api
+                .deleteImages([cleanupPlan.imageIdToCleanUp])
+                .catch((error) =>
+                  logStorageError("post-delete sync image cleanup", error),
+                );
+            }
+            return false;
+          }
+
+          // P1: the create's own request landed successfully, but the live
+          // identity changed WHILE it was in flight (checked again inside
+          // syncQueueEntry, after the response — see landedUnderDepartedIdentity's
+          // own doc comment for why the pre-dispatch check alone can't close
+          // this window). The row now has a REAL cloud identity, just under
+          // the DEPARTED account — route it through the exact same rehome
+          // machinery an account transition uses (fresh id, cleared image
+          // URL/owner, tag/import/enrichment/AI-retry re-key) instead of
+          // trusting this as a normal confirmed sync, which would durably
+          // misattribute a real cloud row to whichever identity is live now.
+          if (result.landedUnderDepartedIdentity) {
+            // Real durable work happened this pass (a fresh create was
+            // enqueued via rehome below), same as any other removeEntry
+            // case — matches the semantics mutationsPushed represents
+            // elsewhere for a broadcastSyncNudge and this pass's own
+            // return value.
+            mutationsPushed = true;
+            const staleRow = getLatestBookmark(entry.local_id);
+            if (staleRow) {
+              await applyAccountTransition(
+                {
+                  kind: "switch",
+                  rehome: [staleRow],
+                  drop: [],
+                  dropQueue: [],
+                  resetWatermark: false,
+                },
+                repository,
+                setBookmarks,
+                setQueue,
+                makeBookmarkId,
+                ensureRepositoryReady,
+                {
+                  rehome: (idMap) =>
+                    rekeyBookmarkIdentity(idMap, { persist: false }),
+                },
+              );
+            } else {
+              // No local row left to rehome (e.g. a separate concurrent
+              // delete that deletedIds.current's own check above didn't
+              // catch for some other reason) — nothing to move, but the
+              // now-permanently-stale queue entry must still not linger.
+              // Durable removal lives HERE (not inside syncQueueEntry, on
+              // purpose — see its own comment): there's no atomic replace
+              // happening alongside it in this branch to fold it into, so a
+              // plain standalone removal is safe and carries no crash-window
+              // risk the way removing it before an in-progress rehome would.
+              setQueue((current) => {
+                const nextQueue = current.filter(
+                  (queued) => queued.local_id !== entry.local_id,
+                );
+                queueRef.current = nextQueue;
+                return nextQueue;
+              });
+              ensureRepositoryReady()
+                .then(() => repository.removeQueueEntry(entry.local_id))
+                .catch((error) =>
+                  logStorageError(
+                    "post-landed-under-departed-identity queue cleanup",
+                    error,
+                  ),
+                );
             }
             return false;
           }
@@ -5293,13 +5624,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               (bookmark) => bookmark.id === lookupId,
             );
             const merged: Bookmark | null = latest
-              ? {
-                  ...latest,
-                  id: update.id,
-                  sync_status: update.sync_status,
-                  ever_synced: update.ever_synced,
-                  updated_at: update.updated_at,
-                }
+              ? mergeSyncedBookmarkFields(latest, update)
               : null;
             if (merged) {
               // Collapse onto the destination id: a pull that already inserted
@@ -5954,6 +6279,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           (entry) =>
             entry.operation === "create" &&
             !deletedIds.current.has(entry.local_id) &&
+            // Image creates need an upload-then-create step the bulk batch
+            // endpoint has no room for — always routed through the per-entry
+            // loop below instead (see syncCreateQueueEntryBatch's own guard).
+            entry.payload.content_type !== "image" &&
             hasBulkCreateResultKey(entry) &&
             isSyncable(entry, { ignoreBackoff: force }),
         );
@@ -5986,6 +6315,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 api,
                 chunk,
                 getLatestBookmark,
+                // authRef, not `auth` — see authRef's own doc comment above
+                // for why: this closure can still be running long after the
+                // render that created it, and `auth` itself would stay
+                // frozen at whatever it was then. Same reasoning as the
+                // single-entry syncQueueEntry call below.
+                () => authRef.current.session?.user.id ?? null,
               );
               await applyBulkCreateChunkResults(chunk, results);
               for (const entry of chunk) {
@@ -6216,6 +6551,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               repository,
               entry,
               getLatestBookmark,
+              uploadBookmarkImage,
+              // P1, round 8/10: `api` (and its `.userId`) was built once at
+              // the top of this sync cycle — this reads the LIVE signed-in
+              // user id fresh, at the exact moment syncQueueEntry checks it,
+              // so a sign-out mid-flight (the logout effect runs
+              // independently and doesn't wait for an in-flight sync) is
+              // caught before a create ever gets durably confirmed under the
+              // departed identity. `authRef.current`, NOT the closed-over
+              // `auth` — see authRef's own doc comment above for why a plain
+              // `auth` read here would silently defeat this whole check: this
+              // closure (and the syncNow invocation it belongs to) can still
+              // be running well after the render that created it, and `auth`
+              // itself stays frozen at whatever it was then.
+              () => authRef.current.session?.user.id ?? null,
             );
             await applySyncEntryResult(entry, result);
           } catch (error) {
@@ -7374,6 +7723,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           makeBookmarkId,
           ensureRepositoryReady,
           {
+            // P1, round 8: plan.rehome can now be non-empty here too (a
+            // local-only image row whose upload landed but whose create was
+            // never confirmed — see staleUploadedImageRows). Without this,
+            // applyAccountTransition's rehome branch re-keys nothing —
+            // idAliases, pending tag ops, pending import collections,
+            // pending enrichment restores, tag links, and AI-retry
+            // bookkeeping all stay pointed at the OLD (now-deleted) id,
+            // stranding any pending work queued against this row. Same
+            // helper the account-transition caller already uses below.
+            rehome: (idMap) => rekeyBookmarkIdentity(idMap, { persist: false }),
             drop: (ids) => {
               // Purge the logged-out account's pending tag ops + links so they
               // can't leak into the next session's UI or upload under it.

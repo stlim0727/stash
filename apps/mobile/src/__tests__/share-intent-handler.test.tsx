@@ -42,8 +42,16 @@ jest.mock('@/domain/enrichment', () => ({
 const mockCopyImage = jest.fn(
   async (_sourceUri: string, fileName: string) => `file:///docs/stash-images/${fileName}`,
 );
+// This suite runs with no auth session (see the auth-provider mock below), so
+// sync never actually fires and uploadImageFile is never called for real —
+// mocked anyway so the module shape stays honest if a future test changes that.
+const mockUploadImageFile = jest.fn(
+  async (_localUri: string, _uploadUrl: string, _headers: Record<string, string>) => undefined,
+);
 jest.mock('@/storage/image-store', () => ({
   copyImageToLibrary: (sourceUri: string, fileName: string) => mockCopyImage(sourceUri, fileName),
+  uploadImageFile: (localUri: string, uploadUrl: string, headers: Record<string, string>) =>
+    mockUploadImageFile(localUri, uploadUrl, headers),
 }));
 const mockRouter = { push: jest.fn(), navigate: jest.fn(), replace: jest.fn(), back: jest.fn() };
 jest.mock('expo-router', () => ({
@@ -676,10 +684,12 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
-  it('captures a shared image as a local-only image bookmark', async () => {
+  it('captures a shared image as a bookmark, queued for a real background upload', async () => {
     // Sharing a screenshot/photo arrives as shareIntent.files (no webUrl). The
-    // handler copies it into durable storage and saves an image bookmark; cloud
-    // upload is deferred, so it is NOT enqueued for sync.
+    // handler copies it into durable storage, saves an image bookmark, and
+    // queues a real create — capture itself stays local-first/optimistic and
+    // renders immediately regardless of the (mocked-out, session-less in this
+    // test) network sync that follows.
     fakeRepo.__reset([]);
     mockShareIntent = {
       hasShareIntent: true,
@@ -708,10 +718,75 @@ describe('ShareIntentHandler', () => {
     expect(stored[0].local_image_uri).toBe(`file:///docs/stash-images/${fileName}`);
     // Title derived from the shared filename.
     expect(stored[0].title).toBe('IMG 0042');
-    // Local-only: nothing queued for cloud sync, and no misleading pending chip.
-    expect(fakeRepo.__queue()).toHaveLength(0);
-    expect(stored[0].sync_status).toBe('synced');
+    // The real MIME type from the share sheet is recorded at capture time —
+    // the upload step uses this directly, never guessing from the local
+    // file's extension (which can mislabel an uncommon format's
+    // Content-Type; see mimeTypeForImageUri's doc comment).
+    expect(stored[0].local_image_mime_type).toBe('image/png');
+    // Queued like any other create — honest 'pending' state (no fake
+    // "already synced" bookkeeping), same shape as a text note capture.
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    expect(fakeRepo.__queue()[0].operation).toBe('create');
+    expect(fakeRepo.__queue()[0].payload.content_type).toBe('image');
+    expect(stored[0].sync_status).toBe('pending');
     unmount();
+  });
+
+  it('durably inserts the image bookmark row BEFORE enqueueing its create (not concurrently)', async () => {
+    // A crash between the two durable writes must always land on the side
+    // reconcileOrphanedQueueEntries already self-heals (a bookmark row with
+    // no queue entry yet) — never a queue entry with no matching bookmark
+    // row (which retries a create forever: there is no local row left to
+    // read local_image_uri/preview_image_url from). Proven with a genuine
+    // race, not just an after-the-fact call-order comparison: insertBookmark
+    // is made artificially slow, and enqueue is made to THROW if it fires
+    // before insertBookmark's promise has actually resolved. A naive
+    // `Promise.all([insertBookmark(...), enqueue(...)])` would let the
+    // (synchronous, real fast) enqueue fire immediately, well before the
+    // delayed insert resolves — this test only passes for genuinely
+    // sequential `insertBookmark().then(() => enqueue())` code.
+    fakeRepo.__reset([]);
+    const originalInsertBookmark = fakeRepo.repository.insertBookmark;
+    const originalEnqueue = fakeRepo.repository.enqueue;
+    let insertResolved = false;
+    fakeRepo.repository.insertBookmark = async (bookmark) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await originalInsertBookmark(bookmark);
+      insertResolved = true;
+    };
+    fakeRepo.repository.enqueue = async (entry) => {
+      if (!insertResolved) {
+        throw new Error('enqueue fired before insertBookmark resolved');
+      }
+      await originalEnqueue(entry);
+    };
+
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: null,
+        text: null,
+        files: [{ path: 'file:///tmp/share/race.png', mimeType: 'image/png', fileName: 'race.png' }],
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    try {
+      const { findByText, unmount } = await renderHandler();
+      await findByText('Saved to Keepory');
+      // addBookmark's own `persisted` chain catches a thrown enqueue and
+      // just logs it (capture must never crash the app) — so an early
+      // enqueue doesn't fail this test via an exception. It fails via THIS
+      // `waitFor` instead: if enqueue fired early, the injected throw means
+      // `originalEnqueue` never actually ran, the queue never reaches length
+      // 1, and this times out.
+      await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+      expect(insertResolved).toBe(true);
+      unmount();
+    } finally {
+      fakeRepo.repository.insertBookmark = originalInsertBookmark;
+      fakeRepo.repository.enqueue = originalEnqueue;
+    }
   });
 
   it('inbox mode jumps to the Inbox and never dismisses the app', async () => {

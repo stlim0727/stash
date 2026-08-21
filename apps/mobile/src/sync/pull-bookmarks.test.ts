@@ -10,6 +10,7 @@ import {
 import type { PullApi } from './pull-bookmarks.ts';
 import type { AIEnrichment, Bookmark } from '@/domain/types';
 import type { BookmarkRepository, TagData } from '@/storage/types';
+import { getPullDiagnostics } from '@/sync/pull-diagnostics';
 
 const REMOTE_ID_A = '7e64cf1e-0000-4000-8000-00000000000a';
 const REMOTE_ID_B = '7e64cf1e-0000-4000-8000-00000000000b';
@@ -308,13 +309,15 @@ test('pull removes synced rows deleted remotely, keeps local-only rows', async (
   assert.equal(calls.includes('deleteBookmark:local-abc123'), false);
 });
 
-test('pull never deletes a local-only image bookmark absent from the server (Sentry STASH-65)', async () => {
-  // Image bookmarks are captured with a real UUID id and sync_status:
-  // 'synced' even though the binary is never uploaded (cloud upload is
-  // deferred) — see addBookmark's image branch in store/bookmarks.tsx. That
-  // combination used to be indistinguishable from a genuinely cloud-confirmed
-  // row absent from a since-deleted-elsewhere row, so the very next pull
-  // after a share deleted the just-captured bookmark within seconds.
+test('pull never deletes a legacy local-only image bookmark absent from the server (Sentry STASH-65)', async () => {
+  // Pre-image-sync devices captured an image bookmark with a real UUID id
+  // and sync_status: 'synced' even though the binary was never uploaded (a
+  // local bookkeeping fiction — see the account-transition.ts cloudOwnedRows
+  // comment for why this legacy shape must keep being excluded even after
+  // real image sync shipped). That combination used to be indistinguishable
+  // from a genuinely cloud-confirmed row absent because it was deleted
+  // elsewhere, so the very next pull after a share deleted the just-captured
+  // bookmark within seconds.
   const { calls, repository } = fakeRepository();
   const imageBookmark = makeBookmark({
     id: REMOTE_ID_B,
@@ -325,6 +328,30 @@ test('pull never deletes a local-only image bookmark absent from the server (Sen
   const api = fakeApi({ listBookmarkIds: async () => [] });
 
   const result = await pullRemoteChanges(api, repository, () => [imageBookmark], () => false);
+
+  assert.deepEqual(result.deletions, []);
+  assert.equal(calls.includes(`deleteBookmark:${REMOTE_ID_B}`), false);
+});
+
+test('pull never deletes a freshly-captured image bookmark mid-upload (real create queued, not yet confirmed)', async () => {
+  // The current capture path (store/bookmarks.tsx's addBookmark) enqueues a
+  // real 'pending' create for an image bookmark instead of the legacy fake
+  // 'synced' bookkeeping above — but the STASH-65 exposure is the same shape:
+  // a real UUID id, absent from the server (because it genuinely hasn't
+  // uploaded yet), must never read as "deleted on another device" while its
+  // create-sync (including the image upload itself) is still in flight.
+  const { calls, repository } = fakeRepository();
+  const uploadingImage = makeBookmark({
+    id: REMOTE_ID_B,
+    content_type: 'image',
+    sync_status: 'pending',
+    ever_synced: undefined,
+    local_image_uri: 'file:///stash-images/shared.jpg',
+    preview_image_url: null,
+  });
+  const api = fakeApi({ listBookmarkIds: async () => [] });
+
+  const result = await pullRemoteChanges(api, repository, () => [uploadingImage], () => false);
 
   assert.deepEqual(result.deletions, []);
   assert.equal(calls.includes(`deleteBookmark:${REMOTE_ID_B}`), false);
@@ -577,4 +604,51 @@ test('same user still reconciles genuine remote deletions', async () => {
   assert.equal(result.userChanged, false);
   assert.deepEqual(result.deletions, [REMOTE_ID_B]);
   assert.ok(calls.includes(`deleteBookmark:${REMOTE_ID_B}`));
+});
+
+test('a failure AFTER a successful fetch still records the real fetched row count, not zero', async () => {
+  const { repository } = fakeRepository();
+  const remote = makeBookmark();
+  const api = fakeApi({
+    listBookmarksUpdatedSince: async () => [remote],
+    listBookmarkIds: async () => [remote.id],
+  });
+  // The fetch succeeds (one row), but persisting the watermark afterward fails —
+  // a persistence failure must not look identical to "fetched nothing".
+  repository.setMeta = async (key) => {
+    if (key === LAST_PULLED_AT_KEY) {
+      throw new Error('watermark write failed');
+    }
+  };
+
+  await assert.rejects(pullRemoteChanges(api, repository, () => [], () => false));
+
+  const [latest] = getPullDiagnostics();
+  assert.equal(latest?.outcome, 'failure');
+  assert.equal(latest?.remoteRowCount, 1);
+  assert.match(latest?.errorMessage ?? '', /watermark write failed/);
+});
+
+test('a failure during the metadata preflight (before since/fullRefreshReason are known) still records an attempt', async () => {
+  const { repository } = fakeRepository();
+  // Fails on the very first repository call the function makes — nothing about
+  // since/fullRefreshReason/remoteRowCount has been computed yet.
+  repository.getMeta = async () => {
+    throw new Error('meta read failed');
+  };
+  const api = fakeApi();
+
+  await assert.rejects(
+    pullRemoteChanges(api, repository, () => [], () => false, {
+      id: 'user-1',
+      isAnonymous: false,
+    }),
+  );
+
+  const [latest] = getPullDiagnostics();
+  assert.equal(latest?.outcome, 'failure');
+  assert.equal(latest?.since, null);
+  assert.equal(latest?.fullRefreshReason, null);
+  assert.equal(latest?.remoteRowCount, 0);
+  assert.match(latest?.errorMessage ?? '', /meta read failed/);
 });

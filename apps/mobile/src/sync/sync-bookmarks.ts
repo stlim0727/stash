@@ -23,8 +23,20 @@ export interface EntrySyncResult {
   bookmarkUpdate?: Bookmark;
   /** True when the entry's work is finished and it can leave the queue. */
   removeEntry?: boolean;
-  /** For creates: what was actually sent, so callers can reconcile later edits. */
+  /** For creates: what was actually sent, so callers can reconcile later edits.
+   *  SUCCESS-ONLY — see the STASH-3Y "unconditional proof this create already
+   *  succeeded remotely" comment at its sole diagnostics call site
+   *  (store/bookmarks.tsx). Never repurpose this for a signal that must also
+   *  fire on failure; use `uploadedImageUrl` below for that. */
   uploadedPayload?: CreateBookmarkInput;
+  /** For creates: the Storage URL an image bookmark's binary uploaded to
+   *  during THIS attempt, if any — set on success AND on a subsequent
+   *  `createBookmark` failure alike (the upload step runs, and can succeed,
+   *  before the create call that follows it). Unlike `uploadedPayload`, this
+   *  is not proof the create itself succeeded — only that a real Storage
+   *  object now exists and needs tracking/cleanup regardless of how the
+   *  create call resolves (see `planDeletedMidFlightCleanup`, its only use). */
+  uploadedImageUrl?: string;
   /** Present when the local bookmark row was removed (deleted on another
    *  device while this device had a queued edit for it — see below). */
   removedBookmarkId?: string;
@@ -38,6 +50,21 @@ export interface EntrySyncResult {
    * local-id row that was never actually created server-side).
    */
   originalLocalId?: string;
+  /**
+   * True when a create's `api.createBookmark` request landed successfully,
+   * but the live signed-in identity changed WHILE that request was in
+   * flight (checked again after the response — the pre-dispatch check
+   * alone can't close this window, since the awaited network call itself
+   * is exactly where it can still happen). The row now has a REAL cloud
+   * identity, but under the DEPARTED identity, not whichever one is live
+   * now — `bookmarkUpdate` is never set in this case; the caller
+   * (applySyncEntryResult in store/bookmarks.tsx) must route `entry.local_id`
+   * through the same rehome machinery account transitions use (mint a fresh
+   * id, tag re-key, etc.) rather than trusting this as a normal confirmed
+   * sync. `removeEntry` is always true alongside this — the ORIGINAL queue
+   * entry is done; a fresh one under the new id replaces it.
+   */
+  landedUnderDepartedIdentity?: boolean;
 }
 
 export const BULK_CREATE_SYNC_CHUNK_SIZE = 50;
@@ -287,6 +314,33 @@ export async function syncCreateQueueEntryBatch(
   api: BookmarkApi,
   entries: LocalPendingBookmark[],
   getBookmark: (id: string) => Bookmark | undefined,
+  /**
+   * Same purpose as syncQueueEntry's own parameter of the same name — see
+   * its doc comment there for the full race. A bulk chunk's own
+   * api.createBookmarks call can take real wall-clock time (potentially
+   * longer than a single create — this is the mass-import path), so the
+   * SAME sign-out-mid-flight exposure applies here, just for every row in
+   * the chunk at once instead of one.
+   *
+   * Unlike syncQueueEntry, a post-response mismatch here does NOT route
+   * through the per-row rehome machinery — this function's caller
+   * (applyBulkCreateChunkResults in store/bookmarks.tsx) is an intricate,
+   * loop-stall-watchdog-sensitive hot path, and safely threading a
+   * per-row identity-mismatch branch through its batched dedup/reconcile
+   * logic is a meaningfully bigger, riskier change than this fix
+   * warranted attempting under the same pass as the single-entry fix.
+   * Instead this throws, which the call site's EXISTING try/catch already
+   * treats as an ordinary batch failure (every entry retries later) — so
+   * at minimum no row is ever durably misattributed to a departed
+   * identity's confirmation. The narrower residual: a retry reusing the
+   * SAME ids can still hit the primary-key-collision shape (STASH-3Q-
+   * adjacent) if the batch's create actually landed under the departed
+   * identity before this check catches it — the same PRE-EXISTING,
+   * already-accepted trade-off this codebase has for any lost-response/
+   * crash mid-bulk-create, identity change or not. Closing that
+   * completely is tracked as a known follow-up, not done here.
+   */
+  getLiveUserId?: () => string | null | undefined,
 ): Promise<EntrySyncResult[]> {
   if (entries.length === 0) {
     return [];
@@ -297,10 +351,23 @@ export async function syncCreateQueueEntryBatch(
   if (entries.some((entry) => !hasBulkCreateResultKey(entry))) {
     throw new Error('Bulk create sync requires a client_id or URL mapping key.');
   }
+  // Image creates need an upload-then-create step this bulk path has no room
+  // for (one request, no per-row side effect) — the caller must route them
+  // through syncQueueEntry instead. Fail loudly rather than let one slip
+  // through and get created without ever uploading its binary.
+  if (entries.some((entry) => entry.payload.content_type === 'image')) {
+    throw new Error('Bulk create sync does not support image bookmarks; use syncQueueEntry.');
+  }
+  if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+    throw new Error('Signed-in identity changed before this bulk create could be dispatched.');
+  }
 
   const now = new Date().toISOString();
   const uploadedPayloads = entries.map((entry) => createUploadPayload(entry, getBookmark));
   const created = await api.createBookmarks(uploadedPayloads);
+  if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+    throw new Error('Signed-in identity changed before this bulk create could be confirmed.');
+  }
   if (created.length !== entries.length) {
     throw new Error('Bulk create sync returned the wrong number of results.');
   }
@@ -371,6 +438,39 @@ export async function syncQueueEntry(
   repository: BookmarkRepository,
   entry: LocalPendingBookmark,
   getBookmark: (id: string) => Bookmark | undefined,
+  /**
+   * Uploads an image-only bookmark's binary to Storage and resolves its
+   * public URL — required only for a `create` entry whose bookmark is
+   * `content_type: 'image'` with a `local_image_uri` still needing upload
+   * (`preview_image_url` still null). Injected (rather than importing a
+   * native file API here) so this module stays platform-free and testable
+   * under the Node runner via a fake; the real implementation lives in
+   * `storage/image-store.native.ts` + `api/bookmarks.ts`'s
+   * `imageUploadTarget`, wired together in `store/bookmarks.tsx`. Omitted
+   * entirely on a platform with no uploader (web) — an image create that
+   * needs one then fails cleanly instead of silently mis-syncing.
+   */
+  uploadImage?: (bookmark: Bookmark) => Promise<string>,
+  /**
+   * Reads the CURRENTLY signed-in user id, fresh, at the moment it's called
+   * — never a value captured earlier. `api.userId` is fixed for this whole
+   * call (it's a property of the `api` instance `syncNow` built once at the
+   * TOP of this sync cycle — see store/bookmarks.tsx), but an image
+   * create's own upload step can take several seconds, long enough for the
+   * user to sign out (or otherwise change identity) mid-flight; the logout
+   * effect runs independently of this in-flight call and doesn't wait for
+   * it. Without re-checking here, right before the create is confirmed, a
+   * create that started under one identity can land AFTER that identity
+   * departed — permanently marking this row `ever_synced: true` under an
+   * account that's no longer live, so it's silently misfiled locally
+   * (looks "synced" but a future edit's `update` op 404s/RLS-fails against
+   * a row a different account owns) and Storage now holds an object under
+   * the departed account's own path that nothing else will ever manage or
+   * clean up. Optional/undefined in tests that don't exercise this —
+   * treated as "can't tell, trust `api`" rather than forcing every existing
+   * fake to supply one.
+   */
+  getLiveUserId?: () => string | null | undefined,
 ): Promise<EntrySyncResult> {
   const now = new Date().toISOString();
 
@@ -475,11 +575,262 @@ export async function syncQueueEntry(
   }
 
   // operation === 'create'
+  // An image-only bookmark's row must never be created server-side before
+  // its binary has genuinely landed (STASH-65 invariant — see
+  // isLocalOnlyBookmark below). Upload first, splice the resulting URL into
+  // the payload, THEN create. `!preview_image_url` makes this step-and-skip
+  // idempotent across retries: once uploaded, a later retry (e.g. the
+  // createBookmark call itself failing) sees it already set and moves
+  // straight to create without re-uploading the same binary.
+  //
+  // The second half of that condition — requiring an already-set
+  // `preview_image_url` to ALSO have a recorded owner matching the CURRENT
+  // session's own user id — is the structural fix for a whole family of
+  // account-lifecycle races (sign-in carry-over, sign-out, a real A→real B
+  // switch): an image's binary uploads to Storage under whatever account is
+  // signed in AT UPLOAD TIME, and if the signed-in account changes before
+  // the row's create is ever confirmed, an already-set `preview_image_url`
+  // silently points at an object the NEW account can never manage. Rather
+  // than each transition needing its own bespoke "was this row affected"
+  // check, this single choke point re-validates ownership fresh, every
+  // retry, against whichever session is actually live right now — closing
+  // the whole class in one place instead of one instance at a time.
+  //
+  // A recorded owner that's simply ABSENT is treated as "needs one-time
+  // re-upload," not "trust it" — a genuine, if narrow, sequencing gap: a
+  // row captured on an app version from BEFORE this field existed, whose
+  // account then changed on that SAME old version (before this whole
+  // account-transition cleanup shipped), never got a chance to either record
+  // an owner OR go through the proactive rehome that would have caught the
+  // switch. By the time the row reaches a version that CAN check ownership,
+  // there's nothing recorded to check against — silently trusting the URL
+  // would reuse an object under whatever account happened to upload it,
+  // possibly not the one this device is signed into by then. Every row this
+  // fix's own code ever creates stamps both fields together, atomically, in
+  // the same write (see the repository.updateBookmark calls below and in
+  // the catch blocks) — so this "absent" branch is unreachable for any row
+  // that has ever been through THIS version's own upload step; it only ever
+  // matters once, for a genuinely legacy row, and the cost of guessing wrong
+  // here is nothing worse than one redundant re-upload of a file already on
+  // disk.
+  let uploadedImageUrl: string | undefined;
+  const bookmarkForUpload = getBookmark(entry.local_id);
+  const uploadedImageOwnerConfirmed =
+    Boolean(bookmarkForUpload?.preview_image_url) &&
+    Boolean(bookmarkForUpload?.local_image_uploaded_for_user_id) &&
+    bookmarkForUpload?.local_image_uploaded_for_user_id === api.userId;
+  if (
+    bookmarkForUpload?.content_type === 'image' &&
+    bookmarkForUpload.local_image_uri &&
+    !uploadedImageOwnerConfirmed
+  ) {
+    if (!uploadImage) {
+      return {
+        entry: await failEntry(
+          repository,
+          entry,
+          new Error('Image upload is not available on this platform.'),
+          now,
+        ),
+      };
+    }
+    try {
+      uploadedImageUrl = await uploadImage(bookmarkForUpload);
+      // Persist immediately (not just carried in `payload` below) so a later
+      // retry never re-uploads the same binary even if the create call that
+      // follows fails. Re-read the row rather than reusing the pre-upload
+      // `bookmarkForUpload` snapshot: the upload can take several seconds,
+      // long enough for a concurrent title/notes edit to land in storage —
+      // writing the stale snapshot here would silently revert it (see the
+      // "full-row storage writes should re-read the freshest row" rule in
+      // AGENTS.md's Known Traps).
+      const freshestBookmark = getBookmark(entry.local_id);
+      if (!freshestBookmark) {
+        // The row is genuinely gone (permanently deleted, e.g. emptying
+        // Trash or Reset Library) — a still-trashed row would still be
+        // returned here with deleted_at set, so this specifically means
+        // "no local row at all," not "moved to Trash." Falling back to the
+        // stale `bookmarkForUpload` snapshot would resurrect it: native's
+        // `updateBookmark` is `INSERT OR REPLACE` (see
+        // repository.native.ts), an upsert, so writing that snapshot back
+        // would durably re-insert a row the user just deleted. Abort
+        // instead — mirrors the identical "bookmark is gone locally"
+        // handling in the 'update' branch above.
+        //
+        // The upload above already landed, though (uploadedImageUrl is set)
+        // — a real, public object now exists at this bookmark's Storage
+        // path even though the row that owned it is gone. The normal
+        // deletion-cleanup path (deleteBookmark/emptyTrash/resetLibrary in
+        // store/bookmarks.tsx) can't catch this: it already ran, earlier,
+        // while preview_image_url was still null (before this upload
+        // finished), so its "does this row own an object" check saw
+        // nothing to clean up. Delete it here instead, best-effort — a
+        // failure just leaves an orphaned object (same bounded, non-
+        // catastrophic trade-off as every other Storage cleanup call in
+        // this app), never blocks the abort itself.
+        if (uploadedImageUrl) {
+          try {
+            await api.deleteImages([entry.local_id]);
+          } catch (error) {
+            recordLog(
+              'warn',
+              `sync: failed to delete orphaned Storage object for permanently-deleted image bookmark ${entry.local_id}: ${errorMessage(error)}`,
+            );
+          }
+        }
+        await removeQueueEntryIfNotSuperseded(repository, entry);
+        return { entry: { ...entry, sync_status: 'synced', updated_at: now }, removeEntry: true };
+      }
+      await repository.updateBookmark({
+        ...freshestBookmark,
+        preview_image_url: uploadedImageUrl,
+        local_image_uploaded_for_user_id: api.userId,
+      });
+    } catch (error) {
+      const failedEntry = await failEntry(repository, entry, error, now);
+      // Mirror the createBookmark-failure catch below: without persisting a
+      // failed bookmark row here too, `bookmark.sync_status` stays stuck at
+      // whatever it was before (typically 'pending') forever — even though
+      // the queue entry itself is genuinely 'failed' and backing off. The
+      // Inbox/Detail "sync pending" chip reads the BOOKMARK row, not the
+      // queue, so a Storage rejection (403/5xx, size limit, ...) would
+      // otherwise look like it's still quietly in progress indefinitely.
+      const localBookmark = getBookmark(entry.local_id);
+      if (localBookmark && localBookmark.sync_status !== 'failed') {
+        const failedBookmark: Bookmark = {
+          ...localBookmark,
+          sync_status: 'failed',
+        };
+        await repository.updateBookmark(failedBookmark);
+        return { entry: failedEntry, bookmarkUpdate: failedBookmark };
+      }
+      return { entry: failedEntry };
+    }
+  }
+
   // Send the LATEST user-authored fields, not the payload captured at save
   // time: the user may have edited title/notes before this upload ran.
   const payload = createUploadPayload(entry, getBookmark);
+  if (uploadedImageUrl) {
+    // createUploadPayload's own getBookmark() re-read may not reflect the
+    // repository write above yet (it's backed by in-memory state, which can
+    // lag a direct repository write) — set explicitly rather than relying on
+    // that race resolving in our favor.
+    payload.preview_image_url = uploadedImageUrl;
+    payload.content_type = 'image';
+  }
+
+  // P1: re-validate the LIVE signed-in identity right before actually
+  // confirming this create — see getLiveUserId's own doc comment above for
+  // the full race (an image upload's multi-second gap is the main exposure,
+  // but this applies to every create). `api.userId` is fixed for this whole
+  // call; if the live identity has since diverged from it, DON'T call
+  // createBookmark under the departed identity — that would durably mark
+  // this row `ever_synced: true` against a real cloud row the CURRENT
+  // identity can never manage again. Fail this attempt instead so the
+  // identity that's actually live now picks it up on the next retry.
+  //
+  // `api.userId` must ALSO be truthy to fire: the real BookmarkApi always
+  // returns one (a session's user id is never empty), so this costs nothing
+  // in production, but a test double that hasn't implemented the getter
+  // (many pre-date it) would otherwise read `undefined` and mismatch
+  // EVERY real getLiveUserId() unconditionally — "unknown, trust it" is the
+  // same backward-compat stance local_image_uploaded_for_user_id takes.
+  if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+    // Best-effort cleanup under the OLD (departing) api instance — it's the
+    // one with rights to its own Storage path. The local row below must
+    // never keep pointing at an object this call just attempted to delete:
+    // if the user later signs back into this SAME departed account,
+    // `uploadedImageOwnerConfirmed` above would otherwise see a matching
+    // owner and wrongly trust a URL to an object that may no longer exist —
+    // a permanently broken image, not just a wasted redundant re-upload.
+    // (Re-signing into a DIFFERENT account is already covered either way —
+    // the owner mismatch alone forces a re-upload.) So the URL/owner are
+    // cleared below unconditionally, regardless of whether this delete
+    // itself actually succeeded — a needless one-time re-upload of a file
+    // still on disk is the safe default either way.
+    if (uploadedImageUrl) {
+      try {
+        await api.deleteImages([entry.local_id]);
+      } catch (error) {
+        // Delete failed — unknown whether the object still exists. Treat
+        // the URL as no longer trustworthy either way: a needless one-time
+        // re-upload of a file still on disk is the safe default, not a
+        // silently broken image reference.
+        recordLog(
+          'warn',
+          `sync: failed to delete Storage object uploaded under a departed identity for ${entry.local_id}: ${errorMessage(error)}`,
+        );
+      }
+    }
+    const failedEntry = await failEntry(
+      repository,
+      entry,
+      new Error('Signed-in identity changed before this create could be confirmed.'),
+      now,
+    );
+    const localBookmark = getBookmark(entry.local_id);
+    if (localBookmark && (localBookmark.sync_status !== 'failed' || uploadedImageUrl)) {
+      const failedBookmark: Bookmark = {
+        ...localBookmark,
+        sync_status: 'failed',
+        ...(uploadedImageUrl
+          ? { preview_image_url: null, local_image_uploaded_for_user_id: null }
+          : {}),
+      };
+      await repository.updateBookmark(failedBookmark);
+      return { entry: failedEntry, bookmarkUpdate: failedBookmark, uploadedImageUrl };
+    }
+    return { entry: failedEntry, uploadedImageUrl };
+  }
+
   try {
     const result = await api.createBookmark(payload);
+
+    // P1: the pre-dispatch check above narrows the race but can't close it
+    // — the awaited call itself is exactly where the live identity can
+    // still change (sign-out mid-flight doesn't wait for this request).
+    // The create landed regardless (result.bookmark_id is real), but it
+    // landed under api.userId, which is now the DEPARTED identity —
+    // confirming this row as `ever_synced: true` here would durably
+    // misattribute a real cloud row to whichever identity happens to be
+    // live now. This pure function has no access to the rehome machinery
+    // (makeBookmarkId, tag re-key, etc. — see applyAccountTransition) that
+    // routing this correctly needs, so just signal it; the caller
+    // (applySyncEntryResult in store/bookmarks.tsx) does the actual rehome.
+    if (getLiveUserId && api.userId && getLiveUserId() !== api.userId) {
+      // Deliberately NOT calling removeQueueEntryIfNotSuperseded here (round
+      // 8's "landed mid-flight, gone locally" abort above does — this
+      // differs on purpose). This row is being rehomed, not discarded — the
+      // caller (applySyncEntryResult) routes it through applyAccountTransition,
+      // whose rehome path removes the OLD queue entry INSIDE the same
+      // atomic replaceBookmarkIdentities commit that also writes the NEW
+      // one (see round 8's own fix for exactly this). Removing it here
+      // first would reopen that closed crash window: a process death
+      // between this call and the rehome actually running would leave the
+      // row with NO active queue entry at all — worse than the original
+      // primary-key-collision risk, since nothing would ever pick it back
+      // up without a separate orphan-reconcile pass rediscovering it.
+      return {
+        // remote_id: result.bookmark_id — NOT left null/whatever `entry`
+        // already had. If this row was ALSO deleted while in flight (races
+        // the same window this check exists for), applySyncEntryResult's
+        // "deleted mid-flight" branch runs BEFORE it ever reaches
+        // landedUnderDepartedIdentity below, and derives its own cleanup
+        // from THIS field via planDeletedMidFlightCleanup — an omitted or
+        // stale remote_id there would silently skip queuing the remote
+        // delete for a row that's now a REAL, orphaned cloud row under the
+        // departed identity.
+        entry: { ...entry, remote_id: result.bookmark_id, sync_status: 'synced', updated_at: now },
+        removeEntry: true,
+        landedUnderDepartedIdentity: true,
+        // Same reasoning as remote_id above, for the image-cleanup half of
+        // that same branch: without this, a landed image upload's Storage
+        // object would never get queued for deletion either.
+        uploadedImageUrl,
+      };
+    }
+
     const syncedEntry: LocalPendingBookmark = {
       ...entry,
       remote_id: result.bookmark_id,
@@ -514,6 +865,12 @@ export async function syncQueueEntry(
         sync_status: 'synced',
         ever_synced: true,
         updated_at: now,
+        // Guarantee the local row reflects what was actually just uploaded,
+        // even if `localBookmark` (read from in-memory state) hadn't yet
+        // caught up to the direct repository write above.
+        ...(uploadedImageUrl
+          ? { preview_image_url: uploadedImageUrl, local_image_uploaded_for_user_id: api.userId }
+          : {}),
       };
       if (isDuplicateSwap) {
         // insertBookmark (not updateBookmark), since the existing row's id is
@@ -530,6 +887,7 @@ export async function syncQueueEntry(
         entry: syncedEntry,
         bookmarkUpdate: syncedBookmark,
         uploadedPayload: payload,
+        uploadedImageUrl,
         originalLocalId: isDuplicateSwap ? entry.local_id : undefined,
         removeEntry,
       };
@@ -539,23 +897,154 @@ export async function syncQueueEntry(
     return {
       entry: syncedEntry,
       uploadedPayload: payload,
+      uploadedImageUrl,
       originalLocalId: result.bookmark_id !== entry.local_id ? entry.local_id : undefined,
       removeEntry,
     };
   } catch (error) {
     const failedEntry = await failEntry(repository, entry, error, now);
     const localBookmark = getBookmark(entry.local_id);
-    if (localBookmark && localBookmark.sync_status !== 'failed') {
-      const failedBookmark: Bookmark = { ...localBookmark, sync_status: 'failed' };
+    // A retried entry's bookmark row is very often ALREADY `sync_status:
+    // 'failed'` from its own previous attempt — the `sync_status !==
+    // 'failed'` half of this guard exists to skip a redundant no-op write
+    // when nothing actually changed. But `uploadedImageUrl` being set means
+    // THIS attempt's upload genuinely landed (possibly a fresh re-upload the
+    // staleness guard above just forced) — that's a real change regardless
+    // of `sync_status`, and skipping the write would leave the in-memory row
+    // (and its `local_image_uploaded_for_user_id` stamp) pointing at the OLD
+    // URL/owner even though the repository already has the new one. The
+    // next retry would then read that stale in-memory owner and wrongly
+    // treat this device's own just-landed upload as stale all over again,
+    // re-uploading the same binary needlessly on every subsequent retry.
+    if (localBookmark && (localBookmark.sync_status !== 'failed' || uploadedImageUrl)) {
+      const failedBookmark: Bookmark = {
+        ...localBookmark,
+        sync_status: 'failed',
+        // The image (if any) already uploaded successfully before this
+        // createBookmark call itself failed. `localBookmark` is the
+        // in-memory snapshot, which never reflects the upload step's direct
+        // repository write above (it wrote straight to storage, bypassing
+        // React state) — without this, the write below would clobber that
+        // just-persisted URL (and its owning-user stamp) back to null/stale,
+        // and the next retry would see `!preview_image_url` and needlessly
+        // re-upload — or, worse, wrongly treat this device's own just-landed
+        // upload as unconfirmed all over again (see
+        // `uploadedImageOwnerConfirmed` above).
+        ...(uploadedImageUrl
+          ? { preview_image_url: uploadedImageUrl, local_image_uploaded_for_user_id: api.userId }
+          : {}),
+      };
       await repository.updateBookmark(failedBookmark);
       return {
         entry: failedEntry,
         bookmarkUpdate: failedBookmark,
+        uploadedImageUrl,
       };
     }
 
-    return { entry: failedEntry };
+    // No local row to write the uploaded URL onto (e.g. deleted mid-flight —
+    // see planDeletedMidFlightCleanup), but `uploadedImageUrl` must still
+    // surface here: it's the only signal the caller has that a real Storage
+    // object exists from THIS attempt and needs cleanup, regardless of the
+    // create call's own outcome.
+    return { entry: failedEntry, uploadedImageUrl };
   }
+}
+
+/**
+ * Merges a just-synced Bookmark's sync-owned fields onto the freshest
+ * in-memory row, without overwriting anything that might have changed
+ * concurrently while the sync was in flight (enrichment settling, a user
+ * edit). `update` (the sync result's `bookmarkUpdate`) was built from a
+ * snapshot taken before the upload started, so blindly writing all of it
+ * back over `latest` would silently revert whatever changed in the
+ * meantime — see `applySyncEntryResult` in store/bookmarks.tsx, the sole
+ * caller.
+ *
+ * `preview_image_url` (and its `local_image_uploaded_for_user_id` owner
+ * stamp) is the one deliberate exception: for an image bookmark
+ * specifically it IS sync-owned — an image bookmark never runs enrichment
+ * (`metadata_status` stays `'skipped'`), so there is no concurrent writer it
+ * could ever race — and `update.preview_image_url` is exactly the URL this
+ * sync pass just uploaded/confirmed. Without carrying it through here,
+ * `latest.preview_image_url` (still null — the upload step writes straight
+ * to the repository, never to React state) would silently drop the
+ * just-uploaded URL from both memory and the next durable write, and the
+ * next title/notes edit's own update payload would then send
+ * `preview_image_url: null` and wipe the image on every device. Dropping
+ * `local_image_uploaded_for_user_id` here specifically would defeat
+ * `syncQueueEntry`'s own staleness guard on the very next retry — it reads
+ * off this in-memory row (via `getBookmark`), not the repository.
+ */
+export function mergeSyncedBookmarkFields(latest: Bookmark, update: Bookmark): Bookmark {
+  return {
+    ...latest,
+    id: update.id,
+    sync_status: update.sync_status,
+    ever_synced: update.ever_synced,
+    updated_at: update.updated_at,
+    ...(update.content_type === 'image'
+      ? {
+          preview_image_url: update.preview_image_url,
+          local_image_uploaded_for_user_id: update.local_image_uploaded_for_user_id,
+        }
+      : {}),
+  };
+}
+
+/** What to clean up when a create/update's request reached the server
+ *  successfully, but the bookmark was permanently deleted locally while it
+ *  was still in flight — see `applySyncEntryResult`'s "Deleted while a
+ *  create/update was in flight" handling in store/bookmarks.tsx, the sole
+ *  caller. Both fields are `null` when there is nothing to clean up. */
+export interface DeletedMidFlightCleanupPlan {
+  /** A remote id to send an explicit `delete` mutation for, or `null` when
+   *  the request never actually reached the server (e.g. it failed). */
+  remoteIdToDelete: string | null;
+  /** A bookmark id whose uploaded Storage object must be deleted, or `null`
+   *  when this wasn't an image create, or its upload never reached Storage. */
+  imageIdToCleanUp: string | null;
+}
+
+/**
+ * Pure decision logic for `planDeletedMidFlightCleanup`'s sole caller.
+ * Split out (mirroring this codebase's existing plan/apply split for
+ * account-transition) so the fix below is independently unit-tested rather
+ * than only reachable through a full sync-cycle integration test.
+ *
+ * `remoteIdToDelete`: a real cloud row now exists under `resultRemoteId`
+ * whenever it's set, regardless of WHY — its own stable id (the common
+ * case: `createBookmark` uses the client-supplied id as primary key, so a
+ * normal successful create's remote id equals the entry's own local id) or,
+ * via a server-side dedupe, an EXISTING different row's id (STASH-3Q
+ * duplicate-swap). A prior version of this check only handled the
+ * duplicate-swap case (`resultRemoteId !== entryLocalId`), silently leaving
+ * the far more common same-id case's cloud row undeleted and resurrectable
+ * by a later pull.
+ *
+ * `imageIdToCleanUp`: the image (if any) already uploaded successfully
+ * before the row was discovered deleted — the same underlying gap
+ * `syncQueueEntry`'s own mid-upload abort branch closes, just triggered at
+ * a later point: here the create call itself had already been dispatched
+ * (past that abort check) and landed anyway. A real, public Storage object
+ * exists and nothing else will ever clean it up. Deliberately keyed off
+ * `uploadedImageUrl`, NOT `uploadedPayload`: the upload step runs before
+ * `createBookmark`, so it can succeed even when that follow-up call then
+ * FAILS — `uploadedPayload` is only ever set on a successful create (see its
+ * own doc comment), so it would silently miss that failure case and leave
+ * the object orphaned forever. `uploadedImageUrl` is set on both outcomes
+ * alike (success and failure) precisely so this check doesn't have to care
+ * which one happened — only whether Storage now holds a real object.
+ */
+export function planDeletedMidFlightCleanup(
+  resultRemoteId: string | null | undefined,
+  uploadedImageUrl: string | undefined,
+  entryLocalId: string,
+): DeletedMidFlightCleanupPlan {
+  return {
+    remoteIdToDelete: resultRemoteId ?? null,
+    imageIdToCleanUp: uploadedImageUrl ? entryLocalId : null,
+  };
 }
 
 /**
@@ -679,6 +1168,17 @@ export function createSyncApi(session: SupabaseAuthSession): BookmarkApi {
 // retried the moment the app updates, with no further doomed request needed.
 const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
 
+/**
+ * The marker text `uploadBookmarkImage` (store/bookmarks.tsx) throws with
+ * when a captured image exceeds `MAX_UPLOAD_IMAGE_BYTES`
+ * (domain/image-share.ts) — checked BEFORE ever attempting the upload, so
+ * this is a client-thrown message, not a server response, but it plays
+ * exactly the same "permanent, will never succeed on retry" role as
+ * `URL_TOO_LONG_ERROR_TEXT` below: a captured image doesn't shrink between
+ * retries, so the bucket's `file_size_limit` will reject it every time.
+ */
+export const IMAGE_TOO_LARGE_ERROR_TEXT = 'exceeds the maximum upload size';
+
 /** A bulk-chunk request fails as a whole even when only one row in it is
  *  actually bad (e.g. one legacy too-long URL), so the caller can't blindly
  *  copy that shared error message onto every entry in the chunk — this text
@@ -686,9 +1186,13 @@ const URL_TOO_LONG_ERROR_TEXT = 'exceeds btree version';
  *  failure handler can detect it BEFORE attributing an error to any entry,
  *  and fall back to per-entry sync to isolate which row actually caused it
  *  instead of misclassifying the rest of the chunk as permanently unsyncable
- *  too (caught in PR review). */
+ *  too (caught in PR review). Despite the name (predates the image case),
+ *  also recognizes an oversized image — harmlessly: image creates never
+ *  enter the bulk-chunk path at all (syncCreateQueueEntryBatch rejects them
+ *  outright), so this only ever matters for the single-entry syncQueueEntry
+ *  path below for that case. */
 export function isRowSpecificPermanentSyncErrorText(message: string): boolean {
-  return message.includes(URL_TOO_LONG_ERROR_TEXT);
+  return message.includes(URL_TOO_LONG_ERROR_TEXT) || message.includes(IMAGE_TOO_LARGE_ERROR_TEXT);
 }
 
 /** Exported so the caller can DRAIN these from the visible queue (see
@@ -696,7 +1200,9 @@ export function isRowSpecificPermanentSyncErrorText(message: string): boolean {
  *  `isSyncable` stops the doomed retries but leaves the row sitting as
  *  `sync_status: 'failed'` in the queue forever, which every "waiting to
  *  sync" count (e.g. Settings) still counts as pending work that can never
- *  drain (caught in PR review). */
+ *  drain (caught in PR review). Despite the name, also covers a
+ *  permanently-too-large image (see IMAGE_TOO_LARGE_ERROR_TEXT above) —
+ *  same "will never succeed on retry" shape, same drain treatment. */
 export function isPermanentlyUnsyncableUrl(entry: LocalPendingBookmark): boolean {
   return (
     entry.sync_status === 'failed' &&
@@ -809,9 +1315,14 @@ export function isSyncable(entry: LocalPendingBookmark, options: IsSyncableOptio
  * Local-ID rows get a `create`; rows that already have a remote identity get an
  * `update`. Both are idempotent on the server (create dedupes on URL, update is
  * last-write-wins), so re-enqueuing a bookmark that actually did reach the
- * cloud is harmless. A local row with no URL is skipped: the create API needs a
- * URL (or shared text, which this app doesn't capture), so enqueuing one would
- * just swap "sync pending" for a permanently failed entry.
+ * cloud is harmless. A URL-less row is only skipped when it's ALSO not a text
+ * note and not an image: `isUploadableCreate`/`createPayloadFromBookmark`
+ * (domain/create-payload.ts) rebuild a text note's body as `shared_text` and
+ * an image row as `content_type: 'image'` (its binary, if not yet uploaded,
+ * is uploaded by `syncQueueEntry` itself once this entry is picked up — see
+ * its `uploadImage` parameter), so both are genuinely reconcilable. Only a
+ * row with none of url/shared_text-body/image is skipped, since enqueuing one
+ * would just swap "sync pending" for a permanently failed entry.
  */
 export function reconcileOrphanedQueueEntries(
   bookmarks: Bookmark[],

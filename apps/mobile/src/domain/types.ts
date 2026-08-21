@@ -108,11 +108,61 @@ export interface Bookmark {
   /**
    * Local-only durable on-device URI of a captured image (content_type
    * 'image'). Set when an image is shared into the app; never sent to the
-   * cloud. Cloud upload of the binary (and the synced `image_path` it will map
-   * to) is deferred to 0.3.x — see docs/architecture/sync-account-switching.md.
-   * Optional so existing rows and remote-mapped rows need no migration.
+   * cloud. The sync engine uploads its binary to the `bookmark-images`
+   * Storage bucket and stores the resulting public URL in
+   * `preview_image_url` (see `sync/sync-bookmarks.ts`'s `syncQueueEntry` and
+   * `api/bookmarks.ts`'s `imageUploadTarget`) — this field stays local-only
+   * regardless, since it's an on-device file path meaningless on another
+   * device. Optional so existing rows and remote-mapped rows need no
+   * migration.
    */
   local_image_uri?: string | null;
+  /**
+   * Local-only MIME type of the captured image, as reported by the OS share
+   * sheet at capture time (`SharedImage.mimeType`); never sent to the cloud.
+   * The upload step uses this as the Storage object's Content-Type — it's
+   * the only reliable source of the REAL type: the durable local file's own
+   * extension alone can't be trusted for an uncommon format (e.g.
+   * `image/jxl`, which still passes `isImageMime` and gets captured, but has
+   * no entry in `domain/image-share.ts`'s MIME_TO_EXT/EXT_TO_MIME maps).
+   * Absent on rows captured before this field existed — the upload step
+   * falls back to guessing from the local file's extension for those only
+   * (see `mimeTypeForImageUri`), which can mislabel an unmapped format's
+   * Content-Type; a genuinely unsupported format still uploads correctly
+   * labeled and is honestly rejected by the bucket's MIME allowlist rather
+   * than silently mislabeled as something it isn't.
+   */
+  local_image_mime_type?: string | null;
+  /**
+   * Local-only record of WHICH signed-in user's session actually performed
+   * the Storage upload that `preview_image_url` points at (the session's own
+   * `user.id` — see `BookmarkApi.imageUploadTarget`'s path namespacing);
+   * never sent to the cloud. An image's binary uploads to Storage BEFORE its
+   * row is ever created, so `preview_image_url` can be genuinely set while
+   * the row itself is still unconfirmed (`createBookmark` still queued or
+   * failed) — and if the signed-in account changes before that create lands
+   * (sign-in carry-over, sign-out, or a real A→real B switch), the URL is
+   * left pointing at an object under the OLD account's own Storage path,
+   * which the new account can never manage and which can vanish if that old
+   * account is later cleaned up. `syncQueueEntry`'s pre-upload guard checks
+   * this against the CURRENT session before trusting an already-set
+   * `preview_image_url`, and re-uploads instead of reusing it on a mismatch —
+   * a single, self-healing choke point that catches every account-lifecycle
+   * transition without each one needing its own bespoke check. Absent (not
+   * merely a stale/wrong value) is ALSO treated as needing a one-time
+   * re-upload, not as "known-fine, trust the existing URL": every row this
+   * fix's own code has ever touched stamps this field in the SAME write as
+   * `preview_image_url`, so the two are only ever out of sync for a row
+   * captured on an app version from before this field existed — and if that
+   * row's account also changed on that same old version (before this
+   * account-transition cleanup shipped), there was never a chance to record
+   * an owner OR catch the switch proactively. Silently trusting an
+   * unrecorded owner would risk reusing an object under whichever account
+   * happened to upload it, not necessarily this device's current one; a
+   * needless one-time re-upload of a file already on disk is the safe
+   * default instead.
+   */
+  local_image_uploaded_for_user_id?: string | null;
   dismissed_suggested_tags?: string[];
   dismissed_suggested_folders?: string[];
   reviewed_summary_tokens?: string[];
@@ -207,6 +257,17 @@ export interface CreateBookmarkInput {
   notes?: string;
   source_app?: string;
   shared_text?: string;
+  /**
+   * Explicit content-type override for a create that carries neither `url`
+   * nor `shared_text` — currently only `'image'`, for an image-only capture
+   * (a screenshot shared with no link). `requirePayload` (api/bookmarks.ts)
+   * requires `preview_image_url` to already be a genuinely uploaded Storage
+   * URL whenever this is set: the row must never be created server-side
+   * before the binary itself has landed (see `isLocalOnlyBookmark`/STASH-65
+   * in sync/sync-bookmarks.ts). Every other content type is inferred from
+   * `url`/`shared_text` presence as before and never needs this field.
+   */
+  content_type?: 'image';
   site_name?: string | null;
   favicon_url?: string | null;
   preview_image_url?: string | null;

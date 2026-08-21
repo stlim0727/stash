@@ -59,7 +59,17 @@ export function createFakeRepositoryModule(): FakeRepositoryModule {
           .map((b) => (b.id === previousId ? bookmark : b));
       }
       const entryIds = new Set(entries.map((entry) => entry.local_id));
-      queue = [...queue.filter((entry) => !entryIds.has(entry.local_id)), ...entries];
+      // Mirror the real repositories: a queue entry still sitting under a
+      // rehomed row's OLD id must be dropped in this SAME atomic write too
+      // (see this method's doc comment in storage/types.ts), or it survives
+      // to retry under the OLD id in parallel with the newly-enqueued entry.
+      const previousIds = new Set(replacements.map((replacement) => replacement.previousId));
+      queue = [
+        ...queue.filter(
+          (entry) => !entryIds.has(entry.local_id) && !previousIds.has(entry.local_id),
+        ),
+        ...entries,
+      ];
       meta = { ...meta, ...state.metaUpdates };
       tagData = state.tagData;
     },

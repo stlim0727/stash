@@ -5,9 +5,10 @@ import type { Bookmark, CreateBookmarkInput } from '@/domain/types';
  * be regenerated from the stored row — account re-home (anonymous → real) and
  * startup self-heal both do this. A URL bookmark re-sends its URL plus the
  * user-authored fields; a URL-less text note keeps its body in `description`,
- * so it must be re-sent as `shared_text`. Otherwise the rebuilt create would
- * carry neither `url` nor `shared_text`, the server would reject it, and the
- * note would never upload.
+ * so it must be re-sent as `shared_text`; a URL-less image bookmark re-sends
+ * `content_type: 'image'` (see below). Otherwise the rebuilt create would
+ * carry neither `url`, `shared_text`, nor an image signal, the server would
+ * reject it, and the row would never upload.
  */
 export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInput {
   // Carry the row's stable capture id so a rebuilt create stays idempotent: if
@@ -29,6 +30,24 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
       client_id: clientId,
     };
   }
+  if (bookmark.content_type === 'image') {
+    // `content_type: 'image'` is the explicit signal requirePayload needs —
+    // there's no url/shared_text to infer it from. `preview_image_url` is
+    // carried through when already uploaded (e.g. a create whose queue entry
+    // was lost AFTER a successful upload); when still null, the caller
+    // (syncQueueEntry, driven by the live bookmark row's `local_image_uri`,
+    // not this snapshot) uploads it before this payload is actually sent —
+    // see isUploadableCreate below.
+    return {
+      id: bookmark.id,
+      content_type: 'image',
+      title: bookmark.title ?? undefined,
+      notes: bookmark.notes ?? undefined,
+      preview_image_url: bookmark.preview_image_url ?? undefined,
+      ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
+      client_id: clientId,
+    };
+  }
   return {
     id: bookmark.id,
     title: bookmark.title ?? undefined,
@@ -42,8 +61,13 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
 /**
  * Whether a rebuilt create payload has something the server will accept. A row
  * with neither a URL nor any text body can't be uploaded as a create, so the
- * self-heal/re-home paths skip it instead of enqueuing a doomed entry.
+ * self-heal/re-home paths skip it instead of enqueuing a doomed entry. An
+ * image payload is always uploadable regardless of whether
+ * `preview_image_url` is set yet — `syncQueueEntry` uploads the binary (from
+ * the live bookmark's `local_image_uri`) before ever sending this payload, so
+ * the payload snapshot alone can't tell "needs upload" apart from "already
+ * uploaded," and doesn't need to.
  */
 export function isUploadableCreate(payload: CreateBookmarkInput): boolean {
-  return Boolean(payload.url || payload.shared_text?.trim());
+  return Boolean(payload.url || payload.shared_text?.trim() || payload.content_type === 'image');
 }

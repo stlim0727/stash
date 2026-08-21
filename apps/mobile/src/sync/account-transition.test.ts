@@ -186,6 +186,187 @@ test('carry-over still re-homes a genuinely cloud-synced image row (ever_synced:
   );
 });
 
+test("applyAccountTransition clears an already-uploaded image bookmark's preview_image_url on rehome (P2: the new account cannot manage the old owner's Storage object)", async () => {
+  // Rehoming mints a NEW local id under the NEW account. The old
+  // preview_image_url points at the OLD (now-abandoned anonymous) user's own
+  // Storage path — owner-scoped Storage RLS means the new account can never
+  // update or delete an object under someone else's path segment, and the
+  // object could vanish if the old anonymous user is later cleaned up. The
+  // URL must be cleared so create-sync re-uploads the same still-on-disk
+  // local file under the new account's own path.
+  const oldRow = bookmark({
+    id: REMOTE_A,
+    url: null,
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/anon-user/' + REMOTE_A,
+    local_image_uri: 'file:///stash-images/shared.jpg',
+    sync_status: 'synced',
+    ever_synced: true,
+  });
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [oldRow],
+  );
+  assert.equal(plan.rehome.length, 1); // sanity: this row IS in the rehome set
+
+  let rehomedBookmarks: Bookmark[] = [];
+  let rehomedEntries: LocalPendingBookmark[] = [];
+  await applyAccountTransition(
+    plan,
+    fakeRepository(),
+    (updater) => {
+      rehomedBookmarks = updater([oldRow]) ?? [];
+    },
+    (updater) => {
+      rehomedEntries = updater([]);
+    },
+    () => 'local-rehomed-image',
+    async () => {},
+  );
+
+  const rehomed = rehomedBookmarks.find((b) => b.id === 'local-rehomed-image');
+  assert.equal(rehomed?.preview_image_url, null);
+  // The local file itself is untouched — same device, still on disk.
+  assert.equal(rehomed?.local_image_uri, 'file:///stash-images/shared.jpg');
+
+  const entry = rehomedEntries.find((e) => e.local_id === 'local-rehomed-image');
+  assert.equal(entry?.payload.content_type, 'image');
+  assert.equal(entry?.payload.preview_image_url, undefined);
+});
+
+test('carry-over rehomes a not-yet-synced image row whose upload already landed, under a FRESH id (P1, round 7: avoids a primary-key collision)', () => {
+  // The upload succeeded (preview_image_url set) but createBookmark itself
+  // failed before ever confirming a cloud row — ever_synced stays unset and
+  // sync_status reads 'failed' (or 'pending' mid-retry). cloudOwnedRows
+  // deliberately misses this (synced-only), so without a separate pass the
+  // still-queued create would retry under the new account with the OLD
+  // anon-owned URL baked in — a real object the new account can never
+  // manage. It's tempting to keep the SAME id here (no confirmed cloud row
+  // exists — the create call itself is what failed) but that's not
+  // guaranteed: the create can have committed server-side and only the
+  // response was lost, leaving this exact local shape while a real row
+  // already exists under this id. A fresh id (the same rehome treatment as
+  // a confirmed-synced row) sidesteps that risk unconditionally.
+  const staleRow = bookmark({
+    id: REMOTE_A,
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/anon-user/' + REMOTE_A,
+    local_image_uri: 'file:///stash-images/shared.jpg',
+    sync_status: 'failed',
+  });
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [staleRow],
+  );
+  assert.deepEqual(
+    plan.rehome.map((b) => b.id),
+    [REMOTE_A],
+  );
+});
+
+test('carry-over does not rehome a local-only image row that never uploaded (nothing stale to fix)', () => {
+  const neverUploaded = bookmark({
+    id: REMOTE_A,
+    content_type: 'image',
+    preview_image_url: null,
+    sync_status: 'pending',
+  });
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [neverUploaded],
+  );
+  assert.deepEqual(plan.rehome, []);
+});
+
+test('carry-over counts a genuinely cloud-synced image row exactly once (cloudOwnedRows and staleUploadedImageRows are mutually exclusive)', () => {
+  const syncedImage = bookmark({
+    id: REMOTE_A,
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/anon-user/' + REMOTE_A,
+    sync_status: 'synced',
+    ever_synced: true,
+  });
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [syncedImage],
+  );
+  assert.deepEqual(
+    plan.rehome.map((b) => b.id),
+    [REMOTE_A],
+  );
+});
+
+test('applyAccountTransition rehomes an unconfirmed-but-uploaded image row under a fresh id and drops its OLD queue entry (P1 fix, round 7)', async () => {
+  const staleRow = bookmark({
+    id: REMOTE_A,
+    url: null,
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/anon-user/' + REMOTE_A,
+    local_image_uri: 'file:///stash-images/shared.jpg',
+    sync_status: 'failed',
+  });
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [staleRow],
+  );
+  assert.equal(plan.rehome.length, 1); // sanity: this row IS in the rehome set
+
+  const oldQueueEntry = queueEntry({
+    local_id: REMOTE_A,
+    operation: 'create',
+    sync_status: 'failed',
+    payload: { id: REMOTE_A, content_type: 'image' },
+  });
+
+  let rehomedBookmarks: Bookmark[] = [];
+  let rehomedQueue: LocalPendingBookmark[] = [];
+  const removeQueueEntryCalls: string[] = [];
+  await applyAccountTransition(
+    plan,
+    {
+      ...fakeRepository(),
+      removeQueueEntry: async (localId) => {
+        removeQueueEntryCalls.push(localId);
+      },
+    },
+    (updater) => {
+      rehomedBookmarks = updater([staleRow]) ?? [];
+    },
+    (updater) => {
+      rehomedQueue = updater([oldQueueEntry]);
+      return rehomedQueue;
+    },
+    () => 'local-rehomed-image',
+    async () => {},
+  );
+
+  // A fresh id, not REMOTE_A — see the plan-level test's reasoning above.
+  const rehomed = rehomedBookmarks.find((b) => b.id === 'local-rehomed-image');
+  assert.equal(rehomed?.preview_image_url, null);
+  assert.equal(rehomed?.local_image_uploaded_for_user_id, null);
+  // The local file itself is untouched — same device, still on disk.
+  assert.equal(rehomed?.local_image_uri, 'file:///stash-images/shared.jpg');
+
+  // The OLD entry (still targeting REMOTE_A) must be gone from the queue —
+  // in memory AND durably — or it would keep retrying create under REMOTE_A
+  // in parallel with the new entry, hitting a primary-key collision if a
+  // real cloud row already exists under that id.
+  assert.equal(
+    rehomedQueue.some((entry) => entry.local_id === REMOTE_A),
+    false,
+  );
+  assert.deepEqual(removeQueueEntryCalls, [REMOTE_A]);
+
+  const newEntry = rehomedQueue.find((entry) => entry.local_id === 'local-rehomed-image');
+  assert.equal(newEntry?.payload.content_type, 'image');
+  assert.equal(newEntry?.payload.preview_image_url, undefined);
+});
+
 test('planLogoutCacheClear drops the logged-out account’s cloud rows', () => {
   const plan = planLogoutCacheClear([bookmark({ id: REMOTE_A }), bookmark({ id: REMOTE_B })]);
   assert.equal(plan.kind, 'logout');
