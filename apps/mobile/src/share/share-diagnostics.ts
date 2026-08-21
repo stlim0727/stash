@@ -2,10 +2,11 @@ import { Platform } from 'react-native';
 import { ShareIntentModule } from 'expo-share-intent';
 
 import {
+  appendShareAttemptHistory,
   buildShareAttemptDiagnostics,
-  markShareAttemptPersisted,
-  parseShareAttemptDiagnostics,
-  serializeShareAttemptDiagnostics,
+  markShareAttemptHistoryPersisted,
+  parseShareAttemptHistory,
+  serializeShareAttemptHistory,
   SHARE_DIAGNOSTICS_PREF_KEY,
   type ShareAttemptDiagnostics,
   type ShareAttemptInput,
@@ -14,22 +15,24 @@ import { recordLog } from '@/observability/log-buffer';
 import { getPreference, setPreference } from '@/storage/preferences';
 
 /**
- * Durable read/write for the "last share attempt" diagnostics record (see
+ * Durable read/write for the recent share-attempt diagnostics history (see
  * `domain/share-diagnostics.ts`). Backed by the same meta store as other
  * preferences so a report filed in a later app session — after the failed
  * share's own session has already ended — can still show what that share
- * contained.
+ * contained. Keeps a short ring of attempts rather than just the latest, so a
+ * report filed right after a *successful retry* still carries evidence of the
+ * earlier failed attempt instead of only the working one (Sentry STASH-67).
  *
  * Every operation is best-effort: diagnostics must never throw into — or
  * delay — the share path. Capture is sacred.
  */
 
-let cached: ShareAttemptDiagnostics | undefined;
+let cached: ShareAttemptDiagnostics[] = [];
 let writeChain = Promise.resolve();
 
-function persist(record: ShareAttemptDiagnostics): void {
+function persist(history: ShareAttemptDiagnostics[]): void {
   writeChain = writeChain
-    .then(() => setPreference(SHARE_DIAGNOSTICS_PREF_KEY, serializeShareAttemptDiagnostics(record)))
+    .then(() => setPreference(SHARE_DIAGNOSTICS_PREF_KEY, serializeShareAttemptHistory(history)))
     .catch(() => {
       // Best-effort - never let diagnostics bookkeeping interfere with capture.
     });
@@ -39,41 +42,42 @@ function persist(record: ShareAttemptDiagnostics): void {
  *  share path must not wait on this write. */
 export function recordShareAttempt(input: ShareAttemptInput): void {
   const record = buildShareAttemptDiagnostics(input);
-  cached = record;
-  persist(record);
+  cached = appendShareAttemptHistory(cached, record);
+  persist(cached);
 }
 
 /** Correlate the repository write outcome with the native/JS share attempt. */
 export function recordSharePersistence(attemptId: string | undefined, durable: boolean): void {
-  if (!cached) {
+  const next = markShareAttemptHistoryPersisted(cached, attemptId, durable);
+  if (!next) {
     return;
   }
-  const record = markShareAttemptPersisted(cached, attemptId, durable);
-  if (!record) {
-    return;
-  }
-  cached = record;
-  persist(record);
+  cached = next;
+  persist(cached);
 }
 
 /**
- * Load the durable record into the in-memory cache. Call once at startup so a
- * report filed in a fresh session can still see the last attempt, even though
- * `getShareDiagnostics` itself stays synchronous for the report screen.
+ * Load the durable history into the in-memory cache. Call once at startup so a
+ * report filed in a fresh session can still see recent attempts, even though
+ * `getShareDiagnostics`/`getShareDiagnosticsHistory` themselves stay
+ * synchronous for the report screen.
  */
 export async function hydrateShareDiagnostics(): Promise<void> {
   try {
-    const stored = parseShareAttemptDiagnostics(await getPreference(SHARE_DIAGNOSTICS_PREF_KEY));
-    if (stored) {
-      cached = stored;
-    }
+    cached = parseShareAttemptHistory(await getPreference(SHARE_DIAGNOSTICS_PREF_KEY));
   } catch {
     // Best-effort — a report screen without this context is still useful.
   }
 }
 
-/** The last recorded share attempt, if any. */
+/** The most recent share attempt, if any. */
 export function getShareDiagnostics(): ShareAttemptDiagnostics | undefined {
+  return cached[cached.length - 1];
+}
+
+/** The recent share-attempt history (oldest first), for correlating a
+ *  reported failure against attempts that happened before the latest. */
+export function getShareDiagnosticsHistory(): ShareAttemptDiagnostics[] {
   return cached;
 }
 

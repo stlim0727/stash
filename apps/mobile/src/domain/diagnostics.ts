@@ -74,6 +74,10 @@ export interface DiagnosticsInput {
   syncReconcile?: DiagnosticsReconcile | null;
   /** Durable record of the last share-intent attempt, if any (survives restarts). */
   shareAttempt?: ShareAttemptDiagnostics | null;
+  /** Recent share-attempt history (oldest first), so a report filed right
+   *  after a successful retry still shows an earlier failed attempt instead
+   *  of only the working one (Sentry STASH-67). */
+  shareAttemptHistory?: ShareAttemptDiagnostics[] | null;
   /** Durable record of the last few sync pull attempts, if any (survives
    *  restarts) — see `sync/pull-diagnostics.ts`. Included unconditionally
    *  (not gated on Developer mode) so a report filed after a failed pull
@@ -148,6 +152,9 @@ export interface DiagnosticsContext {
   syncReconcile?: DiagnosticsReconcile;
   /** Durable record of the last share-intent attempt. Present only after a share runs. */
   shareAttempt?: ShareAttemptDiagnostics;
+  /** Recent share-attempt history (oldest first). Present only when at least
+   *  one attempt has happened. */
+  shareAttemptHistory?: ShareAttemptDiagnostics[];
   /** Durable record of the last few sync pull attempts. Present only once at
    *  least one pull has run. */
   pullHistory?: PullAttemptDiagnostics[];
@@ -247,6 +254,10 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.shareAttempt && typeof input.shareAttempt === 'object') {
     context.shareAttempt = input.shareAttempt;
+  }
+
+  if (input.shareAttemptHistory && input.shareAttemptHistory.length > 0) {
+    context.shareAttemptHistory = input.shareAttemptHistory;
   }
 
   if (Array.isArray(input.pullHistory) && input.pullHistory.length > 0) {
