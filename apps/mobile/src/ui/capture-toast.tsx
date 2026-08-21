@@ -178,7 +178,14 @@ const styles = StyleSheet.create({
     ...overlayLayer(60),
     position: 'absolute',
     left: 24,
-    right: 24,
+    // STASH-66: the Inbox "+" FAB (app/index.tsx) sits at `right: 20`, 60
+    // wide, i.e. it occupies the last 80px from the screen edge. A plain 24px
+    // right inset let the toast rest directly on top of it, hiding the app's
+    // primary action button for the toast's whole visible duration. This
+    // provider is app-wide (rendered above every screen, not just Inbox), so
+    // the wider clearance applies everywhere rather than special-casing the
+    // one route that has the FAB.
+    right: 88,
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 12,
