@@ -74,12 +74,10 @@ export interface ImportItem {
   /** Original creation timestamp (ISO string), when preserved from source. */
   createdAt?: string | null;
   /**
-   * The bookmark's own stable identity from a Stash JSON backup (its `id`
-   * and, for a URL-less row, its `client_id`) — present only for
-   * `source: 'stash-backup'`. URL-less rows have no canonical url_hash to
-   * dedupe a repeated restore against; carrying this through lets the
-   * importer recognize "this backup row already exists locally" instead of
-   * minting a fresh duplicate on every re-import of the same file.
+   * Stable source identities from a Stash JSON backup — present only for
+   * `source: 'stash-backup'`. URL-less rows have no canonical url_hash, so
+   * these are import-dedupe keys. A newly restored row must still mint its own
+   * primary key because the backup id can belong to another cloud account.
    */
   backupId?: string | null;
   backupClientId?: string | null;

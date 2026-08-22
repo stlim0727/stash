@@ -2934,13 +2934,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const activeBookmarkById = new Map(
         activeLocalBookmarks.map((bookmark) => [bookmark.id, bookmark]),
       );
-      // Every local id, active or trashed — used only to avoid an id
-      // collision when restoring a URL-less memo by its backup id (below):
-      // a trashed original must not be silently resurrected under a
-      // duplicate-swap, but its id also must not be reused for a distinct
-      // new row.
-      const allLocalBookmarkIds = new Set(
-        (bookmarksRef.current ?? loadedBookmarks).map((bookmark) => bookmark.id),
+      const activeBookmarkByClientId = new Map(
+        activeLocalBookmarks
+          .filter((bookmark) => bookmark.client_id)
+          .map((bookmark) => [bookmark.client_id!, bookmark] as const),
+      );
+      const trashedLocalBookmarks = (bookmarksRef.current ?? loadedBookmarks).filter(
+        (bookmark) => !isActiveBookmark(bookmark),
+      );
+      const trashedBookmarkIds = new Set(
+        trashedLocalBookmarks.map((bookmark) => bookmark.id),
+      );
+      const trashedBookmarkClientIds = new Set(
+        trashedLocalBookmarks
+          .map((bookmark) => bookmark.client_id)
+          .filter((clientId): clientId is string => !!clientId),
       );
       // Sentry STASH-3K/3M: a bulk import has repeatedly doubled a user's
       // library (their local total exactly 2x the cloud count) with no
@@ -2994,31 +3002,38 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             continue;
           }
           const memoBody = item.metadata.raw_description ?? item.metadata.description;
-          // A URL-less row has no canonical url_hash to dedupe a repeated
-          // restore against — use the backup's own bookmark id instead, so
-          // re-importing the same file (or a file that already matches the
-          // local library) recognizes the existing row rather than minting
-          // a fresh duplicate every time.
+          // A URL-less row has no canonical url_hash. Match the backup's
+          // identity against an active local row, but never reuse its primary
+          // key for a new row: bookmark ids are global, so that id may still
+          // belong to the source account in Postgres. The per-user client_id
+          // is the safe idempotency key for a newly restored copy.
+          const backupDedupeClientId =
+            item.backupClientId ??
+            (item.backupId && hasRemoteIdentity(item.backupId) ? item.backupId : null);
           const existingId =
-            item.backupId && activeBookmarkById.has(item.backupId) ? item.backupId : undefined;
+            (item.backupId && activeBookmarkById.get(item.backupId)?.id) ||
+            (backupDedupeClientId && activeBookmarkByClientId.get(backupDedupeClientId)?.id) ||
+            undefined;
           const isNew = existingId === undefined;
-          // Reuse the backup's own id only when nothing local already holds
-          // it (active or trashed) — otherwise mint a fresh id, matching how
-          // re-adding a trashed URL bookmark creates a new active row
-          // instead of colliding with the trashed one.
-          const id =
-            existingId ??
-            (item.backupId && !allLocalBookmarkIds.has(item.backupId)
-              ? item.backupId
-              : makeBookmarkId());
+          const id = existingId ?? makeBookmarkId();
           if (!isNew) {
             duplicates += 1;
           } else {
-            const clientId = item.backupClientId ?? makeClientId();
+            // A trashed row remains visible to the cloud's all-rows client_id
+            // lookup. Reusing its identity would make the create adopt that
+            // still-deleted row, so a deliberate re-add gets a new capture id.
+            const backupIdentityIsTrashed =
+              (!!item.backupId && trashedBookmarkIds.has(item.backupId)) ||
+              (!!backupDedupeClientId &&
+                trashedBookmarkClientIds.has(backupDedupeClientId));
+            const clientId =
+              backupDedupeClientId && !backupIdentityIsTrashed
+                ? backupDedupeClientId
+                : makeClientId();
             const title = item.title?.trim() ? item.title.trim() : null;
             const notes = item.notes?.trim() ? item.notes.trim() : null;
             const itemCreatedAt = item.createdAt ?? now;
-            newBookmarks.push({
+            const restoredBookmark: Bookmark = {
               id,
               user_id: mockUserId,
               url: null,
@@ -3044,7 +3059,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // branch below: don't let a restored row auto-spend AI quota.
               metadata_status: "skipped",
               sync_status: "pending",
-            });
+            };
+            newBookmarks.push(restoredBookmark);
+            // Make a duplicate occurrence in this same import batch resolve
+            // exactly like a later re-import after the row has been persisted.
+            activeBookmarkById.set(id, restoredBookmark);
+            activeBookmarkByClientId.set(clientId, restoredBookmark);
             newEntries.push({
               local_id: id,
               remote_id: null,

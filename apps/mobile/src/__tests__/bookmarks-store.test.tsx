@@ -878,6 +878,9 @@ test("import: restoring the same Markdown-memo backup twice is idempotent, not a
     expect(summary.imported).toBe(1);
   });
   await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  const restoredId = fakeRepo.__bookmarks()[0]!.id;
+  expect(restoredId).not.toBe(backupItem.backupId);
+  expect(fakeRepo.__bookmarks()[0]?.client_id).toBe(backupItem.backupClientId);
 
   await act(async () => {
     const summary = result.current.importBookmarks([backupItem]);
@@ -885,9 +888,63 @@ test("import: restoring the same Markdown-memo backup twice is idempotent, not a
     expect(summary.duplicates).toBe(1);
   });
 
-  // Still exactly one row, under the backup's own stable id.
+  // Still exactly one row. The backup identity is only the per-account
+  // idempotency key; a restored copy owns a freshly minted global row id.
   expect(fakeRepo.__bookmarks()).toHaveLength(1);
-  expect(fakeRepo.__bookmarks()[0]?.id).toBe("7e64cf1e-0000-4000-8000-0000000000f1");
+  expect(fakeRepo.__bookmarks()[0]?.id).toBe(restoredId);
+});
+
+test("import: re-adding a trashed memo rotates both row and client identity", async () => {
+  const backupId = "7e64cf1e-0000-4000-8000-0000000000f2";
+  const backupClientId = "7e64cf1e-0000-4000-8000-0000000000c2";
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: backupId,
+      client_id: backupClientId,
+      url: null,
+      url_hash: null,
+      title: "Old memo",
+      description: "In trash",
+      content_type: "text",
+      deleted_at: "2026-08-20T00:00:00.000Z",
+    }),
+  ]);
+  const { result } = await renderStore();
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: null,
+        title: "Restored memo",
+        notes: null,
+        tags: [],
+        collection: null,
+        backupId,
+        backupClientId,
+        metadata: {
+          description: "Back again",
+          raw_description: "Back again",
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          canonical_url: null,
+          content_type: "text",
+        },
+      },
+    ]);
+    expect(summary.imported).toBe(1);
+    expect(summary.duplicates).toBe(0);
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(2));
+  const restored = fakeRepo.__bookmarks().find((bookmark) => !bookmark.deleted_at)!;
+  expect(restored.id).not.toBe(backupId);
+  expect(restored.client_id).not.toBe(backupClientId);
+  expect(fakeRepo.__queue()[0]?.payload).toMatchObject({
+    id: restored.id,
+    client_id: restored.client_id,
+  });
 });
 
 test("import: a bodyless text memo keeps its title, notes, and organization", async () => {
