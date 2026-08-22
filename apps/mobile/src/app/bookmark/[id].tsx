@@ -29,6 +29,7 @@ import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
+import { MarkdownBody } from '@/ui/MarkdownBody';
 import { SuggestionSkeleton } from '@/ui/SuggestionSkeleton';
 import { TagField } from '@/ui/TagField';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -57,6 +58,7 @@ import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
 const TITLE_COLLAPSED_LINES = 4;
+const MAX_MEMO_LENGTH = 10_000;
 
 interface BookmarkDetailScreenProps {
   inlineId?: string;
@@ -121,6 +123,8 @@ export default function BookmarkDetailScreen({
   // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
   const [draftNotes, setDraftNotes] = useState<string | null>(null);
+  const [draftDescription, setDraftDescription] = useState<string | null>(null);
+  const [memoEditing, setMemoEditing] = useState(false);
   const [notesFocused, setNotesFocused] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   // Long titles (e.g. a full Instagram caption pasted as the title) are
@@ -136,8 +140,10 @@ export default function BookmarkDetailScreen({
   // latest values; the unmount effect flushes them to the store (no setState).
   const draftTitleRef = useRef<string | null>(null);
   const draftNotesRef = useRef<string | null>(null);
+  const draftDescriptionRef = useRef<string | null>(null);
   draftTitleRef.current = draftTitle;
   draftNotesRef.current = draftNotes;
+  draftDescriptionRef.current = draftDescription;
   const flushRef = useRef<() => void>(() => {});
   useEffect(() => () => flushRef.current(), []);
 
@@ -169,6 +175,7 @@ export default function BookmarkDetailScreen({
   const id = inlineId ?? routeId;
   const inline = inlineId !== undefined;
   const bookmark = id ? getBookmark(id) : undefined;
+  const isTextMemo = bookmark?.content_type === 'text' && !bookmark.url;
   const syncQueueEntry = bookmark
     ? queue.find((entry) => entry.local_id === bookmark.id)
     : undefined;
@@ -177,7 +184,11 @@ export default function BookmarkDetailScreen({
   // this from the URL/"Untitled" to a long title while the screen stays
   // mounted, so re-measure whenever it changes — otherwise the stale line
   // count leaves an overlong title clamped with no "Show more" toggle.
-  const displayedTitle = (bookmark ? displayTitle(bookmark) : null) ?? t('common.untitled');
+  const displayedTitle = bookmark
+    ? isTextMemo
+      ? bookmark.title?.trim() || t('detail.memoFallbackTitle')
+      : displayTitle(bookmark) ?? t('common.untitled')
+    : t('common.untitled');
   useEffect(() => {
     setTitleLineCount(null);
     setTitleExpanded(false);
@@ -266,14 +277,22 @@ export default function BookmarkDetailScreen({
   flushRef.current = () => {
     const dt = draftTitleRef.current;
     const dn = draftNotesRef.current;
-    const fields: { title?: string; notes?: string } = {};
+    const dd = draftDescriptionRef.current;
+    const fields: { title?: string; notes?: string; description?: string } = {};
     if (dt !== null && dt.trim() !== (bookmark.title ?? '')) {
       fields.title = dt.trim();
     }
     if (dn !== null && dn !== (bookmark.notes ?? '')) {
       fields.notes = dn;
     }
-    if (fields.title !== undefined || fields.notes !== undefined) {
+    if (dd !== null && dd.trim() !== (bookmark.description ?? '')) {
+      fields.description = dd;
+    }
+    if (
+      fields.title !== undefined ||
+      fields.notes !== undefined ||
+      fields.description !== undefined
+    ) {
       updateBookmarkFields(bookmark.id, fields);
     }
   };
@@ -457,6 +476,7 @@ export default function BookmarkDetailScreen({
     (showAiReport || enrichment.degraded_reason === 'rate_limited');
 
   const notesValue = draftNotes ?? bookmark.notes ?? '';
+  const memoValue = draftDescription ?? bookmark.description ?? '';
   const notesLength = notesValue.length;
   // 10k chars is generous ( ~2 printed pages) while preventing UI breakage or
   // sync bloat. Matches the truncation warning shown below.
@@ -486,6 +506,14 @@ export default function BookmarkDetailScreen({
     }
     setDraftNotes(null);
   };
+  const commitDescription = () => {
+    if (draftDescription !== null && draftDescription.trim() !== (bookmark.description ?? '')) {
+      updateBookmarkFields(bookmark.id, {
+        description: draftDescription.slice(0, MAX_MEMO_LENGTH),
+      });
+    }
+    setDraftDescription(null);
+  };
 
   // One tidy "Details" section instead of a card per field. Only rows with a
   // real value show, so a sparse bookmark doesn't render mostly-empty cards.
@@ -494,7 +522,7 @@ export default function BookmarkDetailScreen({
     bookmark.site_name ? { label: t('detail.rowSite'), value: bookmark.site_name } : null,
     // Skip the Description row for a text note whose body is already the header
     // title, so the same text doesn't appear twice.
-    bookmark.description && bookmark.description !== displayedTitle
+    !isTextMemo && bookmark.description && bookmark.description !== displayedTitle
       ? { label: t('detail.rowDescription'), value: bookmark.description }
       : null,
     { label: t('detail.rowSaved'), value: formatDate(bookmark.created_at) },
@@ -517,25 +545,27 @@ export default function BookmarkDetailScreen({
   const host = hostFromUrl(bookmark.url);
 
   const handleShare = () => {
-    if (!bookmark.url) {
+    const message = bookmark.url ?? (isTextMemo ? memoValue : null);
+    if (!message) {
       return;
     }
-    void Share.share({
-      message: bookmark.url,
-      url: bookmark.url,
-      title: bookmark.title ?? undefined,
-    }).catch(() => {
+    void Share.share(
+      bookmark.url
+        ? { message, url: bookmark.url, title: bookmark.title ?? undefined }
+        : { message, title: bookmark.title ?? undefined },
+    ).catch(() => {
       setOrganizeError(t('detail.errorShare'));
     });
   };
 
   const handleCopyLink = () => {
-    if (!bookmark.url) {
+    const value = bookmark.url ?? (isTextMemo ? memoValue : null);
+    if (!value) {
       return;
     }
-    void Clipboard.setStringAsync(bookmark.url)
+    void Clipboard.setStringAsync(value)
       .then(() => {
-        showToast(t('toast.linkCopied'));
+        showToast(t(isTextMemo ? 'toast.memoCopied' : 'toast.linkCopied'));
       })
       .catch(() => {
         setOrganizeError(t('detail.errorCopyLink'));
@@ -1030,10 +1060,10 @@ export default function BookmarkDetailScreen({
             onPress={handleSearchYoutube}
           />
         ) : null}
-        {bookmark.url ? (
+        {bookmark.url || isTextMemo ? (
           <ActionButton icon="copy-outline" label={t('common.copy')} tint={palette.text} onPress={handleCopyLink} />
         ) : null}
-        {bookmark.url ? (
+        {bookmark.url || isTextMemo ? (
           <ActionButton icon="share-social" label={t('common.share')} tint={palette.text} onPress={handleShare} />
         ) : null}
         {bookmark.url ? (
@@ -1088,6 +1118,93 @@ export default function BookmarkDetailScreen({
           unfocused, it's a light borderless prompt so a note-less bookmark
           doesn't show a big empty form; once it has text or focus, it becomes an
           elevated bordered box that grows with the content. */}
+      {isTextMemo ? (
+        <View style={styles.memoBlock}>
+          <View style={styles.memoHeader}>
+            <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+              {t('detail.memoContentLabel')}
+            </Text>
+            <View
+              style={[
+                styles.memoModeSwitch,
+                { backgroundColor: palette.surface, borderColor: palette.border },
+              ]}
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: !memoEditing }}
+                onPress={() => {
+                  commitDescription();
+                  setMemoEditing(false);
+                }}
+                style={[
+                  styles.memoModeButton,
+                  !memoEditing && { backgroundColor: palette.accentSoft },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.memoModeLabel,
+                    { color: !memoEditing ? palette.accent : palette.textSecondary },
+                  ]}
+                >
+                  {t('detail.memoPreview')}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: memoEditing }}
+                onPress={() => {
+                  if (!memoEditing) {
+                    setDraftDescription(bookmark.description ?? '');
+                  }
+                  setMemoEditing(true);
+                }}
+                style={[
+                  styles.memoModeButton,
+                  memoEditing && { backgroundColor: palette.accentSoft },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.memoModeLabel,
+                    { color: memoEditing ? palette.accent : palette.textSecondary },
+                  ]}
+                >
+                  {t('detail.memoEdit')}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+          {memoEditing ? (
+            <TextInput
+              accessibilityLabel={t('detail.memoBodyA11y')}
+              autoFocus
+              multiline
+              maxLength={MAX_MEMO_LENGTH}
+              placeholder={t('detail.memoBodyPlaceholder')}
+              placeholderTextColor={palette.textSecondary}
+              scrollEnabled
+              style={[
+                styles.memoInput,
+                {
+                  backgroundColor: palette.surfaceElevated,
+                  borderColor: palette.border,
+                  color: palette.text,
+                },
+              ]}
+              value={memoValue}
+              onChangeText={setDraftDescription}
+              onBlur={commitDescription}
+            />
+          ) : (
+            <Card elevated={false} style={styles.memoPreview}>
+              <MarkdownBody markdown={bookmark.description ?? ''} />
+            </Card>
+          )}
+        </View>
+      ) : null}
+
       <View style={styles.notesBlock}>
         <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
           {t('detail.notesLabel')}
@@ -1659,6 +1776,46 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  memoBlock: {
+    gap: 10,
+  },
+  memoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  memoModeSwitch: {
+    flexDirection: 'row',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    padding: 2,
+    gap: 2,
+  },
+  memoModeButton: {
+    minHeight: 32,
+    justifyContent: 'center',
+    borderRadius: 9,
+    paddingHorizontal: 10,
+  },
+  memoModeLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  memoPreview: {
+    borderRadius: 18,
+    padding: 18,
+  },
+  memoInput: {
+    minHeight: 220,
+    maxHeight: 420,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    padding: 16,
+    fontSize: 15,
+    lineHeight: 22,
+    textAlignVertical: 'top',
   },
   folderSuggestionBlock: {
     gap: 6,

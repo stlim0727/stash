@@ -1,3 +1,4 @@
+import { displayTitle } from '@/domain/item-display';
 import type { Bookmark } from '@/domain/types';
 
 /**
@@ -37,7 +38,7 @@ export function sameSort(a: SortOption, b: SortOption): boolean {
 }
 
 function sortName(bookmark: Bookmark): string {
-  return (bookmark.title ?? bookmark.url ?? '').trim().toLocaleLowerCase();
+  return (displayTitle(bookmark) ?? '').toLocaleLowerCase();
 }
 
 /**

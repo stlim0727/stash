@@ -110,6 +110,49 @@ describe('AddBookmarkScreen duplicate UX', () => {
   });
 });
 
+describe('AddBookmarkScreen Markdown memos', () => {
+  it('saves a URL-less memo with its raw Markdown and stable client id', async () => {
+    fakeRepo.__reset([]);
+    const { findByText, findByLabelText, unmount } = await renderAddScreen();
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+
+    fireEvent.press(await findByText('Memo'));
+    fireEvent.changeText(await findByLabelText('Title (optional)'), 'Weekly plan');
+    fireEvent.changeText(await findByLabelText('Markdown'), '# Priorities\n\n- Ship **memo** support');
+    fireEvent.press(await findByText('Save memo'));
+
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    const saved = fakeRepo.__bookmarks()[0];
+    expect(saved).toMatchObject({
+      url: null,
+      title: 'Weekly plan',
+      description: '# Priorities\n\n- Ship **memo** support',
+      content_type: 'text',
+    });
+    expect(saved.client_id).toBeTruthy();
+    expect(fakeRepo.__queue()[0]?.payload).toMatchObject({
+      title: 'Weekly plan',
+      shared_text: '# Priorities\n\n- Ship **memo** support',
+      client_id: saved.client_id,
+    });
+    expect(mockBack).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('keeps an empty memo open and shows a validation message', async () => {
+    fakeRepo.__reset([]);
+    const { findByText, unmount } = await renderAddScreen();
+
+    fireEvent.press(await findByText('Memo'));
+    fireEvent.press(await findByText('Save memo'));
+
+    await findByText('Write something before saving this memo.');
+    expect(fakeRepo.__queue()).toHaveLength(0);
+    expect(mockBack).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
 describe('AddBookmarkScreen web capture endpoint', () => {
   it('auto-saves a url passed via query params and lands on the Inbox', async () => {
     // The bookmarklet / PWA share target / deep link opens /add?url=…; the

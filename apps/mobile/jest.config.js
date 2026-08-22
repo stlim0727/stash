@@ -8,6 +8,7 @@ module.exports = {
   testMatch: ['**/src/**/*.test.tsx'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^react-native-enriched-markdown$': 'react-native-enriched-markdown/jest',
   },
   clearMocks: true,
   // CI hardening: CircleCI's memory-constrained container (8GB, no swap) gets

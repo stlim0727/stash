@@ -308,10 +308,10 @@ interface BookmarksContextValue {
   resetLibrary: () => Promise<ResetLibraryResult>;
   /** True while a library reset is running — disable import/sync/reset UI. */
   isResettingLibrary: boolean;
-  /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
+  /** Edit user-authored text. Local-first; empty strings clear the field. */
   updateBookmarkFields: (
     id: string,
-    fields: { title?: string; notes?: string },
+    fields: { title?: string; notes?: string; description?: string },
   ) => void;
   /**
    * Record that the user opened a bookmark (viewed Detail or opened its link),
@@ -3357,7 +3357,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateBookmarkFields = useCallback(
-    (id: string, fields: { title?: string; notes?: string }) => {
+    (
+      id: string,
+      fields: { title?: string; notes?: string; description?: string },
+    ) => {
       const before = bookmarksRef.current?.find(
         (bookmark) => bookmark.id === id,
       );
@@ -3369,12 +3372,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (fields.notes !== undefined) {
         patch.notes = fields.notes.trim() || null;
       }
+      if (fields.description !== undefined) {
+        patch.description = fields.description.trim() || null;
+      }
       // Only stale on a real change to user-editable text; a no-op save (or a
       // collection/archive change, which never routes through here) must not.
       const textChanged =
         (patch.title !== undefined &&
           patch.title !== (before?.title ?? null)) ||
-        (patch.notes !== undefined && patch.notes !== (before?.notes ?? null));
+        (patch.notes !== undefined && patch.notes !== (before?.notes ?? null)) ||
+        (patch.description !== undefined &&
+          patch.description !== (before?.description ?? null));
       applyBookmarkUpdate(id, patch);
       if (textChanged) {
         if (patch.title !== undefined && !hasSyncedOnce(id)) {

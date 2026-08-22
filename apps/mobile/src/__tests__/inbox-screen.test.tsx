@@ -173,6 +173,43 @@ test('renders stored bookmarks with their titles', async () => {
   expect(screen.getByText('Raindrop review')).toBeTruthy();
 });
 
+test('renders Markdown memos with a plain preview and memo metadata', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-00000000000d',
+      url: null,
+      url_hash: null,
+      title: 'Release notes',
+      description: '# Priorities\n\n- Ship **memo** support',
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Release notes')).toBeTruthy());
+  expect(screen.getByText('Priorities Ship memo support')).toBeTruthy();
+  expect(screen.getAllByText('Memo').length).toBeGreaterThan(0);
+});
+
+test('an untitled Markdown memo uses its first rendered line as the Inbox title', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-00000000000e',
+      url: null,
+      url_hash: null,
+      title: null,
+      description: '# Weekly **plan**\n\n- Ship it',
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Weekly plan')).toBeTruthy());
+  expect(screen.queryByText('# Weekly **plan**')).toBeNull();
+});
+
 test('web keeps the pinned hero outside a transformed compositing layer', async () => {
   Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
   fakeRepo.__reset([]);

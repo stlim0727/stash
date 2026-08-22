@@ -24,6 +24,13 @@ test('uses the saved text for a URL-less note (no title, no url)', () => {
   );
 });
 
+test('uses the first rendered Markdown line for a URL-less memo label', () => {
+  assert.equal(
+    displayTitle({ title: null, url: null, description: '# Weekly **plan**\n\n- Ship it' }),
+    'Weekly plan',
+  );
+});
+
 test('treats a whitespace-only title as absent', () => {
   assert.equal(
     displayTitle({ title: '   ', url: null, description: 'the note body' }),

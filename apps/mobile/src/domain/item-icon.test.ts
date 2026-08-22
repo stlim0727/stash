@@ -82,6 +82,13 @@ test('letter skips leading non-alphanumerics and uppercases', () => {
   );
 });
 
+test('untitled Markdown memo uses its rendered body label for the monogram', () => {
+  const icon = itemIcon(
+    make({ url: null, title: null, description: '# **weekly** plan', content_type: 'text' }),
+  ) as { letter: string };
+  assert.equal(icon.letter, 'W');
+});
+
 test('monogram color is deterministic and within range', () => {
   const idx = monogramColorIndex('example.com');
   assert.equal(idx, monogramColorIndex('example.com'));

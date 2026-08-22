@@ -131,6 +131,25 @@ test('tag node exposes slug + tag_id, bookmark node exposes bookmark_id', () => 
   assert.equal(bk.bookmark_id, 'bk0');
 });
 
+test('bookmark nodes use a rendered Markdown label for untitled memos', () => {
+  const graph = deriveGraph({
+    bookmarks: [
+      makeBookmark('memo', {
+        url: null,
+        title: null,
+        description: '# Weekly **plan**',
+        content_type: 'text',
+      }),
+    ],
+    tags: [makeTag('notes')],
+    bookmarkTags: [link('memo', 'notes')],
+  });
+
+  const memo = graph.nodes.find((node) => node.id === 'b:memo');
+  assert.ok(memo && memo.kind === 'bookmark');
+  assert.equal(memo.label, 'Weekly plan');
+});
+
 test('trashed and archived bookmarks are excluded (Inbox filter)', () => {
   const input: DeriveGraphInput = {
     bookmarks: [

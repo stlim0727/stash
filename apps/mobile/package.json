@@ -33,6 +33,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.85.3",
+    "react-native-enriched-markdown": "^1.0.2",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
     "react-native-svg": "15.15.4",
@@ -60,6 +61,10 @@
     "typecheck": "tsc --noEmit",
     "test": "node --no-warnings --experimental-transform-types --import ../../scripts/register-alias.mjs --test \"src/**/*.test.ts\"",
     "test:components": "jest"
+  },
+  "enriched-markdown": {
+    "enableCodeHighlight": false,
+    "enableMath": false
   },
   "private": true
 }
