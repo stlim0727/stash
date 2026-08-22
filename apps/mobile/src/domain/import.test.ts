@@ -122,6 +122,7 @@ test('parseJsonBackup keeps url-less items (null url) for the caller to skip', (
   const [item] = parseJsonBackup(json);
   assert.equal(item?.url, null);
   assert.equal(item?.title, 'A thought');
+  assert.equal(item?.metadata?.content_type, 'text');
 });
 
 test('parseJsonBackup carries the backup bookmark id/client_id for idempotent restores', () => {

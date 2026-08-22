@@ -1,4 +1,5 @@
 import { collectionMatchKey } from '@/domain/collection-match';
+import { markdownToPlainText } from '@/domain/markdown';
 import type { Bookmark } from '@/domain/types';
 
 /**
@@ -279,7 +280,9 @@ export function filterBookmarks(
       resolvers?.collectionName?.(bookmark),
     ];
     const proseFields: Array<string | null | undefined> = [
-      bookmark.description,
+      bookmark.content_type === 'text'
+        ? markdownToPlainText(bookmark.description)
+        : bookmark.description,
       bookmark.notes,
       bookmark.url,
     ];

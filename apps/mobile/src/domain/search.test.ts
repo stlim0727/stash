@@ -62,6 +62,19 @@ test('matches are case-insensitive across title, description, notes, and URL', (
   );
 });
 
+test('text memos search only their rendered Markdown projection', () => {
+  const memo = makeBookmark({
+    id: 'memo',
+    url: null,
+    url_hash: null,
+    content_type: 'text',
+    description: '[Keepory](https://example.com/private-token)',
+  });
+
+  assert.deepEqual(filterBookmarks([memo], 'keepory').map((item) => item.id), ['memo']);
+  assert.equal(filterBookmarks([memo], 'private-token').length, 0);
+});
+
 test('multiple terms AND together across fields', () => {
   assert.deepEqual(
     filterBookmarks(corpus, 'local sync').map((b) => b.id),

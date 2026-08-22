@@ -375,6 +375,41 @@ test('createBookmark preserves leading/trailing whitespace in a Markdown memo bo
   });
 });
 
+test('createBookmark accepts an explicitly typed bodyless text memo from backup restore', async () => {
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks') {
+        const body = options.body as Record<string, unknown>;
+        assert.equal(body.content_type, 'text');
+        assert.equal(body.description, null);
+        return [
+          remoteBookmark({
+            id: 'bodyless-memo',
+            url: null,
+            url_hash: null,
+            title: 'Planning shell',
+            content_type: 'text',
+          }),
+        ];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'bodyless-memo',
+    title: 'Planning shell',
+    content_type: 'text',
+    client_id: 'cid-bodyless-memo',
+  });
+
+  assert.equal(result.status, 'created');
+});
+
 test('createBookmark pushes a refreshed memo body when a retry finds its own earlier create (idempotent duplicate)', async () => {
   const patches: Array<Record<string, unknown>> = [];
   const client = {

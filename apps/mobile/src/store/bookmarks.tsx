@@ -2978,10 +2978,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // `description` too, and must not be rebuilt as a fake text memo,
           // which would discard its preview_image_url and mislabel a
           // generated caption as user-authored Markdown.
+          const hasMemoContent =
+            !!item.metadata?.raw_description?.trim() ||
+            !!item.metadata?.description?.trim() ||
+            !!item.title?.trim() ||
+            !!item.notes?.trim() ||
+            item.tags.length > 0 ||
+            !!item.collection?.trim();
           if (
             item.source !== "stash-backup" ||
             item.metadata?.content_type !== "text" ||
-            !item.metadata.description?.trim()
+            !hasMemoContent
           ) {
             skipped += 1;
             continue;
@@ -3044,9 +3051,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               operation: "create",
               payload: {
                 id,
-                shared_text: memoBody,
+                shared_text: memoBody ?? undefined,
                 title: title ?? undefined,
                 notes: notes ?? undefined,
+                content_type: "text",
                 client_id: clientId,
                 metadata_status: "skipped",
                 enrichment_policy: "skip",

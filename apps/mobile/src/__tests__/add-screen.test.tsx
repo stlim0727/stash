@@ -221,6 +221,18 @@ describe('AddBookmarkScreen sheet layout', () => {
     unmount();
   });
 
+  it('bounds the form scroll view to the available viewport height', async () => {
+    fakeRepo.__reset([]);
+    const { findByTestId, unmount } = await renderAddScreen();
+
+    const scroll = await findByTestId('add-scroll');
+    const flat = Array.isArray(scroll.props.style)
+      ? Object.assign({}, ...scroll.props.style.flat())
+      : scroll.props.style;
+    expect(flat.flex).toBe(1);
+    unmount();
+  });
+
   // Add is a transparentModal with the Inbox mounted behind it. On web the
   // modal container sizes to content, so a `flex: 1` root collapses and the
   // Inbox bleeds through below Add. Pinning the root to the viewport height

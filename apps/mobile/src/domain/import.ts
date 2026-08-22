@@ -158,7 +158,8 @@ function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata
     metadata.preview_image_url !== null ||
     metadata.favicon_url !== null ||
     metadata.site_name !== null ||
-    metadata.canonical_url !== null;
+    metadata.canonical_url !== null ||
+    entry.content_type === 'text';
   return hasSignal ? metadata : undefined;
 }
 

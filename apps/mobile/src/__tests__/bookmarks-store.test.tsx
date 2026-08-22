@@ -890,6 +890,42 @@ test("import: restoring the same Markdown-memo backup twice is idempotent, not a
   expect(fakeRepo.__bookmarks()[0]?.id).toBe("7e64cf1e-0000-4000-8000-0000000000f1");
 });
 
+test("import: a bodyless text memo keeps its title, notes, and organization", async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: null,
+        title: "Planning shell",
+        notes: "Body intentionally cleared",
+        tags: ["planning"],
+        collection: null,
+        metadata: {
+          description: null,
+          raw_description: null,
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          canonical_url: null,
+          content_type: "text",
+        },
+      },
+    ]);
+    expect(summary.imported).toBe(1);
+    expect(summary.skipped).toBe(0);
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  const restored = fakeRepo.__bookmarks()[0]!;
+  expect(restored.description).toBeNull();
+  expect(restored.title).toBe("Planning shell");
+  expect(restored.notes).toBe("Body intentionally cleared");
+  expect(fakeRepo.__queue()[0]?.payload).toMatchObject({ content_type: "text" });
+  expect(fakeRepo.__queue()[0]?.payload.shared_text).toBeUndefined();
+});
+
 test("import: a URL-less image bookmark's caption is not restored as a fake text memo", async () => {
   const { result } = await renderStore();
 

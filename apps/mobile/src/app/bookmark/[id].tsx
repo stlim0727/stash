@@ -515,7 +515,9 @@ export default function BookmarkDetailScreen({
     // indented code block), enqueuing a no-op sync.
     if (draftDescription !== null && draftDescription !== (bookmark.description ?? '')) {
       updateBookmarkFields(bookmark.id, {
-        description: draftDescription.slice(0, MAX_MEMO_LENGTH),
+        // Existing captures/backups can predate the editor's creation cap.
+        // Never truncate that user-authored source merely because it was edited.
+        description: draftDescription,
       });
     }
     setDraftDescription(null);

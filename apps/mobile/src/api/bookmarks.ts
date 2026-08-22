@@ -206,6 +206,13 @@ function requirePayload(input: CreateBookmarkInput): { url: string | null; conte
     return { url: null, contentType: 'text' };
   }
 
+  // A restored text memo can legitimately have no body while retaining a
+  // title, notes, tags, or collection. Its explicit type is enough to create
+  // the row; manual Add still validates that newly-authored memos have a body.
+  if (input.content_type === 'text') {
+    return { url: null, contentType: 'text' };
+  }
+
   // Image-only capture (a screenshot with no link): the client always
   // uploads the binary to Storage and resolves its public URL BEFORE calling
   // createBookmark, so this branch only ever sees an already-uploaded row —

@@ -377,6 +377,37 @@ test('entering and leaving Edit without changes does not re-queue a whitespace-l
   expect(fakeRepo.__queue()).toHaveLength(0);
 });
 
+test('editing a captured memo longer than the creation cap preserves its full body', async () => {
+  mockRouteId = SYNCED_ID;
+  const capturedBody = 'x'.repeat(10_001);
+  const editedBody = `${capturedBody}!`;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      url: null,
+      url_hash: null,
+      title: 'Long capture',
+      description: capturedBody,
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await act(async () => {
+    fireEvent.press(await waitFor(() => screen.getByText('Edit Markdown')));
+  });
+  const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
+  await act(async () => {
+    fireEvent.changeText(editor, editedBody);
+  });
+  await waitFor(() => expect(screen.getByLabelText('Markdown memo body').props.value).toBe(editedBody));
+  await act(async () => {
+    fireEvent(editor, 'blur');
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0]?.description).toBe(editedBody));
+});
+
 test('a very long title collapses behind a Show more toggle', async () => {
   mockRouteId = SYNCED_ID;
   const longTitle =

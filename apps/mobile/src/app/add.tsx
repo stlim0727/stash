@@ -131,7 +131,8 @@ export default function AddBookmarkScreen() {
 
   const content = (
     <ScrollView
-      style={{ backgroundColor: palette.background }}
+      testID="add-scroll"
+      style={[styles.scroll, { backgroundColor: palette.background }]}
       contentContainerStyle={styles.container}
       keyboardShouldPersistTaps="handled"
     >
@@ -337,6 +338,9 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     padding: 16,
     gap: 14,
+  },
+  scroll: {
+    flex: 1,
   },
   capturing: {
     flex: 1,

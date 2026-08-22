@@ -1896,6 +1896,11 @@ export default function InboxScreen() {
           void Linking.openURL(item.url!).catch(() => {});
         },
       });
+    }
+    const shareValue =
+      item.url ??
+      (item.content_type === 'text' && item.description?.trim() ? item.description : null);
+    if (shareValue) {
       actions.push({
         key: 'share',
         label: t('common.share'),
@@ -1903,8 +1908,8 @@ export default function InboxScreen() {
         onPress: () => {
           closeMenu();
           void Share.share({
-            message: item.url!,
-            url: item.url!,
+            message: shareValue,
+            ...(item.url ? { url: item.url } : {}),
             title: item.title ?? undefined,
           }).catch(() => {});
         },

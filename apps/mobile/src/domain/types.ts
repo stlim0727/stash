@@ -259,15 +259,11 @@ export interface CreateBookmarkInput {
   shared_text?: string;
   /**
    * Explicit content-type override for a create that carries neither `url`
-   * nor `shared_text` — currently only `'image'`, for an image-only capture
-   * (a screenshot shared with no link). `requirePayload` (api/bookmarks.ts)
-   * requires `preview_image_url` to already be a genuinely uploaded Storage
-   * URL whenever this is set: the row must never be created server-side
-   * before the binary itself has landed (see `isLocalOnlyBookmark`/STASH-65
-   * in sync/sync-bookmarks.ts). Every other content type is inferred from
-   * `url`/`shared_text` presence as before and never needs this field.
+   * nor `shared_text`. `'image'` supports an image-only capture and requires
+   * an already-uploaded `preview_image_url`; `'text'` preserves a restored
+   * memo whose body is empty but whose other authored fields remain.
    */
-  content_type?: 'image';
+  content_type?: 'image' | 'text';
   site_name?: string | null;
   favicon_url?: string | null;
   preview_image_url?: string | null;
