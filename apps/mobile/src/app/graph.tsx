@@ -43,6 +43,7 @@ import {
 } from "@/domain/graph-declutter";
 import { resolveHubLabels, type HubLabelInput } from "@/domain/graph-labels";
 import { placeBookmarkSatellites } from "@/domain/graph-satellite-layout";
+import { displayTitle } from "@/domain/item-display";
 import type { BookmarkTag, Tag } from "@/domain/types";
 import { useT } from "@/i18n";
 import { measureSyncSegment } from "@/observability/slow-segment-log";
@@ -783,8 +784,15 @@ export default function GraphScreen() {
   const titleSignature = useMemo(() => {
     const parts: string[] = [];
     for (const bookmark of committedData.inbox) {
+      // A URL-less text/Markdown-memo bookmark's label falls back to its
+      // body (see displayTitle) only when it has neither title nor url —
+      // include description in the signature just for that case, so
+      // editing a memo's body updates its graph label without invalidating
+      // every other bookmark's signature on an unrelated OG-description fetch.
+      const descriptionPart =
+        !bookmark.title && !bookmark.url ? (bookmark.description ?? "") : "";
       parts.push(
-        `${bookmark.id}:${bookmark.title ?? ""}|${bookmark.url ?? ""}`,
+        `${bookmark.id}:${bookmark.title ?? ""}|${bookmark.url ?? ""}|${descriptionPart}`,
       );
     }
     parts.sort();
@@ -793,7 +801,7 @@ export default function GraphScreen() {
   const bookmarkTitleById = useMemo(() => {
     const map = new Map<string, string>();
     for (const bookmark of committedData.inbox) {
-      map.set(bookmark.id, bookmark.title ?? bookmark.url ?? "Untitled");
+      map.set(bookmark.id, displayTitle(bookmark) ?? "Untitled");
     }
     return map;
     // Intentionally keyed on `titleSignature`, not the churning `inbox` reference.

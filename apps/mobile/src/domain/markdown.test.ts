@@ -44,6 +44,16 @@ test('markdownToPlainText flattens reference-style links and drops their definit
   assert.equal(markdownToPlainText('see item [1] in the list'), 'see item [1] in the list');
 });
 
+test('markdownToPlainText flattens shortcut reference links only when a matching definition exists', () => {
+  assert.equal(
+    markdownToPlainText('[Keepory]\n\n[Keepory]: https://example.com'),
+    'Keepory',
+  );
+  // No matching definition anywhere in the document — treated as ordinary
+  // bracketed prose, not a link.
+  assert.equal(markdownToPlainText('[TODO] fix this later'), '[TODO] fix this later');
+});
+
 test('markdownForDisplay keeps alt text without loading a remote image', () => {
   assert.equal(
     markdownForDisplay('Before ![diagram](https://tracker.example/pixel.png) after'),

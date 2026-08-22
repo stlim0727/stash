@@ -292,6 +292,26 @@ test('a URL-less memo previews Markdown and copies the raw source', async () => 
   expect(await waitFor(() => screen.getByText('Memo copied'))).toBeTruthy();
 });
 
+test('a text memo with authored notes shows both the memo body and the notes editor', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      url: null,
+      url_hash: null,
+      title: null,
+      description: '# Weekly plan',
+      notes: 'keep this note visible',
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Memo')).toBeTruthy());
+  expect(screen.getByText('# Weekly plan')).toBeTruthy();
+  expect(screen.getByLabelText('Notes').props.value).toBe('keep this note visible');
+});
+
 test('editing a memo body persists raw Markdown and queues a synced-row update', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset([

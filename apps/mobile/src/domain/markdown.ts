@@ -13,15 +13,29 @@ export function markdownToPlainText(markdown: string | null | undefined): string
     return '';
   }
 
+  // Labels declared by a reference definition (`[label]: url`) elsewhere in
+  // the document — used below to recognize a shortcut reference link
+  // (`[label]` with no separate destination) without mistaking ordinary
+  // bracketed prose ("see item [1]") for one.
+  const referenceLabels = new Set<string>();
+  for (const match of markdown.matchAll(/^\s*\[([^\]]+)\]:\s*\S/gm)) {
+    referenceLabels.add(match[1]!.trim().toLowerCase());
+  }
+
   return markdown
     .replace(/```[^\n]*\n?/g, '')
     .replace(/~~~[^\n]*\n?/g, '')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    // Full/collapsed reference-style links (`[text][ref]`, `[text][]`), then
-    // the (now-orphaned) reference definition line itself (`[ref]: url`) so
-    // it doesn't linger in the projection as raw text.
+    // Full/collapsed reference-style links (`[text][ref]`, `[text][]`).
     .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
+    // Shortcut reference links (`[label]` alone) — only when a matching
+    // definition was actually found above.
+    .replace(/\[([^\]]+)\](?!\(|\[|:)/g, (fullMatch, label: string) =>
+      referenceLabels.has(label.trim().toLowerCase()) ? label : fullMatch,
+    )
+    // The (now-orphaned) reference definition line itself (`[ref]: url`) so
+    // it doesn't linger in the projection as raw text.
     .replace(/^\s*\[[^\]]+\]:\s*\S.*$/gm, '')
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
