@@ -327,6 +327,33 @@ test('editing a memo body persists raw Markdown and queues a synced-row update',
   });
 });
 
+test('entering and leaving Edit without changes does not re-queue a whitespace-leading memo', async () => {
+  mockRouteId = SYNCED_ID;
+  const indented = '    indented code block';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      url: null,
+      url_hash: null,
+      title: 'Snippet',
+      description: indented,
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await act(async () => {
+    fireEvent.press(await waitFor(() => screen.getByText('Edit Markdown')));
+  });
+  const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
+  await act(async () => {
+    fireEvent(editor, 'blur');
+  });
+
+  expect(fakeRepo.__bookmarks()[0]?.description).toBe(indented);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
 test('a very long title collapses behind a Show more toggle', async () => {
   mockRouteId = SYNCED_ID;
   const longTitle =

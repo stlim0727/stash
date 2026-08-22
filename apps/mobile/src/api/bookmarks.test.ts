@@ -265,6 +265,37 @@ test('createBookmark accepts an image-only payload once its binary is already up
   assert.equal(result.bookmark_id, 'b1');
 });
 
+test('createBookmark preserves leading/trailing whitespace in a Markdown memo body', async () => {
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks') {
+        assert.equal(options.method, 'POST');
+        const body = options.body as Record<string, unknown>;
+        assert.equal(body.description, '    indented code block\n');
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: null,
+            content_type: 'text',
+            description: '    indented code block\n',
+          }),
+        ];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.createBookmark({
+    id: 'b1',
+    shared_text: '    indented code block\n',
+    client_id: 'cid-memo',
+  });
+});
+
 test('createBookmark rejects an image payload with no uploaded preview_image_url (STASH-65 invariant: never create before the binary lands)', async () => {
   const client = {
     request: async () => {

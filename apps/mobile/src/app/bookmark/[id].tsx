@@ -507,7 +507,11 @@ export default function BookmarkDetailScreen({
     setDraftNotes(null);
   };
   const commitDescription = () => {
-    if (draftDescription !== null && draftDescription.trim() !== (bookmark.description ?? '')) {
+    // Compare the raw draft against the raw stored description — trimming
+    // either side here would make merely entering and leaving Edit report a
+    // change for a memo with meaningful leading/trailing whitespace (e.g. an
+    // indented code block), enqueuing a no-op sync.
+    if (draftDescription !== null && draftDescription !== (bookmark.description ?? '')) {
       updateBookmarkFields(bookmark.id, {
         description: draftDescription.slice(0, MAX_MEMO_LENGTH),
       });

@@ -223,6 +223,22 @@ function remoteToBookmark(row: RemoteBookmark): Bookmark {
   return { ...row, sync_status: 'synced', ever_synced: true };
 }
 
+// Validate emptiness with a trimmed copy, but keep the original value —
+// leading/trailing whitespace can be meaningful Markdown (e.g. an indented
+// code block), so a memo body must not be silently rewritten on upload.
+function descriptionFromInput(input: {
+  description?: string | null;
+  shared_text?: string;
+}): string | null {
+  if (input.description?.trim()) {
+    return input.description;
+  }
+  if (input.shared_text?.trim()) {
+    return input.shared_text;
+  }
+  return null;
+}
+
 function enrichmentFromRemote(row: RemoteAIEnrichment): AIEnrichment {
   return {
     ...row,
@@ -365,7 +381,7 @@ export class BookmarkApi {
     const payload = requirePayload(input);
     const timestamp = nowIso();
     const title = input.title?.trim() || null;
-    const description = input.description?.trim() || input.shared_text?.trim() || null;
+    const description = descriptionFromInput(input);
     const notes = input.notes?.trim() || null;
     const sourceApp = input.source_app?.trim() || null;
     const siteName = input.site_name?.trim() || null;
@@ -480,7 +496,7 @@ export class BookmarkApi {
     const prepared = inputs.map((input) => {
       const payload = requirePayload(input);
       const title = input.title?.trim() || null;
-      const description = input.description?.trim() || input.shared_text?.trim() || null;
+      const description = descriptionFromInput(input);
       const notes = input.notes?.trim() || null;
       const sourceApp = input.source_app?.trim() || null;
       const siteName = input.site_name?.trim() || null;
