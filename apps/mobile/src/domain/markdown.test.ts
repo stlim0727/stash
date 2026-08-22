@@ -31,6 +31,19 @@ test('markdownToPlainText preserves ordinary punctuation that is not a matched M
   assert.equal(markdownToPlainText('my_var_name is snake_case'), 'my_var_name is snake_case');
 });
 
+test('markdownToPlainText flattens reference-style links and drops their definition', () => {
+  assert.equal(
+    markdownToPlainText('[Keepory][site]\n\n[site]: https://example.com'),
+    'Keepory',
+  );
+  assert.equal(
+    markdownToPlainText('[Keepory][]\n\n[Keepory]: https://example.com'),
+    'Keepory',
+  );
+  // Ordinary bracketed prose (not a reference-style link) stays untouched.
+  assert.equal(markdownToPlainText('see item [1] in the list'), 'see item [1] in the list');
+});
+
 test('markdownForDisplay keeps alt text without loading a remote image', () => {
   assert.equal(
     markdownForDisplay('Before ![diagram](https://tracker.example/pixel.png) after'),

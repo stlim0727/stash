@@ -205,6 +205,45 @@ test('createBookmarks pushes a refreshed memo body for an idempotent duplicate r
   assert.equal(descriptionPatch?.body.description, 'edited body');
 });
 
+test('createBookmarks does not patch description for a urlHash duplicate from a different device', async () => {
+  const existing = remoteBookmark({
+    id: '00000000-0000-4000-8000-000000000011',
+    url: 'https://example.com/a',
+    url_hash: 'https://example.com/a',
+    description: 'fetched by the other device',
+    client_id: 'cid-other-device',
+  });
+  const patches: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&url_hash=')) {
+        return [existing];
+      }
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        return [];
+      }
+      if (options.method === 'PATCH') {
+        patches.push({ path, body: options.body as Record<string, unknown> });
+        return null;
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const outputs = await api.createBookmarks([
+    {
+      url: 'https://example.com/a',
+      description: 'a stale local guess',
+      client_id: 'cid-this-device',
+    },
+  ]);
+
+  assert.equal(outputs[0]?.status, 'duplicate');
+  assert.equal(patches.length, 1);
+  assert.equal('description' in (patches[0]?.body ?? {}), false);
+});
+
 test('createBookmarks dedupes same-url inputs before the bulk POST', async () => {
   const created = remoteBookmark({
     id: '00000000-0000-4000-8000-000000000033',
@@ -374,6 +413,46 @@ test('createBookmark pushes a refreshed memo body when a retry finds its own ear
 
   assert.equal(result.status, 'duplicate');
   assert.equal(patches[0]?.description, 'edited body');
+});
+
+test('createBookmark does not patch description for a urlHash duplicate from a different device (not this create attempt retried)', async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&url_hash=')) {
+        // Another device already saved this URL since the last pull — a
+        // genuine different save, not a retry of THIS create attempt.
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: 'https://example.com/a',
+            url_hash: 'https://example.com/a',
+            description: 'fetched by the other device',
+            client_id: 'cid-other-device',
+          }),
+        ];
+      }
+      if (path === '/rest/v1/bookmarks?id=eq.b1&user_id=eq.user-1') {
+        assert.equal(options.method, 'PATCH');
+        const body = options.body as Record<string, unknown>;
+        patches.push(body);
+        return [remoteBookmark({ id: 'b1', url: 'https://example.com/a' })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    url: 'https://example.com/a',
+    description: 'a stale local guess',
+    client_id: 'cid-this-device',
+  });
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal('description' in (patches[0] ?? {}), false);
+  assert.equal(patches[0]?.last_saved_at !== undefined, true);
 });
 
 test('createBookmark rejects an image payload with no uploaded preview_image_url (STASH-65 invariant: never create before the binary lands)', async () => {

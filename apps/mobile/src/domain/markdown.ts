@@ -18,6 +18,11 @@ export function markdownToPlainText(markdown: string | null | undefined): string
     .replace(/~~~[^\n]*\n?/g, '')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    // Full/collapsed reference-style links (`[text][ref]`, `[text][]`), then
+    // the (now-orphaned) reference definition line itself (`[ref]: url`) so
+    // it doesn't linger in the projection as raw text.
+    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
+    .replace(/^\s*\[[^\]]+\]:\s*\S.*$/gm, '')
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
     .replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/gm, '')

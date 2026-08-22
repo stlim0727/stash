@@ -403,11 +403,8 @@ export class BookmarkApi {
     // such key, so they dedupe on the device-generated client_id — which a
     // retried upload resends unchanged, closing the gap that let an interrupted
     // text-note sync create a duplicate.
-    const existing = urlHash
-      ? await this.findActiveBookmarkByUrlHash(urlHash)
-      : clientId
-        ? await this.findBookmarkByClientId(clientId)
-        : null;
+    const existingByUrl = urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null;
+    const existing = existingByUrl ?? (clientId ? await this.findBookmarkByClientId(clientId) : null);
     if (existing) {
       // A retried create can land here after its FIRST attempt already
       // succeeded server-side (only the response was lost) — but this
@@ -417,8 +414,15 @@ export class BookmarkApi {
       // instead of silently discarding it along with `last_saved_at`, or an
       // edit made between the original create and this idempotent retry is
       // lost — the cloud keeps the stale text forever.
+      //
+      // Only do this when `client_id` proves `existing` is THIS device's
+      // own earlier attempt, not a urlHash match — a urlHash match can be a
+      // genuinely different save (e.g. another device saved the same URL
+      // since the last pull), and patching its description with this
+      // request's payload would corrupt an unrelated row.
+      const isOwnRetry = !existingByUrl && existing.client_id === clientId;
       await this.updateBookmark(existing.id, {
-        description: description ?? undefined,
+        ...(isOwnRetry ? { description: description ?? undefined } : {}),
         last_saved_at: timestamp,
       });
       return {
@@ -571,12 +575,17 @@ export class BookmarkApi {
     const inserts: Array<{ index: number; body: (typeof prepared)[number]['body'] }> = [];
 
     prepared.forEach((item, index) => {
-      const existing =
-        (item.urlHash ? existingByUrlHash.get(item.urlHash) : null) ??
-        (item.clientId ? existingByClientId.get(item.clientId) : null);
+      const existingByUrl = item.urlHash ? existingByUrlHash.get(item.urlHash) : null;
+      const existing = existingByUrl ?? (item.clientId ? existingByClientId.get(item.clientId) : null);
       if (existing) {
         duplicateIds.add(existing.id);
-        if (item.body.description !== null) {
+        // Only when client_id proves `existing` is THIS device's own
+        // earlier attempt — a urlHash match can be a genuinely different
+        // save (another device saved the same URL since the last pull), and
+        // patching its description with this request's payload would
+        // corrupt an unrelated row.
+        const isOwnRetry = !existingByUrl && existing.client_id === item.clientId;
+        if (isOwnRetry && item.body.description !== null) {
           duplicateDescriptionUpdates.set(existing.id, item.body.description);
         }
         outputs[index] = {
