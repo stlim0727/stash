@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Linking, StyleSheet, View } from 'react-native';
+import { Linking, StyleSheet, Text, View } from 'react-native';
 import {
   EnrichedMarkdownText,
   type MarkdownStyle,
@@ -65,16 +65,21 @@ export function MarkdownBody({ markdown }: { markdown: string }) {
     [palette],
   );
 
+  const plainTextLabel = markdownToPlainText(markdown);
+
   return (
-    // PostHogMaskView below forces its own wrapper accessibilityLabel
-    // ("ph-no-capture"), which would otherwise replace this memo's
-    // content-derived accessible name — restore it explicitly (same pattern
-    // as trash.tsx / Chip.tsx).
-    <View
-      style={styles.container}
-      accessible
-      accessibilityLabel={markdownToPlainText(markdown)}
-    >
+    <View style={styles.container}>
+      {/* PostHogMaskView below forces its own wrapper's accessibilityLabel to
+          the "ph-no-capture" sentinel. A visually-hidden accessible *sibling*
+          (not an ancestor wrapping the renderer) restores a real label for
+          VoiceOver/TalkBack without collapsing the renderer's own tappable
+          links into one opaque, non-interactive node — an ancestor-level
+          `accessible` would make those links individually unreachable. */}
+      {plainTextLabel ? (
+        <Text accessible accessibilityLabel={plainTextLabel} style={styles.srOnly}>
+          {plainTextLabel}
+        </Text>
+      ) : null}
       <PostHogMaskView>
         <EnrichedMarkdownText
           markdown={markdownForDisplay(markdown)}
@@ -97,5 +102,12 @@ export function MarkdownBody({ markdown }: { markdown: string }) {
 const styles = StyleSheet.create({
   container: {
     width: '100%',
+  },
+  srOnly: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    overflow: 'hidden',
+    opacity: 0,
   },
 });

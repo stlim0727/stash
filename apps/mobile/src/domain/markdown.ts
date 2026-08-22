@@ -59,7 +59,12 @@ export function markdownLabel(markdown: string | null | undefined): string | nul
 export function markdownForDisplay(markdown: string): string {
   return markdown
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match, alt: string) => alt || 'Image')
-    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, (_match, alt: string) => alt || 'Image');
+    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, (_match, alt: string) => alt || 'Image')
+    // Shortcut reference images (`![tracker]` + a `[tracker]: url` definition
+    // elsewhere) — neutralize any remaining `![...]` not already handled
+    // above, since it's otherwise indistinguishable from one without fully
+    // parsing the document's reference definitions.
+    .replace(/!\[([^\]]+)\](?!\(|\[)/g, (_match, alt: string) => alt || 'Image');
 }
 
 /** Only ordinary web links may leave a rendered memo. */

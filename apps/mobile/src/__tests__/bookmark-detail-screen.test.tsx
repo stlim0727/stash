@@ -279,6 +279,10 @@ test('a URL-less memo previews Markdown and copies the raw source', async () => 
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('Memo')).toBeTruthy());
   expect(screen.getByText(markdown)).toBeTruthy();
+  // A screen-reader-only sibling label restores the real content over
+  // PostHogMaskView's forced "ph-no-capture" sentinel, without wrapping (and
+  // thereby collapsing) the rendered Markdown's own tappable links.
+  expect(screen.getByLabelText('Weekly plan Ship memo support')).toBeTruthy();
 
   await act(async () => {
     fireEvent.press(screen.getByLabelText('Copy'));

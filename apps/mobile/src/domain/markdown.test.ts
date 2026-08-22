@@ -40,6 +40,10 @@ test('markdownForDisplay keeps alt text without loading a remote image', () => {
     markdownForDisplay('![pixel][tracker]\n\n[tracker]: https://tracker.example/pixel.png'),
     'pixel\n\n[tracker]: https://tracker.example/pixel.png',
   );
+  assert.equal(
+    markdownForDisplay('![pixel]\n\n[pixel]: https://tracker.example/pixel.png'),
+    'pixel\n\n[pixel]: https://tracker.example/pixel.png',
+  );
 });
 
 test('rendered Markdown only opens ordinary web links', () => {
