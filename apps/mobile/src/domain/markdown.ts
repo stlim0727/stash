@@ -1,111 +1,145 @@
-/**
- * Read-side helpers for Markdown memo bodies.
- *
- * The stored value always remains the user's original Markdown. These helpers
- * create a compact plain-text projection only for list labels, graph nodes,
- * search-result previews, and accessibility. They deliberately cover the
- * supported Keepory subset instead of pretending to be a second renderer.
- */
+import { lexer, type Token, type Tokens } from 'marked';
 
-/** Labels declared by a reference definition (`[label]: url`) in a document —
- * used to recognize a shortcut reference link (`[label]` with no separate
- * destination) without mistaking ordinary bracketed prose ("see item [1]")
- * for one. */
-function collectReferenceLabels(markdown: string): Set<string> {
-  const referenceLabels = new Set<string>();
-  for (const match of markdown.matchAll(/^\s*\[([^\]]+)\]:\s*\S/gm)) {
-    referenceLabels.add(match[1]!.trim().toLowerCase());
+const COMMON_HTML_TAG =
+  /<\/?(?:a|abbr|b|blockquote|br|code|del|div|em|h[1-6]|hr|i|img|ins|kbd|li|mark|ol|p|pre|s|span|strong|sub|sup|table|td|th|tr|u|ul)(?:\s[^<>]*)?\/?>/gi;
+
+/**
+ * Project parsed Markdown to readable text.
+ *
+ * Using the syntax tree matters for legacy URL-less shares: unmatched `*`,
+ * comparison operators, and angle-bracket generics are ordinary authored text,
+ * not formatting characters to erase. HTML-looking spans are retained verbatim
+ * for the same reason; only nodes the parser actually recognized as Markdown
+ * lose their markup.
+ */
+function tokenText(token: Token): string {
+  switch (token.type) {
+    case 'text':
+      return (token as Tokens.Text).tokens?.map(tokenText).join('') ?? token.text;
+    case 'codespan':
+    case 'code':
+    case 'escape':
+      return token.text;
+    case 'html':
+      // Marked also classifies unknown angle-bracket text such as `<string>`
+      // as HTML. Strip only known tags inside the parsed HTML node so actual
+      // markup is flattened without corrupting technical prose.
+      return token.text.replace(COMMON_HTML_TAG, '');
+    case 'image':
+      return token.text.trim() || 'Image';
+    case 'checkbox':
+    case 'def':
+    case 'hr':
+      return '';
+    case 'br':
+    case 'space':
+      return '\n';
+    case 'blockquote':
+      return (token as Tokens.Blockquote).tokens.map(tokenText).join('\n');
+    case 'list':
+      return (token as Tokens.List).items.map(tokenText).join('\n');
+    case 'table': {
+      const table = token as Tokens.Table;
+      return [table.header, ...table.rows]
+        .map((row) => row.map((cell) => cell.tokens.map(tokenText).join('')).join(' '))
+        .join('\n');
+    }
+    default:
+      return (token as Tokens.Generic).tokens?.map(tokenText).join('') ?? '';
   }
-  return referenceLabels;
 }
 
-/**
- * Convert supported Markdown syntax to readable plain text without mutating
- * the source. `referenceLabels`, when passed, is used instead of scanning
- * `markdown` itself for reference definitions — `markdownLabel` passes the
- * whole document's labels in when processing a single line at a time, since
- * a definition can live on a different line than its shortcut reference.
- */
-export function markdownToPlainText(
-  markdown: string | null | undefined,
-  referenceLabels?: Set<string>,
-): string {
+/** Convert Markdown to readable plain text without mutating or guessing at ordinary syntax. */
+export function markdownToPlainText(markdown: string | null | undefined): string {
   if (!markdown?.trim()) {
     return '';
   }
 
-  const labels = referenceLabels ?? collectReferenceLabels(markdown);
-
-  return markdown
-    .replace(/```[^\n]*\n?/g, '')
-    .replace(/~~~[^\n]*\n?/g, '')
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    // Full/collapsed reference-style links (`[text][ref]`, `[text][]`).
-    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
-    // Shortcut reference links (`[label]` alone) — only when a matching
-    // definition was actually found above.
-    .replace(/\[([^\]]+)\](?!\(|\[|:)/g, (fullMatch, label: string) =>
-      labels.has(label.trim().toLowerCase()) ? label : fullMatch,
-    )
-    // The (now-orphaned) reference definition line itself (`[ref]: url`) so
-    // it doesn't linger in the projection as raw text.
-    .replace(/^\s*\[[^\]]+\]:\s*\S.*$/gm, '')
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-    .replace(/^\s{0,3}>\s?/gm, '')
-    .replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/gm, '')
-    // Only strip a known common HTML tag name, not any `<letter...>` span —
-    // that would also catch ordinary comparisons ("x < y and y > z") and
-    // generic type syntax in technical notes ("Array<string>").
-    .replace(
-      /<\/?(?:a|abbr|b|blockquote|br|code|del|div|em|h[1-6]|hr|i|img|ins|kbd|li|mark|ol|p|pre|s|span|strong|sub|sup|table|td|th|tr|u|ul)(?:\s[^<>]*)?\/?>/gi,
-      '',
-    )
-    // Only strip *matched pairs* of emphasis/code delimiters, not a lone
-    // `*`/`_`/`~`/`` ` `` that just happens to appear in plain text (e.g.
-    // "2 * 3 = 6"). Bold before italic so `**x**` isn't left as `*x*`.
-    .replace(/\*\*([^\n]+?)\*\*/g, '$1')
-    .replace(/(?<!\w)__([^\n]+?)__(?!\w)/g, '$1')
-    .replace(/\*([^\n]+?)\*/g, '$1')
-    .replace(/(?<!\w)_([^\n]+?)_(?!\w)/g, '$1')
-    .replace(/~~([^\n]+?)~~/g, '$1')
-    .replace(/`([^\n]+?)`/g, '$1')
-    .replace(/\s+/g, ' ')
-    .trim();
+  try {
+    return lexer(markdown).map(tokenText).join('\n').replace(/\s+/g, ' ').trim();
+  } catch {
+    // A malformed document should remain readable and intact. Parsing ordinary
+    // user text is best-effort; never fall back to character-stripping regexes.
+    return markdown.replace(/\s+/g, ' ').trim();
+  }
 }
 
-/** The first meaningful Markdown line, flattened for compact labels. */
+/** The first meaningful rendered line, flattened for compact labels. */
 export function markdownLabel(markdown: string | null | undefined): string | null {
   if (!markdown?.trim()) {
     return null;
   }
-  // Scan the whole document once — a shortcut reference link's definition
-  // can live on a different line than the link itself, so a per-line-only
-  // scan (see markdownToPlainText's own fallback) would never see it.
-  const referenceLabels = collectReferenceLabels(markdown);
-  for (const line of markdown.split(/\r?\n/)) {
-    const plain = markdownToPlainText(line, referenceLabels);
-    if (plain) {
-      return plain;
+  try {
+    // Parse the full document so shortcut reference links can resolve against
+    // definitions declared later, then choose the first rendered block.
+    for (const token of lexer(markdown)) {
+      const plain = tokenText(token).replace(/\s+/g, ' ').trim();
+      if (plain) {
+        return plain;
+      }
+    }
+  } catch {
+    for (const line of markdown.split(/\r?\n/)) {
+      const plain = line.replace(/\s+/g, ' ').trim();
+      if (plain) {
+        return plain;
+      }
     }
   }
   return null;
 }
 
+function childTokens(token: Token): Token[] {
+  if (token.type === 'list') {
+    return (token as Tokens.List).items;
+  }
+  if (token.type === 'table') {
+    const table = token as Tokens.Table;
+    return [table.header, ...table.rows].flatMap((row) =>
+      row.flatMap((cell) => cell.tokens),
+    );
+  }
+  return (token as Tokens.Generic).tokens ?? [];
+}
+
+/** Rewrite parsed child spans while copying every byte between them verbatim. */
+function rewriteTokenSequence(source: string, tokens: Token[]): string {
+  let cursor = 0;
+  let result = '';
+  for (const token of tokens) {
+    const index = source.indexOf(token.raw, cursor);
+    if (index < 0) {
+      continue;
+    }
+    result += source.slice(cursor, index);
+    result += rewriteToken(token);
+    cursor = index + token.raw.length;
+  }
+  return result + source.slice(cursor);
+}
+
+function rewriteToken(token: Token): string {
+  if (token.type === 'image') {
+    return token.text.trim() || 'Image';
+  }
+  const children = childTokens(token);
+  return children.length > 0 ? rewriteTokenSequence(token.raw, children) : token.raw;
+}
+
 /**
- * Remove network-backed image embeds from the rendered projection. The source
- * Markdown is preserved unchanged; MVP memo rendering supports links but must
- * not fetch an arbitrary tracking image just because a memo was opened.
+ * Neutralize actual parsed image nodes before rendering so opening a memo never
+ * fetches an arbitrary tracker. This handles inline and reference-style images
+ * while leaving image-looking source inside code spans/blocks untouched.
  */
 export function markdownForDisplay(markdown: string): string {
-  return markdown
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match, alt: string) => alt || 'Image')
-    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, (_match, alt: string) => alt || 'Image')
-    // Shortcut reference images (`![tracker]` + a `[tracker]: url` definition
-    // elsewhere) — neutralize any remaining `![...]` not already handled
-    // above, since it's otherwise indistinguishable from one without fully
-    // parsing the document's reference definitions.
-    .replace(/!\[([^\]]+)\](?!\(|\[)/g, (_match, alt: string) => alt || 'Image');
+  try {
+    return rewriteTokenSequence(markdown, lexer(markdown));
+  } catch {
+    // Fail closed if parsing ever rejects: escaping every image opener keeps the
+    // authored text visible without letting the renderer interpret a fetchable
+    // image node.
+    return markdown.replace(/!\[/g, '\\![');
+  }
 }
 
 /** Only ordinary web links may leave a rendered memo. */

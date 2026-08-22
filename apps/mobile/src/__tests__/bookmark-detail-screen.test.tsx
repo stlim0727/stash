@@ -313,6 +313,7 @@ test('a text memo with authored notes shows both the memo body and the notes edi
 });
 
 test('editing a memo body persists raw Markdown and queues a synced-row update', async () => {
+  const editedMarkdown = '    const saved = true;\n\n# After\n';
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset([
     makeStoredBookmark({
@@ -331,22 +332,20 @@ test('editing a memo body persists raw Markdown and queues a synced-row update',
   });
   const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
   await act(async () => {
-    fireEvent.changeText(editor, '# After\n\n- [x] Saved');
+    fireEvent.changeText(editor, editedMarkdown);
   });
   // Re-tapping the already-selected Edit segment must not reset the live draft
   // back to the last persisted body.
   await act(async () => {
     fireEvent.press(screen.getByText('Edit Markdown'));
   });
-  expect(screen.getByLabelText('Markdown memo body').props.value).toBe(
-    '# After\n\n- [x] Saved',
-  );
+  expect(screen.getByLabelText('Markdown memo body').props.value).toBe(editedMarkdown);
   await act(async () => {
     fireEvent(editor, 'blur');
   });
 
   await waitFor(() => {
-    expect(fakeRepo.__bookmarks()[0]?.description).toBe('# After\n\n- [x] Saved');
+    expect(fakeRepo.__bookmarks()[0]?.description).toBe(editedMarkdown);
     expect(fakeRepo.__queue()[0]?.operation).toBe('update');
   });
 });

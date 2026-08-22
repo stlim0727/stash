@@ -112,13 +112,14 @@ describe('AddBookmarkScreen duplicate UX', () => {
 
 describe('AddBookmarkScreen Markdown memos', () => {
   it('saves a URL-less memo with its raw Markdown and stable client id', async () => {
+    const markdown = '    const priority = 1;\n\n# Priorities\n';
     fakeRepo.__reset([]);
     const { findByText, findByLabelText, unmount } = await renderAddScreen();
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
 
     fireEvent.press(await findByText('Memo'));
     fireEvent.changeText(await findByLabelText('Title (optional)'), 'Weekly plan');
-    fireEvent.changeText(await findByLabelText('Markdown'), '# Priorities\n\n- Ship **memo** support');
+    fireEvent.changeText(await findByLabelText('Markdown'), markdown);
     fireEvent.press(await findByText('Save memo'));
 
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
@@ -126,13 +127,13 @@ describe('AddBookmarkScreen Markdown memos', () => {
     expect(saved).toMatchObject({
       url: null,
       title: 'Weekly plan',
-      description: '# Priorities\n\n- Ship **memo** support',
+      description: markdown,
       content_type: 'text',
     });
     expect(saved.client_id).toBeTruthy();
     expect(fakeRepo.__queue()[0]?.payload).toMatchObject({
       title: 'Weekly plan',
-      shared_text: '# Priorities\n\n- Ship **memo** support',
+      shared_text: markdown,
       client_id: saved.client_id,
     });
     expect(mockBack).toHaveBeenCalled();

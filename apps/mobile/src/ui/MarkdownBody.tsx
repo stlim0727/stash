@@ -6,7 +6,11 @@ import {
 } from 'react-native-enriched-markdown';
 import { PostHogMaskView } from 'posthog-react-native';
 
-import { isSafeMarkdownLink, markdownForDisplay, markdownToPlainText } from '@/domain/markdown';
+import {
+  isSafeMarkdownLink,
+  markdownForDisplay,
+  markdownToPlainText,
+} from '@/domain/markdown';
 import { usePalette } from '@/theme';
 
 export function MarkdownBody({ markdown }: { markdown: string }) {

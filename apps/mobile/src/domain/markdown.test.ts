@@ -25,6 +25,13 @@ test('markdownLabel flattens a shortcut reference link whose definition is on a 
   assert.equal(markdownLabel('[Keepory]\n\n[Keepory]: https://example.com'), 'Keepory');
 });
 
+test('ordinary operators and HTML-looking generics are not stripped from legacy text', () => {
+  for (const text of ['2 * 3 = 6', 'Array<string>', 'x < y and y > z']) {
+    assert.equal(markdownToPlainText(text), text);
+  }
+  assert.equal(markdownToPlainText('<strong>Important</strong>'), 'Important');
+});
+
 test('plain text remains unchanged because legacy notes are valid Markdown', () => {
   assert.equal(markdownToPlainText('내일 3시에 회의 있습니다'), '내일 3시에 회의 있습니다');
 });
@@ -71,6 +78,21 @@ test('markdownForDisplay keeps alt text without loading a remote image', () => {
     markdownForDisplay('![pixel]\n\n[pixel]: https://tracker.example/pixel.png'),
     'pixel\n\n[pixel]: https://tracker.example/pixel.png',
   );
+});
+
+test('markdownForDisplay neutralizes reference images without rewriting their definition', () => {
+  assert.equal(
+    markdownForDisplay(
+      'Before ![tracking pixel][tracker] after\n\n[tracker]: https://tracker.example/pixel.png',
+    ),
+    'Before tracking pixel after\n\n[tracker]: https://tracker.example/pixel.png',
+  );
+});
+
+test('markdownForDisplay leaves image-looking text inside code untouched', () => {
+  const markdown =
+    '`![inline code](https://tracker.example/a.png)`\n\n```md\n![code block](https://tracker.example/b.png)\n```';
+  assert.equal(markdownForDisplay(markdown), markdown);
 });
 
 test('rendered Markdown only opens ordinary web links', () => {
