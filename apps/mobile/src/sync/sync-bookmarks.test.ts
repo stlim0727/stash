@@ -2064,9 +2064,10 @@ test('reconcileOrphanedQueueEntries re-queues an update for a stranded synced-id
   assert.equal(entries[0]?.operation, 'update');
 });
 
-test('reconcileOrphanedQueueEntries skips a url-less local bookmark', () => {
-  // A create with neither url nor shared_text is rejected by the server, so
-  // re-enqueuing it would strand the row as failed instead of self-healing it.
+test('reconcileOrphanedQueueEntries re-creates an explicitly typed bodyless text memo', () => {
+  // Backup restore can preserve a memo whose body was cleared while authored
+  // metadata or organization remains. The explicit type lets the server create
+  // its base row before tags/collection are attached.
   const orphan = makeBookmark({
     id: 'local-textonly',
     url: null,
@@ -2074,7 +2075,17 @@ test('reconcileOrphanedQueueEntries skips a url-less local bookmark', () => {
     sync_status: 'pending',
   });
 
-  assert.deepEqual(reconcileOrphanedQueueEntries([orphan], []), []);
+  const entries = reconcileOrphanedQueueEntries([orphan], []);
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0]?.payload, {
+    id: 'local-textonly',
+    created_at: '2026-06-12T00:00:00.000Z',
+    content_type: 'text',
+    title: undefined,
+    notes: undefined,
+    shared_text: undefined,
+    client_id: undefined,
+  });
 });
 
 test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its body as shared_text', () => {
@@ -2100,6 +2111,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its
   assert.deepEqual(entries[0]?.payload, {
     id: 'local-note',
     created_at: '2026-06-12T00:00:00.000Z',
+    content_type: 'text',
     title: 'Reminder',
     notes: undefined,
     shared_text: '내일 3시에 회의 있습니다',
