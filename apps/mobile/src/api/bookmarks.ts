@@ -560,6 +560,12 @@ export class BookmarkApi {
 
     const outputs: Array<BulkCreateBookmarkOutput | null> = new Array(inputs.length).fill(null);
     const duplicateIds = new Set<string>();
+    // A retried create in this batch can find its OWN earlier attempt
+    // already landed (response lost) — same idempotent-duplicate case the
+    // single-entry createBookmark handles. Track a refreshed description
+    // per duplicate so it can be pushed individually below instead of
+    // discarded along with the shared last_saved_at-only bump.
+    const duplicateDescriptionUpdates = new Map<string, string>();
     const pendingByKey = new Map<string, number>();
     const duplicateIndexesByInsertIndex = new Map<number, number[]>();
     const inserts: Array<{ index: number; body: (typeof prepared)[number]['body'] }> = [];
@@ -570,6 +576,9 @@ export class BookmarkApi {
         (item.clientId ? existingByClientId.get(item.clientId) : null);
       if (existing) {
         duplicateIds.add(existing.id);
+        if (item.body.description !== null) {
+          duplicateDescriptionUpdates.set(existing.id, item.body.description);
+        }
         outputs[index] = {
           bookmark_id: existing.id,
           status: 'duplicate',
@@ -594,7 +603,21 @@ export class BookmarkApi {
     });
 
     if (duplicateIds.size > 0) {
-      await this.updateLastSavedAt([...duplicateIds], timestamp);
+      // updateLastSavedAt applies ONE shared body to every id in one PATCH,
+      // so it can't carry a per-row refreshed description — push those
+      // individually, and batch the rest (the common case: a plain
+      // duplicate with nothing new to say) through the cheap shared bump.
+      const idsNeedingOnlyTimestamp = [...duplicateIds].filter(
+        (id) => !duplicateDescriptionUpdates.has(id),
+      );
+      await Promise.all([
+        ...[...duplicateDescriptionUpdates].map(([id, description]) =>
+          this.updateBookmark(id, { description, last_saved_at: timestamp }),
+        ),
+        idsNeedingOnlyTimestamp.length > 0
+          ? this.updateLastSavedAt(idsNeedingOnlyTimestamp, timestamp)
+          : Promise.resolve(),
+      ]);
     }
 
     if (inserts.length > 0) {

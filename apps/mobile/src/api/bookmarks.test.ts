@@ -166,6 +166,45 @@ test('createBookmarks bulk-inserts only new rows and returns outputs in input or
   assert.equal(calls.some((call) => call.path.startsWith('/rest/v1/bookmarks?id=in.')), true);
 });
 
+test('createBookmarks pushes a refreshed memo body for an idempotent duplicate retry, not just last_saved_at', async () => {
+  const existing = remoteBookmark({
+    id: '00000000-0000-4000-8000-000000000011',
+    url: null,
+    content_type: 'text',
+    description: 'original body',
+    client_id: 'cid-memo',
+  });
+  const patches: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=in.')) {
+        // The first attempt already landed; only its response was lost, so
+        // this retry finds it via client_id.
+        return [existing];
+      }
+      if (options.method === 'PATCH') {
+        patches.push({ path, body: options.body as Record<string, unknown> });
+        return [{ ...existing, ...(options.body as Record<string, unknown>) }];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const outputs = await api.createBookmarks([
+    {
+      // The memo was edited locally between the original (lost-response)
+      // create and this retry.
+      shared_text: 'edited body',
+      client_id: 'cid-memo',
+    },
+  ]);
+
+  assert.equal(outputs[0]?.status, 'duplicate');
+  const descriptionPatch = patches.find((patch) => patch.path.includes('id=eq.'));
+  assert.equal(descriptionPatch?.body.description, 'edited body');
+});
+
 test('createBookmarks dedupes same-url inputs before the bulk POST', async () => {
   const created = remoteBookmark({
     id: '00000000-0000-4000-8000-000000000033',
