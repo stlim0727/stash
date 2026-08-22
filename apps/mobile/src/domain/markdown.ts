@@ -38,6 +38,12 @@ function tokenText(token: Token): string {
       return (token as Tokens.Blockquote).tokens.map(tokenText).join('\n');
     case 'list':
       return (token as Tokens.List).items.map(tokenText).join('\n');
+    case 'list_item':
+      // A list item's own tokens are block-level (its leading text/paragraph
+      // plus any nested list or continuation paragraph for a loose item), not
+      // an inline run — joining with '' merges unrelated words together, e.g.
+      // "Parent item" + "Child item" becoming "Parent itemChild item".
+      return (token as Tokens.ListItem).tokens.map(tokenText).join('\n');
     case 'table': {
       const table = token as Tokens.Table;
       return [table.header, ...table.rows]

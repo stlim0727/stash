@@ -15,6 +15,20 @@ test('markdownToPlainText keeps content while removing supported formatting synt
   );
 });
 
+test('markdownToPlainText separates nested list items instead of merging their words', () => {
+  assert.equal(
+    markdownToPlainText('- Parent item\n  - Child item\n- Second parent'),
+    'Parent item Child item Second parent',
+  );
+});
+
+test('markdownToPlainText separates a loose list item from its continuation paragraph', () => {
+  assert.equal(
+    markdownToPlainText('- Item one\n\n  continuation paragraph in loose item\n- Item two'),
+    'Item one continuation paragraph in loose item Item two',
+  );
+});
+
 test('markdownLabel returns the first meaningful rendered line', () => {
   assert.equal(markdownLabel('\n# Weekly **plan**\n\nDetails'), 'Weekly plan');
   assert.equal(markdownLabel('  '), null);
