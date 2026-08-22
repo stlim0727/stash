@@ -296,6 +296,47 @@ test('createBookmark preserves leading/trailing whitespace in a Markdown memo bo
   });
 });
 
+test('createBookmark pushes a refreshed memo body when a retry finds its own earlier create (idempotent duplicate)', async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        // The first attempt already landed server-side; only its response
+        // was lost, so this retry finds it via the same client_id.
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: null,
+            content_type: 'text',
+            description: 'original body',
+            client_id: 'cid-memo',
+          }),
+        ];
+      }
+      if (path === '/rest/v1/bookmarks?id=eq.b1&user_id=eq.user-1') {
+        assert.equal(options.method, 'PATCH');
+        const body = options.body as Record<string, unknown>;
+        patches.push(body);
+        return [remoteBookmark({ id: 'b1', url: null, content_type: 'text', description: body.description as string })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    // The memo was edited locally between the original (lost-response)
+    // create and this retry — createUploadPayload refreshes shared_text
+    // from the latest bookmark before every upload attempt.
+    shared_text: 'edited body',
+    client_id: 'cid-memo',
+  });
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(patches[0]?.description, 'edited body');
+});
+
 test('createBookmark rejects an image payload with no uploaded preview_image_url (STASH-65 invariant: never create before the binary lands)', async () => {
   const client = {
     request: async () => {

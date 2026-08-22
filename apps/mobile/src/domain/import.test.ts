@@ -141,6 +141,7 @@ test('parseJsonBackup preserves generated metadata for a lossless restore (#671)
   const [item] = parseJsonBackup(json);
   assert.deepEqual(item?.metadata, {
     description: 'A fetched description.',
+    raw_description: 'A fetched description.',
     preview_image_url: 'https://example.com/a/preview.png',
     favicon_url: 'https://example.com/favicon.ico',
     site_name: 'Example',
@@ -303,6 +304,7 @@ test('a Stash JSON backup round-trips generated metadata and the AI enrichment s
   const [item] = parseJsonBackup(backup);
   assert.deepEqual(item?.metadata, {
     description: 'A fetched description.',
+    raw_description: 'A fetched description.',
     preview_image_url: 'https://example.com/preview.png',
     favicon_url: 'https://example.com/favicon.ico',
     site_name: 'Example',

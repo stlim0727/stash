@@ -2965,12 +2965,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // Like a live text-note capture (see addBookmark's text branch),
           // there's no canonical URL key to dedupe on, so every restored memo
           // is a new note.
-          const memoBody =
-            item.source === "stash-backup" ? item.metadata?.description?.trim() : null;
-          if (!memoBody) {
+          // Test emptiness on the trimmed value, but restore the untrimmed
+          // one — leading/trailing whitespace can be meaningful Markdown
+          // (e.g. an indented code block), so a restore must not silently
+          // rewrite it.
+          if (item.source !== "stash-backup" || !item.metadata?.description?.trim()) {
             skipped += 1;
             continue;
           }
+          const memoBody = item.metadata.raw_description ?? item.metadata.description;
           const id = makeBookmarkId();
           const clientId = makeClientId();
           const title = item.title?.trim() ? item.title.trim() : null;

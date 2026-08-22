@@ -639,6 +639,7 @@ describe("Mass Import, Sync & Reset lifecycle", () => {
           collection: null,
           metadata: {
             description: "A fetched description.",
+            raw_description: "A fetched description.",
             preview_image_url: "https://example.com/preview.png",
             favicon_url: "https://example.com/favicon.ico",
             site_name: "Example",

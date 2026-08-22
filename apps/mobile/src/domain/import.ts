@@ -26,6 +26,15 @@ import type { ContentType, EnrichmentStatus, SuggestedTag } from '@/domain/types
  */
 export interface ImportedMetadata {
   description: string | null;
+  /**
+   * Same value as `description`, but untrimmed — for restoring a URL-less
+   * text/Markdown-memo bookmark, whose raw body lives here and can carry
+   * meaningful leading/trailing whitespace (e.g. an indented code block).
+   * `description` above is trimmed like every other generated-metadata
+   * string field, which is correct for those but would silently rewrite a
+   * memo's source on restore; this field preserves it losslessly.
+   */
+  raw_description: string | null;
   preview_image_url: string | null;
   favicon_url: string | null;
   site_name: string | null;
@@ -124,6 +133,10 @@ function cleanEnrichmentStatus(value: unknown): EnrichmentStatus {
 function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata | undefined {
   const metadata: ImportedMetadata = {
     description: cleanString(entry.description),
+    raw_description:
+      typeof entry.description === 'string' && entry.description.trim().length > 0
+        ? entry.description
+        : null,
     preview_image_url: cleanString(entry.preview_image_url),
     favicon_url: cleanString(entry.favicon_url),
     site_name: cleanString(entry.site_name),

@@ -417,6 +417,35 @@ test('create: uploads the LATEST memo body, not the payload captured at save', a
   assert.equal(result.uploadedPayload?.shared_text, 'edited body');
 });
 
+test('create: falls back to the originally-queued memo body if it was cleared to empty before first sync', async () => {
+  const { repository } = fakeRepository();
+  const sent: Array<{ shared_text?: string }> = [];
+  const api = fakeApi({
+    createBookmark: async (input: { shared_text?: string }) => {
+      sent.push(input);
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'pending' };
+    },
+  });
+  // The memo body was cleared to empty locally while its create was still
+  // queued — refreshing shared_text to '' here would make requirePayload
+  // reject every retry forever (neither a URL nor shared_text).
+  const clearedSinceSave = makeBookmark({
+    url: null,
+    content_type: 'text',
+    description: null,
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { shared_text: 'original body', client_id: 'cid-text' } }),
+    () => clearedSinceSave,
+  );
+
+  assert.equal(sent[0]?.shared_text, 'original body');
+  assert.equal(result.uploadedPayload?.shared_text, 'original body');
+});
+
 test('bulk create: uploads latest titles and replaces local rows with returned remote ids', async () => {
   const first = makeCreateEntry({
     local_id: 'local-a',

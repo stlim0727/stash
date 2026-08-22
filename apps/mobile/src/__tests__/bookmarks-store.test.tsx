@@ -821,8 +821,11 @@ test("import: a URL-less Markdown memo from a Stash JSON backup is restored, not
         notes: null,
         tags: ["planning"],
         collection: null,
+        // A leading-space indented code block: meaningful Markdown that a
+        // trimmed restore would silently flatten into an ordinary paragraph.
         metadata: {
-          description: "# Weekly plan\n\n- Ship memo support",
+          description: "    indented code block",
+          raw_description: "    indented code block",
           preview_image_url: null,
           favicon_url: null,
           site_name: null,
@@ -839,7 +842,7 @@ test("import: a URL-less Markdown memo from a Stash JSON backup is restored, not
   const restored = fakeRepo.__bookmarks()[0]!;
   expect(restored.url).toBeNull();
   expect(restored.content_type).toBe("text");
-  expect(restored.description).toBe("# Weekly plan\n\n- Ship memo support");
+  expect(restored.description).toBe("    indented code block");
   expect(restored.title).toBe("Weekly plan");
   expect(
     result.current

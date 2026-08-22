@@ -409,7 +409,18 @@ export class BookmarkApi {
         ? await this.findBookmarkByClientId(clientId)
         : null;
     if (existing) {
-      await this.updateBookmark(existing.id, { last_saved_at: timestamp });
+      // A retried create can land here after its FIRST attempt already
+      // succeeded server-side (only the response was lost) — but this
+      // request may carry a freshly-edited body (createUploadPayload
+      // refreshes shared_text/description from the latest local state
+      // before every upload attempt, including a retry). Push it through
+      // instead of silently discarding it along with `last_saved_at`, or an
+      // edit made between the original create and this idempotent retry is
+      // lost — the cloud keeps the stale text forever.
+      await this.updateBookmark(existing.id, {
+        description: description ?? undefined,
+        last_saved_at: timestamp,
+      });
       return {
         bookmark_id: existing.id,
         status: 'duplicate',
