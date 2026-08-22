@@ -2957,7 +2957,118 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       let skipped = 0;
 
       for (const item of items) {
-        const normalized = item.url ? normalizeUrl(item.url) : null;
+        if (!item.url) {
+          // A URL-less text/Markdown-memo bookmark: `toJsonBackup` exports it
+          // with url: null and its raw body in `description`, so a restore
+          // must not fall through to the URL-only skip below — that would
+          // silently drop every memo from an advertised full-fidelity backup.
+          // Like a live text-note capture (see addBookmark's text branch),
+          // there's no canonical URL key to dedupe on, so every restored memo
+          // is a new note.
+          const memoBody =
+            item.source === "stash-backup" ? item.metadata?.description?.trim() : null;
+          if (!memoBody) {
+            skipped += 1;
+            continue;
+          }
+          const id = makeBookmarkId();
+          const clientId = makeClientId();
+          const title = item.title?.trim() ? item.title.trim() : null;
+          const notes = item.notes?.trim() ? item.notes.trim() : null;
+          const itemCreatedAt = item.createdAt ?? now;
+          newBookmarks.push({
+            id,
+            user_id: mockUserId,
+            url: null,
+            canonical_url: null,
+            url_hash: null,
+            title,
+            title_is_derived: title ? false : undefined,
+            client_id: clientId,
+            description: memoBody,
+            notes,
+            source_app: null,
+            content_type: "text",
+            preview_image_url: null,
+            favicon_url: null,
+            site_name: null,
+            collection_id: null,
+            is_archived: false,
+            deleted_at: null,
+            created_at: itemCreatedAt,
+            updated_at: now,
+            last_saved_at: now,
+            // Never 'pending' for a restore — same rationale as the URL
+            // branch below: don't let a restored row auto-spend AI quota.
+            metadata_status: "skipped",
+            sync_status: "pending",
+          });
+          newEntries.push({
+            local_id: id,
+            remote_id: null,
+            operation: "create",
+            payload: {
+              id,
+              shared_text: memoBody,
+              title: title ?? undefined,
+              notes: notes ?? undefined,
+              client_id: clientId,
+              metadata_status: "skipped",
+              enrichment_policy: "skip",
+              created_at: itemCreatedAt,
+            },
+            sync_status: "pending",
+            retry_count: 0,
+            last_error: null,
+            created_at: now,
+            updated_at: now,
+          });
+          imported += 1;
+
+          for (const tagName of item.tags) {
+            const op: PendingTagOp = {
+              id: makeUuid(),
+              bookmark_id: id,
+              tag_name: tagName,
+              op: "add",
+              source: "user",
+              confidence: null,
+              created_at: now,
+            };
+            nextTagData = applyTagOp(nextTagData, op, auth.userId ?? mockUserId);
+            nextTagOps = enqueueTagOp(nextTagOps, op);
+            organizationChanged = true;
+          }
+          const memoCollectionName = item.collection?.trim();
+          if (memoCollectionName) {
+            nextImportCollections = enqueuePendingImportCollection(
+              nextImportCollections,
+              {
+                bookmark_id: id,
+                collection_name: memoCollectionName,
+                status: "pending",
+                last_error: null,
+                created_at: now,
+              },
+            );
+            organizationChanged = true;
+          }
+          if (item.enrichment) {
+            nextEnrichmentRestores = enqueuePendingEnrichmentRestore(
+              nextEnrichmentRestores,
+              {
+                bookmark_id: id,
+                enrichment: item.enrichment,
+                status: "pending",
+                last_error: null,
+                created_at: now,
+              },
+            );
+            organizationChanged = true;
+          }
+          continue;
+        }
+        const normalized = normalizeUrl(item.url);
         if (!normalized) {
           skipped += 1;
           continue;

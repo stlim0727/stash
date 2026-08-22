@@ -387,6 +387,36 @@ test('create: forwards the payload client_id so a retried text note stays idempo
   assert.equal(sent[0].client_id, 'cid-text');
 });
 
+test('create: uploads the LATEST memo body, not the payload captured at save', async () => {
+  const { repository } = fakeRepository();
+  const sent: Array<{ shared_text?: string }> = [];
+  const api = fakeApi({
+    createBookmark: async (input: { shared_text?: string }) => {
+      sent.push(input);
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'pending' };
+    },
+  });
+  // An edit landed locally while the original create was still queued (e.g.
+  // offline) — applyBookmarkUpdate never enqueues a separate `update` for a
+  // row that hasn't synced once, so this refresh at upload time is the only
+  // place the edit can reach the server.
+  const editedSinceSave = makeBookmark({
+    url: null,
+    content_type: 'text',
+    description: 'edited body',
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { shared_text: 'original body', client_id: 'cid-text' } }),
+    () => editedSinceSave,
+  );
+
+  assert.equal(sent[0]?.shared_text, 'edited body');
+  assert.equal(result.uploadedPayload?.shared_text, 'edited body');
+});
+
 test('bulk create: uploads latest titles and replaces local rows with returned remote ids', async () => {
   const first = makeCreateEntry({
     local_id: 'local-a',

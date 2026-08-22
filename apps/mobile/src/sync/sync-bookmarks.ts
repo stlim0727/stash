@@ -292,6 +292,16 @@ function createUploadPayload(
     notes: latestAtUpload.notes ?? undefined,
     ...(latestAtUpload.deleted_at ? { deleted_at: latestAtUpload.deleted_at } : {}),
   };
+  // A URL-less text/Markdown-memo row's body lives in `description` locally
+  // but uploads as `shared_text` — refresh it too, the same as title/notes,
+  // so an edit made while the original create is still queued (e.g. offline)
+  // doesn't get silently dropped when that queued body finally uploads
+  // (applyBookmarkUpdate never enqueues a separate `update` for a row that
+  // hasn't synced once yet — this refresh at upload time is the only place
+  // such an edit reaches the server).
+  if (entry.payload.shared_text !== undefined) {
+    payload.shared_text = latestAtUpload.description ?? undefined;
+  }
   if (latestAtUpload.site_name !== null) {
     payload.site_name = latestAtUpload.site_name;
   }

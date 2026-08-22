@@ -285,7 +285,9 @@ export default function BookmarkDetailScreen({
     if (dn !== null && dn !== (bookmark.notes ?? '')) {
       fields.notes = dn;
     }
-    if (dd !== null && dd.trim() !== (bookmark.description ?? '')) {
+    // Compare the raw draft against the raw stored description — see the
+    // same fix in commitDescription below.
+    if (dd !== null && dd !== (bookmark.description ?? '')) {
       fields.description = dd;
     }
     if (

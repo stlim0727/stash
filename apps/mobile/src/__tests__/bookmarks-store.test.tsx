@@ -809,6 +809,45 @@ test("import: tags and collection intent are written durably", async () => {
   ]);
 });
 
+test("import: a URL-less Markdown memo from a Stash JSON backup is restored, not silently skipped", async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: null,
+        title: "Weekly plan",
+        notes: null,
+        tags: ["planning"],
+        collection: null,
+        metadata: {
+          description: "# Weekly plan\n\n- Ship memo support",
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          canonical_url: null,
+          content_type: "text",
+        },
+      },
+    ]);
+    expect(summary.imported).toBe(1);
+    expect(summary.skipped).toBe(0);
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  const restored = fakeRepo.__bookmarks()[0]!;
+  expect(restored.url).toBeNull();
+  expect(restored.content_type).toBe("text");
+  expect(restored.description).toBe("# Weekly plan\n\n- Ship memo support");
+  expect(restored.title).toBe("Weekly plan");
+  expect(
+    result.current
+      .getTagsForBookmark(restored.id)
+      .map((tag) => tag.name),
+  ).toEqual(["planning"]);
+});
+
 test("import: logs a start/finish summary (Sentry STASH-3K/3M instrumentation)", async () => {
   // STASH-3K and its repeat STASH-3M both reported a bulk HTML import doubling
   // the library (local total exactly 2x the cloud count) with no evidence of

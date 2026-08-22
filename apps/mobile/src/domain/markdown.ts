@@ -21,9 +21,13 @@ export function markdownToPlainText(markdown: string | null | undefined): string
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
     .replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/gm, '')
-    // Only strip actual HTML-tag-like spans (`<tag ...>`), not ordinary
-    // comparison operators such as "x < y and y > z".
-    .replace(/<\/?[a-zA-Z][^<>]*>/g, '')
+    // Only strip a known common HTML tag name, not any `<letter...>` span —
+    // that would also catch ordinary comparisons ("x < y and y > z") and
+    // generic type syntax in technical notes ("Array<string>").
+    .replace(
+      /<\/?(?:a|abbr|b|blockquote|br|code|del|div|em|h[1-6]|hr|i|img|ins|kbd|li|mark|ol|p|pre|s|span|strong|sub|sup|table|td|th|tr|u|ul)(?:\s[^<>]*)?\/?>/gi,
+      '',
+    )
     // Only strip *matched pairs* of emphasis/code delimiters, not a lone
     // `*`/`_`/`~`/`` ` `` that just happens to appear in plain text (e.g.
     // "2 * 3 = 6"). Bold before italic so `**x**` isn't left as `*x*`.
