@@ -6,7 +6,7 @@ import {
 } from 'react-native-enriched-markdown';
 import { PostHogMaskView } from 'posthog-react-native';
 
-import { isSafeMarkdownLink, markdownForDisplay } from '@/domain/markdown';
+import { isSafeMarkdownLink, markdownForDisplay, markdownToPlainText } from '@/domain/markdown';
 import { usePalette } from '@/theme';
 
 export function MarkdownBody({ markdown }: { markdown: string }) {
@@ -66,7 +66,15 @@ export function MarkdownBody({ markdown }: { markdown: string }) {
   );
 
   return (
-    <View style={styles.container}>
+    // PostHogMaskView below forces its own wrapper accessibilityLabel
+    // ("ph-no-capture"), which would otherwise replace this memo's
+    // content-derived accessible name — restore it explicitly (same pattern
+    // as trash.tsx / Chip.tsx).
+    <View
+      style={styles.container}
+      accessible
+      accessibilityLabel={markdownToPlainText(markdown)}
+    >
       <PostHogMaskView>
         <EnrichedMarkdownText
           markdown={markdownForDisplay(markdown)}

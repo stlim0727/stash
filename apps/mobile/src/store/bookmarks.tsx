@@ -2698,14 +2698,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // with no link), save it as a text note rather than dropping deliberately
         // shared content — capture is sacred. Reject only when there is nothing
         // at all to save.
-        const text = shared_text?.trim() || null;
-        if (!text) {
+        if (!shared_text?.trim()) {
           return {
             status: "invalid",
             error:
               "Enter a valid web address, like example.com or https://example.com.",
           };
         }
+        // Test emptiness on a trimmed copy above, but persist the original
+        // body — leading whitespace is meaningful Markdown (e.g. an indented
+        // code block), so a Markdown memo must not be silently rewritten.
+        const text = shared_text;
 
         const noteNow = new Date().toISOString();
         // Text notes have no canonical URL key, so distinct shares are distinct
@@ -3373,7 +3376,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         patch.notes = fields.notes.trim() || null;
       }
       if (fields.description !== undefined) {
-        patch.description = fields.description.trim() || null;
+        // Test emptiness on a trimmed copy, but persist the original body —
+        // leading whitespace is meaningful Markdown (e.g. an indented code
+        // block), so editing a memo must not silently rewrite it.
+        patch.description = fields.description.trim() ? fields.description : null;
       }
       // Only stale on a real change to user-editable text; a no-op save (or a
       // collection/archive change, which never routes through here) must not.

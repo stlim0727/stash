@@ -21,8 +21,18 @@ export function markdownToPlainText(markdown: string | null | undefined): string
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
     .replace(/^\s*(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/gm, '')
-    .replace(/<[^>]+>/g, '')
-    .replace(/[`*_~]+/g, '')
+    // Only strip actual HTML-tag-like spans (`<tag ...>`), not ordinary
+    // comparison operators such as "x < y and y > z".
+    .replace(/<\/?[a-zA-Z][^<>]*>/g, '')
+    // Only strip *matched pairs* of emphasis/code delimiters, not a lone
+    // `*`/`_`/`~`/`` ` `` that just happens to appear in plain text (e.g.
+    // "2 * 3 = 6"). Bold before italic so `**x**` isn't left as `*x*`.
+    .replace(/\*\*([^\n]+?)\*\*/g, '$1')
+    .replace(/(?<!\w)__([^\n]+?)__(?!\w)/g, '$1')
+    .replace(/\*([^\n]+?)\*/g, '$1')
+    .replace(/(?<!\w)_([^\n]+?)_(?!\w)/g, '$1')
+    .replace(/~~([^\n]+?)~~/g, '$1')
+    .replace(/`([^\n]+?)`/g, '$1')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -47,7 +57,9 @@ export function markdownLabel(markdown: string | null | undefined): string | nul
  * not fetch an arbitrary tracking image just because a memo was opened.
  */
 export function markdownForDisplay(markdown: string): string {
-  return markdown.replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match, alt: string) => alt || 'Image');
+  return markdown
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_match, alt: string) => alt || 'Image')
+    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, (_match, alt: string) => alt || 'Image');
 }
 
 /** Only ordinary web links may leave a rendered memo. */

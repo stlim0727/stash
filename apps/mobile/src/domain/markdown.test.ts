@@ -25,10 +25,20 @@ test('plain text remains unchanged because legacy notes are valid Markdown', () 
   assert.equal(markdownToPlainText('내일 3시에 회의 있습니다'), '내일 3시에 회의 있습니다');
 });
 
+test('markdownToPlainText preserves ordinary punctuation that is not a matched Markdown pair', () => {
+  assert.equal(markdownToPlainText('2 * 3 = 6'), '2 * 3 = 6');
+  assert.equal(markdownToPlainText('x < y and y > z'), 'x < y and y > z');
+  assert.equal(markdownToPlainText('my_var_name is snake_case'), 'my_var_name is snake_case');
+});
+
 test('markdownForDisplay keeps alt text without loading a remote image', () => {
   assert.equal(
     markdownForDisplay('Before ![diagram](https://tracker.example/pixel.png) after'),
     'Before diagram after',
+  );
+  assert.equal(
+    markdownForDisplay('![pixel][tracker]\n\n[tracker]: https://tracker.example/pixel.png'),
+    'pixel\n\n[tracker]: https://tracker.example/pixel.png',
   );
 });
 
