@@ -260,6 +260,154 @@ test('copy link action copies the bookmark URL and confirms with a toast', async
   expect(await waitFor(() => screen.getByText('Link copied'))).toBeTruthy();
 });
 
+test('a URL-less memo previews Markdown and copies the raw source', async () => {
+  mockRouteId = SYNCED_ID;
+  mockSetStringAsync.mockReset();
+  mockSetStringAsync.mockResolvedValueOnce(undefined);
+  const markdown = '# Weekly plan\n\n- Ship **memo** support';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      url: null,
+      url_hash: null,
+      title: null,
+      description: markdown,
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Memo')).toBeTruthy());
+  expect(screen.getByText(markdown)).toBeTruthy();
+  // A screen-reader-only sibling label restores the real content over
+  // PostHogMaskView's forced "ph-no-capture" sentinel, without wrapping (and
+  // thereby collapsing) the rendered Markdown's own tappable links.
+  expect(screen.getByLabelText('Weekly plan Ship memo support')).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(screen.getByLabelText('Copy'));
+  });
+
+  expect(mockSetStringAsync).toHaveBeenCalledWith(markdown);
+  expect(await waitFor(() => screen.getByText('Memo copied'))).toBeTruthy();
+});
+
+test('a text memo with authored notes shows both the memo body and the notes editor', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      url: null,
+      url_hash: null,
+      title: null,
+      description: '# Weekly plan',
+      notes: 'keep this note visible',
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Memo')).toBeTruthy());
+  expect(screen.getByText('# Weekly plan')).toBeTruthy();
+  expect(screen.getByLabelText('Notes').props.value).toBe('keep this note visible');
+});
+
+test('editing a memo body persists raw Markdown and queues a synced-row update', async () => {
+  const editedMarkdown = '    const saved = true;\n\n# After\n';
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      url: null,
+      url_hash: null,
+      title: 'Working notes',
+      description: '# Before',
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await act(async () => {
+    fireEvent.press(await waitFor(() => screen.getByText('Edit Markdown')));
+  });
+  const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
+  await act(async () => {
+    fireEvent.changeText(editor, editedMarkdown);
+  });
+  // Re-tapping the already-selected Edit segment must not reset the live draft
+  // back to the last persisted body.
+  await act(async () => {
+    fireEvent.press(screen.getByText('Edit Markdown'));
+  });
+  expect(screen.getByLabelText('Markdown memo body').props.value).toBe(editedMarkdown);
+  await act(async () => {
+    fireEvent(editor, 'blur');
+  });
+
+  await waitFor(() => {
+    expect(fakeRepo.__bookmarks()[0]?.description).toBe(editedMarkdown);
+    expect(fakeRepo.__queue()[0]?.operation).toBe('update');
+  });
+});
+
+test('entering and leaving Edit without changes does not re-queue a whitespace-leading memo', async () => {
+  mockRouteId = SYNCED_ID;
+  const indented = '    indented code block';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      url: null,
+      url_hash: null,
+      title: 'Snippet',
+      description: indented,
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await act(async () => {
+    fireEvent.press(await waitFor(() => screen.getByText('Edit Markdown')));
+  });
+  const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
+  await act(async () => {
+    fireEvent(editor, 'blur');
+  });
+
+  expect(fakeRepo.__bookmarks()[0]?.description).toBe(indented);
+  expect(fakeRepo.__queue()).toHaveLength(0);
+});
+
+test('editing a captured memo longer than the creation cap preserves its full body', async () => {
+  mockRouteId = SYNCED_ID;
+  const capturedBody = 'x'.repeat(10_001);
+  const editedBody = `${capturedBody}!`;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      url: null,
+      url_hash: null,
+      title: 'Long capture',
+      description: capturedBody,
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await act(async () => {
+    fireEvent.press(await waitFor(() => screen.getByText('Edit Markdown')));
+  });
+  const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
+  await act(async () => {
+    fireEvent.changeText(editor, editedBody);
+  });
+  await waitFor(() => expect(screen.getByLabelText('Markdown memo body').props.value).toBe(editedBody));
+  await act(async () => {
+    fireEvent(editor, 'blur');
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0]?.description).toBe(editedBody));
+});
+
 test('a very long title collapses behind a Show more toggle', async () => {
   mockRouteId = SYNCED_ID;
   const longTitle =

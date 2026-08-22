@@ -56,6 +56,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
   return {
     id: bookmark.id,
     created_at: bookmark.created_at,
+    content_type: 'text',
     title: bookmark.title ?? undefined,
     notes: bookmark.notes ?? undefined,
     shared_text: bookmark.description ?? undefined,
@@ -65,15 +66,20 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
 }
 
 /**
- * Whether a rebuilt create payload has something the server will accept. A row
- * with neither a URL nor any text body can't be uploaded as a create, so the
- * self-heal/re-home paths skip it instead of enqueuing a doomed entry. An
- * image payload is always uploadable regardless of whether
+ * Whether a rebuilt create payload has something the server will accept. An
+ * explicit text payload can be bodyless after backup restore; its title,
+ * notes, tags, or collection can still carry the user's content. An image
+ * payload is always uploadable regardless of whether
  * `preview_image_url` is set yet — `syncQueueEntry` uploads the binary (from
  * the live bookmark's `local_image_uri`) before ever sending this payload, so
  * the payload snapshot alone can't tell "needs upload" apart from "already
  * uploaded," and doesn't need to.
  */
 export function isUploadableCreate(payload: CreateBookmarkInput): boolean {
-  return Boolean(payload.url || payload.shared_text?.trim() || payload.content_type === 'image');
+  return Boolean(
+    payload.url ||
+      payload.shared_text?.trim() ||
+      payload.content_type === 'image' ||
+      payload.content_type === 'text',
+  );
 }

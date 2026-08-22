@@ -63,6 +63,7 @@ import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
 import { accessibilityTitle, displayTitle, isTitleDerived, siteLabel } from '@/domain/item-display';
+import { markdownToPlainText } from '@/domain/markdown';
 import {
   ALL_FILTER,
   UNCOLLECTED_FILTER,
@@ -1895,6 +1896,11 @@ export default function InboxScreen() {
           void Linking.openURL(item.url!).catch(() => {});
         },
       });
+    }
+    const shareValue =
+      item.url ??
+      (item.content_type === 'text' && item.description?.trim() ? item.description : null);
+    if (shareValue) {
       actions.push({
         key: 'share',
         label: t('common.share'),
@@ -1902,8 +1908,8 @@ export default function InboxScreen() {
         onPress: () => {
           closeMenu();
           void Share.share({
-            message: item.url!,
-            url: item.url!,
+            message: shareValue,
+            ...(item.url ? { url: item.url } : {}),
             title: item.title ?? undefined,
           }).catch(() => {});
         },
@@ -2957,11 +2963,16 @@ export default function InboxScreen() {
               })
             : cardTags;
           const metaParts = [
+            ...(item.content_type === 'text' ? [t('inbox.memoType')] : []),
             ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
             ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];
           const visibleMetaParts = metaParts.slice(0, Platform.OS === 'web' && !searching ? 2 : 3);
           const siteLabelText = siteLabel(item);
+          const memoPreview =
+            item.content_type === 'text' && item.title?.trim() && item.description?.trim()
+              ? markdownToPlainText(item.description)
+              : null;
           // The clean site label is always the primary, persistent text (STASH-39).
           // A query term can additionally match only in the URL's path/query
           // string, not in the label — e.g. "98765" against
@@ -3048,6 +3059,15 @@ export default function InboxScreen() {
                     query={highlightQuery}
                     highlightStyle={highlightStyle}
                   />
+                  {memoPreview ? (
+                    <HighlightedText
+                      style={[styles.listUrl, { color: palette.textSecondary }]}
+                      numberOfLines={1}
+                      text={memoPreview}
+                      query={highlightQuery}
+                      highlightStyle={highlightStyle}
+                    />
+                  ) : null}
                   {item.url ? (
                     <HighlightedText
                       style={[styles.listUrl, { color: palette.textSecondary }]}
@@ -3239,6 +3259,15 @@ export default function InboxScreen() {
                     <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
                   </Pressable>
                 </View>
+                {memoPreview ? (
+                  <HighlightedText
+                    style={[styles.memoPreviewText, { color: palette.textSecondary }]}
+                    numberOfLines={3}
+                    text={memoPreview}
+                    query={highlightQuery}
+                    highlightStyle={highlightStyle}
+                  />
+                ) : null}
                 {showUrlMatchLine && item.url ? (
                   // Standalone (not inside a labeled Pressable, unlike the
                   // title above) — `accessible` + `accessibilityLabel` give
@@ -3886,6 +3915,10 @@ const styles = StyleSheet.create({
     fontSize: 19,
     fontWeight: WEB_BOLD_WEIGHT,
     letterSpacing: -0.2,
+  },
+  memoPreviewText: {
+    fontSize: 14,
+    lineHeight: 20,
   },
   suggestBadge: {
     borderWidth: StyleSheet.hairlineWidth,

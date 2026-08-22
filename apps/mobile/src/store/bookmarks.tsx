@@ -308,10 +308,10 @@ interface BookmarksContextValue {
   resetLibrary: () => Promise<ResetLibraryResult>;
   /** True while a library reset is running — disable import/sync/reset UI. */
   isResettingLibrary: boolean;
-  /** Edit a bookmark's title/notes. Local-first; empty strings clear the field. */
+  /** Edit user-authored text. Local-first; empty strings clear the field. */
   updateBookmarkFields: (
     id: string,
-    fields: { title?: string; notes?: string },
+    fields: { title?: string; notes?: string; description?: string },
   ) => void;
   /**
    * Record that the user opened a bookmark (viewed Detail or opened its link),
@@ -2698,14 +2698,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // with no link), save it as a text note rather than dropping deliberately
         // shared content — capture is sacred. Reject only when there is nothing
         // at all to save.
-        const text = shared_text?.trim() || null;
-        if (!text) {
+        if (!shared_text?.trim()) {
           return {
             status: "invalid",
             error:
               "Enter a valid web address, like example.com or https://example.com.",
           };
         }
+        // Test emptiness on a trimmed copy above, but persist the original
+        // body — leading whitespace is meaningful Markdown (e.g. an indented
+        // code block), so a Markdown memo must not be silently rewritten.
+        const text = shared_text;
 
         const noteNow = new Date().toISOString();
         // Text notes have no canonical URL key, so distinct shares are distinct
@@ -2931,6 +2934,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const activeBookmarkById = new Map(
         activeLocalBookmarks.map((bookmark) => [bookmark.id, bookmark]),
       );
+      const activeBookmarkByClientId = new Map(
+        activeLocalBookmarks
+          .filter((bookmark) => bookmark.client_id)
+          .map((bookmark) => [bookmark.client_id!, bookmark] as const),
+      );
+      const trashedLocalBookmarks = (bookmarksRef.current ?? loadedBookmarks).filter(
+        (bookmark) => !isActiveBookmark(bookmark),
+      );
+      const trashedBookmarkIds = new Set(
+        trashedLocalBookmarks.map((bookmark) => bookmark.id),
+      );
+      const trashedBookmarkClientIds = new Set(
+        trashedLocalBookmarks
+          .map((bookmark) => bookmark.client_id)
+          .filter((clientId): clientId is string => !!clientId),
+      );
       // Sentry STASH-3K/3M: a bulk import has repeatedly doubled a user's
       // library (their local total exactly 2x the cloud count) with no
       // evidence of why — this and the summary log below are the
@@ -2954,7 +2973,169 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       let skipped = 0;
 
       for (const item of items) {
-        const normalized = item.url ? normalizeUrl(item.url) : null;
+        if (!item.url) {
+          // A URL-less text/Markdown-memo bookmark: `toJsonBackup` exports it
+          // with url: null and its raw body in `description`, so a restore
+          // must not fall through to the URL-only skip below — that would
+          // silently drop every memo from an advertised full-fidelity backup.
+          // Test emptiness on the trimmed value, but restore the untrimmed
+          // one — leading/trailing whitespace can be meaningful Markdown
+          // (e.g. an indented code block), so a restore must not silently
+          // rewrite it. Also require content_type: 'text' — a URL-less
+          // *image* bookmark (a captured screenshot) can carry a caption in
+          // `description` too, and must not be rebuilt as a fake text memo,
+          // which would discard its preview_image_url and mislabel a
+          // generated caption as user-authored Markdown.
+          const hasMemoContent =
+            !!item.metadata?.raw_description?.trim() ||
+            !!item.metadata?.description?.trim() ||
+            !!item.title?.trim() ||
+            !!item.notes?.trim() ||
+            item.tags.length > 0 ||
+            !!item.collection?.trim();
+          if (
+            item.source !== "stash-backup" ||
+            item.metadata?.content_type !== "text" ||
+            !hasMemoContent
+          ) {
+            skipped += 1;
+            continue;
+          }
+          const memoBody = item.metadata.raw_description ?? item.metadata.description;
+          // A URL-less row has no canonical url_hash. Match the backup's
+          // identity against an active local row, but never reuse its primary
+          // key for a new row: bookmark ids are global, so that id may still
+          // belong to the source account in Postgres. The per-user client_id
+          // is the safe idempotency key for a newly restored copy.
+          const backupDedupeClientId =
+            item.backupClientId ??
+            (item.backupId && hasRemoteIdentity(item.backupId) ? item.backupId : null);
+          const existingId =
+            (item.backupId && activeBookmarkById.get(item.backupId)?.id) ||
+            (backupDedupeClientId && activeBookmarkByClientId.get(backupDedupeClientId)?.id) ||
+            undefined;
+          const isNew = existingId === undefined;
+          const id = existingId ?? makeBookmarkId();
+          if (!isNew) {
+            duplicates += 1;
+          } else {
+            // A trashed row remains visible to the cloud's all-rows client_id
+            // lookup. Reusing its identity would make the create adopt that
+            // still-deleted row, so a deliberate re-add gets a new capture id.
+            const backupIdentityIsTrashed =
+              (!!item.backupId && trashedBookmarkIds.has(item.backupId)) ||
+              (!!backupDedupeClientId &&
+                trashedBookmarkClientIds.has(backupDedupeClientId));
+            const clientId =
+              backupDedupeClientId && !backupIdentityIsTrashed
+                ? backupDedupeClientId
+                : makeClientId();
+            const title = item.title?.trim() ? item.title.trim() : null;
+            const notes = item.notes?.trim() ? item.notes.trim() : null;
+            const itemCreatedAt = item.createdAt ?? now;
+            const restoredBookmark: Bookmark = {
+              id,
+              user_id: mockUserId,
+              url: null,
+              canonical_url: null,
+              url_hash: null,
+              title,
+              title_is_derived: title ? false : undefined,
+              client_id: clientId,
+              description: memoBody,
+              notes,
+              source_app: null,
+              content_type: "text",
+              preview_image_url: null,
+              favicon_url: null,
+              site_name: null,
+              collection_id: null,
+              is_archived: false,
+              deleted_at: null,
+              created_at: itemCreatedAt,
+              updated_at: now,
+              last_saved_at: now,
+              // Never 'pending' for a restore — same rationale as the URL
+              // branch below: don't let a restored row auto-spend AI quota.
+              metadata_status: "skipped",
+              sync_status: "pending",
+            };
+            newBookmarks.push(restoredBookmark);
+            // Make a duplicate occurrence in this same import batch resolve
+            // exactly like a later re-import after the row has been persisted.
+            activeBookmarkById.set(id, restoredBookmark);
+            activeBookmarkByClientId.set(clientId, restoredBookmark);
+            newEntries.push({
+              local_id: id,
+              remote_id: null,
+              operation: "create",
+              payload: {
+                id,
+                shared_text: memoBody ?? undefined,
+                title: title ?? undefined,
+                notes: notes ?? undefined,
+                content_type: "text",
+                client_id: clientId,
+                metadata_status: "skipped",
+                enrichment_policy: "skip",
+                created_at: itemCreatedAt,
+              },
+              sync_status: "pending",
+              retry_count: 0,
+              last_error: null,
+              created_at: now,
+              updated_at: now,
+            });
+            imported += 1;
+          }
+
+          for (const tagName of item.tags) {
+            const op: PendingTagOp = {
+              id: makeUuid(),
+              bookmark_id: id,
+              tag_name: tagName,
+              op: "add",
+              source: "user",
+              confidence: null,
+              created_at: now,
+            };
+            nextTagData = applyTagOp(nextTagData, op, auth.userId ?? mockUserId);
+            nextTagOps = enqueueTagOp(nextTagOps, op);
+            organizationChanged = true;
+          }
+          const memoCollectionName = item.collection?.trim();
+          const memoTarget = activeBookmarkById.get(id);
+          // Same guard as the URL branch below: don't clobber a dedupe-
+          // matched existing row's organization.
+          if (memoCollectionName && !memoTarget?.collection_id) {
+            nextImportCollections = enqueuePendingImportCollection(
+              nextImportCollections,
+              {
+                bookmark_id: id,
+                collection_name: memoCollectionName,
+                status: "pending",
+                last_error: null,
+                created_at: now,
+              },
+            );
+            organizationChanged = true;
+          }
+          if (item.enrichment) {
+            nextEnrichmentRestores = enqueuePendingEnrichmentRestore(
+              nextEnrichmentRestores,
+              {
+                bookmark_id: id,
+                enrichment: item.enrichment,
+                status: "pending",
+                last_error: null,
+                created_at: now,
+              },
+            );
+            organizationChanged = true;
+          }
+          continue;
+        }
+        const normalized = normalizeUrl(item.url);
         if (!normalized) {
           skipped += 1;
           continue;
@@ -3357,7 +3538,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateBookmarkFields = useCallback(
-    (id: string, fields: { title?: string; notes?: string }) => {
+    (
+      id: string,
+      fields: { title?: string; notes?: string; description?: string },
+    ) => {
       const before = bookmarksRef.current?.find(
         (bookmark) => bookmark.id === id,
       );
@@ -3369,12 +3553,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       if (fields.notes !== undefined) {
         patch.notes = fields.notes.trim() || null;
       }
+      if (fields.description !== undefined) {
+        // Test emptiness on a trimmed copy, but persist the original body —
+        // leading whitespace is meaningful Markdown (e.g. an indented code
+        // block), so editing a memo must not silently rewrite it.
+        patch.description = fields.description.trim() ? fields.description : null;
+      }
       // Only stale on a real change to user-editable text; a no-op save (or a
       // collection/archive change, which never routes through here) must not.
       const textChanged =
         (patch.title !== undefined &&
           patch.title !== (before?.title ?? null)) ||
-        (patch.notes !== undefined && patch.notes !== (before?.notes ?? null));
+        (patch.notes !== undefined && patch.notes !== (before?.notes ?? null)) ||
+        (patch.description !== undefined &&
+          patch.description !== (before?.description ?? null));
       applyBookmarkUpdate(id, patch);
       if (textChanged) {
         if (patch.title !== undefined && !hasSyncedOnce(id)) {

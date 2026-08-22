@@ -26,6 +26,15 @@ import type { ContentType, EnrichmentStatus, SuggestedTag } from '@/domain/types
  */
 export interface ImportedMetadata {
   description: string | null;
+  /**
+   * Same value as `description`, but untrimmed — for restoring a URL-less
+   * text/Markdown-memo bookmark, whose raw body lives here and can carry
+   * meaningful leading/trailing whitespace (e.g. an indented code block).
+   * `description` above is trimmed like every other generated-metadata
+   * string field, which is correct for those but would silently rewrite a
+   * memo's source on restore; this field preserves it losslessly.
+   */
+  raw_description: string | null;
   preview_image_url: string | null;
   favicon_url: string | null;
   site_name: string | null;
@@ -64,6 +73,14 @@ export interface ImportItem {
   enrichment?: ImportedEnrichment;
   /** Original creation timestamp (ISO string), when preserved from source. */
   createdAt?: string | null;
+  /**
+   * Stable source identities from a Stash JSON backup — present only for
+   * `source: 'stash-backup'`. URL-less rows have no canonical url_hash, so
+   * these are import-dedupe keys. A newly restored row must still mint its own
+   * primary key because the backup id can belong to another cloud account.
+   */
+  backupId?: string | null;
+  backupClientId?: string | null;
 }
 
 /** Thrown when a file can't be understood as a supported import format. */
@@ -124,6 +141,10 @@ function cleanEnrichmentStatus(value: unknown): EnrichmentStatus {
 function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata | undefined {
   const metadata: ImportedMetadata = {
     description: cleanString(entry.description),
+    raw_description:
+      typeof entry.description === 'string' && entry.description.trim().length > 0
+        ? entry.description
+        : null,
     preview_image_url: cleanString(entry.preview_image_url),
     favicon_url: cleanString(entry.favicon_url),
     site_name: cleanString(entry.site_name),
@@ -135,7 +156,8 @@ function parseImportedMetadata(entry: Record<string, unknown>): ImportedMetadata
     metadata.preview_image_url !== null ||
     metadata.favicon_url !== null ||
     metadata.site_name !== null ||
-    metadata.canonical_url !== null;
+    metadata.canonical_url !== null ||
+    entry.content_type === 'text';
   return hasSignal ? metadata : undefined;
 }
 
@@ -215,6 +237,8 @@ export function parseJsonBackup(text: string): ImportItem[] {
         rawCreatedAt && !isNaN(new Date(rawCreatedAt).getTime())
           ? new Date(rawCreatedAt).toISOString()
           : null,
+      backupId: cleanString(entry.id),
+      backupClientId: cleanString(entry.client_id),
     };
   });
 }

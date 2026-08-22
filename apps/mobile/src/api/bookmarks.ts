@@ -206,6 +206,13 @@ function requirePayload(input: CreateBookmarkInput): { url: string | null; conte
     return { url: null, contentType: 'text' };
   }
 
+  // A restored text memo can legitimately have no body while retaining a
+  // title, notes, tags, or collection. Its explicit type is enough to create
+  // the row; manual Add still validates that newly-authored memos have a body.
+  if (input.content_type === 'text') {
+    return { url: null, contentType: 'text' };
+  }
+
   // Image-only capture (a screenshot with no link): the client always
   // uploads the binary to Storage and resolves its public URL BEFORE calling
   // createBookmark, so this branch only ever sees an already-uploaded row —
@@ -221,6 +228,22 @@ function requirePayload(input: CreateBookmarkInput): { url: string | null; conte
 
 function remoteToBookmark(row: RemoteBookmark): Bookmark {
   return { ...row, sync_status: 'synced', ever_synced: true };
+}
+
+// Validate emptiness with a trimmed copy, but keep the original value —
+// leading/trailing whitespace can be meaningful Markdown (e.g. an indented
+// code block), so a memo body must not be silently rewritten on upload.
+function descriptionFromInput(input: {
+  description?: string | null;
+  shared_text?: string;
+}): string | null {
+  if (input.description?.trim()) {
+    return input.description;
+  }
+  if (input.shared_text?.trim()) {
+    return input.shared_text;
+  }
+  return null;
 }
 
 function enrichmentFromRemote(row: RemoteAIEnrichment): AIEnrichment {
@@ -365,7 +388,7 @@ export class BookmarkApi {
     const payload = requirePayload(input);
     const timestamp = nowIso();
     const title = input.title?.trim() || null;
-    const description = input.description?.trim() || input.shared_text?.trim() || null;
+    const description = descriptionFromInput(input);
     const notes = input.notes?.trim() || null;
     const sourceApp = input.source_app?.trim() || null;
     const siteName = input.site_name?.trim() || null;
@@ -387,13 +410,28 @@ export class BookmarkApi {
     // such key, so they dedupe on the device-generated client_id — which a
     // retried upload resends unchanged, closing the gap that let an interrupted
     // text-note sync create a duplicate.
-    const existing = urlHash
-      ? await this.findActiveBookmarkByUrlHash(urlHash)
-      : clientId
-        ? await this.findBookmarkByClientId(clientId)
-        : null;
+    const existingByUrl = urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null;
+    const existing = existingByUrl ?? (clientId ? await this.findBookmarkByClientId(clientId) : null);
     if (existing) {
-      await this.updateBookmark(existing.id, { last_saved_at: timestamp });
+      // A retried create can land here after its FIRST attempt already
+      // succeeded server-side (only the response was lost) — but this
+      // request may carry a freshly-edited body (createUploadPayload
+      // refreshes shared_text/description from the latest local state
+      // before every upload attempt, including a retry). Push it through
+      // instead of silently discarding it along with `last_saved_at`, or an
+      // edit made between the original create and this idempotent retry is
+      // lost — the cloud keeps the stale text forever.
+      //
+      // Only do this when `client_id` proves `existing` is THIS device's
+      // own earlier attempt, not a urlHash match — a urlHash match can be a
+      // genuinely different save (e.g. another device saved the same URL
+      // since the last pull), and patching its description with this
+      // request's payload would corrupt an unrelated row.
+      const isOwnRetry = !existingByUrl && existing.client_id === clientId;
+      await this.updateBookmark(existing.id, {
+        ...(isOwnRetry ? { description: description ?? undefined } : {}),
+        last_saved_at: timestamp,
+      });
       return {
         bookmark_id: existing.id,
         status: 'duplicate',
@@ -445,10 +483,19 @@ export class BookmarkApi {
       // url_hash one), so the url_hash lookup alone would miss the archived
       // original and leave the entry failing forever.
       if (error instanceof SupabaseRequestError && error.status === 409) {
+        const duplicateByUrl = urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null;
         const duplicate =
-          (urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null) ??
-          (clientId ? await this.findBookmarkByClientId(clientId) : null);
+          duplicateByUrl ?? (clientId ? await this.findBookmarkByClientId(clientId) : null);
         if (duplicate) {
+          // Same idempotent-retry case as the pre-insert `existing` branch
+          // above (see its comment) — the insert itself lost the race to
+          // this request's own earlier attempt, so apply the same
+          // client-id-proven refreshed description here too.
+          const isOwnRetry = !duplicateByUrl && duplicate.client_id === clientId;
+          await this.updateBookmark(duplicate.id, {
+            ...(isOwnRetry ? { description: description ?? undefined } : {}),
+            last_saved_at: timestamp,
+          });
           return {
             bookmark_id: duplicate.id,
             status: 'duplicate',
@@ -480,7 +527,7 @@ export class BookmarkApi {
     const prepared = inputs.map((input) => {
       const payload = requirePayload(input);
       const title = input.title?.trim() || null;
-      const description = input.description?.trim() || input.shared_text?.trim() || null;
+      const description = descriptionFromInput(input);
       const notes = input.notes?.trim() || null;
       const sourceApp = input.source_app?.trim() || null;
       const siteName = input.site_name?.trim() || null;
@@ -533,16 +580,30 @@ export class BookmarkApi {
 
     const outputs: Array<BulkCreateBookmarkOutput | null> = new Array(inputs.length).fill(null);
     const duplicateIds = new Set<string>();
+    // A retried create in this batch can find its OWN earlier attempt
+    // already landed (response lost) — same idempotent-duplicate case the
+    // single-entry createBookmark handles. Track a refreshed description
+    // per duplicate so it can be pushed individually below instead of
+    // discarded along with the shared last_saved_at-only bump.
+    const duplicateDescriptionUpdates = new Map<string, string>();
     const pendingByKey = new Map<string, number>();
     const duplicateIndexesByInsertIndex = new Map<number, number[]>();
     const inserts: Array<{ index: number; body: (typeof prepared)[number]['body'] }> = [];
 
     prepared.forEach((item, index) => {
-      const existing =
-        (item.urlHash ? existingByUrlHash.get(item.urlHash) : null) ??
-        (item.clientId ? existingByClientId.get(item.clientId) : null);
+      const existingByUrl = item.urlHash ? existingByUrlHash.get(item.urlHash) : null;
+      const existing = existingByUrl ?? (item.clientId ? existingByClientId.get(item.clientId) : null);
       if (existing) {
         duplicateIds.add(existing.id);
+        // Only when client_id proves `existing` is THIS device's own
+        // earlier attempt — a urlHash match can be a genuinely different
+        // save (another device saved the same URL since the last pull), and
+        // patching its description with this request's payload would
+        // corrupt an unrelated row.
+        const isOwnRetry = !existingByUrl && existing.client_id === item.clientId;
+        if (isOwnRetry && item.body.description !== null) {
+          duplicateDescriptionUpdates.set(existing.id, item.body.description);
+        }
         outputs[index] = {
           bookmark_id: existing.id,
           status: 'duplicate',
@@ -567,7 +628,21 @@ export class BookmarkApi {
     });
 
     if (duplicateIds.size > 0) {
-      await this.updateLastSavedAt([...duplicateIds], timestamp);
+      // updateLastSavedAt applies ONE shared body to every id in one PATCH,
+      // so it can't carry a per-row refreshed description — push those
+      // individually, and batch the rest (the common case: a plain
+      // duplicate with nothing new to say) through the cheap shared bump.
+      const idsNeedingOnlyTimestamp = [...duplicateIds].filter(
+        (id) => !duplicateDescriptionUpdates.has(id),
+      );
+      await Promise.all([
+        ...[...duplicateDescriptionUpdates].map(([id, description]) =>
+          this.updateBookmark(id, { description, last_saved_at: timestamp }),
+        ),
+        idsNeedingOnlyTimestamp.length > 0
+          ? this.updateLastSavedAt(idsNeedingOnlyTimestamp, timestamp)
+          : Promise.resolve(),
+      ]);
     }
 
     if (inserts.length > 0) {

@@ -1,3 +1,4 @@
+import { markdownLabel } from '@/domain/markdown';
 import type { Bookmark } from '@/domain/types';
 
 /**
@@ -73,7 +74,12 @@ export function monogramColorIndex(seed: string): number {
 export function monogramIcon(bookmark: Bookmark): MonogramIcon {
   const host = hostFromUrl(bookmark.url);
   // Letter prefers the human site name, then the domain, then the title.
-  const label = bookmark.site_name?.trim() || host || bookmark.title?.trim() || '#';
+  const label =
+    bookmark.site_name?.trim() ||
+    host ||
+    bookmark.title?.trim() ||
+    markdownLabel(bookmark.description ?? '') ||
+    '#';
   // Color seed prefers the stable domain so the same site is always one color.
   const seed = host ?? label;
   return { kind: 'monogram', letter: firstLetter(label), colorIndex: monogramColorIndex(seed) };

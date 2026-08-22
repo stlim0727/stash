@@ -809,6 +809,213 @@ test("import: tags and collection intent are written durably", async () => {
   ]);
 });
 
+test("import: a URL-less Markdown memo from a Stash JSON backup is restored, not silently skipped", async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: null,
+        title: "Weekly plan",
+        notes: null,
+        tags: ["planning"],
+        collection: null,
+        // A leading-space indented code block: meaningful Markdown that a
+        // trimmed restore would silently flatten into an ordinary paragraph.
+        metadata: {
+          description: "    indented code block",
+          raw_description: "    indented code block",
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          canonical_url: null,
+          content_type: "text",
+        },
+      },
+    ]);
+    expect(summary.imported).toBe(1);
+    expect(summary.skipped).toBe(0);
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  const restored = fakeRepo.__bookmarks()[0]!;
+  expect(restored.url).toBeNull();
+  expect(restored.content_type).toBe("text");
+  expect(restored.description).toBe("    indented code block");
+  expect(restored.title).toBe("Weekly plan");
+  expect(
+    result.current
+      .getTagsForBookmark(restored.id)
+      .map((tag) => tag.name),
+  ).toEqual(["planning"]);
+});
+
+test("import: restoring the same Markdown-memo backup twice is idempotent, not a duplicate", async () => {
+  const { result } = await renderStore();
+  const backupItem = {
+    source: "stash-backup" as const,
+    url: null,
+    title: "Weekly plan",
+    notes: null,
+    tags: [],
+    collection: null,
+    backupId: "7e64cf1e-0000-4000-8000-0000000000f1",
+    backupClientId: "cid-weekly-plan",
+    metadata: {
+      description: "# Weekly plan",
+      raw_description: "# Weekly plan",
+      preview_image_url: null,
+      favicon_url: null,
+      site_name: null,
+      canonical_url: null,
+      content_type: "text" as const,
+    },
+  };
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([backupItem]);
+    expect(summary.imported).toBe(1);
+  });
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  const restoredId = fakeRepo.__bookmarks()[0]!.id;
+  expect(restoredId).not.toBe(backupItem.backupId);
+  expect(fakeRepo.__bookmarks()[0]?.client_id).toBe(backupItem.backupClientId);
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([backupItem]);
+    expect(summary.imported).toBe(0);
+    expect(summary.duplicates).toBe(1);
+  });
+
+  // Still exactly one row. The backup identity is only the per-account
+  // idempotency key; a restored copy owns a freshly minted global row id.
+  expect(fakeRepo.__bookmarks()).toHaveLength(1);
+  expect(fakeRepo.__bookmarks()[0]?.id).toBe(restoredId);
+});
+
+test("import: re-adding a trashed memo rotates both row and client identity", async () => {
+  const backupId = "7e64cf1e-0000-4000-8000-0000000000f2";
+  const backupClientId = "7e64cf1e-0000-4000-8000-0000000000c2";
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: backupId,
+      client_id: backupClientId,
+      url: null,
+      url_hash: null,
+      title: "Old memo",
+      description: "In trash",
+      content_type: "text",
+      deleted_at: "2026-08-20T00:00:00.000Z",
+    }),
+  ]);
+  const { result } = await renderStore();
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: null,
+        title: "Restored memo",
+        notes: null,
+        tags: [],
+        collection: null,
+        backupId,
+        backupClientId,
+        metadata: {
+          description: "Back again",
+          raw_description: "Back again",
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          canonical_url: null,
+          content_type: "text",
+        },
+      },
+    ]);
+    expect(summary.imported).toBe(1);
+    expect(summary.duplicates).toBe(0);
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(2));
+  const restored = fakeRepo.__bookmarks().find((bookmark) => !bookmark.deleted_at)!;
+  expect(restored.id).not.toBe(backupId);
+  expect(restored.client_id).not.toBe(backupClientId);
+  expect(fakeRepo.__queue()[0]?.payload).toMatchObject({
+    id: restored.id,
+    client_id: restored.client_id,
+  });
+});
+
+test("import: a bodyless text memo keeps its title, notes, and organization", async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: null,
+        title: "Planning shell",
+        notes: "Body intentionally cleared",
+        tags: ["planning"],
+        collection: null,
+        metadata: {
+          description: null,
+          raw_description: null,
+          preview_image_url: null,
+          favicon_url: null,
+          site_name: null,
+          canonical_url: null,
+          content_type: "text",
+        },
+      },
+    ]);
+    expect(summary.imported).toBe(1);
+    expect(summary.skipped).toBe(0);
+  });
+
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  const restored = fakeRepo.__bookmarks()[0]!;
+  expect(restored.description).toBeNull();
+  expect(restored.title).toBe("Planning shell");
+  expect(restored.notes).toBe("Body intentionally cleared");
+  expect(fakeRepo.__queue()[0]?.payload).toMatchObject({ content_type: "text" });
+  expect(fakeRepo.__queue()[0]?.payload.shared_text).toBeUndefined();
+});
+
+test("import: a URL-less image bookmark's caption is not restored as a fake text memo", async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: null,
+        title: "Screenshot",
+        notes: null,
+        tags: [],
+        collection: null,
+        metadata: {
+          description: "a generated caption",
+          raw_description: "a generated caption",
+          preview_image_url: "https://example.com/shot.png",
+          favicon_url: null,
+          site_name: null,
+          canonical_url: null,
+          content_type: "image",
+        },
+      },
+    ]);
+    // Restoring a URL-less image bookmark isn't supported by this memo path
+    // (it would discard preview_image_url and mislabel the caption as
+    // user-authored Markdown) — it's skipped, not silently corrupted.
+    expect(summary.imported).toBe(0);
+    expect(summary.skipped).toBe(1);
+  });
+
+  expect(fakeRepo.__bookmarks()).toHaveLength(0);
+});
+
 test("import: logs a start/finish summary (Sentry STASH-3K/3M instrumentation)", async () => {
   // STASH-3K and its repeat STASH-3M both reported a bulk HTML import doubling
   // the library (local total exactly 2x the cloud count) with no evidence of

@@ -8,6 +8,10 @@ module.exports = {
   testMatch: ['**/src/**/*.test.tsx'],
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^react-native-enriched-markdown$': 'react-native-enriched-markdown/jest',
+    // Marked publishes a UMD build specifically for non-ESM runtimes. Mapping
+    // it here avoids making Jest/Babel transform third-party parser code.
+    '^marked$': '<rootDir>/node_modules/marked/lib/marked.umd.js',
   },
   clearMocks: true,
   // CI hardening: CircleCI's memory-constrained container (8GB, no swap) gets

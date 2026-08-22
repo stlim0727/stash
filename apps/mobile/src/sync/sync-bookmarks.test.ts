@@ -387,6 +387,65 @@ test('create: forwards the payload client_id so a retried text note stays idempo
   assert.equal(sent[0].client_id, 'cid-text');
 });
 
+test('create: uploads the LATEST memo body, not the payload captured at save', async () => {
+  const { repository } = fakeRepository();
+  const sent: Array<{ shared_text?: string }> = [];
+  const api = fakeApi({
+    createBookmark: async (input: { shared_text?: string }) => {
+      sent.push(input);
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'pending' };
+    },
+  });
+  // An edit landed locally while the original create was still queued (e.g.
+  // offline) — applyBookmarkUpdate never enqueues a separate `update` for a
+  // row that hasn't synced once, so this refresh at upload time is the only
+  // place the edit can reach the server.
+  const editedSinceSave = makeBookmark({
+    url: null,
+    content_type: 'text',
+    description: 'edited body',
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { shared_text: 'original body', client_id: 'cid-text' } }),
+    () => editedSinceSave,
+  );
+
+  assert.equal(sent[0]?.shared_text, 'edited body');
+  assert.equal(result.uploadedPayload?.shared_text, 'edited body');
+});
+
+test('create: falls back to the originally-queued memo body if it was cleared to empty before first sync', async () => {
+  const { repository } = fakeRepository();
+  const sent: Array<{ shared_text?: string }> = [];
+  const api = fakeApi({
+    createBookmark: async (input: { shared_text?: string }) => {
+      sent.push(input);
+      return { bookmark_id: '00000000-0000-4000-8000-000000000001', status: 'created', metadata_status: 'pending' };
+    },
+  });
+  // The memo body was cleared to empty locally while its create was still
+  // queued — refreshing shared_text to '' here would make requirePayload
+  // reject every retry forever (neither a URL nor shared_text).
+  const clearedSinceSave = makeBookmark({
+    url: null,
+    content_type: 'text',
+    description: null,
+  });
+
+  const result = await syncQueueEntry(
+    api,
+    repository,
+    makeCreateEntry({ payload: { shared_text: 'original body', client_id: 'cid-text' } }),
+    () => clearedSinceSave,
+  );
+
+  assert.equal(sent[0]?.shared_text, 'original body');
+  assert.equal(result.uploadedPayload?.shared_text, 'original body');
+});
+
 test('bulk create: uploads latest titles and replaces local rows with returned remote ids', async () => {
   const first = makeCreateEntry({
     local_id: 'local-a',
@@ -2005,9 +2064,10 @@ test('reconcileOrphanedQueueEntries re-queues an update for a stranded synced-id
   assert.equal(entries[0]?.operation, 'update');
 });
 
-test('reconcileOrphanedQueueEntries skips a url-less local bookmark', () => {
-  // A create with neither url nor shared_text is rejected by the server, so
-  // re-enqueuing it would strand the row as failed instead of self-healing it.
+test('reconcileOrphanedQueueEntries re-creates an explicitly typed bodyless text memo', () => {
+  // Backup restore can preserve a memo whose body was cleared while authored
+  // metadata or organization remains. The explicit type lets the server create
+  // its base row before tags/collection are attached.
   const orphan = makeBookmark({
     id: 'local-textonly',
     url: null,
@@ -2015,7 +2075,17 @@ test('reconcileOrphanedQueueEntries skips a url-less local bookmark', () => {
     sync_status: 'pending',
   });
 
-  assert.deepEqual(reconcileOrphanedQueueEntries([orphan], []), []);
+  const entries = reconcileOrphanedQueueEntries([orphan], []);
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0]?.payload, {
+    id: 'local-textonly',
+    created_at: '2026-06-12T00:00:00.000Z',
+    content_type: 'text',
+    title: undefined,
+    notes: undefined,
+    shared_text: undefined,
+    client_id: undefined,
+  });
 });
 
 test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its body as shared_text', () => {
@@ -2041,6 +2111,7 @@ test('reconcileOrphanedQueueEntries re-creates a stranded text note carrying its
   assert.deepEqual(entries[0]?.payload, {
     id: 'local-note',
     created_at: '2026-06-12T00:00:00.000Z',
+    content_type: 'text',
     title: 'Reminder',
     notes: undefined,
     shared_text: '내일 3시에 회의 있습니다',

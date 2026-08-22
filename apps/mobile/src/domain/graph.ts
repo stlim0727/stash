@@ -27,6 +27,7 @@
  * positions across renders and test runs).
  */
 
+import { displayTitle } from '@/domain/item-display';
 import type { Bookmark, BookmarkTag, Tag } from '@/domain/types';
 
 /** Legacy id for older graph data/tests; current graph derivation omits untagged bookmarks. */
@@ -271,7 +272,7 @@ export function deriveGraph(input: DeriveGraphInput): Graph {
       kind: 'bookmark',
       id: bookmarkNodeId(bookmark.id),
       bookmark_id: bookmark.id,
-      label: bookmark.title ?? bookmark.url ?? 'Untitled',
+      label: displayTitle(bookmark) ?? 'Untitled',
       degree: tagIds.length,
     } satisfies BookmarkGraphNode];
   });

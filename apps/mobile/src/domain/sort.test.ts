@@ -78,6 +78,19 @@ test('name sort falls back to URL when there is no title', () => {
   assert.deepEqual(ids(sorted), ['q', 'p']);
 });
 
+test('name sort uses the rendered Markdown label for an untitled memo', () => {
+  const memo = make('memo', null, '2026-01-05T00:00:00.000Z');
+  memo.url = null;
+  memo.content_type = 'text';
+  memo.description = '# Apple **memo**';
+  const titled = make('titled', 'Banana', '2026-01-04T00:00:00.000Z');
+
+  assert.deepEqual(ids(sortBookmarks([titled, memo], { field: 'name', dir: 'asc' })), [
+    'memo',
+    'titled',
+  ]);
+});
+
 test('does not mutate the input array', () => {
   const input = [b, a, c];
   const snapshot = ids(input);

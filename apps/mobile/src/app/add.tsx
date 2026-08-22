@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -25,6 +26,9 @@ import { useBookmarks } from '@/store/bookmarks';
 // dimmed Inbox (mirrors Report's right-docked sheet); this caps the panel
 // width. No effect on phones (their width is already below the breakpoint).
 const SHEET_PANEL_MAX_WIDTH = 480;
+const MAX_MEMO_LENGTH = 10_000;
+
+type AddMode = 'link' | 'memo';
 
 export default function AddBookmarkScreen() {
   const palette = usePalette();
@@ -37,8 +41,11 @@ export default function AddBookmarkScreen() {
   const asSheet = width >= 760;
   const { addBookmark, isLoading } = useBookmarks();
   const { show } = useCaptureToast();
+  const [mode, setMode] = useState<AddMode>('link');
   const [url, setUrl] = useState('');
   const [note, setNote] = useState('');
+  const [memoTitle, setMemoTitle] = useState('');
+  const [memoBody, setMemoBody] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   // A capture intent passed via query params — the web counterpart of the
@@ -102,7 +109,14 @@ export default function AddBookmarkScreen() {
   }
 
   function handleSave() {
-    const result = addBookmark({ url, notes: note });
+    if (mode === 'memo' && !memoBody.trim()) {
+      setError(t('add.memoRequired'));
+      return;
+    }
+    const result =
+      mode === 'memo'
+        ? addBookmark({ title: memoTitle, shared_text: memoBody })
+        : addBookmark({ url, notes: note });
     if (result.status === 'invalid') {
       setError(result.error);
       return;
@@ -116,44 +130,126 @@ export default function AddBookmarkScreen() {
   }
 
   const content = (
-    <View style={[styles.container, { backgroundColor: palette.background }]}>
+    <ScrollView
+      testID="add-scroll"
+      style={[styles.scroll, { backgroundColor: palette.background }]}
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled"
+    >
       <Card elevated={false} style={styles.captureCard}>
-        <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
-        <TextInput
-          style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
-          placeholder={t('add.urlPlaceholder')}
-          placeholderTextColor={palette.textSecondary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoFocus
-          keyboardType="url"
-          value={url}
-          onChangeText={(value) => {
-            setUrl(value);
-            if (error) {
-              setError(null);
-            }
-          }}
-          onSubmitEditing={handleSave}
-        />
-        {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
-        <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.noteLabel')}</Text>
-        <TextInput
-          style={[
-            styles.input,
-            styles.noteInput,
-            { backgroundColor: palette.card, color: palette.text },
-          ]}
-          placeholder={t('add.notePlaceholder')}
-          placeholderTextColor={palette.textSecondary}
-          multiline
-          value={note}
-          onChangeText={setNote}
-        />
+        <View
+          accessibilityRole="tablist"
+          style={[styles.modeSwitch, { backgroundColor: palette.surface, borderColor: palette.border }]}
+        >
+          {(['link', 'memo'] as const).map((value) => {
+            const selected = mode === value;
+            return (
+              <Pressable
+                key={value}
+                accessibilityRole="tab"
+                accessibilityState={{ selected }}
+                accessibilityLabel={t(value === 'link' ? 'add.modeLinkA11y' : 'add.modeMemoA11y')}
+                onPress={() => {
+                  setMode(value);
+                  setError(null);
+                }}
+                style={[
+                  styles.modeButton,
+                  selected && { backgroundColor: palette.accentSoft },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    { color: selected ? palette.accent : palette.textSecondary },
+                  ]}
+                >
+                  {t(value === 'link' ? 'add.modeLink' : 'add.modeMemo')}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {mode === 'link' ? (
+          <>
+            <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
+              placeholder={t('add.urlPlaceholder')}
+              placeholderTextColor={palette.textSecondary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoFocus
+              keyboardType="url"
+              value={url}
+              onChangeText={(value) => {
+                setUrl(value);
+                if (error) {
+                  setError(null);
+                }
+              }}
+              onSubmitEditing={handleSave}
+            />
+            {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
+            <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.noteLabel')}</Text>
+            <TextInput
+              style={[
+                styles.input,
+                styles.noteInput,
+                { backgroundColor: palette.card, color: palette.text },
+              ]}
+              placeholder={t('add.notePlaceholder')}
+              placeholderTextColor={palette.textSecondary}
+              multiline
+              value={note}
+              onChangeText={setNote}
+            />
+          </>
+        ) : (
+          <>
+            <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.memoTitleLabel')}</Text>
+            <TextInput
+              accessibilityLabel={t('add.memoTitleLabel')}
+              style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
+              placeholder={t('add.memoTitlePlaceholder')}
+              placeholderTextColor={palette.textSecondary}
+              value={memoTitle}
+              onChangeText={setMemoTitle}
+            />
+            <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.memoBodyLabel')}</Text>
+            <TextInput
+              accessibilityLabel={t('add.memoBodyLabel')}
+              style={[
+                styles.input,
+                styles.memoInput,
+                { backgroundColor: palette.card, color: palette.text },
+              ]}
+              placeholder={t('add.memoBodyPlaceholder')}
+              placeholderTextColor={palette.textSecondary}
+              autoCapitalize="sentences"
+              autoCorrect
+              autoFocus
+              maxLength={MAX_MEMO_LENGTH}
+              multiline
+              value={memoBody}
+              onChangeText={(value) => {
+                setMemoBody(value);
+                if (error) {
+                  setError(null);
+                }
+              }}
+            />
+            {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
+          </>
+        )}
       </Card>
-      <Button size="lg" onPress={handleSave}>{t('add.save')}</Button>
-      <Text style={[styles.hint, { color: palette.textSecondary }]}>{t('add.hint')}</Text>
-    </View>
+      <Button size="lg" onPress={handleSave}>
+        {t(mode === 'memo' ? 'add.saveMemo' : 'add.save')}
+      </Button>
+      <Text style={[styles.hint, { color: palette.textSecondary }]}>
+        {t(mode === 'memo' ? 'add.memoHint' : 'add.hint')}
+      </Text>
+    </ScrollView>
   );
 
   // The Stack header is hidden for this screen, so Add supplies its own header
@@ -239,9 +335,12 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   container: {
-    flex: 1,
+    flexGrow: 1,
     padding: 16,
     gap: 14,
+  },
+  scroll: {
+    flex: 1,
   },
   capturing: {
     flex: 1,
@@ -258,6 +357,25 @@ const styles = StyleSheet.create({
     padding: 18,
     gap: 10,
   },
+  modeSwitch: {
+    flexDirection: 'row',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 16,
+    padding: 3,
+    gap: 4,
+  },
+  modeButton: {
+    flex: 1,
+    minHeight: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    paddingHorizontal: 12,
+  },
+  modeButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
   label: {
     fontSize: 13,
     fontWeight: '600',
@@ -272,6 +390,10 @@ const styles = StyleSheet.create({
   },
   noteInput: {
     minHeight: 96,
+    textAlignVertical: 'top',
+  },
+  memoInput: {
+    minHeight: 180,
     textAlignVertical: 'top',
   },
   error: {

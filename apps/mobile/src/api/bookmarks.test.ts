@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { BookmarkApi, type RemoteBookmark } from './bookmarks.ts';
+import { SupabaseRequestError } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
 const SESSION: SupabaseAuthSession = {
@@ -166,6 +167,84 @@ test('createBookmarks bulk-inserts only new rows and returns outputs in input or
   assert.equal(calls.some((call) => call.path.startsWith('/rest/v1/bookmarks?id=in.')), true);
 });
 
+test('createBookmarks pushes a refreshed memo body for an idempotent duplicate retry, not just last_saved_at', async () => {
+  const existing = remoteBookmark({
+    id: '00000000-0000-4000-8000-000000000011',
+    url: null,
+    content_type: 'text',
+    description: 'original body',
+    client_id: 'cid-memo',
+  });
+  const patches: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=in.')) {
+        // The first attempt already landed; only its response was lost, so
+        // this retry finds it via client_id.
+        return [existing];
+      }
+      if (options.method === 'PATCH') {
+        patches.push({ path, body: options.body as Record<string, unknown> });
+        return [{ ...existing, ...(options.body as Record<string, unknown>) }];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const outputs = await api.createBookmarks([
+    {
+      // The memo was edited locally between the original (lost-response)
+      // create and this retry.
+      shared_text: 'edited body',
+      client_id: 'cid-memo',
+    },
+  ]);
+
+  assert.equal(outputs[0]?.status, 'duplicate');
+  const descriptionPatch = patches.find((patch) => patch.path.includes('id=eq.'));
+  assert.equal(descriptionPatch?.body.description, 'edited body');
+});
+
+test('createBookmarks does not patch description for a urlHash duplicate from a different device', async () => {
+  const existing = remoteBookmark({
+    id: '00000000-0000-4000-8000-000000000011',
+    url: 'https://example.com/a',
+    url_hash: 'https://example.com/a',
+    description: 'fetched by the other device',
+    client_id: 'cid-other-device',
+  });
+  const patches: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&url_hash=')) {
+        return [existing];
+      }
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        return [];
+      }
+      if (options.method === 'PATCH') {
+        patches.push({ path, body: options.body as Record<string, unknown> });
+        return null;
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const outputs = await api.createBookmarks([
+    {
+      url: 'https://example.com/a',
+      description: 'a stale local guess',
+      client_id: 'cid-this-device',
+    },
+  ]);
+
+  assert.equal(outputs[0]?.status, 'duplicate');
+  assert.equal(patches.length, 1);
+  assert.equal('description' in (patches[0]?.body ?? {}), false);
+});
+
 test('createBookmarks dedupes same-url inputs before the bulk POST', async () => {
   const created = remoteBookmark({
     id: '00000000-0000-4000-8000-000000000033',
@@ -263,6 +342,201 @@ test('createBookmark accepts an image-only payload once its binary is already up
 
   assert.equal(result.status, 'created');
   assert.equal(result.bookmark_id, 'b1');
+});
+
+test('createBookmark preserves leading/trailing whitespace in a Markdown memo body', async () => {
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks') {
+        assert.equal(options.method, 'POST');
+        const body = options.body as Record<string, unknown>;
+        assert.equal(body.description, '    indented code block\n');
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: null,
+            content_type: 'text',
+            description: '    indented code block\n',
+          }),
+        ];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  await api.createBookmark({
+    id: 'b1',
+    shared_text: '    indented code block\n',
+    client_id: 'cid-memo',
+  });
+});
+
+test('createBookmark accepts an explicitly typed bodyless text memo from backup restore', async () => {
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        return [];
+      }
+      if (path === '/rest/v1/bookmarks') {
+        const body = options.body as Record<string, unknown>;
+        assert.equal(body.content_type, 'text');
+        assert.equal(body.description, null);
+        return [
+          remoteBookmark({
+            id: 'bodyless-memo',
+            url: null,
+            url_hash: null,
+            title: 'Planning shell',
+            content_type: 'text',
+          }),
+        ];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'bodyless-memo',
+    title: 'Planning shell',
+    content_type: 'text',
+    client_id: 'cid-bodyless-memo',
+  });
+
+  assert.equal(result.status, 'created');
+});
+
+test('createBookmark pushes a refreshed memo body when a retry finds its own earlier create (idempotent duplicate)', async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        // The first attempt already landed server-side; only its response
+        // was lost, so this retry finds it via the same client_id.
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: null,
+            content_type: 'text',
+            description: 'original body',
+            client_id: 'cid-memo',
+          }),
+        ];
+      }
+      if (path === '/rest/v1/bookmarks?id=eq.b1&user_id=eq.user-1') {
+        assert.equal(options.method, 'PATCH');
+        const body = options.body as Record<string, unknown>;
+        patches.push(body);
+        return [remoteBookmark({ id: 'b1', url: null, content_type: 'text', description: body.description as string })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    // The memo was edited locally between the original (lost-response)
+    // create and this retry — createUploadPayload refreshes shared_text
+    // from the latest bookmark before every upload attempt.
+    shared_text: 'edited body',
+    client_id: 'cid-memo',
+  });
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(patches[0]?.description, 'edited body');
+});
+
+test('createBookmark does not patch description for a urlHash duplicate from a different device (not this create attempt retried)', async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&url_hash=')) {
+        // Another device already saved this URL since the last pull — a
+        // genuine different save, not a retry of THIS create attempt.
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: 'https://example.com/a',
+            url_hash: 'https://example.com/a',
+            description: 'fetched by the other device',
+            client_id: 'cid-other-device',
+          }),
+        ];
+      }
+      if (path === '/rest/v1/bookmarks?id=eq.b1&user_id=eq.user-1') {
+        assert.equal(options.method, 'PATCH');
+        const body = options.body as Record<string, unknown>;
+        patches.push(body);
+        return [remoteBookmark({ id: 'b1', url: 'https://example.com/a' })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    url: 'https://example.com/a',
+    description: 'a stale local guess',
+    client_id: 'cid-this-device',
+  });
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal('description' in (patches[0] ?? {}), false);
+  assert.equal(patches[0]?.last_saved_at !== undefined, true);
+});
+
+test('createBookmark pushes a refreshed memo body when a 409 conflict reveals its own earlier create (race with the pre-insert lookup)', async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  let clientIdLookupCount = 0;
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        clientIdLookupCount += 1;
+        if (clientIdLookupCount === 1) {
+          // The pre-insert lookup runs before the original attempt's insert
+          // has landed — finds nothing.
+          return [];
+        }
+        // By the time the POST below fails with 409, the original attempt
+        // has landed — this second lookup (the 409 recovery path) finds it.
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: null,
+            content_type: 'text',
+            description: 'original body',
+            client_id: 'cid-memo',
+          }),
+        ];
+      }
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        throw new SupabaseRequestError('conflict', 409);
+      }
+      if (path === '/rest/v1/bookmarks?id=eq.b1&user_id=eq.user-1') {
+        assert.equal(options.method, 'PATCH');
+        const body = options.body as Record<string, unknown>;
+        patches.push(body);
+        return [remoteBookmark({ id: 'b1', url: null, content_type: 'text', description: body.description as string })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    shared_text: 'edited body',
+    client_id: 'cid-memo',
+  });
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(patches[0]?.description, 'edited body');
 });
 
 test('createBookmark rejects an image payload with no uploaded preview_image_url (STASH-65 invariant: never create before the binary lands)', async () => {

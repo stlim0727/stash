@@ -497,6 +497,57 @@ test('bookmark nodes render a length-capped title label', async () => {
   expect(labelContents).toContain('Short one');
 });
 
+test('an untitled Markdown memo renders its derived body label, not "Untitled"', async () => {
+  // Two bookmarks share `notes` so it survives the shared-tag backbone
+  // (minSharedDegree: 2) and both bookmark nodes render.
+  fakeRepo.__reset(
+    [
+      makeStoredBookmark({
+        id: '7e64cf1e-0000-4000-8000-0000000000e1',
+        url: null,
+        url_hash: null,
+        title: null,
+        description: '# Weekly plan\n\nDetails',
+        content_type: 'text',
+      }),
+      makeStoredBookmark({ id: '7e64cf1e-0000-4000-8000-0000000000e2', title: 'Other bookmark' }),
+    ],
+    {
+      tags: [makeTag('t-notes', 'notes')],
+      bookmarkTags: [
+        {
+          bookmark_id: '7e64cf1e-0000-4000-8000-0000000000e1',
+          tag_id: 't-notes',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+        {
+          bookmark_id: '7e64cf1e-0000-4000-8000-0000000000e2',
+          tag_id: 't-notes',
+          source: 'user',
+          confidence: null,
+          created_at: '2026-06-12T00:00:00.000Z',
+        },
+      ],
+      collections: [],
+    },
+  );
+
+  const screen = await renderScreen();
+  await waitFor(() => expect(screen.getByTestId('graph-loading')).toBeTruthy());
+  await flushSettle();
+
+  await waitFor(() =>
+    expect(screen.getByTestId('graph-bookmark-7e64cf1e-0000-4000-8000-0000000000e1')).toBeTruthy(),
+  );
+  const labelContents = collectNodesWithProp(screen.toJSON(), 'content')
+    .map((node) => node.props.content)
+    .filter((content): content is string => typeof content === 'string');
+  expect(labelContents).toContain('Weekly plan');
+  expect(labelContents).not.toContain('Untitled');
+});
+
 test('bookmark labels ignore pointer events so an overlapping label never blocks a tap', async () => {
   seedLibrary();
 

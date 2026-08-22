@@ -1,4 +1,5 @@
 import { hostFromUrl } from '@/domain/item-icon';
+import { markdownLabel, markdownToPlainText } from '@/domain/markdown';
 import type { Bookmark } from '@/domain/types';
 
 /**
@@ -20,8 +21,7 @@ export function displayTitle(
   if (bookmark.url) {
     return bookmark.url;
   }
-  const description = bookmark.description?.trim();
-  return description || null;
+  return markdownLabel(bookmark.description ?? '');
 }
 
 /**
@@ -64,7 +64,7 @@ export function accessibilityTitle(
   if (bookmark.url) {
     return truncateForSpeech(bookmark.url);
   }
-  const description = bookmark.description?.trim();
+  const description = markdownToPlainText(bookmark.description ?? '');
   return description ? truncateForSpeech(description) : null;
 }
 

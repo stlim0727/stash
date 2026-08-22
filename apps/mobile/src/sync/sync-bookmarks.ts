@@ -292,6 +292,22 @@ function createUploadPayload(
     notes: latestAtUpload.notes ?? undefined,
     ...(latestAtUpload.deleted_at ? { deleted_at: latestAtUpload.deleted_at } : {}),
   };
+  // A URL-less text/Markdown-memo row's body lives in `description` locally
+  // but uploads as `shared_text` — refresh it too, the same as title/notes,
+  // so an edit made while the original create is still queued (e.g. offline)
+  // doesn't get silently dropped when that queued body finally uploads
+  // (applyBookmarkUpdate never enqueues a separate `update` for a row that
+  // hasn't synced once yet — this refresh at upload time is the only place
+  // such an edit reaches the server).
+  if (entry.payload.shared_text !== undefined) {
+    // Fall back to the originally-queued body if the memo was since cleared
+    // to empty — requirePayload rejects a create with neither a URL nor
+    // shared_text, so refreshing to an empty body here would turn a still-
+    // uploadable create into one that fails every retry forever.
+    payload.shared_text = latestAtUpload.description?.trim()
+      ? latestAtUpload.description
+      : entry.payload.shared_text;
+  }
   if (latestAtUpload.site_name !== null) {
     payload.site_name = latestAtUpload.site_name;
   }

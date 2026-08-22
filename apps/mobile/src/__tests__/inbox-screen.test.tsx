@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { FlatList, LayoutAnimation, Linking, Platform, StyleSheet } from 'react-native';
+import { FlatList, LayoutAnimation, Linking, Platform, Share, StyleSheet } from 'react-native';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -171,6 +171,43 @@ test('renders stored bookmarks with their titles', async () => {
 
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
   expect(screen.getByText('Raindrop review')).toBeTruthy();
+});
+
+test('renders Markdown memos with a plain preview and memo metadata', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-00000000000d',
+      url: null,
+      url_hash: null,
+      title: 'Release notes',
+      description: '# Priorities\n\n- Ship **memo** support',
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Release notes')).toBeTruthy());
+  expect(screen.getByText('Priorities Ship memo support')).toBeTruthy();
+  expect(screen.getAllByText('Memo').length).toBeGreaterThan(0);
+});
+
+test('an untitled Markdown memo uses its first rendered line as the Inbox title', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-00000000000e',
+      url: null,
+      url_hash: null,
+      title: null,
+      description: '# Weekly **plan**\n\n- Ship it',
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByText('Weekly plan')).toBeTruthy());
+  expect(screen.queryByText('# Weekly **plan**')).toBeNull();
 });
 
 test('web keeps the pinned hero outside a transformed compositing layer', async () => {
@@ -1804,6 +1841,30 @@ test('the visible ⋯ overflow button opens the action menu (no long-press neede
   await fireEvent.press(screen.getByLabelText('More actions'));
   expect(screen.getByText('Move to collection…')).toBeTruthy();
   expect(screen.getByText('Move to Trash')).toBeTruthy();
+});
+
+test('a memo action menu shares its raw Markdown body', async () => {
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: 'sharedAction' });
+  const markdown = '# Weekly plan\n\n- Ship memo support';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000064',
+      url: null,
+      url_hash: null,
+      title: 'Weekly plan',
+      description: markdown,
+      content_type: 'text',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Weekly plan')).toBeTruthy());
+  await fireEvent.press(screen.getByLabelText('More actions'));
+  expect(screen.queryByText('Open link')).toBeNull();
+  await fireEvent.press(screen.getByText('Share'));
+
+  expect(share).toHaveBeenCalledWith({ message: markdown, title: 'Weekly plan' });
+  share.mockRestore();
 });
 
 test('long-pressing the preview image (not just the title) opens the action menu', async () => {

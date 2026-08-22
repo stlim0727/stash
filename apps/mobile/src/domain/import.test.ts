@@ -122,6 +122,16 @@ test('parseJsonBackup keeps url-less items (null url) for the caller to skip', (
   const [item] = parseJsonBackup(json);
   assert.equal(item?.url, null);
   assert.equal(item?.title, 'A thought');
+  assert.equal(item?.metadata?.content_type, 'text');
+});
+
+test('parseJsonBackup carries the backup bookmark id/client_id for idempotent restores', () => {
+  const json = JSON.stringify({
+    bookmarks: [{ id: 'bm-1', client_id: 'cid-1', title: 'A thought', content_type: 'text' }],
+  });
+  const [item] = parseJsonBackup(json);
+  assert.equal(item?.backupId, 'bm-1');
+  assert.equal(item?.backupClientId, 'cid-1');
 });
 
 test('parseJsonBackup preserves generated metadata for a lossless restore (#671)', () => {
@@ -141,6 +151,7 @@ test('parseJsonBackup preserves generated metadata for a lossless restore (#671)
   const [item] = parseJsonBackup(json);
   assert.deepEqual(item?.metadata, {
     description: 'A fetched description.',
+    raw_description: 'A fetched description.',
     preview_image_url: 'https://example.com/a/preview.png',
     favicon_url: 'https://example.com/favicon.ico',
     site_name: 'Example',
@@ -303,6 +314,7 @@ test('a Stash JSON backup round-trips generated metadata and the AI enrichment s
   const [item] = parseJsonBackup(backup);
   assert.deepEqual(item?.metadata, {
     description: 'A fetched description.',
+    raw_description: 'A fetched description.',
     preview_image_url: 'https://example.com/preview.png',
     favicon_url: 'https://example.com/favicon.ico',
     site_name: 'Example',

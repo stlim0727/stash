@@ -52,6 +52,7 @@ test('carries a text note body back as shared_text (not url)', () => {
   assert.deepEqual(payload, {
     id: 'b1',
     created_at: '2026-06-20T00:00:00.000Z',
+    content_type: 'text',
     title: 'Note',
     notes: undefined,
     shared_text: 'a thought',
@@ -111,6 +112,10 @@ test('isUploadableCreate accepts a URL payload', () => {
 
 test('isUploadableCreate accepts a shared_text payload', () => {
   assert.equal(isUploadableCreate({ shared_text: 'hello' }), true);
+});
+
+test('isUploadableCreate accepts an explicitly typed bodyless text payload', () => {
+  assert.equal(isUploadableCreate({ content_type: 'text', title: 'Remember this' }), true);
 });
 
 test('isUploadableCreate accepts an image payload even before it is uploaded', () => {
