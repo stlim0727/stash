@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { BookmarkApi, type RemoteBookmark } from './bookmarks.ts';
+import { SupabaseRequestError } from '@/supabase/client';
 import type { SupabaseAuthSession } from '@/supabase/types';
 
 const SESSION: SupabaseAuthSession = {
@@ -453,6 +454,54 @@ test('createBookmark does not patch description for a urlHash duplicate from a d
   assert.equal(result.status, 'duplicate');
   assert.equal('description' in (patches[0] ?? {}), false);
   assert.equal(patches[0]?.last_saved_at !== undefined, true);
+});
+
+test('createBookmark pushes a refreshed memo body when a 409 conflict reveals its own earlier create (race with the pre-insert lookup)', async () => {
+  const patches: Array<Record<string, unknown>> = [];
+  let clientIdLookupCount = 0;
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&client_id=')) {
+        clientIdLookupCount += 1;
+        if (clientIdLookupCount === 1) {
+          // The pre-insert lookup runs before the original attempt's insert
+          // has landed — finds nothing.
+          return [];
+        }
+        // By the time the POST below fails with 409, the original attempt
+        // has landed — this second lookup (the 409 recovery path) finds it.
+        return [
+          remoteBookmark({
+            id: 'b1',
+            url: null,
+            content_type: 'text',
+            description: 'original body',
+            client_id: 'cid-memo',
+          }),
+        ];
+      }
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        throw new SupabaseRequestError('conflict', 409);
+      }
+      if (path === '/rest/v1/bookmarks?id=eq.b1&user_id=eq.user-1') {
+        assert.equal(options.method, 'PATCH');
+        const body = options.body as Record<string, unknown>;
+        patches.push(body);
+        return [remoteBookmark({ id: 'b1', url: null, content_type: 'text', description: body.description as string })];
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    shared_text: 'edited body',
+    client_id: 'cid-memo',
+  });
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(patches[0]?.description, 'edited body');
 });
 
 test('createBookmark rejects an image payload with no uploaded preview_image_url (STASH-65 invariant: never create before the binary lands)', async () => {

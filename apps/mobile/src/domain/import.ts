@@ -73,6 +73,16 @@ export interface ImportItem {
   enrichment?: ImportedEnrichment;
   /** Original creation timestamp (ISO string), when preserved from source. */
   createdAt?: string | null;
+  /**
+   * The bookmark's own stable identity from a Stash JSON backup (its `id`
+   * and, for a URL-less row, its `client_id`) — present only for
+   * `source: 'stash-backup'`. URL-less rows have no canonical url_hash to
+   * dedupe a repeated restore against; carrying this through lets the
+   * importer recognize "this backup row already exists locally" instead of
+   * minting a fresh duplicate on every re-import of the same file.
+   */
+  backupId?: string | null;
+  backupClientId?: string | null;
 }
 
 /** Thrown when a file can't be understood as a supported import format. */
@@ -228,6 +238,8 @@ export function parseJsonBackup(text: string): ImportItem[] {
         rawCreatedAt && !isNaN(new Date(rawCreatedAt).getTime())
           ? new Date(rawCreatedAt).toISOString()
           : null,
+      backupId: cleanString(entry.id),
+      backupClientId: cleanString(entry.client_id),
     };
   });
 }

@@ -7,20 +7,34 @@
  * supported Keepory subset instead of pretending to be a second renderer.
  */
 
-/** Convert supported Markdown syntax to readable plain text without mutating the source. */
-export function markdownToPlainText(markdown: string | null | undefined): string {
-  if (!markdown?.trim()) {
-    return '';
-  }
-
-  // Labels declared by a reference definition (`[label]: url`) elsewhere in
-  // the document — used below to recognize a shortcut reference link
-  // (`[label]` with no separate destination) without mistaking ordinary
-  // bracketed prose ("see item [1]") for one.
+/** Labels declared by a reference definition (`[label]: url`) in a document —
+ * used to recognize a shortcut reference link (`[label]` with no separate
+ * destination) without mistaking ordinary bracketed prose ("see item [1]")
+ * for one. */
+function collectReferenceLabels(markdown: string): Set<string> {
   const referenceLabels = new Set<string>();
   for (const match of markdown.matchAll(/^\s*\[([^\]]+)\]:\s*\S/gm)) {
     referenceLabels.add(match[1]!.trim().toLowerCase());
   }
+  return referenceLabels;
+}
+
+/**
+ * Convert supported Markdown syntax to readable plain text without mutating
+ * the source. `referenceLabels`, when passed, is used instead of scanning
+ * `markdown` itself for reference definitions — `markdownLabel` passes the
+ * whole document's labels in when processing a single line at a time, since
+ * a definition can live on a different line than its shortcut reference.
+ */
+export function markdownToPlainText(
+  markdown: string | null | undefined,
+  referenceLabels?: Set<string>,
+): string {
+  if (!markdown?.trim()) {
+    return '';
+  }
+
+  const labels = referenceLabels ?? collectReferenceLabels(markdown);
 
   return markdown
     .replace(/```[^\n]*\n?/g, '')
@@ -32,7 +46,7 @@ export function markdownToPlainText(markdown: string | null | undefined): string
     // Shortcut reference links (`[label]` alone) — only when a matching
     // definition was actually found above.
     .replace(/\[([^\]]+)\](?!\(|\[|:)/g, (fullMatch, label: string) =>
-      referenceLabels.has(label.trim().toLowerCase()) ? label : fullMatch,
+      labels.has(label.trim().toLowerCase()) ? label : fullMatch,
     )
     // The (now-orphaned) reference definition line itself (`[ref]: url`) so
     // it doesn't linger in the projection as raw text.
@@ -65,8 +79,12 @@ export function markdownLabel(markdown: string | null | undefined): string | nul
   if (!markdown?.trim()) {
     return null;
   }
+  // Scan the whole document once — a shortcut reference link's definition
+  // can live on a different line than the link itself, so a per-line-only
+  // scan (see markdownToPlainText's own fallback) would never see it.
+  const referenceLabels = collectReferenceLabels(markdown);
   for (const line of markdown.split(/\r?\n/)) {
-    const plain = markdownToPlainText(line);
+    const plain = markdownToPlainText(line, referenceLabels);
     if (plain) {
       return plain;
     }

@@ -476,10 +476,19 @@ export class BookmarkApi {
       // url_hash one), so the url_hash lookup alone would miss the archived
       // original and leave the entry failing forever.
       if (error instanceof SupabaseRequestError && error.status === 409) {
+        const duplicateByUrl = urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null;
         const duplicate =
-          (urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null) ??
-          (clientId ? await this.findBookmarkByClientId(clientId) : null);
+          duplicateByUrl ?? (clientId ? await this.findBookmarkByClientId(clientId) : null);
         if (duplicate) {
+          // Same idempotent-retry case as the pre-insert `existing` branch
+          // above (see its comment) — the insert itself lost the race to
+          // this request's own earlier attempt, so apply the same
+          // client-id-proven refreshed description here too.
+          const isOwnRetry = !duplicateByUrl && duplicate.client_id === clientId;
+          await this.updateBookmark(duplicate.id, {
+            ...(isOwnRetry ? { description: description ?? undefined } : {}),
+            last_saved_at: timestamp,
+          });
           return {
             bookmark_id: duplicate.id,
             status: 'duplicate',

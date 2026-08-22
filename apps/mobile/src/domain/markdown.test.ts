@@ -21,6 +21,10 @@ test('markdownLabel returns the first meaningful rendered line', () => {
   assert.equal(markdownLabel(null), null);
 });
 
+test('markdownLabel flattens a shortcut reference link whose definition is on a later line', () => {
+  assert.equal(markdownLabel('[Keepory]\n\n[Keepory]: https://example.com'), 'Keepory');
+});
+
 test('plain text remains unchanged because legacy notes are valid Markdown', () => {
   assert.equal(markdownToPlainText('내일 3시에 회의 있습니다'), '내일 3시에 회의 있습니다');
 });

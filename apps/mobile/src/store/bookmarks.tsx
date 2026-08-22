@@ -2934,6 +2934,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       const activeBookmarkById = new Map(
         activeLocalBookmarks.map((bookmark) => [bookmark.id, bookmark]),
       );
+      // Every local id, active or trashed — used only to avoid an id
+      // collision when restoring a URL-less memo by its backup id (below):
+      // a trashed original must not be silently resurrected under a
+      // duplicate-swap, but its id also must not be reused for a distinct
+      // new row.
+      const allLocalBookmarkIds = new Set(
+        (bookmarksRef.current ?? loadedBookmarks).map((bookmark) => bookmark.id),
+      );
       // Sentry STASH-3K/3M: a bulk import has repeatedly doubled a user's
       // library (their local total exactly 2x the cloud count) with no
       // evidence of why — this and the summary log below are the
@@ -2962,71 +2970,96 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // with url: null and its raw body in `description`, so a restore
           // must not fall through to the URL-only skip below — that would
           // silently drop every memo from an advertised full-fidelity backup.
-          // Like a live text-note capture (see addBookmark's text branch),
-          // there's no canonical URL key to dedupe on, so every restored memo
-          // is a new note.
           // Test emptiness on the trimmed value, but restore the untrimmed
           // one — leading/trailing whitespace can be meaningful Markdown
           // (e.g. an indented code block), so a restore must not silently
-          // rewrite it.
-          if (item.source !== "stash-backup" || !item.metadata?.description?.trim()) {
+          // rewrite it. Also require content_type: 'text' — a URL-less
+          // *image* bookmark (a captured screenshot) can carry a caption in
+          // `description` too, and must not be rebuilt as a fake text memo,
+          // which would discard its preview_image_url and mislabel a
+          // generated caption as user-authored Markdown.
+          if (
+            item.source !== "stash-backup" ||
+            item.metadata?.content_type !== "text" ||
+            !item.metadata.description?.trim()
+          ) {
             skipped += 1;
             continue;
           }
           const memoBody = item.metadata.raw_description ?? item.metadata.description;
-          const id = makeBookmarkId();
-          const clientId = makeClientId();
-          const title = item.title?.trim() ? item.title.trim() : null;
-          const notes = item.notes?.trim() ? item.notes.trim() : null;
-          const itemCreatedAt = item.createdAt ?? now;
-          newBookmarks.push({
-            id,
-            user_id: mockUserId,
-            url: null,
-            canonical_url: null,
-            url_hash: null,
-            title,
-            title_is_derived: title ? false : undefined,
-            client_id: clientId,
-            description: memoBody,
-            notes,
-            source_app: null,
-            content_type: "text",
-            preview_image_url: null,
-            favicon_url: null,
-            site_name: null,
-            collection_id: null,
-            is_archived: false,
-            deleted_at: null,
-            created_at: itemCreatedAt,
-            updated_at: now,
-            last_saved_at: now,
-            // Never 'pending' for a restore — same rationale as the URL
-            // branch below: don't let a restored row auto-spend AI quota.
-            metadata_status: "skipped",
-            sync_status: "pending",
-          });
-          newEntries.push({
-            local_id: id,
-            remote_id: null,
-            operation: "create",
-            payload: {
+          // A URL-less row has no canonical url_hash to dedupe a repeated
+          // restore against — use the backup's own bookmark id instead, so
+          // re-importing the same file (or a file that already matches the
+          // local library) recognizes the existing row rather than minting
+          // a fresh duplicate every time.
+          const existingId =
+            item.backupId && activeBookmarkById.has(item.backupId) ? item.backupId : undefined;
+          const isNew = existingId === undefined;
+          // Reuse the backup's own id only when nothing local already holds
+          // it (active or trashed) — otherwise mint a fresh id, matching how
+          // re-adding a trashed URL bookmark creates a new active row
+          // instead of colliding with the trashed one.
+          const id =
+            existingId ??
+            (item.backupId && !allLocalBookmarkIds.has(item.backupId)
+              ? item.backupId
+              : makeBookmarkId());
+          if (!isNew) {
+            duplicates += 1;
+          } else {
+            const clientId = item.backupClientId ?? makeClientId();
+            const title = item.title?.trim() ? item.title.trim() : null;
+            const notes = item.notes?.trim() ? item.notes.trim() : null;
+            const itemCreatedAt = item.createdAt ?? now;
+            newBookmarks.push({
               id,
-              shared_text: memoBody,
-              title: title ?? undefined,
-              notes: notes ?? undefined,
+              user_id: mockUserId,
+              url: null,
+              canonical_url: null,
+              url_hash: null,
+              title,
+              title_is_derived: title ? false : undefined,
               client_id: clientId,
-              metadata_status: "skipped",
-              enrichment_policy: "skip",
+              description: memoBody,
+              notes,
+              source_app: null,
+              content_type: "text",
+              preview_image_url: null,
+              favicon_url: null,
+              site_name: null,
+              collection_id: null,
+              is_archived: false,
+              deleted_at: null,
               created_at: itemCreatedAt,
-            },
-            sync_status: "pending",
-            retry_count: 0,
-            last_error: null,
-            created_at: now,
-            updated_at: now,
-          });
-          imported += 1;
+              updated_at: now,
+              last_saved_at: now,
+              // Never 'pending' for a restore — same rationale as the URL
+              // branch below: don't let a restored row auto-spend AI quota.
+              metadata_status: "skipped",
+              sync_status: "pending",
+            });
+            newEntries.push({
+              local_id: id,
+              remote_id: null,
+              operation: "create",
+              payload: {
+                id,
+                shared_text: memoBody,
+                title: title ?? undefined,
+                notes: notes ?? undefined,
+                client_id: clientId,
+                metadata_status: "skipped",
+                enrichment_policy: "skip",
+                created_at: itemCreatedAt,
+              },
+              sync_status: "pending",
+              retry_count: 0,
+              last_error: null,
+              created_at: now,
+              updated_at: now,
+            });
+            imported += 1;
+          }
 
           for (const tagName of item.tags) {
             const op: PendingTagOp = {
@@ -3043,7 +3076,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             organizationChanged = true;
           }
           const memoCollectionName = item.collection?.trim();
-          if (memoCollectionName) {
+          const memoTarget = activeBookmarkById.get(id);
+          // Same guard as the URL branch below: don't clobber a dedupe-
+          // matched existing row's organization.
+          if (memoCollectionName && !memoTarget?.collection_id) {
             nextImportCollections = enqueuePendingImportCollection(
               nextImportCollections,
               {

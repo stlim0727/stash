@@ -851,6 +851,78 @@ test("import: a URL-less Markdown memo from a Stash JSON backup is restored, not
   ).toEqual(["planning"]);
 });
 
+test("import: restoring the same Markdown-memo backup twice is idempotent, not a duplicate", async () => {
+  const { result } = await renderStore();
+  const backupItem = {
+    source: "stash-backup" as const,
+    url: null,
+    title: "Weekly plan",
+    notes: null,
+    tags: [],
+    collection: null,
+    backupId: "7e64cf1e-0000-4000-8000-0000000000f1",
+    backupClientId: "cid-weekly-plan",
+    metadata: {
+      description: "# Weekly plan",
+      raw_description: "# Weekly plan",
+      preview_image_url: null,
+      favicon_url: null,
+      site_name: null,
+      canonical_url: null,
+      content_type: "text" as const,
+    },
+  };
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([backupItem]);
+    expect(summary.imported).toBe(1);
+  });
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([backupItem]);
+    expect(summary.imported).toBe(0);
+    expect(summary.duplicates).toBe(1);
+  });
+
+  // Still exactly one row, under the backup's own stable id.
+  expect(fakeRepo.__bookmarks()).toHaveLength(1);
+  expect(fakeRepo.__bookmarks()[0]?.id).toBe("7e64cf1e-0000-4000-8000-0000000000f1");
+});
+
+test("import: a URL-less image bookmark's caption is not restored as a fake text memo", async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    const summary = result.current.importBookmarks([
+      {
+        source: "stash-backup",
+        url: null,
+        title: "Screenshot",
+        notes: null,
+        tags: [],
+        collection: null,
+        metadata: {
+          description: "a generated caption",
+          raw_description: "a generated caption",
+          preview_image_url: "https://example.com/shot.png",
+          favicon_url: null,
+          site_name: null,
+          canonical_url: null,
+          content_type: "image",
+        },
+      },
+    ]);
+    // Restoring a URL-less image bookmark isn't supported by this memo path
+    // (it would discard preview_image_url and mislabel the caption as
+    // user-authored Markdown) — it's skipped, not silently corrupted.
+    expect(summary.imported).toBe(0);
+    expect(summary.skipped).toBe(1);
+  });
+
+  expect(fakeRepo.__bookmarks()).toHaveLength(0);
+});
+
 test("import: logs a start/finish summary (Sentry STASH-3K/3M instrumentation)", async () => {
   // STASH-3K and its repeat STASH-3M both reported a bulk HTML import doubling
   // the library (local total exactly 2x the cloud count) with no evidence of
