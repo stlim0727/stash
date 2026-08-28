@@ -62,34 +62,34 @@ export function isTransientSyncFailure(entry: LocalPendingBookmark): boolean {
 }
 
 /**
- * Number of independently-timed failed attempts needed, all attributed to
- * the same DNS-resolution failure, before the UI treats it as a persistent
- * device/network problem (STASH-4Z: one user hit this on every single create
- * for 24 days straight, always the same `UnknownHostException` for our own
- * host) rather than an ordinary one-off transient blip.
- */
-export const REPEATED_DNS_FAILURE_THRESHOLD = 2;
-
-/**
- * True once enough INDEPENDENT attempts have hit the same DNS-resolution
- * failure that it looks like the device/network itself can't reach us, not
- * just a momentary connectivity gap. Drives the more specific "check your
- * connection" status copy instead of the generic connection-wait one.
+ * True once a DNS-resolution failure has proven durable enough to have
+ * already earned its own Sentry health escalation (STASH-4Z) — i.e. some
+ * currently-failing entry's `retry_count` already crossed
+ * `TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD` and
+ * `applySyncQueueHealthEscalation` (sync/sync-bookmarks.ts) durably marked
+ * `health_escalated_at`.
  *
- * Counts distinct `last_attempt_at` timestamps rather than raw entry rows: a
- * single failed bulk-create request stamps the SAME `last_error_kind` (and
- * the attempted chunk's SAME `last_attempt_at`) onto every entry in that
- * chunk, plus every later untried entry in the same import — one real
- * network failure, not several. Entries with no `last_attempt_at` (never
- * independently attempted) don't count on their own.
+ * Deliberately reuses that existing marker instead of trying to infer
+ * "repeated" from the queue's own current snapshot: a queue entry only ever
+ * stores its LATEST attempt (no history), and a bulk-create retry re-stamps
+ * the same shared timestamp across a whole chunk each pass — so neither raw
+ * entry counts nor attempt timestamps can tell "one real failure that
+ * happened to touch N rows" apart from "N independently-timed failures", or
+ * "a single entry that's been stuck for a long time" apart from "an entry
+ * that only just failed once". `health_escalated_at` already encodes that
+ * distinction, durably, at the exact point the retry logic itself decided
+ * this had gone on long enough to be a real problem — for a single
+ * long-stuck entry just as much as a repeated one.
+ *
+ * Drives the more specific "check your connection" status copy instead of
+ * the generic connection-wait one.
  */
 export function hasRepeatedDnsFailures(queue: readonly LocalPendingBookmark[]): boolean {
-  const attemptTimestamps = new Set(
-    queue
-      .filter((entry) => entry.sync_status === 'failed' && entry.last_error_kind === 'transient_dns')
-      .map((entry) => entry.last_attempt_at)
-      .filter((timestamp): timestamp is string => Boolean(timestamp)),
+  return queue.some(
+    (entry) =>
+      entry.sync_status === 'failed' &&
+      entry.last_error_kind === 'transient_dns' &&
+      Boolean(entry.health_escalated_at),
   );
-  return attemptTimestamps.size >= REPEATED_DNS_FAILURE_THRESHOLD;
 }
 import type { LocalPendingBookmark } from '@/domain/types';
