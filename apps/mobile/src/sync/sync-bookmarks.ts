@@ -1,7 +1,11 @@
 import { BOOKMARK_NOT_FOUND_ERROR_MESSAGE, createBookmarkApi } from '@/api/bookmarks';
 import type { BookmarkApi } from '@/api/bookmarks';
 import { createPayloadFromBookmark, isUploadableCreate } from '@/domain/create-payload';
-import { isTransientNetworkError, isTransientSyncFailure } from '@/domain/network-errors';
+import {
+  isDnsResolutionFailure,
+  isTransientNetworkError,
+  isTransientSyncFailure,
+} from '@/domain/network-errors';
 import type {
   Bookmark,
   CreateBookmarkInput,
@@ -95,10 +99,15 @@ function errorMessage(error: unknown): string {
 
 /** Classify the failure while its runtime type is still available. A
  * SupabaseRequestError proves the server returned an HTTP response, even when
- * its body happens to contain transport-like wording such as "timed out". */
+ * its body happens to contain transport-like wording such as "timed out".
+ * DNS resolution failures are checked first since they're a subset of the
+ * broader transient-network signatures (STASH-4Z). */
 export function syncErrorKind(error: unknown): SyncErrorKind {
   if (error instanceof SupabaseRequestError) {
     return 'other';
+  }
+  if (isDnsResolutionFailure(error)) {
+    return 'transient_dns';
   }
   return isTransientNetworkError(error) ? 'transient_network' : 'other';
 }
@@ -140,7 +149,7 @@ export function applySyncQueueHealthEscalation(
     return nextEntry;
   }
   const nextThreshold =
-    nextEntry.last_error_kind === 'transient_network'
+    nextEntry.last_error_kind === 'transient_network' || nextEntry.last_error_kind === 'transient_dns'
       ? TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD
       : SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD;
   return nextEntry.retry_count >= nextThreshold

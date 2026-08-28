@@ -296,8 +296,12 @@ export interface CreateBookmarkInput {
 export type QueueOperation = 'create' | 'update' | 'delete';
 
 /** Persisted provenance for the latest sync failure. Unlike `last_error`, this
- * never infers transport state from server-controlled response text. */
-export type SyncErrorKind = 'transient_network' | 'other';
+ * never infers transport state from server-controlled response text.
+ * `transient_dns` is the DNS-resolution-specific subset of `transient_network`
+ * (STASH-4Z) — split out so the UI can tell a repeated, likely device/network
+ * DNS problem apart from an ordinary transport blip; both are still "transient"
+ * for retry/backoff and health-escalation purposes. */
+export type SyncErrorKind = 'transient_dns' | 'transient_network' | 'other';
 
 export interface LocalPendingBookmark {
   /** Generated on device. */

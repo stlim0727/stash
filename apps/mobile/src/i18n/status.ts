@@ -33,11 +33,18 @@ export function syncStatusLabel(
   t: TFunction,
   value: string,
   queueState?: SyncQueueState | null,
+  repeatedDnsFailure?: boolean,
 ): string {
+  const isTransientFailure =
+    queueState?.sync_status === 'failed' &&
+    (queueState.last_error_kind === 'transient_network' ||
+      queueState.last_error_kind === 'transient_dns');
   const status =
-    queueState?.sync_status === 'failed' && queueState.last_error_kind === 'transient_network'
-      ? t('status.waitingForConnection')
-      : word(t, SYNC_STATUS_KEYS, value);
+    queueState?.last_error_kind === 'transient_dns' && repeatedDnsFailure
+      ? t('status.checkConnection')
+      : isTransientFailure
+        ? t('status.waitingForConnection')
+        : word(t, SYNC_STATUS_KEYS, value);
   return t('status.syncPrefix', { status });
 }
 

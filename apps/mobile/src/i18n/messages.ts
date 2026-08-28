@@ -52,6 +52,9 @@ export const en = {
   'status.syncing': 'syncing',
   'status.failed': 'failed',
   'status.waitingForConnection': 'waiting for connection',
+  // STASH-4Z: several queue entries stuck on the same DNS-resolution
+  // failure — a likely device/network problem, not just a momentary gap.
+  'status.checkConnection': 'check connection',
   'status.complete': 'complete',
   'status.skipped': 'skipped',
   // STASH-61: an on-device check confirmed a saved YouTube video is gone

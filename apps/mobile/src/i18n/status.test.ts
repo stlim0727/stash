@@ -48,3 +48,45 @@ test('does not reuse stale transient provenance while a queue entry is pending',
     'sync pending',
   );
 });
+
+test('a single DNS failure still reads as waiting for connection (STASH-4Z)', () => {
+  const dnsFailure = {
+    sync_status: 'failed' as const,
+    last_error_kind: 'transient_dns' as const,
+  };
+  assert.equal(
+    syncStatusLabel(createT('en'), 'failed', dnsFailure),
+    'sync waiting for connection',
+  );
+  assert.equal(
+    syncStatusLabel(createT('en'), 'failed', dnsFailure, false),
+    'sync waiting for connection',
+  );
+});
+
+test('a repeated DNS failure surfaces the check-connection copy (STASH-4Z)', () => {
+  const dnsFailure = {
+    sync_status: 'failed' as const,
+    last_error_kind: 'transient_dns' as const,
+  };
+  assert.equal(
+    syncStatusLabel(createT('en'), 'failed', dnsFailure, true),
+    'sync check connection',
+  );
+  assert.equal(
+    syncStatusLabel(createT('ko'), 'failed', dnsFailure, true),
+    '동기화 연결 확인 필요',
+  );
+});
+
+test('repeatedDnsFailure does not affect a non-DNS transient failure', () => {
+  assert.equal(
+    syncStatusLabel(
+      createT('en'),
+      'failed',
+      { sync_status: 'failed', last_error_kind: 'transient_network' },
+      true,
+    ),
+    'sync waiting for connection',
+  );
+});
