@@ -62,22 +62,34 @@ export function isTransientSyncFailure(entry: LocalPendingBookmark): boolean {
 }
 
 /**
- * Number of currently-failing queue entries needed, all attributed to the
- * same DNS-resolution failure, before the UI treats it as a persistent
+ * Number of independently-timed failed attempts needed, all attributed to
+ * the same DNS-resolution failure, before the UI treats it as a persistent
  * device/network problem (STASH-4Z: one user hit this on every single create
  * for 24 days straight, always the same `UnknownHostException` for our own
  * host) rather than an ordinary one-off transient blip.
  */
 export const REPEATED_DNS_FAILURE_THRESHOLD = 2;
 
-/** True once enough queue entries are stuck on the same DNS-resolution
+/**
+ * True once enough INDEPENDENT attempts have hit the same DNS-resolution
  * failure that it looks like the device/network itself can't reach us, not
  * just a momentary connectivity gap. Drives the more specific "check your
- * connection" status copy instead of the generic connection-wait one. */
+ * connection" status copy instead of the generic connection-wait one.
+ *
+ * Counts distinct `last_attempt_at` timestamps rather than raw entry rows: a
+ * single failed bulk-create request stamps the SAME `last_error_kind` (and
+ * the attempted chunk's SAME `last_attempt_at`) onto every entry in that
+ * chunk, plus every later untried entry in the same import — one real
+ * network failure, not several. Entries with no `last_attempt_at` (never
+ * independently attempted) don't count on their own.
+ */
 export function hasRepeatedDnsFailures(queue: readonly LocalPendingBookmark[]): boolean {
-  const dnsFailures = queue.filter(
-    (entry) => entry.sync_status === 'failed' && entry.last_error_kind === 'transient_dns',
+  const attemptTimestamps = new Set(
+    queue
+      .filter((entry) => entry.sync_status === 'failed' && entry.last_error_kind === 'transient_dns')
+      .map((entry) => entry.last_attempt_at)
+      .filter((timestamp): timestamp is string => Boolean(timestamp)),
   );
-  return dnsFailures.length >= REPEATED_DNS_FAILURE_THRESHOLD;
+  return attemptTimestamps.size >= REPEATED_DNS_FAILURE_THRESHOLD;
 }
 import type { LocalPendingBookmark } from '@/domain/types';

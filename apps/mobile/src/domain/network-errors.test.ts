@@ -82,24 +82,94 @@ test('isTransientSyncFailure treats a DNS failure as transient too', () => {
   );
 });
 
-test('hasRepeatedDnsFailures requires several currently-failing entries with the same DNS kind', () => {
+test('hasRepeatedDnsFailures requires several independently-timed failures with the same DNS kind', () => {
   assert.equal(REPEATED_DNS_FAILURE_THRESHOLD, 2);
 
   const oneDnsFailure = [
-    makeQueueEntry({ local_id: 'a', sync_status: 'failed', last_error_kind: 'transient_dns' }),
-    makeQueueEntry({ local_id: 'b', sync_status: 'failed', last_error_kind: 'other' }),
+    makeQueueEntry({
+      local_id: 'a',
+      sync_status: 'failed',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: '2026-08-28T00:00:00.000Z',
+    }),
+    makeQueueEntry({
+      local_id: 'b',
+      sync_status: 'failed',
+      last_error_kind: 'other',
+      last_attempt_at: '2026-08-28T00:01:00.000Z',
+    }),
   ];
   assert.equal(hasRepeatedDnsFailures(oneDnsFailure), false);
 
   const twoDnsFailures = [
-    makeQueueEntry({ local_id: 'a', sync_status: 'failed', last_error_kind: 'transient_dns' }),
-    makeQueueEntry({ local_id: 'b', sync_status: 'failed', last_error_kind: 'transient_dns' }),
+    makeQueueEntry({
+      local_id: 'a',
+      sync_status: 'failed',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: '2026-08-28T00:00:00.000Z',
+    }),
+    makeQueueEntry({
+      local_id: 'b',
+      sync_status: 'failed',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: '2026-08-21T00:00:00.000Z',
+    }),
   ];
   assert.equal(hasRepeatedDnsFailures(twoDnsFailures), true);
 
   const oneRecovered = [
-    makeQueueEntry({ local_id: 'a', sync_status: 'synced', last_error_kind: 'transient_dns' }),
-    makeQueueEntry({ local_id: 'b', sync_status: 'failed', last_error_kind: 'transient_dns' }),
+    makeQueueEntry({
+      local_id: 'a',
+      sync_status: 'synced',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: '2026-08-28T00:00:00.000Z',
+    }),
+    makeQueueEntry({
+      local_id: 'b',
+      sync_status: 'failed',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: '2026-08-21T00:00:00.000Z',
+    }),
   ];
   assert.equal(hasRepeatedDnsFailures(oneRecovered), false);
+});
+
+test('a single failed bulk-create request does not count as repeated (review finding)', () => {
+  // syncCreateQueueEntryBatch's one rejected call stamps the SAME
+  // last_attempt_at onto every entry in the attempted chunk, and the SAME
+  // last_error_kind (with no last_attempt_at bump) onto every later,
+  // unattempted entry in the same import — one real network failure, not N.
+  const sameAttempt = '2026-08-28T00:00:00.000Z';
+  const oneBulkFailure = [
+    makeQueueEntry({
+      local_id: 'a',
+      sync_status: 'failed',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: sameAttempt,
+    }),
+    makeQueueEntry({
+      local_id: 'b',
+      sync_status: 'failed',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: sameAttempt,
+    }),
+    makeQueueEntry({
+      local_id: 'c',
+      sync_status: 'failed',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: null,
+    }),
+  ];
+  assert.equal(hasRepeatedDnsFailures(oneBulkFailure), false);
+
+  const twoBulkFailures = [
+    ...oneBulkFailure,
+    makeQueueEntry({
+      local_id: 'd',
+      sync_status: 'failed',
+      last_error_kind: 'transient_dns',
+      last_attempt_at: '2026-08-21T00:00:00.000Z',
+    }),
+  ];
+  assert.equal(hasRepeatedDnsFailures(twoBulkFailures), true);
 });

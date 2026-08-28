@@ -79,6 +79,21 @@ test('a repeated DNS failure surfaces the check-connection copy (STASH-4Z)', () 
   );
 });
 
+test('an actively-retrying entry ignores stale DNS provenance even when other entries are repeating (STASH-4Z review)', () => {
+  // The retry loop flips sync_status to 'syncing' while spreading the rest
+  // of the entry unchanged, so last_error_kind can still read 'transient_dns'
+  // from the PREVIOUS failed attempt while this one is actively in flight.
+  assert.equal(
+    syncStatusLabel(
+      createT('en'),
+      'syncing',
+      { sync_status: 'syncing', last_error_kind: 'transient_dns' },
+      true,
+    ),
+    'sync syncing',
+  );
+});
+
 test('repeatedDnsFailure does not affect a non-DNS transient failure', () => {
   assert.equal(
     syncStatusLabel(

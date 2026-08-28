@@ -35,12 +35,14 @@ export function syncStatusLabel(
   queueState?: SyncQueueState | null,
   repeatedDnsFailure?: boolean,
 ): string {
+  const isFailed = queueState?.sync_status === 'failed';
+  const isDnsFailure = isFailed && queueState?.last_error_kind === 'transient_dns';
   const isTransientFailure =
-    queueState?.sync_status === 'failed' &&
-    (queueState.last_error_kind === 'transient_network' ||
-      queueState.last_error_kind === 'transient_dns');
+    isFailed &&
+    (queueState?.last_error_kind === 'transient_network' ||
+      queueState?.last_error_kind === 'transient_dns');
   const status =
-    queueState?.last_error_kind === 'transient_dns' && repeatedDnsFailure
+    isDnsFailure && repeatedDnsFailure
       ? t('status.checkConnection')
       : isTransientFailure
         ? t('status.waitingForConnection')
