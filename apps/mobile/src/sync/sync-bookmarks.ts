@@ -5,6 +5,7 @@ import {
   isDnsResolutionFailure,
   isTransientNetworkError,
   isTransientSyncFailure,
+  TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD,
 } from '@/domain/network-errors';
 import type {
   Bookmark,
@@ -122,10 +123,11 @@ export function syncErrorKind(error: unknown): SyncErrorKind {
  */
 export const SYNC_QUEUE_HEALTH_ESCALATION_THRESHOLD = 3;
 
-/** Offline/DNS failures are expected device state, not evidence of a broken
- * server contract. Give connectivity time to recover before escalating, while
- * still surfacing a genuinely prolonged outage. */
-export const TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD = 6;
+// TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD (offline/DNS failures are
+// expected device state, not evidence of a broken server contract; give
+// connectivity time to recover before escalating) lives in
+// domain/network-errors.ts, imported above — hasRepeatedDnsFailures needs
+// the identical threshold and domain/ can't import back into sync/.
 
 /**
  * Persist the one-time health-escalation transition on the queue entry itself.

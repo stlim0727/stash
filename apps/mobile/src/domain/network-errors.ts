@@ -62,24 +62,33 @@ export function isTransientSyncFailure(entry: LocalPendingBookmark): boolean {
 }
 
 /**
- * True once a DNS-resolution failure has proven durable enough to have
- * already earned its own Sentry health escalation (STASH-4Z) — i.e. some
- * currently-failing entry's `retry_count` already crossed
- * `TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD` and
- * `applySyncQueueHealthEscalation` (sync/sync-bookmarks.ts) durably marked
- * `health_escalated_at`.
+ * Retry count at which an expected transport failure (offline/DNS) is
+ * treated as a genuinely prolonged outage rather than a momentary blip
+ * (STASH-4Z) — see `applySyncQueueHealthEscalation` in
+ * sync/sync-bookmarks.ts, the Sentry health-escalation gate this same
+ * number drives. Lives here (not in sync/) so this pure UI signal below can
+ * use the identical threshold without sync/ importing back into domain/.
+ */
+export const TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD = 6;
+
+/**
+ * True once a currently-failing entry's OWN `retry_count` has crossed
+ * {@link TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD} while its most
+ * recent failure is specifically a DNS-resolution one — i.e. this looks
+ * like a genuinely persistent device/network problem, not a momentary blip.
  *
- * Deliberately reuses that existing marker instead of trying to infer
- * "repeated" from the queue's own current snapshot: a queue entry only ever
- * stores its LATEST attempt (no history), and a bulk-create retry re-stamps
- * the same shared timestamp across a whole chunk each pass — so neither raw
- * entry counts nor attempt timestamps can tell "one real failure that
- * happened to touch N rows" apart from "N independently-timed failures", or
- * "a single entry that's been stuck for a long time" apart from "an entry
- * that only just failed once". `health_escalated_at` already encodes that
- * distinction, durably, at the exact point the retry logic itself decided
- * this had gone on long enough to be a real problem — for a single
- * long-stuck entry just as much as a repeated one.
+ * Checks `retry_count` directly rather than the entry's `health_escalated_at`
+ * marker: that marker is cross-kind and sticky by design (set once, kept
+ * even if a later retry's failure kind changes — see
+ * `applySyncQueueHealthEscalation`'s comment on preventing duplicate
+ * alerts), so an entry that escalated an ORDINARY failure at retry 3 and
+ * only later happened to fail once on DNS would already read as escalated
+ * despite never having actually retried 6 times against DNS. `retry_count`
+ * is the durable, per-entry, kind-agnostic attempt count that doesn't have
+ * that gap — including through a bulk-create retry, where each entry's own
+ * `retry_count` only advances on an attempt IT was actually part of (unlike
+ * `last_attempt_at`, which a shared batch re-stamps across a whole chunk
+ * regardless of each entry's real attempt history).
  *
  * Drives the more specific "check your connection" status copy instead of
  * the generic connection-wait one.
@@ -89,7 +98,7 @@ export function hasRepeatedDnsFailures(queue: readonly LocalPendingBookmark[]): 
     (entry) =>
       entry.sync_status === 'failed' &&
       entry.last_error_kind === 'transient_dns' &&
-      Boolean(entry.health_escalated_at),
+      entry.retry_count >= TRANSIENT_NETWORK_HEALTH_ESCALATION_THRESHOLD,
   );
 }
 import type { LocalPendingBookmark } from '@/domain/types';
