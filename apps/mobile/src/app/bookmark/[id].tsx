@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PostHogMaskView } from 'posthog-react-native';
 
 import { useI18n } from '@/i18n';
+import { hasRepeatedDnsFailures } from '@/domain/network-errors';
 import {
   enrichmentDegradedLabel,
   metadataStatusLabel,
@@ -179,6 +180,7 @@ export default function BookmarkDetailScreen({
   const syncQueueEntry = bookmark
     ? queue.find((entry) => entry.local_id === bookmark.id)
     : undefined;
+  const repeatedDnsFailure = hasRepeatedDnsFailures(queue);
 
   // The title shown when not editing. Background metadata enrichment can swap
   // this from the URL/"Untitled" to a long title while the screen stays
@@ -541,7 +543,7 @@ export default function BookmarkDetailScreen({
   // are noteworthy (not yet synced / still enriching), never as full cards.
   const statusChips: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    statusChips.push(syncStatusLabel(t, bookmark.sync_status, syncQueueEntry));
+    statusChips.push(syncStatusLabel(t, bookmark.sync_status, syncQueueEntry, repeatedDnsFailure));
   }
   if (bookmark.metadata_status !== 'complete') {
     statusChips.push(metadataStatusLabel(t, bookmark.metadata_status));

@@ -48,3 +48,60 @@ test('does not reuse stale transient provenance while a queue entry is pending',
     'sync pending',
   );
 });
+
+test('a single DNS failure still reads as waiting for connection (STASH-4Z)', () => {
+  const dnsFailure = {
+    sync_status: 'failed' as const,
+    last_error_kind: 'transient_dns' as const,
+  };
+  assert.equal(
+    syncStatusLabel(createT('en'), 'failed', dnsFailure),
+    'sync waiting for connection',
+  );
+  assert.equal(
+    syncStatusLabel(createT('en'), 'failed', dnsFailure, false),
+    'sync waiting for connection',
+  );
+});
+
+test('a repeated DNS failure surfaces the check-connection copy (STASH-4Z)', () => {
+  const dnsFailure = {
+    sync_status: 'failed' as const,
+    last_error_kind: 'transient_dns' as const,
+  };
+  assert.equal(
+    syncStatusLabel(createT('en'), 'failed', dnsFailure, true),
+    'sync check connection',
+  );
+  assert.equal(
+    syncStatusLabel(createT('ko'), 'failed', dnsFailure, true),
+    '동기화 연결 확인 필요',
+  );
+});
+
+test('an actively-retrying entry ignores stale DNS provenance even when other entries are repeating (STASH-4Z review)', () => {
+  // The retry loop flips sync_status to 'syncing' while spreading the rest
+  // of the entry unchanged, so last_error_kind can still read 'transient_dns'
+  // from the PREVIOUS failed attempt while this one is actively in flight.
+  assert.equal(
+    syncStatusLabel(
+      createT('en'),
+      'syncing',
+      { sync_status: 'syncing', last_error_kind: 'transient_dns' },
+      true,
+    ),
+    'sync syncing',
+  );
+});
+
+test('repeatedDnsFailure does not affect a non-DNS transient failure', () => {
+  assert.equal(
+    syncStatusLabel(
+      createT('en'),
+      'failed',
+      { sync_status: 'failed', last_error_kind: 'transient_network' },
+      true,
+    ),
+    'sync waiting for connection',
+  );
+});

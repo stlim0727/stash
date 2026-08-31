@@ -114,6 +114,7 @@ import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
 import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
+import { hasRepeatedDnsFailures } from '@/domain/network-errors';
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import {
   INITIAL_HEADER_COLLAPSE_STATE,
@@ -127,10 +128,11 @@ function statusLabel(
   bookmark: Bookmark,
   t: TFunction,
   queueEntry?: LocalPendingBookmark | null,
+  repeatedDnsFailure?: boolean,
 ): string | null {
   const parts: string[] = [];
   if (bookmark.sync_status !== 'synced') {
-    parts.push(syncStatusLabel(t, bookmark.sync_status, queueEntry));
+    parts.push(syncStatusLabel(t, bookmark.sync_status, queueEntry, repeatedDnsFailure));
   }
   if (bookmark.metadata_status === 'pending') {
     parts.push(metadataStatusLabel(t, 'pending'));
@@ -545,6 +547,7 @@ export default function InboxScreen() {
     () => new Map(queue.map((entry) => [entry.local_id, entry] as const)),
     [queue],
   );
+  const repeatedDnsFailure = useMemo(() => hasRepeatedDnsFailures(queue), [queue]);
   const { show: showToast } = useCaptureToast();
   const [query, setQuery] = useState('');
   // The TextInput stays bound to `query` (instant echo), but the derived work —
@@ -2908,7 +2911,12 @@ export default function InboxScreen() {
               </Pressable>
             );
           }
-          const status = statusLabel(item, t, syncQueueEntryByBookmarkId.get(item.id));
+          const status = statusLabel(
+            item,
+            t,
+            syncQueueEntryByBookmarkId.get(item.id),
+            repeatedDnsFailure,
+          );
           const collectionName = getCollection(item.collection_id)?.name ?? null;
           const cardTags = getTagsForBookmark(item.id);
           // Pending AI suggestions = high-confidence suggested tags not yet

@@ -455,7 +455,9 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         retry_count: row.retry_count,
         last_error: row.last_error,
         last_error_kind:
-          row.last_error_kind === 'transient_network' || row.last_error_kind === 'other'
+          row.last_error_kind === 'transient_dns' ||
+          row.last_error_kind === 'transient_network' ||
+          row.last_error_kind === 'other'
             ? row.last_error_kind
             : null,
         health_escalated_at: row.health_escalated_at ?? null,

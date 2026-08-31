@@ -1360,9 +1360,11 @@ test('syncErrorKind preserves transport-vs-HTTP provenance before persistence', 
   const dnsError = new Error(
     'fetch failed: java.net.UnknownHostException: Unable to resolve host "example.supabase.co"',
   );
+  const timeoutError = new Error('Network request failed');
   const responseError = new SupabaseRequestError('The request timed out', 503);
 
-  assert.equal(syncErrorKind(dnsError), 'transient_network');
+  assert.equal(syncErrorKind(dnsError), 'transient_dns');
+  assert.equal(syncErrorKind(timeoutError), 'transient_network');
   assert.equal(syncErrorKind(responseError), 'other');
 });
 
@@ -2412,6 +2414,21 @@ test('applySyncQueueHealthEscalation delays transient network escalation until r
   const atSixResult = applySyncQueueHealthEscalation(atFive, atSix, HEALTH_ESCALATED_AT);
   assert.equal(atThreeResult.health_escalated_at, undefined);
   assert.equal(atSixResult.health_escalated_at, HEALTH_ESCALATED_AT);
+});
+
+test('applySyncQueueHealthEscalation delays a DNS-specific failure until retry 6 too (STASH-4Z)', () => {
+  const atFive = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 5,
+    last_error_kind: 'transient_dns',
+  });
+  const atSix = makeCreateEntry({
+    sync_status: 'failed',
+    retry_count: 6,
+    last_error_kind: 'transient_dns',
+  });
+  const marked = applySyncQueueHealthEscalation(atFive, atSix, HEALTH_ESCALATED_AT);
+  assert.equal(marked.health_escalated_at, HEALTH_ESCALATED_AT);
 });
 
 test('a persisted marker prevents duplicate alerts when failure kinds change', () => {
