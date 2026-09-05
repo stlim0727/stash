@@ -16,7 +16,8 @@
  *    Pocket can move into Stash directly. `tags` (pipe-separated) map to tags.
  */
 
-import type { ContentType, EnrichmentStatus, SuggestedTag } from '@/domain/types';
+import type { ContentType, EnrichmentStatus, SuggestedTag, TextFormat } from '@/domain/types';
+import { parseTextFormat } from '@/domain/text-format';
 
 /**
  * Generated page metadata carried by a Stash JSON backup's bookmark snapshot.
@@ -63,6 +64,8 @@ export interface ImportItem {
   url: string | null;
   title: string | null;
   notes: string | null;
+  description_format?: TextFormat;
+  notes_format?: TextFormat;
   /** Tag names parsed from the source (deduped, order preserved). */
   tags: string[];
   /** Folder (HTML) or collection name (JSON), when the source recorded one. */
@@ -228,7 +231,9 @@ export function parseJsonBackup(text: string): ImportItem[] {
       // metadata. Never restore a generated description as user notes — that
       // would corrupt the user-vs-generated separation and then sync the
       // generated text as if the user had typed it.
-      notes: cleanString(entry.notes),
+      notes: typeof entry.notes === 'string' && entry.notes.length ? entry.notes : null,
+      ...(parseTextFormat(entry.description_format) ? { description_format: parseTextFormat(entry.description_format) } : {}),
+      ...(parseTextFormat(entry.notes_format) ? { notes_format: parseTextFormat(entry.notes_format) } : {}),
       tags,
       collection: cleanString(entry.collection_name),
       metadata: parseImportedMetadata(entry),

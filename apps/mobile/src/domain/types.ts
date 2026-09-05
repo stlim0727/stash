@@ -7,6 +7,8 @@
 
 export type ContentType = 'url' | 'article' | 'image' | 'video' | 'text' | 'unknown';
 
+export type TextFormat = 'plain' | 'markdown';
+
 export type MetadataStatus = 'pending' | 'complete' | 'failed' | 'skipped';
 
 /**
@@ -65,8 +67,12 @@ export interface Bookmark {
    */
   title_is_derived?: boolean;
   description: string | null;
+  /** Null/absent preserves legacy Markdown rendering for URL-less memo bodies. */
+  description_format?: TextFormat | null;
   /** User-authored private notes. */
   notes: string | null;
+  /** Null/absent preserves legacy plain-text personal notes. */
+  notes_format?: TextFormat | null;
   source_app: string | null;
   content_type: ContentType;
   preview_image_url: string | null;
@@ -255,6 +261,8 @@ export interface CreateBookmarkInput {
   title?: string;
   description?: string;
   notes?: string;
+  description_format?: TextFormat | null;
+  notes_format?: TextFormat | null;
   source_app?: string;
   shared_text?: string;
   /**

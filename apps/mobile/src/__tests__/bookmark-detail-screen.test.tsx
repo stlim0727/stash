@@ -1,6 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Linking, StyleSheet } from 'react-native';
-import type { ReactNode } from 'react';
+import { Linking } from 'react-native';
+import { useState, type ReactNode } from 'react';
 
 jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
@@ -292,7 +292,7 @@ test('a URL-less memo previews Markdown and copies the raw source', async () => 
   expect(await waitFor(() => screen.getByText('Memo copied'))).toBeTruthy();
 });
 
-test('a text memo with authored notes shows both the memo body and the notes editor', async () => {
+test('a text memo with authored notes shows both the memo body and selectable notes', async () => {
   mockRouteId = SYNCED_ID;
   fakeRepo.__reset([
     makeStoredBookmark({
@@ -309,7 +309,7 @@ test('a text memo with authored notes shows both the memo body and the notes edi
   const screen = await renderDetail();
   await waitFor(() => expect(screen.getByText('Memo')).toBeTruthy());
   expect(screen.getByText('# Weekly plan')).toBeTruthy();
-  expect(screen.getByLabelText('Notes').props.value).toBe('keep this note visible');
+  expect(screen.getByText('keep this note visible').props.selectable).toBe(true);
 });
 
 test('editing a memo body persists raw Markdown and queues a synced-row update', async () => {
@@ -328,18 +328,16 @@ test('editing a memo body persists raw Markdown and queues a synced-row update',
 
   const screen = await renderDetail();
   await act(async () => {
-    fireEvent.press(await waitFor(() => screen.getByText('Edit Markdown')));
+    fireEvent.press(await waitFor(() => screen.getByLabelText('Edit Content')));
   });
-  const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
+  const editor = await waitFor(() => screen.getByLabelText('Memo body'));
   await act(async () => {
     fireEvent.changeText(editor, editedMarkdown);
   });
-  // Re-tapping the already-selected Edit segment must not reset the live draft
-  // back to the last persisted body.
-  await act(async () => {
-    fireEvent.press(screen.getByText('Edit Markdown'));
-  });
-  expect(screen.getByLabelText('Markdown memo body').props.value).toBe(editedMarkdown);
+  // Switching preview tabs must keep the current source and input node.
+  await fireEvent.press(screen.getByText('Preview'));
+  await fireEvent.press(screen.getByText('Write'));
+  expect(screen.getByLabelText('Memo body').props.value).toBe(editedMarkdown);
   await act(async () => {
     fireEvent(editor, 'blur');
   });
@@ -366,9 +364,9 @@ test('entering and leaving Edit without changes does not re-queue a whitespace-l
 
   const screen = await renderDetail();
   await act(async () => {
-    fireEvent.press(await waitFor(() => screen.getByText('Edit Markdown')));
+    fireEvent.press(await waitFor(() => screen.getByLabelText('Edit Content')));
   });
-  const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
+  const editor = await waitFor(() => screen.getByLabelText('Memo body'));
   await act(async () => {
     fireEvent(editor, 'blur');
   });
@@ -394,18 +392,86 @@ test('editing a captured memo longer than the creation cap preserves its full bo
 
   const screen = await renderDetail();
   await act(async () => {
-    fireEvent.press(await waitFor(() => screen.getByText('Edit Markdown')));
+    fireEvent.press(await waitFor(() => screen.getByLabelText('Edit Content')));
   });
-  const editor = await waitFor(() => screen.getByLabelText('Markdown memo body'));
+  const editor = await waitFor(() => screen.getByLabelText('Memo body'));
   await act(async () => {
     fireEvent.changeText(editor, editedBody);
   });
-  await waitFor(() => expect(screen.getByLabelText('Markdown memo body').props.value).toBe(editedBody));
+  await waitFor(() => expect(screen.getByLabelText('Memo body').props.value).toBe(editedBody));
   await act(async () => {
     fireEvent(editor, 'blur');
   });
 
   await waitFor(() => expect(fakeRepo.__bookmarks()[0]?.description).toBe(editedBody));
+});
+
+test('format-only changes preserve long notes and keep memo body and note formats independent', async () => {
+  mockRouteId = SYNCED_ID;
+  const body = '    body code\n\n# Body\n';
+  const notes = `    ${'x'.repeat(10_001)}\n\n# Note\n`;
+  fakeRepo.__reset([makeStoredBookmark({
+    id: SYNCED_ID, url: null, url_hash: null, content_type: 'text',
+    description: body, notes,
+  })]);
+  const screen = await renderDetail();
+  await fireEvent.press(await screen.findByLabelText('Format for Note'));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Markdown' }));
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
+    description: body, notes, notes_format: 'markdown',
+  }));
+  await fireEvent.press(screen.getByLabelText('Format for Content'));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Plain text' }));
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
+    description: body, description_format: 'plain', notes, notes_format: 'markdown',
+  }));
+  expect(screen.getByText(body).props.selectable).toBe(true);
+});
+
+test('closing detail saves both latest drafts and formats without relying on blur', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([makeStoredBookmark({
+    id: SYNCED_ID, url: null, url_hash: null, content_type: 'text',
+    description: '# Old body', notes: 'Old note',
+  })]);
+  function DetailWhileOpen() {
+    const [open, setOpen] = useState(true);
+    return open ? <BookmarkDetailScreen inlineId={SYNCED_ID} onInlineClose={() => setOpen(false)} /> : null;
+  }
+  const screen = await render(
+    <BookmarksProvider><CaptureToastProvider><DetailWhileOpen /></CaptureToastProvider></BookmarksProvider>,
+  );
+  await fireEvent.press(await screen.findByLabelText('Edit Content'));
+  await fireEvent.press(screen.getByLabelText('Format for Content'));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Plain text' }));
+  await fireEvent.changeText(screen.getByLabelText('Memo body'), '  # Latest body\n');
+  await fireEvent.press(screen.getByLabelText('Edit Note'));
+  await fireEvent.press(screen.getByLabelText('Format for Note'));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Markdown' }));
+  await fireEvent.changeText(screen.getByLabelText('Notes'), '    latest note\n');
+  await fireEvent.press(screen.getByLabelText('Close'));
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
+    description: '  # Latest body\n', description_format: 'plain',
+    notes: '    latest note\n', notes_format: 'markdown',
+  }));
+});
+
+test('a bookmark note preserves its draft through blur, format menu, preview, and Done', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, notes: 'Before' })]);
+  const screen = await renderDetail();
+  await fireEvent.press(await screen.findByLabelText('Edit Note'));
+  const source = '    new code\n\n# Keep this draft\n';
+  await fireEvent.changeText(screen.getByLabelText('Notes'), source);
+  await fireEvent(screen.getByLabelText('Notes'), 'blur');
+  await fireEvent.press(screen.getByLabelText('Format for Note'));
+  await fireEvent.press(screen.getByRole('radio', { name: 'Markdown' }));
+  await fireEvent.press(screen.getByRole('tab', { name: 'Preview' }));
+  expect(screen.getByText(source)).toBeTruthy();
+  await fireEvent.press(screen.getByRole('tab', { name: 'Write' }));
+  expect(screen.getByLabelText('Notes').props.value).toBe(source);
+  await fireEvent.press(screen.getByLabelText('Finish editing Note'));
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({ notes: source, notes_format: 'markdown' }));
 });
 
 test('a very long title collapses behind a Show more toggle', async () => {
@@ -682,7 +748,7 @@ test('the summary "Use as note" fills an empty note', async () => {
 
   // The note now holds the summary text, and the proposed-summary block is gone.
   await waitFor(() =>
-    expect(screen.getByLabelText('Notes').props.value).toBe('A concise overview of the article.'),
+    expect(screen.getByText('A concise overview of the article.')).toBeTruthy(),
   );
   expect(screen.queryByLabelText('Use the suggested summary as your note')).toBeNull();
 });
@@ -712,27 +778,21 @@ test('the summary "Add to note" appends without overwriting existing text', asyn
 
   // The user's original text is preserved and the summary is appended below it.
   await waitFor(() =>
-    expect(screen.getByLabelText('Notes').props.value).toBe('My own thoughts.\n\nAn AI overview.'),
+    expect(screen.getByText('My own thoughts.\n\nAn AI overview.')).toBeTruthy(),
   );
 });
 
-test('the note field is a borderless prompt when empty and contained when it has text', async () => {
+test('an empty note opens the editor on one tap and Done returns to selectable reading', async () => {
   mockRouteId = SYNCED_ID;
-
-  // Empty note: labeled section, but the box has no fill/border — a light prompt.
   fakeRepo.__reset([makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', notes: null })]);
-  let screen = await renderDetail();
-  expect(screen.getByText('Note')).toBeTruthy();
-  let box = screen.getByLabelText('Notes').parent;
-  expect(StyleSheet.flatten(box?.props.style).backgroundColor).toBe('transparent');
-
-  // A note with text: the box gains its elevated fill so the content feels held.
-  fakeRepo.__reset([
-    makeStoredBookmark({ id: SYNCED_ID, title: 'A synced bookmark', notes: 'My own thoughts.' }),
-  ]);
-  screen = await renderDetail();
-  box = screen.getByLabelText('Notes').parent;
-  expect(StyleSheet.flatten(box?.props.style).backgroundColor).not.toBe('transparent');
+  const screen = await renderDetail();
+  expect(screen.queryByLabelText('Notes')).toBeNull();
+  await fireEvent.press(await screen.findByLabelText('Add a note…'));
+  await fireEvent.changeText(screen.getByLabelText('Notes'), '# literal note');
+  await fireEvent.press(screen.getByLabelText('Finish editing Note'));
+  expect(screen.queryByLabelText('Notes')).toBeNull();
+  expect(screen.getByText('# literal note').props.selectable).toBe(true);
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0]?.notes).toBe('# literal note'));
 });
 
 test('dismissing the summary hides it durably and never touches the note', async () => {
@@ -758,7 +818,7 @@ test('dismissing the summary hides it durably and never touches the note', async
   // The block is gone, the note is untouched, and the decision is persisted so a
   // re-open (or an identical re-pull) won't re-surface it.
   expect(screen.queryByText('A summary to dismiss.')).toBeNull();
-  expect(screen.getByLabelText('Notes').props.value).toBe('Untouched.');
+  expect(screen.getByText('Untouched.').props.selectable).toBe(true);
   await waitFor(() => {
     const bookmark = fakeRepo.__bookmarks().find((b) => b.id === SYNCED_ID);
     expect(bookmark?.reviewed_summary_tokens).toContain(summaryToken('A summary to dismiss.')!);

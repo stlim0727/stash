@@ -11,6 +11,7 @@ import type {
   SuggestedTag,
   Tag,
   TagSource,
+  TextFormat,
 } from '@/domain/types';
 import type { AiServerQueueSnapshot } from '@/domain/processing-status';
 import { createSupabaseClient, SupabaseRequestError } from '@/supabase/client';
@@ -72,6 +73,8 @@ export interface UpdateBookmarkInput {
   title?: string | null;
   description?: string | null;
   notes?: string | null;
+  description_format?: TextFormat | null;
+  notes_format?: TextFormat | null;
   collection_id?: string | null;
   is_archived?: boolean;
   deleted_at?: string | null;
@@ -389,7 +392,7 @@ export class BookmarkApi {
     const timestamp = nowIso();
     const title = input.title?.trim() || null;
     const description = descriptionFromInput(input);
-    const notes = input.notes?.trim() || null;
+    const notes = input.notes?.length ? input.notes : null;
     const sourceApp = input.source_app?.trim() || null;
     const siteName = input.site_name?.trim() || null;
     const faviconUrl = input.favicon_url?.trim() || null;
@@ -427,9 +430,14 @@ export class BookmarkApi {
       // genuinely different save (e.g. another device saved the same URL
       // since the last pull), and patching its description with this
       // request's payload would corrupt an unrelated row.
-      const isOwnRetry = !existingByUrl && existing.client_id === clientId;
+      const isOwnRetry = clientId !== null && existing.client_id === clientId;
       await this.updateBookmark(existing.id, {
-        ...(isOwnRetry ? { description: description ?? undefined } : {}),
+        ...(isOwnRetry ? {
+          description: description ?? undefined,
+          notes: input.notes === undefined ? undefined : notes,
+          description_format: input.description_format,
+          notes_format: input.notes_format,
+        } : {}),
         last_saved_at: timestamp,
       });
       return {
@@ -451,6 +459,8 @@ export class BookmarkApi {
       client_id: clientId,
       title,
       description,
+      description_format: input.description_format,
+      notes_format: input.notes_format,
       notes,
       source_app: sourceApp,
       content_type: payload.contentType,
@@ -491,9 +501,14 @@ export class BookmarkApi {
           // above (see its comment) — the insert itself lost the race to
           // this request's own earlier attempt, so apply the same
           // client-id-proven refreshed description here too.
-          const isOwnRetry = !duplicateByUrl && duplicate.client_id === clientId;
+          const isOwnRetry = clientId !== null && duplicate.client_id === clientId;
           await this.updateBookmark(duplicate.id, {
-            ...(isOwnRetry ? { description: description ?? undefined } : {}),
+            ...(isOwnRetry ? {
+              description: description ?? undefined,
+              notes: input.notes === undefined ? undefined : notes,
+              description_format: input.description_format,
+              notes_format: input.notes_format,
+            } : {}),
             last_saved_at: timestamp,
           });
           return {
@@ -528,7 +543,7 @@ export class BookmarkApi {
       const payload = requirePayload(input);
       const title = input.title?.trim() || null;
       const description = descriptionFromInput(input);
-      const notes = input.notes?.trim() || null;
+      const notes = input.notes?.length ? input.notes : null;
       const sourceApp = input.source_app?.trim() || null;
       const siteName = input.site_name?.trim() || null;
       const faviconUrl = input.favicon_url?.trim() || null;
@@ -551,6 +566,8 @@ export class BookmarkApi {
           client_id: clientId,
           title,
           description,
+          description_format: input.description_format,
+          notes_format: input.notes_format,
           notes,
           source_app: sourceApp,
           content_type: payload.contentType,
@@ -585,7 +602,7 @@ export class BookmarkApi {
     // single-entry createBookmark handles. Track a refreshed description
     // per duplicate so it can be pushed individually below instead of
     // discarded along with the shared last_saved_at-only bump.
-    const duplicateDescriptionUpdates = new Map<string, string>();
+    const duplicateContentUpdates = new Map<string, UpdateBookmarkInput>();
     const pendingByKey = new Map<string, number>();
     const duplicateIndexesByInsertIndex = new Map<number, number[]>();
     const inserts: Array<{ index: number; body: (typeof prepared)[number]['body'] }> = [];
@@ -600,9 +617,15 @@ export class BookmarkApi {
         // save (another device saved the same URL since the last pull), and
         // patching its description with this request's payload would
         // corrupt an unrelated row.
-        const isOwnRetry = !existingByUrl && existing.client_id === item.clientId;
-        if (isOwnRetry && item.body.description !== null) {
-          duplicateDescriptionUpdates.set(existing.id, item.body.description);
+        const isOwnRetry = item.clientId !== null && existing.client_id === item.clientId;
+        if (isOwnRetry && (item.body.description !== null || inputs[index].notes !== undefined ||
+          item.body.description_format !== undefined || item.body.notes_format !== undefined)) {
+          duplicateContentUpdates.set(existing.id, {
+            description: item.body.description ?? undefined,
+            notes: inputs[index].notes === undefined ? undefined : item.body.notes,
+            description_format: item.body.description_format,
+            notes_format: item.body.notes_format,
+          });
         }
         outputs[index] = {
           bookmark_id: existing.id,
@@ -633,11 +656,11 @@ export class BookmarkApi {
       // individually, and batch the rest (the common case: a plain
       // duplicate with nothing new to say) through the cheap shared bump.
       const idsNeedingOnlyTimestamp = [...duplicateIds].filter(
-        (id) => !duplicateDescriptionUpdates.has(id),
+        (id) => !duplicateContentUpdates.has(id),
       );
       await Promise.all([
-        ...[...duplicateDescriptionUpdates].map(([id, description]) =>
-          this.updateBookmark(id, { description, last_saved_at: timestamp }),
+        ...[...duplicateContentUpdates].map(([id, content]) =>
+          this.updateBookmark(id, { ...content, last_saved_at: timestamp }),
         ),
         idsNeedingOnlyTimestamp.length > 0
           ? this.updateLastSavedAt(idsNeedingOnlyTimestamp, timestamp)

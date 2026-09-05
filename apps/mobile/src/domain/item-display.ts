@@ -1,5 +1,5 @@
 import { hostFromUrl } from '@/domain/item-icon';
-import { markdownLabel, markdownToPlainText } from '@/domain/markdown';
+import { memoBodyFormat, memoBodyLabel, textForDisplay } from '@/domain/text-format';
 import type { Bookmark } from '@/domain/types';
 
 /**
@@ -12,7 +12,7 @@ import type { Bookmark } from '@/domain/types';
  * the calling screen.
  */
 export function displayTitle(
-  bookmark: Pick<Bookmark, 'title' | 'url' | 'description'>,
+  bookmark: Pick<Bookmark, 'title' | 'url' | 'description' | 'description_format'>,
 ): string | null {
   const title = bookmark.title?.trim();
   if (title) {
@@ -21,7 +21,7 @@ export function displayTitle(
   if (bookmark.url) {
     return bookmark.url;
   }
-  return markdownLabel(bookmark.description ?? '');
+  return memoBodyLabel(bookmark);
 }
 
 /**
@@ -51,7 +51,7 @@ export function isTitleDerived(
  * Pure and dependency-free (aside from the host parser) so it is unit-testable.
  */
 export function accessibilityTitle(
-  bookmark: Pick<Bookmark, 'title' | 'url' | 'description'>,
+  bookmark: Pick<Bookmark, 'title' | 'url' | 'description' | 'description_format'>,
 ): string | null {
   const title = bookmark.title?.trim();
   if (title) {
@@ -64,7 +64,7 @@ export function accessibilityTitle(
   if (bookmark.url) {
     return truncateForSpeech(bookmark.url);
   }
-  const description = markdownToPlainText(bookmark.description ?? '');
+  const description = textForDisplay(bookmark.description, memoBodyFormat(bookmark));
   return description ? truncateForSpeech(description) : null;
 }
 

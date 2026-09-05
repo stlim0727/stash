@@ -21,6 +21,8 @@ Stores saved URLs and shared content.
 | title | text | User-visible title. |
 | description | text | Page description or user-provided description. |
 | notes | text | User-authored private notes. |
+| description_format | text, nullable | `plain` or `markdown` for a URL-less memo body. Null/absent preserves legacy Markdown rendering; newly captured memos explicitly default to `plain`. |
+| notes_format | text, nullable | `plain` or `markdown` for private notes on any bookmark. Null/absent preserves plain text. Both format fields sync and round-trip through JSON backups. |
 | source_app | text | Source app or share provider when available. |
 | content_type | text | `url`, `article`, `image`, `video`, `text`, or `unknown`. |
 | preview_image_url | text | Optional rich preview image. |

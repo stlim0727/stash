@@ -40,6 +40,7 @@ import type {
   MetadataStatus,
   SuggestedTag,
   Tag,
+  TextFormat,
 } from "@/domain/types";
 import { sanitizeTagData } from "@/domain/tag-data";
 import { tagSlug } from "@/domain/tag-input";
@@ -278,6 +279,8 @@ interface BookmarksContextValue {
     url?: string;
     title?: string;
     notes?: string;
+    description_format?: TextFormat;
+    notes_format?: TextFormat;
     /** Shared text with no usable URL — saved as a text note. */
     shared_text?: string;
     /** A shared image to capture as an image bookmark (local-only for now). */
@@ -311,7 +314,7 @@ interface BookmarksContextValue {
   /** Edit user-authored text. Local-first; empty strings clear the field. */
   updateBookmarkFields: (
     id: string,
-    fields: { title?: string; notes?: string; description?: string },
+    fields: { title?: string; notes?: string; description?: string; description_format?: TextFormat; notes_format?: TextFormat },
   ) => void;
   /**
    * Record that the user opened a bookmark (viewed Detail or opened its link),
@@ -2525,12 +2528,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       url,
       title,
       notes,
+      description_format = "plain",
+      notes_format = "plain",
       shared_text,
       image,
     }: {
       url?: string;
       title?: string;
       notes?: string;
+      description_format?: TextFormat;
+      notes_format?: TextFormat;
       shared_text?: string;
       image?: SharedImage;
     }): AddBookmarkResult => {
@@ -2569,7 +2576,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             : imageTitleFromFileName(image.fileName),
           title_is_derived: title?.trim() ? false : undefined,
           description: null,
-          notes: notes?.trim() ? notes.trim() : null,
+          notes: notes?.length ? notes : null,
+          description_format,
+          notes_format,
           source_app: null,
           content_type: "image",
           preview_image_url: null,
@@ -2607,6 +2616,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             content_type: "image",
             title: imageBookmark.title ?? undefined,
             notes: imageBookmark.notes ?? undefined,
+            description_format: imageBookmark.description_format,
+            notes_format: imageBookmark.notes_format,
             client_id: imageClientId,
           },
           sync_status: "pending",
@@ -2729,7 +2740,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // mirror the cloud API (which maps shared_text → description), so a
           // pulled-back note matches the locally captured one.
           description: text,
-          notes: notes?.trim() ? notes.trim() : null,
+          notes: notes?.length ? notes : null,
+          description_format,
+          notes_format,
           source_app: null,
           content_type: "text",
           preview_image_url: null,
@@ -2753,6 +2766,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             id: note.id,
             title: note.title ?? undefined,
             notes: note.notes ?? undefined,
+            description_format: note.description_format,
+            notes_format: note.notes_format,
             shared_text: text,
             client_id: noteClientId,
           },
@@ -2839,7 +2854,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         title: title?.trim() ? title.trim() : null,
         title_is_derived: title?.trim() ? false : undefined,
         description: null,
-        notes: notes?.trim() ? notes.trim() : null,
+        notes: notes?.length ? notes : null,
+        description_format,
+        notes_format,
         source_app: null,
         content_type: "url",
         preview_image_url: null,
@@ -2864,6 +2881,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           url: normalized,
           title: bookmark.title ?? undefined,
           notes: bookmark.notes ?? undefined,
+          description_format: bookmark.description_format,
+          notes_format: bookmark.notes_format,
           client_id: clientId,
         },
         sync_status: "pending",
@@ -3031,7 +3050,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ? backupDedupeClientId
                 : makeClientId();
             const title = item.title?.trim() ? item.title.trim() : null;
-            const notes = item.notes?.trim() ? item.notes.trim() : null;
+            const notes = item.notes?.length ? item.notes : null;
             const itemCreatedAt = item.createdAt ?? now;
             const restoredBookmark: Bookmark = {
               id,
@@ -3043,6 +3062,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               title_is_derived: title ? false : undefined,
               client_id: clientId,
               description: memoBody,
+              description_format: item.description_format,
+              notes_format: item.notes_format,
               notes,
               source_app: null,
               content_type: "text",
@@ -3074,6 +3095,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 shared_text: memoBody ?? undefined,
                 title: title ?? undefined,
                 notes: notes ?? undefined,
+                description_format: item.description_format,
+                notes_format: item.notes_format,
                 content_type: "text",
                 client_id: clientId,
                 metadata_status: "skipped",
@@ -3160,7 +3183,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (isNew) {
           const clientId = makeClientId();
           const title = item.title?.trim() ? item.title.trim() : null;
-          const notes = item.notes?.trim() ? item.notes.trim() : null;
+          const notes = item.notes?.length ? item.notes : null;
           const itemCreatedAt = item.createdAt ?? now;
           // #671: a Stash JSON backup restore carries its own generated
           // metadata snapshot (parseJsonBackup, #678) — restore it losslessly
@@ -3190,6 +3213,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             title_is_derived: title ? false : undefined,
             client_id: clientId,
             description,
+            description_format: item.description_format,
+            notes_format: item.notes_format,
             notes,
             source_app: null,
             content_type: "url",
@@ -3214,6 +3239,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               url: normalized,
               title: title ?? undefined,
               notes: notes ?? undefined,
+              description_format: item.description_format,
+              notes_format: item.notes_format,
               client_id: clientId,
               description: description ?? undefined,
               preview_image_url: previewImageUrl,
@@ -3540,7 +3567,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const updateBookmarkFields = useCallback(
     (
       id: string,
-      fields: { title?: string; notes?: string; description?: string },
+      fields: { title?: string; notes?: string; description?: string; description_format?: TextFormat; notes_format?: TextFormat },
     ) => {
       const before = bookmarksRef.current?.find(
         (bookmark) => bookmark.id === id,
@@ -3551,13 +3578,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         patch.title_is_derived = patch.title === null ? undefined : false;
       }
       if (fields.notes !== undefined) {
-        patch.notes = fields.notes.trim() || null;
+        patch.notes = fields.notes.length ? fields.notes : null;
       }
       if (fields.description !== undefined) {
-        // Test emptiness on a trimmed copy, but persist the original body —
-        // leading whitespace is meaningful Markdown (e.g. an indented code
-        // block), so editing a memo must not silently rewrite it.
-        patch.description = fields.description.trim() ? fields.description : null;
+        // Preserve authored whitespace in both formats, including code indentation.
+        patch.description = fields.description.length ? fields.description : null;
+      }
+      if (fields.description_format !== undefined) {
+        patch.description_format = fields.description_format;
+      }
+      if (fields.notes_format !== undefined) {
+        patch.notes_format = fields.notes_format;
       }
       // Only stale on a real change to user-editable text; a no-op save (or a
       // collection/archive change, which never routes through here) must not.

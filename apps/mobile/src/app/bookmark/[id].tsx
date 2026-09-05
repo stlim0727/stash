@@ -30,7 +30,9 @@ import { usePalette } from '@/theme';
 import { Card } from '@/ui/Card';
 import { CollectionPicker } from '@/ui/CollectionPicker';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
-import { MarkdownBody } from '@/ui/MarkdownBody';
+import { MemoEditor, type MemoDraft } from '@/ui/MemoEditor';
+import { memoBodyFormat, notesFormat } from '@/domain/text-format';
+import type { TextFormat } from '@/domain/types';
 import { SuggestionSkeleton } from '@/ui/SuggestionSkeleton';
 import { TagField } from '@/ui/TagField';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -123,10 +125,8 @@ export default function BookmarkDetailScreen({
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   // null = not editing; a string = the in-progress draft (auto-saved on blur).
   const [draftTitle, setDraftTitle] = useState<string | null>(null);
-  const [draftNotes, setDraftNotes] = useState<string | null>(null);
-  const [draftDescription, setDraftDescription] = useState<string | null>(null);
-  const [memoEditing, setMemoEditing] = useState(false);
-  const [notesFocused, setNotesFocused] = useState(false);
+  const [draftNotes, setDraftNotes] = useState<MemoDraft | null>(null);
+  const [draftDescription, setDraftDescription] = useState<MemoDraft | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   // Long titles (e.g. a full Instagram caption pasted as the title) are
   // collapsed to a few lines with a "Show more" toggle so they don't push the
@@ -140,8 +140,8 @@ export default function BookmarkDetailScreen({
   // button, which unmounts before a TextInput's onBlur fires. Refs hold the
   // latest values; the unmount effect flushes them to the store (no setState).
   const draftTitleRef = useRef<string | null>(null);
-  const draftNotesRef = useRef<string | null>(null);
-  const draftDescriptionRef = useRef<string | null>(null);
+  const draftNotesRef = useRef<MemoDraft | null>(null);
+  const draftDescriptionRef = useRef<MemoDraft | null>(null);
   draftTitleRef.current = draftTitle;
   draftNotesRef.current = draftNotes;
   draftDescriptionRef.current = draftDescription;
@@ -156,26 +156,21 @@ export default function BookmarkDetailScreen({
     };
   }, []);
 
-  // On web a multiline TextInput renders as a fixed-height <textarea> that
-  // scrolls instead of growing (native auto-grows on its own). Size the notes
-  // field to its content on every render so the whole memo is visible without an
-  // inner scrollbar. No-op on native, where the field already grows.
-  const notesRef = useRef<TextInput | null>(null);
-  useEffect(() => {
-    if (Platform.OS !== 'web') {
-      return;
-    }
-    const node = notesRef.current as unknown as HTMLTextAreaElement | null;
-    if (!node || !('style' in node)) {
-      return;
-    }
-    node.style.height = 'auto';
-    node.style.height = `${node.scrollHeight}px`;
-  });
-
   const id = inlineId ?? routeId;
   const inline = inlineId !== undefined;
   const bookmark = id ? getBookmark(id) : undefined;
+  // Retain drafts through blur/menu/preview events until the store confirms
+  // the same source and format. A later external update can then show normally.
+  useEffect(() => {
+    if (bookmark && draftNotes && draftNotes.value === (bookmark.notes ?? '') && draftNotes.format === notesFormat(bookmark)) {
+      setDraftNotes(null);
+      draftNotesRef.current = null;
+    }
+    if (bookmark && draftDescription && draftDescription.value === (bookmark.description ?? '') && draftDescription.format === memoBodyFormat(bookmark)) {
+      setDraftDescription(null);
+      draftDescriptionRef.current = null;
+    }
+  }, [bookmark, draftNotes, draftDescription]);
   const isTextMemo = bookmark?.content_type === 'text' && !bookmark.url;
   const syncQueueEntry = bookmark
     ? queue.find((entry) => entry.local_id === bookmark.id)
@@ -280,17 +275,19 @@ export default function BookmarkDetailScreen({
     const dt = draftTitleRef.current;
     const dn = draftNotesRef.current;
     const dd = draftDescriptionRef.current;
-    const fields: { title?: string; notes?: string; description?: string } = {};
+    const fields: { title?: string; notes?: string; description?: string; notes_format?: TextFormat; description_format?: TextFormat } = {};
     if (dt !== null && dt.trim() !== (bookmark.title ?? '')) {
       fields.title = dt.trim();
     }
-    if (dn !== null && dn !== (bookmark.notes ?? '')) {
-      fields.notes = dn;
+    if (dn !== null && (dn.value !== (bookmark.notes ?? '') || dn.format !== notesFormat(bookmark))) {
+      fields.notes = dn.value;
+      fields.notes_format = dn.format;
     }
     // Compare the raw draft against the raw stored description — see the
     // same fix in commitDescription below.
-    if (dd !== null && dd !== (bookmark.description ?? '')) {
-      fields.description = dd;
+    if (dd !== null && (dd.value !== (bookmark.description ?? '') || dd.format !== memoBodyFormat(bookmark))) {
+      fields.description = dd.value;
+      fields.description_format = dd.format;
     }
     if (
       fields.title !== undefined ||
@@ -479,17 +476,19 @@ export default function BookmarkDetailScreen({
     !aiWorking &&
     (showAiReport || enrichment.degraded_reason === 'rate_limited');
 
-  const notesValue = draftNotes ?? bookmark.notes ?? '';
-  const memoValue = draftDescription ?? bookmark.description ?? '';
-  const notesLength = notesValue.length;
-  // 10k chars is generous ( ~2 printed pages) while preventing UI breakage or
-  // sync bloat. Matches the truncation warning shown below.
-  const MAX_NOTES_LENGTH = 10000;
-  const notesTooLong = notesLength > MAX_NOTES_LENGTH;
+  const notesValue = draftNotes?.value ?? bookmark.notes ?? '';
+  const memoValue = draftDescription?.value ?? bookmark.description ?? '';
+  const currentNotesFormat = draftNotes?.format ?? notesFormat(bookmark);
+  const currentMemoFormat = draftDescription?.format ?? memoBodyFormat(bookmark);
 
-  // Show the contained (bordered/elevated) treatment only when there's a note to
-  // hold or the user is editing; otherwise render a light borderless prompt.
-  const notesFilled = notesValue.trim() !== '' || notesFocused;
+  const changeNotes = (draft: MemoDraft) => {
+    draftNotesRef.current = draft;
+    setDraftNotes(draft);
+  };
+  const changeDescription = (draft: MemoDraft) => {
+    draftDescriptionRef.current = draft;
+    setDraftDescription(draft);
+  };
 
   // Auto-save on blur: edit in place, no explicit "Save" button.
   const commitTitle = () => {
@@ -499,30 +498,18 @@ export default function BookmarkDetailScreen({
     }
     setDraftTitle(null);
   };
-  const commitNotes = () => {
-    if (draftNotes !== null && draftNotes !== (bookmark.notes ?? '')) {
-      // Truncate on save for STASH-1J (prevents DB bloat / sync issues on very
-      // long input). The UI warning already nudges the user; this is a safety.
-      const safeNotes = draftNotes.length > MAX_NOTES_LENGTH
-        ? draftNotes.slice(0, MAX_NOTES_LENGTH)
-        : draftNotes;
-      updateBookmarkFields(bookmark.id, { notes: safeNotes });
+  const commitNotes = (draft: MemoDraft) => {
+    if (draft.value !== (bookmark.notes ?? '') || draft.format !== notesFormat(bookmark)) {
+      updateBookmarkFields(bookmark.id, { notes: draft.value, notes_format: draft.format });
     }
-    setDraftNotes(null);
   };
-  const commitDescription = () => {
-    // Compare the raw draft against the raw stored description — trimming
-    // either side here would make merely entering and leaving Edit report a
-    // change for a memo with meaningful leading/trailing whitespace (e.g. an
-    // indented code block), enqueuing a no-op sync.
-    if (draftDescription !== null && draftDescription !== (bookmark.description ?? '')) {
+  const commitDescription = (draft: MemoDraft) => {
+    if (draft.value !== (bookmark.description ?? '') || draft.format !== memoBodyFormat(bookmark)) {
       updateBookmarkFields(bookmark.id, {
-        // Existing captures/backups can predate the editor's creation cap.
-        // Never truncate that user-authored source merely because it was edited.
-        description: draftDescription,
+        description: draft.value,
+        description_format: draft.format,
       });
     }
-    setDraftDescription(null);
   };
 
   // One tidy "Details" section instead of a card per field. Only rows with a
@@ -731,21 +718,17 @@ export default function BookmarkDetailScreen({
   // never poured into the note field silently — it lands only when the user taps
   // here. An empty note is filled; a note with text is *appended* to (never
   // overwritten), so the action stays live and non-destructive. `notesValue`
-  // already folds in any in-progress draft, so we build on the latest text and
-  // clear the draft (the store write supersedes it).
+  // already folds in any in-progress draft, so we build on the latest source
+  // and keep its selected format.
   const handleUseSummary = () => {
     const summary = enrichment?.summary?.trim();
     if (!summary) {
       return;
     }
-    const nextNotes = notesValue.trim() === '' ? summary : `${notesValue}\n\n${summary}`;
-    // Truncate the combined result (STASH-1J safety net). ProposedSummary is
-    // non-destructive, but long summaries + existing notes could still exceed.
-    const safeNotes = nextNotes.length > MAX_NOTES_LENGTH
-      ? nextNotes.slice(0, MAX_NOTES_LENGTH)
-      : nextNotes;
-    updateBookmarkFields(bookmark.id, { notes: safeNotes });
-    setDraftNotes(null);
+    const nextNotes = notesValue === '' ? summary : `${notesValue}\n\n${summary}`;
+    const nextDraft = { value: nextNotes, format: currentNotesFormat };
+    changeNotes(nextDraft);
+    commitNotes(nextDraft);
     // Durable: don't re-surface an identical summary we've already used.
     if (summaryTok) {
       markSummaryReviewed(bookmark.id, summaryTok);
@@ -1123,136 +1106,29 @@ export default function BookmarkDetailScreen({
         )}
       </View>
 
-      {/* Notes — a labeled section (the header names the field, so the box no
-          longer needs a pencil glyph to avoid reading as a divider). Empty and
-          unfocused, it's a light borderless prompt so a note-less bookmark
-          doesn't show a big empty form; once it has text or focus, it becomes an
-          elevated bordered box that grows with the content. */}
       {isTextMemo ? (
-        <View style={styles.memoBlock}>
-          <View style={styles.memoHeader}>
-            <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-              {t('detail.memoContentLabel')}
-            </Text>
-            <View
-              style={[
-                styles.memoModeSwitch,
-                { backgroundColor: palette.surface, borderColor: palette.border },
-              ]}
-            >
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ selected: !memoEditing }}
-                onPress={() => {
-                  commitDescription();
-                  setMemoEditing(false);
-                }}
-                style={[
-                  styles.memoModeButton,
-                  !memoEditing && { backgroundColor: palette.accentSoft },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.memoModeLabel,
-                    { color: !memoEditing ? palette.accent : palette.textSecondary },
-                  ]}
-                >
-                  {t('detail.memoPreview')}
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ selected: memoEditing }}
-                onPress={() => {
-                  if (!memoEditing) {
-                    setDraftDescription(bookmark.description ?? '');
-                  }
-                  setMemoEditing(true);
-                }}
-                style={[
-                  styles.memoModeButton,
-                  memoEditing && { backgroundColor: palette.accentSoft },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.memoModeLabel,
-                    { color: memoEditing ? palette.accent : palette.textSecondary },
-                  ]}
-                >
-                  {t('detail.memoEdit')}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-          {memoEditing ? (
-            <TextInput
-              accessibilityLabel={t('detail.memoBodyA11y')}
-              autoFocus
-              multiline
-              maxLength={MAX_MEMO_LENGTH}
-              placeholder={t('detail.memoBodyPlaceholder')}
-              placeholderTextColor={palette.textSecondary}
-              scrollEnabled
-              style={[
-                styles.memoInput,
-                {
-                  backgroundColor: palette.surfaceElevated,
-                  borderColor: palette.border,
-                  color: palette.text,
-                },
-              ]}
-              value={memoValue}
-              onChangeText={setDraftDescription}
-              onBlur={commitDescription}
-            />
-          ) : (
-            <Card elevated={false} style={styles.memoPreview}>
-              <MarkdownBody markdown={bookmark.description ?? ''} />
-            </Card>
-          )}
-        </View>
+        <MemoEditor
+          key={`body-${bookmark.id}`}
+          label={t('detail.memoContentLabel')}
+          accessibilityLabel={t('detail.memoBodyA11y')}
+          placeholder={t('detail.memoBodyPlaceholder')}
+          value={memoValue}
+          format={currentMemoFormat}
+          maxLength={MAX_MEMO_LENGTH}
+          onChange={changeDescription}
+          onCommit={commitDescription}
+        />
       ) : null}
-
-      <View style={styles.notesBlock}>
-        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
-          {t('detail.notesLabel')}
-        </Text>
-        <View
-          style={[
-            styles.notesBox,
-            notesFilled
-              ? { backgroundColor: palette.surfaceElevated, borderColor: palette.border }
-              : styles.notesBoxEmpty,
-            notesTooLong && { borderColor: palette.danger },
-          ]}
-        >
-          <TextInput
-            ref={notesRef}
-            accessibilityLabel={t('detail.notesA11y')}
-            style={[styles.notesInput, { color: palette.text }]}
-            placeholder={t('detail.notesPlaceholder')}
-            placeholderTextColor={palette.textSecondary}
-            multiline
-            maxLength={MAX_NOTES_LENGTH}
-            value={notesValue}
-            onChangeText={setDraftNotes}
-            onFocus={() => setNotesFocused(true)}
-            onBlur={() => {
-              setNotesFocused(false);
-              commitNotes();
-            }}
-            // Explicit scroll for the bounded maxHeight (native + web).
-            scrollEnabled
-          />
-          {notesTooLong && (
-            <Text style={[styles.error, { color: palette.danger, paddingTop: 4 }]}>
-              {t('detail.notesTooLong', { count: notesLength, max: MAX_NOTES_LENGTH })}
-            </Text>
-          )}
-        </View>
-      </View>
+      <MemoEditor
+        key={`notes-${bookmark.id}`}
+        label={t('detail.notesLabel')}
+        accessibilityLabel={t('detail.notesA11y')}
+        placeholder={t('detail.notesPlaceholder')}
+        value={notesValue}
+        format={currentNotesFormat}
+        onChange={changeNotes}
+        onCommit={commitNotes}
+      />
 
       {/* The AI summary is proposed as a note here — in its own clearly-labeled
           dashed ghost block, never poured into the field above — so it can't be
@@ -1787,46 +1663,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  memoBlock: {
-    gap: 10,
-  },
-  memoHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  memoModeSwitch: {
-    flexDirection: 'row',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    padding: 2,
-    gap: 2,
-  },
-  memoModeButton: {
-    minHeight: 32,
-    justifyContent: 'center',
-    borderRadius: 9,
-    paddingHorizontal: 10,
-  },
-  memoModeLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  memoPreview: {
-    borderRadius: 18,
-    padding: 18,
-  },
-  memoInput: {
-    minHeight: 220,
-    maxHeight: 420,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    padding: 16,
-    fontSize: 15,
-    lineHeight: 22,
-    textAlignVertical: 'top',
-  },
   folderSuggestionBlock: {
     gap: 6,
     marginTop: 2,
@@ -1908,41 +1744,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
     fontSize: 15,
-  },
-  notesBlock: {
-    gap: 6,
-  },
-  notesBox: {
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  // Empty & unfocused: no fill or border (a transparent border keeps the height
-  // steady when it flips to the contained state), flush left as a plain prompt.
-  notesBoxEmpty: {
-    backgroundColor: 'transparent',
-    borderColor: 'transparent',
-    paddingHorizontal: 0,
-  },
-  notesInput: {
-    fontSize: 15,
-    // Android shaves the tops of the first line of a top-aligned multiline
-    // TextInput when it sits flush to the content box: a small paddingTop gives
-    // the ascenders room, lineHeight guarantees vertical space regardless of the
-    // device font, and includeFontPadding:false keeps first-line placement
-    // consistent across Android fonts so it doesn't regress elsewhere.
-    lineHeight: 21,
-    includeFontPadding: false,
-    paddingTop: 2,
-    paddingBottom: 0,
-    paddingHorizontal: 0,
-    minHeight: 40,
-    // Bounded growth prevents very long memos (STASH-1J/1H) from pushing the
-    // entire Detail layout off-screen or breaking ScrollView/KeyboardAvoidingScreen.
-    // 8 lines (~170px) is generous for most notes; inner scroll appears for longer.
-    maxHeight: 170,
-    textAlignVertical: 'top',
   },
   error: {
     fontSize: 13,
