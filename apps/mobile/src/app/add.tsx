@@ -14,11 +14,13 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { parseCaptureParams } from '@/domain/web-capture';
+import type { TextFormat } from '@/domain/types';
 import { useT } from '@/i18n';
 import { usePalette } from '@/theme';
 import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { KeyboardAvoidingScreen } from '@/ui/KeyboardAvoidingScreen';
+import { MemoEditor } from '@/ui/MemoEditor';
 import { useCaptureToast } from '@/ui/capture-toast';
 import { useBookmarks } from '@/store/bookmarks';
 
@@ -46,6 +48,8 @@ export default function AddBookmarkScreen() {
   const [note, setNote] = useState('');
   const [memoTitle, setMemoTitle] = useState('');
   const [memoBody, setMemoBody] = useState('');
+  const [noteFormat, setNoteFormat] = useState<TextFormat>('plain');
+  const [memoFormat, setMemoFormat] = useState<TextFormat>('plain');
   const [error, setError] = useState<string | null>(null);
 
   // A capture intent passed via query params — the web counterpart of the
@@ -115,8 +119,8 @@ export default function AddBookmarkScreen() {
     }
     const result =
       mode === 'memo'
-        ? addBookmark({ title: memoTitle, shared_text: memoBody })
-        : addBookmark({ url, notes: note });
+        ? addBookmark({ title: memoTitle, shared_text: memoBody, description_format: memoFormat })
+        : addBookmark({ url, notes: note, notes_format: noteFormat });
     if (result.status === 'invalid') {
       setError(result.error);
       return;
@@ -191,18 +195,17 @@ export default function AddBookmarkScreen() {
               onSubmitEditing={handleSave}
             />
             {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
-            <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.noteLabel')}</Text>
-            <TextInput
-              style={[
-                styles.input,
-                styles.noteInput,
-                { backgroundColor: palette.card, color: palette.text },
-              ]}
+            <MemoEditor
+              label={t('add.noteLabel')}
+              accessibilityLabel={t('add.noteLabel')}
               placeholder={t('add.notePlaceholder')}
-              placeholderTextColor={palette.textSecondary}
-              multiline
               value={note}
-              onChangeText={setNote}
+              format={noteFormat}
+              alwaysEditing
+              onChange={({ value, format }) => {
+                setNote(value);
+                setNoteFormat(format);
+              }}
             />
           </>
         ) : (
@@ -216,24 +219,18 @@ export default function AddBookmarkScreen() {
               value={memoTitle}
               onChangeText={setMemoTitle}
             />
-            <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.memoBodyLabel')}</Text>
-            <TextInput
+            <MemoEditor
+              label={t('add.memoBodyLabel')}
               accessibilityLabel={t('add.memoBodyLabel')}
-              style={[
-                styles.input,
-                styles.memoInput,
-                { backgroundColor: palette.card, color: palette.text },
-              ]}
               placeholder={t('add.memoBodyPlaceholder')}
-              placeholderTextColor={palette.textSecondary}
-              autoCapitalize="sentences"
-              autoCorrect
               autoFocus
+              alwaysEditing
               maxLength={MAX_MEMO_LENGTH}
-              multiline
               value={memoBody}
-              onChangeText={(value) => {
+              format={memoFormat}
+              onChange={({ value, format }) => {
                 setMemoBody(value);
+                setMemoFormat(format);
                 if (error) {
                   setError(null);
                 }
@@ -387,14 +384,6 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 14,
     fontSize: 16,
-  },
-  noteInput: {
-    minHeight: 96,
-    textAlignVertical: 'top',
-  },
-  memoInput: {
-    minHeight: 180,
-    textAlignVertical: 'top',
   },
   error: {
     fontSize: 13,

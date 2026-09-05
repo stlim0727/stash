@@ -2506,3 +2506,38 @@ test('findStaleQueueEntries: a duplicate-swap re-queue under the NEW id does not
   );
   assert.deepEqual(stale, ['original-id']);
 });
+
+test('create and update carry current text formats, including edits made offline', async () => {
+  const { repository } = fakeRepository();
+  const latest = makeBookmark({ id: '00000000-0000-4000-8000-000000000001',
+    description_format: 'plain', notes_format: 'markdown', notes: '    raw\n' });
+  const sent: Array<Record<string, unknown>> = [];
+  const api = fakeApi({
+    createBookmark: async (input: CreateBookmarkInput) => {
+      sent.push({ ...input });
+      return { bookmark_id: latest.id, status: 'created', metadata_status: 'pending' };
+    },
+    updateBookmark: async (_id: string, input: Record<string, unknown>) => {
+      sent.push(input);
+      return latest;
+    },
+  });
+  await syncQueueEntry(api, repository, makeCreateEntry({ local_id: latest.id,
+    payload: { url: latest.url!, notes_format: 'plain' } }), () => latest);
+  await syncQueueEntry(api, repository, makeMutationEntry(latest.id, 'update'), () => latest);
+  for (const input of sent) {
+    assert.equal(input.description_format, 'plain');
+    assert.equal(input.notes_format, 'markdown');
+    assert.equal(input.notes, '    raw\n');
+  }
+  assert.equal(sent.length, 2);
+});
+
+test('a format-only change during create requires reconciliation and survives completion', () => {
+  const latest = makeBookmark({ description_format: 'plain', notes_format: 'markdown' });
+  const uploaded = { description_format: 'plain' as const, notes_format: 'plain' as const };
+  assert.equal(createNeedsReconcileUpdate(latest, uploaded), true);
+  const merged = mergeSyncedBookmarkFields(latest, makeBookmark({ notes_format: 'plain' }));
+  assert.equal(merged.notes_format, 'markdown');
+  assert.equal(createNeedsReconcileUpdate(latest, { ...uploaded, notes_format: 'markdown' }), false);
+});

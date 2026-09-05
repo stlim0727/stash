@@ -292,10 +292,17 @@ upload queue drains — local pending work always wins until uploaded.
 - ✅ Client-side search from the Inbox: case-insensitive over
   title/description/notes/URL; multiple terms AND together; live match count
   and a distinct "no matches" empty state.
-- ✅ Edit title and notes from Bookmark Detail: inline inputs with a "Save
-  changes" button when dirty. Local-first — saves apply immediately, persist,
-  and queue an update mutation for synced bookmarks; clearing a field stores
-  null (an emptied title becomes eligible for enrichment again).
+- ✅ Title edits save on blur. Memo bodies and personal notes share a selectable
+  reading view and an Edit action; an empty note opens for writing in one tap.
+  Edits save locally on blur, Done, or leaving Detail, and queue sync without
+  waiting for the network. Empty strings clear the field.
+- ✅ Each body/note independently selects Plain text or Markdown. New captures
+  default to Plain text; existing memo bodies remain Markdown and existing
+  personal notes remain Plain text. Only Markdown offers Write/Preview tabs.
+  Preview uses the current draft. Changing format never rewrites the source,
+  removes syntax, trims whitespace, or truncates an existing long note.
+- ✅ Format choices survive sync and JSON backup/restore. Plain-text memo titles,
+  Inbox previews, and search keep literal syntax instead of parsing it as Markdown.
 
 ## 13. Feedback / issue reporting
 

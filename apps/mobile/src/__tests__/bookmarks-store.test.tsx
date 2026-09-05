@@ -1186,3 +1186,36 @@ test("enriching a synced bookmark queues an update so metadata reaches the cloud
     expect(entry).toBeTruthy();
   });
 });
+
+test("text formats persist independently without changing authored whitespace", async () => {
+  const { result } = await renderStore();
+  await act(async () => {
+    const saved = result.current.addBookmark({ shared_text: "# Literal\n", notes: "    code\n" });
+    if (saved.status === "created") await saved.persisted;
+  });
+  const saved = fakeRepo.__bookmarks()[0]!;
+  expect(saved.description_format).toBe("plain");
+  expect(saved.notes_format).toBe("plain");
+  expect(saved.notes).toBe("    code\n");
+  await act(async () => {
+    result.current.updateBookmarkFields(saved.id, { notes_format: "markdown" });
+  });
+  await waitFor(() => expect(fakeRepo.__bookmarks()[0]?.notes_format).toBe("markdown"));
+  expect(fakeRepo.__bookmarks()[0]?.notes).toBe("    code\n");
+  expect(fakeRepo.__bookmarks()[0]?.description_format).toBe("plain");
+});
+
+test("JSON restore keeps plain body and Markdown personal notes in both row and create queue", async () => {
+  const { result } = await renderStore();
+  await act(async () => {
+    const imported = result.current.importBookmarks([{ source: "stash-backup", url: null,
+      title: "Restored", notes: "    code\n", description_format: "plain", notes_format: "markdown",
+      tags: [], collection: null, metadata: { description: "# Literal", raw_description: "# Literal\n",
+        preview_image_url: null, favicon_url: null, site_name: null, canonical_url: null, content_type: "text" } }]);
+  });
+  await waitFor(() => expect(fakeRepo.__bookmarks()).toHaveLength(1));
+  expect(fakeRepo.__bookmarks()[0]).toMatchObject({ description_format: "plain", notes_format: "markdown",
+    description: "# Literal\n", notes: "    code\n" });
+  expect(fakeRepo.__queue()[0]?.payload).toMatchObject({ description_format: "plain", notes_format: "markdown",
+    shared_text: "# Literal\n", notes: "    code\n" });
+});

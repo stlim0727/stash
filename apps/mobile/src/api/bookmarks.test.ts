@@ -354,6 +354,9 @@ test('createBookmark preserves leading/trailing whitespace in a Markdown memo bo
         assert.equal(options.method, 'POST');
         const body = options.body as Record<string, unknown>;
         assert.equal(body.description, '    indented code block\n');
+        assert.equal(body.description_format, 'plain');
+        assert.equal(body.notes_format, 'markdown');
+        assert.equal(body.notes, '    note code\n');
         return [
           remoteBookmark({
             id: 'b1',
@@ -371,6 +374,9 @@ test('createBookmark preserves leading/trailing whitespace in a Markdown memo bo
   await api.createBookmark({
     id: 'b1',
     shared_text: '    indented code block\n',
+    description_format: 'plain',
+    notes_format: 'markdown',
+    notes: '    note code\n',
     client_id: 'cid-memo',
   });
 });
@@ -738,3 +744,27 @@ test('restoreAIEnrichment returns null (not an error) when the bookmark already 
 
   assert.equal(result, null);
 });
+
+for (const bulk of [false, true]) {
+  test(`${bulk ? 'bulk' : 'single'} create retry preserves a URL note format change`, async () => {
+    const patches: Array<Record<string, unknown>> = [];
+    const existing = remoteBookmark({ id: 'b1', client_id: 'own-capture', notes_format: 'plain' });
+    const client = { request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (options.method === 'PATCH') {
+        patches.push(options.body as Record<string, unknown>);
+        return [existing];
+      }
+      if (path.includes('url_hash=')) return [existing];
+      if (path.includes('client_id=')) return [];
+      throw new Error(`unexpected request ${path}`);
+    } };
+    const api = new BookmarkApi(SESSION, client as never);
+    const input = { url: 'https://example.com/a', client_id: 'own-capture',
+      notes: '    raw code\n', notes_format: 'markdown' as const };
+    if (bulk) await api.createBookmarks([input]);
+    else await api.createBookmark(input);
+    assert.equal(patches.length, 1);
+    assert.equal(patches[0].notes, input.notes);
+    assert.equal(patches[0].notes_format, 'markdown');
+  });
+}

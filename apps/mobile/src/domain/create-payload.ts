@@ -19,6 +19,10 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
   // dedupes against it instead of inserting a duplicate (the failure mode text
   // notes are most exposed to, having no url_hash key).
   const clientId = bookmark.client_id ?? undefined;
+  const textFormats = {
+    ...(bookmark.description_format !== undefined ? { description_format: bookmark.description_format } : {}),
+    ...(bookmark.notes_format !== undefined ? { notes_format: bookmark.notes_format } : {}),
+  };
   // The bookmark's own id is its permanent identity from the moment it was
   // created (see makeBookmarkId) — resending it here is what lets a rebuilt
   // create for an already-existing row stay keyed to the SAME row instead of
@@ -30,6 +34,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
       url: bookmark.url,
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
+      ...textFormats,
       ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
       client_id: clientId,
     };
@@ -48,6 +53,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
       content_type: 'image',
       title: bookmark.title ?? undefined,
       notes: bookmark.notes ?? undefined,
+      ...textFormats,
       preview_image_url: bookmark.preview_image_url ?? undefined,
       ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
       client_id: clientId,
@@ -59,6 +65,7 @@ export function createPayloadFromBookmark(bookmark: Bookmark): CreateBookmarkInp
     content_type: 'text',
     title: bookmark.title ?? undefined,
     notes: bookmark.notes ?? undefined,
+    ...textFormats,
     shared_text: bookmark.description ?? undefined,
     ...(bookmark.deleted_at ? { deleted_at: bookmark.deleted_at } : {}),
     client_id: clientId,

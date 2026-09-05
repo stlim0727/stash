@@ -110,7 +110,36 @@ describe('AddBookmarkScreen duplicate UX', () => {
   });
 });
 
-describe('AddBookmarkScreen Markdown memos', () => {
+describe('AddBookmarkScreen memo formats', () => {
+  it('defaults new memos to plain text and preserves literal Markdown syntax', async () => {
+    const source = '  # literal heading\n*literal*\n';
+    fakeRepo.__reset([]);
+    const screen = await renderAddScreen();
+    await fireEvent.press(await screen.findByText('Memo'));
+    await fireEvent.changeText(screen.getByLabelText('Content'), source);
+    expect(screen.queryByText('Preview')).toBeNull();
+    await fireEvent.press(screen.getByText('Save memo'));
+    await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
+      description: source,
+      description_format: 'plain',
+    }));
+  });
+
+  it('saves bookmark notes with the chosen Markdown format and original whitespace', async () => {
+    const source = '    note code\n\n# Remember\n';
+    fakeRepo.__reset([]);
+    const screen = await renderAddScreen();
+    await fireEvent.changeText(screen.getByPlaceholderText('https://'), 'https://example.com/note-format');
+    await fireEvent.changeText(screen.getByPlaceholderText('Why are you saving this?'), source);
+    await fireEvent.press(screen.getByLabelText('Format for Note (optional)'));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Markdown' }));
+    await fireEvent.press(screen.getByText('Save bookmark'));
+    await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
+      notes: source,
+      notes_format: 'markdown',
+    }));
+  });
+
   it('saves a URL-less memo with its raw Markdown and stable client id', async () => {
     const markdown = '    const priority = 1;\n\n# Priorities\n';
     fakeRepo.__reset([]);
@@ -119,7 +148,11 @@ describe('AddBookmarkScreen Markdown memos', () => {
 
     fireEvent.press(await findByText('Memo'));
     fireEvent.changeText(await findByLabelText('Title (optional)'), 'Weekly plan');
-    fireEvent.changeText(await findByLabelText('Markdown'), markdown);
+    await fireEvent.changeText(await findByLabelText('Content'), markdown);
+    await fireEvent.press(await findByLabelText('Format for Content'));
+    await fireEvent.press(await findByText('Markdown'));
+    await fireEvent.press(await findByText('Preview'));
+    await fireEvent.press(await findByText('Write'));
     fireEvent.press(await findByText('Save memo'));
 
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
@@ -128,12 +161,14 @@ describe('AddBookmarkScreen Markdown memos', () => {
       url: null,
       title: 'Weekly plan',
       description: markdown,
+      description_format: 'markdown',
       content_type: 'text',
     });
     expect(saved.client_id).toBeTruthy();
     expect(fakeRepo.__queue()[0]?.payload).toMatchObject({
       title: 'Weekly plan',
       shared_text: markdown,
+      description_format: 'markdown',
       client_id: saved.client_id,
     });
     expect(mockBack).toHaveBeenCalled();

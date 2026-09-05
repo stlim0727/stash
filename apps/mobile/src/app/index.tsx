@@ -63,7 +63,7 @@ import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
 import { accessibilityTitle, displayTitle, isTitleDerived, siteLabel } from '@/domain/item-display';
-import { markdownToPlainText } from '@/domain/markdown';
+import { memoBodyFormat, textForDisplay } from '@/domain/text-format';
 import {
   ALL_FILTER,
   UNCOLLECTED_FILTER,
@@ -2979,7 +2979,7 @@ export default function InboxScreen() {
           const siteLabelText = siteLabel(item);
           const memoPreview =
             item.content_type === 'text' && item.title?.trim() && item.description?.trim()
-              ? markdownToPlainText(item.description)
+              ? textForDisplay(item.description, memoBodyFormat(item))
               : null;
           // The clean site label is always the primary, persistent text (STASH-39).
           // A query term can additionally match only in the URL's path/query

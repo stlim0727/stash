@@ -207,7 +207,9 @@ try {
   const api = createBookmarkApi(session);
   const testUrl = `https://example.com/stash-verify-${Date.now()}`;
 
-  const created = await api.createBookmark({ url: testUrl, notes: 'verification run' });
+  const created = await api.createBookmark({
+    url: testUrl, notes: '    verification run\n', notes_format: 'markdown',
+  });
   if (created.status !== 'created') {
     fail('createBookmark', `expected status created, got ${created.status}`);
   }
@@ -225,6 +227,11 @@ try {
     fail('listBookmarks', 'created bookmark not in list');
   }
   ok('listBookmarks');
+  const createdNote = listed.find((bookmark) => bookmark.id === created.bookmark_id);
+  if (createdNote.notes !== '    verification run\n' || createdNote.notes_format !== 'markdown') {
+    fail('note format + raw whitespace', 'note source or format did not survive creation');
+  }
+  ok('note format + raw whitespace');
 
   await api.updateBookmark(created.bookmark_id, { title: 'Verified title', notes: 'updated' });
   const detailAfterUpdate = await api.getBookmark(created.bookmark_id);
@@ -232,6 +239,23 @@ try {
     fail('updateBookmark', 'title did not persist');
   }
   ok('updateBookmark + getBookmark');
+
+  const memoSource = '# Literal heading\n\n    indented source\n';
+  const memo = await api.createBookmark({
+    shared_text: memoSource, description_format: 'plain',
+    client_id: crypto.randomUUID(), enrichment_policy: 'skip',
+  });
+  cleanups.push(() => api.deleteBookmark(memo.bookmark_id, true));
+  const savedMemo = await api.getBookmark(memo.bookmark_id);
+  if (savedMemo?.bookmark.description !== memoSource || savedMemo.bookmark.description_format !== 'plain') {
+    fail('plain memo format', 'memo source or format did not survive creation');
+  }
+  await api.updateBookmark(memo.bookmark_id, { description_format: 'markdown' });
+  const formattedMemo = await api.getBookmark(memo.bookmark_id);
+  if (formattedMemo?.bookmark.description !== memoSource || formattedMemo.bookmark.description_format !== 'markdown') {
+    fail('format-only edit', 'changing format rewrote the memo source or failed to persist');
+  }
+  ok('plain memo + format-only edit preserves source');
 
   const tags = await api.addTags({
     bookmark_id: created.bookmark_id,

@@ -83,8 +83,15 @@ Editable fields:
 - `title`
 - `description`
 - `notes`
+- `description_format` — `plain` or `markdown` for URL-less memo bodies; null preserves legacy Markdown.
+- `notes_format` — `plain` or `markdown` for private notes; null preserves legacy plain text.
 - `collection_id`
 - `is_archived`
+
+Both format fields are also accepted by create calls. Format changes preserve the
+raw text, including leading/trailing whitespace. Apply the `bookmark_text_formats`
+migration before deploying clients that send these fields; old clients can keep
+omitting them.
 
 ### deleteBookmark
 

@@ -301,6 +301,8 @@ function createUploadPayload(
     ...entry.payload,
     title: latestAtUpload.title ?? undefined,
     notes: latestAtUpload.notes ?? undefined,
+    ...(latestAtUpload.description_format !== undefined ? { description_format: latestAtUpload.description_format } : {}),
+    ...(latestAtUpload.notes_format !== undefined ? { notes_format: latestAtUpload.notes_format } : {}),
     ...(latestAtUpload.deleted_at ? { deleted_at: latestAtUpload.deleted_at } : {}),
   };
   // A URL-less text/Markdown-memo row's body lives in `description` locally
@@ -513,6 +515,8 @@ export async function syncQueueEntry(
       title: bookmark.title,
       description: bookmark.description,
       notes: bookmark.notes,
+      ...(bookmark.description_format !== undefined ? { description_format: bookmark.description_format } : {}),
+      ...(bookmark.notes_format !== undefined ? { notes_format: bookmark.notes_format } : {}),
       collection_id: bookmark.collection_id,
       is_archived: bookmark.is_archived,
       deleted_at: bookmark.deleted_at,
@@ -1108,7 +1112,9 @@ export function createNeedsReconcileUpdate(
     persisted.collection_id !== null ||
     titleNeedsReconcile ||
     persisted.notes !== (uploadedPayload?.notes ?? null) ||
-    persisted.description !== (uploadedPayload?.shared_text ?? null)
+    persisted.description !== (uploadedPayload?.shared_text ?? null) ||
+    (persisted.description_format ?? null) !== (uploadedPayload?.description_format ?? null) ||
+    (persisted.notes_format ?? null) !== (uploadedPayload?.notes_format ?? null)
   );
 }
 

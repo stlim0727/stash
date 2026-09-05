@@ -1,5 +1,5 @@
 import { collectionMatchKey } from '@/domain/collection-match';
-import { markdownToPlainText } from '@/domain/markdown';
+import { memoBodyFormat, notesFormat, textForDisplay } from '@/domain/text-format';
 import type { Bookmark } from '@/domain/types';
 
 /**
@@ -281,9 +281,9 @@ export function filterBookmarks(
     ];
     const proseFields: Array<string | null | undefined> = [
       bookmark.content_type === 'text'
-        ? markdownToPlainText(bookmark.description)
+        ? textForDisplay(bookmark.description, memoBodyFormat(bookmark))
         : bookmark.description,
-      bookmark.notes,
+      textForDisplay(bookmark.notes, notesFormat(bookmark)),
       bookmark.url,
     ];
 
