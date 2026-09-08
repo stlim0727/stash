@@ -47,3 +47,6 @@ example
 
 # dynamic config files
 google-services.json
+
+# Google Play Console service account key (see docs/development/play-store.md)
+*service-account*.json
