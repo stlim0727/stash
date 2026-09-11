@@ -218,7 +218,7 @@ test('updatedAt refreshes on a repeated failure for an already-open episode (Cod
   assert.notEqual(secondUpdatedAt, firstUpdatedAt);
 });
 
-test('getSyncStatusDiagnostics prunes a failure episode whose local_id is no longer in the live queue past the grace period (discarded bookmark, Codex review on #765)', () => {
+test('getSyncStatusDiagnostics prunes a failure episode past the grace period, counted from when it was FIRST observed absent (discarded bookmark, Codex review on #765)', () => {
   // A permanent delete, an emptied Trash, or a library reset removes the
   // queue entry without ever calling noteSyncEntryStatus('synced'/excluded)
   // for it — this is the general-purpose cleanup for all of those, rather
@@ -231,8 +231,14 @@ test('getSyncStatusDiagnostics prunes a failure episode whose local_id is no lon
     assert.equal(getSyncStatusDiagnostics()!.activeFailures, 2);
 
     // local-1's bookmark was discarded — only local-2 remains in the queue.
-    // Past the grace period (see the dedicated test below for within it), so
-    // this is a genuine, not merely in-flight, absence.
+    // First observation just starts the clock; nothing is pruned yet.
+    assert.equal(
+      getSyncStatusDiagnostics(new Set(['local-2']))!.activeFailures,
+      2,
+    );
+
+    // Past the grace period from THAT observation — a genuine, not merely
+    // in-flight, absence. local-2 stays (still live, still genuinely failed).
     mock.timers.tick(PRUNE_GRACE_MS + 1);
     assert.equal(
       getSyncStatusDiagnostics(new Set(['local-2']))!.activeFailures,
@@ -244,6 +250,7 @@ test('getSyncStatusDiagnostics prunes a failure episode whose local_id is no lon
     // correctly (it was never pruned).
     assert.equal(getSyncStatusDiagnostics()!.activeFailures, 1);
     noteSyncEntryStatus('local-2', 'synced', 'create');
+    assert.equal(getSyncStatusDiagnostics()!.activeFailures, 0);
     assert.deepEqual(getSyncStatusDiagnostics()!.syncedAfterFailureByKind, {
       transient_network: 1,
     });
@@ -252,7 +259,7 @@ test('getSyncStatusDiagnostics prunes a failure episode whose local_id is no lon
   }
 });
 
-test('getSyncStatusDiagnostics does NOT prune an episode absent from the live set within the grace period (in-flight identity transition, Codex review on #765)', () => {
+test('getSyncStatusDiagnostics does NOT prune an episode within the grace period from when it was first observed absent (in-flight identity transition, Codex review on #765)', () => {
   // A duplicate-swap resolution briefly has neither the old id (already
   // removed from the queue) nor the new adopted id (not yet added — it's an
   // update to an existing row) present in the live queue while
@@ -264,6 +271,7 @@ test('getSyncStatusDiagnostics does NOT prune an episode absent from the live se
     resetSyncStatusDiagnostics();
     noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
 
+    assert.equal(getSyncStatusDiagnostics(new Set())!.activeFailures, 1);
     mock.timers.tick(PRUNE_GRACE_MS - 1);
     assert.equal(getSyncStatusDiagnostics(new Set())!.activeFailures, 1);
 
@@ -273,6 +281,50 @@ test('getSyncStatusDiagnostics does NOT prune an episode absent from the live se
     assert.deepEqual(getSyncStatusDiagnostics()!.syncedAfterFailureByKind, {
       transient_network: 1,
     });
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('the prune grace window is measured from FIRST observed absence, not from failedAt (Codex review on #765, round 2)', () => {
+  // A real retry can sit in backoff well past the grace period before a
+  // duplicate-swap ever remaps it — using failedAt would make that remap
+  // immediately eligible for pruning on the very next read.
+  mock.timers.enable({ apis: ['Date'] });
+  try {
+    resetSyncStatusDiagnostics();
+    noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+
+    // The episode is already older than the grace period by the time it's
+    // first observed absent — it must still get its own full grace window
+    // starting now, not be pruned immediately because failedAt is old.
+    mock.timers.tick(PRUNE_GRACE_MS + 1);
+    assert.equal(getSyncStatusDiagnostics(new Set())!.activeFailures, 1);
+
+    mock.timers.tick(PRUNE_GRACE_MS - 1);
+    assert.equal(getSyncStatusDiagnostics(new Set())!.activeFailures, 1);
+
+    mock.timers.tick(2);
+    assert.equal(getSyncStatusDiagnostics(new Set())!.activeFailures, 0);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('an id reappearing in the live set resets its absence clock', () => {
+  mock.timers.enable({ apis: ['Date'] });
+  try {
+    resetSyncStatusDiagnostics();
+    noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+
+    getSyncStatusDiagnostics(new Set()); // first observed absent
+    mock.timers.tick(PRUNE_GRACE_MS - 1);
+    getSyncStatusDiagnostics(new Set(['local-1'])); // reappears (e.g. requeued)
+
+    mock.timers.tick(PRUNE_GRACE_MS + 1);
+    // Absent again, but the clock restarted on reappearance — still within
+    // its (new) grace window.
+    assert.equal(getSyncStatusDiagnostics(new Set())!.activeFailures, 1);
   } finally {
     mock.timers.reset();
   }

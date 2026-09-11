@@ -56,6 +56,14 @@ export interface SyncStatusDiagnostics {
 interface FailureEpisode {
   failedAt: number;
   errorKind: string;
+  /** When this id was first observed absent from a live set passed to
+   *  `getSyncStatusDiagnostics` — undefined while it's present (or before the
+   *  first such check). Drives the prune grace period; deliberately NOT
+   *  `failedAt` — see that function's comment for why (Codex review on #765,
+   *  round 2: an episode open longer than the grace period before a
+   *  duplicate-swap remaps it must still get the full grace window from the
+   *  moment it actually goes missing, not from whenever it first failed). */
+  absentSince?: number;
 }
 
 // See getSyncStatusDiagnostics's live-queue pruning: comfortably longer than
@@ -227,8 +235,21 @@ export function getSyncStatusDiagnostics(
       // genuinely discarded bookmark (permanent delete, emptied Trash,
       // library reset) never becomes live again, so this only delays its
       // cleanup, it doesn't skip it.
-      if (!liveLocalIds.has(localId) && now - episode.failedAt > PRUNE_GRACE_MS) {
-        inFlightFailures.delete(localId);
+      //
+      // Measured from when THIS id was first seen absent, not from
+      // `failedAt` (Codex review on #765, round 2) — a real retry can sit in
+      // backoff for well over the grace period before a duplicate-swap ever
+      // remaps it, and using `failedAt` would make that remap immediately
+      // eligible for pruning on the very next read instead of getting its
+      // own fresh grace window.
+      if (!liveLocalIds.has(localId)) {
+        if (episode.absentSince === undefined) {
+          episode.absentSince = now;
+        } else if (now - episode.absentSince > PRUNE_GRACE_MS) {
+          inFlightFailures.delete(localId);
+        }
+      } else if (episode.absentSince !== undefined) {
+        episode.absentSince = undefined;
       }
     }
   }
