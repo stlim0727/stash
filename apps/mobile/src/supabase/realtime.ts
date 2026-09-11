@@ -26,6 +26,9 @@ interface RealtimeSyncProps {
 const NUDGE_SEND_DEBOUNCE_MS = 1000;
 
 export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSyncProps) {
+  // A primitive, not the `session` object — see the comment on connectSocket's
+  // dependency array below for why that distinction matters.
+  const accessToken = session?.access_token ?? null;
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const rtClientRef = useRef<RealtimeClient | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -86,13 +89,13 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
   }, []);
 
   const connectSocket = useCallback(() => {
-    if (status !== 'authenticated' || !session || !userId || AppState.currentState !== 'active') {
+    if (status !== 'authenticated' || !accessToken || !userId || AppState.currentState !== 'active') {
       disconnectSocket();
       return;
     }
 
     if (rtClientRef.current) {
-      rtClientRef.current.setAuth(session.access_token);
+      rtClientRef.current.setAuth(accessToken);
       return;
     }
 
@@ -105,7 +108,7 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
     });
     rtClientRef.current = rt;
 
-    rt.setAuth(session.access_token);
+    rt.setAuth(accessToken);
     rt.connect();
 
     const channel = rt.channel(`sync:private:${userId}`, {
@@ -130,7 +133,14 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
         recordLog('warn', `Realtime: Channel error joining sync:private:${userId}`);
       }
     });
-  }, [session, status, userId, deviceId, triggerDebouncedSync, disconnectSocket]);
+    // Keyed on `accessToken` (a primitive), not the `session` object itself:
+    // `ensureAnonymousSession` calls `setSession(active)` unconditionally on
+    // every sync pass (auth-provider.tsx), handing back a structurally-equal
+    // but reference-new session even when the token didn't change. Depending
+    // on `session` directly would reintroduce the exact STASH-K churn this
+    // file just removed for `syncNow` — every sync-triggered session refresh
+    // would still tear down and rebuild the socket from scratch.
+  }, [accessToken, status, userId, deviceId, triggerDebouncedSync, disconnectSocket]);
 
   // Lifecycle listeners. Deliberately keyed on `connectSocket`/`disconnectSocket`
   // only, not `syncNow` (read via `syncNowRef` above instead) — those two are
