@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  excludeFromSyncStatusDiagnostics,
   getSyncStatusDiagnostics,
   noteSyncEntryStatus,
   remapSyncStatusIdentity,
@@ -133,4 +134,64 @@ test('remapSyncStatusIdentity is a no-op for an id with no in-flight episode', (
   noteSyncEntryStatus('new-id', 'synced', 'create');
 
   assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
+});
+
+test('a failure-only session (nothing has synced yet) still produces a snapshot with activeFailures set (Codex review on #765)', () => {
+  // The case this exists for: a report filed during a total outage, where
+  // every create has failed and none has ever succeeded. Before this fix,
+  // getSyncStatusDiagnostics() returned undefined here — making the whole
+  // diagnostic look unpopulated instead of showing the exact "always fails"
+  // pattern STASH-69 describes.
+  resetSyncStatusDiagnostics();
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+
+  const snapshot = getSyncStatusDiagnostics();
+  assert.ok(snapshot);
+  assert.equal(snapshot!.activeFailures, 1);
+  assert.equal(snapshot!.syncedWithoutFailure, 0);
+  assert.deepEqual(snapshot!.syncedAfterFailureByKind, {});
+});
+
+test('activeFailures reflects only currently-unresolved episodes, live off the in-flight map', () => {
+  resetSyncStatusDiagnostics();
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+  noteSyncEntryStatus('local-2', 'failed', 'create', 'transient_network');
+  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 2);
+
+  noteSyncEntryStatus('local-1', 'synced', 'create');
+  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 1);
+
+  noteSyncEntryStatus('local-2', 'synced', 'create');
+  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 0);
+});
+
+test('excludeFromSyncStatusDiagnostics silently ignores an id — account rehome creates are not "saved bookmarks" (Codex review on #765)', () => {
+  // account-transition.ts mints operation:'create' entries to re-home an
+  // entire already-synced library onto a new account id; none of that is a
+  // new user save, so it must never feed this diagnostic even though it
+  // will report as a normal 'create' sync outcome.
+  resetSyncStatusDiagnostics();
+  excludeFromSyncStatusDiagnostics(['rehomed-1', 'rehomed-2']);
+
+  noteSyncEntryStatus('rehomed-1', 'synced', 'create');
+  noteSyncEntryStatus('rehomed-2', 'failed', 'create', 'transient_network');
+  noteSyncEntryStatus('rehomed-2', 'synced', 'create');
+
+  assert.equal(getSyncStatusDiagnostics(), undefined);
+});
+
+test('excludeFromSyncStatusDiagnostics also clears an already-open episode for that id', () => {
+  resetSyncStatusDiagnostics();
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 1);
+
+  excludeFromSyncStatusDiagnostics(['local-1']);
+  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 0);
+
+  // Its eventual sync is now silently ignored too — neither recovered-from-
+  // failure nor a clean sync, since it was never real evidence to begin with.
+  noteSyncEntryStatus('local-1', 'synced', 'create');
+  const snapshot = getSyncStatusDiagnostics()!;
+  assert.equal(snapshot.syncedWithoutFailure, 0);
+  assert.deepEqual(snapshot.syncedAfterFailureByKind, {});
 });

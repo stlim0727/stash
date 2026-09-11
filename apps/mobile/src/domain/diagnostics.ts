@@ -38,6 +38,7 @@ export interface DiagnosticsSyncStatus {
   syncedAfterFailureByKind: Record<string, number>;
   syncedWithoutFailure: number;
   maxFailureToSyncedMs: number;
+  activeFailures: number;
   updatedAt: string;
 }
 

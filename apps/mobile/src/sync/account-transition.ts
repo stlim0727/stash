@@ -24,6 +24,7 @@ import type { Bookmark, LocalPendingBookmark } from '@/domain/types';
 import { recordLog } from '@/observability/log-buffer';
 import type { BookmarkRepository, IdentityRekeyState } from '@/storage/types';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
+import { excludeFromSyncStatusDiagnostics } from '@/sync/sync-status-diagnostics';
 
 export interface SyncedUserRef {
   id: string;
@@ -376,6 +377,12 @@ export async function applyAccountTransition(
         updated_at: now,
       });
     }
+    // STASH-69 investigation: these `operation: 'create'` entries re-upload
+    // an already-existing library under a new account id — not a user
+    // saving a new bookmark. Excluded so a rehome (a real report: 561
+    // bookmarks in one) doesn't swamp the genuine new-capture signal (Codex
+    // review on #765).
+    excludeFromSyncStatusDiagnostics(newEntries.map((entry) => entry.local_id));
     recordLog('warn', `account switch: re-homing ${plan.rehome.length} bookmark(s) into the new account`);
     setBookmarks((current) =>
       (current ?? []).map((bookmark) => rehomedById.get(bookmark.id) ?? bookmark),
