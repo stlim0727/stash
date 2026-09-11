@@ -39,6 +39,7 @@ import {
 import { getStorageDiagnostics } from '@/storage/diagnostics';
 import { getPullDiagnostics } from '@/sync/pull-diagnostics';
 import { getReconcileDiagnostics } from '@/sync/reconcile-diagnostics';
+import { getSyncStatusDiagnostics } from '@/sync/sync-status-diagnostics';
 import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
 import { useT } from '@/i18n';
 import { Button } from '@/ui/Button';
@@ -211,6 +212,18 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         recentSlowSegments: describeRecentSegments(),
         storage: getStorageDiagnostics(),
         syncReconcile: getReconcileDiagnostics(),
+        // Excludes permanently-unsyncable entries, same as queueDepth/lastError
+        // above: those never leave the queue by design, so including them
+        // here would mean their failure episode can never be pruned and an
+        // old dead entry contaminates activeFailures on every later,
+        // unrelated report (Codex review on #765).
+        syncStatusHistory: getSyncStatusDiagnostics(
+          new Set(
+            queue
+              .filter((entry) => !isPermanentlyUnsyncableUrl(entry))
+              .map((entry) => entry.local_id),
+          ),
+        ),
         shareAttempt: getShareDiagnostics(),
         shareAttemptHistory: getShareDiagnosticsHistory(),
         pullHistory: getPullDiagnostics(),
@@ -228,6 +241,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       pathname,
       sourceContext,
       auth.status,
+      queue,
       queueDepth,
       isSyncing,
       lastPulledAt,

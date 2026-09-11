@@ -7,6 +7,11 @@ import {
   planLogoutCacheClear,
 } from './account-transition.ts';
 import {
+  getSyncStatusDiagnostics,
+  noteSyncEntryStatus,
+  resetSyncStatusDiagnostics,
+} from './sync-status-diagnostics.ts';
+import {
   dropPendingTagOpsForBookmarks,
   rekeyPendingTagOps,
   type PendingTagOp,
@@ -724,4 +729,84 @@ test('re-homed/dropped rows no longer match — transition is self-idempotent', 
   );
   assert.deepEqual(plan.rehome, []);
   assert.deepEqual(plan.drop, []);
+});
+
+test('applyAccountTransition excludes a confirmed-synced rehome from STASH-69 diagnostics but keeps a stale-uploaded-image rehome (Codex review on #765)', async () => {
+  // cloudOwnedRows (confirmed synced to the previous account) is migration
+  // noise — excluded. staleUploadedImageRows (an image whose upload landed
+  // but whose create was never confirmed) is a genuinely ambiguous/failed
+  // NEW capture — exactly the failed->synced evidence STASH-69 collects,
+  // so it must stay eligible.
+  resetSyncStatusDiagnostics();
+  const confirmedSynced = bookmark({ id: REMOTE_A, sync_status: 'synced' });
+  const staleImage = bookmark({
+    id: 'local-image-stale',
+    content_type: 'image',
+    preview_image_url: 'https://storage.example.com/bookmark-images/anon-user/local-image-stale',
+    local_image_uri: 'file:///stash-images/shared.jpg',
+    sync_status: 'failed',
+  });
+  const plan = planAccountTransition(
+    { id: 'anon', isAnonymous: true },
+    { id: 'real', isAnonymous: false },
+    [confirmedSynced, staleImage],
+  );
+  assert.equal(plan.rehome.length, 2);
+
+  let counter = 0;
+  const newIds: string[] = [];
+  await applyAccountTransition(
+    plan,
+    fakeRepository(),
+    () => {},
+    () => {},
+    () => {
+      counter += 1;
+      const id = `new-${counter}`;
+      newIds.push(id);
+      return id;
+    },
+    async () => {},
+    {},
+  );
+
+  assert.equal(newIds.length, 2);
+  const [confirmedNewId, staleImageNewId] = newIds;
+
+  noteSyncEntryStatus(confirmedNewId!, 'synced', 'create');
+  noteSyncEntryStatus(staleImageNewId!, 'synced', 'create');
+
+  // Only the stale-image rehome's sync counts as evidence.
+  assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
+});
+
+test('applyAccountTransition does not exclude a non-image single-row rehome outside a carry-over plan (Codex review on #765, round 9)', async () => {
+  // bookmarks.tsx's landedUnderDepartedIdentity handler builds an ad-hoc
+  // `{ kind: 'switch', rehome: [staleRow] }` plan directly, bypassing
+  // cloudOwnedRows/staleUploadedImageRows — staleRow can be a URL/text
+  // bookmark, not just an image. Unlike a real carry-over's rehome list
+  // (which only ever contains confirmed-synced library rows or stale image
+  // uploads), this single row is a genuine in-flight NEW capture and must
+  // stay eligible as STASH-69 evidence even though `isLocalOnlyBookmark`
+  // reads false for it (it isn't an image at all).
+  resetSyncStatusDiagnostics();
+  const inFlightUrlCapture = bookmark({ id: 'local-url-in-flight', content_type: 'url', sync_status: 'pending' });
+
+  let newId: string | undefined;
+  await applyAccountTransition(
+    { kind: 'switch', rehome: [inFlightUrlCapture], drop: [], dropQueue: [], resetWatermark: false },
+    fakeRepository(),
+    () => {},
+    () => {},
+    () => {
+      newId = 'new-in-flight';
+      return newId;
+    },
+    async () => {},
+    {},
+  );
+
+  noteSyncEntryStatus(newId!, 'synced', 'create');
+
+  assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
 });

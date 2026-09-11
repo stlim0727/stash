@@ -184,6 +184,10 @@ import {
   recordCreateCompleted,
   recordReconcileNeeded,
 } from "@/sync/reconcile-diagnostics";
+import {
+  noteSyncEntryStatus,
+  remapSyncStatusIdentity,
+} from "@/sync/sync-status-diagnostics";
 
 export function isBookmarkSyncedOnce(bookmark: Bookmark): boolean {
   return (
@@ -5330,6 +5334,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       tagDataRef.current = rekeyedTagData;
       setTagData(rekeyedTagData);
       remapAiRetryIdentity(idMap);
+      // STASH-69 investigation: an in-flight failure episode is keyed by
+      // local_id like the state above — without this, a bookmark that
+      // failed and was then rehomed (duplicate adoption, anonymous→real
+      // carry-over) would leak its old-id episode and miscount its eventual
+      // success under the new id as a clean sync (Codex review on #765).
+      remapSyncStatusIdentity(idMap);
 
       const identityState: IdentityRekeyState = {
         metaUpdates: {
@@ -5653,9 +5663,35 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const applySyncEntryResult = async (
           entry: LocalPendingBookmark,
           result: Awaited<ReturnType<typeof syncQueueEntry>>,
-        ): Promise<boolean> => {
+          // STASH-69 investigation: the local_id `noteSyncEntryStatus` should
+          // credit an outcome to — usually just `entry.local_id`, except a
+          // duplicate-swap adopts a DIFFERENT id (`merged.id` below), to which
+          // any open failure episode is separately re-keyed via
+          // rekeyBookmarkIdentity/remapSyncStatusIdentity. A plain return
+          // value can't carry this to the caller's catch block if THIS
+          // function throws after the swap (e.g. rekeyBookmarkIdentity's own
+          // awaited writes failing) — the caller would then record the
+          // failure against the stale pre-swap id, missing the moved episode
+          // the same way a premature 'synced' call would (Codex review on
+          // #765). Written to on every reassignment, read by the caller
+          // whether this function returns or throws.
+          idTracker: { current: string },
+        ): Promise<string | false> => {
           if (result.entry.sync_status === "failed") {
             syncFailed += 1;
+            // STASH-69 investigation: recorded unconditionally, before any of
+            // the branching below — safe to call every pass regardless of
+            // outcome (idempotent past the first occurrence). The 'synced'
+            // side is deliberately NOT recorded here — see the call site's
+            // own comment on why (Codex review on #765: recording it this
+            // early risked double-counting one bookmark if this function
+            // later threw after this point).
+            noteSyncEntryStatus(
+              entry.local_id,
+              "failed",
+              entry.operation,
+              result.entry.last_error_kind,
+            );
           }
           if (didSyncQueueHealthEscalate(entry, result.entry)) {
             reportSyncQueueHealthEscalation({
@@ -5871,6 +5907,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 result.originalLocalId &&
                 result.originalLocalId !== merged.id
               ) {
+                idTracker.current = merged.id;
                 // Re-key tag/AI-retry state the same way account rehoming does
                 // — otherwise a tag added (or a rehome carried over) in the
                 // window before this duplicate-swap silently never uploads,
@@ -5952,7 +5989,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               mutationsPushed = true;
             }
           }
-          return true;
+          // STASH-69 investigation: no `bookmarkUpdate` means the create
+          // succeeded remotely but this device never had (or already lost)
+          // a local bookmark row to merge it onto — the bulk path's
+          // `queueOnlyEntries` is the identical case, also excluded there.
+          // No local row ever existed to show a sync status to the user, so
+          // it's not evidence either way for STASH-69 (Codex review on
+          // #765).
+          return result.bookmarkUpdate ? idTracker.current : false;
         };
         const applyBulkCreateChunkResults = async (
           chunk: LocalPendingBookmark[],
@@ -6162,7 +6206,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // actual cause is confirmed and fixed.
           const reconcileReasonTally: Record<string, number> = {};
           const queueLenBeforeChunk = queueRef.current.length;
-          for (const { bookmark: update, originalLocalId } of completions) {
+          for (const {
+            bookmark: update,
+            entry: completedEntry,
+            originalLocalId,
+          } of completions) {
             const lookupId = originalLocalId ?? update.id;
             // Deleted while the upload/durable-persist was in flight: the
             // user's delete may have run before this row's sync_status flip
@@ -6186,6 +6234,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             );
             if (!latest) {
               continue;
+            }
+            // STASH-69 investigation: recorded here, not in the earlier
+            // per-result loop — this point is reached only once the durable
+            // persist above has actually succeeded AND this specific entry
+            // wasn't deleted mid-flight/missing its local row, so it's the
+            // earliest place this bookmark can truthfully be said to have
+            // reached 'synced'. Recording it any earlier risked counting an
+            // entry whose durable completion later failed entirely (Codex
+            // review on #765) — those stay 'syncing' and get retried, which
+            // would otherwise double-count them on that retry.
+            if (update.sync_status === "synced") {
+              noteSyncEntryStatus(lookupId, "synced", completedEntry.operation);
             }
             const merged: Bookmark = {
               ...latest,
@@ -6636,6 +6696,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   failedEntries.set(entry.local_id, failedEntry);
                 }
                 syncFailed += failedEntries.size;
+                // STASH-69 investigation: a bulk-create chunk failure marks
+                // every entry in it (plus untried later entries) 'failed' in
+                // one shot — a real, likely source of "it always fails
+                // first" reports on a multi-item import. A later successful
+                // retry of these SAME entries (while at least two remain
+                // bulk-eligible) goes through applyBulkCreateChunkResults's
+                // own 'synced' call, not the per-entry loop — see there.
+                for (const [localId, failedEntry] of failedEntries) {
+                  noteSyncEntryStatus(
+                    localId,
+                    "failed",
+                    failedEntry.operation,
+                    failedEntry.last_error_kind,
+                  );
+                }
 
                 try {
                   await ensureRepositoryReady();
@@ -6760,6 +6835,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // A storage/repository failure on one entry must not abort the whole
           // run and strand this (and every later) entry at 'syncing' forever.
           // Mark just this entry failed so the next pass retries it.
+          // STASH-69 investigation: tracks applySyncEntryResult's effective
+          // id across a throw, not just a normal return — see its own
+          // parameter doc comment (Codex review on #765).
+          const idTracker = { current: entry.local_id };
           try {
             setQueue((current) =>
               current.map((queued) =>
@@ -6789,7 +6868,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // itself stays frozen at whatever it was then.
               () => authRef.current.session?.user.id ?? null,
             );
-            await applySyncEntryResult(entry, result);
+            const appliedLocalId = await applySyncEntryResult(entry, result, idTracker);
+            // STASH-69 investigation: recorded only once applySyncEntryResult
+            // has actually FINISHED without throwing — a create can reach
+            // 'synced' in `result` yet still end up durably marked 'failed'
+            // below (e.g. rekeyBookmarkIdentity's repository writes failing
+            // mid-function for a duplicate-adoption swap), and recording it
+            // any earlier risked double-counting the same bookmark once here
+            // and again on its eventual real retry (Codex review on #765).
+            // Uses the returned id, not entry.local_id — applySyncEntryResult
+            // returns `false` for a result it rejected/diverted entirely
+            // (deleted mid-flight, landed under a departed identity), and a
+            // duplicate-swap adopts a DIFFERENT id, to which any open failure
+            // episode was already separately re-keyed (Codex review on #765).
+            if (appliedLocalId && result.entry.sync_status === "synced") {
+              noteSyncEntryStatus(appliedLocalId, "synced", entry.operation);
+            }
           } catch (error) {
             logStorageError("sync entry", error);
             syncFailed += 1;
@@ -6804,6 +6898,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               last_attempt_at: failedAt,
               updated_at: failedAt,
             };
+            // STASH-69 investigation: a thrown syncQueueEntry never produces
+            // a `result`, so applySyncEntryResult's own note call never runs
+            // for this entry — without this, a real 'failed' status durably
+            // persisted just below would be entirely invisible to this
+            // diagnostic (Codex review on #765). Uses idTracker.current, not
+            // entry.local_id — if applySyncEntryResult threw AFTER already
+            // re-keying onto a duplicate-swap's adopted id, that's the id any
+            // open failure episode now actually lives under (Codex review on
+            // #765, round 2).
+            noteSyncEntryStatus(
+              idTracker.current,
+              "failed",
+              entry.operation,
+              failed.last_error_kind,
+            );
             setQueue((current) =>
               current.map((queued) =>
                 queued.local_id === entry.local_id ? failed : queued,
