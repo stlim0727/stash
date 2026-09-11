@@ -5663,7 +5663,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const applySyncEntryResult = async (
           entry: LocalPendingBookmark,
           result: Awaited<ReturnType<typeof syncQueueEntry>>,
-        ): Promise<boolean> => {
+        ): Promise<string | false> => {
+          // STASH-69 investigation: the local_id `noteSyncEntryStatus`
+          // should credit a 'synced' outcome to — usually just `entry.local_id`,
+          // except a duplicate-swap adopts a DIFFERENT id (`merged.id` below),
+          // to which any open failure episode is separately re-keyed via
+          // rekeyBookmarkIdentity/remapSyncStatusIdentity. Recording synced
+          // against the original id afterward would miss that moved episode
+          // entirely (Codex review on #765) — the caller uses this returned
+          // id, not `entry.local_id`, once this function resolves.
+          let effectiveLocalId = entry.local_id;
           if (result.entry.sync_status === "failed") {
             syncFailed += 1;
             // STASH-69 investigation: recorded unconditionally, before any of
@@ -5894,6 +5903,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 result.originalLocalId &&
                 result.originalLocalId !== merged.id
               ) {
+                effectiveLocalId = merged.id;
                 // Re-key tag/AI-retry state the same way account rehoming does
                 // — otherwise a tag added (or a rehome carried over) in the
                 // window before this duplicate-swap silently never uploads,
@@ -5975,7 +5985,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               mutationsPushed = true;
             }
           }
-          return true;
+          return effectiveLocalId;
         };
         const applyBulkCreateChunkResults = async (
           chunk: LocalPendingBookmark[],
@@ -6843,7 +6853,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // itself stays frozen at whatever it was then.
               () => authRef.current.session?.user.id ?? null,
             );
-            await applySyncEntryResult(entry, result);
+            const appliedLocalId = await applySyncEntryResult(entry, result);
             // STASH-69 investigation: recorded only once applySyncEntryResult
             // has actually FINISHED without throwing — a create can reach
             // 'synced' in `result` yet still end up durably marked 'failed'
@@ -6851,8 +6861,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // mid-function for a duplicate-adoption swap), and recording it
             // any earlier risked double-counting the same bookmark once here
             // and again on its eventual real retry (Codex review on #765).
-            if (result.entry.sync_status === "synced") {
-              noteSyncEntryStatus(entry.local_id, "synced", entry.operation);
+            // Uses the returned id, not entry.local_id — applySyncEntryResult
+            // returns `false` for a result it rejected/diverted entirely
+            // (deleted mid-flight, landed under a departed identity), and a
+            // duplicate-swap adopts a DIFFERENT id, to which any open failure
+            // episode was already separately re-keyed (Codex review on #765).
+            if (appliedLocalId && result.entry.sync_status === "synced") {
+              noteSyncEntryStatus(appliedLocalId, "synced", entry.operation);
             }
           } catch (error) {
             logStorageError("sync entry", error);
