@@ -15,6 +15,14 @@
  * Cumulative-since-launch, like `reconcile-diagnostics.ts` and
  * `storage/diagnostics.ts`'s `sqliteContention` — no per-event growth, only a
  * small fixed-size summary plus one in-flight map bounded by the live queue.
+ *
+ * Scoped to `create` operations only (Codex review on #765): STASH-69's
+ * report is specifically about newly *saved* bookmarks ("저장한 북마크들이"),
+ * and an `update`/`delete` queue entry cycling through the same
+ * failed→synced path (an ordinary edit retried after a network blip) would
+ * otherwise dilute the signal this instrumentation exists to give — a
+ * session full of edits could make `syncedWithoutFailure` look reassuring
+ * while every actual new-bookmark save was failing first.
  */
 
 export interface SyncStatusDiagnostics {
@@ -38,9 +46,10 @@ interface FailureEpisode {
   errorKind: string;
 }
 
-// Keyed by local_id, bounded by however many entries are currently mid-retry
-// in the live sync queue — never grows unboundedly the way a per-event log
-// would.
+// Keyed by local_id, bounded by however many CREATE entries are currently
+// mid-retry in the live sync queue — never grows unboundedly the way a
+// per-event log would. Re-keyed alongside the rest of a bookmark's identity
+// on account rehoming — see `remapSyncStatusIdentity`.
 const inFlightFailures = new Map<string, FailureEpisode>();
 
 const state: Omit<SyncStatusDiagnostics, 'updatedAt'> & { updatedAt: string | null } = {
@@ -51,20 +60,32 @@ const state: Omit<SyncStatusDiagnostics, 'updatedAt'> & { updatedAt: string | nu
 };
 
 /**
- * Record one sync queue entry's resulting status for this pass — called
- * unconditionally from `applySyncEntryResult` for every entry a sync pass
- * processes, whatever the result's `removeEntry`/branching outcome (this
- * function only reads `result.entry.sync_status`, which sync-bookmarks.ts
- * sets to 'failed'/'synced' before any of that branching runs).
+ * Record one sync queue entry's resulting status for this pass. Called
+ * unconditionally, before any result-specific branching that could skip or
+ * throw, from every place a queue entry's status is actually decided:
+ * `applySyncEntryResult` (the regular per-entry retry loop), the bulk-create
+ * chunk failure path, the bulk-create chunk SUCCESS path
+ * (`applyBulkCreateChunkResults` — a failed chunk's later successful retry
+ * goes through here, not the per-entry loop, so without this call an
+ * episode opened by the failure path would never close), and the per-entry
+ * loop's outer catch (a `syncQueueEntry` throw never produces a `result` at
+ * all, so without this call that failure would be invisible to this
+ * diagnostic even though it's a real, durably-persisted 'failed' status).
  *
- * Statuses other than 'failed'/'synced' (e.g. the transient 'syncing' set
- * just before the attempt) are no-ops — only a resolved outcome is evidence.
+ * A no-op for anything but a `create` operation, or a status other than
+ * 'failed'/'synced' (e.g. the transient 'syncing' set just before an
+ * attempt) — only a resolved outcome on a new-bookmark save is evidence.
  */
 export function noteSyncEntryStatus(
   localId: string,
   status: string,
+  operation: string,
   errorKind?: string | null,
 ): void {
+  if (operation !== 'create') {
+    return;
+  }
+
   if (status === 'failed') {
     // Keep the FIRST failure's timestamp/kind — a retry that keeps failing
     // must not reset the clock on how long this bookmark has looked failed
@@ -91,6 +112,26 @@ export function noteSyncEntryStatus(
     state.syncedWithoutFailure += 1;
   }
   state.updatedAt = new Date().toISOString();
+}
+
+/**
+ * Move an in-flight failure episode from an old local_id to a new one —
+ * called alongside `remapAiRetryIdentity` and the rest of
+ * `rekeyBookmarkIdentity`'s per-local-id state (Codex review on #765).
+ * Without this, a bookmark that failed and was then rehomed during an
+ * account transition (duplicate adoption, anonymous→real carry-over) would
+ * leak its old-id episode forever (never bounded by the live queue again,
+ * since the old id no longer has a queue entry) while its eventual success
+ * under the new id gets miscounted as `syncedWithoutFailure`.
+ */
+export function remapSyncStatusIdentity(idMap: ReadonlyMap<string, string>): void {
+  for (const [oldId, newId] of idMap) {
+    const episode = inFlightFailures.get(oldId);
+    if (episode) {
+      inFlightFailures.delete(oldId);
+      inFlightFailures.set(newId, episode);
+    }
+  }
 }
 
 export function getSyncStatusDiagnostics(): SyncStatusDiagnostics | undefined {

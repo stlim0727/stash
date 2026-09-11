@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   getSyncStatusDiagnostics,
   noteSyncEntryStatus,
+  remapSyncStatusIdentity,
   resetSyncStatusDiagnostics,
 } from './sync-status-diagnostics.ts';
 
@@ -14,7 +15,7 @@ test('getSyncStatusDiagnostics returns undefined before anything is recorded', (
 
 test('a bookmark that syncs cleanly (no failed status ever seen) counts as syncedWithoutFailure', () => {
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'synced');
+  noteSyncEntryStatus('local-1', 'synced', 'create');
 
   const snapshot = getSyncStatusDiagnostics();
   assert.ok(snapshot);
@@ -24,8 +25,8 @@ test('a bookmark that syncs cleanly (no failed status ever seen) counts as synce
 
 test('a bookmark that fails then syncs counts under syncedAfterFailureByKind, not syncedWithoutFailure (Sentry STASH-69)', () => {
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'failed', 'transient_network');
-  noteSyncEntryStatus('local-1', 'synced');
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+  noteSyncEntryStatus('local-1', 'synced', 'create');
 
   const snapshot = getSyncStatusDiagnostics();
   assert.ok(snapshot);
@@ -35,19 +36,19 @@ test('a bookmark that fails then syncs counts under syncedAfterFailureByKind, no
 
 test('a missing error kind is tallied as unknown rather than dropped', () => {
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'failed');
-  noteSyncEntryStatus('local-1', 'synced');
+  noteSyncEntryStatus('local-1', 'failed', 'create');
+  noteSyncEntryStatus('local-1', 'synced', 'create');
 
   assert.deepEqual(getSyncStatusDiagnostics()!.syncedAfterFailureByKind, { unknown: 1 });
 });
 
 test('repeated failed calls for the same entry (retries) keep the FIRST failure timestamp/kind, not the latest', () => {
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'failed', 'transient_network');
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
   // A later retry surfaces a different kind — the episode should still be
   // attributed to the kind that first made this bookmark look failed.
-  noteSyncEntryStatus('local-1', 'failed', 'transient_dns');
-  noteSyncEntryStatus('local-1', 'synced');
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_dns');
+  noteSyncEntryStatus('local-1', 'synced', 'create');
 
   assert.deepEqual(getSyncStatusDiagnostics()!.syncedAfterFailureByKind, {
     transient_network: 1,
@@ -56,25 +57,25 @@ test('repeated failed calls for the same entry (retries) keep the FIRST failure 
 
 test('maxFailureToSyncedMs tracks the longest observed failure-to-synced span', async () => {
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'failed', 'transient_network');
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
   await new Promise((resolve) => setTimeout(resolve, 20));
-  noteSyncEntryStatus('local-1', 'synced');
+  noteSyncEntryStatus('local-1', 'synced', 'create');
 
   const firstSpan = getSyncStatusDiagnostics()!.maxFailureToSyncedMs;
   assert.ok(firstSpan >= 20);
 
   // A later, much shorter episode must not shrink the recorded maximum.
-  noteSyncEntryStatus('local-2', 'failed', 'transient_network');
-  noteSyncEntryStatus('local-2', 'synced');
+  noteSyncEntryStatus('local-2', 'failed', 'create', 'transient_network');
+  noteSyncEntryStatus('local-2', 'synced', 'create');
 
   assert.equal(getSyncStatusDiagnostics()!.maxFailureToSyncedMs, firstSpan);
 });
 
 test('independent bookmarks are tracked separately — one failing does not taint another syncing cleanly', () => {
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'failed', 'transient_network');
-  noteSyncEntryStatus('local-2', 'synced');
-  noteSyncEntryStatus('local-1', 'synced');
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+  noteSyncEntryStatus('local-2', 'synced', 'create');
+  noteSyncEntryStatus('local-1', 'synced', 'create');
 
   const snapshot = getSyncStatusDiagnostics()!;
   assert.equal(snapshot.syncedWithoutFailure, 1);
@@ -83,17 +84,53 @@ test('independent bookmarks are tracked separately — one failing does not tain
 
 test('a status other than failed/synced (e.g. the transient "syncing" set before an attempt) is a no-op', () => {
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'syncing');
-  noteSyncEntryStatus('local-1', 'pending');
+  noteSyncEntryStatus('local-1', 'syncing', 'create');
+  noteSyncEntryStatus('local-1', 'pending', 'create');
 
   assert.equal(getSyncStatusDiagnostics(), undefined);
 });
 
 test('a synced entry that never appeared as failed multiple times just tallies each independently', () => {
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'synced');
-  noteSyncEntryStatus('local-2', 'synced');
-  noteSyncEntryStatus('local-3', 'synced');
+  noteSyncEntryStatus('local-1', 'synced', 'create');
+  noteSyncEntryStatus('local-2', 'synced', 'create');
+  noteSyncEntryStatus('local-3', 'synced', 'create');
 
   assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 3);
+});
+
+test('update/delete operations are ignored entirely — only create is evidence for "saved bookmarks" (Codex review on #765)', () => {
+  resetSyncStatusDiagnostics();
+  noteSyncEntryStatus('local-1', 'failed', 'update', 'transient_network');
+  noteSyncEntryStatus('local-1', 'synced', 'update');
+  noteSyncEntryStatus('local-2', 'failed', 'delete', 'transient_network');
+  noteSyncEntryStatus('local-2', 'synced', 'delete');
+
+  assert.equal(getSyncStatusDiagnostics(), undefined);
+});
+
+test('remapSyncStatusIdentity moves an in-flight failure episode to the new id (account rehoming, Codex review on #765)', () => {
+  resetSyncStatusDiagnostics();
+  noteSyncEntryStatus('old-local-1', 'failed', 'create', 'transient_network');
+
+  remapSyncStatusIdentity(new Map([['old-local-1', 'new-local-1']]));
+
+  // The old id no longer has an open episode...
+  noteSyncEntryStatus('old-local-1', 'synced', 'create');
+  assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
+
+  // ...but the new id's eventual success correctly closes the moved episode
+  // instead of being miscounted as a clean sync.
+  noteSyncEntryStatus('new-local-1', 'synced', 'create');
+  const snapshot = getSyncStatusDiagnostics()!;
+  assert.deepEqual(snapshot.syncedAfterFailureByKind, { transient_network: 1 });
+  assert.equal(snapshot.syncedWithoutFailure, 1);
+});
+
+test('remapSyncStatusIdentity is a no-op for an id with no in-flight episode', () => {
+  resetSyncStatusDiagnostics();
+  remapSyncStatusIdentity(new Map([['no-such-id', 'new-id']]));
+  noteSyncEntryStatus('new-id', 'synced', 'create');
+
+  assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
 });

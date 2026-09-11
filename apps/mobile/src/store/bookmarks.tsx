@@ -184,7 +184,10 @@ import {
   recordCreateCompleted,
   recordReconcileNeeded,
 } from "@/sync/reconcile-diagnostics";
-import { noteSyncEntryStatus } from "@/sync/sync-status-diagnostics";
+import {
+  noteSyncEntryStatus,
+  remapSyncStatusIdentity,
+} from "@/sync/sync-status-diagnostics";
 
 export function isBookmarkSyncedOnce(bookmark: Bookmark): boolean {
   return (
@@ -5331,6 +5334,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       tagDataRef.current = rekeyedTagData;
       setTagData(rekeyedTagData);
       remapAiRetryIdentity(idMap);
+      // STASH-69 investigation: an in-flight failure episode is keyed by
+      // local_id like the state above — without this, a bookmark that
+      // failed and was then rehomed (duplicate adoption, anonymous→real
+      // carry-over) would leak its old-id episode and miscount its eventual
+      // success under the new id as a clean sync (Codex review on #765).
+      remapSyncStatusIdentity(idMap);
 
       const identityState: IdentityRekeyState = {
         metaUpdates: {
@@ -5665,6 +5674,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           noteSyncEntryStatus(
             entry.local_id,
             result.entry.sync_status,
+            entry.operation,
             result.entry.last_error_kind,
           );
           if (didSyncQueueHealthEscalate(entry, result.entry)) {
@@ -6007,6 +6017,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           ) {
             const entry = chunk[resultIndex]!;
             const result = results[resultIndex]!;
+
+            // STASH-69 investigation: recorded unconditionally, same
+            // rationale as recordBulkChunkStarted above — every result
+            // syncCreateQueueEntryBatch returns already represents a create
+            // that succeeded remotely, regardless of what the branching
+            // below does with it. Without this, a failed chunk's later
+            // successful retry (still routed through THIS function, not the
+            // per-entry loop, once at least two entries remain bulk-eligible)
+            // would leave the failure episode opened above permanently open
+            // (Codex review on #765).
+            noteSyncEntryStatus(entry.local_id, "synced", entry.operation);
 
             if (
               entry.operation !== "delete" &&
@@ -6649,12 +6670,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 // STASH-69 investigation: a bulk-create chunk failure marks
                 // every entry in it (plus untried later entries) 'failed' in
                 // one shot — a real, likely source of "it always fails
-                // first" reports on a multi-item import. Recorded the same
-                // way as the per-entry path in applySyncEntryResult so a
-                // later retry's 'synced' result (routed through the regular
-                // per-entry loop) closes the same episode.
+                // first" reports on a multi-item import. A later successful
+                // retry of these SAME entries (while at least two remain
+                // bulk-eligible) goes through applyBulkCreateChunkResults's
+                // own 'synced' call, not the per-entry loop — see there.
                 for (const [localId, failedEntry] of failedEntries) {
-                  noteSyncEntryStatus(localId, "failed", failedEntry.last_error_kind);
+                  noteSyncEntryStatus(
+                    localId,
+                    "failed",
+                    failedEntry.operation,
+                    failedEntry.last_error_kind,
+                  );
                 }
 
                 try {
@@ -6824,6 +6850,12 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               last_attempt_at: failedAt,
               updated_at: failedAt,
             };
+            // STASH-69 investigation: a thrown syncQueueEntry never produces
+            // a `result`, so applySyncEntryResult's own note call never runs
+            // for this entry — without this, a real 'failed' status durably
+            // persisted just below would be entirely invisible to this
+            // diagnostic (Codex review on #765).
+            noteSyncEntryStatus(entry.local_id, "failed", entry.operation, failed.last_error_kind);
             setQueue((current) =>
               current.map((queued) =>
                 queued.local_id === entry.local_id ? failed : queued,
