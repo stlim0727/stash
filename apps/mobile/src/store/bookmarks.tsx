@@ -5989,7 +5989,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               mutationsPushed = true;
             }
           }
-          return idTracker.current;
+          // STASH-69 investigation: no `bookmarkUpdate` means the create
+          // succeeded remotely but this device never had (or already lost)
+          // a local bookmark row to merge it onto — the bulk path's
+          // `queueOnlyEntries` is the identical case, also excluded there.
+          // No local row ever existed to show a sync status to the user, so
+          // it's not evidence either way for STASH-69 (Codex review on
+          // #765).
+          return result.bookmarkUpdate ? idTracker.current : false;
         };
         const applyBulkCreateChunkResults = async (
           chunk: LocalPendingBookmark[],
