@@ -33,6 +33,14 @@ export interface DiagnosticsReconcile {
   updatedAt: string;
 }
 
+/** See `sync/sync-status-diagnostics.ts` (STASH-69 investigation). */
+export interface DiagnosticsSyncStatus {
+  syncedAfterFailureByKind: Record<string, number>;
+  syncedWithoutFailure: number;
+  maxFailureToSyncedMs: number;
+  updatedAt: string;
+}
+
 export interface DiagnosticsInput {
   /** App version string, e.g. from expo-constants (`expoConfig.version`). */
   appVersion?: string | null;
@@ -72,6 +80,9 @@ export interface DiagnosticsInput {
   storage?: DiagnosticsStorage | null;
   /** Cumulative-since-launch create-sync reconcile summary (STASH-3Y investigation). */
   syncReconcile?: DiagnosticsReconcile | null;
+  /** Cumulative-since-launch tally of bookmarks that reached `synced` after
+   *  showing `failed` at least once, vs. cleanly (STASH-69 investigation). */
+  syncStatusHistory?: DiagnosticsSyncStatus | null;
   /** Durable record of the last share-intent attempt, if any (survives restarts). */
   shareAttempt?: ShareAttemptDiagnostics | null;
   /** Recent share-attempt history (oldest first), so a report filed right
@@ -150,6 +161,8 @@ export interface DiagnosticsContext {
   storage?: DiagnosticsStorage;
   /** Cumulative-since-launch create-sync reconcile summary (STASH-3Y investigation). */
   syncReconcile?: DiagnosticsReconcile;
+  /** Cumulative-since-launch sync-failure-episode tally (STASH-69 investigation). */
+  syncStatusHistory?: DiagnosticsSyncStatus;
   /** Durable record of the last share-intent attempt. Present only after a share runs. */
   shareAttempt?: ShareAttemptDiagnostics;
   /** Recent share-attempt history (oldest first). Present only when at least
@@ -250,6 +263,10 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
 
   if (input.syncReconcile && typeof input.syncReconcile === 'object') {
     context.syncReconcile = input.syncReconcile;
+  }
+
+  if (input.syncStatusHistory && typeof input.syncStatusHistory === 'object') {
+    context.syncStatusHistory = input.syncStatusHistory;
   }
 
   if (input.shareAttempt && typeof input.shareAttempt === 'object') {

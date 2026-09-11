@@ -39,6 +39,7 @@ import {
 import { getStorageDiagnostics } from '@/storage/diagnostics';
 import { getPullDiagnostics } from '@/sync/pull-diagnostics';
 import { getReconcileDiagnostics } from '@/sync/reconcile-diagnostics';
+import { getSyncStatusDiagnostics } from '@/sync/sync-status-diagnostics';
 import { isPermanentlyUnsyncableUrl } from '@/sync/sync-bookmarks';
 import { useT } from '@/i18n';
 import { Button } from '@/ui/Button';
@@ -211,6 +212,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         recentSlowSegments: describeRecentSegments(),
         storage: getStorageDiagnostics(),
         syncReconcile: getReconcileDiagnostics(),
+        syncStatusHistory: getSyncStatusDiagnostics(),
         shareAttempt: getShareDiagnostics(),
         shareAttemptHistory: getShareDiagnosticsHistory(),
         pullHistory: getPullDiagnostics(),

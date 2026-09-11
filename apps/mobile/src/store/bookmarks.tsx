@@ -184,6 +184,7 @@ import {
   recordCreateCompleted,
   recordReconcileNeeded,
 } from "@/sync/reconcile-diagnostics";
+import { noteSyncEntryStatus } from "@/sync/sync-status-diagnostics";
 
 export function isBookmarkSyncedOnce(bookmark: Bookmark): boolean {
   return (
@@ -5657,6 +5658,15 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           if (result.entry.sync_status === "failed") {
             syncFailed += 1;
           }
+          // STASH-69 investigation: record every result unconditionally, before
+          // any of the branching below can skip/return early — see
+          // sync-status-diagnostics.ts for why (direct evidence for whether a
+          // "failed" step is rare or something every save passes through).
+          noteSyncEntryStatus(
+            entry.local_id,
+            result.entry.sync_status,
+            result.entry.last_error_kind,
+          );
           if (didSyncQueueHealthEscalate(entry, result.entry)) {
             reportSyncQueueHealthEscalation({
               operation: entry.operation,
@@ -6636,6 +6646,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   failedEntries.set(entry.local_id, failedEntry);
                 }
                 syncFailed += failedEntries.size;
+                // STASH-69 investigation: a bulk-create chunk failure marks
+                // every entry in it (plus untried later entries) 'failed' in
+                // one shot — a real, likely source of "it always fails
+                // first" reports on a multi-item import. Recorded the same
+                // way as the per-entry path in applySyncEntryResult so a
+                // later retry's 'synced' result (routed through the regular
+                // per-entry loop) closes the same episode.
+                for (const [localId, failedEntry] of failedEntries) {
+                  noteSyncEntryStatus(localId, "failed", failedEntry.last_error_kind);
+                }
 
                 try {
                   await ensureRepositoryReady();
