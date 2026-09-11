@@ -212,8 +212,17 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         recentSlowSegments: describeRecentSegments(),
         storage: getStorageDiagnostics(),
         syncReconcile: getReconcileDiagnostics(),
+        // Excludes permanently-unsyncable entries, same as queueDepth/lastError
+        // above: those never leave the queue by design, so including them
+        // here would mean their failure episode can never be pruned and an
+        // old dead entry contaminates activeFailures on every later,
+        // unrelated report (Codex review on #765).
         syncStatusHistory: getSyncStatusDiagnostics(
-          new Set(queue.map((entry) => entry.local_id)),
+          new Set(
+            queue
+              .filter((entry) => !isPermanentlyUnsyncableUrl(entry))
+              .map((entry) => entry.local_id),
+          ),
         ),
         shareAttempt: getShareDiagnostics(),
         shareAttemptHistory: getShareDiagnosticsHistory(),

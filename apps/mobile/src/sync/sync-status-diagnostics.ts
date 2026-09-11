@@ -58,6 +58,13 @@ interface FailureEpisode {
   errorKind: string;
 }
 
+// See getSyncStatusDiagnostics's live-queue pruning: comfortably longer than
+// any realistic in-flight identity-transition window (a duplicate-swap's
+// remaining repository/network round-trips), short enough that a genuinely
+// discarded bookmark's episode still clears within a session. Exported for
+// tests only.
+export const PRUNE_GRACE_MS = 30_000;
+
 // Keyed by local_id, bounded by however many CREATE entries are currently
 // mid-retry in the live sync queue — never grows unboundedly the way a
 // per-event log would. Re-keyed alongside the rest of a bookmark's identity
@@ -158,6 +165,16 @@ export function remapSyncStatusIdentity(idMap: ReadonlyMap<string, string>): voi
       inFlightFailures.delete(oldId);
       inFlightFailures.set(newId, episode);
     }
+    // An excluded rehome-origin create can also resolve as a server-side
+    // duplicate (the single-entry path, not just the bulk one) and get
+    // re-keyed onto the adopted id here — the exclusion marker must follow
+    // it, or the adopted id's eventual sync is counted as real evidence
+    // despite being exactly the migration noise exclusion exists to filter
+    // out (Codex review on #765).
+    if (excludedLocalIds.has(oldId)) {
+      excludedLocalIds.delete(oldId);
+      excludedLocalIds.add(newId);
+    }
   }
 }
 
@@ -196,8 +213,21 @@ export function getSyncStatusDiagnostics(
     return undefined;
   }
   if (liveLocalIds) {
-    for (const localId of inFlightFailures.keys()) {
-      if (!liveLocalIds.has(localId)) {
+    const now = Date.now();
+    for (const [localId, episode] of inFlightFailures) {
+      // Grace period before an absent id is treated as discarded (Codex
+      // review on #765): a duplicate-swap resolution briefly has NEITHER the
+      // old id (already removed from the queue) NOR the new adopted id (not
+      // yet added — it's an update to an existing row, not a fresh queue
+      // entry) present in the live queue while applySyncEntryResult's own
+      // later awaits are still in flight and remapSyncStatusIdentity has
+      // already moved the episode onto that new id. A read in that narrow
+      // window would otherwise prune a real, about-to-resolve episode before
+      // its 'synced' call ever lands. That window is milliseconds; a
+      // genuinely discarded bookmark (permanent delete, emptied Trash,
+      // library reset) never becomes live again, so this only delays its
+      // cleanup, it doesn't skip it.
+      if (!liveLocalIds.has(localId) && now - episode.failedAt > PRUNE_GRACE_MS) {
         inFlightFailures.delete(localId);
       }
     }

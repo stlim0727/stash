@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 
 import {
   excludeFromSyncStatusDiagnostics,
   getSyncStatusDiagnostics,
   noteSyncEntryStatus,
+  PRUNE_GRACE_MS,
   remapSyncStatusIdentity,
   resetSyncStatusDiagnostics,
 } from './sync-status-diagnostics.ts';
@@ -217,30 +218,79 @@ test('updatedAt refreshes on a repeated failure for an already-open episode (Cod
   assert.notEqual(secondUpdatedAt, firstUpdatedAt);
 });
 
-test('getSyncStatusDiagnostics prunes a failure episode whose local_id is no longer in the live queue (discarded bookmark, Codex review on #765)', () => {
+test('getSyncStatusDiagnostics prunes a failure episode whose local_id is no longer in the live queue past the grace period (discarded bookmark, Codex review on #765)', () => {
   // A permanent delete, an emptied Trash, or a library reset removes the
   // queue entry without ever calling noteSyncEntryStatus('synced'/excluded)
   // for it — this is the general-purpose cleanup for all of those, rather
   // than hooking into every call site that can discard queued create work.
+  mock.timers.enable({ apis: ['Date'] });
+  try {
+    resetSyncStatusDiagnostics();
+    noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+    noteSyncEntryStatus('local-2', 'failed', 'create', 'transient_network');
+    assert.equal(getSyncStatusDiagnostics()!.activeFailures, 2);
+
+    // local-1's bookmark was discarded — only local-2 remains in the queue.
+    // Past the grace period (see the dedicated test below for within it), so
+    // this is a genuine, not merely in-flight, absence.
+    mock.timers.tick(PRUNE_GRACE_MS + 1);
+    assert.equal(
+      getSyncStatusDiagnostics(new Set(['local-2']))!.activeFailures,
+      1,
+    );
+
+    // The prune is durable, not just filtered on read — a later call without
+    // a live set still reflects it, and local-2's eventual sync still closes
+    // correctly (it was never pruned).
+    assert.equal(getSyncStatusDiagnostics()!.activeFailures, 1);
+    noteSyncEntryStatus('local-2', 'synced', 'create');
+    assert.deepEqual(getSyncStatusDiagnostics()!.syncedAfterFailureByKind, {
+      transient_network: 1,
+    });
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('getSyncStatusDiagnostics does NOT prune an episode absent from the live set within the grace period (in-flight identity transition, Codex review on #765)', () => {
+  // A duplicate-swap resolution briefly has neither the old id (already
+  // removed from the queue) nor the new adopted id (not yet added — it's an
+  // update to an existing row) present in the live queue while
+  // applySyncEntryResult's remaining awaits are in flight. A read during
+  // that narrow window must not prune the episode remapSyncStatusIdentity
+  // just moved onto the new id before its 'synced' call ever lands.
+  mock.timers.enable({ apis: ['Date'] });
+  try {
+    resetSyncStatusDiagnostics();
+    noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+
+    mock.timers.tick(PRUNE_GRACE_MS - 1);
+    assert.equal(getSyncStatusDiagnostics(new Set())!.activeFailures, 1);
+
+    // The still-open episode later resolves correctly — proof it was never
+    // pruned, not just that the count momentarily read 1.
+    noteSyncEntryStatus('local-1', 'synced', 'create');
+    assert.deepEqual(getSyncStatusDiagnostics()!.syncedAfterFailureByKind, {
+      transient_network: 1,
+    });
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('remapSyncStatusIdentity moves the exclusion marker alongside the episode (duplicate adoption of a rehome-origin create, Codex review on #765)', () => {
+  // account-transition.ts excludes a rehome's fresh ids up front, but one of
+  // those creates can still resolve as a server-side duplicate via the
+  // single-entry path, which re-keys it onto a DIFFERENT (existing row's)
+  // id — that adopted id must inherit the exclusion, or this migration-only
+  // create gets counted as a real new-capture success.
   resetSyncStatusDiagnostics();
-  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
-  noteSyncEntryStatus('local-2', 'failed', 'create', 'transient_network');
-  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 2);
+  excludeFromSyncStatusDiagnostics(['rehomed-old-id']);
 
-  // local-1's bookmark was discarded — only local-2 remains in the queue.
-  assert.equal(
-    getSyncStatusDiagnostics(new Set(['local-2']))!.activeFailures,
-    1,
-  );
+  remapSyncStatusIdentity(new Map([['rehomed-old-id', 'adopted-id']]));
 
-  // The prune is durable, not just filtered on read — a later call without
-  // a live set still reflects it, and local-2's eventual sync still closes
-  // correctly (it was never pruned).
-  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 1);
-  noteSyncEntryStatus('local-2', 'synced', 'create');
-  assert.deepEqual(getSyncStatusDiagnostics()!.syncedAfterFailureByKind, {
-    transient_network: 1,
-  });
+  noteSyncEntryStatus('adopted-id', 'synced', 'create');
+  assert.equal(getSyncStatusDiagnostics(), undefined);
 });
 
 test('getSyncStatusDiagnostics without a live set reflects the raw in-flight map (test-isolation default)', () => {
