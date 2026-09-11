@@ -377,12 +377,6 @@ export async function applyAccountTransition(
         updated_at: now,
       });
     }
-    // STASH-69 investigation: these `operation: 'create'` entries re-upload
-    // an already-existing library under a new account id — not a user
-    // saving a new bookmark. Excluded so a rehome (a real report: 561
-    // bookmarks in one) doesn't swamp the genuine new-capture signal (Codex
-    // review on #765).
-    excludeFromSyncStatusDiagnostics(newEntries.map((entry) => entry.local_id));
     recordLog('warn', `account switch: re-homing ${plan.rehome.length} bookmark(s) into the new account`);
     setBookmarks((current) =>
       (current ?? []).map((bookmark) => rehomedById.get(bookmark.id) ?? bookmark),
@@ -409,6 +403,16 @@ export async function applyAccountTransition(
     // upload against the re-homed bookmark instead of an id the new account
     // never had.
     const identityState = await tagState.rehome?.(idMap);
+    // STASH-69 investigation: deliberately AFTER tagState.rehome (which
+    // remaps a rehomed OLD id's open sync-status failure episode, if any,
+    // onto its new id — see remapSyncStatusIdentity) rather than before.
+    // Excluding first would leave that remapped episode stuck forever under
+    // an id noteSyncEntryStatus now ignores (Codex review on #765): these
+    // `operation: 'create'` entries re-upload an already-existing library
+    // under a new account id, not a user saving a new bookmark, so a rehome
+    // (a real report: 561 bookmarks in one) must never swamp the genuine
+    // new-capture signal.
+    excludeFromSyncStatusDiagnostics(newEntries.map((entry) => entry.local_id));
     await ensureRepositoryReady();
     const replacements = [...rehomedById].map(([previousId, bookmark]) => ({
       previousId,

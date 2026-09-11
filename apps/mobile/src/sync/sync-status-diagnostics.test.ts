@@ -195,3 +195,50 @@ test('excludeFromSyncStatusDiagnostics also clears an already-open episode for t
   assert.equal(snapshot.syncedWithoutFailure, 0);
   assert.deepEqual(snapshot.syncedAfterFailureByKind, {});
 });
+
+test('updatedAt refreshes on a repeated failure for an already-open episode (Codex review on #765)', async () => {
+  // A retry that keeps failing is fresh evidence too, even though the
+  // episode's own failedAt/errorKind deliberately don't reset — a report
+  // filed right after that retry must not look hours-stale.
+  resetSyncStatusDiagnostics();
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+  const firstUpdatedAt = getSyncStatusDiagnostics()!.updatedAt;
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_dns');
+  const secondUpdatedAt = getSyncStatusDiagnostics()!.updatedAt;
+
+  assert.notEqual(secondUpdatedAt, firstUpdatedAt);
+});
+
+test('getSyncStatusDiagnostics prunes a failure episode whose local_id is no longer in the live queue (discarded bookmark, Codex review on #765)', () => {
+  // A permanent delete, an emptied Trash, or a library reset removes the
+  // queue entry without ever calling noteSyncEntryStatus('synced'/excluded)
+  // for it — this is the general-purpose cleanup for all of those, rather
+  // than hooking into every call site that can discard queued create work.
+  resetSyncStatusDiagnostics();
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+  noteSyncEntryStatus('local-2', 'failed', 'create', 'transient_network');
+  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 2);
+
+  // local-1's bookmark was discarded — only local-2 remains in the queue.
+  assert.equal(
+    getSyncStatusDiagnostics(new Set(['local-2']))!.activeFailures,
+    1,
+  );
+
+  // The prune is durable, not just filtered on read — a later call without
+  // a live set still reflects it, and local-2's eventual sync still closes
+  // correctly (it was never pruned).
+  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 1);
+  noteSyncEntryStatus('local-2', 'synced', 'create');
+  assert.deepEqual(getSyncStatusDiagnostics()!.syncedAfterFailureByKind, {
+    transient_network: 1,
+  });
+});
+
+test('getSyncStatusDiagnostics without a live set reflects the raw in-flight map (test-isolation default)', () => {
+  resetSyncStatusDiagnostics();
+  noteSyncEntryStatus('local-1', 'failed', 'create', 'transient_network');
+  assert.equal(getSyncStatusDiagnostics()!.activeFailures, 1);
+});

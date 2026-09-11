@@ -113,11 +113,14 @@ export function noteSyncEntryStatus(
     // informative than whichever kind the latest retry happens to report.
     if (!inFlightFailures.has(localId)) {
       inFlightFailures.set(localId, { failedAt: Date.now(), errorKind: errorKind ?? 'unknown' });
-      // A failure-only session (nothing has synced yet, e.g. reported
-      // during an outage) must still produce a snapshot — see
-      // `activeFailures`'s own doc comment.
-      state.updatedAt = new Date().toISOString();
     }
+    // Refreshed on every failed call, first or repeat (Codex review on
+    // #765) — a report filed right after a recent retry must not look
+    // hours-stale just because the episode itself (failedAt/errorKind)
+    // deliberately doesn't reset. Also covers a failure-only session
+    // (nothing has synced yet, e.g. reported during an outage) — see
+    // `activeFailures`'s own doc comment.
+    state.updatedAt = new Date().toISOString();
     return;
   }
 
@@ -175,9 +178,29 @@ export function excludeFromSyncStatusDiagnostics(localIds: Iterable<string>): vo
   }
 }
 
-export function getSyncStatusDiagnostics(): SyncStatusDiagnostics | undefined {
+/**
+ * @param liveLocalIds The current sync queue's local_ids (report.tsx has
+ *   `queue` in scope already). When given, any tracked failure episode whose
+ *   local_id is no longer present is pruned before counting `activeFailures`
+ *   — the queue entry is gone with no 'synced'/exclude call ever having run
+ *   for it (a permanent delete, an emptied Trash, a library reset), so
+ *   without this the episode would otherwise sit in `activeFailures` for the
+ *   rest of the session despite there being no bookmark left to resolve it
+ *   (Codex review on #765). Omit only for tests exercising the module in
+ *   isolation, where `activeFailures` then reflects the raw in-flight map.
+ */
+export function getSyncStatusDiagnostics(
+  liveLocalIds?: ReadonlySet<string>,
+): SyncStatusDiagnostics | undefined {
   if (state.updatedAt === null) {
     return undefined;
+  }
+  if (liveLocalIds) {
+    for (const localId of inFlightFailures.keys()) {
+      if (!liveLocalIds.has(localId)) {
+        inFlightFailures.delete(localId);
+      }
+    }
   }
   return {
     syncedAfterFailureByKind: { ...state.syncedAfterFailureByKind },

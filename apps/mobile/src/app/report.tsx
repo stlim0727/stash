@@ -212,7 +212,9 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
         recentSlowSegments: describeRecentSegments(),
         storage: getStorageDiagnostics(),
         syncReconcile: getReconcileDiagnostics(),
-        syncStatusHistory: getSyncStatusDiagnostics(),
+        syncStatusHistory: getSyncStatusDiagnostics(
+          new Set(queue.map((entry) => entry.local_id)),
+        ),
         shareAttempt: getShareDiagnostics(),
         shareAttemptHistory: getShareDiagnosticsHistory(),
         pullHistory: getPullDiagnostics(),
@@ -230,6 +232,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
       pathname,
       sourceContext,
       auth.status,
+      queue,
       queueDepth,
       isSyncing,
       lastPulledAt,

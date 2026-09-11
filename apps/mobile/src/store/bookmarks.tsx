@@ -5666,17 +5666,20 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         ): Promise<boolean> => {
           if (result.entry.sync_status === "failed") {
             syncFailed += 1;
+            // STASH-69 investigation: recorded unconditionally, before any of
+            // the branching below — safe to call every pass regardless of
+            // outcome (idempotent past the first occurrence). The 'synced'
+            // side is deliberately NOT recorded here — see the call site's
+            // own comment on why (Codex review on #765: recording it this
+            // early risked double-counting one bookmark if this function
+            // later threw after this point).
+            noteSyncEntryStatus(
+              entry.local_id,
+              "failed",
+              entry.operation,
+              result.entry.last_error_kind,
+            );
           }
-          // STASH-69 investigation: record every result unconditionally, before
-          // any of the branching below can skip/return early — see
-          // sync-status-diagnostics.ts for why (direct evidence for whether a
-          // "failed" step is rare or something every save passes through).
-          noteSyncEntryStatus(
-            entry.local_id,
-            result.entry.sync_status,
-            entry.operation,
-            result.entry.last_error_kind,
-          );
           if (didSyncQueueHealthEscalate(entry, result.entry)) {
             reportSyncQueueHealthEscalation({
               operation: entry.operation,
@@ -6018,17 +6021,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             const entry = chunk[resultIndex]!;
             const result = results[resultIndex]!;
 
-            // STASH-69 investigation: recorded unconditionally, same
-            // rationale as recordBulkChunkStarted above — every result
-            // syncCreateQueueEntryBatch returns already represents a create
-            // that succeeded remotely, regardless of what the branching
-            // below does with it. Without this, a failed chunk's later
-            // successful retry (still routed through THIS function, not the
-            // per-entry loop, once at least two entries remain bulk-eligible)
-            // would leave the failure episode opened above permanently open
-            // (Codex review on #765).
-            noteSyncEntryStatus(entry.local_id, "synced", entry.operation);
-
             if (
               entry.operation !== "delete" &&
               deletedIds.current.has(entry.local_id)
@@ -6193,7 +6185,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // actual cause is confirmed and fixed.
           const reconcileReasonTally: Record<string, number> = {};
           const queueLenBeforeChunk = queueRef.current.length;
-          for (const { bookmark: update, originalLocalId } of completions) {
+          for (const {
+            bookmark: update,
+            entry: completedEntry,
+            originalLocalId,
+          } of completions) {
             const lookupId = originalLocalId ?? update.id;
             // Deleted while the upload/durable-persist was in flight: the
             // user's delete may have run before this row's sync_status flip
@@ -6217,6 +6213,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             );
             if (!latest) {
               continue;
+            }
+            // STASH-69 investigation: recorded here, not in the earlier
+            // per-result loop — this point is reached only once the durable
+            // persist above has actually succeeded AND this specific entry
+            // wasn't deleted mid-flight/missing its local row, so it's the
+            // earliest place this bookmark can truthfully be said to have
+            // reached 'synced'. Recording it any earlier risked counting an
+            // entry whose durable completion later failed entirely (Codex
+            // review on #765) — those stay 'syncing' and get retried, which
+            // would otherwise double-count them on that retry.
+            if (update.sync_status === "synced") {
+              noteSyncEntryStatus(lookupId, "synced", completedEntry.operation);
             }
             const merged: Bookmark = {
               ...latest,
@@ -6836,6 +6844,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               () => authRef.current.session?.user.id ?? null,
             );
             await applySyncEntryResult(entry, result);
+            // STASH-69 investigation: recorded only once applySyncEntryResult
+            // has actually FINISHED without throwing — a create can reach
+            // 'synced' in `result` yet still end up durably marked 'failed'
+            // below (e.g. rekeyBookmarkIdentity's repository writes failing
+            // mid-function for a duplicate-adoption swap), and recording it
+            // any earlier risked double-counting the same bookmark once here
+            // and again on its eventual real retry (Codex review on #765).
+            if (result.entry.sync_status === "synced") {
+              noteSyncEntryStatus(entry.local_id, "synced", entry.operation);
+            }
           } catch (error) {
             logStorageError("sync entry", error);
             syncFailed += 1;
