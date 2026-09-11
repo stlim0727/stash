@@ -31,6 +31,13 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
   const channelRef = useRef<RealtimeChannel | null>(null);
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const nudgeSendTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // `syncNow` is a useCallback keyed on the store's `auth`/`queue` state, so it
+  // gets a new identity on essentially every sync-driven state change. Reading
+  // it through a ref (reassigned every render, not a dependency) keeps
+  // `triggerDebouncedSync`/`connectSocket` stable across those churns — see
+  // the comment on the lifecycle effect below for why that matters.
+  const syncNowRef = useRef(syncNow);
+  syncNowRef.current = syncNow;
 
   // Retrieve or generate install_device_id
   useEffect(() => {
@@ -59,9 +66,9 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
       clearTimeout(debounceTimeoutRef.current);
     }
     debounceTimeoutRef.current = setTimeout(() => {
-      void syncNow().catch((err) => recordLog('warn', `Realtime sync failed: ${String(err)}`));
+      void syncNowRef.current().catch((err) => recordLog('warn', `Realtime sync failed: ${String(err)}`));
     }, 3000);
-  }, [syncNow]);
+  }, []);
 
   const disconnectSocket = useCallback(() => {
     if (nudgeSendTimeoutRef.current) {
@@ -125,14 +132,21 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
     });
   }, [session, status, userId, deviceId, triggerDebouncedSync, disconnectSocket]);
 
-  // Lifecycle listeners
+  // Lifecycle listeners. Deliberately keyed on `connectSocket`/`disconnectSocket`
+  // only, not `syncNow` (read via `syncNowRef` above instead) — those two are
+  // now stable across a `syncNow` identity change, so this effect no longer
+  // tears down and rebuilds the socket (disconnect+connect+new channel) on
+  // every sync-driven re-render. Sentry STASH-K traced JS-thread stalls to
+  // slow "react-cycle" segments during active syncing; that churn — a fresh
+  // RealtimeClient/channel/subscribe on nearly every processed queue entry —
+  // was a real, avoidable cost hiding in what looked like ordinary React work.
   useEffect(() => {
     connectSocket();
     const handleStateChange = (nextState: AppStateStatus) => {
       if (nextState === 'active') {
         connectSocket();
         // Catch up on any changes missed while backgrounded/offline
-        void syncNow().catch(() => {});
+        void syncNowRef.current().catch(() => {});
       } else {
         disconnectSocket();
         if (debounceTimeoutRef.current) {
@@ -150,7 +164,7 @@ export function useRealtimeSync({ session, status, userId, syncNow }: RealtimeSy
         clearTimeout(debounceTimeoutRef.current);
       }
     };
-  }, [connectSocket, disconnectSocket, syncNow]);
+  }, [connectSocket, disconnectSocket]);
 
   const broadcastSyncNudge = useCallback(() => {
     if (!channelRef.current || !deviceId) {

@@ -120,3 +120,34 @@ test('broadcastSyncNudge is a no-op before the channel/device id are ready', asy
   });
   expect(mockChannel.send).not.toHaveBeenCalled();
 });
+
+test('a new syncNow identity (session/status/userId unchanged) does not tear down and recreate the socket (Sentry STASH-K)', async () => {
+  // `syncNow` is a useCallback keyed on the store's `auth`/`queue` state, so
+  // it gets a brand-new identity on nearly every sync-driven re-render — a
+  // busy sync pass can re-render dozens of times a second. If this hook
+  // depended on `syncNow` directly, each of those would tear down the
+  // websocket (disconnect) and build a whole new RealtimeClient + channel
+  // (connect), which showed up as repeated "Subscribed to private channel"
+  // log spam and contributed to the slow "react-cycle" segments behind
+  // STASH-K's JS-thread stalls during active syncing.
+  const { rerender } = await renderHook(
+    ({ syncNow }: { syncNow: () => Promise<boolean> }) =>
+      useRealtimeSync({ session, status: 'authenticated', userId: 'user-1', syncNow }),
+    { initialProps: { syncNow: jest.fn(async () => true) } },
+  );
+
+  const connectCalls = mockClient.connect.mock.calls.length;
+  const disconnectCalls = mockClient.disconnect.mock.calls.length;
+  const channelCalls = mockClient.channel.mock.calls.length;
+
+  await act(async () => {
+    rerender({ syncNow: jest.fn(async () => true) });
+  });
+  await act(async () => {
+    rerender({ syncNow: jest.fn(async () => true) });
+  });
+
+  expect(mockClient.connect.mock.calls.length).toBe(connectCalls);
+  expect(mockClient.disconnect.mock.calls.length).toBe(disconnectCalls);
+  expect(mockClient.channel.mock.calls.length).toBe(channelCalls);
+});
