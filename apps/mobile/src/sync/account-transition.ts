@@ -332,9 +332,20 @@ export async function applyAccountTransition(
     /** old bookmark id -> new bookmark id, for re-keying tag state below. */
     const idMap = new Map<string, string>();
     const newEntries: LocalPendingBookmark[] = [];
+    // STASH-69 investigation: only cloudOwnedRows entries (confirmed synced
+    // to the previous account — genuine migration, not a new save) get
+    // excluded from sync-status diagnostics below. staleUploadedImageRows
+    // entries (isLocalOnlyBookmark) are a genuinely ambiguous/failed NEW
+    // capture whose create never confirmed — exactly the failed→synced
+    // evidence STASH-69 exists to collect, not migration noise (Codex
+    // review on #765).
+    const migrationOnlyNewIds: string[] = [];
     for (const old of plan.rehome) {
       const newId = makeBookmarkId();
       idMap.set(old.id, newId);
+      if (!isLocalOnlyBookmark(old)) {
+        migrationOnlyNewIds.push(newId);
+      }
       // ever_synced resets: the new id has never synced under this account,
       // regardless of whether the old row (under the old id) ever had.
       //
@@ -411,8 +422,9 @@ export async function applyAccountTransition(
     // `operation: 'create'` entries re-upload an already-existing library
     // under a new account id, not a user saving a new bookmark, so a rehome
     // (a real report: 561 bookmarks in one) must never swamp the genuine
-    // new-capture signal.
-    excludeFromSyncStatusDiagnostics(newEntries.map((entry) => entry.local_id));
+    // new-capture signal. Restricted to migrationOnlyNewIds, not every
+    // rehomed entry — see its own comment above.
+    excludeFromSyncStatusDiagnostics(migrationOnlyNewIds);
     await ensureRepositoryReady();
     const replacements = [...rehomedById].map(([previousId, bookmark]) => ({
       previousId,
