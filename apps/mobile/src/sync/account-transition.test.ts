@@ -779,3 +779,34 @@ test('applyAccountTransition excludes a confirmed-synced rehome from STASH-69 di
   // Only the stale-image rehome's sync counts as evidence.
   assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
 });
+
+test('applyAccountTransition does not exclude a non-image single-row rehome outside a carry-over plan (Codex review on #765, round 9)', async () => {
+  // bookmarks.tsx's landedUnderDepartedIdentity handler builds an ad-hoc
+  // `{ kind: 'switch', rehome: [staleRow] }` plan directly, bypassing
+  // cloudOwnedRows/staleUploadedImageRows — staleRow can be a URL/text
+  // bookmark, not just an image. Unlike a real carry-over's rehome list
+  // (which only ever contains confirmed-synced library rows or stale image
+  // uploads), this single row is a genuine in-flight NEW capture and must
+  // stay eligible as STASH-69 evidence even though `isLocalOnlyBookmark`
+  // reads false for it (it isn't an image at all).
+  resetSyncStatusDiagnostics();
+  const inFlightUrlCapture = bookmark({ id: 'local-url-in-flight', content_type: 'url', sync_status: 'pending' });
+
+  let newId: string | undefined;
+  await applyAccountTransition(
+    { kind: 'switch', rehome: [inFlightUrlCapture], drop: [], dropQueue: [], resetWatermark: false },
+    fakeRepository(),
+    () => {},
+    () => {},
+    () => {
+      newId = 'new-in-flight';
+      return newId;
+    },
+    async () => {},
+    {},
+  );
+
+  noteSyncEntryStatus(newId!, 'synced', 'create');
+
+  assert.equal(getSyncStatusDiagnostics()!.syncedWithoutFailure, 1);
+});

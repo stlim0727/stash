@@ -339,11 +339,23 @@ export async function applyAccountTransition(
     // capture whose create never confirmed — exactly the failed→synced
     // evidence STASH-69 exists to collect, not migration noise (Codex
     // review on #765).
+    //
+    // Gated on `plan.kind === 'carry-over'` (Codex review on #765, round 9),
+    // not just `!isLocalOnlyBookmark`: cloudOwnedRows is ONLY ever folded
+    // into `rehome` by the carry-over planner (see planAccountTransition) —
+    // every other rehome source (staleUploadedImageRows, and the single-row
+    // ad-hoc plan `landedUnderDepartedIdentity` builds in bookmarks.tsx,
+    // which can carry a URL/text bookmark too, not just images) is never a
+    // previously-synced library row. Without this gate, a non-image
+    // bookmark whose in-flight create happened to land under a departing
+    // identity (a genuine new capture, possibly with real prior failed
+    // attempts) would be misclassified as migration noise by
+    // `!isLocalOnlyBookmark` alone and lose its failed→synced evidence.
     const migrationOnlyNewIds: string[] = [];
     for (const old of plan.rehome) {
       const newId = makeBookmarkId();
       idMap.set(old.id, newId);
-      if (!isLocalOnlyBookmark(old)) {
+      if (plan.kind === 'carry-over' && !isLocalOnlyBookmark(old)) {
         migrationOnlyNewIds.push(newId);
       }
       // ever_synced resets: the new id has never synced under this account,
