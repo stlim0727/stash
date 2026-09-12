@@ -152,8 +152,12 @@ export const en = {
   'inbox.clearSearchA11y': 'Clear search',
   // Sticky active-filter bar: tells the user the list is narrowed and offers a
   // one-tap way back. `scopeFiltered`/`scopeSearch` label what's active; a
-  // clear/✕ action is shown.
-  'inbox.scopeFiltered': 'Filtered: {label}',
+  // clear/✕ action is shown. Carries a count (Sentry STASH-6A: a user asked
+  // whether a filtered-item count exists anywhere — it didn't, since the only
+  // other place that computes one, `sectionFacet`, is deliberately hidden
+  // outside search to save vertical space) using the same `{label} · {count}`
+  // separator as `sectionFacet` for consistency.
+  'inbox.scopeFiltered': 'Filtered: {label} · {count}',
   'inbox.scopeSearch': 'Results for “{query}”',
   // When a search runs inside an active facet (a collection, a tag, or the
   // Inbox/no-collection view), the results are scoped to that facet — so the
