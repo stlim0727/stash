@@ -106,7 +106,7 @@ export const ko: Catalog = {
   'inbox.emptySearchHint': '태그, 컬렉션, 사이트 이름에서도 검색해요.',
   'inbox.clearSearch': '검색 지우기',
   'inbox.clearSearchA11y': '검색 지우기',
-  'inbox.scopeFiltered': '필터: {label}',
+  'inbox.scopeFiltered': '필터: {label} · {count}',
   'inbox.scopeSearch': '“{query}” 검색 결과',
   'inbox.scopeSearchIn': '{scope}에서 “{query}” 검색 결과',
   'inbox.scopeClearA11y': '필터를 지우고 모든 북마크 보기',

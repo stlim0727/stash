@@ -190,7 +190,7 @@ test('tapping a tag chip applies the tag facet and clears the query', async () =
   });
 
   // Facet applied (only the tagged bookmark remains), query cleared.
-  await waitFor(() => expect(screen.getByText('Filtered: #design')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('Filtered: #design · 1')).toBeTruthy());
   expect(screen.getByText('Design system')).toBeTruthy();
   expect(screen.queryByText('Unrelated note')).toBeNull();
   expect(input.props.value).toBe('');
@@ -371,7 +371,7 @@ test('a tag tap survives a blur fired first (deferred-hide race)', async () => {
     await act(async () => {
       jest.runOnlyPendingTimers();
     });
-    await waitFor(() => expect(screen.getByText('Filtered: #design')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Filtered: #design · 1')).toBeTruthy());
     expect(screen.queryByText('Unrelated note')).toBeNull();
     expect(input.props.value).toBe('');
   } finally {
@@ -599,7 +599,7 @@ test('tapping a filtered tag chip applies the facet and clears the query', async
   // The tag facet is applied (only the #design bookmark remains) and the search
   // UI folds away onto the filtered list — the tap-to-open field unmounts, which
   // is the new "query cleared" end-state.
-  await waitFor(() => expect(screen.getByText('Filtered: #design')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText('Filtered: #design · 1')).toBeTruthy());
   expect(screen.getByText('A design doc')).toBeTruthy();
   expect(screen.queryByText('A database doc')).toBeNull();
   expect(screen.queryByPlaceholderText(SEARCH_PLACEHOLDER)).toBeNull();
@@ -689,7 +689,7 @@ test('a filtered chip tap survives a blur fired first (Phase-2 typing race)', as
     });
     // The facet is applied and the search UI folds away (the tap-to-open field
     // unmounts) — the tap succeeded and the query is cleared.
-    await waitFor(() => expect(screen.getByText('Filtered: #design')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Filtered: #design · 1')).toBeTruthy());
     expect(screen.queryByPlaceholderText(SEARCH_PLACEHOLDER)).toBeNull();
 
     await act(async () => {

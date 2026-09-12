@@ -1771,12 +1771,12 @@ export default function InboxScreen() {
     const label =
       filter.kind === 'uncollected' ? t('inbox.filterNoCollection') : (activeChip?.label ?? '');
     return {
-      text: t('inbox.scopeFiltered', { label }),
+      text: t('inbox.scopeFiltered', { label, count: visible.length }),
       icon: 'funnel-outline',
       action: 'clear-facet',
       a11y: t('inbox.scopeClearA11y'),
     };
-  }, [searching, debouncedQuery, filter.kind, activeChip, t]);
+  }, [searching, debouncedQuery, filter.kind, activeChip, visible.length, t]);
 
   // Run the scope bar's trailing action: close a live search first (folds the
   // tap-to-open field away and clears the query, leaving any underlying facet in

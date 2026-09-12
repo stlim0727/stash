@@ -1021,8 +1021,9 @@ test('a tag route param filters the Inbox to that tag on load', async () => {
 
   expect(screen.queryByText('Unrelated note')).toBeNull();
   // The active facet is named by the pinned filter bar (the section label no
-  // longer duplicates the scope outside of search).
-  expect(screen.getByText('Filtered: #design')).toBeTruthy();
+  // longer duplicates the scope outside of search). Carries a count (STASH-6A)
+  // — one bookmark matches #design here.
+  expect(screen.getByText('Filtered: #design · 1')).toBeTruthy();
 });
 
 test('an empty library shows the onboarding card even with a legacy Tag-cloud preference', async () => {
