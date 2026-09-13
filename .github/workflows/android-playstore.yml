@@ -23,6 +23,12 @@ name: Android Play Store Release
 # servers, so those must be configured once as EAS project environment
 # variables for the `production` environment (`eas env:create` or the Expo
 # dashboard), not as GitHub secrets.
+#
+# Google Play's submit API rejects a listing that has never received a
+# manual upload — per docs/development/play-store.md, the very first AAB for
+# a new Play Console app must be uploaded by hand (Play Console -> internal
+# testing) before this workflow's --auto-submit can succeed. Only re-dispatch
+# this workflow after that one-time bootstrap upload.
 
 on:
   workflow_dispatch: {}
@@ -36,6 +42,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # workflow_dispatch lets the dispatcher pick any branch/tag as the run's
+      # ref (independent of any `inputs`), and that ref is what gets checked
+      # out and shipped to Play below — so guard it here rather than trusting
+      # the UI/API caller. Mirrors android-apk.yml's release-branch rule
+      # (docs/development/branching.md): only `main` or a `release/*` line.
+      - name: Restrict to approved release refs
+        run: |
+          if [ "${{ github.ref_name }}" != "main" ] && [[ "${{ github.ref_name }}" != release/* ]]; then
+            echo "::error::Refusing to build+submit to Play from ref '${{ github.ref_name }}' — dispatch this workflow from 'main' or a 'release/*' branch only (see docs/development/branching.md)."
+            exit 1
+          fi
 
       - uses: pnpm/action-setup@v4
 

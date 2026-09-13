@@ -21,6 +21,13 @@
 //   Routing it through `extra` shares `version`'s
 //   cache-immune path, so the provenance updates each build.
 //   Empty locally ⇒ the app shows a "local build" label.
+//
+//   A build triggered via `eas build` (e.g. android-playstore.yml) never has
+//   these EXPO_PUBLIC_* vars set — the GitHub Actions runner just kicks off
+//   a remote EAS build, it doesn't set the remote worker's env. EAS itself
+//   sets EAS_BUILD_GIT_COMMIT_HASH on that worker, so fall back to it for the
+//   sha and derive the commit URL from it; there's no EAS-provided branch
+//   name, so gitRef stays null for EAS-triggered builds.
 
 const path = require("path");
 const fs = require("fs");
@@ -69,9 +76,13 @@ module.exports = ({ config }) => {
     ios: { ...config.ios, buildNumber: String(versionCode) },
     extra: {
       ...config.extra,
-      gitSha: process.env.EXPO_PUBLIC_GIT_SHA || null,
+      gitSha: process.env.EXPO_PUBLIC_GIT_SHA || process.env.EAS_BUILD_GIT_COMMIT_HASH || null,
       gitRef: process.env.EXPO_PUBLIC_GIT_REF || null,
-      commitUrl: process.env.EXPO_PUBLIC_COMMIT_URL || null,
+      commitUrl:
+        process.env.EXPO_PUBLIC_COMMIT_URL ||
+        (process.env.EAS_BUILD_GIT_COMMIT_HASH
+          ? `https://github.com/stlim0727/stash/commit/${process.env.EAS_BUILD_GIT_COMMIT_HASH}`
+          : null),
       eas: {
         ...((config.extra && config.extra.eas) || {}),
         ...(easProjectId ? { projectId: easProjectId } : {}),
