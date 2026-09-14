@@ -2964,6 +2964,7 @@ export default function InboxScreen() {
             : cardTags;
           const metaParts = [
             ...(item.content_type === 'text' ? [t('inbox.memoType')] : []),
+            ...(item.content_type === 'image' ? [t('inbox.photoType')] : []),
             ...(collectionName ? [t('inbox.inCollection', { name: collectionName })] : []),
             ...orderedTags.slice(0, 3).map((tag) => `#${tag.name}`),
           ];

@@ -144,6 +144,7 @@ export const ko: Catalog = {
   'inbox.sessionExpiredA11y': '세션이 만료되었습니다. 설정에서 다시 로그인하여 동기화를 재개하세요.',
   'inbox.inCollection': '{name}에 있음',
   'inbox.memoType': '메모',
+  'inbox.photoType': '사진',
   'inbox.addBookmark': '북마크 추가',
   'inbox.settingsA11y': '설정',
   'inbox.scrollToTopA11y': '맨 위로 스크롤',
