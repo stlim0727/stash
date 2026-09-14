@@ -88,6 +88,23 @@ Expected output: `.aab` suitable for Play Console upload.
 Do not use `.github/workflows/android-apk.yml` for Play upload. That workflow is
 for internal testing and sideload distribution only.
 
+### CI: `.github/workflows/android-playstore.yml`
+
+A manual-dispatch-only GitHub Actions workflow runs the equivalent build +
+submit remotely: `eas build --profile production --platform android
+--non-interactive --auto-submit`. It builds on EAS's cloud infra (not the
+runner) and submits to whatever track `eas.json`'s `submit.production`
+profile targets (currently `internal`). It never triggers on tag push or
+push to `main` — dispatch it by hand from *Actions -> Android Play Store
+Release -> Run workflow* only when you intend to publish.
+
+Requires repo secrets `EXPO_TOKEN` (Expo access token) and
+`PLAY_SERVICE_ACCOUNT_JSON` (the Play publisher service-account key content).
+Build-time app config (Supabase URL, Sentry DSN, etc.) must be set as EAS
+project environment variables for the `production` environment beforehand —
+this workflow does not pass them through, since the build runs on Expo's
+servers, not this runner.
+
 Before building:
 
 - Ensure `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` are set

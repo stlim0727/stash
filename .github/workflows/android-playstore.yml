@@ -1,0 +1,92 @@
+name: Android Play Store Release
+
+# Builds a Play-ready Android App Bundle via EAS Build (runs on Expo's cloud
+# infra, not this runner) and auto-submits it to Google Play using the
+# `submit.production` profile already defined in apps/mobile/eas.json (which
+# targets the `internal` track — see docs/development/play-store.md for the
+# internal -> closed -> production promotion sequence).
+#
+# Manual dispatch only. This intentionally does NOT trigger on tag push like
+# .github/workflows/android-apk.yml does: that workflow builds a debug-signed
+# sideload APK for testers, this one publishes to a real Google Play track,
+# so it must never fire as a side effect of cutting a build elsewhere.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   EXPO_TOKEN                 an Expo access token (expo.dev -> Account ->
+#                               Access tokens) for non-interactive `eas` auth.
+#   PLAY_SERVICE_ACCOUNT_JSON  full contents of the Google Play publisher
+#                               service-account JSON key referenced by
+#                               eas.json's `submit.production.android.serviceAccountKeyPath`.
+#
+# Build-time app config (EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SENTRY_DSN,
+# etc.) is NOT passed through this workflow: the build itself runs on EAS's
+# servers, so those must be configured once as EAS project environment
+# variables for the `production` environment (`eas env:create` or the Expo
+# dashboard), not as GitHub secrets.
+#
+# Google Play's submit API rejects a listing that has never received a
+# manual upload — per docs/development/play-store.md, the very first AAB for
+# a new Play Console app must be uploaded by hand (Play Console -> internal
+# testing) before this workflow's --auto-submit can succeed. Only re-dispatch
+# this workflow after that one-time bootstrap upload.
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: android-playstore
+  cancel-in-progress: false
+
+jobs:
+  build-and-submit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # workflow_dispatch lets the dispatcher pick any branch/tag as the run's
+      # ref (independent of any `inputs`), and that ref is what gets checked
+      # out and shipped to Play below — so guard it here rather than trusting
+      # the UI/API caller. Mirrors android-apk.yml's release-branch rule
+      # (docs/development/branching.md): only `main` or a `release/*` line.
+      - name: Restrict to approved release refs
+        run: |
+          if [ "${{ github.ref_name }}" != "main" ] && [[ "${{ github.ref_name }}" != release/* ]]; then
+            echo "::error::Refusing to build+submit to Play from ref '${{ github.ref_name }}' — dispatch this workflow from 'main' or a 'release/*' branch only (see docs/development/branching.md)."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Same gate as CI: fail fast before spending EAS build minutes and a
+      # Play upload slot on broken code.
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:components
+
+      # Written next to eas.json at the exact relative path its
+      # `serviceAccountKeyPath` expects, and removed unconditionally after
+      # the submit step so the key never lingers on the runner.
+      - name: Write Play publisher service account key
+        working-directory: apps/mobile
+        run: printf '%s' "$PLAY_SERVICE_ACCOUNT_JSON" > keepory-play-publisher-service-account.json
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+
+      - name: EAS build (production) + submit to Play
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: pnpm dlx eas-cli build --platform android --profile production --non-interactive --auto-submit
+
+      - name: Remove Play publisher service account key
+        if: always()
+        working-directory: apps/mobile
+        run: rm -f keepory-play-publisher-service-account.json
