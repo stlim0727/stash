@@ -231,6 +231,7 @@ export const en = {
   'inbox.sessionExpiredA11y': 'Session expired. Open settings to sign back in and resume syncing.',
   'inbox.inCollection': 'in {name}',
   'inbox.memoType': 'Memo',
+  'inbox.photoType': 'Photo',
   'inbox.addBookmark': 'Add bookmark',
   'inbox.settingsA11y': 'Settings',
   'inbox.scrollToTopA11y': 'Scroll to top',
