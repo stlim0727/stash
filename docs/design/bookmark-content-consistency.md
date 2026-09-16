@@ -38,15 +38,13 @@ happened to send, with no shared UI contract between them.
    together, the image is silently dropped with no UI indication.
    `store/bookmarks.tsx` `addBookmark` (L2523-2536) treats `image` / `url` /
    `shared_text` as mutually exclusive.
-3. **The `notes` field's meaning silently changes by content type.** For
-   link/image bookmarks, `notes` is a plain-text caption, edited via a bare
-   `TextInput` in `bookmark/[id].tsx` (L1216-1253) with no rendering step. For
-   a text memo (`content_type: 'text'`), the body lives in a _different_
-   field, `description`, and is parsed and rendered as Markdown via
-   `MarkdownBody` (L1210, preview/edit toggle at L1129-1213). Same-looking
-   multi-line input, different behavior depending on which tab created it —
-   this is the sharpest inconsistency and the most likely source of the
-   "산만하다" feeling.
+3. **Memo bodies and annotations are distinct but consistently edited.** The
+   Detail screen already renders both through `MemoEditor`: `description` uses
+   `description_format` and `notes` uses `notes_format`, preserving each
+   field's `plain` or `markdown` semantics. This is not a rendering gap to fix.
+   The remaining product question is whether two separately authored text
+   surfaces are clear enough in the combined-anchor UI; their storage and
+   format provenance must remain distinct.
 4. **Type badges are half-implemented.** The Inbox card meta line adds a
    "Memo" label only for `content_type === 'text'` (`index.tsx` L2966,
    `t('inbox.memoType')`); there is no equivalent label for image bookmarks.
@@ -59,14 +57,13 @@ preview_image_url`, `index.tsx` L2994/L3120 — so this is a labeling gap,
 
 ## 3. Design options considered
 
-**A — Single entity: "0-1 anchor + consistently rendered Markdown text"
+**A — Single entity: "0-1 anchor + existing formatted text fields"
 (recommended, narrowed).** A bookmark keeps one anchor (none | link | image |
-link+image). Its primary memo body and its optional annotation remain distinct
-when both exist, but both receive the same Markdown preview/edit treatment
-regardless of anchor. A pure memo (no anchor) stays possible. This satisfies
-the user's "3가지 조합" ask while still bounding it — an anchor is at most one
-of each kind, never an open-ended list — without conflating two separately
-authored values.
+link+image). Its primary memo body and optional annotation remain distinct,
+including each field's existing `plain`/`markdown` format metadata. A pure memo
+(no anchor) stays possible. This satisfies the user's "3가지 조합" ask while
+still bounding it — an anchor is at most one of each kind, never an open-ended
+list — without introducing an unnecessary text-field migration.
 
 **B — Keep 3 separate capture modes, unify only the shared UI/Markdown
 treatment.** Smallest schema-safe change; does not satisfy the explicit
@@ -80,11 +77,10 @@ asked (Simplicity first).
 
 ## 4. Recommended direction
 
-Option A, narrowed as above. It resolves inconsistency #3 (the sharpest one)
-by giving memo bodies and annotations one rendering/editing contract while
-preserving their distinct meanings, and it turns inconsistency #2 (accidental,
-silent-drop combining) into a designed, visible capability instead of removing
-it.
+Option A, narrowed as above. The existing `MemoEditor` and format fields already
+provide a shared rendering/editing contract while preserving distinct meanings.
+The remaining work turns inconsistency #2 (accidental, silent-drop combining)
+into a designed, visible capability instead of removing it.
 
 This is a recommendation for review, not a decision — Phase 2 below requires
 explicit greenlight plus domain-sync-engineer sign-off before any schema
@@ -94,46 +90,34 @@ change lands.
 
 ### Phase 1 — no schema change, safe to build now
 
-- **Add an image-attach entry point to the manual Add screen.** Today
+- **Add a native-only image-attach entry point to the manual Add screen.** Today
   opening the app can only produce a Link or Memo; attaching a photo requires
   leaving the app and using OS share. Reuse the existing "local URI first,
   optimistic" image pipeline `store/bookmarks.tsx` already uses for shared
-  images (L2641-2691) rather than building a second one.
+  images (L2641-2691) rather than building a second one. Do not expose this on
+  web until web has durable local persistence and a working binary upload path;
+  the current web image-store keeps a transient source URI and cannot upload.
 - **Give image bookmarks the same type-label treatment text memos already
   have** in the Inbox meta line (`index.tsx` L2966) — closes gap #4.
 - Both changes are additive UI work with no `Bookmark` schema change and no
-  sync-queue shape change, so they carry Phase-1-level risk.
+  sync-queue shape change, so they carry Phase-1-level risk on native.
 
-Deliberately **out of Phase 1**: unifying `notes` to render as Markdown.
-Investigating the field in `bookmark/[id].tsx` (L1216-1253) during this
-review surfaced that `notes` is more entangled than `description` — it drives
-focus state (`notesFocused`), a length warning (`notesTooLong`), and is the
-landing field for the "use AI summary" action (`ProposedSummary`,
-L1255-1265+). Converting it to a Markdown preview/edit toggle like the memo
-block is a real behavior change to a field explicitly called out as
-user-authored-and-sacred, not a pure rendering tweak — it belongs in Phase 2
-review, not a same-session drive-by edit.
+No text-field migration is proposed: `MemoEditor`, `description_format`, and
+`notes_format` already give both fields explicit plain/Markdown behavior.
 
 ### Phase 2 — schema-affecting, needs domain-sync-engineer review first
 
-- Normalize `notes`/`description` into explicitly distinct memo-body and
-  annotation fields, both always Markdown and decoupled from `content_type`.
-  A row with both existing fields populated must retain both values; neither
-  may overwrite, concatenate with, or be substituted for the other. Older app
-  versions must continue to see the legacy fields during the compatibility
-  window, so the schema and rollout must be additive before any later cleanup.
 - Support a link+image combined anchor (attach an image alongside a URL from
-  Add, or from a share that carries both).
+  Add, or from a share that carries both). Store a user attachment separately
+  from generated page preview metadata (for example, dedicated remote/local
+  attachment fields plus explicit provenance); `preview_image_url` remains
+  reserved for generated OpenGraph/page previews. Metadata refresh must never
+  clear or replace the attachment, and permanent deletion must clean up its
+  uploaded object independently of `content_type`.
 
 Open questions for that review:
 
-1. What additive schema and compatibility window should carry the distinct
-   memo body and annotation? The migration must copy `description` to the new
-   memo-body representation and `notes` to the new annotation representation
-   independently, including when both are populated. Most existing plain-text
-   values round-trip as Markdown as-is, but dual-write/read behavior with older
-   app versions still needs to be designed and verified.
-2. A link+image anchor uses `url_hash` as its identity whenever a URL is
+1. A link+image anchor uses `url_hash` as its identity whenever a URL is
    present. On a duplicate URL, the incoming image is an update to the existing
    bookmark rather than a second bookmark: attach it when the existing row has
    no image; when it already has one, an interactive Add flow must ask whether
@@ -142,11 +126,14 @@ Open questions for that review:
    Any uploaded-but-unattached binary must be cleaned up. Confirm the exact
    update/cleanup transaction against `sync/sync-bookmarks.ts` and the upload
    API before implementation.
+2. What additive attachment fields and compatibility window let older clients
+   continue using generated `preview_image_url` safely while newer clients
+   upload, sync, render, replace, and permanently delete user attachments?
 3. Does the existing "binary upload before row create" ordering for image
    bookmarks (`docs/api/bookmarks.md`: the server refuses a `content_type:
 image` row without `preview_image_url` already set) extend cleanly to the
    link+image combined case?
-4. A cloud migration that transforms existing rows **must bump `updated_at`**
+4. Any cloud migration that transforms existing rows **must bump `updated_at`**
    (or deliberately force a full client refresh) so incremental pull clients
    receive the transformed values. The no-timestamp-bump rule in `AGENTS.md`
    applies to local-only cosmetic repair, not server-side schema/data
