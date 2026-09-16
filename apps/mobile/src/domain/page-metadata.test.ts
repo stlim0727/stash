@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   checkYoutubeAvailability,
   detectCharset,
+  discoverOembedEndpoint,
   fetchPageMetadata,
   htmlHeadSummary,
   isYoutubeAvailabilityCandidate,
@@ -99,6 +100,23 @@ test('parsePageMetadata returns undefined fields for empty documents', () => {
   assert.equal(meta.preview_image_url, undefined);
 });
 
+test('discoverOembedEndpoint resolves a provider-independent JSON discovery link', () => {
+  assert.equal(
+    discoverOembedEndpoint(
+      `<head><link rel="alternate" type="application/json+oembed" href="/api/oembed?url=post%2F1"></head>`,
+      'https://social.example/posts/1',
+    ),
+    'https://social.example/api/oembed?url=post%2F1',
+  );
+  assert.equal(
+    discoverOembedEndpoint(
+      `<head><link type="text/xml+oembed" href="https://social.example/oembed.xml"></head>`,
+      'https://social.example/posts/1',
+    ),
+    null,
+  );
+});
+
 test('youtubeVideoId extracts the id from every YouTube URL shape', () => {
   assert.equal(youtubeVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
   assert.equal(youtubeVideoId('https://youtu.be/dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
@@ -109,11 +127,20 @@ test('youtubeVideoId extracts the id from every YouTube URL shape', () => {
   assert.equal(youtubeVideoId('not a url'), null);
 });
 
-test('oembedEndpoint builds a canonical YouTube oEmbed URL (shorts → watch)', () => {
+test('oembedEndpoint builds provider URLs for YouTube and Reddit posts', () => {
   assert.equal(
     oembedEndpoint('https://www.youtube.com/shorts/MufIgnqP1vk'),
     'https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DMufIgnqP1vk',
   );
+  assert.equal(
+    oembedEndpoint('https://www.reddit.com/r/LocalLLaMA/comments/abc123/a_specific_post/'),
+    'https://www.reddit.com/oembed?url=https%3A%2F%2Fwww.reddit.com%2Fr%2FLocalLLaMA%2Fcomments%2Fabc123%2Fa_specific_post%2F',
+  );
+  assert.equal(
+    oembedEndpoint('https://redd.it/abc123'),
+    'https://www.reddit.com/oembed?url=https%3A%2F%2Fredd.it%2Fabc123',
+  );
+  assert.equal(oembedEndpoint('https://www.reddit.com/r/LocalLLaMA/'), null);
   assert.equal(oembedEndpoint('https://example.com/article'), null);
 });
 
@@ -294,6 +321,88 @@ test('fetchPageMetadata keeps hqdefault when sddefault is missing (404)', async 
   try {
     const meta = await fetchPageMetadata('https://youtu.be/jNQXAC9IVRw');
     assert.equal(meta?.preview_image_url, 'https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata prefers Reddit oEmbed over its generic HTML title (STASH-6F)', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (target: string) => {
+    calls.push(target);
+    if (target.startsWith('https://www.reddit.com/oembed')) {
+      return {
+        ok: true,
+        json: async () => ({
+          title: 'A specific Reddit post title',
+          provider_name: 'Reddit',
+          thumbnail_url: 'https://preview.redd.it/example.jpg',
+        }),
+      } as unknown as Response;
+    }
+    return htmlResponse('<head><title>Reddit</title></head>');
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata(
+      'https://www.reddit.com/r/LocalLLaMA/comments/abc123/a_specific_post/',
+    );
+    assert.equal(meta?.title, 'A specific Reddit post title');
+    assert.equal(meta?.site_name, 'Reddit');
+    assert.equal(meta?.preview_image_url, 'https://preview.redd.it/example.jpg');
+    assert.equal(calls.length, 1, 'successful oEmbed should avoid the generic HTML request');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata follows standard oEmbed discovery for an unknown provider', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (target: string) => {
+    calls.push(target);
+    if (target === 'https://social.example/api/oembed?post=42') {
+      return {
+        ok: true,
+        json: async () => ({
+          title: 'The specific post title',
+          provider_name: 'Social Example',
+          thumbnail_url: 'https://social.example/thumb.jpg',
+        }),
+      } as unknown as Response;
+    }
+    return htmlResponse(
+      '<head><title>Social Example</title><link rel="alternate" type="application/json+oembed" href="/api/oembed?post=42"></head>',
+      { url: 'https://social.example/posts/42' },
+    );
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://social.example/posts/42');
+    assert.equal(meta?.title, 'The specific post title');
+    assert.equal(meta?.site_name, 'Social Example');
+    assert.equal(meta?.preview_image_url, 'https://social.example/thumb.jpg');
+    assert.deepEqual(calls, [
+      'https://social.example/posts/42',
+      'https://social.example/api/oembed?post=42',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('checkYoutubeAvailability does not query the Reddit oEmbed provider', async () => {
+  const originalFetch = globalThis.fetch;
+  let called = false;
+  globalThis.fetch = (async () => {
+    called = true;
+    return { ok: true, status: 200, json: async () => ({ title: 'post' }) } as unknown as Response;
+  }) as typeof fetch;
+  try {
+    assert.equal(
+      await checkYoutubeAvailability('https://www.reddit.com/r/test/comments/abc123/post/'),
+      'unknown',
+    );
+    assert.equal(called, false);
   } finally {
     globalThis.fetch = originalFetch;
   }

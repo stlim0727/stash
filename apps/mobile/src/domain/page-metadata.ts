@@ -148,6 +148,27 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
 }
 
 /**
+ * Read the standard oEmbed discovery link advertised by a page. This is the
+ * general provider-independent path: any site can opt in without Stash knowing
+ * its hostname. Provider adapters remain useful for sites such as Reddit whose
+ * native-fetch HTML can omit discovery and expose only a generic app title.
+ */
+export function discoverOembedEndpoint(html: string, baseUrl: string): string | null {
+  const head = html.slice(0, MAX_HTML_BYTES);
+  for (const tag of head.match(/<link\b[^>]*>/gi) ?? []) {
+    const type = (attribute(tag, 'type') ?? '').toLowerCase().split(';')[0]?.trim();
+    if (type !== 'application/json+oembed') {
+      continue;
+    }
+    const href = clean(attribute(tag, 'href'));
+    if (href) {
+      return resolveHref(href, baseUrl) ?? null;
+    }
+  }
+  return null;
+}
+
+/**
  * A short, privacy-safe summary of a page's <head> for the failure diagnostic:
  * how many <meta> tags it had, which og:/twitter: *keys* were present (the key
  * names are standardized tokens, not user content), and whether a <title> tag
@@ -182,6 +203,7 @@ interface HtmlFetchResult {
   metadata: FetchedMetadata | null;
   outcome: string;
   finalUrl?: string;
+  discoveredOembedUrl?: string;
 }
 
 interface CappedBody {
@@ -283,15 +305,21 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
     // Redirects may have moved us; resolve relative URLs against the final URL.
     const finalUrl = response.url || url;
     const metadata = parsePageMetadata(html, finalUrl);
+    const discoveredOembedUrl = discoverOembedEndpoint(html, finalUrl) ?? undefined;
     if (!metadata.title) {
       // A 200 with no parseable title is the classic "content-free JS shell".
       // Note the final URL (so a redirect chain like naver.me → m.place shows)
       // and a structural head summary so the failure log says *why* on its own.
       const size = `${body.read}${body.truncated ? '+' : ''}`;
       const detail = `${htmlHeadSummary(html)} bytes=${size} ct=${contentType.split(';')[0] || 'unknown'}`;
-      return { metadata, outcome: `no_title@${finalUrl} {${detail}}`, finalUrl };
+      return {
+        metadata,
+        outcome: `no_title@${finalUrl} {${detail}}`,
+        finalUrl,
+        discoveredOembedUrl,
+      };
     }
-    return { metadata, outcome: 'ok', finalUrl };
+    return { metadata, outcome: 'ok', finalUrl, discoveredOembedUrl };
   } catch (err) {
     return { metadata: null, outcome: `error:${err instanceof Error ? err.name : 'unknown'}` };
   } finally {
@@ -374,6 +402,15 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   }
 
   const bot = await fetchHtmlMetadata(target, BOT_USER_AGENT);
+  if (bot.discoveredOembedUrl) {
+    const discovered = await fetchOembed(bot.discoveredOembedUrl);
+    if (discovered?.title) {
+      return discovered;
+    }
+    oembedOutcome = oembedOutcome
+      ? `${oembedOutcome};discovered=failed`
+      : 'discovered=failed';
+  }
   if (bot.metadata?.title) {
     return bot.metadata;
   }
@@ -381,6 +418,15 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
   // browser. Keep the bot result as a fallback so we never discard usable
   // partial metadata (e.g. a favicon) the browser retry can't improve on.
   const browser = await fetchHtmlMetadata(target, BROWSER_USER_AGENT);
+  if (browser.discoveredOembedUrl && browser.discoveredOembedUrl !== bot.discoveredOembedUrl) {
+    const discovered = await fetchOembed(browser.discoveredOembedUrl);
+    if (discovered?.title) {
+      return discovered;
+    }
+    oembedOutcome = oembedOutcome
+      ? `${oembedOutcome};browser_discovered=failed`
+      : 'browser_discovered=failed';
+  }
   let result = browser.metadata ?? bot.metadata;
   const landedOn = browser.finalUrl ?? bot.finalUrl;
 
@@ -560,6 +606,22 @@ export function oembedEndpoint(rawUrl: string): string | null {
     const watch = `https://www.youtube.com/watch?v=${youtubeId}`;
     return `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(watch)}`;
   }
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.replace(/^www\./, '').replace(/^m\./, '');
+    const isRedditPost =
+      (host === 'reddit.com' && /\/(?:r\/[^/]+\/)?comments\/[^/]+(?:\/|$)/i.test(parsed.pathname)) ||
+      (host === 'redd.it' && parsed.pathname.split('/').filter(Boolean).length > 0);
+    if (isRedditPost) {
+      // Reddit's HTML response frequently exposes only the generic "Reddit"
+      // app title to native fetches. Its oEmbed response carries the actual
+      // post title (and a thumbnail when the post has one), so prefer that
+      // structured preview just as we do for YouTube (STASH-6F).
+      return `https://www.reddit.com/oembed?url=${encodeURIComponent(rawUrl)}`;
+    }
+  } catch {
+    return null;
+  }
   return null;
 }
 
@@ -683,6 +745,11 @@ async function resolveKnownYoutubeShortener(rawUrl: string): Promise<string | nu
 export async function checkYoutubeAvailability(
   rawUrl: string,
 ): Promise<'available' | 'unavailable' | 'unknown'> {
+  // oembedEndpoint also supports Reddit previews; availability is specifically
+  // a YouTube lifecycle check, so never query another provider here.
+  if (!youtubeVideoId(rawUrl) && !isKnownYoutubeShortenerHost(rawUrl)) {
+    return 'unknown';
+  }
   let endpoint = oembedEndpoint(rawUrl);
   if (!endpoint) {
     const resolved = await resolveKnownYoutubeShortener(rawUrl);
