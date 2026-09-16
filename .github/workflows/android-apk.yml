@@ -77,7 +77,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          # The action's default package list still includes the obsolete
+          # `tools` package, which Google removed from the SDK repository.
+          # GitHub's Android runner already has the SDK packages that Gradle
+          # needs; use the action only to configure the SDK/PATH and licenses.
+          packages: ''
 
       # A hoisted (npm-like) layout is friendliest for React Native Gradle
       # autolinking; pnpm's default isolated symlinks can confuse it.
@@ -374,7 +381,9 @@ jobs:
       # hits) is visible in the log instead of silently costing 5 cold minutes.
       - name: ccache stats
         if: always()
-        run: ccache -s
+        # Setup failures can skip the apt install above. Do not add a second,
+        # misleading failure just because ccache was never installed.
+        run: command -v ccache >/dev/null && ccache -s || echo "ccache was not installed; no stats available"
 
       # Always save the Gradle cache after each build so the Gradle build cache
       # (task output hashes stored in ~/.gradle/caches/build-cache-*) accumulates
