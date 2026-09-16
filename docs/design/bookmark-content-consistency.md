@@ -104,7 +104,13 @@ change lands.
   writes must report "saved locally, sync pending" and retain/reconcile the
   pending row, not invite a retry that creates a second image bookmark. Expose
   separate local-persistence and enqueue outcomes (or equivalent typed states)
-  so only a failed image copy/row insert is treated as a failed save.
+  so only a failed image copy/row insert is treated as a failed save. If the
+  image copy succeeds but the row insert fails, delete that copied file and
+  roll back the optimistic bookmark and queue entry before offering Retry. A
+  cleanup failure must be recorded for durable retry rather than abandoned;
+  alternatively, the retry may reuse the same bookmark id and destination so
+  it cannot create another file. Never mint a fresh retry identity while the
+  previous copy can still exist.
 - **Give image bookmarks the same type-label treatment text memos already
   have** in the Inbox meta line (`index.tsx` L2966) — closes gap #4.
 - Both changes are additive UI work with no `Bookmark` schema change and no
@@ -132,8 +138,20 @@ No text-field migration is proposed: `MemoEditor`, `description_format`, and
   text field. On a duplicate URL, attach the incoming annotation only when the
   existing `notes` is empty; identical text is a no-op, and conflicting text
   preserves the existing user-authored note while reporting that the new
-  caption was not applied. Apply the same policy to local and concurrent remote
-  duplicate branches.
+  caption was not applied. Applying a caption to a local duplicate is a real
+  user mutation: update the pending create payload when one exists, otherwise
+  enqueue an update, so the queue still represents the latest mutation.
+
+  Apply the same merge policy to concurrent remote duplicates, but do not build
+  the adopted local row solely from the just-uploaded local payload. The
+  duplicate response (or an immediate fetch) must provide the authoritative
+  remote note and the accepted/no-op/conflict outcome before identity adoption.
+  Exclude a rejected incoming caption from the generic reconcile update so it
+  cannot overwrite that authoritative note. A conflict discovered only during
+  background sync must persist a post-sync confirmation before it completes;
+  the next foreground/open drains that record and tells the user the caption
+  was not applied. Android share dismissal therefore cannot discard the only
+  conflict report, and the record is cleared only after it has been surfaced.
 
 Open questions for that review:
 
