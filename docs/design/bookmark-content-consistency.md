@@ -41,7 +41,7 @@ happened to send, with no shared UI contract between them.
 3. **The `notes` field's meaning silently changes by content type.** For
    link/image bookmarks, `notes` is a plain-text caption, edited via a bare
    `TextInput` in `bookmark/[id].tsx` (L1216-1253) with no rendering step. For
-   a text memo (`content_type: 'text'`), the body lives in a *different*
+   a text memo (`content_type: 'text'`), the body lives in a _different_
    field, `description`, and is parsed and rendered as Markdown via
    `MarkdownBody` (L1210, preview/edit toggle at L1129-1213). Same-looking
    multi-line input, different behavior depending on which tab created it —
@@ -51,7 +51,7 @@ happened to send, with no shared UI contract between them.
    "Memo" label only for `content_type === 'text'` (`index.tsx` L2966,
    `t('inbox.memoType')`); there is no equivalent label for image bookmarks.
    (Thumbnails themselves render fine for both — `local_image_uri ??
-   preview_image_url`, `index.tsx` L2994/L3120 — so this is a labeling gap,
+preview_image_url`, `index.tsx` L2994/L3120 — so this is a labeling gap,
    not a visual one.)
 5. **No product spec ever decided when combining types is allowed.** Image
    support was added reactively (to not lose a shared screenshot), not
@@ -59,12 +59,14 @@ happened to send, with no shared UI contract between them.
 
 ## 3. Design options considered
 
-**A — Single entity: "0-1 anchor + one always-Markdown note" (recommended,
-narrowed).** A bookmark keeps one anchor (none | link | image | link+image)
-plus one note field, always rendered as Markdown regardless of anchor. A pure
-memo (no anchor) stays possible. Satisfies the user's "3가지 조합" ask while
-still bounding it — an anchor is at most one of each kind, never an
-open-ended list.
+**A — Single entity: "0-1 anchor + consistently rendered Markdown text"
+(recommended, narrowed).** A bookmark keeps one anchor (none | link | image |
+link+image). Its primary memo body and its optional annotation remain distinct
+when both exist, but both receive the same Markdown preview/edit treatment
+regardless of anchor. A pure memo (no anchor) stays possible. This satisfies
+the user's "3가지 조합" ask while still bounding it — an anchor is at most one
+of each kind, never an open-ended list — without conflating two separately
+authored values.
 
 **B — Keep 3 separate capture modes, unify only the shared UI/Markdown
 treatment.** Smallest schema-safe change; does not satisfy the explicit
@@ -79,10 +81,10 @@ asked (Simplicity first).
 ## 4. Recommended direction
 
 Option A, narrowed as above. It resolves inconsistency #3 (the sharpest one)
-outright by making "note" one concept everywhere instead of two fields with
-different rendering rules, and it turns inconsistency #2 (accidental,
-silent-drop combining) into a designed, visible capability instead of
-removing it.
+by giving memo bodies and annotations one rendering/editing contract while
+preserving their distinct meanings, and it turns inconsistency #2 (accidental,
+silent-drop combining) into a designed, visible capability instead of removing
+it.
 
 This is a recommendation for review, not a decision — Phase 2 below requires
 explicit greenlight plus domain-sync-engineer sign-off before any schema
@@ -114,27 +116,42 @@ review, not a same-session drive-by edit.
 
 ### Phase 2 — schema-affecting, needs domain-sync-engineer review first
 
-- Merge `notes`/`description` into one note field, always Markdown, decoupled
-  from `content_type`.
+- Normalize `notes`/`description` into explicitly distinct memo-body and
+  annotation fields, both always Markdown and decoupled from `content_type`.
+  A row with both existing fields populated must retain both values; neither
+  may overwrite, concatenate with, or be substituted for the other. Older app
+  versions must continue to see the legacy fields during the compatibility
+  window, so the schema and rollout must be additive before any later cleanup.
 - Support a link+image combined anchor (attach an image alongside a URL from
   Add, or from a share that carries both).
 
 Open questions for that review:
 
-1. Is merging `notes`/`description` safe against existing cloud rows and
-   older app versions reading the split fields? Most existing plain-text
-   `notes` values round-trip fine as Markdown as-is (no markdown metacharacters
-   ⇒ renders identically), but this needs to be verified, not assumed.
-2. With a link+image anchor, which key wins for dedupe (`url_hash` vs.
-   `client_id`) — presumably `url_hash` whenever a URL is present, but this
-   needs confirming against `sync/sync-bookmarks.ts`.
+1. What additive schema and compatibility window should carry the distinct
+   memo body and annotation? The migration must copy `description` to the new
+   memo-body representation and `notes` to the new annotation representation
+   independently, including when both are populated. Most existing plain-text
+   values round-trip as Markdown as-is, but dual-write/read behavior with older
+   app versions still needs to be designed and verified.
+2. A link+image anchor uses `url_hash` as its identity whenever a URL is
+   present. On a duplicate URL, the incoming image is an update to the existing
+   bookmark rather than a second bookmark: attach it when the existing row has
+   no image; when it already has one, an interactive Add flow must ask whether
+   to replace it, while a non-interactive share keeps the existing image and
+   reports that outcome instead of silently claiming the new image was saved.
+   Any uploaded-but-unattached binary must be cleaned up. Confirm the exact
+   update/cleanup transaction against `sync/sync-bookmarks.ts` and the upload
+   API before implementation.
 3. Does the existing "binary upload before row create" ordering for image
    bookmarks (`docs/api/bookmarks.md`: the server refuses a `content_type:
-   image` row without `preview_image_url` already set) extend cleanly to the
+image` row without `preview_image_url` already set) extend cleanly to the
    link+image combined case?
-4. Any migration that touches existing rows must not bump `updated_at` on
-   rows that have no local edit, per the local-only-cosmetic-repair rule in
-   `AGENTS.md` — confirm the migration path respects this.
+4. A cloud migration that transforms existing rows **must bump `updated_at`**
+   (or deliberately force a full client refresh) so incremental pull clients
+   receive the transformed values. The no-timestamp-bump rule in `AGENTS.md`
+   applies to local-only cosmetic repair, not server-side schema/data
+   migration. The rollout must also account for queued local edits so the
+   migration cannot win over newer user-authored content.
 
 ## 6. Next steps
 
