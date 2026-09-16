@@ -22,6 +22,7 @@ jest.mock("@/supabase/auth-provider", () => ({
   SupabaseAuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 jest.mock("@/domain/enrichment", () => ({
+  ...jest.requireActual("@/domain/enrichment"),
   enrichBookmark: (bookmark: Bookmark, fetcher?: unknown) =>
     mockEnrichBookmark(bookmark, fetcher),
 }));
@@ -81,6 +82,38 @@ test("addBookmark shows the bookmark immediately and queues a create", async () 
   expect(result.current.inbox[0]?.sync_status).toBe("pending");
   await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
   expect(fakeRepo.__queue()[0]?.operation).toBe("create");
+});
+
+test("source-app title is replaced by enrichment while a manual title stays protected (STASH-6C)", async () => {
+  mockEnrichBookmark.mockImplementation(async () => ({
+    patch: { title: "Fetched Reddit post title", title_is_derived: false },
+    metadata_status: "complete",
+  }));
+  const { result } = await renderStore();
+
+  await act(async () => {
+    result.current.addBookmark({
+      url: "https://www.reddit.com/r/LocalLLaMA/comments/source/generated",
+      title: "Reddit",
+      title_is_derived: true,
+    });
+    result.current.addBookmark({
+      url: "https://www.reddit.com/r/LocalLLaMA/comments/manual/title",
+      title: "My Reddit note",
+    });
+  });
+
+  await waitFor(() =>
+    expect(result.current.inbox.find((item) => item.url?.includes("/source/"))).toMatchObject({
+      title: "Fetched Reddit post title",
+      title_is_derived: false,
+      metadata_status: "complete",
+    }),
+  );
+  expect(result.current.inbox.find((item) => item.url?.includes("/manual/"))).toMatchObject({
+    title: "My Reddit note",
+    title_is_derived: false,
+  });
 });
 
 test("markBookmarkAccessed sets last_accessed_at and persists it durably", async () => {
@@ -596,6 +629,95 @@ test("refreshBookmarkPreview keeps a user-authored title while refreshing genera
       preview_image_url: "https://i.ytimg.com/vi/dQw4w9WgXcQ/sddefault.jpg",
     }),
   );
+});
+
+test("refreshBookmarkPreview repairs a legacy Reddit source-app title (STASH-6C)", async () => {
+  const id = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      url: "https://www.reddit.com/r/LocalLLaMA/comments/abc/post",
+      title: "Reddit",
+      // Affected builds incorrectly stamped the source app's EXTRA_TITLE as
+      // user-authored, which normally makes Preview Refresh preserve it.
+      title_is_derived: false,
+    }),
+  ]);
+  mockEnrichBookmark.mockResolvedValueOnce({
+    patch: {
+      title: "A useful Reddit post title",
+      title_is_derived: false,
+      site_name: "Reddit",
+      preview_image_url: "https://preview.redd.it/example.jpg",
+    },
+    metadata_status: "complete",
+  });
+  const { result } = await renderStore();
+
+  await act(async () => {
+    await result.current.refreshBookmarkPreview(id);
+  });
+
+  expect(mockEnrichBookmark).toHaveBeenCalledWith(
+    expect.objectContaining({ id, title: null }),
+    undefined,
+  );
+  await waitFor(() =>
+    expect(result.current.getBookmark(id)).toMatchObject({
+      title: "A useful Reddit post title",
+      title_is_derived: false,
+      site_name: "Reddit",
+      preview_image_url: "https://preview.redd.it/example.jpg",
+    }),
+  );
+});
+
+test("refreshBookmarkPreview preserves a title edited while the fetch is in flight", async () => {
+  const id = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      title: "Generated source title",
+      title_is_derived: true,
+    }),
+  ]);
+  let resolveRefresh!: (value: {
+    patch: Partial<Bookmark>;
+    metadata_status: MetadataStatus;
+  }) => void;
+  mockEnrichBookmark.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveRefresh = resolve;
+      }),
+  );
+  const { result } = await renderStore();
+
+  let refresh!: Promise<string | null>;
+  await act(async () => {
+    refresh = result.current.refreshBookmarkPreview(id);
+    await Promise.resolve();
+  });
+  await act(async () => {
+    result.current.updateBookmarkFields(id, { title: "Edited while refreshing" });
+  });
+  await act(async () => {
+    resolveRefresh({
+      patch: {
+        title: "Fetched title must not win",
+        title_is_derived: false,
+        site_name: "Refreshed Site",
+      },
+      metadata_status: "complete",
+    });
+    await refresh;
+  });
+
+  expect(result.current.getBookmark(id)).toMatchObject({
+    title: "Edited while refreshing",
+    title_is_derived: false,
+    site_name: "Refreshed Site",
+  });
 });
 
 test("a no-op edit (no real text change) does not mark the enrichment stale", async () => {

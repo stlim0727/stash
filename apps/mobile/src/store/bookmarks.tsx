@@ -16,7 +16,10 @@ import { resolveAliasedId } from "@/domain/bookmark-id-swap";
 import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
 import { createConcurrencyLimiter } from "@/domain/concurrency";
-import { enrichBookmark } from "@/domain/enrichment";
+import {
+  enrichBookmark,
+  isRepairableSourceTitle,
+} from "@/domain/enrichment";
 import { checkYoutubeAvailability, isYoutubeAvailabilityCandidate } from "@/domain/page-metadata";
 import { isTransientNetworkError } from "@/domain/network-errors";
 import { jwtSubject } from "@/domain/jwt";
@@ -282,6 +285,8 @@ interface BookmarksContextValue {
   addBookmark: (input: {
     url?: string;
     title?: string;
+    /** True when the title came from a source app rather than the user. */
+    title_is_derived?: boolean;
     notes?: string;
     description_format?: TextFormat;
     notes_format?: TextFormat;
@@ -940,6 +945,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
   const localCreateFlushesInFlight = useRef(0);
   const pendingUserTitleEdits = useRef(new Set<string>());
+  // Generated source titles can also improve while a create request is in
+  // flight. Track that divergence separately so post-create reconciliation
+  // pushes the fetched title instead of leaving the cloud on the stale sender
+  // title (STASH-6C review).
+  const pendingGeneratedTitleUpdates = useRef(new Set<string>());
   // A bulk-create chunk's reconcile follow-up (deletedMidFlightIds/
   // followUpUpdates in applyBulkCreateChunkResults) removes the chunk's
   // completed 'create' entries from the queue before its own sequential
@@ -1988,15 +1998,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     ? "synced"
                     : source.sync_status,
                 };
-          // Fill only generated fields that are still empty, so a user-authored
-          // title is never overwritten by generated metadata.
+          // Fill only generated fields that are still empty. A source-app
+          // share title is itself generated and may be improved; a manual
+          // user title remains protected.
           const safePatch: Partial<Bookmark> = {};
-          if (patch.title !== undefined && latest.title === null) {
+          if (
+            patch.title !== undefined &&
+            (latest.title === null || latest.title_is_derived === true)
+          ) {
             safePatch.title = patch.title;
             // Carry the title's provenance alongside it, so a generated fallback
             // title is recorded as such (and a real fetched title as not-derived).
             safePatch.title_is_derived = patch.title_is_derived;
           }
+          const generatedTitleChanged =
+            safePatch.title !== undefined && safePatch.title !== latest.title;
           if (patch.site_name !== undefined && latest.site_name === null) {
             safePatch.site_name = patch.site_name;
           }
@@ -2053,6 +2069,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // bookmark's create upload already sends its latest fields.
           if (hasSyncedOnce(updated.id)) {
             enqueueMutation(updated.id, "update");
+          } else if (generatedTitleChanged) {
+            pendingGeneratedTitleUpdates.current.add(updated.id);
           }
         } finally {
           enriching.current.delete(bookmark.id);
@@ -2531,6 +2549,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ({
       url,
       title,
+      title_is_derived = false,
       notes,
       description_format = "plain",
       notes_format = "plain",
@@ -2539,6 +2558,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }: {
       url?: string;
       title?: string;
+      title_is_derived?: boolean;
       notes?: string;
       description_format?: TextFormat;
       notes_format?: TextFormat;
@@ -2578,7 +2598,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           title: title?.trim()
             ? title.trim()
             : imageTitleFromFileName(image.fileName),
-          title_is_derived: title?.trim() ? false : undefined,
+          title_is_derived: title?.trim() ? title_is_derived : undefined,
           description: null,
           notes: notes?.length ? notes : null,
           description_format,
@@ -2739,7 +2759,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           url_hash: null,
           client_id: noteClientId,
           title: title?.trim() ? title.trim() : null,
-          title_is_derived: title?.trim() ? false : undefined,
+          title_is_derived: title?.trim() ? title_is_derived : undefined,
           // The shared text is the note's body. Stored as the description to
           // mirror the cloud API (which maps shared_text → description), so a
           // pulled-back note matches the locally captured one.
@@ -2853,10 +2873,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // stays null until enrichment resolves a real rel=canonical / og:url.
         url_hash: dedupeKey,
         client_id: clientId,
-        // A title provided at capture (e.g. from the share payload) counts as
-        // user-authored; enrichment only fills it when still null.
+        // Manual Add titles are user-authored. Source-app share titles are
+        // generated hints and may be improved by enrichment (STASH-6C).
         title: title?.trim() ? title.trim() : null,
-        title_is_derived: title?.trim() ? false : undefined,
+        title_is_derived: title?.trim() ? title_is_derived : undefined,
         description: null,
         notes: notes?.length ? notes : null,
         description_format,
@@ -3624,7 +3644,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       setPreviewRefreshingIds((prev) => new Set(prev).add(id));
       try {
-        const userTitle = bookmark.title_is_derived === false;
+        // Older Android captures marked Reddit's generic EXTRA_TITLE
+        // ("Reddit") as user-authored. Preview Refresh is an explicit request
+        // to fetch better metadata, so repair that one known provenance mistake
+        // while continuing to preserve every ordinary manual title.
+        const userTitle =
+          bookmark.title_is_derived === false &&
+          !isRepairableSourceTitle(bookmark);
         const refreshTarget: Bookmark = {
           ...bookmark,
           title: userTitle ? bookmark.title : null,
@@ -3633,8 +3659,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           preview_image_url: null,
         };
         const { patch, metadata_status } = await enrichBookmark(refreshTarget);
+        const latest =
+          bookmarksRef.current?.find((item) => item.id === id) ?? bookmark;
+        // A title edit can land while the metadata request is in flight. Only
+        // apply the fetched title if both the value and its provenance still
+        // match the snapshot the refresh started from; generated site/image
+        // fields may still refresh independently.
+        const titleStillRefreshable =
+          !userTitle &&
+          latest.title === bookmark.title &&
+          latest.title_is_derived === bookmark.title_is_derived;
         const nextPatch: Partial<Bookmark> = { metadata_status };
-        if (!userTitle && patch.title !== undefined) {
+        if (titleStillRefreshable && patch.title !== undefined) {
           nextPatch.title = patch.title;
           nextPatch.title_is_derived = patch.title_is_derived;
         }
@@ -3647,8 +3683,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (patch.preview_image_url !== undefined) {
           nextPatch.preview_image_url = patch.preview_image_url;
         }
-        const latest =
-          bookmarksRef.current?.find((item) => item.id === id) ?? bookmark;
         const syncsRemotely = hasSyncedOnce(id);
         const updated: Bookmark = {
           ...latest,
@@ -5941,16 +5975,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 // unconditionally near the top of this function — this only
                 // records *why*, once reconcile is confirmed needed.
                 const payload = result.uploadedPayload;
-                const titleChangedByUser =
+                const titleChangedDuringCreate =
                   pendingUserTitleEdits.current.has(lookupId) ||
-                  pendingUserTitleEdits.current.has(merged.id);
+                  pendingUserTitleEdits.current.has(merged.id) ||
+                  pendingGeneratedTitleUpdates.current.has(lookupId) ||
+                  pendingGeneratedTitleUpdates.current.has(merged.id);
                 const isDuplicateSwap =
                   Boolean(result.originalLocalId) &&
                   result.originalLocalId !== merged.id;
                 if (
                   isDuplicateSwap ||
                   createNeedsReconcileUpdate(merged, payload, {
-                    titleChangedByUser,
+                    titleChangedByUser: titleChangedDuringCreate,
                   })
                 ) {
                   const reasons: Record<string, number> = {};
@@ -5960,7 +5996,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   if (merged.collection_id !== null) reasons.collection_id = 1;
                   if (
                     merged.title !== (payload?.title ?? null) &&
-                    titleChangedByUser
+                    titleChangedDuringCreate
                   ) {
                     reasons.title = 1;
                   }
@@ -5977,6 +6013,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 }
                 pendingUserTitleEdits.current.delete(lookupId);
                 pendingUserTitleEdits.current.delete(merged.id);
+                pendingGeneratedTitleUpdates.current.delete(lookupId);
+                pendingGeneratedTitleUpdates.current.delete(merged.id);
               }
               // A brand-new bookmark just gained a remote identity: queue AI
               // suggestions for it. We DON'T fire immediately — the background
@@ -6276,15 +6314,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // checking the stale snapshot would silently drop it, and a
               // later pull could then overwrite it with the older uploaded
               // values (caught in PR review).
-              const titleChangedByUser =
+              const titleChangedDuringCreate =
                 pendingUserTitleEdits.current.has(lookupId) ||
-                pendingUserTitleEdits.current.has(merged.id);
+                pendingUserTitleEdits.current.has(merged.id) ||
+                pendingGeneratedTitleUpdates.current.has(lookupId) ||
+                pendingGeneratedTitleUpdates.current.has(merged.id);
               const isDuplicateSwap =
                 Boolean(originalLocalId) && originalLocalId !== merged.id;
               if (
                 isDuplicateSwap ||
                 createNeedsReconcileUpdate(merged, uploadedPayload, {
-                  titleChangedByUser,
+                  titleChangedByUser: titleChangedDuringCreate,
                 })
               ) {
                 followUpUpdates.push(merged);
@@ -6295,7 +6335,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 if (merged.collection_id !== null) reasons.collection_id = 1;
                 if (
                   merged.title !== (uploadedPayload.title ?? null) &&
-                  titleChangedByUser
+                  titleChangedDuringCreate
                 ) {
                   reasons.title = 1;
                 }
@@ -6313,6 +6353,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               }
               pendingUserTitleEdits.current.delete(lookupId);
               pendingUserTitleEdits.current.delete(merged.id);
+              pendingGeneratedTitleUpdates.current.delete(lookupId);
+              pendingGeneratedTitleUpdates.current.delete(merged.id);
               if (uploadedPayload.enrichment_policy !== "skip") {
                 pendingAiIds.push(merged.id);
               }

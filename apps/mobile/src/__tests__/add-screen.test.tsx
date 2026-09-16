@@ -203,6 +203,10 @@ describe('AddBookmarkScreen web capture endpoint', () => {
     // Landed the freshly stashed item by replacing to the Inbox.
     await waitFor(() => expect(mockReplace).toHaveBeenCalledWith('/'));
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    expect(fakeRepo.__bookmarks()[0]).toMatchObject({
+      title: 'From bookmarklet',
+      title_is_derived: true,
+    });
     unmount();
   });
 

@@ -189,7 +189,7 @@ export function ShareIntentHandler() {
     // "nothing to save" toast for a genuinely empty share.
     const saveStartedAt = Date.now();
     const result = share.url
-      ? addBookmark({ url: share.url, title: share.title })
+      ? addBookmark({ url: share.url, title: share.title, title_is_derived: true })
       : share.image
         ? addBookmark({ image: share.image, title: share.title })
         : addBookmark({ shared_text: share.text, title: share.title });

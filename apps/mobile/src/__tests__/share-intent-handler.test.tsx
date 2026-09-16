@@ -262,6 +262,31 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('marks a source-app title as generated so enrichment can improve it (STASH-6C)', async () => {
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/example/post',
+        text: null,
+        meta: { title: 'Reddit' },
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Keepory');
+    await waitFor(async () => {
+      const saved = await fakeRepo.repository.listBookmarks();
+      expect(saved[0]).toMatchObject({
+        title: 'Reddit',
+        title_is_derived: true,
+      });
+    });
+    unmount();
+  });
+
   it('still saves the share if the OS intent is reset during a slow store load', async () => {
     // resetOnBackground (or the user backing out) can clear the expo-share-intent
     // context before a slow SQLite load finishes. The capture must survive that:
@@ -544,7 +569,11 @@ describe('ShareIntentHandler', () => {
     fakeRepo.__reset([]);
     mockShareIntent = {
       hasShareIntent: true,
-      shareIntent: { webUrl: null, text: '내일 3시에 회의 있습니다' },
+      shareIntent: {
+        webUrl: null,
+        text: '내일 3시에 회의 있습니다',
+        meta: { title: 'KakaoTalk message' },
+      },
       resetShareIntent: jest.fn(),
     };
 
@@ -560,6 +589,8 @@ describe('ShareIntentHandler', () => {
     expect(stored[0].url).toBeNull();
     expect(stored[0].content_type).toBe('text');
     expect(stored[0].description).toBe('내일 3시에 회의 있습니다');
+    expect(stored[0].title).toBe('KakaoTalk message');
+    expect(stored[0].title_is_derived).toBe(false);
     unmount();
   });
 

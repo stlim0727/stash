@@ -77,6 +77,24 @@ export interface EnrichmentResult {
 export type MetadataFetcher = (url: string) => Promise<FetchedMetadata | null>;
 
 /**
+ * A sender-generated title that older builds incorrectly marked user-authored.
+ * Keep this deliberately narrow: it is used only when the user explicitly
+ * requests Preview Refresh, so ordinary startup work never guesses about title
+ * ownership or rewrites a legitimate edit.
+ */
+export function isRepairableSourceTitle(bookmark: Pick<Bookmark, 'url' | 'title'>): boolean {
+  if (bookmark.title?.trim().toLowerCase() !== 'reddit' || !bookmark.url) {
+    return false;
+  }
+  try {
+    const host = new URL(bookmark.url).hostname.toLowerCase();
+    return host === 'reddit.com' || host.endsWith('.reddit.com');
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Produces an enrichment patch for a bookmark. Only fills generated fields
  * that are still empty, so a user-provided title/description is never
  * overwritten. Real page metadata (OpenGraph/title/favicon) is preferred;
@@ -103,8 +121,11 @@ export async function enrichBookmark(
       preview_image_url: fetched.preview_image_url ?? fallback.preview_image_url,
     };
     const patch: Partial<Bookmark> = {};
-    if (bookmark.title == null) {
-      patch.title = derived.title;
+    // A source app's share-sheet title is generated metadata, not a user edit.
+    // It is often only the app/site name (Reddit sends "Reddit"), so let real
+    // page metadata improve it while continuing to protect manual titles.
+    if (bookmark.title == null || (bookmark.title_is_derived === true && fetched.title)) {
+      patch.title = fetched.title ?? derived.title;
       // Record provenance: true when the title came from the URL fallback (no
       // fetched title), false when it's a real fetched page title. Lets the
       // backfill/UI trust a recorded fact instead of string-matching.
@@ -114,10 +135,10 @@ export async function enrichBookmark(
       // is the "the preview is just the URL / a random-looking string" moment —
       // logging it (with the fetched-vs-fallback signal) lets us tell, after the
       // fact, that the real title never arrived rather than guessing.
-      if (!fetched.title) {
+      if (bookmark.title == null && !fetched.title) {
         recordLog(
           'warn',
-          `enrich: URL-derived fallback title "${derived.title}" for ${bookmark.url} (no fetched title)`,
+          'enrich: URL-derived fallback title used (no fetched title)',
         );
       }
     }

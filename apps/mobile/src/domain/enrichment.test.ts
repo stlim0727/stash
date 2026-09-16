@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { deriveMetadata, enrichBookmark } from './enrichment.ts';
+import { deriveMetadata, enrichBookmark, isRepairableSourceTitle } from './enrichment.ts';
 import type { Bookmark } from './types.ts';
 
 function makeBookmark(overrides: Partial<Bookmark> = {}): Bookmark {
@@ -102,6 +102,44 @@ test('enrichBookmark never overwrites a user-provided title', async () => {
   const result = await enrichBookmark(makeBookmark({ title: 'My own title' }), offline);
   assert.equal(result.metadata_status, 'complete');
   assert.equal('title' in result.patch, false);
+});
+
+test('enrichBookmark improves a generated source-app title (STASH-6C)', async () => {
+  const result = await enrichBookmark(
+    makeBookmark({ title: 'Reddit', title_is_derived: true }),
+    async () => ({ title: 'Local LLM discussion', site_name: 'Reddit' }),
+  );
+
+  assert.equal(result.patch.title, 'Local LLM discussion');
+  assert.equal(result.patch.title_is_derived, false);
+});
+
+test('enrichBookmark keeps a useful source-app title when fetching yields no title', async () => {
+  const result = await enrichBookmark(
+    makeBookmark({ title: 'A useful shared article title', title_is_derived: true }),
+    offline,
+  );
+
+  assert.equal('title' in result.patch, false);
+});
+
+test('isRepairableSourceTitle recognizes only the legacy generic Reddit title', () => {
+  assert.equal(
+    isRepairableSourceTitle(
+      makeBookmark({ url: 'https://www.reddit.com/r/LocalLLaMA/comments/abc/post', title: 'Reddit' }),
+    ),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle(
+      makeBookmark({ url: 'https://www.reddit.com/r/LocalLLaMA', title: 'My Reddit links' }),
+    ),
+    false,
+  );
+  assert.equal(
+    isRepairableSourceTitle(makeBookmark({ url: 'https://notreddit.com/post', title: 'Reddit' })),
+    false,
+  );
 });
 
 test('enrichBookmark survives a fetcher that throws', async () => {
