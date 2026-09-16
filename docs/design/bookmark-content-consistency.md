@@ -97,10 +97,14 @@ change lands.
   images (L2641-2691) rather than building a second one. Do not expose this on
   web until web has durable local persistence and a working binary upload path;
   the current web image-store keeps a transient source URI and cannot upload.
-  The manual Add flow must await `AddBookmarkResult.persisted` before showing
-  success or navigating away, matching the share handler's durability boundary;
-  selecting an image is not a successful save while its picker URI is still
-  being copied into durable storage.
+  The manual Add flow must await a durability result that specifically confirms
+  both the image copy and bookmark-row insert before showing success or
+  navigating away. Do not reuse the current aggregate
+  `AddBookmarkResult.persisted` unchanged: an enqueue failure after those local
+  writes must report "saved locally, sync pending" and retain/reconcile the
+  pending row, not invite a retry that creates a second image bookmark. Expose
+  separate local-persistence and enqueue outcomes (or equivalent typed states)
+  so only a failed image copy/row insert is treated as a failed save.
 - **Give image bookmarks the same type-label treatment text memos already
   have** in the Inbox meta line (`index.tsx` L2966) — closes gap #4.
 - Both changes are additive UI work with no `Bookmark` schema change and no
@@ -119,11 +123,17 @@ No text-field migration is proposed: `MemoEditor`, `description_format`, and
   clear or replace the attachment, and permanent deletion must clean up its
   uploaded object independently of `content_type`.
 - Preserve accompanying user-authored share text for URL and URL+image
-  captures. Strip URL tokens already represented by the anchor (using the same
-  principle as the web capture path), then store any remaining caption or
-  selected quote in `notes` with `notes_format: 'plain'`. An empty remainder
-  must not create an annotation, and capture must never copy an echoed URL into
-  a user-authored text field.
+  captures. A shared helper used by both native share intake and web `/add`
+  must strip every URL token represented by the anchor, including composite
+  values such as `Caption https://example.com`; the current web equality-only
+  check is insufficient. Store any remaining caption or selected quote in
+  `notes` with `notes_format: 'plain'`. An empty remainder must not create an
+  annotation, and capture must never copy an echoed URL into a user-authored
+  text field. On a duplicate URL, attach the incoming annotation only when the
+  existing `notes` is empty; identical text is a no-op, and conflicting text
+  preserves the existing user-authored note while reporting that the new
+  caption was not applied. Apply the same policy to local and concurrent remote
+  duplicate branches.
 
 Open questions for that review:
 
