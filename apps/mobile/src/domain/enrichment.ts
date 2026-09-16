@@ -77,6 +77,24 @@ export interface EnrichmentResult {
 export type MetadataFetcher = (url: string) => Promise<FetchedMetadata | null>;
 
 /**
+ * A sender-generated title that older builds incorrectly marked user-authored.
+ * Keep this deliberately narrow: it is used only when the user explicitly
+ * requests Preview Refresh, so ordinary startup work never guesses about title
+ * ownership or rewrites a legitimate edit.
+ */
+export function isRepairableSourceTitle(bookmark: Pick<Bookmark, 'url' | 'title'>): boolean {
+  if (bookmark.title?.trim().toLowerCase() !== 'reddit' || !bookmark.url) {
+    return false;
+  }
+  try {
+    const host = new URL(bookmark.url).hostname.toLowerCase();
+    return host === 'reddit.com' || host.endsWith('.reddit.com');
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Produces an enrichment patch for a bookmark. Only fills generated fields
  * that are still empty, so a user-provided title/description is never
  * overwritten. Real page metadata (OpenGraph/title/favicon) is preferred;

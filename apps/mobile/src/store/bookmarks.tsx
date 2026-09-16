@@ -16,7 +16,10 @@ import { resolveAliasedId } from "@/domain/bookmark-id-swap";
 import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
 import { createConcurrencyLimiter } from "@/domain/concurrency";
-import { enrichBookmark } from "@/domain/enrichment";
+import {
+  enrichBookmark,
+  isRepairableSourceTitle,
+} from "@/domain/enrichment";
 import { checkYoutubeAvailability, isYoutubeAvailabilityCandidate } from "@/domain/page-metadata";
 import { isTransientNetworkError } from "@/domain/network-errors";
 import { jwtSubject } from "@/domain/jwt";
@@ -3632,7 +3635,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       setPreviewRefreshingIds((prev) => new Set(prev).add(id));
       try {
-        const userTitle = bookmark.title_is_derived === false;
+        // Older Android captures marked Reddit's generic EXTRA_TITLE
+        // ("Reddit") as user-authored. Preview Refresh is an explicit request
+        // to fetch better metadata, so repair that one known provenance mistake
+        // while continuing to preserve every ordinary manual title.
+        const userTitle =
+          bookmark.title_is_derived === false &&
+          !isRepairableSourceTitle(bookmark);
         const refreshTarget: Bookmark = {
           ...bookmark,
           title: userTitle ? bookmark.title : null,

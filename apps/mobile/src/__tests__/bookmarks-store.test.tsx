@@ -22,6 +22,7 @@ jest.mock("@/supabase/auth-provider", () => ({
   SupabaseAuthProvider: ({ children }: { children: ReactNode }) => children,
 }));
 jest.mock("@/domain/enrichment", () => ({
+  ...jest.requireActual("@/domain/enrichment"),
   enrichBookmark: (bookmark: Bookmark, fetcher?: unknown) =>
     mockEnrichBookmark(bookmark, fetcher),
 }));
@@ -626,6 +627,47 @@ test("refreshBookmarkPreview keeps a user-authored title while refreshing genera
       title_is_derived: false,
       site_name: "YouTube",
       preview_image_url: "https://i.ytimg.com/vi/dQw4w9WgXcQ/sddefault.jpg",
+    }),
+  );
+});
+
+test("refreshBookmarkPreview repairs a legacy Reddit source-app title (STASH-6C)", async () => {
+  const id = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      url: "https://www.reddit.com/r/LocalLLaMA/comments/abc/post",
+      title: "Reddit",
+      // Affected builds incorrectly stamped the source app's EXTRA_TITLE as
+      // user-authored, which normally makes Preview Refresh preserve it.
+      title_is_derived: false,
+    }),
+  ]);
+  mockEnrichBookmark.mockResolvedValueOnce({
+    patch: {
+      title: "A useful Reddit post title",
+      title_is_derived: false,
+      site_name: "Reddit",
+      preview_image_url: "https://preview.redd.it/example.jpg",
+    },
+    metadata_status: "complete",
+  });
+  const { result } = await renderStore();
+
+  await act(async () => {
+    await result.current.refreshBookmarkPreview(id);
+  });
+
+  expect(mockEnrichBookmark).toHaveBeenCalledWith(
+    expect.objectContaining({ id, title: null }),
+    undefined,
+  );
+  await waitFor(() =>
+    expect(result.current.getBookmark(id)).toMatchObject({
+      title: "A useful Reddit post title",
+      title_is_derived: false,
+      site_name: "Reddit",
+      preview_image_url: "https://preview.redd.it/example.jpg",
     }),
   );
 });
