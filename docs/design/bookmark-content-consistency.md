@@ -97,6 +97,10 @@ change lands.
   images (L2641-2691) rather than building a second one. Do not expose this on
   web until web has durable local persistence and a working binary upload path;
   the current web image-store keeps a transient source URI and cannot upload.
+  The manual Add flow must await `AddBookmarkResult.persisted` before showing
+  success or navigating away, matching the share handler's durability boundary;
+  selecting an image is not a successful save while its picker URI is still
+  being copied into durable storage.
 - **Give image bookmarks the same type-label treatment text memos already
   have** in the Inbox meta line (`index.tsx` L2966) — closes gap #4.
 - Both changes are additive UI work with no `Bookmark` schema change and no
@@ -114,6 +118,12 @@ No text-field migration is proposed: `MemoEditor`, `description_format`, and
   reserved for generated OpenGraph/page previews. Metadata refresh must never
   clear or replace the attachment, and permanent deletion must clean up its
   uploaded object independently of `content_type`.
+- Preserve accompanying user-authored share text for URL and URL+image
+  captures. Strip URL tokens already represented by the anchor (using the same
+  principle as the web capture path), then store any remaining caption or
+  selected quote in `notes` with `notes_format: 'plain'`. An empty remainder
+  must not create an annotation, and capture must never copy an echoed URL into
+  a user-authored text field.
 
 Open questions for that review:
 
