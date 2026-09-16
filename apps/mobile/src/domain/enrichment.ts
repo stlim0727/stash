@@ -124,8 +124,8 @@ export async function enrichBookmark(
     // A source app's share-sheet title is generated metadata, not a user edit.
     // It is often only the app/site name (Reddit sends "Reddit"), so let real
     // page metadata improve it while continuing to protect manual titles.
-    if (bookmark.title == null || bookmark.title_is_derived === true) {
-      patch.title = derived.title;
+    if (bookmark.title == null || (bookmark.title_is_derived === true && fetched.title)) {
+      patch.title = fetched.title ?? derived.title;
       // Record provenance: true when the title came from the URL fallback (no
       // fetched title), false when it's a real fetched page title. Lets the
       // backfill/UI trust a recorded fact instead of string-matching.
@@ -135,10 +135,10 @@ export async function enrichBookmark(
       // is the "the preview is just the URL / a random-looking string" moment —
       // logging it (with the fetched-vs-fallback signal) lets us tell, after the
       // fact, that the real title never arrived rather than guessing.
-      if (!fetched.title) {
+      if (bookmark.title == null && !fetched.title) {
         recordLog(
           'warn',
-          `enrich: URL-derived fallback title "${derived.title}" for ${bookmark.url} (no fetched title)`,
+          'enrich: URL-derived fallback title used (no fetched title)',
         );
       }
     }

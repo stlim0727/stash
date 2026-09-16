@@ -672,6 +672,54 @@ test("refreshBookmarkPreview repairs a legacy Reddit source-app title (STASH-6C)
   );
 });
 
+test("refreshBookmarkPreview preserves a title edited while the fetch is in flight", async () => {
+  const id = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      title: "Generated source title",
+      title_is_derived: true,
+    }),
+  ]);
+  let resolveRefresh!: (value: {
+    patch: Partial<Bookmark>;
+    metadata_status: MetadataStatus;
+  }) => void;
+  mockEnrichBookmark.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveRefresh = resolve;
+      }),
+  );
+  const { result } = await renderStore();
+
+  let refresh!: Promise<string | null>;
+  await act(async () => {
+    refresh = result.current.refreshBookmarkPreview(id);
+    await Promise.resolve();
+  });
+  await act(async () => {
+    result.current.updateBookmarkFields(id, { title: "Edited while refreshing" });
+  });
+  await act(async () => {
+    resolveRefresh({
+      patch: {
+        title: "Fetched title must not win",
+        title_is_derived: false,
+        site_name: "Refreshed Site",
+      },
+      metadata_status: "complete",
+    });
+    await refresh;
+  });
+
+  expect(result.current.getBookmark(id)).toMatchObject({
+    title: "Edited while refreshing",
+    title_is_derived: false,
+    site_name: "Refreshed Site",
+  });
+});
+
 test("a no-op edit (no real text change) does not mark the enrichment stale", async () => {
   const {
     makeStoredBookmark,

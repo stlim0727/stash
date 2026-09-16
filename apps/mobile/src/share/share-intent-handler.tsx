@@ -191,8 +191,8 @@ export function ShareIntentHandler() {
     const result = share.url
       ? addBookmark({ url: share.url, title: share.title, title_is_derived: true })
       : share.image
-        ? addBookmark({ image: share.image, title: share.title, title_is_derived: true })
-        : addBookmark({ shared_text: share.text, title: share.title, title_is_derived: true });
+        ? addBookmark({ image: share.image, title: share.title })
+        : addBookmark({ shared_text: share.text, title: share.title });
     const saved = result.status !== 'invalid';
     // Only a genuinely new save is worth confirming on the next open; a
     // duplicate already lived in the library and a no-link share saved nothing.

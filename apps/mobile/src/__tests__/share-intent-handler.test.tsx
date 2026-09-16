@@ -569,7 +569,11 @@ describe('ShareIntentHandler', () => {
     fakeRepo.__reset([]);
     mockShareIntent = {
       hasShareIntent: true,
-      shareIntent: { webUrl: null, text: '내일 3시에 회의 있습니다' },
+      shareIntent: {
+        webUrl: null,
+        text: '내일 3시에 회의 있습니다',
+        meta: { title: 'KakaoTalk message' },
+      },
       resetShareIntent: jest.fn(),
     };
 
@@ -585,6 +589,8 @@ describe('ShareIntentHandler', () => {
     expect(stored[0].url).toBeNull();
     expect(stored[0].content_type).toBe('text');
     expect(stored[0].description).toBe('내일 3시에 회의 있습니다');
+    expect(stored[0].title).toBe('KakaoTalk message');
+    expect(stored[0].title_is_derived).toBe(false);
     unmount();
   });
 

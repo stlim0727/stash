@@ -114,6 +114,15 @@ test('enrichBookmark improves a generated source-app title (STASH-6C)', async ()
   assert.equal(result.patch.title_is_derived, false);
 });
 
+test('enrichBookmark keeps a useful source-app title when fetching yields no title', async () => {
+  const result = await enrichBookmark(
+    makeBookmark({ title: 'A useful shared article title', title_is_derived: true }),
+    offline,
+  );
+
+  assert.equal('title' in result.patch, false);
+});
+
 test('isRepairableSourceTitle recognizes only the legacy generic Reddit title', () => {
   assert.equal(
     isRepairableSourceTitle(

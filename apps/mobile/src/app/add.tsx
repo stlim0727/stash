@@ -77,6 +77,7 @@ export default function AddBookmarkScreen() {
       ? addBookmark({
           url: capture.url,
           title: capture.title,
+          title_is_derived: true,
           // Preserve any accompanying text (a PWA Web Share Target's selected
           // quote / description) as the note. A share target that merely echoes
           // the URL back into `text` shouldn't duplicate it as a note.

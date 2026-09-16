@@ -945,6 +945,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
   const syncNowRef = useRef<(() => Promise<boolean>) | null>(null);
   const localCreateFlushesInFlight = useRef(0);
   const pendingUserTitleEdits = useRef(new Set<string>());
+  // Generated source titles can also improve while a create request is in
+  // flight. Track that divergence separately so post-create reconciliation
+  // pushes the fetched title instead of leaving the cloud on the stale sender
+  // title (STASH-6C review).
+  const pendingGeneratedTitleUpdates = useRef(new Set<string>());
   // A bulk-create chunk's reconcile follow-up (deletedMidFlightIds/
   // followUpUpdates in applyBulkCreateChunkResults) removes the chunk's
   // completed 'create' entries from the queue before its own sequential
@@ -2006,6 +2011,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // title is recorded as such (and a real fetched title as not-derived).
             safePatch.title_is_derived = patch.title_is_derived;
           }
+          const generatedTitleChanged =
+            safePatch.title !== undefined && safePatch.title !== latest.title;
           if (patch.site_name !== undefined && latest.site_name === null) {
             safePatch.site_name = patch.site_name;
           }
@@ -2062,6 +2069,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           // bookmark's create upload already sends its latest fields.
           if (hasSyncedOnce(updated.id)) {
             enqueueMutation(updated.id, "update");
+          } else if (generatedTitleChanged) {
+            pendingGeneratedTitleUpdates.current.add(updated.id);
           }
         } finally {
           enriching.current.delete(bookmark.id);
@@ -3650,8 +3659,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           preview_image_url: null,
         };
         const { patch, metadata_status } = await enrichBookmark(refreshTarget);
+        const latest =
+          bookmarksRef.current?.find((item) => item.id === id) ?? bookmark;
+        // A title edit can land while the metadata request is in flight. Only
+        // apply the fetched title if both the value and its provenance still
+        // match the snapshot the refresh started from; generated site/image
+        // fields may still refresh independently.
+        const titleStillRefreshable =
+          !userTitle &&
+          latest.title === bookmark.title &&
+          latest.title_is_derived === bookmark.title_is_derived;
         const nextPatch: Partial<Bookmark> = { metadata_status };
-        if (!userTitle && patch.title !== undefined) {
+        if (titleStillRefreshable && patch.title !== undefined) {
           nextPatch.title = patch.title;
           nextPatch.title_is_derived = patch.title_is_derived;
         }
@@ -3664,8 +3683,6 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         if (patch.preview_image_url !== undefined) {
           nextPatch.preview_image_url = patch.preview_image_url;
         }
-        const latest =
-          bookmarksRef.current?.find((item) => item.id === id) ?? bookmark;
         const syncsRemotely = hasSyncedOnce(id);
         const updated: Bookmark = {
           ...latest,
@@ -5958,16 +5975,18 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 // unconditionally near the top of this function — this only
                 // records *why*, once reconcile is confirmed needed.
                 const payload = result.uploadedPayload;
-                const titleChangedByUser =
+                const titleChangedDuringCreate =
                   pendingUserTitleEdits.current.has(lookupId) ||
-                  pendingUserTitleEdits.current.has(merged.id);
+                  pendingUserTitleEdits.current.has(merged.id) ||
+                  pendingGeneratedTitleUpdates.current.has(lookupId) ||
+                  pendingGeneratedTitleUpdates.current.has(merged.id);
                 const isDuplicateSwap =
                   Boolean(result.originalLocalId) &&
                   result.originalLocalId !== merged.id;
                 if (
                   isDuplicateSwap ||
                   createNeedsReconcileUpdate(merged, payload, {
-                    titleChangedByUser,
+                    titleChangedByUser: titleChangedDuringCreate,
                   })
                 ) {
                   const reasons: Record<string, number> = {};
@@ -5977,7 +5996,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                   if (merged.collection_id !== null) reasons.collection_id = 1;
                   if (
                     merged.title !== (payload?.title ?? null) &&
-                    titleChangedByUser
+                    titleChangedDuringCreate
                   ) {
                     reasons.title = 1;
                   }
@@ -5994,6 +6013,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 }
                 pendingUserTitleEdits.current.delete(lookupId);
                 pendingUserTitleEdits.current.delete(merged.id);
+                pendingGeneratedTitleUpdates.current.delete(lookupId);
+                pendingGeneratedTitleUpdates.current.delete(merged.id);
               }
               // A brand-new bookmark just gained a remote identity: queue AI
               // suggestions for it. We DON'T fire immediately — the background
@@ -6293,15 +6314,17 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               // checking the stale snapshot would silently drop it, and a
               // later pull could then overwrite it with the older uploaded
               // values (caught in PR review).
-              const titleChangedByUser =
+              const titleChangedDuringCreate =
                 pendingUserTitleEdits.current.has(lookupId) ||
-                pendingUserTitleEdits.current.has(merged.id);
+                pendingUserTitleEdits.current.has(merged.id) ||
+                pendingGeneratedTitleUpdates.current.has(lookupId) ||
+                pendingGeneratedTitleUpdates.current.has(merged.id);
               const isDuplicateSwap =
                 Boolean(originalLocalId) && originalLocalId !== merged.id;
               if (
                 isDuplicateSwap ||
                 createNeedsReconcileUpdate(merged, uploadedPayload, {
-                  titleChangedByUser,
+                  titleChangedByUser: titleChangedDuringCreate,
                 })
               ) {
                 followUpUpdates.push(merged);
@@ -6312,7 +6335,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 if (merged.collection_id !== null) reasons.collection_id = 1;
                 if (
                   merged.title !== (uploadedPayload.title ?? null) &&
-                  titleChangedByUser
+                  titleChangedDuringCreate
                 ) {
                   reasons.title = 1;
                 }
@@ -6330,6 +6353,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
               }
               pendingUserTitleEdits.current.delete(lookupId);
               pendingUserTitleEdits.current.delete(merged.id);
+              pendingGeneratedTitleUpdates.current.delete(lookupId);
+              pendingGeneratedTitleUpdates.current.delete(merged.id);
               if (uploadedPayload.enrichment_policy !== "skip") {
                 pendingAiIds.push(merged.id);
               }
