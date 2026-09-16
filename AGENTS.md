@@ -581,3 +581,14 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   two libraries.
 - Consider a hard server-side version gate through an Edge Function proxy; the
   current `app_config.min_app_version` gate is client-side only.
+
+## Agent Efficiency & Best Practices (Optimized Tools)
+- **Exclude Generated/Dependency Directories:** Do not read, search, or parse files under the following directories unless explicitly instructed: `.git`, `build`, `venv`, `node_modules`, `dist`,
+`__pycache__`.
+- **Use Installed Token-Saving Tools:**
+  - **File Finding (`fd`):** Always prefer `fd` over `find` or generic file searches.
+  - **Structural Searching (`ast-grep` / `sg`):** For code searches (like finding class/function structures or patterns), prefer `ast-grep` (via `sg`) over text grepping.
+  - **Surgical Reading (`bat`):** When inspecting specific line spans or chunks of files, prefer `bat --line-range <start>:<end> <file_path>` to avoid downloading the entire file.
+  - **Python Formatting & Linting (`ruff`):** For Python linting or formatting, use `ruff check` and `ruff format`.
+  - **JavaScript/TypeScript (`eslint` / `prettier`):** Prefer standard `eslint --fix` and `prettier --write` for JS/TS tasks.
+
