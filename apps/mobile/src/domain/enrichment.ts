@@ -103,7 +103,10 @@ export async function enrichBookmark(
       preview_image_url: fetched.preview_image_url ?? fallback.preview_image_url,
     };
     const patch: Partial<Bookmark> = {};
-    if (bookmark.title == null) {
+    // A source app's share-sheet title is generated metadata, not a user edit.
+    // It is often only the app/site name (Reddit sends "Reddit"), so let real
+    // page metadata improve it while continuing to protect manual titles.
+    if (bookmark.title == null || bookmark.title_is_derived === true) {
       patch.title = derived.title;
       // Record provenance: true when the title came from the URL fallback (no
       // fetched title), false when it's a real fetched page title. Lets the

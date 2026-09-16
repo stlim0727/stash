@@ -71,6 +71,8 @@ export function ShareIntentHandler() {
     image: SharedImage | null;
     fileCount: number;
     fileMimeTypes: string[];
+    urlSource: 'web_url' | 'text' | 'none';
+    urlCandidatesMatch?: boolean;
   } | null>(null);
   // Guards against re-copying the same intent across renders before the reset
   // propagates; cleared once the intent goes away so a later share is captured.
@@ -130,7 +132,9 @@ export function ShareIntentHandler() {
     // through extractFirstUrl so share.url is always a normalized, saveable URL
     // or null — falling through to the text-note path below rather than losing
     // the capture. Capture is sacred.
-    const url = extractFirstUrl(shareIntent.webUrl) ?? extractFirstUrl(shareIntent.text);
+    const webUrlCandidate = extractFirstUrl(shareIntent.webUrl);
+    const textUrlCandidate = extractFirstUrl(shareIntent.text);
+    const url = webUrlCandidate ?? textUrlCandidate;
     // Keep the raw shared text so a no-link share (e.g. a KakaoTalk message)
     // can still be saved as a text note instead of being dropped.
     const text = shareIntent.text ?? undefined;
@@ -151,6 +155,10 @@ export function ShareIntentHandler() {
       image,
       fileCount,
       fileMimeTypes,
+      urlSource: webUrlCandidate ? 'web_url' : textUrlCandidate ? 'text' : 'none',
+      ...(webUrlCandidate && textUrlCandidate
+        ? { urlCandidatesMatch: webUrlCandidate === textUrlCandidate }
+        : {}),
     });
     // Coarse capture breadcrumb (kind of share only — never URL/title/text) so a
     // freeze right after a share (Sentry STASH-H) shows the share on the event
@@ -181,10 +189,10 @@ export function ShareIntentHandler() {
     // "nothing to save" toast for a genuinely empty share.
     const saveStartedAt = Date.now();
     const result = share.url
-      ? addBookmark({ url: share.url, title: share.title })
+      ? addBookmark({ url: share.url, title: share.title, title_is_derived: true })
       : share.image
-        ? addBookmark({ image: share.image, title: share.title })
-        : addBookmark({ shared_text: share.text, title: share.title });
+        ? addBookmark({ image: share.image, title: share.title, title_is_derived: true })
+        : addBookmark({ shared_text: share.text, title: share.title, title_is_derived: true });
     const saved = result.status !== 'invalid';
     // Only a genuinely new save is worth confirming on the next open; a
     // duplicate already lived in the library and a no-link share saved nothing.
@@ -202,6 +210,10 @@ export function ShareIntentHandler() {
       fileCount: share.fileCount,
       fileMimeTypes: share.fileMimeTypes,
       result: result.status,
+      urlSource: share.urlSource,
+      ...(typeof share.urlCandidatesMatch === 'boolean'
+        ? { urlCandidatesMatch: share.urlCandidatesMatch }
+        : {}),
       // How long this share sat waiting on the cold-start store load before it
       // could be processed (Sentry STASH-2T/STASH-2V: a "shared but nothing
       // saved, no toast" report with no evidence of what actually happened).

@@ -83,6 +83,38 @@ test("addBookmark shows the bookmark immediately and queues a create", async () 
   expect(fakeRepo.__queue()[0]?.operation).toBe("create");
 });
 
+test("source-app title is replaced by enrichment while a manual title stays protected (STASH-6C)", async () => {
+  mockEnrichBookmark.mockImplementation(async () => ({
+    patch: { title: "Fetched Reddit post title", title_is_derived: false },
+    metadata_status: "complete",
+  }));
+  const { result } = await renderStore();
+
+  await act(async () => {
+    result.current.addBookmark({
+      url: "https://www.reddit.com/r/LocalLLaMA/comments/source/generated",
+      title: "Reddit",
+      title_is_derived: true,
+    });
+    result.current.addBookmark({
+      url: "https://www.reddit.com/r/LocalLLaMA/comments/manual/title",
+      title: "My Reddit note",
+    });
+  });
+
+  await waitFor(() =>
+    expect(result.current.inbox.find((item) => item.url?.includes("/source/"))).toMatchObject({
+      title: "Fetched Reddit post title",
+      title_is_derived: false,
+      metadata_status: "complete",
+    }),
+  );
+  expect(result.current.inbox.find((item) => item.url?.includes("/manual/"))).toMatchObject({
+    title: "My Reddit note",
+    title_is_derived: false,
+  });
+});
+
 test("markBookmarkAccessed sets last_accessed_at and persists it durably", async () => {
   fakeRepo.__reset([
     makeStoredBookmark({ id: "bm-access", last_accessed_at: null }),

@@ -118,6 +118,8 @@ test('history round-trips through serialize/parse', () => {
     fileMimeTypes: ['image/jpeg', 'video/mp4'],
     result: 'created',
     loadWaitMs: 4200,
+    urlSource: 'text',
+    urlCandidatesMatch: false,
   });
   const b = buildShareAttemptDiagnostics({
     attemptId: 'native-attempt-2',
@@ -130,6 +132,22 @@ test('history round-trips through serialize/parse', () => {
   });
   const history = [a, b];
   assert.deepEqual(parseShareAttemptHistory(serializeShareAttemptHistory(history)), history);
+});
+
+test('build drops invalid URL-source diagnostics instead of persisting arbitrary content', () => {
+  const record = buildShareAttemptDiagnostics({
+    hasUrl: true,
+    hasText: true,
+    hasImage: false,
+    fileCount: 0,
+    fileMimeTypes: [],
+    result: 'duplicate',
+    urlSource: 'https://private.example/path' as never,
+    urlCandidatesMatch: true,
+  });
+
+  assert.equal(record.urlSource, undefined);
+  assert.equal(record.urlCandidatesMatch, true);
 });
 
 test('appendShareAttemptHistory caps the ring at MAX_SHARE_ATTEMPT_HISTORY, dropping the oldest', () => {

@@ -282,6 +282,8 @@ interface BookmarksContextValue {
   addBookmark: (input: {
     url?: string;
     title?: string;
+    /** True when the title came from a source app rather than the user. */
+    title_is_derived?: boolean;
     notes?: string;
     description_format?: TextFormat;
     notes_format?: TextFormat;
@@ -1988,10 +1990,14 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                     ? "synced"
                     : source.sync_status,
                 };
-          // Fill only generated fields that are still empty, so a user-authored
-          // title is never overwritten by generated metadata.
+          // Fill only generated fields that are still empty. A source-app
+          // share title is itself generated and may be improved; a manual
+          // user title remains protected.
           const safePatch: Partial<Bookmark> = {};
-          if (patch.title !== undefined && latest.title === null) {
+          if (
+            patch.title !== undefined &&
+            (latest.title === null || latest.title_is_derived === true)
+          ) {
             safePatch.title = patch.title;
             // Carry the title's provenance alongside it, so a generated fallback
             // title is recorded as such (and a real fetched title as not-derived).
@@ -2531,6 +2537,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     ({
       url,
       title,
+      title_is_derived = false,
       notes,
       description_format = "plain",
       notes_format = "plain",
@@ -2539,6 +2546,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     }: {
       url?: string;
       title?: string;
+      title_is_derived?: boolean;
       notes?: string;
       description_format?: TextFormat;
       notes_format?: TextFormat;
@@ -2578,7 +2586,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           title: title?.trim()
             ? title.trim()
             : imageTitleFromFileName(image.fileName),
-          title_is_derived: title?.trim() ? false : undefined,
+          title_is_derived: title?.trim() ? title_is_derived : undefined,
           description: null,
           notes: notes?.length ? notes : null,
           description_format,
@@ -2739,7 +2747,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           url_hash: null,
           client_id: noteClientId,
           title: title?.trim() ? title.trim() : null,
-          title_is_derived: title?.trim() ? false : undefined,
+          title_is_derived: title?.trim() ? title_is_derived : undefined,
           // The shared text is the note's body. Stored as the description to
           // mirror the cloud API (which maps shared_text → description), so a
           // pulled-back note matches the locally captured one.
@@ -2853,10 +2861,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         // stays null until enrichment resolves a real rel=canonical / og:url.
         url_hash: dedupeKey,
         client_id: clientId,
-        // A title provided at capture (e.g. from the share payload) counts as
-        // user-authored; enrichment only fills it when still null.
+        // Manual Add titles are user-authored. Source-app share titles are
+        // generated hints and may be improved by enrichment (STASH-6C).
         title: title?.trim() ? title.trim() : null,
-        title_is_derived: title?.trim() ? false : undefined,
+        title_is_derived: title?.trim() ? title_is_derived : undefined,
         description: null,
         notes: notes?.length ? notes : null,
         description_format,

@@ -104,6 +104,16 @@ test('enrichBookmark never overwrites a user-provided title', async () => {
   assert.equal('title' in result.patch, false);
 });
 
+test('enrichBookmark improves a generated source-app title (STASH-6C)', async () => {
+  const result = await enrichBookmark(
+    makeBookmark({ title: 'Reddit', title_is_derived: true }),
+    async () => ({ title: 'Local LLM discussion', site_name: 'Reddit' }),
+  );
+
+  assert.equal(result.patch.title, 'Local LLM discussion');
+  assert.equal(result.patch.title_is_derived, false);
+});
+
 test('enrichBookmark survives a fetcher that throws', async () => {
   const result = await enrichBookmark(makeBookmark(), async () => {
     throw new Error('network down');

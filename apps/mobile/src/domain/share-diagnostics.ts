@@ -29,6 +29,7 @@ export const SHARE_DIAGNOSTICS_PREF_KEY = 'pref.share.lastAttempt';
 export const MAX_SHARE_ATTEMPT_HISTORY = 10;
 
 export type ShareAttemptResult = 'created' | 'duplicate' | 'invalid';
+export type ShareUrlSource = 'web_url' | 'text' | 'none';
 
 const VALID_RESULTS = new Set<ShareAttemptResult>(['created', 'duplicate', 'invalid']);
 
@@ -43,6 +44,13 @@ export interface ShareAttemptInput {
   fileCount: number;
   fileMimeTypes: string[];
   result: ShareAttemptResult;
+  /**
+   * Privacy-safe evidence for false duplicate reports: which intent field
+   * supplied the selected URL, plus whether both fields supplied the same
+   * normalized candidate. The URLs themselves are deliberately never stored.
+   */
+  urlSource?: ShareUrlSource;
+  urlCandidatesMatch?: boolean;
   /**
    * Milliseconds between the share landing in JS (`receivedAt`) and the store
    * finishing its cold-start load, i.e. how long the share sat waiting before
@@ -76,6 +84,12 @@ export function buildShareAttemptDiagnostics(input: ShareAttemptInput): ShareAtt
     fileCount: Math.max(0, Math.floor(input.fileCount) || 0),
     fileMimeTypes: input.fileMimeTypes.filter((m) => typeof m === 'string').slice(0, MAX_MIME_TYPES),
     result: VALID_RESULTS.has(input.result) ? input.result : 'invalid',
+    ...(input.urlSource === 'web_url' || input.urlSource === 'text' || input.urlSource === 'none'
+      ? { urlSource: input.urlSource }
+      : {}),
+    ...(typeof input.urlCandidatesMatch === 'boolean'
+      ? { urlCandidatesMatch: input.urlCandidatesMatch }
+      : {}),
     ...(typeof input.loadWaitMs === 'number' && Number.isFinite(input.loadWaitMs) && input.loadWaitMs >= 0
       ? { loadWaitMs: Math.round(input.loadWaitMs) }
       : {}),
@@ -108,6 +122,12 @@ function normalizeShareAttempt(
       : [],
     result: data.result as ShareAttemptResult,
     updatedAt: data.updatedAt,
+    ...(data.urlSource === 'web_url' || data.urlSource === 'text' || data.urlSource === 'none'
+      ? { urlSource: data.urlSource }
+      : {}),
+    ...(typeof data.urlCandidatesMatch === 'boolean'
+      ? { urlCandidatesMatch: data.urlCandidatesMatch }
+      : {}),
     ...(typeof data.attemptId === 'string' && data.attemptId ? { attemptId: data.attemptId } : {}),
     ...(typeof data.receivedAt === 'string' && data.receivedAt ? { receivedAt: data.receivedAt } : {}),
     ...(typeof data.durable === 'boolean' ? { durable: data.durable } : {}),

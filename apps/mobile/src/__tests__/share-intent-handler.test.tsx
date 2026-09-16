@@ -262,6 +262,31 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('marks a source-app title as generated so enrichment can improve it (STASH-6C)', async () => {
+    fakeRepo.__reset([]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: 'https://www.reddit.com/r/LocalLLaMA/comments/example/post',
+        text: null,
+        meta: { title: 'Reddit' },
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Saved to Keepory');
+    await waitFor(async () => {
+      const saved = await fakeRepo.repository.listBookmarks();
+      expect(saved[0]).toMatchObject({
+        title: 'Reddit',
+        title_is_derived: true,
+      });
+    });
+    unmount();
+  });
+
   it('still saves the share if the OS intent is reset during a slow store load', async () => {
     // resetOnBackground (or the user backing out) can clear the expo-share-intent
     // context before a slow SQLite load finishes. The capture must survive that:
@@ -970,6 +995,38 @@ describe('ShareIntentHandler', () => {
       );
     });
     expect(mockFlush).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('records privacy-safe URL candidate disagreement for a duplicate share (STASH-6B)', async () => {
+    const existingBookmark = makeStoredBookmark({
+      id: 'existing-id',
+      url: 'https://example.com/already-saved',
+    });
+    fakeRepo.__reset([existingBookmark]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: 'https://example.com/already-saved',
+        text: 'Read https://example.com/intended-new-page',
+        meta: { attemptId: 'stash-6b-mismatch' },
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Already in Keepory');
+    await waitFor(async () => {
+      expect(
+        await readLastShareAttempt((key) => fakeRepo.repository.getMeta(key)),
+      ).toMatchObject({
+        attemptId: 'stash-6b-mismatch',
+        result: 'duplicate',
+        urlSource: 'web_url',
+        urlCandidatesMatch: false,
+      });
+    });
     unmount();
   });
 
