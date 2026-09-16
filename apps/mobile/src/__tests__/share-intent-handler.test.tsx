@@ -973,6 +973,38 @@ describe('ShareIntentHandler', () => {
     unmount();
   });
 
+  it('records privacy-safe URL candidate disagreement for a duplicate share (STASH-6B)', async () => {
+    const existingBookmark = makeStoredBookmark({
+      id: 'existing-id',
+      url: 'https://example.com/already-saved',
+    });
+    fakeRepo.__reset([existingBookmark]);
+    mockShareIntent = {
+      hasShareIntent: true,
+      shareIntent: {
+        webUrl: 'https://example.com/already-saved',
+        text: 'Read https://example.com/intended-new-page',
+        meta: { attemptId: 'stash-6b-mismatch' },
+      },
+      resetShareIntent: jest.fn(),
+    };
+
+    const { findByText, unmount } = await renderHandler();
+
+    await findByText('Already in Keepory');
+    await waitFor(async () => {
+      expect(
+        await readLastShareAttempt((key) => fakeRepo.repository.getMeta(key)),
+      ).toMatchObject({
+        attemptId: 'stash-6b-mismatch',
+        result: 'duplicate',
+        urlSource: 'web_url',
+        urlCandidatesMatch: false,
+      });
+    });
+    unmount();
+  });
+
   it('triggers capture_completed PostHog event on invalid save', async () => {
     mockCapture.mockClear();
     mockFlush.mockClear();
