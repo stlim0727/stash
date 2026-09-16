@@ -415,7 +415,7 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   diagnostics are checked.
 - `ai-enrich` reuses the user's existing tags to curb tag fragmentation. When
   ranking tags by usage, count links on **active** bookmarks only (`deleted_at
-  is null and is_archived = false`): trash is a soft delete so `bookmark_tags`
+is null and is_archived = false`): trash is a soft delete so `bookmark_tags`
   links persist, and `removeTags` leaves an orphan `tags` row — a naive
   `bookmark_tags(count)` resurfaces tags the user already cleared. See
   `docs/design/library-organizing.md`.
@@ -435,7 +435,7 @@ only, debug-signed, standalone, and includes build provenance in Settings.
 - If a compound git command is denied, earlier parts did not run either. Re-fetch
   and verify SHAs before building or deploying from `main`.
 - In-app feedback reports (Sentry tag `logger: feedback-bridge`, `source:
-  in-app-feedback`) carry **no Sentry breadcrumbs** — `trackBreadcrumb` writes
+in-app-feedback`) carry **no Sentry breadcrumbs** — `trackBreadcrumb` writes
   are attached to a captured exception's session, not to a user-typed feedback
   submission. Don't spend a round-trip checking `get_sentry_resource`
   (`resourceType: breadcrumbs`) for one of these; it 404s. The `context.logs`/
@@ -488,8 +488,8 @@ only, debug-signed, standalone, and includes build provenance in Settings.
 - On web (RN-web/CSS stacking rules), a sibling with **any** explicit
   `position` + positive `zIndex` paints above **all** `zIndex:auto`/unset
   siblings in the same stacking context, regardless of DOM/mount order — so
-  giving only the *moving* layer a `zIndex` (to control its own paint order
-  relative to content behind it) does not guarantee a *different*, unpositioned
+  giving only the _moving_ layer a `zIndex` (to control its own paint order
+  relative to content behind it) does not guarantee a _different_, unpositioned
   sibling (e.g. a "pinned" element with no explicit stacking) stays visually on
   top of it. To keep A above B, both need competing explicit values (via
   `overlayLayer(z)` — see `ui/layering.ts`), not just B. Caught on the web-only
@@ -509,7 +509,7 @@ only, debug-signed, standalone, and includes build provenance in Settings.
     #567/#569 — inbox search open/close on web): the root cause of "tap the
     search icon, the field opens then immediately closes/never focuses" was
     the underlying `FlatList`'s `keyboardDismissMode="on-drag"` firing on
-    incidental scroll/drag from the *opening* gesture itself — indistinguishable
+    incidental scroll/drag from the _opening_ gesture itself — indistinguishable
     from a real blur, so the existing (correct) empty-query auto-close fired.
     Fixed with a short timed suppression window after `openSearch()`, not by
     guessing at focus/blur timing (two earlier theories — `flushSync` for
@@ -535,7 +535,7 @@ only, debug-signed, standalone, and includes build provenance in Settings.
     has focus (the search open/✕ toggle) needs `onMouseDown` `preventDefault`
     on web (PR #567) — react-native-web's `Pressable` forwards unrecognized
     props like `onMouseDown` straight to the host DOM node. Without it, a
-    mousedown on the button blurs the still-focused input *before* the click
+    mousedown on the button blurs the still-focused input _before_ the click
     fires; with any real (non-instant) gap between mouse-down and mouse-up,
     an empty-query auto-close-on-blur can run first and flip the button back
     to its other state, so the click that follows does the opposite of what
@@ -583,12 +583,12 @@ only, debug-signed, standalone, and includes build provenance in Settings.
   current `app_config.min_app_version` gate is client-side only.
 
 ## Agent Efficiency & Best Practices (Optimized Tools)
+
 - **Exclude Generated/Dependency Directories:** Do not read, search, or parse files under the following directories unless explicitly instructed: `.git`, `build`, `venv`, `node_modules`, `dist`,
-`__pycache__`.
+  `__pycache__`.
 - **Use Installed Token-Saving Tools:**
   - **File Finding (`fd`):** Always prefer `fd` over `find` or generic file searches.
   - **Structural Searching (`ast-grep` / `sg`):** For code searches (like finding class/function structures or patterns), prefer `ast-grep` (via `sg`) over text grepping.
   - **Surgical Reading (`bat`):** When inspecting specific line spans or chunks of files, prefer `bat --line-range <start>:<end> <file_path>` to avoid downloading the entire file.
   - **Python Formatting & Linting (`ruff`):** For Python linting or formatting, use `ruff check` and `ruff format`.
   - **JavaScript/TypeScript (`eslint` / `prettier`):** Prefer standard `eslint --fix` and `prettier --write` for JS/TS tasks.
-
