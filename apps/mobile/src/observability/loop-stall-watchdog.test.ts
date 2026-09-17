@@ -87,6 +87,27 @@ test('one stall reports exactly once, with the measured ms and coarse detail', (
   assert.match(reports[0]!, /cannot be captured/);
 });
 
+test('records a perceptible sub-stall delay without reporting a Sentry error', () => {
+  const clock = makeClock();
+  const reports: string[] = [];
+  const delays: Array<{ label: string; durationMs: number; endedAt: number }> = [];
+  armLoopStallWatchdog({
+    ...TUNABLES,
+    now: clock.now,
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+    report: (m) => reports.push(m),
+    observeDelay: (label, durationMs, endedAt) =>
+      delays.push({ label, durationMs, endedAt }),
+  });
+
+  clock.set(1_750); // tick due at 1000 arrives 750ms late: lag, not a 3s stall
+  clock.fire();
+
+  assert.equal(reports.length, 0);
+  assert.deepEqual(delays, [{ label: 'event-loop-delay', durationMs: 750, endedAt: 1_750 }]);
+});
+
 test('a second stall within the cooldown is suppressed; one after it reports again', () => {
   const clock = makeClock();
   const reports: string[] = [];
@@ -115,6 +136,7 @@ test('an implausibly late tick is treated as OS suspension, not a stall', () => 
   const clock = makeClock();
   const reports: string[] = [];
   const suspensions: string[] = [];
+  const delays: number[] = [];
   armLoopStallWatchdog({
     ...TUNABLES,
     now: clock.now,
@@ -122,6 +144,7 @@ test('an implausibly late tick is treated as OS suspension, not a stall', () => 
     cancel: clock.cancel,
     report: (m) => reports.push(m),
     reportSuspension: (m) => suspensions.push(m),
+    observeDelay: (_label, durationMs) => delays.push(durationMs),
   });
 
   clock.set(200_000); // way past backgroundSuspicionMs (100000)
@@ -129,6 +152,7 @@ test('an implausibly late tick is treated as OS suspension, not a stall', () => 
 
   assert.equal(reports.length, 0);
   assert.equal(suspensions.length, 1);
+  assert.equal(delays.length, 0, 'OS suspension must not pollute UI-lag diagnostics');
   assert.match(suspensions[0]!, /OS suspension/);
 });
 

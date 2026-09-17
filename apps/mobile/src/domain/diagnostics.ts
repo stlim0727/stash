@@ -71,6 +71,7 @@ export interface DiagnosticsInput {
   logs?: string[] | null;
   /**
    * Compact summary of recent slow (>=500ms) synchronous JS-thread segments
+   * and observed event-loop delays
    * (see `observability/slow-segment-log.ts`'s `describeRecentSegments`).
    * Previously this only reached monitoring via the automatic loop-stall
    * watchdog's report, so a manually-submitted "feels slow" report — the

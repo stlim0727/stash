@@ -1,6 +1,6 @@
 /**
- * A tiny ring buffer of recent *synchronous* JS-thread segments that ran long
- * enough to be felt as a freeze.
+ * A tiny ring buffer of recent synchronous JS-thread segments and observed
+ * event-loop delays that ran long enough to be felt as a freeze.
  *
  * This exists to close the hard limitation stated in `loop-stall-watchdog.ts`:
  * that watchdog can prove the JS loop was blocked for N ms, but by the time its
@@ -9,9 +9,9 @@
  * "stalled ~3096ms (syncing=true queue=685)" — enough to place the stall inside
  * a sync pass over a large queue, not enough to name the code that blocked.
  *
- * The fix is to have the suspect regions time *themselves*. Every entry here is
- * a span with no `await` in it, so its duration IS JS-thread block time — the
- * same quantity the watchdog measures from the outside. A segment of ~3000ms
+ * Suspect regions time *themselves*, while the loop watchdog records shorter
+ * delayed heartbeats that have no instrumented owner yet. Every entry measures
+ * JS-thread block time rather than wall time across an `await`. A segment of ~3000ms
  * recorded moments before a ~3000ms stall report is direct attribution, not a
  * correlation; an empty list is informative too, since it rules the
  * instrumented regions out.
