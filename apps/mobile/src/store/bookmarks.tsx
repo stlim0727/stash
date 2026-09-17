@@ -81,6 +81,7 @@ import {
   type AiEnrichmentBurstQueue,
 } from "@/domain/ai-enrichment-burst";
 import { parseStringSetMap } from "@/domain/string-set-map";
+import { sameRecordSnapshot } from "@/domain/record-snapshot";
 import type { StringSetMap } from "@/domain/string-set-map";
 import {
   buildProcessingStats,
@@ -5609,10 +5610,21 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
         const durableBookmarks = await repository.listBookmarks();
         const durableQueue = await repository.listQueue();
+        // Repository reads allocate fresh arrays/rows even when nothing has
+        // changed. Publishing those references unconditionally made every sync
+        // pass invalidate the whole Bookmarks context and re-render the large
+        // Inbox; STASH-K captured 1.2–3.8s `react-cycle` segments plus RN's
+        // "VirtualizedList ... slow to update" warning with one queued mutation.
+        // Keep refs fresh for this run, but do not render an identical snapshot.
+        const bookmarksChanged = !sameRecordSnapshot(
+          bookmarksRef.current ?? [],
+          durableBookmarks,
+        );
+        const queueChanged = !sameRecordSnapshot(queueRef.current, durableQueue);
         bookmarksRef.current = durableBookmarks;
         queueRef.current = durableQueue;
-        setBookmarks(durableBookmarks);
-        setQueue(durableQueue);
+        if (bookmarksChanged) setBookmarks(durableBookmarks);
+        if (queueChanged) setQueue(durableQueue);
 
         // Upload-then-pull: even with nothing to upload, the pull still runs.
         // Defer creates whose metadata is still fetching, so that metadata rides
@@ -8221,16 +8233,31 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     aiServerQueueSnapshot,
   ]);
 
+  // Queue/progress-only changes rebuild the context value during sync. Keep
+  // these library projections stable unless bookmarks actually changed, so
+  // the Inbox does not repeat its O(library) facet/search/sort pipeline for an
+  // unrelated sync-status render (the hot `react-cycle` path in STASH-K).
+  const inbox = useMemo(
+    () =>
+      loadedBookmarks
+        .filter((bookmark) => isActiveBookmark(bookmark))
+        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [loadedBookmarks],
+  );
+  const trash = useMemo(
+    () =>
+      loadedBookmarks
+        .filter((bookmark) => bookmark.deleted_at != null)
+        .sort((a, b) => (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "")),
+    [loadedBookmarks],
+  );
+
   const value = useMemo<BookmarksContextValue>(
     () => ({
       isLoading: bookmarks === null,
       loadError,
-      inbox: loadedBookmarks
-        .filter((bookmark) => isActiveBookmark(bookmark))
-        .sort((a, b) => b.created_at.localeCompare(a.created_at)),
-      trash: loadedBookmarks
-        .filter((bookmark) => bookmark.deleted_at != null)
-        .sort((a, b) => (b.deleted_at ?? "").localeCompare(a.deleted_at ?? "")),
+      inbox,
+      trash,
       queue,
       getBookmark,
       getTagsForBookmark,
@@ -8288,7 +8315,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     [
       bookmarks,
       loadError,
-      loadedBookmarks,
+      inbox,
+      trash,
       queue,
       getBookmark,
       getTagsForBookmark,

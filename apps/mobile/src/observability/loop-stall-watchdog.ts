@@ -29,11 +29,14 @@
  */
 
 import { recordLog } from '@/observability/log-buffer';
+import { recordSlowSegment } from '@/observability/slow-segment-log';
 
-/** Heartbeat cadence: how often the tick reschedules itself. ~1s gives roughly
- *  second-granularity detection at negligible steady-state cost (two clock
- *  reads per tick). */
-export const DEFAULT_LOOP_STALL_INTERVAL_MS = 1_000;
+/** Heartbeat cadence: how often the tick reschedules itself. This must be well
+ *  below the user-visible ~1s hitch we are trying to measure: with the old 1s
+ *  cadence, a 900ms block beginning just after a healthy tick could finish
+ *  before the next tick was due and leave no delay at all. Four cheap clock
+ *  reads/callbacks per second keep the phase error bounded to 250ms. */
+export const DEFAULT_LOOP_STALL_INTERVAL_MS = 250;
 
 /** A tick arriving more than this late past its schedule is treated as a stall.
  *  Sits deliberately in the gap between ordinary sub-second cold-start/GC jank
@@ -78,6 +81,10 @@ export interface LoopStallWatchdogDeps {
   /** Injected suspension reporter; defaults to an `info`-level `recordLog`
    *  (buffer only — never a Sentry exception). */
   reportSuspension?: (message: string) => void;
+  /** Record shorter loop delays for a later in-app feedback report without
+   *  promoting every perceptible hitch to a Sentry error. The default feeds
+   *  the same bounded, privacy-safe buffer as measured React/sync segments. */
+  observeDelay?: (label: string, durationMs: number, endedAt: number) => void;
 }
 
 export interface LoopStallWatchdog {
@@ -115,6 +122,7 @@ export function armLoopStallWatchdog(deps: LoopStallWatchdogDeps = {}): LoopStal
     deps.cancel ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   const report = deps.report ?? ((message) => recordLog('error', message));
   const reportSuspension = deps.reportSuspension ?? ((message) => recordLog('info', message));
+  const observeDelay = deps.observeDelay ?? recordSlowSegment;
   const { describe } = deps;
 
   let disarmed = false;
@@ -144,6 +152,18 @@ export function armLoopStallWatchdog(deps: LoopStallWatchdogDeps = {}): LoopStal
         `js event loop stalled ~${delta}ms — the JS thread was blocked past ${thresholdMs}ms so input/press handling was frozen${detail}; ` +
           'reporting only (nothing aborted). Note: the blocking stack is already unwound and cannot be captured here',
       );
+    }
+    if (delta <= backgroundSuspicionMs) {
+      // `recordSlowSegment` applies its own 250ms floor. Combined with the
+      // 250ms heartbeat, this reliably captures an approximately 1s hitch
+      // regardless of where within the timer interval the block begins. This
+      // captures the perceptible-but-sub-3s hitches users describe as laggy
+      // scrolling or navigation, while the error reporter above remains reserved for a
+      // genuine multi-second freeze. Awaiting a backend request does not block
+      // the event loop, so a matching entry is evidence of local JS work rather
+      // than a network wait. It is only retained in the bounded diagnostics
+      // ring and reaches Sentry if the user submits an in-app report.
+      observeDelay('event-loop-delay', delta, actual);
     }
     // Rebaseline off *now* so the immediate catch-up tick after a stall is not
     // itself misread as a second stall.
