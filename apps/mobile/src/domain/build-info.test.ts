@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { describeBuild, getBuildInfo } from './build-info.ts';
+import { describeAppVersion, describeBuild, getBuildInfo } from './build-info.ts';
+
+test('describeAppVersion includes the native store build number when available', () => {
+  assert.equal(describeAppVersion('1.2.4', '5'), '1.2.4 (5)');
+  assert.equal(describeAppVersion('1.2.4', null), '1.2.4');
+  assert.equal(describeAppVersion(undefined, '  '), '0.0.0');
+});
 
 test('getBuildInfo returns nulls when nothing is baked in', () => {
   const info = getBuildInfo();

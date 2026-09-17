@@ -45,6 +45,8 @@ export interface DiagnosticsSyncStatus {
 export interface DiagnosticsInput {
   /** App version string, e.g. from expo-constants (`expoConfig.version`). */
   appVersion?: string | null;
+  /** Native store build number (`versionCode` on Android, build number on iOS). */
+  appBuildVersion?: string | null;
   /** Platform identifier, e.g. React Native `Platform.OS` ('ios' | 'android' | 'web'). */
   platform?: string | null;
   /** Optional OS / SDK version label for extra context. */
@@ -144,6 +146,7 @@ export interface DiagnosticsStorage {
 
 export interface DiagnosticsContext {
   appVersion: string;
+  appBuildVersion?: string;
   platform: string;
   osVersion?: string;
   route: string;
@@ -228,6 +231,11 @@ export function buildDiagnosticsContext(input: DiagnosticsInput = {}): Diagnosti
     lastPulledAt: cleanString(input.lastPulledAt) ?? null,
     capturedAt: new Date().toISOString(),
   };
+
+  const appBuildVersion = cleanString(input.appBuildVersion);
+  if (appBuildVersion) {
+    context.appBuildVersion = appBuildVersion;
+  }
 
   const osVersion = cleanString(input.osVersion);
   if (osVersion) {

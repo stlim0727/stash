@@ -39,6 +39,19 @@ export interface BuildInfo {
   commitUrl: string | null;
 }
 
+/**
+ * Human-readable store version. Android's monotonically increasing build
+ * number is what distinguishes Play releases that share a marketing version.
+ */
+export function describeAppVersion(
+  version: string | null | undefined,
+  nativeBuildVersion: string | null | undefined,
+): string {
+  const cleanVersion = clean(version) || '0.0.0';
+  const cleanBuildVersion = clean(nativeBuildVersion);
+  return cleanBuildVersion ? `${cleanVersion} (${cleanBuildVersion})` : cleanVersion;
+}
+
 function clean(value: string | null | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
 }
