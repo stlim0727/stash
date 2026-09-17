@@ -87,6 +87,46 @@ test('one stall reports exactly once, with the measured ms and coarse detail', (
   assert.match(reports[0]!, /cannot be captured/);
 });
 
+test('records a perceptible sub-stall delay without reporting a Sentry error', () => {
+  const clock = makeClock();
+  const reports: string[] = [];
+  const delays: Array<{ label: string; durationMs: number; endedAt: number }> = [];
+  armLoopStallWatchdog({
+    ...TUNABLES,
+    now: clock.now,
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+    report: (m) => reports.push(m),
+    observeDelay: (label, durationMs, endedAt) =>
+      delays.push({ label, durationMs, endedAt }),
+  });
+
+  clock.set(1_750); // tick due at 1000 arrives 750ms late: lag, not a 3s stall
+  clock.fire();
+
+  assert.equal(reports.length, 0);
+  assert.deepEqual(delays, [{ label: 'event-loop-delay', durationMs: 750, endedAt: 1_750 }]);
+});
+
+test('the default cadence cannot hide an approximately one-second hitch between ticks', () => {
+  const clock = makeClock();
+  const delays: number[] = [];
+  armLoopStallWatchdog({
+    now: clock.now,
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+    observeDelay: (_label, durationMs) => delays.push(durationMs),
+  });
+
+  // Worst alignment: blocking starts immediately after the heartbeat was
+  // scheduled. At the old 1000ms cadence this could produce zero measured
+  // delay; at 250ms, a 1000ms return is still observed as 750ms late.
+  clock.set(1_000);
+  clock.fire();
+
+  assert.deepEqual(delays, [750]);
+});
+
 test('a second stall within the cooldown is suppressed; one after it reports again', () => {
   const clock = makeClock();
   const reports: string[] = [];
@@ -115,6 +155,7 @@ test('an implausibly late tick is treated as OS suspension, not a stall', () => 
   const clock = makeClock();
   const reports: string[] = [];
   const suspensions: string[] = [];
+  const delays: number[] = [];
   armLoopStallWatchdog({
     ...TUNABLES,
     now: clock.now,
@@ -122,6 +163,7 @@ test('an implausibly late tick is treated as OS suspension, not a stall', () => 
     cancel: clock.cancel,
     report: (m) => reports.push(m),
     reportSuspension: (m) => suspensions.push(m),
+    observeDelay: (_label, durationMs) => delays.push(durationMs),
   });
 
   clock.set(200_000); // way past backgroundSuspicionMs (100000)
@@ -129,6 +171,7 @@ test('an implausibly late tick is treated as OS suspension, not a stall', () => 
 
   assert.equal(reports.length, 0);
   assert.equal(suspensions.length, 1);
+  assert.equal(delays.length, 0, 'OS suspension must not pollute UI-lag diagnostics');
   assert.match(suspensions[0]!, /OS suspension/);
 });
 
@@ -196,6 +239,6 @@ test('omits the detail suffix when no describe() is provided', () => {
 });
 
 test('exposes generous, deliberately-chosen defaults', () => {
-  assert.equal(DEFAULT_LOOP_STALL_INTERVAL_MS, 1_000);
+  assert.equal(DEFAULT_LOOP_STALL_INTERVAL_MS, 250);
   assert.equal(DEFAULT_LOOP_STALL_THRESHOLD_MS, 3_000);
 });
