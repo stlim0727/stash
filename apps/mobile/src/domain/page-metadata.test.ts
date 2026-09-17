@@ -356,6 +356,38 @@ test('fetchPageMetadata prefers Reddit oEmbed over its generic HTML title (STASH
   }
 });
 
+test('fetchPageMetadata uses Reddit oEmbed after an app share-link redirect (STASH-6H)', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  const finalUrl = 'https://www.reddit.com/r/korea/comments/abc123/a_specific_post/';
+  globalThis.fetch = (async (target: string) => {
+    calls.push(target);
+    if (target.startsWith('https://www.reddit.com/oembed')) {
+      return {
+        ok: true,
+        json: async () => ({
+          title: 'A specific Reddit post title',
+          provider_name: 'Reddit',
+          thumbnail_url: 'https://preview.redd.it/example.jpg',
+        }),
+      } as unknown as Response;
+    }
+    return htmlResponse('<head><title>Reddit</title></head>', { url: finalUrl });
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata('https://www.reddit.com/r/korea/s/shareToken');
+    assert.equal(meta?.title, 'A specific Reddit post title');
+    assert.equal(meta?.site_name, 'Reddit');
+    assert.equal(meta?.preview_image_url, 'https://preview.redd.it/example.jpg');
+    assert.deepEqual(calls, [
+      'https://www.reddit.com/r/korea/s/shareToken',
+      `https://www.reddit.com/oembed?url=${encodeURIComponent(finalUrl)}`,
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('fetchPageMetadata follows standard oEmbed discovery for an unknown provider', async () => {
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];

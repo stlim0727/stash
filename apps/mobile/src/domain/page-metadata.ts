@@ -411,6 +411,21 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
       ? `${oembedOutcome};discovered=failed`
       : 'discovered=failed';
   }
+  // A shared URL can become a known provider only after redirects (Reddit's
+  // /s/ links are a common example). Prefer that provider's structured data
+  // even when the redirected HTML has a generic title such as "Reddit".
+  if (bot.finalUrl && bot.finalUrl !== target) {
+    const redirectedOembed = await fetchKnownOembedMetadata(bot.finalUrl);
+    if (redirectedOembed.metadata?.title) {
+      recordLog('info', `preview: recovered via oEmbed for ${bot.finalUrl} from ${url}`);
+      return redirectedOembed.metadata;
+    }
+    if (redirectedOembed.outcome) {
+      oembedOutcome = oembedOutcome
+        ? `${oembedOutcome};redirect=${redirectedOembed.outcome}`
+        : `redirect=${redirectedOembed.outcome}`;
+    }
+  }
   if (bot.metadata?.title) {
     return bot.metadata;
   }
@@ -427,25 +442,20 @@ export async function fetchPageMetadata(url: string): Promise<FetchedMetadata | 
       ? `${oembedOutcome};browser_discovered=failed`
       : 'browser_discovered=failed';
   }
-  let result = browser.metadata ?? bot.metadata;
-  const landedOn = browser.finalUrl ?? bot.finalUrl;
-
-  // Short links such as share.google can redirect to a known oEmbed provider
-  // (notably YouTube Shorts). The original URL has no oEmbed endpoint, and the
-  // redirected HTML can still be a title-less shell, so try the final URL before
-  // conceding to URL-derived fallback metadata.
-  if (!result?.title && landedOn && landedOn !== target) {
-    const redirectedOembed = await fetchKnownOembedMetadata(landedOn);
+  if (browser.finalUrl && browser.finalUrl !== target && browser.finalUrl !== bot.finalUrl) {
+    const redirectedOembed = await fetchKnownOembedMetadata(browser.finalUrl);
     if (redirectedOembed.metadata?.title) {
-      recordLog('info', `preview: recovered via oEmbed for ${landedOn} from ${url}`);
+      recordLog('info', `preview: recovered via oEmbed for ${browser.finalUrl} from ${url}`);
       return redirectedOembed.metadata;
     }
     if (redirectedOembed.outcome) {
       oembedOutcome = oembedOutcome
-        ? `${oembedOutcome};redirect=${redirectedOembed.outcome}`
-        : `redirect=${redirectedOembed.outcome}`;
+        ? `${oembedOutcome};browser_redirect=${redirectedOembed.outcome}`
+        : `browser_redirect=${redirectedOembed.outcome}`;
     }
   }
+  let result = browser.metadata ?? bot.metadata;
+  const landedOn = browser.finalUrl ?? bot.finalUrl;
 
   // SPA shell with no title: if we landed on a page that has a server-rendered
   // sibling (e.g. a Naver Map place entry), fetch that for the real metadata.
