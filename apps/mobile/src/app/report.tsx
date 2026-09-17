@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Application from 'expo-application';
 import Constants from 'expo-constants';
 import { usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -198,6 +199,7 @@ export default function ReportScreen({ createApi = createFeedbackApi }: ReportSc
     (): DiagnosticsContext =>
       buildDiagnosticsContext({
         appVersion,
+        appBuildVersion: Application.nativeBuildVersion,
         platform,
         osVersion: `Expo SDK ${Constants.expoConfig?.sdkVersion ?? '56'}`,
         route: sourceContext?.route ?? pathname,

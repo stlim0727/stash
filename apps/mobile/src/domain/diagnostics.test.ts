@@ -6,6 +6,7 @@ import { buildDiagnosticsContext, formatDiagnosticsReport } from './diagnostics.
 test('buildDiagnosticsContext includes the expected operational fields', () => {
   const context = buildDiagnosticsContext({
     appVersion: '1.2.3',
+    appBuildVersion: '42',
     platform: 'ios',
     osVersion: 'iOS 18.0',
     route: '/settings',
@@ -17,6 +18,7 @@ test('buildDiagnosticsContext includes the expected operational fields', () => {
   });
 
   assert.equal(context.appVersion, '1.2.3');
+  assert.equal(context.appBuildVersion, '42');
   assert.equal(context.platform, 'ios');
   assert.equal(context.osVersion, 'iOS 18.0');
   assert.equal(context.route, '/settings');
@@ -64,6 +66,7 @@ test('buildDiagnosticsContext excludes user content — it only keeps known keys
 
   const allowedKeys = [
     'appVersion',
+    'appBuildVersion',
     'platform',
     'osVersion',
     'route',

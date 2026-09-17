@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Application from "expo-application";
 import Constants from "expo-constants";
 import { useRouter } from "expo-router";
 import { PostHogMaskView } from "posthog-react-native";
@@ -25,7 +26,7 @@ import { BookmarkletButton } from "@/ui/BookmarkletButton";
 import { Button } from "@/ui/Button";
 import { Card } from "@/ui/Card";
 import { ActionSheet } from "@/ui/ActionSheet";
-import { describeBuild, getBuildInfo } from "@/domain/build-info";
+import { describeAppVersion, describeBuild, getBuildInfo } from "@/domain/build-info";
 import {
   DEFAULT_SHARE_BEHAVIOR,
   parseShareBehavior,
@@ -825,13 +826,17 @@ export default function SettingsScreen() {
   const recentPulls = getPullDiagnostics();
 
   const build = getBuildInfo(Constants.expoConfig?.extra);
-  const appVersion = `${Constants.expoConfig?.version ?? "0.0.0"} (Expo SDK ${
+  const storeVersion = describeAppVersion(
+    Constants.expoConfig?.version,
+    Application.nativeBuildVersion,
+  );
+  const appVersion = `${storeVersion} (Expo SDK ${
     Constants.expoConfig?.sdkVersion ?? "56"
   })`;
   // Always-visible footer line so the deployed version/commit is verifiable
   // without opening Developer mode. Appends the commit when one is baked in.
   const buildLine =
-    `Keepory ${Constants.expoConfig?.version ?? "0.0.0"}` +
+    `Keepory ${storeVersion}` +
     (build.shortSha
       ? ` · ${build.ref ? `${build.ref} @ ` : ""}${build.shortSha}`
       : "");
