@@ -70,7 +70,7 @@ export interface DiagnosticsInput {
   /** Recent technical log lines to aid debugging (already formatted). */
   logs?: string[] | null;
   /**
-   * Compact summary of recent slow (>=500ms) synchronous JS-thread segments
+   * Compact summary of recent slow (>=250ms) synchronous JS-thread segments
    * and observed event-loop delays
    * (see `observability/slow-segment-log.ts`'s `describeRecentSegments`).
    * Previously this only reached monitoring via the automatic loop-stall

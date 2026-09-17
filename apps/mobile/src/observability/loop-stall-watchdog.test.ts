@@ -108,6 +108,25 @@ test('records a perceptible sub-stall delay without reporting a Sentry error', (
   assert.deepEqual(delays, [{ label: 'event-loop-delay', durationMs: 750, endedAt: 1_750 }]);
 });
 
+test('the default cadence cannot hide an approximately one-second hitch between ticks', () => {
+  const clock = makeClock();
+  const delays: number[] = [];
+  armLoopStallWatchdog({
+    now: clock.now,
+    schedule: clock.schedule,
+    cancel: clock.cancel,
+    observeDelay: (_label, durationMs) => delays.push(durationMs),
+  });
+
+  // Worst alignment: blocking starts immediately after the heartbeat was
+  // scheduled. At the old 1000ms cadence this could produce zero measured
+  // delay; at 250ms, a 1000ms return is still observed as 750ms late.
+  clock.set(1_000);
+  clock.fire();
+
+  assert.deepEqual(delays, [750]);
+});
+
 test('a second stall within the cooldown is suppressed; one after it reports again', () => {
   const clock = makeClock();
   const reports: string[] = [];
@@ -220,6 +239,6 @@ test('omits the detail suffix when no describe() is provided', () => {
 });
 
 test('exposes generous, deliberately-chosen defaults', () => {
-  assert.equal(DEFAULT_LOOP_STALL_INTERVAL_MS, 1_000);
+  assert.equal(DEFAULT_LOOP_STALL_INTERVAL_MS, 250);
   assert.equal(DEFAULT_LOOP_STALL_THRESHOLD_MS, 3_000);
 });

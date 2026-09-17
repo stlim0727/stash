@@ -31,10 +31,12 @@
 import { recordLog } from '@/observability/log-buffer';
 import { recordSlowSegment } from '@/observability/slow-segment-log';
 
-/** Heartbeat cadence: how often the tick reschedules itself. ~1s gives roughly
- *  second-granularity detection at negligible steady-state cost (two clock
- *  reads per tick). */
-export const DEFAULT_LOOP_STALL_INTERVAL_MS = 1_000;
+/** Heartbeat cadence: how often the tick reschedules itself. This must be well
+ *  below the user-visible ~1s hitch we are trying to measure: with the old 1s
+ *  cadence, a 900ms block beginning just after a healthy tick could finish
+ *  before the next tick was due and leave no delay at all. Four cheap clock
+ *  reads/callbacks per second keep the phase error bounded to 250ms. */
+export const DEFAULT_LOOP_STALL_INTERVAL_MS = 250;
 
 /** A tick arriving more than this late past its schedule is treated as a stall.
  *  Sits deliberately in the gap between ordinary sub-second cold-start/GC jank
@@ -152,9 +154,11 @@ export function armLoopStallWatchdog(deps: LoopStallWatchdogDeps = {}): LoopStal
       );
     }
     if (delta <= backgroundSuspicionMs) {
-      // `recordSlowSegment` applies its own 500ms floor. This captures the
-      // perceptible-but-sub-3s hitches users describe as laggy scrolling or
-      // navigation, while the error reporter above remains reserved for a
+      // `recordSlowSegment` applies its own 250ms floor. Combined with the
+      // 250ms heartbeat, this reliably captures an approximately 1s hitch
+      // regardless of where within the timer interval the block begins. This
+      // captures the perceptible-but-sub-3s hitches users describe as laggy
+      // scrolling or navigation, while the error reporter above remains reserved for a
       // genuine multi-second freeze. Awaiting a backend request does not block
       // the event loop, so a matching entry is evidence of local JS work rather
       // than a network wait. It is only retained in the bounded diagnostics

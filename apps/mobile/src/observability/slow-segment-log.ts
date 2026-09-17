@@ -25,9 +25,10 @@
 
 /** Segments shorter than this are dropped. Comfortably below the watchdog's
  *  3s stall bound (so the blocker is always captured) but above ordinary
- *  per-frame work, which keeps the buffer from filling with noise during a
- *  long bulk import. */
-export const SLOW_SEGMENT_THRESHOLD_MS = 500;
+ *  frame work, which keeps the buffer from filling with noise during a long
+ *  bulk import. Paired with the watchdog's 250ms cadence, the 250ms floor
+ *  guarantees an approximately 1s block cannot hide between heartbeat ticks. */
+export const SLOW_SEGMENT_THRESHOLD_MS = 250;
 
 /** How many segments to retain. Small on purpose: only the ones adjacent to a
  *  stall are useful, and the report has to stay a single readable line. */
