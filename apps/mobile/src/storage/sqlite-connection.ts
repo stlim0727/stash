@@ -31,6 +31,10 @@ export interface SqliteConnectionOptions {
    * not escalate, or the alert is pure noise (STASH-C).
    */
   reopenAlertWindowMs?: number;
+  /** Backoff schedule for transient `database is locked` failures while opening. */
+  openLockedRetryDelaysMs?: readonly number[];
+  /** Injectable delay for locked-open retry tests. Defaults to setTimeout. */
+  sleep?: (ms: number) => Promise<void>;
   /** Clock for reopen-cadence tracking; injectable for tests. Defaults to Date.now. */
   now?: () => number;
   /**
@@ -61,6 +65,12 @@ const DEFAULT_REOPEN_ALERT_THRESHOLD = 5;
 // 5 reopens inside a minute is unambiguous thrash; the same 5 spread across a
 // long session is normal background/foreground lifecycle and must stay silent.
 const DEFAULT_REOPEN_ALERT_WINDOW_MS = 60_000;
+// A timed-out native probe may keep the old connection's read transaction alive
+// briefly after we move recovery onto a fresh handle. Opening/schema setup can
+// then report `database is locked` until that abandoned probe settles. Keep the
+// capture waiting behind a short bounded retry instead of failing its durable
+// write while recovery is already in progress (STASH-6E).
+const DEFAULT_OPEN_LOCKED_RETRY_DELAYS_MS = [100, 250, 500, 1_000] as const;
 // Only record a tail wait past this bound. A healthy op on this tiny local DB
 // starts near-instantly, so anything above this is head-of-line blocking worth
 // a breadcrumb — while the steady state (fast, uncontended ops) stays silent.
@@ -196,6 +206,8 @@ export class SqliteConnection<DB> {
   private readonly workTimeoutMs: number;
   private readonly reopenAlertThreshold: number;
   private readonly reopenAlertWindowMs: number;
+  private readonly openLockedRetryDelaysMs: readonly number[];
+  private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
   // Bumped on every background AND foreground transition (see
   // registerForForegroundState below) — a wait spanning a change in this
@@ -228,6 +240,8 @@ export class SqliteConnection<DB> {
     this.workTimeoutMs = options.workTimeoutMs ?? DEFAULT_WORK_TIMEOUT_MS;
     this.reopenAlertThreshold = options.reopenAlertThreshold ?? DEFAULT_REOPEN_ALERT_THRESHOLD;
     this.reopenAlertWindowMs = options.reopenAlertWindowMs ?? DEFAULT_REOPEN_ALERT_WINDOW_MS;
+    this.openLockedRetryDelaysMs = options.openLockedRetryDelaysMs ?? DEFAULT_OPEN_LOCKED_RETRY_DELAYS_MS;
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.now = options.now ?? Date.now;
     this.registerForegroundState = options.registerForegroundState ?? registerForForegroundState;
   }
@@ -529,7 +543,7 @@ export class SqliteConnection<DB> {
     try {
       const openStart = Date.now();
       const useNewConnection = this.reopenWithNewConnection;
-      const db = await this.opener({ useNewConnection });
+      const db = await this.openWithLockedRetry(useNewConnection);
       const openMs = Date.now() - openStart;
       // Cleared only on success, so a failed open still reopens safely.
       this.reopenWithNewConnection = false;
@@ -546,6 +560,25 @@ export class SqliteConnection<DB> {
       // only surfaces as the generic "Couldn't open local storage" banner.
       recordLog('error', `sqlite open failed: ${String(error)}`);
       throw error;
+    }
+  }
+
+  private async openWithLockedRetry(useNewConnection: boolean): Promise<DB> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.opener({ useNewConnection });
+      } catch (error) {
+        const delayMs = this.openLockedRetryDelaysMs[attempt];
+        if (delayMs === undefined || !/database is locked/i.test(String(error))) {
+          throw error;
+        }
+        recordLog(
+          'warn',
+          `sqlite open blocked by an active transaction; retrying in ${delayMs}ms ` +
+            `(attempt ${attempt + 1}/${this.openLockedRetryDelaysMs.length})`,
+        );
+        await this.sleep(delayMs);
+      }
     }
   }
 

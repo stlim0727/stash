@@ -88,6 +88,8 @@ function makeConnection(opts?: {
   workTimeoutMs?: number;
   reopenAlertThreshold?: number;
   reopenAlertWindowMs?: number;
+  openLockedRetryDelaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   registerForegroundState?: (handler: {
     onBackground?: () => void;
@@ -131,6 +133,71 @@ test('coalesces a cold-start burst onto a single open', async () => {
   for (const h of handles) {
     assert.equal(h, opened[0]);
   }
+});
+
+test('a transient database-locked open waits and retries without releasing callers', async () => {
+  clearLogEntries();
+  let attempts = 0;
+  const delays: number[] = [];
+  const connection = new SqliteConnection<FakeDb>(
+    async () => {
+      attempts += 1;
+      if (attempts < 3) {
+        throw new Error('NativeDatabase.execAsync rejected: database is locked');
+      }
+      return new FakeDb(attempts);
+    },
+    (db) => db.probe(),
+    (db) => db.close(),
+    {
+      openLockedRetryDelaysMs: [100, 250],
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    },
+  );
+
+  const db = await connection.get();
+
+  assert.equal(db.id, 3);
+  assert.equal(attempts, 3);
+  assert.deepEqual(delays, [100, 250]);
+  assert.equal(
+    getLogEntries().filter((entry) => entry.message.includes('open blocked by an active transaction')).length,
+    2,
+  );
+});
+
+test('a non-lock open failure is never retried', async () => {
+  let attempts = 0;
+  const connection = new SqliteConnection<FakeDb>(
+    async () => {
+      attempts += 1;
+      throw new Error('Path already points to a non-normal file');
+    },
+    (db) => db.probe(),
+    (db) => db.close(),
+    { openLockedRetryDelaysMs: [0, 0], sleep: async () => {} },
+  );
+
+  await assert.rejects(connection.get(), /non-normal file/);
+  assert.equal(attempts, 1);
+});
+
+test('a persistent database lock stops after the bounded retry schedule', async () => {
+  let attempts = 0;
+  const connection = new SqliteConnection<FakeDb>(
+    async () => {
+      attempts += 1;
+      throw new Error('database is locked');
+    },
+    (db) => db.probe(),
+    (db) => db.close(),
+    { openLockedRetryDelaysMs: [0, 0], sleep: async () => {} },
+  );
+
+  await assert.rejects(connection.get(), /database is locked/);
+  assert.equal(attempts, 3);
 });
 
 test('a stale handle is reopened once and closed, never double-opened', async () => {

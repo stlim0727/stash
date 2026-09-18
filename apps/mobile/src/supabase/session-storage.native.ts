@@ -54,15 +54,27 @@ const secureBackend: SecureKvBackend = {
 // new sessions are ever written here.
 const legacyConnection = new SqliteConnection<SQLite.SQLiteDatabase>(
   async ({ useNewConnection }) => {
-    ensureNativeSqliteDirectory();
-    const db = await SQLite.openDatabaseAsync('stash-auth.db', { useNewConnection });
-    await db.execAsync(`
-      CREATE TABLE IF NOT EXISTS meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-    `);
-    return db;
+    let db: SQLite.SQLiteDatabase | null = null;
+    try {
+      ensureNativeSqliteDirectory();
+      db = await SQLite.openDatabaseAsync('stash-auth.db', { useNewConnection });
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      `);
+      return db;
+    } catch (error) {
+      if (db) {
+        try {
+          await db.closeAsync();
+        } catch {
+          // Best effort. Preserve the original open/schema error.
+        }
+      }
+      throw error;
+    }
   },
   (db) => db.getFirstAsync('SELECT 1'),
   (db) => db.closeAsync(),
