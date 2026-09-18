@@ -33,6 +33,7 @@ export const ko: Catalog = {
   'status.synced': '동기화됨',
   'status.syncing': '동기화 중',
   'status.failed': '실패',
+  'status.retrying': '재시도 중',
   'status.waitingForConnection': '연결 대기 중',
   'status.checkConnection': '연결 확인 필요',
   'status.complete': '완료',

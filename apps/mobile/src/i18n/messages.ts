@@ -51,6 +51,7 @@ export const en = {
   'status.synced': 'synced',
   'status.syncing': 'syncing',
   'status.failed': 'failed',
+  'status.retrying': 'retrying',
   'status.waitingForConnection': 'waiting for connection',
   // STASH-4Z: several queue entries stuck on the same DNS-resolution
   // failure — a likely device/network problem, not just a momentary gap.
