@@ -239,6 +239,15 @@ test('valid capture_completed events pass sanitization', () => {
   assert.equal(getSanitizationReason(event), null);
 });
 
+test('valid sync_recovered events pass sanitization without bookmark identifiers', () => {
+  const event = {
+    name: 'sync_recovered',
+    properties: { failed_runs: 2, delay_band: '10_30s', failure_kind: 'other' },
+  };
+  assert.deepEqual(sanitizeEvent(event), event);
+  assert.equal(getSanitizationReason(event), null);
+});
+
 test('rejects invalid properties on capture_completed', () => {
   const invalidEvents = [
     { name: 'capture_completed', properties: { source: 'not_share', result: 'created', durable: true, persistence_ms: 100, platform: 'android' } },

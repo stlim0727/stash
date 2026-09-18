@@ -29,11 +29,31 @@ test('uses a failed queue entry when the bookmark still has pending status', () 
   );
 });
 
-test('keeps genuine sync failures labeled as failed', () => {
+test('describes a recoverable but idle sync failure as queued', () => {
   assert.equal(
     syncStatusLabel(createT('en'), 'failed', {
       sync_status: 'failed',
       last_error_kind: 'other',
+      health_escalated_at: null,
+    }),
+    'sync queued',
+  );
+  assert.equal(
+    syncStatusLabel(createT('ko'), 'failed', {
+      sync_status: 'failed',
+      last_error_kind: 'other',
+      health_escalated_at: null,
+    }),
+    '동기화 대기 중',
+  );
+});
+
+test('keeps repeatedly failing sync work labeled as failed after health escalation', () => {
+  assert.equal(
+    syncStatusLabel(createT('en'), 'failed', {
+      sync_status: 'failed',
+      last_error_kind: 'other',
+      health_escalated_at: '2026-09-18T00:00:00.000Z',
     }),
     'sync failed',
   );

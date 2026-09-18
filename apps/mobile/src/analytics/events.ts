@@ -50,7 +50,23 @@ export interface CaptureCompletedEvent {
   readonly properties: CaptureCompletedProperties;
 }
 
-export type AnalyticsEvent = AppOpenEvent | ScreenViewedEvent | CaptureCompletedEvent;
+export type SyncRecoveryDelayBand = 'under_10s' | '10_30s' | '30_60s' | '1_5m' | 'over_5m';
+export type SyncRecoveryFailureKind = 'transient_dns' | 'transient_network' | 'other' | 'unknown';
+
+export interface SyncRecoveredEvent {
+  readonly name: 'sync_recovered';
+  readonly properties: {
+    readonly failed_runs: number;
+    readonly delay_band: SyncRecoveryDelayBand;
+    readonly failure_kind: SyncRecoveryFailureKind;
+  };
+}
+
+export type AnalyticsEvent =
+  | AppOpenEvent
+  | ScreenViewedEvent
+  | CaptureCompletedEvent
+  | SyncRecoveredEvent;
 export type AnalyticsEventName = AnalyticsEvent['name'];
 
 export const ALLOWED_PLATFORMS: ReadonlySet<AnalyticsPlatform> = new Set([
@@ -85,6 +101,19 @@ export const ALLOWED_RESULTS: ReadonlySet<'created' | 'duplicate' | 'invalid'> =
   'duplicate',
   'invalid',
 ] as const);
+export const ALLOWED_SYNC_RECOVERY_DELAY_BANDS: ReadonlySet<SyncRecoveryDelayBand> = new Set([
+  'under_10s',
+  '10_30s',
+  '30_60s',
+  '1_5m',
+  'over_5m',
+]);
+export const ALLOWED_SYNC_RECOVERY_FAILURE_KINDS: ReadonlySet<SyncRecoveryFailureKind> = new Set([
+  'transient_dns',
+  'transient_network',
+  'other',
+  'unknown',
+]);
 
 export const EVENT_CATALOG = {
   app_open: {
@@ -100,6 +129,11 @@ export const EVENT_CATALOG = {
     durable: 'boolean',
     persistence_ms: 'number',
     platform: ALLOWED_PLATFORMS,
+  },
+  sync_recovered: {
+    failed_runs: 'number',
+    delay_band: ALLOWED_SYNC_RECOVERY_DELAY_BANDS,
+    failure_kind: ALLOWED_SYNC_RECOVERY_FAILURE_KINDS,
   },
 } as const;
 
@@ -141,6 +175,34 @@ export function createCaptureCompletedEvent(
       durable,
       persistence_ms: normalizedMs,
       platform,
+    },
+  };
+}
+
+export function createSyncRecoveredEvent(
+  failedRuns: number,
+  lastFailureAt: string | null | undefined,
+  failureKind: SyncRecoveryFailureKind | null | undefined,
+  now = Date.now(),
+): SyncRecoveredEvent {
+  const failedAt = lastFailureAt ? Date.parse(lastFailureAt) : Number.NaN;
+  const elapsedMs = Number.isFinite(failedAt) ? Math.max(0, now - failedAt) : 0;
+  const delayBand: SyncRecoveryDelayBand =
+    elapsedMs < 10_000
+      ? 'under_10s'
+      : elapsedMs < 30_000
+        ? '10_30s'
+        : elapsedMs < 60_000
+          ? '30_60s'
+          : elapsedMs < 300_000
+            ? '1_5m'
+            : 'over_5m';
+  return {
+    name: 'sync_recovered',
+    properties: {
+      failed_runs: Math.max(1, Math.min(10_000, Math.round(failedRuns))),
+      delay_band: delayBand,
+      failure_kind: failureKind ?? 'unknown',
     },
   };
 }

@@ -7,6 +7,7 @@ import {
   createAppOpenEvent,
   createScreenViewedEvent,
   createCaptureCompletedEvent,
+  createSyncRecoveredEvent,
   EVENT_CATALOG,
 } from './events.ts';
 
@@ -19,6 +20,17 @@ test('createAppOpenEvent builds valid app_open payload', () => {
       auth_state: 'authenticated',
     },
   });
+});
+
+test('createSyncRecoveredEvent buckets delay and clamps failed-run counts', () => {
+  assert.deepEqual(
+    createSyncRecoveredEvent(2, '2026-09-18T00:00:00.000Z', 'other', Date.parse('2026-09-18T00:00:17.000Z')),
+    {
+      name: 'sync_recovered',
+      properties: { failed_runs: 2, delay_band: '10_30s', failure_kind: 'other' },
+    },
+  );
+  assert.equal(createSyncRecoveredEvent(0, null, null).properties.failed_runs, 1);
 });
 
 test('createScreenViewedEvent builds valid screen_viewed payload', () => {

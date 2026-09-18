@@ -8,7 +8,8 @@ import type { MessageKey } from '@/i18n/messages';
 import type { TFunction } from '@/i18n/translate';
 import type { EnrichmentDegradedReason, LocalPendingBookmark } from '@/domain/types';
 
-type SyncQueueState = Pick<LocalPendingBookmark, 'sync_status' | 'last_error_kind'>;
+type SyncQueueState = Pick<LocalPendingBookmark, 'sync_status' | 'last_error_kind'> &
+  Partial<Pick<LocalPendingBookmark, 'health_escalated_at'>>;
 
 const SYNC_STATUS_KEYS: Record<string, MessageKey> = {
   pending: 'status.pending',
@@ -41,12 +42,22 @@ export function syncStatusLabel(
     isFailed &&
     (queueState?.last_error_kind === 'transient_network' ||
       queueState?.last_error_kind === 'transient_dns');
+  // A failed queue attempt is normally recoverable background work. It may be
+  // waiting for the next natural sync trigger rather than actively retrying,
+  // so use neutral waiting copy instead of promising progress or presenting a
+  // temporary state as a terminal failure.
+  // `health_escalated_at` is the durable point where repeated failures become
+  // actionable (3 ordinary attempts, 6 connectivity attempts), so it is also
+  // the source of truth for when the stronger wording is warranted.
+  const isRecoveringFailure = isFailed && !queueState?.health_escalated_at;
   const status =
     isDnsFailure && repeatedDnsFailure
       ? t('status.checkConnection')
       : isTransientFailure
         ? t('status.waitingForConnection')
-        : word(t, SYNC_STATUS_KEYS, value);
+        : isRecoveringFailure
+          ? t('status.queued')
+          : word(t, SYNC_STATUS_KEYS, value);
   return t('status.syncPrefix', { status });
 }
 

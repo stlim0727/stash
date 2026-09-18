@@ -4,6 +4,7 @@ import type {
   AppOpenEvent,
   ScreenViewedEvent,
   CaptureCompletedEvent,
+  SyncRecoveredEvent,
 } from './events.ts';
 import { EVENT_CATALOG } from './events.ts';
 
@@ -249,7 +250,8 @@ export function sanitizeEventWithReason(input: unknown): SanitizationResult {
           name: eventName,
           properties: Object.freeze({ screen: sanitizedProperties.screen }),
         } as ScreenViewedEvent)
-      : Object.freeze({
+      : eventName === 'capture_completed'
+      ? Object.freeze({
           name: eventName,
           properties: Object.freeze({
             source: sanitizedProperties.source as 'share',
@@ -258,7 +260,15 @@ export function sanitizeEventWithReason(input: unknown): SanitizationResult {
             persistence_ms: sanitizedProperties.persistence_ms as number,
             platform: sanitizedProperties.platform as any,
           }),
-        } as CaptureCompletedEvent);
+        } as CaptureCompletedEvent)
+      : Object.freeze({
+          name: eventName,
+          properties: Object.freeze({
+            failed_runs: sanitizedProperties.failed_runs as number,
+            delay_band: sanitizedProperties.delay_band as SyncRecoveredEvent['properties']['delay_band'],
+            failure_kind: sanitizedProperties.failure_kind as SyncRecoveredEvent['properties']['failure_kind'],
+          }),
+        } as SyncRecoveredEvent);
 
   return { event: cleanEvent, reason: null };
 }
