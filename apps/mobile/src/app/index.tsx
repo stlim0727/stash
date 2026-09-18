@@ -550,13 +550,26 @@ export default function InboxScreen() {
   const repeatedDnsFailure = useMemo(() => hasRepeatedDnsFailures(queue), [queue]);
   const { show: showToast } = useCaptureToast();
   const [openingBookmarkId, setOpeningBookmarkId] = useState<string | null>(null);
+  const openBookmarkFrame = useRef<number | null>(null);
   // Native detail screens can take a moment to mount. Keep the tapped item
   // visibly busy until navigation replaces the Inbox, then clear it when the
   // user returns so the card never remains stuck in its loading state.
   useFocusEffect(
     useCallback(() => {
+      if (openBookmarkFrame.current !== null) {
+        cancelAnimationFrame(openBookmarkFrame.current);
+        openBookmarkFrame.current = null;
+      }
       setOpeningBookmarkId(null);
     }, []),
+  );
+  useEffect(
+    () => () => {
+      if (openBookmarkFrame.current !== null) {
+        cancelAnimationFrame(openBookmarkFrame.current);
+      }
+    },
+    [],
   );
   const [query, setQuery] = useState('');
   // The TextInput stays bound to `query` (instant echo), but the derived work —
@@ -2964,7 +2977,13 @@ export default function InboxScreen() {
               return;
             }
             setOpeningBookmarkId(item.id);
-            router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
+            // Let React commit the busy overlay before mounting the potentially
+            // expensive detail route; otherwise both updates share this press
+            // event and the spinner may never reach the screen.
+            openBookmarkFrame.current = requestAnimationFrame(() => {
+              openBookmarkFrame.current = null;
+              router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
+            });
           };
           const isOpening = openingBookmarkId === item.id;
           const openLink = () => {
@@ -3140,7 +3159,7 @@ export default function InboxScreen() {
                 {isOpening ? (
                   <View
                     testID="inbox-bookmark-opening"
-                    pointerEvents="none"
+                    pointerEvents="auto"
                     style={[styles.bookmarkOpeningOverlay, { backgroundColor: palette.accentSoft }]}
                   >
                     <ActivityIndicator color={palette.accent} />
@@ -3359,7 +3378,7 @@ export default function InboxScreen() {
               {isOpening ? (
                 <View
                   testID="inbox-bookmark-opening"
-                  pointerEvents="none"
+                  pointerEvents="auto"
                   style={[styles.bookmarkOpeningOverlay, { backgroundColor: palette.accentSoft }]}
                 >
                   <ActivityIndicator color={palette.accent} />

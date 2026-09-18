@@ -186,14 +186,29 @@ test('shows immediate progress feedback while opening a bookmark detail screen',
 
   const screen = await renderInbox();
   const title = await screen.findByRole('button', { name: 'Slow detail' });
+  let openFrame: FrameRequestCallback | null = null;
+  const requestFrame = jest
+    .spyOn(global, 'requestAnimationFrame')
+    .mockImplementation((callback) => {
+      openFrame = callback;
+      return 1;
+    });
 
   await fireEvent.press(title);
 
-  expect(screen.getByTestId('inbox-bookmark-opening')).toBeTruthy();
+  const overlay = screen.getByTestId('inbox-bookmark-opening');
+  expect(overlay.props.pointerEvents).toBe('auto');
+  expect(mockPush).not.toHaveBeenCalled();
+
+  await act(async () => {
+    openFrame?.(performance.now());
+  });
+
   expect(mockPush).toHaveBeenCalledWith({
     pathname: '/bookmark/[id]',
     params: { id },
   });
+  requestFrame.mockRestore();
 });
 
 test('renders Markdown memos with a plain preview and memo metadata', async () => {
