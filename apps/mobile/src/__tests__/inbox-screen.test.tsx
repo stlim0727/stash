@@ -173,6 +173,44 @@ test('renders stored bookmarks with their titles', async () => {
   expect(screen.getByText('Raindrop review')).toBeTruthy();
 });
 
+test('shows immediate progress feedback while opening a bookmark detail screen', async () => {
+  const id = '7e64cf1e-0000-4000-8000-00000000000c';
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id,
+      title: 'Slow detail',
+      url: 'https://example.com/slow-detail',
+      url_hash: 'https://example.com/slow-detail',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  const title = await screen.findByRole('button', { name: 'Slow detail' });
+  let openFrame: FrameRequestCallback | null = null;
+  const requestFrame = jest
+    .spyOn(global, 'requestAnimationFrame')
+    .mockImplementation((callback) => {
+      openFrame = callback;
+      return 1;
+    });
+
+  await fireEvent.press(title);
+
+  const overlay = screen.getByTestId('inbox-bookmark-opening');
+  expect(overlay.props.pointerEvents).toBe('auto');
+  expect(mockPush).not.toHaveBeenCalled();
+
+  await act(async () => {
+    openFrame?.(performance.now());
+  });
+
+  expect(mockPush).toHaveBeenCalledWith({
+    pathname: '/bookmark/[id]',
+    params: { id },
+  });
+  requestFrame.mockRestore();
+});
+
 test('renders Markdown memos with a plain preview and memo metadata', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
