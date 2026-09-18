@@ -1553,17 +1553,16 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
-  // Record that an enrichment arrived unwitnessed: flag its bookmark for the
-  // Inbox banner, but only if it actually carries a recommendation the user
-  // hasn't already handled — a pending tag suggestion, a folder suggestion, OR
-  // a pending summary (matching what makes a bookmark reviewable on the Review
-  // screen). An enrichment that's all already-applied tags / already-reviewed
-  // summary isn't worth announcing.
-  const noteUnseenSuggestions = useCallback(
-    (enrichment: AIEnrichment) => {
+  // Add an unwitnessed enrichment to a caller-owned snapshot, but only if it
+  // actually carries a recommendation the user hasn't already handled. Keeping
+  // eligibility separate from publication lets a pull containing hundreds of
+  // enrichments accumulate them into ONE React/meta write instead of fanning
+  // hundreds of setMeta calls onto the SQLite actor (STASH-6G).
+  const addUnseenSuggestion = useCallback(
+    (enrichment: AIEnrichment, next: Set<string>): boolean => {
       const id = enrichment.bookmark_id;
-      if (unseenSuggestionIdsRef.current.has(id)) {
-        return;
+      if (next.has(id)) {
+        return false;
       }
       const bookmark = bookmarksRef.current?.find((item) => item.id === id);
       const applied = appliedTagNamesRef(id);
@@ -1597,13 +1596,25 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         !hasFolder &&
         !hasSummary
       ) {
-        return;
+        return false;
       }
-      const next = new Set(unseenSuggestionIdsRef.current);
       next.add(id);
-      applyUnseenSuggestions(next);
+      return true;
     },
-    [appliedTagNamesRef, applyUnseenSuggestions],
+    [appliedTagNamesRef],
+  );
+
+  // Direct/background enrichment settles one row at a time, so publish it
+  // immediately. Pull sync uses addUnseenSuggestion directly and publishes the
+  // whole batch once below.
+  const noteUnseenSuggestions = useCallback(
+    (enrichment: AIEnrichment) => {
+      const next = new Set(unseenSuggestionIdsRef.current);
+      if (addUnseenSuggestion(enrichment, next)) {
+        applyUnseenSuggestions(next);
+      }
+    },
+    [addUnseenSuggestion, applyUnseenSuggestions],
   );
 
   const markSuggestionsSeen = useCallback(
@@ -7096,6 +7107,10 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ),
               );
               let anyRetryCleared = false;
+              const nextUnseenSuggestions = new Set(
+                unseenSuggestionIdsRef.current,
+              );
+              let unseenSuggestionsChanged = false;
               // STASH #578 Phase 2: extend the burst-completion toast (STASH #574
               // Phase 1, `AI_ENRICHMENT_BURST_TOAST_MIN`) to also cover
               // enrichments this sync pull delivered that this device didn't
@@ -7117,7 +7132,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 const isNewOrNewer =
                   !known || enrichment.updated_at > known.updated_at;
                 if (isNewOrNewer) {
-                  noteUnseenSuggestions(enrichment);
+                  unseenSuggestionsChanged =
+                    addUnseenSuggestion(
+                      enrichment,
+                      nextUnseenSuggestions,
+                    ) || unseenSuggestionsChanged;
                   if (!aiEnriching.current.has(enrichment.bookmark_id)) {
                     workerDrivenCount += 1;
                   }
@@ -7157,6 +7176,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
                 ) {
                   clearAiServerQueued(enrichment.bookmark_id);
                 }
+              }
+              if (unseenSuggestionsChanged) {
+                applyUnseenSuggestions(nextUnseenSuggestions);
               }
               if (anyRetryCleared) {
                 syncAiRetryIds();
@@ -7266,7 +7288,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       syncTagOps,
       syncPendingImportCollections,
       syncPendingEnrichmentRestores,
-      noteUnseenSuggestions,
+      addUnseenSuggestion,
+      applyUnseenSuggestions,
       reconcileAccountTransition,
     ],
   );
