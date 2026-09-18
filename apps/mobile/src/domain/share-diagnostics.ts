@@ -52,6 +52,12 @@ export interface ShareAttemptInput {
   urlSource?: ShareUrlSource;
   urlCandidatesMatch?: boolean;
   /**
+   * Whether this attempt selected the same normalized URL as the immediately
+   * preceding share handled in this JS session. This reveals whether a reported
+   * "retry" actually retried the same link without retaining either URL.
+   */
+  sameUrlAsPreviousAttempt?: boolean;
+  /**
    * Milliseconds between the share landing in JS (`receivedAt`) and the store
    * finishing its cold-start load, i.e. how long the share sat waiting before
    * it could be processed. Present only when the share actually had to wait
@@ -67,6 +73,14 @@ export interface ShareAttemptDiagnostics extends ShareAttemptInput {
   updatedAt: string;
   durable?: boolean;
   persistedAt?: string;
+}
+
+/** Compare two transient normalized URLs while exposing only a shape signal. */
+export function compareShareAttemptUrls(
+  currentUrl: string | null,
+  previousUrl: string | null,
+): boolean | undefined {
+  return currentUrl && previousUrl ? currentUrl === previousUrl : undefined;
 }
 
 /** Build a record from a just-finished share attempt, capping/normalizing fields. */
@@ -89,6 +103,9 @@ export function buildShareAttemptDiagnostics(input: ShareAttemptInput): ShareAtt
       : {}),
     ...(typeof input.urlCandidatesMatch === 'boolean'
       ? { urlCandidatesMatch: input.urlCandidatesMatch }
+      : {}),
+    ...(typeof input.sameUrlAsPreviousAttempt === 'boolean'
+      ? { sameUrlAsPreviousAttempt: input.sameUrlAsPreviousAttempt }
       : {}),
     ...(typeof input.loadWaitMs === 'number' && Number.isFinite(input.loadWaitMs) && input.loadWaitMs >= 0
       ? { loadWaitMs: Math.round(input.loadWaitMs) }
@@ -127,6 +144,9 @@ function normalizeShareAttempt(
       : {}),
     ...(typeof data.urlCandidatesMatch === 'boolean'
       ? { urlCandidatesMatch: data.urlCandidatesMatch }
+      : {}),
+    ...(typeof data.sameUrlAsPreviousAttempt === 'boolean'
+      ? { sameUrlAsPreviousAttempt: data.sameUrlAsPreviousAttempt }
       : {}),
     ...(typeof data.attemptId === 'string' && data.attemptId ? { attemptId: data.attemptId } : {}),
     ...(typeof data.receivedAt === 'string' && data.receivedAt ? { receivedAt: data.receivedAt } : {}),

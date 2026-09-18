@@ -13,6 +13,7 @@ import {
   type ShareBehavior,
 } from '@/domain/share-behavior';
 import { pickSharedImage, type SharedImage } from '@/domain/image-share';
+import { compareShareAttemptUrls } from '@/domain/share-diagnostics';
 import { extractFirstUrl } from '@/domain/urls';
 import { useT } from '@/i18n';
 import { recordLog } from '@/observability/log-buffer';
@@ -73,10 +74,16 @@ export function ShareIntentHandler() {
     fileMimeTypes: string[];
     urlSource: 'web_url' | 'text' | 'none';
     urlCandidatesMatch?: boolean;
+    sameUrlAsPreviousAttempt?: boolean;
   } | null>(null);
   // Guards against re-copying the same intent across renders before the reset
   // propagates; cleared once the intent goes away so a later share is captured.
   const capturedRef = useRef(false);
+  // Keep only the previous normalized URL in memory long enough to compare a
+  // follow-up share. Diagnostics persist the comparison boolean, never either
+  // URL, so a STASH-6B-style "duplicate, then retry created" report can tell a
+  // real same-link retry from two different shares without leaking content.
+  const previousShareUrlRef = useRef<string | null>(null);
   // The native module can report an error without a usable share payload. Keep
   // that visible to monitoring, but suppress duplicate reports across renders.
   const reportedErrorRef = useRef<string | null>(null);
@@ -135,6 +142,9 @@ export function ShareIntentHandler() {
     const webUrlCandidate = extractFirstUrl(shareIntent.webUrl);
     const textUrlCandidate = extractFirstUrl(shareIntent.text);
     const url = webUrlCandidate ?? textUrlCandidate;
+    const previousUrl = previousShareUrlRef.current;
+    previousShareUrlRef.current = url;
+    const sameUrlAsPreviousAttempt = compareShareAttemptUrls(url, previousUrl);
     // Keep the raw shared text so a no-link share (e.g. a KakaoTalk message)
     // can still be saved as a text note instead of being dropped.
     const text = shareIntent.text ?? undefined;
@@ -159,6 +169,7 @@ export function ShareIntentHandler() {
       ...(webUrlCandidate && textUrlCandidate
         ? { urlCandidatesMatch: webUrlCandidate === textUrlCandidate }
         : {}),
+      ...(typeof sameUrlAsPreviousAttempt === 'boolean' ? { sameUrlAsPreviousAttempt } : {}),
     });
     // Coarse capture breadcrumb (kind of share only — never URL/title/text) so a
     // freeze right after a share (Sentry STASH-H) shows the share on the event
@@ -213,6 +224,9 @@ export function ShareIntentHandler() {
       urlSource: share.urlSource,
       ...(typeof share.urlCandidatesMatch === 'boolean'
         ? { urlCandidatesMatch: share.urlCandidatesMatch }
+        : {}),
+      ...(typeof share.sameUrlAsPreviousAttempt === 'boolean'
+        ? { sameUrlAsPreviousAttempt: share.sameUrlAsPreviousAttempt }
         : {}),
       // How long this share sat waiting on the cold-start store load before it
       // could be processed (Sentry STASH-2T/STASH-2V: a "shared but nothing
