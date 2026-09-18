@@ -630,6 +630,60 @@ test('createBookmarks isolates a bulk primary-key conflict and recovers the lega
   ]);
 });
 
+test('createBookmarks waits for every launched conflict retry before propagating a sibling failure', async () => {
+  let releaseSlowRetry!: () => void;
+  let slowRetryStarted!: () => void;
+  const slowStarted = new Promise<void>((resolve) => {
+    slowRetryStarted = resolve;
+  });
+  const slowRetry = new Promise<RemoteBookmark[]>((resolve) => {
+    releaseSlowRetry = () => resolve([
+      remoteBookmark({
+        id: 'slow-id',
+        url: 'https://example.com/slow',
+        url_hash: 'https://example.com/slow',
+        client_id: 'slow-client',
+      }),
+    ]);
+  });
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=') || path.includes('client_id=')) return [];
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        if (Array.isArray(options.body)) {
+          throw new SupabaseRequestError('bulk conflict', 409);
+        }
+        const body = options.body as Record<string, unknown>;
+        if (body.id === 'failed-id') throw new Error('individual retry failed');
+        slowRetryStarted();
+        return slowRetry;
+      }
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  let rejected = false;
+  const create = api.createBookmarks([
+    { id: 'failed-id', url: 'https://example.com/failed', client_id: 'failed-client' },
+    { id: 'slow-id', url: 'https://example.com/slow', client_id: 'slow-client' },
+  ]);
+  void create.then(
+    () => {},
+    () => {
+      rejected = true;
+    },
+  );
+
+  await slowStarted;
+  await Promise.resolve();
+  assert.equal(rejected, false);
+
+  releaseSlowRetry();
+  await assert.rejects(create, /individual retry failed/);
+  assert.equal(rejected, true);
+});
+
 test('createBookmark rejects an image payload with no uploaded preview_image_url (STASH-65 invariant: never create before the binary lands)', async () => {
   const client = {
     request: async () => {
