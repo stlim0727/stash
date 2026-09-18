@@ -549,6 +549,15 @@ export default function InboxScreen() {
   );
   const repeatedDnsFailure = useMemo(() => hasRepeatedDnsFailures(queue), [queue]);
   const { show: showToast } = useCaptureToast();
+  const [openingBookmarkId, setOpeningBookmarkId] = useState<string | null>(null);
+  // Native detail screens can take a moment to mount. Keep the tapped item
+  // visibly busy until navigation replaces the Inbox, then clear it when the
+  // user returns so the card never remains stuck in its loading state.
+  useFocusEffect(
+    useCallback(() => {
+      setOpeningBookmarkId(null);
+    }, []),
+  );
   const [query, setQuery] = useState('');
   // The TextInput stays bound to `query` (instant echo), but the derived work —
   // filtering, sorting, the searching flag, the section label — keys off this
@@ -2951,8 +2960,13 @@ export default function InboxScreen() {
               setInlineDetailId((current) => (current === item.id ? null : item.id));
               return;
             }
+            if (openingBookmarkId !== null) {
+              return;
+            }
+            setOpeningBookmarkId(item.id);
             router.push({ pathname: '/bookmark/[id]', params: { id: item.id } });
           };
+          const isOpening = openingBookmarkId === item.id;
           const openLink = () => {
             if (item.url) {
               markBookmarkAccessed(item.id);
@@ -3051,6 +3065,7 @@ export default function InboxScreen() {
                   accessibilityRole="button"
                   accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
                   accessibilityHint={t('inbox.openBookmarkHint')}
+                  accessibilityState={{ busy: isOpening }}
                   onPress={openDetail}
                   onLongPress={() => setMenuItem(item)}
                 >
@@ -3122,13 +3137,22 @@ export default function InboxScreen() {
                 >
                   <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
                 </Pressable>
+                {isOpening ? (
+                  <View
+                    testID="inbox-bookmark-opening"
+                    pointerEvents="none"
+                    style={[styles.bookmarkOpeningOverlay, { backgroundColor: palette.accentSoft }]}
+                  >
+                    <ActivityIndicator color={palette.accent} />
+                  </View>
+                ) : null}
               </Pressable>
             );
           }
 
           const previewUri = item.local_image_uri ?? item.preview_image_url ?? null;
           const cardElement = (
-            <Card style={styles.card}>
+            <Card style={[styles.card, isOpening ? { borderColor: palette.accent } : null]}>
               <View
                 // Container for card layout
                 accessible={false}
@@ -3228,6 +3252,7 @@ export default function InboxScreen() {
                     accessibilityRole="button"
                     accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
                     accessibilityHint={t('inbox.openBookmarkHint')}
+                    accessibilityState={{ busy: isOpening }}
                     onPress={openDetail}
                     onLongPress={() => setMenuItem(item)}
                   >
@@ -3331,6 +3356,15 @@ export default function InboxScreen() {
                   ) : null}
                 </View>
               </View>
+              {isOpening ? (
+                <View
+                  testID="inbox-bookmark-opening"
+                  pointerEvents="none"
+                  style={[styles.bookmarkOpeningOverlay, { backgroundColor: palette.accentSoft }]}
+                >
+                  <ActivityIndicator color={palette.accent} />
+                </View>
+              ) : null}
             </Card>
           );
           // In a multi-column grid each cell must claim its column width (flex:
@@ -3755,10 +3789,22 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   card: {
+    position: 'relative',
     borderRadius: 28,
     overflow: 'hidden',
   },
+  bookmarkOpeningOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.82,
+  },
   listRow: {
+    position: 'relative',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
