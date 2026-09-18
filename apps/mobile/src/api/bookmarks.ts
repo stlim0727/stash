@@ -695,12 +695,20 @@ export class BookmarkApi {
         // identify that owner-scoped row by its permanent id, while unrelated
         // rows in the chunk still upload normally. The common bulk path keeps
         // its one-request behavior.
-        const recovered = await Promise.all(
+        const settled = await Promise.allSettled(
           inserts.map(async (item) => ({
             item,
             result: await this.createBookmark(inputs[item.index]!),
           })),
         );
+        // Promise.all would reject as soon as the first retry fails, leaving
+        // sibling requests detached while syncInFlight unwinds. Keep the busy
+        // guard active until every already-launched write has settled, then
+        // propagate the first failure without publishing partial results.
+        const recovered = settled.map((result) => {
+          if (result.status === 'rejected') throw result.reason;
+          return result.value;
+        });
         for (const { item, result } of recovered) {
           const preparedItem = prepared[item.index]!;
           outputs[item.index] = {
