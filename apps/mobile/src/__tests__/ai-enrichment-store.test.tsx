@@ -4513,6 +4513,49 @@ test('a sync pull delivering 2+ worker-driven enrichments feeds the burst-comple
   expect(store.current!.aiEnrichmentBurstToast?.count).toBe(2);
 });
 
+test('a sync pull batches many unseen suggestions into one durable meta write (STASH-6G)', async () => {
+  apiMock.__spies.listBookmarkIds.mockResolvedValue([SYNCED_ID, SECOND_SYNCED_ID]);
+  fakeRepo.__reset([
+    makeStoredBookmark({ id: SYNCED_ID }),
+    makeStoredBookmark({ id: SECOND_SYNCED_ID }),
+  ]);
+  const originalSetMeta = fakeRepo.repository.setMeta.bind(fakeRepo.repository);
+  let unseenWrites = 0;
+  fakeRepo.repository.setMeta = async (key, value) => {
+    if (key === 'unseen_ai_suggestions') unseenWrites += 1;
+    await originalSetMeta(key, value);
+  };
+
+  try {
+    const store = renderStore();
+    await waitFor(() => expect(store.current?.isLoading).toBe(false));
+    await waitFor(() => expect(store.current?.lastPulledAt).not.toBeNull());
+    apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
+      makeEnrichment({
+        id: 'enrich-unseen-1',
+        bookmark_id: SYNCED_ID,
+        suggested_tags: [{ name: 'design', confidence: 0.9 }],
+      }),
+      makeEnrichment({
+        id: 'enrich-unseen-2',
+        bookmark_id: SECOND_SYNCED_ID,
+        suggested_tags: [{ name: 'research', confidence: 0.9 }],
+      }),
+    ]);
+
+    await act(async () => {
+      await store.current!.syncNow();
+    });
+
+    expect(store.current!.unseenSuggestionIds).toEqual(
+      new Set([SYNCED_ID, SECOND_SYNCED_ID]),
+    );
+    expect(unseenWrites).toBe(1);
+  } finally {
+    fakeRepo.repository.setMeta = originalSetMeta;
+  }
+});
+
 test('a sync pull delivering only 1 worker-driven enrichment stays silent (below the burst threshold)', async () => {
   const store = await renderReady();
   apiMock.__spies.listEnrichmentsUpdatedSince.mockResolvedValueOnce([
