@@ -4,11 +4,33 @@ import { test } from 'node:test';
 import {
   appendShareAttemptHistory,
   buildShareAttemptDiagnostics,
+  compareShareAttemptUrls,
   markShareAttemptHistoryPersisted,
   MAX_SHARE_ATTEMPT_HISTORY,
   parseShareAttemptHistory,
   serializeShareAttemptHistory,
 } from '@/domain/share-diagnostics';
+
+test('compareShareAttemptUrls reports only same/different shape for consecutive URLs', () => {
+  assert.equal(compareShareAttemptUrls('https://example.com/a', 'https://example.com/a'), true);
+  assert.equal(compareShareAttemptUrls('https://example.com/b', 'https://example.com/a'), false);
+  assert.equal(
+    compareShareAttemptUrls(
+      'https://share.google/article?si=new-token',
+      'https://share.google/article?si=old-token',
+    ),
+    true,
+  );
+  assert.equal(
+    compareShareAttemptUrls(
+      'https://example.com/a?utm_source=retry',
+      'https://example.com/a',
+    ),
+    true,
+  );
+  assert.equal(compareShareAttemptUrls('https://example.com/a', null), undefined);
+  assert.equal(compareShareAttemptUrls(null, 'https://example.com/a'), undefined);
+});
 
 test('build normalizes booleans, caps file counts/mime types, and stamps a timestamp', () => {
   const record = buildShareAttemptDiagnostics({
@@ -144,10 +166,12 @@ test('build drops invalid URL-source diagnostics instead of persisting arbitrary
     result: 'duplicate',
     urlSource: 'https://private.example/path' as never,
     urlCandidatesMatch: true,
+    sameUrlAsPreviousAttempt: false,
   });
 
   assert.equal(record.urlSource, undefined);
   assert.equal(record.urlCandidatesMatch, true);
+  assert.equal(record.sameUrlAsPreviousAttempt, false);
 });
 
 test('appendShareAttemptHistory caps the ring at MAX_SHARE_ATTEMPT_HISTORY, dropping the oldest', () => {
