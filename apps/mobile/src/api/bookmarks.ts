@@ -493,15 +493,22 @@ export class BookmarkApi {
       // url_hash one), so the url_hash lookup alone would miss the archived
       // original and leave the entry failing forever.
       if (error instanceof SupabaseRequestError && error.status === 409) {
+        // The primary key is the final idempotency key. Rows created before
+        // `client_id` can miss both ordinary lookups after their URL changes or
+        // they move to Trash; without this lookup their retry remains stuck on
+        // `bookmarks_pkey` forever (STASH-4Z).
+        const duplicateById = input.id ? await this.findBookmarkById(input.id) : null;
         const duplicateByUrl = urlHash ? await this.findActiveBookmarkByUrlHash(urlHash) : null;
         const duplicate =
-          duplicateByUrl ?? (clientId ? await this.findBookmarkByClientId(clientId) : null);
+          duplicateById ?? duplicateByUrl ??
+          (clientId ? await this.findBookmarkByClientId(clientId) : null);
         if (duplicate) {
           // Same idempotent-retry case as the pre-insert `existing` branch
           // above (see its comment) — the insert itself lost the race to
           // this request's own earlier attempt, so apply the same
-          // client-id-proven refreshed description here too.
-          const isOwnRetry = clientId !== null && duplicate.client_id === clientId;
+          // permanent-id/client-id-proven refreshed description here too.
+          const isOwnRetry = duplicate.id === input.id ||
+            (clientId !== null && duplicate.client_id === clientId);
           await this.updateBookmark(duplicate.id, {
             ...(isOwnRetry ? {
               description: description ?? undefined,
@@ -669,12 +676,50 @@ export class BookmarkApi {
     }
 
     if (inserts.length > 0) {
-      const rows = await this.requestArray<RemoteBookmark>('/rest/v1/bookmarks', {
-        method: 'POST',
-        accessToken: this.session.access_token,
-        headers: { Prefer: 'return=representation' },
-        body: inserts.map((item) => item.body),
-      });
+      let rows: RemoteBookmark[];
+      try {
+        rows = await this.requestArray<RemoteBookmark>('/rest/v1/bookmarks', {
+          method: 'POST',
+          accessToken: this.session.access_token,
+          headers: { Prefer: 'return=representation' },
+          body: inserts.map((item) => item.body),
+        });
+      } catch (error) {
+        if (!(error instanceof SupabaseRequestError) || error.status !== 409) {
+          throw error;
+        }
+
+        // A single legacy row whose original create landed without a response
+        // can make the whole atomic bulk INSERT fail on `bookmarks_pkey`. Retry
+        // this exceptional path item-by-item: createBookmark's 409 recovery can
+        // identify that owner-scoped row by its permanent id, while unrelated
+        // rows in the chunk still upload normally. The common bulk path keeps
+        // its one-request behavior.
+        const recovered = await Promise.all(
+          inserts.map(async (item) => ({
+            item,
+            result: await this.createBookmark(inputs[item.index]!),
+          })),
+        );
+        for (const { item, result } of recovered) {
+          const preparedItem = prepared[item.index]!;
+          outputs[item.index] = {
+            ...result,
+            client_id: preparedItem.clientId,
+            url_hash: preparedItem.urlHash,
+          };
+          const duplicateIndexes = duplicateIndexesByInsertIndex.get(item.index) ?? [];
+          for (const duplicateIndex of duplicateIndexes) {
+            outputs[duplicateIndex] = {
+              ...result,
+              status: 'duplicate',
+              client_id: preparedItem.clientId,
+              url_hash: preparedItem.urlHash,
+            };
+          }
+        }
+        rows = [];
+      }
       const rowsByClientId = new Map(
         rows
           .filter((row) => row.client_id)
@@ -686,6 +731,9 @@ export class BookmarkApi {
           .map((row) => [row.url_hash as string, row] as const),
       );
       for (const item of inserts) {
+        if (outputs[item.index]) {
+          continue;
+        }
         const preparedItem = prepared[item.index]!;
         const created =
           (preparedItem.clientId ? rowsByClientId.get(preparedItem.clientId) : undefined) ??
@@ -1375,6 +1423,27 @@ export class BookmarkApi {
       { accessToken: this.session.access_token },
     );
 
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Looks up an owner-scoped row by the permanent id minted at capture. This
+   * is the last-resort idempotency key for rows created before `client_id` was
+   * introduced, or whose URL no longer matches the current local payload.
+   */
+  private async findBookmarkById(id: string): Promise<RemoteBookmark | null> {
+    const rows = await this.requestArray<RemoteBookmark>(
+      appendSearchParams(
+        '/rest/v1/bookmarks',
+        new URLSearchParams({
+          select: '*',
+          user_id: `eq.${this.session.user.id}`,
+          id: `eq.${id}`,
+          limit: '1',
+        }),
+      ),
+      { accessToken: this.session.access_token },
+    );
     return rows[0] ?? null;
   }
 

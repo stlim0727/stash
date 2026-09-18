@@ -524,6 +524,9 @@ test('createBookmark pushes a refreshed memo body when a 409 conflict reveals it
       if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
         throw new SupabaseRequestError('conflict', 409);
       }
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&id=')) {
+        return [];
+      }
       if (path === '/rest/v1/bookmarks?id=eq.b1&user_id=eq.user-1') {
         assert.equal(options.method, 'PATCH');
         const body = options.body as Record<string, unknown>;
@@ -543,6 +546,88 @@ test('createBookmark pushes a refreshed memo body when a 409 conflict reveals it
 
   assert.equal(result.status, 'duplicate');
   assert.equal(patches[0]?.description, 'edited body');
+});
+
+test('createBookmark recovers a primary-key retry for a legacy row with no client_id or matching active URL', async () => {
+  const legacy = remoteBookmark({
+    id: 'b1',
+    url: 'https://example.com/old',
+    url_hash: 'https://example.com/old',
+    client_id: null,
+    deleted_at: '2026-09-01T00:00:00.000Z',
+  });
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=')) return [];
+      if (path.includes('client_id=')) return [];
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        throw new SupabaseRequestError('duplicate key value violates bookmarks_pkey', 409);
+      }
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&id=')) return [legacy];
+      if (path === '/rest/v1/bookmarks?id=eq.b1&user_id=eq.user-1') return [legacy];
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const result = await api.createBookmark({
+    id: 'b1',
+    url: 'https://example.com/new',
+    description: 'latest local description',
+    client_id: 'new-client-id',
+  });
+
+  assert.equal(result.status, 'duplicate');
+  assert.equal(result.bookmark_id, 'b1');
+});
+
+test('createBookmarks isolates a bulk primary-key conflict and recovers the legacy row by id', async () => {
+  const legacy = remoteBookmark({
+    id: 'legacy-id',
+    url: 'https://example.com/old',
+    url_hash: 'https://example.com/old',
+    client_id: null,
+  });
+  const fresh = remoteBookmark({
+    id: 'fresh-id',
+    url: 'https://example.com/fresh',
+    url_hash: 'https://example.com/fresh',
+    client_id: 'fresh-client',
+  });
+  let bulkAttempted = false;
+  const client = {
+    request: async (path: string, options: Record<string, unknown> = {}) => {
+      if (path.includes('url_hash=') || path.includes('client_id=')) return [];
+      if (path.startsWith('/rest/v1/bookmarks?select=*&user_id=eq.user-1&id=')) {
+        return path.includes('legacy-id') ? [legacy] : [];
+      }
+      if (path === '/rest/v1/bookmarks' && options.method === 'POST') {
+        if (Array.isArray(options.body)) {
+          bulkAttempted = true;
+          throw new SupabaseRequestError('duplicate key value violates bookmarks_pkey', 409);
+        }
+        const body = options.body as Record<string, unknown>;
+        if (body.id === 'legacy-id') {
+          throw new SupabaseRequestError('duplicate key value violates bookmarks_pkey', 409);
+        }
+        return [fresh];
+      }
+      if (path === '/rest/v1/bookmarks?id=eq.legacy-id&user_id=eq.user-1') return [legacy];
+      throw new Error(`unexpected request ${path}`);
+    },
+  };
+  const api = new BookmarkApi(SESSION, client as never);
+
+  const results = await api.createBookmarks([
+    { id: 'legacy-id', url: 'https://example.com/new', client_id: 'legacy-client' },
+    { id: 'fresh-id', url: 'https://example.com/fresh', client_id: 'fresh-client' },
+  ]);
+
+  assert.equal(bulkAttempted, true);
+  assert.deepEqual(results.map(({ bookmark_id, status }) => ({ bookmark_id, status })), [
+    { bookmark_id: 'legacy-id', status: 'duplicate' },
+    { bookmark_id: 'fresh-id', status: 'created' },
+  ]);
 });
 
 test('createBookmark rejects an image payload with no uploaded preview_image_url (STASH-65 invariant: never create before the binary lands)', async () => {

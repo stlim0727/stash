@@ -36,14 +36,13 @@ interface QueueRow {
   last_attempt_at: string | null;
 }
 
-// A large JSON restore intentionally keeps its bookmark rows and organization
-// outboxes in one transaction (see runImportBatchTransactions). On a real
-// 997-bookmark restore that bounded unit took just over the connection's normal
-// 5s watchdog and produced STASH-4V even though the handle completed normally.
-// Keep the strict default for ordinary statements, but give this known bulk
-// transaction enough reporting headroom; it is still surfaced if it truly
-// remains stuck.
-const IMPORT_BATCH_WORK_TIMEOUT_MS = 30_000;
+// Large JSON restores and account identity rekeys intentionally keep their
+// bookmark rows, queues, and organization state in one transaction. Real
+// thousand-row units can exceed the connection's normal 5s watchdog and produce
+// STASH-4V even though the handle completes normally. Keep the strict default
+// for ordinary statements, but give these known bulk transactions enough
+// reporting headroom; they are still surfaced if they truly remain stuck.
+const BULK_TRANSACTION_WORK_TIMEOUT_MS = 30_000;
 
 /**
  * Idempotent schema applied on *every* open. Keeping it in the opener (rather
@@ -314,7 +313,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
         }
         await writeTagData(db, state.tagData);
       }),
-    'replaceBookmarkIdentities');
+    'replaceBookmarkIdentities', { workTimeoutMs: BULK_TRANSACTION_WORK_TIMEOUT_MS });
   }
 
   async completeCreateSyncBatch(completions: CreateSyncCompletion[]): Promise<void> {
@@ -392,7 +391,7 @@ class SqliteBookmarkRepository implements BookmarkRepository {
           );
         },
       });
-    }, 'insertImportBatch', { workTimeoutMs: IMPORT_BATCH_WORK_TIMEOUT_MS });
+    }, 'insertImportBatch', { workTimeoutMs: BULK_TRANSACTION_WORK_TIMEOUT_MS });
   }
 
   async deleteBookmark(id: string): Promise<void> {
