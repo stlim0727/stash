@@ -268,7 +268,7 @@ export class PostHogHttpTransport implements AnalyticsTransport {
                     ...baseProperties,
                     screen: event.properties.screen,
                   };
-                } else {
+                } else if (event.name === 'capture_completed') {
                   properties = {
                     ...baseProperties,
                     source: event.properties.source,
@@ -276,6 +276,13 @@ export class PostHogHttpTransport implements AnalyticsTransport {
                     durable: event.properties.durable,
                     persistence_ms: event.properties.persistence_ms,
                     platform: event.properties.platform,
+                  };
+                } else {
+                  properties = {
+                    ...baseProperties,
+                    failed_runs: event.properties.failed_runs,
+                    delay_band: event.properties.delay_band,
+                    failure_kind: event.properties.failure_kind,
                   };
                 }
                 return {

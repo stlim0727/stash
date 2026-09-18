@@ -12,6 +12,8 @@ import type { ReactNode } from "react";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 
+import { captureAnalytics } from "@/analytics/capture-bridge";
+import { createSyncRecoveredEvent } from "@/analytics/events";
 import { resolveAliasedId } from "@/domain/bookmark-id-swap";
 import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
@@ -192,6 +194,21 @@ import {
   noteSyncEntryStatus,
   remapSyncStatusIdentity,
 } from "@/sync/sync-status-diagnostics";
+
+function captureSyncRecovery(entry: LocalPendingBookmark): void {
+  if (entry.operation !== "create" || entry.retry_count < 1) return;
+  captureAnalytics(
+    createSyncRecoveredEvent(
+      entry.retry_count,
+      entry.last_attempt_at,
+      entry.last_error_kind ?? "unknown",
+    ),
+  );
+  recordLog(
+    "info",
+    `create sync recovered after ${entry.retry_count} failed run(s) (${entry.last_error_kind ?? "unknown"})`,
+  );
+}
 
 export function isBookmarkSyncedOnce(bookmark: Bookmark): boolean {
   return (
@@ -6296,6 +6313,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // would otherwise double-count them on that retry.
             if (update.sync_status === "synced") {
               noteSyncEntryStatus(lookupId, "synced", completedEntry.operation);
+              captureSyncRecovery(completedEntry);
             }
             const merged: Bookmark = {
               ...latest,
@@ -6937,6 +6955,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             // episode was already separately re-keyed (Codex review on #765).
             if (appliedLocalId && result.entry.sync_status === "synced") {
               noteSyncEntryStatus(appliedLocalId, "synced", entry.operation);
+              captureSyncRecovery(entry);
             }
           } catch (error) {
             logStorageError("sync entry", error);

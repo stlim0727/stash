@@ -12,6 +12,7 @@ import { usePathname } from 'expo-router';
 import { AppState, Platform } from 'react-native';
 
 import { createAppOpenEvent, createScreenViewedEvent } from './events.ts';
+import { registerAnalyticsCapture } from './capture-bridge.ts';
 import type { AnalyticsAuthState, AnalyticsPlatform } from './events.ts';
 import { FreshLaunchBooleanFlag } from './fresh-flag.ts';
 import {
@@ -183,6 +184,8 @@ export function AnalyticsProvider({ children }: { children: ReactNode }) {
     },
     [runtime],
   );
+
+  useEffect(() => registerAnalyticsCapture(capture), [capture]);
 
   const flush = useCallback(async () => {
     await runtime.flush();

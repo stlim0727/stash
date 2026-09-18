@@ -29,14 +29,14 @@ test('uses a failed queue entry when the bookmark still has pending status', () 
   );
 });
 
-test('describes a recoverable sync failure as retrying', () => {
+test('describes a recoverable but idle sync failure as queued', () => {
   assert.equal(
     syncStatusLabel(createT('en'), 'failed', {
       sync_status: 'failed',
       last_error_kind: 'other',
       health_escalated_at: null,
     }),
-    'sync retrying',
+    'sync queued',
   );
   assert.equal(
     syncStatusLabel(createT('ko'), 'failed', {
@@ -44,7 +44,7 @@ test('describes a recoverable sync failure as retrying', () => {
       last_error_kind: 'other',
       health_escalated_at: null,
     }),
-    '동기화 재시도 중',
+    '동기화 대기 중',
   );
 });
 

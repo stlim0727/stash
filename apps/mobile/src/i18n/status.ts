@@ -42,9 +42,10 @@ export function syncStatusLabel(
     isFailed &&
     (queueState?.last_error_kind === 'transient_network' ||
       queueState?.last_error_kind === 'transient_dns');
-  // A failed queue attempt is normally recoverable background work: automatic
-  // retries are already scheduled and fresh share bursts commonly settle on
-  // the next pass. Do not present that temporary state as a terminal failure.
+  // A failed queue attempt is normally recoverable background work. It may be
+  // waiting for the next natural sync trigger rather than actively retrying,
+  // so use neutral waiting copy instead of promising progress or presenting a
+  // temporary state as a terminal failure.
   // `health_escalated_at` is the durable point where repeated failures become
   // actionable (3 ordinary attempts, 6 connectivity attempts), so it is also
   // the source of truth for when the stronger wording is warranted.
@@ -55,7 +56,7 @@ export function syncStatusLabel(
       : isTransientFailure
         ? t('status.waitingForConnection')
         : isRecoveringFailure
-          ? t('status.retrying')
+          ? t('status.queued')
           : word(t, SYNC_STATUS_KEYS, value);
   return t('status.syncPrefix', { status });
 }

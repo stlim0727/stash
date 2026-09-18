@@ -310,3 +310,33 @@ test('wire payload contains only capture_completed properties on capture_complet
     ],
   });
 });
+
+test('wire payload contains aggregate retry statistics on sync_recovered events', async () => {
+  const storage = memoryStorage();
+  const requests: Array<{ input: string; init: RequestInit }> = [];
+  const transport = await createPostHogHttpTransport({
+    ...baseOptions,
+    storage,
+    fetcher: async (input, init) => {
+      requests.push({ input, init });
+      return new Response(null, { status: 200 });
+    },
+  });
+  assert.ok(transport);
+
+  transport.capture({
+    name: 'sync_recovered',
+    properties: { failed_runs: 2, delay_band: '10_30s', failure_kind: 'other' },
+  });
+  await transport.flush();
+
+  const payload = JSON.parse(String(requests[0].init.body));
+  assert.deepEqual(payload.batch[0].properties, {
+    distinct_id: `ka_${'a'.repeat(32)}`,
+    failed_runs: 2,
+    delay_band: '10_30s',
+    failure_kind: 'other',
+    $geoip_disable: true,
+    $process_person_profile: false,
+  });
+});
