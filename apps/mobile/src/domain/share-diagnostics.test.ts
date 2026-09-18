@@ -14,6 +14,20 @@ import {
 test('compareShareAttemptUrls reports only same/different shape for consecutive URLs', () => {
   assert.equal(compareShareAttemptUrls('https://example.com/a', 'https://example.com/a'), true);
   assert.equal(compareShareAttemptUrls('https://example.com/b', 'https://example.com/a'), false);
+  assert.equal(
+    compareShareAttemptUrls(
+      'https://share.google/article?si=new-token',
+      'https://share.google/article?si=old-token',
+    ),
+    true,
+  );
+  assert.equal(
+    compareShareAttemptUrls(
+      'https://example.com/a?utm_source=retry',
+      'https://example.com/a',
+    ),
+    true,
+  );
   assert.equal(compareShareAttemptUrls('https://example.com/a', null), undefined);
   assert.equal(compareShareAttemptUrls(null, 'https://example.com/a'), undefined);
 });

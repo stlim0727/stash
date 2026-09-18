@@ -1,3 +1,5 @@
+import { canonicalizeUrl } from '@/domain/urls';
+
 /**
  * Durable share-attempt diagnostics (see `share/share-diagnostics.ts`).
  *
@@ -80,7 +82,9 @@ export function compareShareAttemptUrls(
   currentUrl: string | null,
   previousUrl: string | null,
 ): boolean | undefined {
-  return currentUrl && previousUrl ? currentUrl === previousUrl : undefined;
+  return currentUrl && previousUrl
+    ? canonicalizeUrl(currentUrl) === canonicalizeUrl(previousUrl)
+    : undefined;
 }
 
 /** Build a record from a just-finished share attempt, capping/normalizing fields. */
