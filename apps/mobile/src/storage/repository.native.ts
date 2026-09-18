@@ -140,18 +140,30 @@ class SqliteBookmarkRepository implements BookmarkRepository {
   private readonly connection = new SqliteConnection<SQLite.SQLiteDatabase>(
     async ({ useNewConnection }) => {
       let phase = 'preflight';
+      let db: SQLite.SQLiteDatabase | null = null;
       try {
         ensureNativeSqliteDirectory();
         phase = 'openDatabaseAsync';
         // `useNewConnection` is set only when the previous handle was abandoned
         // with a native op still in flight; the default per-path cache would
         // otherwise hand that very connection straight back.
-        const db = await SQLite.openDatabaseAsync('stash.db', { useNewConnection });
+        db = await SQLite.openDatabaseAsync('stash.db', { useNewConnection });
         phase = 'execSchema';
         await db.execAsync(SCHEMA_SQL);
         return db;
       } catch (error) {
         noteSqliteOpenFailure(phase, error);
+        // openWithLockedRetry may call this opener again after schema setup
+        // loses to an abandoned transaction. Do not leak the newly-opened
+        // handle into that retry; it would retain another lock/reference and
+        // make recovery progressively less likely.
+        if (db) {
+          try {
+            await db.closeAsync();
+          } catch {
+            // Best effort. Preserve the original open/schema error.
+          }
+        }
         throw error;
       }
     },
