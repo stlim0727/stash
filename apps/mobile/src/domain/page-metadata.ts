@@ -1,9 +1,11 @@
 /**
  * Fetch + parse real page metadata (OpenGraph/Twitter cards, <title>,
- * favicon). The parser is pure and regex-based — React Native has no DOM —
+ * favicon). htmlparser2 reads HTML without a browser DOM on React Native,
  * and the fetcher resolves to null on any failure so enrichment can always
  * fall back to URL-derived metadata.
  */
+
+import { Parser } from 'htmlparser2';
 
 // Relative .ts import (not the @ alias) so Node's test runner can resolve it.
 import { recordLog } from '../observability/log-buffer.ts';
@@ -72,28 +74,9 @@ export interface FetchedMetadata {
   preview_image_url?: string;
 }
 
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-};
-
-function decodeEntities(value: string): string {
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)))
-    .replace(/&([a-z]+);/gi, (match, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? match);
-}
-
 function clean(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const decoded = decodeEntities(value).replace(/\s+/g, ' ').trim();
-  return decoded || undefined;
+  // htmlparser2 already decoded entities; don't decode literal entity text twice.
+  return value?.replace(/\s+/g, ' ').trim() || undefined;
 }
 
 function resolveHref(href: string, baseUrl: string): string | undefined {
@@ -104,30 +87,51 @@ function resolveHref(href: string, baseUrl: string): string | undefined {
   }
 }
 
-function attribute(tag: string, name: string): string | undefined {
-  const match = tag.match(new RegExp(`${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, 'i'));
-  return match ? (match[2] ?? match[3]) : undefined;
+/** Parse the bounded HTML prefix without allocating a document tree. */
+function parseHtmlHead(html: string) {
+  const meta = new Map<string, string>();
+  const links: Record<string, string>[] = [];
+  const keys = new Set<string>();
+  let metaCount = 0;
+  let hasTitleTag = false;
+  let inTitle = false;
+  let title = '';
+  const parser = new Parser({
+    onopentag(name, attributes) {
+      if (name === 'meta') {
+        metaCount += 1;
+        const key = (attributes.property ?? attributes.name ?? '').toLowerCase();
+        if (/^(og:|twitter:)/.test(key)) keys.add(key);
+        const content = clean(attributes.content);
+        if (key && content && !meta.has(key)) meta.set(key, content);
+      } else if (name === 'link') {
+        links.push(attributes);
+      } else if (name === 'title' && !hasTitleTag) {
+        hasTitleTag = true;
+        inTitle = true;
+      }
+    },
+    ontext(text) {
+      if (inTitle) title += text;
+    },
+    onclosetag(name) {
+      if (name === 'title') inTitle = false;
+    },
+  });
+  parser.end(html.slice(0, MAX_HTML_BYTES));
+  return { meta, links, title: clean(title), metaCount, keys, hasTitleTag };
 }
 
 export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadata {
-  const head = html.slice(0, MAX_HTML_BYTES);
-
-  const meta = new Map<string, string>();
-  for (const tag of head.match(/<meta\b[^>]*>/gi) ?? []) {
-    const key = (attribute(tag, '(?:property|name)') ?? '').toLowerCase();
-    const content = clean(attribute(tag, 'content'));
-    if (key && content && !meta.has(key)) {
-      meta.set(key, content);
-    }
-  }
+  const { meta, links, title } = parseHtmlHead(html);
 
   let favicon: string | undefined;
-  for (const tag of head.match(/<link\b[^>]*>/gi) ?? []) {
-    const rel = (attribute(tag, 'rel') ?? '').toLowerCase();
+  for (const attributes of links) {
+    const rel = (attributes.rel ?? '').toLowerCase();
     if (!/(^|\s)(icon|shortcut icon|apple-touch-icon)(\s|$)/.test(rel)) {
       continue;
     }
-    const href = attribute(tag, 'href');
+    const href = attributes.href;
     if (href) {
       favicon = resolveHref(href, baseUrl);
       if (favicon) {
@@ -136,11 +140,10 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
     }
   }
 
-  const titleTag = clean(head.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]);
   const image = meta.get('og:image') ?? meta.get('og:image:url') ?? meta.get('twitter:image');
 
   return {
-    title: meta.get('og:title') ?? meta.get('twitter:title') ?? titleTag,
+    title: meta.get('og:title') ?? meta.get('twitter:title') ?? title,
     site_name: meta.get('og:site_name'),
     favicon_url: favicon,
     preview_image_url: image ? resolveHref(image, baseUrl) : undefined,
@@ -154,13 +157,12 @@ export function parsePageMetadata(html: string, baseUrl: string): FetchedMetadat
  * native-fetch HTML can omit discovery and expose only a generic app title.
  */
 export function discoverOembedEndpoint(html: string, baseUrl: string): string | null {
-  const head = html.slice(0, MAX_HTML_BYTES);
-  for (const tag of head.match(/<link\b[^>]*>/gi) ?? []) {
-    const type = (attribute(tag, 'type') ?? '').toLowerCase().split(';')[0]?.trim();
+  for (const attributes of parseHtmlHead(html).links) {
+    const type = (attributes.type ?? '').toLowerCase().split(';')[0]?.trim();
     if (type !== 'application/json+oembed') {
       continue;
     }
-    const href = clean(attribute(tag, 'href'));
+    const href = clean(attributes.href);
     if (href) {
       return resolveHref(href, baseUrl) ?? null;
     }
@@ -178,17 +180,8 @@ export function discoverOembedEndpoint(html: string, baseUrl: string): string | 
  * preview tells us *why* from the logs/Sentry alone, without re-capturing HTML.
  */
 export function htmlHeadSummary(html: string): string {
-  const head = html.slice(0, MAX_HTML_BYTES);
-  const metaTags = head.match(/<meta\b[^>]*>/gi) ?? [];
-  const keys: string[] = [];
-  for (const tag of metaTags) {
-    const key = (attribute(tag, '(?:property|name)') ?? '').toLowerCase();
-    if (/^(og:|twitter:)/.test(key) && !keys.includes(key)) {
-      keys.push(key);
-    }
-  }
-  const hasTitleTag = /<title[^>]*>/i.test(head);
-  return `metas=${metaTags.length} og/tw=[${keys.join(',')}] title=${hasTitleTag}`;
+  const { metaCount, keys, hasTitleTag } = parseHtmlHead(html);
+  return `metas=${metaCount} og/tw=[${[...keys].join(',')}] title=${hasTitleTag}`;
 }
 
 /**
@@ -329,7 +322,7 @@ async function fetchHtmlMetadata(url: string, userAgent: string): Promise<HtmlFe
 
 /**
  * Some pages are pure client-side SPAs whose initial HTML is a title-less shell
- * (so regex scraping yields nothing), but expose a *server-rendered* sibling
+ * (so HTML parsing yields nothing), but expose a *server-rendered* sibling
  * page with OpenGraph/`<title>` tags for link sharing. Given the URL we actually
  * landed on, return such a sibling to fetch instead, or null when there isn't a
  * known one.
