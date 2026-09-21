@@ -2020,6 +2020,31 @@ test('a card with a preview image still shows the ribbon site label unchanged', 
   expect(screen.getByText('WIRED')).toBeTruthy();
 });
 
+test('a card without a preview image renders a fallback preview banner with the ribbon site label', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-0000000000a6',
+      title: 'No preview image',
+      url: 'https://news.ycombinator.com/item?id=123',
+      url_hash: 'https://news.ycombinator.com/item?id=123',
+      site_name: 'Hacker News',
+      favicon_url: null,
+      preview_image_url: null,
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('No preview image')).toBeTruthy());
+
+  // The card renders the preview container with the fallback banner
+  expect(screen.getByTestId('inbox-card-preview')).toBeTruthy();
+  // Shows the domain monogram ("H" for Hacker News)
+  expect(screen.getByTestId('inbox-card-monogram')).toBeTruthy();
+  expect(screen.getByText('H')).toBeTruthy();
+  // And the preview ribbon carries the site label
+  expect(screen.getByText('Hacker News')).toBeTruthy();
+});
+
 test('list view rows show the site label instead of the raw URL', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({

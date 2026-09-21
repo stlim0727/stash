@@ -277,6 +277,72 @@ function ItemIcon({
   );
 }
 
+/**
+ * Fallback preview banner for cards without a preview image.
+ * Renders a prominent favicon tile if available, falling back to a bold domain monogram,
+ * centered on a subtly tinted surface with matching site accent.
+ */
+function CardPreviewFallback({
+  item,
+  testID,
+}: {
+  item: Bookmark;
+  testID?: string;
+}) {
+  const palette = usePalette();
+  const [faviconFailed, setFaviconFailed] = useState(false);
+  const base = itemIcon(item);
+  const icon = base.kind === 'favicon' && faviconFailed ? monogramIcon(item) : base;
+  const monogram = monogramIcon(item);
+  const accentColor = MONOGRAM_COLORS[monogram.colorIndex];
+
+  return (
+    <View
+      style={[
+        styles.cardPreviewFallback,
+        { backgroundColor: palette.mutedSurface },
+      ]}
+    >
+      <View
+        style={[
+          StyleSheet.absoluteFill,
+          { backgroundColor: accentColor, opacity: palette.background === '#151b26' ? 0.14 : 0.08 },
+        ]}
+      />
+      {icon.kind === 'favicon' ? (
+        <View
+          style={[
+            styles.cardFallbackFaviconTile,
+            {
+              borderColor: palette.border,
+              backgroundColor: palette.surfaceElevated,
+            },
+            palette.shadow.soft,
+          ]}
+        >
+          <Image
+            source={{ uri: icon.uri }}
+            style={styles.cardFallbackFaviconImage}
+            resizeMode="contain"
+            onError={() => setFaviconFailed(true)}
+          />
+        </View>
+      ) : (
+        <View
+          testID={testID}
+          style={[
+            styles.cardFallbackMonogramTile,
+            { backgroundColor: accentColor },
+            palette.shadow.soft,
+          ]}
+        >
+          <Text style={styles.cardFallbackMonogramLetter}>{icon.letter}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 // The list that drives the collapsing header. Animated.FlatList lets the
 // scroll position feed an Animated.Value over the native driver; the cast keeps
 // FlatList's generic item typing (Animated.FlatList erases it to `any`).
@@ -3176,93 +3242,62 @@ export default function InboxScreen() {
                 // Container for card layout
                 accessible={false}
               >
-                {previewUri ? (
-                  <View style={styles.cardPreviewContainer}>
-                    <Pressable
-                      testID="inbox-card-preview"
-                      accessible={false}
-                      onPress={openDetail}
-                      onLongPress={() => setMenuItem(item)}
-                      style={StyleSheet.absoluteFill}
-                    >
+                <View style={styles.cardPreviewContainer}>
+                  <Pressable
+                    testID="inbox-card-preview"
+                    accessible={false}
+                    onPress={openDetail}
+                    onLongPress={() => setMenuItem(item)}
+                    style={StyleSheet.absoluteFill}
+                  >
+                    {previewUri ? (
                       <Image
                         source={{ uri: previewUri }}
                         style={styles.cardPreview}
                       />
-                    </Pressable>
-                    {item.url ? (
-                      <Pressable
-                        accessibilityRole="link"
-                        accessibilityLabel={t('common.openLink')}
-                        onPress={openLink}
-                        onLongPress={() => setMenuItem(item)}
-                        hitSlop={6}
-                        style={styles.previewRibbon}
-                      >
-                        <PostHogMaskView>
-                          <Text style={styles.previewRibbonText} numberOfLines={1}>
-                            {siteLabel(item)}
-                          </Text>
-                        </PostHogMaskView>
-                        <Ionicons name="open-outline" size={12} color="#ffffff" />
-                      </Pressable>
-                    ) : null}
-                  </View>
-                ) : null}
-                {!previewUri && item.url ? (
-                  // Mirrors the ribbon's position over a preview image: the
-                  // site-name + open-link pill sits above the title instead
-                  // of below it, so the "where does this link go" affordance
-                  // lands in the same place regardless of preview image. The
-                  // row itself opens the detail view so the space to the
-                  // left of the pill is tappable too, not just dead space.
-                  <Pressable
-                    accessible={false}
-                    tabIndex={-1}
-                    onPress={openDetail}
-                    onLongPress={() => setMenuItem(item)}
-                    style={styles.cardUrlRowTop}
-                  >
+                    ) : (
+                      <CardPreviewFallback
+                        item={item}
+                        testID="inbox-card-monogram"
+                      />
+                    )}
+                  </Pressable>
+                  {item.url ? (
                     <Pressable
                       accessibilityRole="link"
                       accessibilityLabel={t('common.openLink')}
                       onPress={openLink}
                       onLongPress={() => setMenuItem(item)}
                       hitSlop={6}
-                      style={[styles.cardUrlOpenPill, { backgroundColor: palette.accentSoft, borderColor: palette.accent }]}
+                      style={styles.previewRibbon}
                     >
-                      <HighlightedText
-                        style={[styles.cardUrlOpenPillText, { color: palette.accentText }]}
-                        numberOfLines={1}
-                        text={siteLabelText}
-                        query={highlightQuery}
-                        highlightStyle={highlightStyle}
-                      />
-                      <Ionicons name="open-outline" size={13} color={palette.accentText} />
+                      <PostHogMaskView>
+                        <Text style={styles.previewRibbonText} numberOfLines={1}>
+                          {siteLabel(item)}
+                        </Text>
+                      </PostHogMaskView>
+                      <Ionicons name="open-outline" size={12} color="#ffffff" />
                     </Pressable>
-                  </Pressable>
-                ) : null}
-                <View
-                  style={[
-                    styles.cardBody,
-                    Platform.OS === 'web' && columns > 1 && !previewUri ? styles.cardBodyTextOnlyWeb : null,
-                  ]}
-                >
+                  ) : null}
+                </View>
+                <View style={styles.cardBody}>
                   <View style={styles.cardTitleRow}>
                     {/* Not independently labelled: it's a supplementary tap
                         target over the same action the title/link pill
                         already exposes to screen readers, so it stays out
                         of the accessibility tree rather than duplicating
                         the "Open link" label. */}
-                    <Pressable
-                      accessible={false}
-                      tabIndex={-1}
-                      onPress={item.url ? openLink : openDetail}
-                      onLongPress={() => setMenuItem(item)}
-                      hitSlop={6}
-                    >
-                      <ItemIcon item={item} testID="inbox-card-monogram" />
-                    </Pressable>
+                    {previewUri ? (
+                      <Pressable
+                        accessible={false}
+                        tabIndex={-1}
+                        onPress={item.url ? openLink : openDetail}
+                        onLongPress={() => setMenuItem(item)}
+                        hitSlop={6}
+                      >
+                        <ItemIcon item={item} testID="inbox-card-monogram" />
+                      </Pressable>
+                    ) : null}
                   {/* Only the title is the accessible "open details" button so
                       the sibling … overflow button stays independently
                       focusable; the whole card remains tappable visually. */}
@@ -3917,6 +3952,39 @@ const styles = StyleSheet.create({
   cardPreview: {
     width: '100%',
     height: CARD_PREVIEW_HEIGHT,
+  },
+  cardPreviewFallback: {
+    width: '100%',
+    height: CARD_PREVIEW_HEIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  cardFallbackFaviconTile: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  cardFallbackFaviconImage: {
+    width: 34,
+    height: 34,
+  },
+  cardFallbackMonogramTile: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardFallbackMonogramLetter: {
+    color: '#ffffff',
+    fontSize: 26,
+    fontWeight: '700',
   },
   previewRibbon: {
     position: 'absolute',
