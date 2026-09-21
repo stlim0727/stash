@@ -13,6 +13,11 @@ module.exports = {
     // it here avoids making Jest/Babel transform third-party parser code.
     '^marked$': '<rootDir>/node_modules/marked/lib/marked.umd.js',
   },
+  transformIgnorePatterns: [
+    '/node_modules/(?!(.pnpm|htmlparser2|domhandler|domutils|domelementtype|entities|dom-serializer|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|standard-navigation))',
+    '/node_modules/react-native-reanimated/plugin/',
+    '/node_modules/@react-native/babel-preset/',
+  ],
   clearMocks: true,
   // CI hardening: CircleCI's memory-constrained container (8GB, no swap) gets
   // over-subscribed by jest-expo's default numCPUs-1 heavy workers, which
