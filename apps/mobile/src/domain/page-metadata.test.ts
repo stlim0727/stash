@@ -13,6 +13,7 @@ import {
   parseOembed,
   parsePageMetadata,
   previewSourceUrl,
+  youtubePlaylistId,
   youtubeVideoId,
 } from './page-metadata.ts';
 import { clearLogEntries, getLogEntries } from '../observability/log-buffer.ts';
@@ -193,10 +194,39 @@ test('youtubeVideoId extracts the id from every YouTube URL shape', () => {
   assert.equal(youtubeVideoId('not a url'), null);
 });
 
+test('youtubePlaylistId extracts the playlist id from YouTube and YouTube Music playlist URLs', () => {
+  assert.equal(
+    youtubePlaylistId('https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
+    'PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4',
+  );
+  assert.equal(
+    youtubePlaylistId('https://music.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
+    'PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4',
+  );
+  assert.equal(
+    youtubePlaylistId('https://m.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4&si=xyz'),
+    'PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4',
+  );
+  assert.equal(
+    youtubePlaylistId('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
+    null,
+  );
+  assert.equal(youtubePlaylistId('https://example.com/playlist?list=PL123'), null);
+  assert.equal(youtubePlaylistId('not a url'), null);
+});
+
 test('oembedEndpoint builds provider URLs for YouTube and Reddit posts', () => {
   assert.equal(
     oembedEndpoint('https://www.youtube.com/shorts/MufIgnqP1vk'),
     'https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3DMufIgnqP1vk',
+  );
+  assert.equal(
+    oembedEndpoint('https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
+    'https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fplaylist%3Flist%3DPLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4',
+  );
+  assert.equal(
+    oembedEndpoint('https://music.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
+    'https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fwww.youtube.com%2Fplaylist%3Flist%3DPLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4',
   );
   assert.equal(
     oembedEndpoint('https://www.reddit.com/r/LocalLLaMA/comments/abc123/a_specific_post/'),
@@ -310,8 +340,16 @@ test('checkYoutubeAvailability reports available when oEmbed answers with a titl
   }
 });
 
-test('isYoutubeAvailabilityCandidate accepts direct YouTube URLs and the share.google shortener, rejects everything else', () => {
+test('isYoutubeAvailabilityCandidate accepts direct YouTube URLs, playlists, and the share.google shortener, rejects everything else', () => {
   assert.equal(isYoutubeAvailabilityCandidate('https://youtu.be/dQw4w9WgXcQ'), true);
+  assert.equal(
+    isYoutubeAvailabilityCandidate('https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
+    true,
+  );
+  assert.equal(
+    isYoutubeAvailabilityCandidate('https://music.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4'),
+    true,
+  );
   assert.equal(isYoutubeAvailabilityCandidate('https://share.google/bb3vpuiCbbyVhrpTp'), true);
   assert.equal(isYoutubeAvailabilityCandidate('https://example.com/article'), false);
   assert.equal(isYoutubeAvailabilityCandidate('not a url'), false);
@@ -387,6 +425,36 @@ test('fetchPageMetadata keeps hqdefault when sddefault is missing (404)', async 
   try {
     const meta = await fetchPageMetadata('https://youtu.be/jNQXAC9IVRw');
     assert.equal(meta?.preview_image_url, 'https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('fetchPageMetadata prefers YouTube playlist oEmbed over generic HTML title', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = (async (target: string) => {
+    calls.push(target);
+    if (target.startsWith('https://www.youtube.com/oembed')) {
+      return {
+        ok: true,
+        json: async () => ({
+          title: 'Lex Fridman Podcast',
+          provider_name: 'YouTube',
+          thumbnail_url: 'https://i.ytimg.com/vi/s7d2d8FhevU/hqdefault.jpg',
+        }),
+      } as unknown as Response;
+    }
+    return htmlResponse('<head><title>YouTube</title></head>');
+  }) as typeof fetch;
+  try {
+    const meta = await fetchPageMetadata(
+      'https://www.youtube.com/playlist?list=PLrAXtmErZgOdP_8GztsuKi9nrraNbKKp4',
+    );
+    assert.equal(meta?.title, 'Lex Fridman Podcast');
+    assert.equal(meta?.site_name, 'YouTube');
+    assert.equal(meta?.preview_image_url, 'https://i.ytimg.com/vi/s7d2d8FhevU/hqdefault.jpg');
+    assert.equal(calls.length, 1, 'successful oEmbed should avoid the generic HTML request');
   } finally {
     globalThis.fetch = originalFetch;
   }
