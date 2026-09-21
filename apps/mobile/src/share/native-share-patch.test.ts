@@ -65,29 +65,29 @@ test('native attempt id survives the JavaScript parser', () => {
   assert.match(parser, /meta: shareIntent\?\.meta \?\? null/);
 });
 
-test('Android activity recreation does not replay stale share intents (STASH-6K)', () => {
-  assert.match(lifecycleListener, /val isRecreation = savedInstanceState != null/);
+test('Android ACTION_VIEW is restricted to http/https and disarms intent', () => {
   assert.match(
-    lifecycleListener,
-    /val isFromHistory = intent != null && \(intent\.flags and Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\) != 0/,
+    nativeModule,
+    /if \(intent\.action == Intent\.ACTION_VIEW && intent\.data != null\)/,
   );
   assert.match(
-    lifecycleListener,
-    /if \(!isRecreation && !isFromHistory && intent\?\.type != null\)/,
+    nativeModule,
+    /if \(scheme == "http" \|\| scheme == "https"\)/,
   );
   assert.match(
-    lifecycleListener,
+    nativeModule,
     /activity\?\.intent = Intent\(Intent\.ACTION_MAIN\)/,
   );
 });
 
-test('Android native module disarms intent after handling and handles ACTION_VIEW with null type (STASH-6K)', () => {
+test('Android lifecycle listener preserves unhandled shares and suppresses handled/history replays', () => {
+  assert.match(debugJournal, /fun markHandled\(context: Context\?, attemptId: String\?\)/);
+  assert.match(debugJournal, /fun isHandled\(context: Context\?, attemptId: String\?\): Boolean/);
+  assert.match(lifecycleListener, /val isHandled = ShareIntentDebugJournal\.isHandled/);
   assert.match(
-    nativeModule,
-    /if \(intent\.action == Intent\.ACTION_VIEW && intent\.dataString != null\)/,
+    lifecycleListener,
+    /val isFromHistory = intent != null && \(intent\.flags and Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\) != 0/,
   );
-  assert.match(
-    nativeModule,
-    /activity\?\.intent = Intent\(Intent\.ACTION_MAIN\)/,
-  );
+  assert.match(lifecycleListener, /if \(!isStaleReplay && hasShareContent\)/);
+  assert.match(lifecycleListener, /activity\?\.intent = Intent\(Intent\.ACTION_MAIN\)/);
 });
