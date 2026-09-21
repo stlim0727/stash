@@ -24,6 +24,7 @@ const mockAuthSessionValue = {
 let mockAuthSession: typeof mockAuthSessionValue | null = null;
 afterEach(() => {
   mockAuthSession = null;
+  resetPreviewImageFailuresForTest();
 });
 jest.mock('@/supabase/auth-provider', () => ({
   useSupabaseAuth: () => ({
@@ -113,6 +114,7 @@ jest.mock('expo-router', () => {
 import InboxScreen from '@/app/index';
 import { BookmarksProvider, useBookmarks } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
+import { resetPreviewImageFailuresForTest } from '@/domain/preview-image-cache';
 import { INBOX_VIEW_PREF_KEY } from '@/domain/view-mode';
 import type { Collection, Tag } from '@/domain/types';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -2295,4 +2297,34 @@ test('tapping the hero wordmark scrolls the list back to the top', async () => {
 
   expect(scrollToOffsetSpy).toHaveBeenCalledWith({ offset: 0, animated: true });
   scrollToOffsetSpy.mockRestore();
+});
+
+test('falls back to CardPreviewFallback when preview image fails to load in card view (STASH-6P)', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000044',
+      title: 'Expired card preview',
+      url: 'https://example.com/expired-post',
+      preview_image_url: 'https://scontent.cdninstagram.com/expired-card.jpg',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Expired card preview')).toBeTruthy());
+  expect(screen.getByTestId('inbox-card-preview')).toBeTruthy();
+
+  // Initially, preview image is rendered, fallback banner is not
+  expect(screen.getByTestId('inbox-card-preview-image')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-card-preview-fallback')).toBeNull();
+
+  // Trigger error on image inside card preview
+  await act(async () => {
+    fireEvent(screen.getByTestId('inbox-card-preview-image'), 'error');
+  });
+
+  // Now CardPreviewFallback is rendered
+  await waitFor(() => {
+    expect(screen.getByTestId('inbox-card-preview-fallback')).toBeTruthy();
+  });
+  expect(screen.queryByTestId('inbox-card-preview-image')).toBeNull();
 });

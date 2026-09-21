@@ -22,6 +22,7 @@ import { enrichBookmark } from "@/domain/enrichment";
 import { isRepairableSourceTitle } from "@/domain/url-title";
 import { checkYoutubeAvailability, isYoutubeAvailabilityCandidate } from "@/domain/page-metadata";
 import { isTransientNetworkError } from "@/domain/network-errors";
+import { clearPreviewImageFailed } from "@/domain/preview-image-cache";
 import { jwtSubject } from "@/domain/jwt";
 import { planTitleBackfill } from "@/domain/title-backfill";
 import type { TitleBackfillPatch } from "@/domain/title-backfill";
@@ -3722,6 +3723,9 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
       }
       setPreviewRefreshingIds((prev) => new Set(prev).add(id));
       try {
+        if (bookmark.preview_image_url) {
+          clearPreviewImageFailed(bookmark.preview_image_url);
+        }
         // Older Android captures marked Reddit's generic EXTRA_TITLE
         // ("Reddit") as user-authored. Preview Refresh is an explicit request
         // to fetch better metadata, so repair that one known provenance mistake

@@ -26,6 +26,7 @@ const mockAuthSessionValue = {
 let mockAuthSession: typeof mockAuthSessionValue | null = null;
 afterEach(() => {
   mockAuthSession = null;
+  resetPreviewImageFailuresForTest();
 });
 jest.mock('@/supabase/auth-provider', () => ({
   useSupabaseAuth: () => ({
@@ -103,6 +104,7 @@ jest.mock('expo-router', () => ({
 
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import { summaryToken } from '@/domain/ai-suggestions';
+import { resetPreviewImageFailuresForTest } from '@/domain/preview-image-cache';
 import { BookmarksProvider } from '@/store/bookmarks';
 import { CaptureToastProvider } from '@/ui/capture-toast';
 import type { FakeRepositoryModule } from './helpers/fake-repository';
@@ -1454,4 +1456,28 @@ test('offers hashtags from the title as one-tap tag suggestions', async () => {
   await waitFor(() => expect(screen.getByLabelText('Browse #목살')).toBeTruthy());
   // ...and it is no longer offered as a suggestion.
   expect(screen.queryByLabelText('Accept suggested tag 목살')).toBeNull();
+});
+
+test('unmounts preview hero when the image fails to load so it does not occupy empty space (STASH-6P)', async () => {
+  mockRouteId = SYNCED_ID;
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Threads post with expired image',
+      url: 'https://threads.net/@user/post/123',
+      preview_image_url: 'https://scontent.cdninstagram.com/expired.jpg',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByTestId('bookmark-detail-preview')).toBeTruthy());
+
+  // Simulate image load error (e.g. 403 Forbidden: URL signature expired)
+  await act(async () => {
+    fireEvent(screen.getByTestId('bookmark-detail-preview'), 'error');
+  });
+
+  await waitFor(() => {
+    expect(screen.queryByTestId('bookmark-detail-preview')).toBeNull();
+  });
 });

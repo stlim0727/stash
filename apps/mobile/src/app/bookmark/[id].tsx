@@ -5,7 +5,9 @@ import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
   Alert,
   Image,
+  type ImageLoadEventData,
   Linking,
+  type NativeSyntheticEvent,
   Platform,
   Pressable,
   ScrollView,
@@ -57,6 +59,11 @@ import {
   dismissSuggestionBundle,
   recordFolderSuggestionActedOn,
 } from '@/domain/suggestion-actions';
+import {
+  didPreviewImageLoad,
+  markPreviewImageFailed,
+  useIsPreviewImageFailed,
+} from '@/domain/preview-image-cache';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 
 // Lines of title shown before collapsing behind a "Show more" toggle.
@@ -159,6 +166,8 @@ export default function BookmarkDetailScreen({
   const id = inlineId ?? routeId;
   const inline = inlineId !== undefined;
   const bookmark = id ? getBookmark(id) : undefined;
+  const rawPreviewUri = bookmark?.local_image_uri ?? bookmark?.preview_image_url ?? null;
+  const isPreviewFailedToLoad = useIsPreviewImageFailed(rawPreviewUri);
   // Retain drafts through blur/menu/preview events until the store confirms
   // the same source and format. A later external update can then show normally.
   useEffect(() => {
@@ -902,10 +911,10 @@ export default function BookmarkDetailScreen({
             </View>
           );
         }
-        if (hidePreviewHero) {
+        if (hidePreviewHero || isPreviewFailedToLoad) {
           return null;
         }
-        const previewUri = bookmark.local_image_uri ?? bookmark.preview_image_url;
+        const previewUri = rawPreviewUri;
         if (!previewUri) {
           return null;
         }
@@ -920,6 +929,12 @@ export default function BookmarkDetailScreen({
               source={{ uri: previewUri }}
               style={styles.preview}
               resizeMode="cover"
+              onError={() => markPreviewImageFailed(previewUri)}
+              onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                  markPreviewImageFailed(previewUri);
+                }
+              }}
             />
           </Pressable>
         ) : (
@@ -928,6 +943,12 @@ export default function BookmarkDetailScreen({
             source={{ uri: previewUri }}
             style={styles.preview}
             resizeMode="cover"
+            onError={() => markPreviewImageFailed(previewUri)}
+            onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+              if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                markPreviewImageFailed(previewUri);
+              }
+            }}
           />
         );
       })()}

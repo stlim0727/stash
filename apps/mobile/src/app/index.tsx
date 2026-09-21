@@ -122,6 +122,12 @@ import {
   type HeaderCollapseState,
 } from '@/domain/header-collapse';
 import { didWordmarkImageLoad, shouldShowWordmarkFallback } from '@/domain/wordmark';
+import {
+  didPreviewImageLoad,
+  isPreviewImageFailed,
+  markPreviewImageFailed,
+  usePreviewImageFailuresVersion,
+} from '@/domain/preview-image-cache';
 import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 
 function statusLabel(
@@ -298,6 +304,7 @@ function CardPreviewFallback({
 
   return (
     <View
+      testID="inbox-card-preview-fallback"
       style={[
         styles.cardPreviewFallback,
         { backgroundColor: palette.mutedSurface },
@@ -557,6 +564,7 @@ const BrowseChip = memo(function BrowseChip({
 });
 
 export default function InboxScreen() {
+  usePreviewImageFailuresVersion();
   const palette = usePalette();
   const t = useT();
   const insets = useSafeAreaInsets();
@@ -3099,7 +3107,8 @@ export default function InboxScreen() {
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.
           if (viewMode === 'list') {
-            const thumbUri = item.local_image_uri ?? item.preview_image_url ?? null;
+            const rawThumbUri = item.local_image_uri ?? item.preview_image_url ?? null;
+            const thumbUri = isPreviewImageFailed(rawThumbUri) ? null : rawThumbUri;
             const compactMeta = metaParts.join('  ·  ');
             return (
               <Pressable
@@ -3135,6 +3144,12 @@ export default function InboxScreen() {
                       testID="inbox-compact-thumb"
                       source={{ uri: thumbUri }}
                       style={[styles.compactThumb, { backgroundColor: palette.mutedSurface }]}
+                      onError={() => markPreviewImageFailed(thumbUri)}
+                      onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                        if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                          markPreviewImageFailed(thumbUri);
+                        }
+                      }}
                     />
                   ) : (
                     <ItemIcon item={item} testID="inbox-list-monogram" />
@@ -3235,7 +3250,8 @@ export default function InboxScreen() {
             );
           }
 
-          const previewUri = item.local_image_uri ?? item.preview_image_url ?? null;
+          const rawPreviewUri = item.local_image_uri ?? item.preview_image_url ?? null;
+          const previewUri = isPreviewImageFailed(rawPreviewUri) ? null : rawPreviewUri;
           const cardElement = (
             <Card style={[styles.card, isOpening ? { borderColor: palette.accent } : null]}>
               <View
@@ -3253,8 +3269,15 @@ export default function InboxScreen() {
                   >
                     {previewUri ? (
                       <Image
+                        testID="inbox-card-preview-image"
                         source={{ uri: previewUri }}
                         style={styles.cardPreview}
+                        onError={() => markPreviewImageFailed(previewUri)}
+                        onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                          if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                            markPreviewImageFailed(previewUri);
+                          }
+                        }}
                       />
                     ) : (
                       <CardPreviewFallback
