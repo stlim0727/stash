@@ -3246,6 +3246,7 @@ export default function InboxScreen() {
                   <Pressable
                     testID="inbox-card-preview"
                     accessible={false}
+                    tabIndex={-1}
                     onPress={openDetail}
                     onLongPress={() => setMenuItem(item)}
                     style={StyleSheet.absoluteFill}
@@ -3271,11 +3272,13 @@ export default function InboxScreen() {
                       hitSlop={6}
                       style={styles.previewRibbon}
                     >
-                      <PostHogMaskView>
-                        <Text style={styles.previewRibbonText} numberOfLines={1}>
-                          {siteLabel(item)}
-                        </Text>
-                      </PostHogMaskView>
+                      <HighlightedText
+                        style={styles.previewRibbonText}
+                        numberOfLines={1}
+                        text={siteLabelText}
+                        query={highlightQuery}
+                        highlightStyle={highlightStyle}
+                      />
                       <Ionicons name="open-outline" size={12} color="#ffffff" />
                     </Pressable>
                   ) : null}
