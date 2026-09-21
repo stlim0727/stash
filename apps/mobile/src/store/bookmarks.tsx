@@ -2876,19 +2876,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           currentDedupeKey(bookmark) === dedupeKey,
       );
       if (existing) {
+        const isRepairable = isRepairableSourceTitle(existing);
         const titleCanBeImproved =
           Boolean(title?.trim()) &&
           (existing.title == null ||
             existing.title_is_derived === true ||
-            isRepairableSourceTitle(existing));
+            isRepairable);
         const updatedTitle = titleCanBeImproved ? title!.trim() : existing.title;
         const updatedTitleDerived = titleCanBeImproved
           ? title_is_derived
-          : existing.title_is_derived;
+          : isRepairable
+            ? true
+            : existing.title_is_derived;
 
         const needsMetadataRefresh =
           Boolean(existing.url) &&
-          (existing.title_is_derived === true || isRepairableSourceTitle(existing));
+          (existing.title_is_derived === true || isRepairable);
 
         const titleChanged = titleCanBeImproved && updatedTitle !== existing.title;
         const syncsRemotely = titleChanged ? hasSyncedOnce(existing.id) : false;
@@ -2923,7 +2926,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         }
 
         if (needsMetadataRefresh) {
-          enrichInBackground(updated);
+          // Clear repairable title on the refresh target so enrichBookmark emits a title patch
+          // even when the incoming duplicate share supplied no title (Codex review)
+          enrichInBackground({
+            ...updated,
+            title: isRepairable && !titleCanBeImproved ? null : updated.title,
+            title_is_derived: isRepairable ? true : updated.title_is_derived,
+          });
         }
 
         return { status: "duplicate", bookmark: updated, persisted };

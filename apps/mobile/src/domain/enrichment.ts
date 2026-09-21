@@ -1,7 +1,7 @@
 // Relative .ts import (not the @ alias) so Node's test runner can resolve it.
 import { fetchPageMetadata } from './page-metadata.ts';
 import type { FetchedMetadata } from './page-metadata.ts';
-import { describeKnownUrl, looksOpaqueId } from './url-title.ts';
+import { describeKnownUrl, isRepairableSourceTitle, looksOpaqueId } from './url-title.ts';
 import { recordLog } from '../observability/log-buffer.ts';
 import type { Bookmark, MetadataStatus } from '@/domain/types';
 
@@ -108,7 +108,10 @@ export async function enrichBookmark(
     // A source app's share-sheet title is generated metadata, not a user edit.
     // It is often only the app/site name (Reddit sends "Reddit"), so let real
     // page metadata improve it while continuing to protect manual titles.
-    if (bookmark.title == null || (bookmark.title_is_derived === true && fetched.title)) {
+    if (
+      bookmark.title == null ||
+      ((bookmark.title_is_derived === true || isRepairableSourceTitle(bookmark)) && fetched.title)
+    ) {
       patch.title = fetched.title ?? derived.title;
       // Record provenance: true when the title came from the URL fallback (no
       // fetched title), false when it's a real fetched page title. Lets the
