@@ -64,3 +64,30 @@ test('native attempt id survives the JavaScript parser', () => {
   assert.match(parser, /\.\.\.shareIntent\.meta/);
   assert.match(parser, /meta: shareIntent\?\.meta \?\? null/);
 });
+
+test('Android activity recreation does not replay stale share intents (STASH-6K)', () => {
+  assert.match(lifecycleListener, /val isRecreation = savedInstanceState != null/);
+  assert.match(
+    lifecycleListener,
+    /val isFromHistory = intent != null && \(intent\.flags and Intent\.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY\) != 0/,
+  );
+  assert.match(
+    lifecycleListener,
+    /if \(!isRecreation && !isFromHistory && intent\?\.type != null\)/,
+  );
+  assert.match(
+    lifecycleListener,
+    /activity\?\.intent = Intent\(Intent\.ACTION_MAIN\)/,
+  );
+});
+
+test('Android native module disarms intent after handling and handles ACTION_VIEW with null type (STASH-6K)', () => {
+  assert.match(
+    nativeModule,
+    /if \(intent\.action == Intent\.ACTION_VIEW && intent\.dataString != null\)/,
+  );
+  assert.match(
+    nativeModule,
+    /activity\?\.intent = Intent\(Intent\.ACTION_MAIN\)/,
+  );
+});

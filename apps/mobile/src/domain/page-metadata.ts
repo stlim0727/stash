@@ -599,6 +599,31 @@ export function youtubeVideoId(rawUrl: string): string | null {
 }
 
 /**
+ * Extract a YouTube playlist id from /playlist?list=... URLs.
+ * Returns null for anything that isn't a recognizable YouTube playlist URL.
+ */
+export function youtubePlaylistId(rawUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.replace(/^www\./, '').replace(/^m\./, '');
+  const isYouTubeHost =
+    host === 'youtube.com' || host === 'youtube-nocookie.com' || host === 'music.youtube.com';
+
+  if (isYouTubeHost) {
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    if (segments[0] === 'playlist') {
+      const list = parsed.searchParams.get('list');
+      return list || null;
+    }
+  }
+  return null;
+}
+
+/**
  * The oEmbed JSON endpoint for a URL, or null when there's no known provider.
  * YouTube ids are normalized to a canonical watch URL so shorts/youtu.be all
  * resolve.
@@ -608,6 +633,11 @@ export function oembedEndpoint(rawUrl: string): string | null {
   if (youtubeId) {
     const watch = `https://www.youtube.com/watch?v=${youtubeId}`;
     return `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(watch)}`;
+  }
+  const playlistId = youtubePlaylistId(rawUrl);
+  if (playlistId) {
+    const playlistUrl = `https://www.youtube.com/playlist?list=${playlistId}`;
+    return `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(playlistUrl)}`;
   }
   try {
     const parsed = new URL(rawUrl);
@@ -688,7 +718,11 @@ function isKnownYoutubeShortenerHost(rawUrl: string): boolean {
 
 /** Whether `checkYoutubeAvailability` can do anything useful with this URL. */
 export function isYoutubeAvailabilityCandidate(rawUrl: string): boolean {
-  return Boolean(youtubeVideoId(rawUrl)) || isKnownYoutubeShortenerHost(rawUrl);
+  return (
+    Boolean(youtubeVideoId(rawUrl)) ||
+    Boolean(youtubePlaylistId(rawUrl)) ||
+    isKnownYoutubeShortenerHost(rawUrl)
+  );
 }
 
 /**
@@ -750,7 +784,11 @@ export async function checkYoutubeAvailability(
 ): Promise<'available' | 'unavailable' | 'unknown'> {
   // oembedEndpoint also supports Reddit previews; availability is specifically
   // a YouTube lifecycle check, so never query another provider here.
-  if (!youtubeVideoId(rawUrl) && !isKnownYoutubeShortenerHost(rawUrl)) {
+  if (
+    !youtubeVideoId(rawUrl) &&
+    !youtubePlaylistId(rawUrl) &&
+    !isKnownYoutubeShortenerHost(rawUrl)
+  ) {
     return 'unknown';
   }
   let endpoint = oembedEndpoint(rawUrl);
