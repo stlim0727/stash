@@ -100,6 +100,72 @@ test('parsePageMetadata returns undefined fields for empty documents', () => {
   assert.equal(meta.preview_image_url, undefined);
 });
 
+test('parsePageMetadata handles unquoted attributes, uppercase tags, and quoted angle brackets', () => {
+  const html = `<HEAD>
+    <META PROPERTY=og:title CONTENT="A > B &copy; &mdash; &#x1F986;">
+    <META PROPERTY=og:site_name CONTENT=Example>
+    <META PROPERTY=og:image CONTENT="/preview?a=1&amp;b=2">
+    <LINK REL=icon HREF="/icon?a=1&amp;b=2">
+  </HEAD>`;
+  assert.deepEqual(parsePageMetadata(html, 'https://example.com/article'), {
+    title: 'A > B © — 🦆',
+    site_name: 'Example',
+    preview_image_url: 'https://example.com/preview?a=1&b=2',
+    favicon_url: 'https://example.com/icon?a=1&b=2',
+  });
+});
+
+test('HTML parsing ignores metadata and discovery links inside comments and scripts', () => {
+  const html = `<head>
+    <!-- <meta property="og:title" content="Comment"><title>Fake</title>
+         <link type="application/json+oembed" href="/fake"> -->
+    <script>const template = '<meta property="og:image" content="/fake.png"><title>Fake</title><link type="application/json+oembed" href="/fake">';</script>
+    <title>Real &copy; title</title>
+    <meta data-property="og:title" content="Wrong attribute">
+    <meta property="og:site_name" content="Real site">
+  </head>`;
+  const meta = parsePageMetadata(html, 'https://example.com/');
+  assert.equal(meta.title, 'Real © title');
+  assert.equal(meta.preview_image_url, undefined);
+  assert.equal(discoverOembedEndpoint(html, 'https://example.com/'), null);
+  assert.equal(htmlHeadSummary(html), 'metas=2 og/tw=[og:site_name] title=true');
+});
+
+test('parsePageMetadata decodes entities once and replaces invalid numeric references', () => {
+  assert.equal(
+    parsePageMetadata('<meta property="og:title" content="&amp;copy; &#x110000;">', 'https://example.com/').title,
+    '&copy; �',
+  );
+  assert.equal(
+    parsePageMetadata('<title>A &amp;copy; &copy; B</title>', 'https://example.com/').title,
+    'A &copy; © B',
+  );
+});
+
+test('parsePageMetadata preserves first nonempty metadata and first title precedence', () => {
+  const html = `<meta property="og:title" content=" ">
+    <meta property="og:title" content="First">
+    <meta property="og:title" content="Second">
+    <meta name="twitter:title" content="Twitter">
+    <title>Document</title>`;
+  assert.equal(parsePageMetadata(html, 'https://example.com/').title, 'First');
+  assert.equal(parsePageMetadata('<title>First</title><title>Second</title>', 'https://example.com/').title, 'First');
+});
+
+test('HTML parsing keeps the bounded prefix for metadata, discovery, and diagnostics', () => {
+  const html = ' '.repeat(512 * 1024) + '<title>Too late</title><meta property="og:title" content="Too late"><link type="application/json+oembed" href="/late">';
+  assert.equal(parsePageMetadata(html, 'https://example.com/').title, undefined);
+  assert.equal(discoverOembedEndpoint(html, 'https://example.com/'), null);
+  assert.equal(htmlHeadSummary(html), 'metas=0 og/tw=[] title=false');
+});
+
+test('discoverOembedEndpoint handles unquoted types and decodes URL entities once', () => {
+  assert.equal(
+    discoverOembedEndpoint('<LINK TYPE=application/json+oembed HREF="/oembed?a=1&amp;b=2">', 'https://example.com/post'),
+    'https://example.com/oembed?a=1&b=2',
+  );
+});
+
 test('discoverOembedEndpoint resolves a provider-independent JSON discovery link', () => {
   assert.equal(
     discoverOembedEndpoint(
