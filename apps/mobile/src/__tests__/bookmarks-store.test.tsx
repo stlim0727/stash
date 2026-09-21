@@ -262,6 +262,50 @@ test("saving the same URL twice reuses the existing bookmark", async () => {
   expect(result.current.inbox[0]!.last_accessed_at).toEqual(expect.any(String));
 });
 
+test("re-sharing an untitled duplicate URL triggers metadata refresh in background", async () => {
+  const { result } = await renderStore();
+
+  await act(async () => {
+    result.current.addBookmark({ url: "https://example.com/untitled" });
+  });
+  await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+
+  mockEnrichBookmark.mockClear();
+
+  let status = "";
+  await act(async () => {
+    status = result.current.addBookmark({
+      url: "https://example.com/untitled",
+    }).status;
+  });
+
+  expect(status).toBe("duplicate");
+  await waitFor(() => expect(mockEnrichBookmark).toHaveBeenCalled());
+});
+
+test("manual title resembling a source-app title is preserved during enrichment", async () => {
+  mockEnrichBookmark.mockImplementation(async () => ({
+    patch: { title: "Fetched Reddit post title", title_is_derived: false },
+    metadata_status: "complete",
+  }));
+  const { result } = await renderStore();
+
+  await act(async () => {
+    result.current.addBookmark({
+      url: "https://www.reddit.com/r/LocalLLaMA/comments/manual/title",
+      title: "Reddit", // Matches isRepairableSourceTitle but user-authored (not derived)
+    });
+  });
+
+  await waitFor(() =>
+    expect(result.current.inbox[0]).toMatchObject({
+      title: "Reddit",
+      title_is_derived: false,
+      metadata_status: "complete",
+    }),
+  );
+});
+
 test("re-sharing a YouTube URL dedupes against a stored row with a stale si hash", async () => {
   // Simulates a local row saved by an older build, before `si` was stripped:
   // its persisted url_hash still carries the old share token and hasn't been

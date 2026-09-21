@@ -2031,9 +2031,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           const safePatch: Partial<Bookmark> = {};
           if (
             patch.title !== undefined &&
-            (latest.title === null ||
-              latest.title_is_derived === true ||
-              isRepairableSourceTitle(latest))
+            (latest.title === null || latest.title_is_derived === true)
           ) {
             safePatch.title = patch.title;
             // Carry the title's provenance alongside it, so a generated fallback
@@ -2891,7 +2889,7 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
 
         const needsMetadataRefresh =
           Boolean(existing.url) &&
-          (existing.title_is_derived === true || isRepairable);
+          (updatedTitle == null || updatedTitleDerived === true || isRepairable);
 
         const titleChanged = titleCanBeImproved && updatedTitle !== existing.title;
         const syncsRemotely = titleChanged ? hasSyncedOnce(existing.id) : false;
@@ -2913,6 +2911,11 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             bookmark.id === existing.id ? updated : bookmark,
           ),
         );
+        if (bookmarksRef.current !== null) {
+          bookmarksRef.current = bookmarksRef.current.map((bookmark) =>
+            bookmark.id === existing.id ? updated : bookmark,
+          );
+        }
         const persisted = ensureRepositoryReady()
           .then(() => repository.updateBookmark(updated))
           .then(() => true)

@@ -333,24 +333,24 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
 - Open PRs as ready for review by default. Use draft only when the user asks or
   the work is knowingly incomplete.
 - **Always rebase feature branches on the latest target branch (`main`) before opening or updating a PR** (`git fetch origin main && git rebase origin/main`). Ensure all local commits apply cleanly over the newest target HEAD prior to pushing or creating the PR.
-- After opening or updating a PR, keep watching while active for CI failures and
-  human review activity. Ignore routine bot/status comments such as deploy
-  preview success messages.
+- After opening or updating a PR, continuously monitor and actively address:
+  - Any review comments or suggestions (including automated reviews from AI agents like Codex, as well as human reviewers). When addressed, post a short reply referencing the fixing commit and mark the thread as resolved.
+  - Any CI failures or build issues.
+  - Any merge conflicts.
+  Stop monitoring after 5 minutes of idle time (once CI is green and no new comments, failures, or conflicts have appeared for 5 minutes). Ignore routine bot/status comments such as deploy preview success messages.
 - When posting manual GitHub comments, PR bodies, or review replies through a
   user's GitHub credentials, explicitly identify the note with the agent's actual identity
   (e.g., Antigravity, Claude, Codex, etc.) so it is clear which AI assistant authored it
   and is not mistaken for the human account owner. Do not duplicate that label
   on platform-generated or automatically-triggered bot comments that already
   identify their source.
-- If CI is green and no human review activity appears for 5 minutes, either ask
+- If CI is green and no review activity appears for 5 minutes, either ask
   the user to merge or merge directly for small, well-tested, low-risk changes.
 - Do not auto-merge PRs that change Supabase migrations/functions,
   auth/session/sync deletion behavior, Cloudflare deploy config, or release
   workflows. Report status and ask.
-- If CI fails or a human review appears, stop the auto-merge path, inspect it,
+- If CI fails or a review appears, stop the auto-merge path, inspect it,
   and either address it or report the blocker.
-- When a commit addresses a review comment, post a short reply on that thread
-  referencing the fixing commit.
 
 ## Verification Status
 
