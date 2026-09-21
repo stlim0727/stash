@@ -43,9 +43,23 @@ export function ShareConfirmHandler() {
     if (!pending) {
       return;
     }
-    show(t('toast.savedCount', { count: pending.savedCount }), {
+    const message =
+      pending.savedCount > 0
+        ? t('toast.savedCount', { count: pending.savedCount })
+        : t('toast.duplicate');
+    const targetRoute =
+      pending.savedCount === 0 && pending.lastBookmarkId
+        ? `/bookmark/${pending.lastBookmarkId}`
+        : '/';
+    show(message, {
       label: t('common.view'),
-      onPress: () => router.replace('/'),
+      onPress: () => {
+        if (targetRoute === '/') {
+          router.replace('/');
+        } else {
+          router.push(targetRoute as any);
+        }
+      },
     });
   }, [show, t, router]);
 

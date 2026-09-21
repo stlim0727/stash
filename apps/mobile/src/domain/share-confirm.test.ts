@@ -43,3 +43,14 @@ test('add accumulates onto an existing record', () => {
 test('add never decrements on a stray negative', () => {
   assert.deepEqual(addPendingShareSave({ savedCount: 2 }, -5), { savedCount: 2 });
 });
+
+test('supports duplicateCount and lastBookmarkId', () => {
+  const record = addPendingShareSave(null, { addedDuplicates: 1, bookmarkId: 'bm-123' });
+  assert.deepEqual(record, { savedCount: 0, duplicateCount: 1, lastBookmarkId: 'bm-123' });
+
+  const serialized = serializePendingShareConfirm(record);
+  assert.deepEqual(parsePendingShareConfirm(serialized), record);
+
+  const accumulated = addPendingShareSave(record, { addedSaves: 1, bookmarkId: 'bm-456' });
+  assert.deepEqual(accumulated, { savedCount: 1, duplicateCount: 1, lastBookmarkId: 'bm-456' });
+});

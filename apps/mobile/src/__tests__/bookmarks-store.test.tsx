@@ -247,6 +247,7 @@ test("saving the same URL twice reuses the existing bookmark", async () => {
     result.current.addBookmark({ url: "example.com/a" });
   });
   await waitFor(() => expect(result.current.inbox).toHaveLength(1));
+  const initialCreatedAt = result.current.inbox[0]!.created_at;
 
   let status = "";
   await act(async () => {
@@ -257,6 +258,8 @@ test("saving the same URL twice reuses the existing bookmark", async () => {
 
   expect(status).toBe("duplicate");
   expect(result.current.inbox).toHaveLength(1);
+  expect(result.current.inbox[0]!.created_at).toBe(initialCreatedAt);
+  expect(result.current.inbox[0]!.last_accessed_at).toEqual(expect.any(String));
 });
 
 test("re-sharing a YouTube URL dedupes against a stored row with a stale si hash", async () => {
