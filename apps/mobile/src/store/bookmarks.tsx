@@ -18,10 +18,8 @@ import { resolveAliasedId } from "@/domain/bookmark-id-swap";
 import { mockUserId } from "@/domain/mock-data";
 import { canonicalizeUrl, isUrlTooLong, normalizeUrl } from "@/domain/urls";
 import { createConcurrencyLimiter } from "@/domain/concurrency";
-import {
-  enrichBookmark,
-  isRepairableSourceTitle,
-} from "@/domain/enrichment";
+import { enrichBookmark } from "@/domain/enrichment";
+import { isRepairableSourceTitle } from "@/domain/url-title";
 import { checkYoutubeAvailability, isYoutubeAvailabilityCandidate } from "@/domain/page-metadata";
 import { isTransientNetworkError } from "@/domain/network-errors";
 import { jwtSubject } from "@/domain/jwt";
@@ -2876,12 +2874,48 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           currentDedupeKey(bookmark) === dedupeKey,
       );
       if (existing) {
-        const updated = { ...existing, last_saved_at: now };
+        const isRepairable = isRepairableSourceTitle(existing);
+        const titleCanBeImproved =
+          Boolean(title?.trim()) &&
+          (existing.title == null ||
+            existing.title_is_derived === true ||
+            isRepairable);
+        const updatedTitle = titleCanBeImproved ? title!.trim() : existing.title;
+        const updatedTitleDerived = titleCanBeImproved
+          ? title_is_derived
+          : isRepairable
+            ? true
+            : existing.title_is_derived;
+
+        const needsMetadataRefresh =
+          Boolean(existing.url) &&
+          (updatedTitle == null || updatedTitleDerived === true || isRepairable);
+
+        const titleChanged = titleCanBeImproved && updatedTitle !== existing.title;
+        const syncsRemotely = titleChanged ? hasSyncedOnce(existing.id) : false;
+
+        const updated: Bookmark = {
+          ...existing,
+          title: updatedTitle,
+          title_is_derived: updatedTitleDerived,
+          last_saved_at: now,
+          last_accessed_at: now,
+          updated_at: titleChanged ? now : existing.updated_at,
+          sync_status: syncsRemotely ? "pending" : existing.sync_status,
+          ever_synced: syncsRemotely ? true : existing.ever_synced,
+          metadata_status: needsMetadataRefresh ? "pending" : existing.metadata_status,
+        };
+
         setBookmarks((current) =>
           (current ?? []).map((bookmark) =>
             bookmark.id === existing.id ? updated : bookmark,
           ),
         );
+        if (bookmarksRef.current !== null) {
+          bookmarksRef.current = bookmarksRef.current.map((bookmark) =>
+            bookmark.id === existing.id ? updated : bookmark,
+          );
+        }
         const persisted = ensureRepositoryReady()
           .then(() => repository.updateBookmark(updated))
           .then(() => true)
@@ -2889,7 +2923,22 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             logStorageError("duplicate save", error);
             return false;
           });
-        return { status: "duplicate", bookmark: existing, persisted };
+
+        if (syncsRemotely) {
+          enqueueMutation(existing.id, "update");
+        }
+
+        if (needsMetadataRefresh) {
+          // Clear repairable title on the refresh target so enrichBookmark emits a title patch
+          // even when the incoming duplicate share supplied no title (Codex review)
+          enrichInBackground({
+            ...updated,
+            title: isRepairable && !titleCanBeImproved ? null : updated.title,
+            title_is_derived: isRepairable ? true : updated.title_is_derived,
+          });
+        }
+
+        return { status: "duplicate", bookmark: updated, persisted };
       }
 
       const clientId = makeClientId();

@@ -3,6 +3,7 @@ import {
   parsePendingShareConfirm,
   serializePendingShareConfirm,
   SHARE_CONFIRM_PREF_KEY,
+  type AddPendingShareOptions,
   type PendingShareConfirm,
 } from '@/domain/share-confirm';
 import { getPreference, setPreference } from '@/storage/preferences';
@@ -18,15 +19,15 @@ import { getPreference, setPreference } from '@/storage/preferences';
  */
 
 /**
- * Record that `addedSaves` genuinely new item(s) were stashed, accumulating
- * onto anything not yet confirmed. Awaitable on purpose: the share handler
- * must let this write settle *before* it dismisses the app, or `exitApp()`
- * could cut it off and the reopened app would have nothing to confirm.
+ * Record that item(s) were stashed/confirmed, accumulating onto anything not
+ * yet confirmed. Awaitable on purpose: the share handler must let this write
+ * settle *before* it dismisses the app, or `exitApp()` could cut it off and
+ * the reopened app would have nothing to confirm.
  */
-export async function recordPendingShareConfirm(addedSaves = 1): Promise<void> {
+export async function recordPendingShareConfirm(added: AddPendingShareOptions = 1): Promise<void> {
   try {
     const prev = parsePendingShareConfirm(await getPreference(SHARE_CONFIRM_PREF_KEY));
-    const next = addPendingShareSave(prev, addedSaves);
+    const next = addPendingShareSave(prev, added);
     await setPreference(SHARE_CONFIRM_PREF_KEY, serializePendingShareConfirm(next));
   } catch {
     // Best-effort — never let confirmation bookkeeping interfere with capture.

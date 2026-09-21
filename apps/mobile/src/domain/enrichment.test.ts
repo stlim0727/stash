@@ -114,6 +114,20 @@ test('enrichBookmark improves a generated source-app title (STASH-6C)', async ()
   assert.equal(result.patch.title_is_derived, false);
 });
 
+test('enrichBookmark improves a legacy repairable source-app title even when title_is_derived is false', async () => {
+  const result = await enrichBookmark(
+    makeBookmark({
+      url: 'https://news.hada.io/topic?id=29576',
+      title: 'Topic',
+      title_is_derived: false,
+    }),
+    async () => ({ title: 'Real Article Title', site_name: 'GeekNews' }),
+  );
+
+  assert.equal(result.patch.title, 'Real Article Title');
+  assert.equal(result.patch.title_is_derived, false);
+});
+
 test('enrichBookmark keeps a useful source-app title when fetching yields no title', async () => {
   const result = await enrichBookmark(
     makeBookmark({ title: 'A useful shared article title', title_is_derived: true }),

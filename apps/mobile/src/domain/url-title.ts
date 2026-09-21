@@ -131,6 +131,34 @@ export function describeKnownUrl(rawUrl: string): UrlTitle | null {
 }
 
 /**
+ * A sender-generated title that older builds incorrectly marked user-authored.
+ * Keep this deliberately narrow: it is used only when the user explicitly
+ * requests Preview Refresh or re-saves a duplicate, so ordinary startup work
+ * never guesses about title ownership or rewrites a legitimate edit.
+ */
+export function isRepairableSourceTitle(bookmark: { url: string | null; title: string | null }): boolean {
+  if (!bookmark.title || !bookmark.url) {
+    return false;
+  }
+  const trimmed = bookmark.title.trim().toLowerCase();
+  try {
+    const host = new URL(bookmark.url).hostname.toLowerCase();
+    if (trimmed === 'reddit' && (host === 'reddit.com' || host.endsWith('.reddit.com'))) {
+      return true;
+    }
+    if (
+      trimmed === 'topic' &&
+      (host === 'news.hada.io' || host.endsWith('.news.hada.io'))
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Does a path segment read like an opaque id (`Dabls52E90n`, `MEvcN4Nwa1g`, a
  * long hash, a numeric id) rather than human words? Such a segment makes a poor
  * title — it looks random — so the caller prefers the host over Title-Casing

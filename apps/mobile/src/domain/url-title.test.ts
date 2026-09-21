@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { describeKnownUrl, looksOpaqueId } from './url-title.ts';
+import { describeKnownUrl, isRepairableSourceTitle, looksOpaqueId } from './url-title.ts';
 
 test('describeKnownUrl labels a YouTube link with a derived thumbnail', () => {
   const shorts = describeKnownUrl('https://youtube.com/shorts/0JE4ngPfYo4');
@@ -81,4 +81,38 @@ test('looksOpaqueId flags id-shaped segments but not real words', () => {
   assert.equal(looksOpaqueId('html5'), false);
   assert.equal(looksOpaqueId('internationalization'), false);
   assert.equal(looksOpaqueId('한국어로된아주긴제목입니다정말로'), false);
+});
+
+test('describeKnownUrl returns null for news.hada.io host', () => {
+  assert.equal(
+    describeKnownUrl('https://news.hada.io/topic?id=29576'),
+    null,
+  );
+  assert.equal(
+    describeKnownUrl('https://hada.io/about'),
+    null,
+  );
+});
+
+test('isRepairableSourceTitle recognizes legacy Reddit and GeekNews Topic placeholders', () => {
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://www.reddit.com/r/react/123', title: 'Reddit' }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://news.hada.io/topic?id=29576', title: 'Topic' }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://news.hada.io/topic?id=29576', title: 'topic' }),
+    true,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://news.hada.io/topic?id=29576', title: 'Real Article Title' }),
+    false,
+  );
+  assert.equal(
+    isRepairableSourceTitle({ url: 'https://example.com/topic', title: 'Topic' }),
+    false,
+  );
 });

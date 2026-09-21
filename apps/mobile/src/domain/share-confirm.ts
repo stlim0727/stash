@@ -20,7 +20,19 @@ export const SHARE_CONFIRM_PREF_KEY = 'pref.share.pendingConfirm';
 export interface PendingShareConfirm {
   /** How many genuinely new items were stashed since the last confirmation. */
   savedCount: number;
+  /** How many duplicate items were confirmed since the last confirmation. */
+  duplicateCount?: number;
+  /** The most recently saved/confirmed bookmark id (for jumping directly to it). */
+  lastBookmarkId?: string;
 }
+
+export type AddPendingShareOptions =
+  | number
+  | {
+      addedSaves?: number;
+      addedDuplicates?: number;
+      bookmarkId?: string;
+    };
 
 /**
  * Parse a stored record. Returns `null` for anything missing, malformed, or
@@ -32,19 +44,43 @@ export function parsePendingShareConfirm(raw: string | null | undefined): Pendin
     return null;
   }
   try {
-    const data = JSON.parse(raw) as { savedCount?: unknown };
+    const data = JSON.parse(raw) as {
+      savedCount?: unknown;
+      duplicateCount?: unknown;
+      lastBookmarkId?: unknown;
+    };
     const savedCount =
       typeof data?.savedCount === 'number' && Number.isFinite(data.savedCount)
         ? Math.floor(data.savedCount)
         : 0;
-    return savedCount > 0 ? { savedCount } : null;
+    const duplicateCount =
+      typeof data?.duplicateCount === 'number' && Number.isFinite(data.duplicateCount)
+        ? Math.floor(data.duplicateCount)
+        : 0;
+    const lastBookmarkId =
+      typeof data?.lastBookmarkId === 'string' && data.lastBookmarkId.trim()
+        ? data.lastBookmarkId.trim()
+        : undefined;
+
+    if (savedCount <= 0 && duplicateCount <= 0) {
+      return null;
+    }
+    return {
+      savedCount: Math.max(0, savedCount),
+      ...(duplicateCount > 0 ? { duplicateCount } : {}),
+      ...(lastBookmarkId ? { lastBookmarkId } : {}),
+    };
   } catch {
     return null;
   }
 }
 
 export function serializePendingShareConfirm(value: PendingShareConfirm): string {
-  return JSON.stringify({ savedCount: value.savedCount });
+  return JSON.stringify({
+    savedCount: value.savedCount,
+    ...(value.duplicateCount && value.duplicateCount > 0 ? { duplicateCount: value.duplicateCount } : {}),
+    ...(value.lastBookmarkId ? { lastBookmarkId: value.lastBookmarkId } : {}),
+  });
 }
 
 /**
@@ -52,7 +88,25 @@ export function serializePendingShareConfirm(value: PendingShareConfirm): string
  * stack up before the app is reopened (each Android share launches, saves, and
  * exits on its own), so counts accumulate rather than overwrite.
  */
-export function addPendingShareSave(prev: PendingShareConfirm | null, added = 1): PendingShareConfirm {
-  const base = prev?.savedCount ?? 0;
-  return { savedCount: base + Math.max(0, Math.floor(added)) };
+export function addPendingShareSave(
+  prev: PendingShareConfirm | null,
+  added: AddPendingShareOptions = 1,
+): PendingShareConfirm {
+  const isNum = typeof added === 'number';
+  const rawSaves = isNum ? added : (added.addedSaves ?? 0);
+  const rawDuplicates = isNum ? 0 : (added.addedDuplicates ?? 0);
+  const stepSaves = Math.max(0, Math.floor(rawSaves));
+  const stepDuplicates = Math.max(0, Math.floor(rawDuplicates));
+  const bookmarkId = isNum ? prev?.lastBookmarkId : (added.bookmarkId ?? prev?.lastBookmarkId);
+
+  const baseSaves = prev?.savedCount ?? 0;
+  const baseDuplicates = prev?.duplicateCount ?? 0;
+  const nextSaves = baseSaves + stepSaves;
+  const nextDuplicates = baseDuplicates + stepDuplicates;
+
+  return {
+    savedCount: nextSaves,
+    ...(nextDuplicates > 0 ? { duplicateCount: nextDuplicates } : {}),
+    ...(nextSaves > 0 || nextDuplicates > 0 ? (bookmarkId ? { lastBookmarkId: bookmarkId } : {}) : {}),
+  };
 }

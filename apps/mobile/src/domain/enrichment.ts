@@ -1,7 +1,7 @@
 // Relative .ts import (not the @ alias) so Node's test runner can resolve it.
 import { fetchPageMetadata } from './page-metadata.ts';
 import type { FetchedMetadata } from './page-metadata.ts';
-import { describeKnownUrl, looksOpaqueId } from './url-title.ts';
+import { describeKnownUrl, isRepairableSourceTitle, looksOpaqueId } from './url-title.ts';
 import { recordLog } from '../observability/log-buffer.ts';
 import type { Bookmark, MetadataStatus } from '@/domain/types';
 
@@ -76,23 +76,7 @@ export interface EnrichmentResult {
 
 export type MetadataFetcher = (url: string) => Promise<FetchedMetadata | null>;
 
-/**
- * A sender-generated title that older builds incorrectly marked user-authored.
- * Keep this deliberately narrow: it is used only when the user explicitly
- * requests Preview Refresh, so ordinary startup work never guesses about title
- * ownership or rewrites a legitimate edit.
- */
-export function isRepairableSourceTitle(bookmark: Pick<Bookmark, 'url' | 'title'>): boolean {
-  if (bookmark.title?.trim().toLowerCase() !== 'reddit' || !bookmark.url) {
-    return false;
-  }
-  try {
-    const host = new URL(bookmark.url).hostname.toLowerCase();
-    return host === 'reddit.com' || host.endsWith('.reddit.com');
-  } catch {
-    return false;
-  }
-}
+export { isRepairableSourceTitle } from './url-title.ts';
 
 /**
  * Produces an enrichment patch for a bookmark. Only fills generated fields
@@ -124,7 +108,10 @@ export async function enrichBookmark(
     // A source app's share-sheet title is generated metadata, not a user edit.
     // It is often only the app/site name (Reddit sends "Reddit"), so let real
     // page metadata improve it while continuing to protect manual titles.
-    if (bookmark.title == null || (bookmark.title_is_derived === true && fetched.title)) {
+    if (
+      bookmark.title == null ||
+      ((bookmark.title_is_derived === true || isRepairableSourceTitle(bookmark)) && fetched.title)
+    ) {
       patch.title = fetched.title ?? derived.title;
       // Record provenance: true when the title came from the URL fallback (no
       // fetched title), false when it's a real fetched page title. Lets the

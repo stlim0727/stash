@@ -309,7 +309,15 @@ export function ShareIntentHandler() {
         // row, so they must not block the duplicate toast or Inbox navigation.
         const newCaptureFailed =
           result.status === 'created' && (await persisted) === false;
-        show(newCaptureFailed ? t('toast.saveFailed') : message);
+        show(
+          newCaptureFailed ? t('toast.saveFailed') : message,
+          result.status === 'duplicate' && result.bookmark?.id
+            ? {
+                label: t('common.view'),
+                onPress: () => router.push(`/bookmark/${result.bookmark.id}`),
+              }
+            : undefined,
+        );
         if (!newCaptureFailed) {
           router.replace('/');
         }
@@ -339,19 +347,31 @@ export function ShareIntentHandler() {
         // actually self-dismiss (Android): on iOS/web we fall through to an
         // in-app toast + Inbox below, which already confirms the save, so a
         // record there would surface a stale "saved" toast on the next launch.
-        if (isNewSave && canDismissAfterShare()) {
-          await recordPendingShareConfirm();
+        if (canDismissAfterShare()) {
+          if (isNewSave) {
+            await recordPendingShareConfirm();
+          } else if (result.status === 'duplicate' && result.bookmark?.id) {
+            await recordPendingShareConfirm({ addedDuplicates: 1, bookmarkId: result.bookmark.id });
+          }
         }
         await analytics.flush();
         if (await dismissAfterShare(message)) {
           return;
         }
         // Revert the confirmation if self-dismissal failed, so reopening does not show a stale toast
-        if (isNewSave && canDismissAfterShare()) {
+        if (canDismissAfterShare()) {
           await takePendingShareConfirm();
         }
       }
-      show(message);
+      show(
+        message,
+        result.status === 'duplicate' && result.bookmark?.id
+          ? {
+              label: t('common.view'),
+              onPress: () => router.push(`/bookmark/${result.bookmark.id}`),
+            }
+          : undefined,
+      );
       router.replace('/');
     })();
   }, [pendingShare, isLoading, addBookmark, router, show, t]);
