@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState, type ComponentProps } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   type ImageLoadEventData,
@@ -160,6 +161,30 @@ export default function BookmarkDetailScreen({
   useEffect(() => {
     return () => {
       setOrganizeError(null);
+    };
+  }, []);
+
+  const [isOpeningLink, setIsOpeningLink] = useState(false);
+  const openLinkTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // External browsers or apps can take a moment to launch. Clear the busy
+  // overlay when returning to the app or when screen gains focus so the
+  // preview never stays stuck in its loading state.
+  useFocusEffect(
+    useCallback(() => {
+      if (openLinkTimeout.current !== null) {
+        clearTimeout(openLinkTimeout.current);
+        openLinkTimeout.current = null;
+      }
+      setIsOpeningLink(false);
+    }, []),
+  );
+
+  useEffect(() => {
+    return () => {
+      if (openLinkTimeout.current !== null) {
+        clearTimeout(openLinkTimeout.current);
+      }
     };
   }, []);
 
@@ -813,10 +838,24 @@ export default function BookmarkDetailScreen({
 
   const handleOpenLink = () => {
     if (bookmark.url) {
+      if (isOpeningLink) {
+        return;
+      }
+      setIsOpeningLink(true);
       markBookmarkAccessed(bookmark.id);
-      void Linking.openURL(bookmark.url).catch(() => {
-        setOrganizeError(t('detail.errorOpen'));
-      });
+      void Linking.openURL(bookmark.url)
+        .catch(() => {
+          setOrganizeError(t('detail.errorOpen'));
+        })
+        .finally(() => {
+          if (openLinkTimeout.current !== null) {
+            clearTimeout(openLinkTimeout.current);
+          }
+          openLinkTimeout.current = setTimeout(() => {
+            setIsOpeningLink(false);
+            openLinkTimeout.current = null;
+          }, 1200);
+        });
     }
   };
 
@@ -920,9 +959,18 @@ export default function BookmarkDetailScreen({
         }
         return bookmark.url ? (
           <Pressable
+            testID="bookmark-detail-preview-pressable"
             accessibilityRole="link"
             accessibilityLabel={t('common.openLink')}
+            accessibilityHint={t('inbox.openBookmarkHint')}
+            accessibilityState={{ busy: isOpeningLink }}
             onPress={handleOpenLink}
+            style={({ pressed }) => [
+              styles.previewContainer,
+              { backgroundColor: palette.mutedSurface },
+              pressed && styles.previewPressed,
+              isOpeningLink && { borderColor: palette.accent },
+            ]}
           >
             <Image
               testID="bookmark-detail-preview"
@@ -936,20 +984,41 @@ export default function BookmarkDetailScreen({
                 }
               }}
             />
+            <View
+              testID="bookmark-detail-preview-ribbon"
+              style={styles.previewRibbon}
+              pointerEvents="none"
+            >
+              <Text style={styles.previewRibbonText} numberOfLines={1}>
+                {host ?? t('common.open')}
+              </Text>
+              <Ionicons name="open-outline" size={12} color="#ffffff" />
+            </View>
+            {isOpeningLink ? (
+              <View
+                testID="bookmark-detail-preview-opening"
+                pointerEvents="auto"
+                style={[styles.previewOpeningOverlay, { backgroundColor: palette.accentSoft }]}
+              >
+                <ActivityIndicator color={palette.accent} />
+              </View>
+            ) : null}
           </Pressable>
         ) : (
-          <Image
-            testID="bookmark-detail-preview"
-            source={{ uri: previewUri }}
-            style={styles.preview}
-            resizeMode="cover"
-            onError={() => markPreviewImageFailed(previewUri)}
-            onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-              if (!didPreviewImageLoad(event.nativeEvent.source)) {
-                markPreviewImageFailed(previewUri);
-              }
-            }}
-          />
+          <View style={[styles.previewContainer, { backgroundColor: palette.mutedSurface }]}>
+            <Image
+              testID="bookmark-detail-preview"
+              source={{ uri: previewUri }}
+              style={styles.preview}
+              resizeMode="cover"
+              onError={() => markPreviewImageFailed(previewUri)}
+              onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
+                if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                  markPreviewImageFailed(previewUri);
+                }
+              }}
+            />
+          </View>
         );
       })()}
       {/* Compact byline: favicon · host · status, instead of a header card. */}
@@ -1064,7 +1133,13 @@ export default function BookmarkDetailScreen({
 
       <View style={styles.actionBar}>
         {bookmark.url ? (
-          <ActionButton icon="open-outline" label={t('common.open')} tint={palette.accent} onPress={handleOpenLink} />
+          <ActionButton
+            icon="open-outline"
+            label={t('common.open')}
+            tint={palette.accent}
+            disabled={busy || isOpeningLink}
+            onPress={handleOpenLink}
+          />
         ) : null}
         {bookmark.video_unavailable ? (
           <ActionButton
@@ -1520,6 +1595,53 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: -8,
+  },
+  previewContainer: {
+    position: 'relative',
+    width: '100%',
+    height: 220,
+    borderRadius: 28,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'transparent',
+  },
+  previewPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.985 }],
+  },
+  previewOpeningOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.82,
+  },
+  previewRibbon: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    maxWidth: '75%',
+    ...Platform.select({
+      web: {
+        backdropFilter: 'blur(8px)',
+      },
+    }),
+  },
+  previewRibbonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
+    flexShrink: 1,
   },
   preview: {
     width: '100%',

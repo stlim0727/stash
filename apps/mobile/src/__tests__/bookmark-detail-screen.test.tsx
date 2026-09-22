@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import { Linking } from 'react-native';
 import { useState, type ReactNode } from 'react';
 
@@ -91,16 +91,20 @@ const mockNavigate = jest.fn();
 const mockDismissTo = jest.fn();
 // The detail screen reads the bookmark id from the route; tests set it.
 let mockRouteId = 'bookmark-raindrop';
-jest.mock('expo-router', () => ({
-  useRouter: () => ({
-    navigate: mockNavigate,
-    dismissTo: mockDismissTo,
-    push: jest.fn(),
-    back: jest.fn(),
-    replace: jest.fn(),
-  }),
-  useLocalSearchParams: () => ({ id: mockRouteId }),
-}));
+jest.mock('expo-router', () => {
+  const { useEffect } = require('react');
+  return {
+    useRouter: () => ({
+      navigate: mockNavigate,
+      dismissTo: mockDismissTo,
+      push: jest.fn(),
+      back: jest.fn(),
+      replace: jest.fn(),
+    }),
+    useLocalSearchParams: () => ({ id: mockRouteId }),
+    useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, []),
+  };
+});
 
 import BookmarkDetailScreen from '@/app/bookmark/[id]';
 import { summaryToken } from '@/domain/ai-suggestions';
@@ -189,6 +193,51 @@ test('tapping the preview image opens the bookmark link', async () => {
   await fireEvent.press(screen.getByLabelText('Open link'));
 
   expect(openURL).toHaveBeenCalledWith('https://www.inkandswitch.com/local-first/');
+  openURL.mockRestore();
+});
+
+test('preview image displays affordance ribbon and shows busy progress overlay when tapped', async () => {
+  mockRouteId = SYNCED_ID;
+  let resolveOpenUrl: () => void = () => {};
+  const openUrlPromise = new Promise<void>((resolve) => {
+    resolveOpenUrl = resolve;
+  });
+  const openURL = jest.spyOn(Linking, 'openURL').mockReturnValue(openUrlPromise);
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: SYNCED_ID,
+      title: 'Local-first software',
+      url: 'https://www.inkandswitch.com/local-first/',
+      url_hash: 'https://www.inkandswitch.com/local-first/',
+      preview_image_url: 'https://example.com/preview.png',
+    }),
+  ]);
+
+  const screen = await renderDetail();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  // Affordance ribbon shows hostname
+  const ribbon = screen.getByTestId('bookmark-detail-preview-ribbon');
+  expect(ribbon).toBeTruthy();
+  expect(within(ribbon).getByText('inkandswitch.com')).toBeTruthy();
+
+  // Initially not busy
+  const pressable = screen.getByTestId('bookmark-detail-preview-pressable');
+  expect(pressable.props.accessibilityState).toEqual({ busy: false });
+  expect(screen.queryByTestId('bookmark-detail-preview-opening')).toBeNull();
+
+  // Tap preview image
+  await fireEvent.press(pressable);
+
+  // Now busy with opening overlay
+  expect(pressable.props.accessibilityState).toEqual({ busy: true });
+  expect(screen.getByTestId('bookmark-detail-preview-opening')).toBeTruthy();
+
+  // Resolve opening
+  await act(async () => {
+    resolveOpenUrl();
+  });
+
   openURL.mockRestore();
 });
 
