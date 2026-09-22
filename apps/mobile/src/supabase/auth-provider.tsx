@@ -240,7 +240,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   // Tag crash/error reports with the anonymous user id (opaque — no PII) so
   // events can be grouped per device. No-op until Sentry is configured.
   const userId = session?.user.id ?? null;
-  const { locale } = useI18n();
+  const { locale, isHydrated } = useI18n();
   useEffect(() => {
     setSentryUser(userId);
   }, [userId]);
@@ -287,22 +287,45 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   // Stamp the user's language preference into public.user_preferences and
   // user_metadata so server-side triggers (like dispatch_ai_enrichment) know
   // which language to enrich bookmarks in. Fire-and-forget, never throws.
+  //
+  // Gate on `isHydrated` so we don't publish the temporary fallback device locale
+  // while the stored language override is still loading from disk.
+  // Serialize writes and check sequence numbers to prevent superseded writes
+  // from completing out of order and overwriting newer preferences.
+  const localeWriteSeq = useRef(0);
+  const localeWritePromise = useRef<Promise<void>>(Promise.resolve());
+
   useEffect(() => {
-    if (status !== 'anonymous' && status !== 'authenticated') {
+    if (!isHydrated || (status !== 'anonymous' && status !== 'authenticated')) {
       return;
     }
     const active = sessionRef.current;
     if (!active) {
       return;
     }
+    const seq = ++localeWriteSeq.current;
     const client = createSupabaseClient();
-    void trackUserPreferences({
-      client,
-      session: active,
-      locale,
-      now: new Date().toISOString(),
-    });
-  }, [userId, status, locale]);
+    localeWritePromise.current = localeWritePromise.current
+      .catch(() => {})
+      .then(async () => {
+        if (seq !== localeWriteSeq.current) {
+          return;
+        }
+        const currentSession = sessionRef.current;
+        if (!currentSession) {
+          return;
+        }
+        if (statusRef.current !== 'anonymous' && statusRef.current !== 'authenticated') {
+          return;
+        }
+        await trackUserPreferences({
+          client,
+          session: currentSession,
+          locale,
+          now: new Date().toISOString(),
+        });
+      });
+  }, [userId, status, locale, isHydrated]);
 
   const email = session?.user.email ?? null;
   const metadata = session?.user.user_metadata;

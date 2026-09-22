@@ -21,14 +21,16 @@ import { LOCALE_PREF_KEY } from '@/i18n/locale';
 const repoMock = require('@/storage/repository') as {
   __reset: () => void;
   __meta: (key: string) => string | null;
+  __setMeta: (key: string, value: string) => void;
 };
 
 function Probe() {
-  const { t, locale, setLocalePreference } = useI18n();
+  const { t, locale, setLocalePreference, isHydrated } = useI18n();
   return (
     <>
       <Text testID="label">{t('common.cancel')}</Text>
       <Text testID="locale">{locale}</Text>
+      <Text testID="hydrated">{String(isHydrated)}</Text>
       <Pressable testID="to-ko" onPress={() => setLocalePreference('ko')}>
         <Text>ko</Text>
       </Pressable>
@@ -43,9 +45,10 @@ beforeEach(() => {
   mockState.locales = [{ languageTag: 'en-US', languageCode: 'en' }];
 });
 
-test('renders the device locale (English) by default', async () => {
+test('renders the device locale (English) by default and reports isHydrated', async () => {
   const screen = await wrap(<Probe />);
-  await waitFor(() => expect(screen.getByTestId('locale').props.children).toBe('en'));
+  await waitFor(() => expect(screen.getByTestId('hydrated').props.children).toBe('true'));
+  expect(screen.getByTestId('locale').props.children).toBe('en');
   expect(screen.getByTestId('label').props.children).toBe('Cancel');
 });
 
@@ -67,4 +70,12 @@ test('a manual override switches language and is persisted', async () => {
   await waitFor(() => expect(screen.getByTestId('label').props.children).toBe('취소'));
   expect(screen.getByTestId('locale').props.children).toBe('ko');
   await waitFor(() => expect(repoMock.__meta(LOCALE_PREF_KEY)).toBe('ko'));
+});
+
+test('exposes isHydrated and loads stored override on hydration', async () => {
+  repoMock.__setMeta(LOCALE_PREF_KEY, 'ko');
+  const screen = await wrap(<Probe />);
+  await waitFor(() => expect(screen.getByTestId('hydrated').props.children).toBe('true'));
+  expect(screen.getByTestId('locale').props.children).toBe('ko');
+  expect(screen.getByTestId('label').props.children).toBe('취소');
 });

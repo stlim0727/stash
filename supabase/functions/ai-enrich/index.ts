@@ -176,6 +176,35 @@ async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefine
   }
 }
 
+/**
+ * Look up the user's preferred locale from `auth.users.raw_user_meta_data` via
+ * the GoTrue admin API (service-role). Used as a fallback when `public.user_preferences`
+ * does not have a row or the table lookup failed, mirroring the metadata fallback
+ * in the database trigger `dispatch_ai_enrichment`.
+ */
+async function fetchOwnerLocaleFromMetadata(userId: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      headers: {
+        apikey: SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      },
+    });
+    if (!res.ok) {
+      return undefined;
+    }
+    const user = (await res.json()) as { user_metadata?: Record<string, unknown> };
+    const locale = user.user_metadata?.locale;
+    if (typeof locale === 'string' && locale.trim()) {
+      return locale.trim();
+    }
+    return undefined;
+  } catch (err) {
+    console.error('Owner locale metadata lookup threw:', err);
+    return undefined;
+  }
+}
+
 // ── Overflow-queue batch worker (STASH #578 Phase 2) ────────────────────────
 // Triggered only by the pg_cron dispatch in the pending_ai_enrichment_queue
 // migration (see runBatchWorker's call site above). Everything below is
@@ -275,6 +304,9 @@ async function loadEnrichmentContextForUser(
     if (typeof pref?.locale === 'string' && pref.locale.trim()) {
       userLocale = pref.locale.trim();
     }
+  }
+  if (!userLocale) {
+    userLocale = (await fetchOwnerLocaleFromMetadata(userId)) ?? null;
   }
   if (activeRes.ok && tagRes.ok) {
     const activeIds = new Set(
@@ -958,6 +990,9 @@ Deno.serve(async (req) => {
       if (typeof pref?.locale === 'string' && pref.locale.trim()) {
         resolvedLocale = pref.locale.trim();
       }
+    }
+    if (!resolvedLocale) {
+      resolvedLocale = (await fetchOwnerLocaleFromMetadata(bookmark.user_id)) ?? undefined;
     }
     if (activeRes.ok && tagRes.ok) {
       const activeIds = new Set(
