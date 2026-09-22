@@ -191,16 +191,27 @@ export class StashSupabaseClient {
   constructor(private readonly config: SupabaseConfig = requireConfig()) {}
 
   async request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
-    const response = await fetch(`${this.config.url}${path}`, {
-      method: options.method ?? 'GET',
-      headers: {
-        apikey: this.config.anonKey,
-        Authorization: `Bearer ${options.accessToken ?? this.config.anonKey}`,
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    if (typeof timeout === 'object' && typeof timeout.unref === 'function') {
+      timeout.unref();
+    }
+    let response: Response;
+    try {
+      response = await fetch(`${this.config.url}${path}`, {
+        method: options.method ?? 'GET',
+        headers: {
+          apikey: this.config.anonKey,
+          Authorization: `Bearer ${options.accessToken ?? this.config.anonKey}`,
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+        body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     const payload = await parseResponse(response);
     if (!response.ok) {
@@ -407,11 +418,14 @@ export class StashSupabaseClient {
   /**
    * Fetch the user's preferences from `public.user_preferences`.
    */
-  async getUserPreferences(accessToken: string): Promise<{ locale?: string } | null> {
-    const rows = await this.request<Array<{ locale?: string }>>('/rest/v1/user_preferences?select=locale&limit=1', {
-      method: 'GET',
-      accessToken,
-    });
+  async getUserPreferences(accessToken: string): Promise<{ locale?: string; preference?: string } | null> {
+    const rows = await this.request<Array<{ locale?: string; preference?: string }>>(
+      '/rest/v1/user_preferences?select=locale,preference&limit=1',
+      {
+        method: 'GET',
+        accessToken,
+      },
+    );
     return rows[0] ?? null;
   }
 

@@ -305,6 +305,8 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   const reconciledUserIdRef = useRef<string | null>(null);
   const localeWriteSeq = useRef(0);
   const localePublicationPromise = useRef<Promise<void>>(Promise.resolve());
+  const preferenceRef = useRef(preference);
+  preferenceRef.current = preference;
 
   useEffect(() => {
     if (!isHydrated || (status !== 'anonymous' && status !== 'authenticated')) {
@@ -318,46 +320,69 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     const seq = ++localeWriteSeq.current;
     const client = createSupabaseClient();
 
+    const task = async () => {
+      if (seq !== localeWriteSeq.current) {
+        return;
+      }
+      const currentSession = sessionRef.current;
+      if (!currentSession || currentSession.user.id !== currentUserId) {
+        return;
+      }
+      if (statusRef.current !== 'anonymous' && statusRef.current !== 'authenticated') {
+        return;
+      }
+
+      // On first connection to this account on this device, check if the account already has
+      // a stored preference on the server (Comment 4 & Comment 2).
+      if (reconciledUserIdRef.current !== currentUserId) {
+        reconciledUserIdRef.current = currentUserId;
+        try {
+          const remote = await client.getUserPreferences(currentSession.access_token);
+          // Revalidate post-request before calling setter! (Comment 1)
+          if (
+            seq !== localeWriteSeq.current ||
+            sessionRef.current?.user.id !== currentUserId ||
+            (statusRef.current !== 'anonymous' && statusRef.current !== 'authenticated') ||
+            preferenceRef.current !== 'system'
+          ) {
+            return;
+          }
+          // Only adopt if remote preference is an explicit supported locale ('en' | 'ko').
+          // Never overwrite local 'system' mode if the remote preference was 'system' or unset! (Comment 2)
+          const remotePref = remote?.preference ?? currentSession.user.user_metadata?.preference;
+          if (remotePref && isSupportedLocale(remotePref)) {
+            await setLocalePreference(remotePref);
+            return;
+          }
+        } catch {
+          // Best effort: proceed with local preference if server check fails
+        }
+      }
+
+      await trackUserPreferences({
+        client,
+        session: currentSession,
+        locale,
+        preference,
+        now: new Date().toISOString(),
+      });
+    };
+
+    // Bound serialized publication requests with a 5-second timeout so a hanging
+    // network request can never block the promise chain indefinitely (Comment 3).
+    const boundedTask = Promise.race([
+      task(),
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 5000);
+        if (typeof t === 'object' && typeof t.unref === 'function') {
+          t.unref();
+        }
+      }),
+    ]);
+
     localePublicationPromise.current = localePublicationPromise.current
       .catch(() => {})
-      .then(async () => {
-        if (seq !== localeWriteSeq.current) {
-          return;
-        }
-        const currentSession = sessionRef.current;
-        if (!currentSession || currentSession.user.id !== currentUserId) {
-          return;
-        }
-        if (statusRef.current !== 'anonymous' && statusRef.current !== 'authenticated') {
-          return;
-        }
-
-        // On first connection to this account on this device, check if the account already has
-        // a stored preference on the server (Comment 4).
-        if (reconciledUserIdRef.current !== currentUserId) {
-          reconciledUserIdRef.current = currentUserId;
-          try {
-            const remote = await client.getUserPreferences(currentSession.access_token);
-            if (remote?.locale && isSupportedLocale(remote.locale)) {
-              // If this device hasn't set an explicit manual override ('system'),
-              // adopt the account's existing server preference!
-              if (preference === 'system') {
-                await setLocalePreference(remote.locale);
-                return;
-              }
-            }
-          } catch {
-            // Best effort: proceed with local preference if server check fails
-          }
-        }
-
-        await trackUserPreferences({
-          client,
-          session: currentSession,
-          locale,
-          now: new Date().toISOString(),
-        });
-      });
+      .then(() => boundedTask);
   }, [userId, status, locale, preference, isHydrated, setLocalePreference]);
 
   const awaitLocalePublication = useCallback(async () => {

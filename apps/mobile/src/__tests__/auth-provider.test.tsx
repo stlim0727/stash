@@ -21,6 +21,26 @@ const mockAuthedSession = {
 
 jest.mock('@/observability/sentry', () => ({ setSentryUser: jest.fn() }));
 
+const mockSetLocalePreference = jest.fn();
+let mockI18nPreference = 'system';
+let mockI18nLocale = 'en';
+
+jest.mock('@/i18n', () => {
+  const actual = jest.requireActual('@/i18n');
+  return {
+    ...actual,
+    useI18n: () => ({
+      locale: mockI18nLocale,
+      preference: mockI18nPreference,
+      setLocalePreference: mockSetLocalePreference,
+      t: (key: string) => key,
+      formatDate: (val: any) => String(val),
+      formatNumber: (val: any) => String(val),
+      isHydrated: true,
+    }),
+  };
+});
+
 jest.mock('@/supabase/config', () => ({
   getSupabaseConfigState: () => ({
     status: 'configured',
@@ -72,6 +92,8 @@ function wrapper({ children }: { children: ReactNode }) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockI18nPreference = 'system';
+  mockI18nLocale = 'en';
 });
 
 test('bootstraps an anonymous session on mount', async () => {
@@ -278,11 +300,33 @@ test('a save after logout lazily mints an anonymous session', async () => {
   expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(2);
 });
 
-test('reconciles account locale on first connection and exposes awaitLocalePublication', async () => {
-  fakeClient.getUserPreferences.mockResolvedValueOnce({ locale: 'ko' });
+test('reconciles account locale on first connection when remote has explicit preference and local is system', async () => {
+  fakeClient.getUserPreferences.mockResolvedValueOnce({ locale: 'ko', preference: 'ko' });
   const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
 
   await expect(result.current.awaitLocalePublication()).resolves.toBeUndefined();
   expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token');
+  expect(mockSetLocalePreference).toHaveBeenCalledWith('ko');
+});
+
+test('preserves system mode when remote preference is system or unset', async () => {
+  fakeClient.getUserPreferences.mockResolvedValueOnce({ locale: 'ko', preference: 'system' });
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  await expect(result.current.awaitLocalePublication()).resolves.toBeUndefined();
+  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token');
+  expect(mockSetLocalePreference).not.toHaveBeenCalled();
+});
+
+test('does not adopt remote preference if local preference is already an explicit preference', async () => {
+  mockI18nPreference = 'en';
+  fakeClient.getUserPreferences.mockResolvedValueOnce({ locale: 'ko', preference: 'ko' });
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  await expect(result.current.awaitLocalePublication()).resolves.toBeUndefined();
+  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token');
+  expect(mockSetLocalePreference).not.toHaveBeenCalled();
 });

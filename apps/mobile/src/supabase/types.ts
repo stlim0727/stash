@@ -26,6 +26,8 @@ export interface SupabaseAuthUser {
     app_version_updated_at?: string | null;
     /** User's preferred locale (e.g. 'en', 'ko') stamped from preferences. */
     locale?: string | null;
+    /** User's preferred language setting ('system', 'en', 'ko') stamped from preferences. */
+    preference?: string | null;
   };
   created_at?: string;
 }

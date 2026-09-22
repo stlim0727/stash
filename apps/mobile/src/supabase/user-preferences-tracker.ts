@@ -19,6 +19,7 @@ export interface TrackUserPreferencesParams {
   client: UserPreferencesWriter;
   session: SupabaseAuthSession;
   locale: string;
+  preference?: string;
   now: string;
 }
 
@@ -26,6 +27,7 @@ export async function trackUserPreferences({
   client,
   session,
   locale,
+  preference,
   now,
 }: TrackUserPreferencesParams): Promise<void> {
   const trimmed = typeof locale === 'string' && locale.trim() ? locale.trim() : 'en';
@@ -34,16 +36,22 @@ export async function trackUserPreferences({
     await client.upsertUserPreferences(session.access_token, {
       user_id: session.user.id,
       locale: trimmed,
+      ...(preference ? { preference } : {}),
       updated_at: now,
     });
   } catch {
     // Best-effort: a failed write is retried on the next session start or preference change.
   }
 
-  if (typeof client.updateUserMetadata === 'function' && session.user.user_metadata?.locale !== trimmed) {
+  const metaChanged =
+    session.user.user_metadata?.locale !== trimmed ||
+    (preference && session.user.user_metadata?.preference !== preference);
+
+  if (typeof client.updateUserMetadata === 'function' && metaChanged) {
     try {
       await client.updateUserMetadata(session.access_token, {
         locale: trimmed,
+        ...(preference ? { preference } : {}),
         locale_updated_at: now,
       });
     } catch {
