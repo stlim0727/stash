@@ -962,7 +962,6 @@ export default function BookmarkDetailScreen({
             testID="bookmark-detail-preview-pressable"
             accessibilityRole="link"
             accessibilityLabel={t('common.openLink')}
-            accessibilityHint={t('inbox.openBookmarkHint')}
             accessibilityState={{ busy: isOpeningLink }}
             onPress={handleOpenLink}
             style={({ pressed }) => [
@@ -989,9 +988,11 @@ export default function BookmarkDetailScreen({
               style={styles.previewRibbon}
               pointerEvents="none"
             >
-              <Text style={styles.previewRibbonText} numberOfLines={1}>
-                {host ?? t('common.open')}
-              </Text>
+              <PostHogMaskView>
+                <Text style={styles.previewRibbonText} numberOfLines={1}>
+                  {host ?? t('common.open')}
+                </Text>
+              </PostHogMaskView>
               <Ionicons name="open-outline" size={12} color="#ffffff" />
             </View>
             {isOpeningLink ? (
