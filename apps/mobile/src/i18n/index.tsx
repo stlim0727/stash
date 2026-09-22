@@ -44,7 +44,7 @@ export interface I18nValue {
   /** Translate a message key, with optional interpolation params. */
   t: TFunction;
   /** Persist + apply a new language preference. */
-  setLocalePreference: (preference: LocalePreference) => void;
+  setLocalePreference: (preference: LocalePreference) => Promise<void>;
   /** Locale-aware date/time formatting. */
   formatDate: (value: string | number | Date, options?: Intl.DateTimeFormatOptions) => string;
   /** Locale-aware number formatting. */
@@ -67,21 +67,23 @@ function detectDeviceLocale(): Locale {
 function makeValue(
   locale: Locale,
   preference: LocalePreference,
-  setPref: (p: LocalePreference) => void,
+  setPref: (p: LocalePreference) => Promise<void> | void,
   isHydrated = true,
 ): I18nValue {
   return {
     locale,
     preference,
     t: createT(locale),
-    setLocalePreference: setPref,
+    setLocalePreference: async (p) => {
+      await setPref(p);
+    },
     formatDate: (value, options) => formatDate(value, locale, options),
     formatNumber: (value) => formatNumber(value, locale),
     isHydrated,
   };
 }
 
-const noop = () => {};
+const noop = async () => {};
 const I18nContext = createContext<I18nValue>(
   makeValue(DEFAULT_LOCALE, DEFAULT_LOCALE_PREFERENCE, noop),
 );
@@ -112,9 +114,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const setLocalePreference = useCallback((next: LocalePreference) => {
+  const setLocalePreference = useCallback(async (next: LocalePreference) => {
     setPreferenceState(next);
-    void setPreference(LOCALE_PREF_KEY, serializeLocalePreference(next)).catch(() => {});
+    await setPreference(LOCALE_PREF_KEY, serializeLocalePreference(next)).catch(() => {});
   }, []);
 
   const locale = resolvePreference(preference, deviceLocale);

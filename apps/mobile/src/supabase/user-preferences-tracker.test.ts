@@ -58,6 +58,7 @@ test('upserts locale into user_preferences and updates user_metadata', async () 
   assert.equal(client.metaCalls[0].token, 'token-123');
   assert.deepEqual(client.metaCalls[0].data, {
     locale: 'ko',
+    locale_updated_at: NOW,
   });
 });
 

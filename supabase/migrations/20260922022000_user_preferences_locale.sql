@@ -49,6 +49,9 @@ declare
   v_url text;
   v_secret text;
   v_locale text;
+  v_pref_updated_at timestamptz;
+  v_meta_locale text;
+  v_meta_updated_at timestamptz;
 begin
   -- Skip archived rows, ones whose metadata is still being fetched (the model
   -- would only see the bare URL), and rows whose owner explicitly opted this
@@ -87,13 +90,17 @@ begin
       return new;
     end if;
 
-    -- Look up user's preferred locale from user_preferences, falling back to auth.users raw_user_meta_data
-    select locale into v_locale
+    -- Look up user's preferred locale from user_preferences and auth.users raw_user_meta_data,
+    -- preferring whichever was updated more recently.
+    select locale, updated_at into v_locale, v_pref_updated_at
       from public.user_preferences where user_id = new.user_id;
 
-    if v_locale is null then
-      select raw_user_meta_data->>'locale' into v_locale
-        from auth.users where id = new.user_id;
+    select raw_user_meta_data->>'locale', (raw_user_meta_data->>'locale_updated_at')::timestamptz
+      into v_meta_locale, v_meta_updated_at
+      from auth.users where id = new.user_id;
+
+    if v_meta_locale is not null and (v_locale is null or v_pref_updated_at is null or v_meta_updated_at > v_pref_updated_at) then
+      v_locale := v_meta_locale;
     end if;
 
     perform net.http_post(

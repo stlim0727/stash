@@ -5741,6 +5741,13 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
           );
         }
 
+        // Await user's language preference publication before uploading bookmarks,
+        // so server triggers (like dispatch_ai_enrichment) enrich in the user's
+        // chosen language instead of racing and defaulting to English (Comment 1).
+        if (syncable.length > 0 && typeof authRef.current.awaitLocalePublication === "function") {
+          await authRef.current.awaitLocalePublication();
+        }
+
         const api = createSyncApi(session);
         const createdIdsSyncedThisRun = new Set<string>();
         const getLatestBookmark = (id: string) =>

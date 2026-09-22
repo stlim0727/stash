@@ -182,7 +182,9 @@ async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefine
  * does not have a row or the table lookup failed, mirroring the metadata fallback
  * in the database trigger `dispatch_ai_enrichment`.
  */
-async function fetchOwnerLocaleFromMetadata(userId: string): Promise<string | undefined> {
+async function fetchOwnerLocaleFromMetadata(
+  userId: string,
+): Promise<{ locale: string; updatedAt?: string } | undefined> {
   try {
     const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
       headers: {
@@ -195,8 +197,11 @@ async function fetchOwnerLocaleFromMetadata(userId: string): Promise<string | un
     }
     const user = (await res.json()) as { user_metadata?: Record<string, unknown> };
     const locale = user.user_metadata?.locale;
+    const updatedAt = typeof user.user_metadata?.locale_updated_at === 'string'
+      ? user.user_metadata.locale_updated_at
+      : undefined;
     if (typeof locale === 'string' && locale.trim()) {
-      return locale.trim();
+      return { locale: locale.trim(), updatedAt };
     }
     return undefined;
   } catch (err) {
@@ -294,19 +299,28 @@ async function loadEnrichmentContextForUser(
   }
   let existingTags: string[] = [];
   let userLocale: string | null = null;
-  const [activeRes, tagRes, prefRes] = await Promise.all([
+  let prefUpdatedAt: string | null = null;
+  const [activeRes, tagRes, prefRes, meta] = await Promise.all([
     serviceRest(`/bookmarks?user_id=eq.${userId}&deleted_at=is.null&is_archived=is.false&select=id`),
     serviceRest(`/tags?user_id=eq.${userId}&select=name,bookmark_tags(bookmark_id)`),
-    serviceRest(`/user_preferences?user_id=eq.${userId}&select=locale&limit=1`),
+    serviceRest(`/user_preferences?user_id=eq.${userId}&select=locale,updated_at&limit=1`),
+    fetchOwnerLocaleFromMetadata(userId),
   ]);
   if (prefRes.ok) {
-    const [pref] = (await prefRes.json()) as Array<{ locale?: string }>;
+    const [pref] = (await prefRes.json()) as Array<{ locale?: string; updated_at?: string }>;
     if (typeof pref?.locale === 'string' && pref.locale.trim()) {
       userLocale = pref.locale.trim();
+      prefUpdatedAt = pref.updated_at ?? null;
     }
   }
-  if (!userLocale) {
-    userLocale = (await fetchOwnerLocaleFromMetadata(userId)) ?? null;
+  if (meta?.locale) {
+    if (!userLocale || !prefUpdatedAt || !meta.updatedAt) {
+      if (!userLocale) {
+        userLocale = meta.locale;
+      }
+    } else if (new Date(meta.updatedAt).getTime() > new Date(prefUpdatedAt).getTime()) {
+      userLocale = meta.locale;
+    }
   }
   if (activeRes.ok && tagRes.ok) {
     const activeIds = new Set(
@@ -818,7 +832,13 @@ async function runBatchWorker(): Promise<Response> {
     // STASH #579: best-effort drained-queue push notification, after the
     // real work above is fully settled. Never throws (see its own docs) and
     // never affects `processed`/`deferred` below.
-    await notifyDrainedUsers(eligible);
+    // Carry the resolved user locale so completion push notifications are
+    // properly localized even when older queued rows had locale = null.
+    const resolvedEligible = eligible.map((row) => ({
+      ...row,
+      locale: row.locale ?? contextByUser.get(row.user_id)?.locale ?? null,
+    }));
+    await notifyDrainedUsers(resolvedEligible);
 
     return json({ processed: eligible.length, deferred: deferred.length }, 200);
   } catch (error) {
@@ -982,17 +1002,31 @@ Deno.serve(async (req) => {
       ),
       rest(`/tags?user_id=eq.${bookmark.user_id}&select=name,bookmark_tags(bookmark_id)`),
       !resolvedLocale
-        ? rest(`/user_preferences?user_id=eq.${bookmark.user_id}&select=locale&limit=1`)
+        ? rest(`/user_preferences?user_id=eq.${bookmark.user_id}&select=locale,updated_at&limit=1`)
         : Promise.resolve(null),
     ]);
-    if (prefRes && prefRes.ok) {
-      const [pref] = (await prefRes.json()) as Array<{ locale?: string }>;
-      if (typeof pref?.locale === 'string' && pref.locale.trim()) {
-        resolvedLocale = pref.locale.trim();
-      }
-    }
     if (!resolvedLocale) {
-      resolvedLocale = (await fetchOwnerLocaleFromMetadata(bookmark.user_id)) ?? undefined;
+      let prefLocale: string | null = null;
+      let prefUpdatedAt: string | null = null;
+      if (prefRes && prefRes.ok) {
+        const [pref] = (await prefRes.json()) as Array<{ locale?: string; updated_at?: string }>;
+        if (typeof pref?.locale === 'string' && pref.locale.trim()) {
+          prefLocale = pref.locale.trim();
+          prefUpdatedAt = pref.updated_at ?? null;
+        }
+      }
+      const meta = await fetchOwnerLocaleFromMetadata(bookmark.user_id);
+      if (meta?.locale) {
+        if (!prefLocale || !prefUpdatedAt || !meta.updatedAt) {
+          resolvedLocale = prefLocale ?? meta.locale;
+        } else if (new Date(meta.updatedAt).getTime() > new Date(prefUpdatedAt).getTime()) {
+          resolvedLocale = meta.locale;
+        } else {
+          resolvedLocale = prefLocale;
+        }
+      } else if (prefLocale) {
+        resolvedLocale = prefLocale;
+      }
     }
     if (activeRes.ok && tagRes.ok) {
       const activeIds = new Set(

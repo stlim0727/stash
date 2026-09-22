@@ -42,7 +42,10 @@ export async function trackUserPreferences({
 
   if (typeof client.updateUserMetadata === 'function' && session.user.user_metadata?.locale !== trimmed) {
     try {
-      await client.updateUserMetadata(session.access_token, { locale: trimmed });
+      await client.updateUserMetadata(session.access_token, {
+        locale: trimmed,
+        locale_updated_at: now,
+      });
     } catch {
       // Best-effort: updating user_metadata is secondary to user_preferences table.
     }
