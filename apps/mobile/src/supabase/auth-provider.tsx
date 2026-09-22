@@ -16,6 +16,8 @@ import { setSentryUser } from '@/observability/sentry';
 import { describeSupabaseConfig, getSupabaseConfigState } from '@/supabase/config';
 import { createSupabaseClient, isSessionExpired } from '@/supabase/client';
 import { trackAppVersionMetadata } from '@/supabase/app-version-tracker';
+import { trackUserPreferences } from '@/supabase/user-preferences-tracker';
+import { useI18n } from '@/i18n';
 import { runOAuthSignIn } from '@/supabase/run-oauth';
 import type { OAuthProvider, SupabaseAuthSession } from '@/supabase/types';
 
@@ -238,6 +240,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   // Tag crash/error reports with the anonymous user id (opaque — no PII) so
   // events can be grouped per device. No-op until Sentry is configured.
   const userId = session?.user.id ?? null;
+  const { locale } = useI18n();
   useEffect(() => {
     setSentryUser(userId);
   }, [userId]);
@@ -280,6 +283,26 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       }
     })();
   }, [userId, status]);
+
+  // Stamp the user's language preference into public.user_preferences and
+  // user_metadata so server-side triggers (like dispatch_ai_enrichment) know
+  // which language to enrich bookmarks in. Fire-and-forget, never throws.
+  useEffect(() => {
+    if (status !== 'anonymous' && status !== 'authenticated') {
+      return;
+    }
+    const active = sessionRef.current;
+    if (!active) {
+      return;
+    }
+    const client = createSupabaseClient();
+    void trackUserPreferences({
+      client,
+      session: active,
+      locale,
+      now: new Date().toISOString(),
+    });
+  }, [userId, status, locale]);
 
   const email = session?.user.email ?? null;
   const metadata = session?.user.user_metadata;
