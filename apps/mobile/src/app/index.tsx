@@ -3265,7 +3265,10 @@ export default function InboxScreen() {
                     tabIndex={-1}
                     onPress={openDetail}
                     onLongPress={() => setMenuItem(item)}
-                    style={StyleSheet.absoluteFill}
+                    style={({ pressed }) => [
+                      StyleSheet.absoluteFill,
+                      { opacity: pressed ? 0.82 : 1 },
+                    ]}
                   >
                     {previewUri ? (
                       <Image
@@ -3293,7 +3296,10 @@ export default function InboxScreen() {
                       onPress={openLink}
                       onLongPress={() => setMenuItem(item)}
                       hitSlop={6}
-                      style={styles.previewRibbon}
+                      style={({ pressed }) => [
+                        styles.previewRibbon,
+                        { opacity: pressed ? 0.75 : 1 },
+                      ]}
                     >
                       <HighlightedText
                         style={styles.previewRibbonText}

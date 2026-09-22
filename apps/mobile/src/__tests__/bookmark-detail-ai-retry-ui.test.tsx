@@ -13,16 +13,20 @@ jest.mock('react-native-safe-area-context', () => ({
   SafeAreaProvider: ({ children }: { children: ReactNode }) => children,
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
 }));
-jest.mock('expo-router', () => ({
-  useRouter: () => ({
-    navigate: jest.fn(),
-    dismissTo: jest.fn(),
-    push: jest.fn(),
-    back: jest.fn(),
-    replace: jest.fn(),
-  }),
-  useLocalSearchParams: () => ({ id: BOOKMARK_ID }),
-}));
+jest.mock('expo-router', () => {
+  const { useEffect } = require('react');
+  return {
+    useRouter: () => ({
+      navigate: jest.fn(),
+      dismissTo: jest.fn(),
+      push: jest.fn(),
+      back: jest.fn(),
+      replace: jest.fn(),
+    }),
+    useLocalSearchParams: () => ({ id: BOOKMARK_ID }),
+    useFocusEffect: (cb: () => void | (() => void)) => useEffect(cb, []),
+  };
+});
 
 const BOOKMARK_ID = '7e64cf1e-0000-4000-8000-000000000001';
 
