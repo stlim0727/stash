@@ -16,6 +16,9 @@ import { setSentryUser } from '@/observability/sentry';
 import { describeSupabaseConfig, getSupabaseConfigState } from '@/supabase/config';
 import { createSupabaseClient, isSessionExpired } from '@/supabase/client';
 import { trackAppVersionMetadata } from '@/supabase/app-version-tracker';
+import { trackUserPreferences } from '@/supabase/user-preferences-tracker';
+import { useI18n } from '@/i18n';
+import { isSupportedLocale } from '@/i18n/locale';
 import { runOAuthSignIn } from '@/supabase/run-oauth';
 import type { OAuthProvider, SupabaseAuthSession } from '@/supabase/types';
 
@@ -55,6 +58,8 @@ interface SupabaseAuthContextValue {
    * an orphaned, empty `auth.users` row on every logout (the leak this fixes).
    */
   signOut: () => Promise<void>;
+  /** Wait until the initial user locale has been reconciled and published to Supabase. */
+  awaitLocalePublication: () => Promise<void>;
 }
 
 const SupabaseAuthContext = createContext<SupabaseAuthContextValue | null>(null);
@@ -228,6 +233,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     // here: minting an anonymous user eagerly on every logout is exactly the
     // orphaned-empty-user leak this change removes. The anonymous user is
     // created lazily on the next capture instead.
+    reconciledUserIdRef.current = null;
     inFlight.current = null;
   }, [session, configState]);
 
@@ -238,6 +244,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
   // Tag crash/error reports with the anonymous user id (opaque — no PII) so
   // events can be grouped per device. No-op until Sentry is configured.
   const userId = session?.user.id ?? null;
+  const { locale, preference, setLocalePreference, isHydrated } = useI18n();
   useEffect(() => {
     setSentryUser(userId);
   }, [userId]);
@@ -281,6 +288,94 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     })();
   }, [userId, status]);
 
+  // Stamp the user's language preference into public.user_preferences and
+  // user_metadata so server-side triggers (like dispatch_ai_enrichment) know
+  // which language to enrich bookmarks in. Fire-and-forget, never throws.
+  //
+  // Gate on `isHydrated` so we don't publish the temporary fallback device locale
+  // while the stored language override is still loading from disk.
+  //
+  // Before pushing a device-local preference to an existing account, check if the
+  // account already has a preference stored on the server (Comment 4). If the user
+  // on this device hasn't set an explicit override ('system'), adopt the account's
+  // preference so one device does not clobber another device's language choice.
+  //
+  // Expose `awaitLocalePublication` so startup sync can await preference landing
+  // before uploading bookmarks (Comment 1).
+  const reconciledUserIdRef = useRef<string | null>(null);
+  const localeWriteSeq = useRef(0);
+  const localePublicationPromise = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => {
+    if (!isHydrated || (status !== 'anonymous' && status !== 'authenticated')) {
+      return;
+    }
+    const active = sessionRef.current;
+    if (!active) {
+      return;
+    }
+    const currentUserId = active.user.id;
+    const seq = ++localeWriteSeq.current;
+    const client = createSupabaseClient();
+
+    localePublicationPromise.current = localePublicationPromise.current
+      .catch(() => {})
+      .then(async () => {
+        if (seq !== localeWriteSeq.current) {
+          return;
+        }
+        const currentSession = sessionRef.current;
+        if (!currentSession || currentSession.user.id !== currentUserId) {
+          return;
+        }
+        if (statusRef.current !== 'anonymous' && statusRef.current !== 'authenticated') {
+          return;
+        }
+
+        // On first connection to this account on this device, check if the account already has
+        // a stored preference on the server (Comment 4).
+        if (reconciledUserIdRef.current !== currentUserId) {
+          reconciledUserIdRef.current = currentUserId;
+          try {
+            const remote = await client.getUserPreferences(currentSession.access_token);
+            if (remote?.locale && isSupportedLocale(remote.locale)) {
+              // If this device hasn't set an explicit manual override ('system'),
+              // adopt the account's existing server preference!
+              if (preference === 'system') {
+                await setLocalePreference(remote.locale);
+                return;
+              }
+            }
+          } catch {
+            // Best effort: proceed with local preference if server check fails
+          }
+        }
+
+        await trackUserPreferences({
+          client,
+          session: currentSession,
+          locale,
+          now: new Date().toISOString(),
+        });
+      });
+  }, [userId, status, locale, preference, isHydrated, setLocalePreference]);
+
+  const awaitLocalePublication = useCallback(async () => {
+    try {
+      await Promise.race([
+        localePublicationPromise.current,
+        new Promise((resolve) => {
+          const t = setTimeout(resolve, 3000);
+          if (typeof t === 'object' && typeof t.unref === 'function') {
+            t.unref();
+          }
+        }),
+      ]);
+    } catch {
+      // Best-effort
+    }
+  }, []);
+
   const email = session?.user.email ?? null;
   const metadata = session?.user.user_metadata;
   const displayName = metadata?.full_name ?? metadata?.name ?? null;
@@ -300,6 +395,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       ensureAnonymousSession,
       signIn,
       signOut,
+      awaitLocalePublication,
     }),
     [
       status,
@@ -313,6 +409,7 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
       ensureAnonymousSession,
       signIn,
       signOut,
+      awaitLocalePublication,
     ],
   );
 

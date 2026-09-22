@@ -176,6 +176,40 @@ async function fetchOwnerIsAnonymous(userId: string): Promise<boolean | undefine
   }
 }
 
+/**
+ * Look up the user's preferred locale from `auth.users.raw_user_meta_data` via
+ * the GoTrue admin API (service-role). Used as a fallback when `public.user_preferences`
+ * does not have a row or the table lookup failed, mirroring the metadata fallback
+ * in the database trigger `dispatch_ai_enrichment`.
+ */
+async function fetchOwnerLocaleFromMetadata(
+  userId: string,
+): Promise<{ locale: string; updatedAt?: string } | undefined> {
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${encodeURIComponent(userId)}`, {
+      headers: {
+        apikey: SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      },
+    });
+    if (!res.ok) {
+      return undefined;
+    }
+    const user = (await res.json()) as { user_metadata?: Record<string, unknown> };
+    const locale = user.user_metadata?.locale;
+    const updatedAt = typeof user.user_metadata?.locale_updated_at === 'string'
+      ? user.user_metadata.locale_updated_at
+      : undefined;
+    if (typeof locale === 'string' && locale.trim()) {
+      return { locale: locale.trim(), updatedAt };
+    }
+    return undefined;
+  } catch (err) {
+    console.error('Owner locale metadata lookup threw:', err);
+    return undefined;
+  }
+}
+
 // ── Overflow-queue batch worker (STASH #578 Phase 2) ────────────────────────
 // Triggered only by the pg_cron dispatch in the pending_ai_enrichment_queue
 // migration (see runBatchWorker's call site above). Everything below is
@@ -257,17 +291,37 @@ async function markPendingEnrichmentSettled(
  *  per row, since several claimed rows commonly share a user. */
 async function loadEnrichmentContextForUser(
   userId: string,
-): Promise<{ collections: Array<{ id: string; name: string }>; existingTags: string[] }> {
+): Promise<{ collections: Array<{ id: string; name: string }>; existingTags: string[]; locale: string | null }> {
   let collections: Array<{ id: string; name: string }> = [];
   const colRes = await serviceRest(`/collections?user_id=eq.${userId}&select=id,name`);
   if (colRes.ok) {
     collections = (await colRes.json()) as Array<{ id: string; name: string }>;
   }
   let existingTags: string[] = [];
-  const [activeRes, tagRes] = await Promise.all([
+  let userLocale: string | null = null;
+  let prefUpdatedAt: string | null = null;
+  const [activeRes, tagRes, prefRes, meta] = await Promise.all([
     serviceRest(`/bookmarks?user_id=eq.${userId}&deleted_at=is.null&is_archived=is.false&select=id`),
     serviceRest(`/tags?user_id=eq.${userId}&select=name,bookmark_tags(bookmark_id)`),
+    serviceRest(`/user_preferences?user_id=eq.${userId}&select=locale,updated_at&limit=1`),
+    fetchOwnerLocaleFromMetadata(userId),
   ]);
+  if (prefRes.ok) {
+    const [pref] = (await prefRes.json()) as Array<{ locale?: string; updated_at?: string }>;
+    if (typeof pref?.locale === 'string' && pref.locale.trim()) {
+      userLocale = pref.locale.trim();
+      prefUpdatedAt = pref.updated_at ?? null;
+    }
+  }
+  if (meta?.locale) {
+    if (!userLocale || !prefUpdatedAt || !meta.updatedAt) {
+      if (!userLocale) {
+        userLocale = meta.locale;
+      }
+    } else if (new Date(meta.updatedAt).getTime() > new Date(prefUpdatedAt).getTime()) {
+      userLocale = meta.locale;
+    }
+  }
   if (activeRes.ok && tagRes.ok) {
     const activeIds = new Set(
       ((await activeRes.json()) as Array<{ id: string }>).map((b) => b.id),
@@ -288,7 +342,7 @@ async function loadEnrichmentContextForUser(
       .slice(0, MAX_EXISTING_TAGS)
       .map((tag) => tag.name);
   }
-  return { collections, existingTags };
+  return { collections, existingTags, locale: userLocale };
 }
 
 /** Spend one rate-limit slot for `userId` via the existing service-role-only
@@ -422,6 +476,7 @@ async function recordEnrichmentCall(entry: {
 const EMPTY_ENRICHMENT_CONTEXT = {
   collections: [] as Array<{ id: string; name: string }>,
   existingTags: [] as string[],
+  locale: null as string | null,
 };
 
 /** Enrich ONE claimed row with its own provider call and persist the result.
@@ -443,7 +498,7 @@ const EMPTY_ENRICHMENT_CONTEXT = {
 async function processEnrichmentRow(
   row: PendingEnrichmentRow,
   bookmarksById: Map<string, BookmarkRow>,
-  contextByUser: Map<string, { collections: Array<{ id: string; name: string }>; existingTags: string[] }>,
+  contextByUser: Map<string, { collections: Array<{ id: string; name: string }>; existingTags: string[]; locale: string | null }>,
   slotClaimed: boolean,
 ): Promise<void> {
   const bookmark = bookmarksById.get(row.bookmark_id);
@@ -464,7 +519,7 @@ async function processEnrichmentRow(
     content_type: bookmark.content_type,
     collections: ctx.collections.map((col) => col.name),
     existing_tags: ctx.existingTags,
-    locale: row.locale ?? undefined,
+    locale: row.locale ?? ctx.locale ?? undefined,
   };
 
   // Null only when the provider rate-limited us, which is handled below by
@@ -777,7 +832,13 @@ async function runBatchWorker(): Promise<Response> {
     // STASH #579: best-effort drained-queue push notification, after the
     // real work above is fully settled. Never throws (see its own docs) and
     // never affects `processed`/`deferred` below.
-    await notifyDrainedUsers(eligible);
+    // Carry the resolved user locale so completion push notifications are
+    // properly localized even when older queued rows had locale = null.
+    const resolvedEligible = eligible.map((row) => ({
+      ...row,
+      locale: row.locale ?? contextByUser.get(row.user_id)?.locale ?? null,
+    }));
+    await notifyDrainedUsers(resolvedEligible);
 
     return json({ processed: eligible.length, deferred: deferred.length }, 200);
   } catch (error) {
@@ -934,12 +995,39 @@ Deno.serve(async (req) => {
     // per-capture prompt cost. Owner-scoped so the service-role path can't leak
     // another user's tags (a no-op on the RLS-scoped app path).
     let existingTags: string[] = [];
-    const [activeRes, tagRes] = await Promise.all([
+    let resolvedLocale = locale;
+    const [activeRes, tagRes, prefRes] = await Promise.all([
       rest(
         `/bookmarks?user_id=eq.${bookmark.user_id}&deleted_at=is.null&is_archived=is.false&select=id`,
       ),
       rest(`/tags?user_id=eq.${bookmark.user_id}&select=name,bookmark_tags(bookmark_id)`),
+      !resolvedLocale
+        ? rest(`/user_preferences?user_id=eq.${bookmark.user_id}&select=locale,updated_at&limit=1`)
+        : Promise.resolve(null),
     ]);
+    if (!resolvedLocale) {
+      let prefLocale: string | null = null;
+      let prefUpdatedAt: string | null = null;
+      if (prefRes && prefRes.ok) {
+        const [pref] = (await prefRes.json()) as Array<{ locale?: string; updated_at?: string }>;
+        if (typeof pref?.locale === 'string' && pref.locale.trim()) {
+          prefLocale = pref.locale.trim();
+          prefUpdatedAt = pref.updated_at ?? null;
+        }
+      }
+      const meta = await fetchOwnerLocaleFromMetadata(bookmark.user_id);
+      if (meta?.locale) {
+        if (!prefLocale || !prefUpdatedAt || !meta.updatedAt) {
+          resolvedLocale = prefLocale ?? meta.locale;
+        } else if (new Date(meta.updatedAt).getTime() > new Date(prefUpdatedAt).getTime()) {
+          resolvedLocale = meta.locale;
+        } else {
+          resolvedLocale = prefLocale;
+        }
+      } else if (prefLocale) {
+        resolvedLocale = prefLocale;
+      }
+    }
     if (activeRes.ok && tagRes.ok) {
       const activeIds = new Set(
         ((await activeRes.json()) as Array<{ id: string }>).map((b) => b.id),
@@ -1052,7 +1140,7 @@ Deno.serve(async (req) => {
       content_type: overlay(bookmark.content_type, 'content_type') ?? bookmark.content_type,
       collections: collections.map((col) => col.name),
       existing_tags: existingTags,
-      locale,
+      locale: resolvedLocale,
     };
 
     // Run the configured provider; if a live model call fails (rate limit,
@@ -1115,7 +1203,7 @@ Deno.serve(async (req) => {
             body: JSON.stringify({
               bookmark_id: bookmark.id,
               user_id: bookmark.user_id,
-              ...(locale ? { locale } : {}),
+              ...(resolvedLocale ? { locale: resolvedLocale } : {}),
             }),
           });
           if (!enqueueRes.ok) {

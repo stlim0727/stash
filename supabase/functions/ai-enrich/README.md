@@ -49,7 +49,8 @@ a wrong secret is `401` and never downgraded to the app path. The same per-user
 rate limit applies, via the `service_role`-only `request_ai_enrichment_slot_for`
 variant. The client and trigger dedupe on the "already enriched?" check, so
 whichever fires first wins and the other is a cheap no-op. Server-triggered
-enrichment runs in English (a trigger has no per-user locale); in-app requests
+enrichment looks up the user's preferred locale from `public.user_preferences`
+(falling back to `auth.users.raw_user_meta_data->>'locale'`, then English); in-app requests
 still pass `locale`.
 
 **Setup.** Set the function secret and tell the database where to call:

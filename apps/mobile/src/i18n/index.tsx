@@ -44,11 +44,13 @@ export interface I18nValue {
   /** Translate a message key, with optional interpolation params. */
   t: TFunction;
   /** Persist + apply a new language preference. */
-  setLocalePreference: (preference: LocalePreference) => void;
+  setLocalePreference: (preference: LocalePreference) => Promise<void>;
   /** Locale-aware date/time formatting. */
   formatDate: (value: string | number | Date, options?: Intl.DateTimeFormatOptions) => string;
   /** Locale-aware number formatting. */
   formatNumber: (value: number) => string;
+  /** True once the stored locale preference has been read from disk. */
+  isHydrated: boolean;
 }
 
 /** The best supported locale for the device, read synchronously. */
@@ -62,18 +64,26 @@ function detectDeviceLocale(): Locale {
 }
 
 /** A context default usable without a provider (keeps unit tests simple). */
-function makeValue(locale: Locale, preference: LocalePreference, setPref: (p: LocalePreference) => void): I18nValue {
+function makeValue(
+  locale: Locale,
+  preference: LocalePreference,
+  setPref: (p: LocalePreference) => Promise<void> | void,
+  isHydrated = true,
+): I18nValue {
   return {
     locale,
     preference,
     t: createT(locale),
-    setLocalePreference: setPref,
+    setLocalePreference: async (p) => {
+      await setPref(p);
+    },
     formatDate: (value, options) => formatDate(value, locale, options),
     formatNumber: (value) => formatNumber(value, locale),
+    isHydrated,
   };
 }
 
-const noop = () => {};
+const noop = async () => {};
 const I18nContext = createContext<I18nValue>(
   makeValue(DEFAULT_LOCALE, DEFAULT_LOCALE_PREFERENCE, noop),
 );
@@ -81,6 +91,7 @@ const I18nContext = createContext<I18nValue>(
 export function I18nProvider({ children }: { children: ReactNode }) {
   const deviceLocale = useMemo(detectDeviceLocale, []);
   const [preference, setPreferenceState] = useState<LocalePreference>(DEFAULT_LOCALE_PREFERENCE);
+  const [isHydrated, setIsHydrated] = useState(false);
   const loaded = useRef(false);
 
   useEffect(() => {
@@ -93,22 +104,25 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {})
       .finally(() => {
-        loaded.current = true;
+        if (active) {
+          loaded.current = true;
+          setIsHydrated(true);
+        }
       });
     return () => {
       active = false;
     };
   }, []);
 
-  const setLocalePreference = useCallback((next: LocalePreference) => {
+  const setLocalePreference = useCallback(async (next: LocalePreference) => {
     setPreferenceState(next);
-    void setPreference(LOCALE_PREF_KEY, serializeLocalePreference(next)).catch(() => {});
+    await setPreference(LOCALE_PREF_KEY, serializeLocalePreference(next)).catch(() => {});
   }, []);
 
   const locale = resolvePreference(preference, deviceLocale);
   const value = useMemo<I18nValue>(
-    () => makeValue(locale, preference, setLocalePreference),
-    [locale, preference, setLocalePreference],
+    () => makeValue(locale, preference, setLocalePreference, isHydrated),
+    [locale, preference, setLocalePreference, isHydrated],
   );
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

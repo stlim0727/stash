@@ -107,6 +107,17 @@ Admin-only, per-user sync/app-version tracking (GH #687). One row per user, owne
 | last_synced_at | timestamptz | Last successful sync, once wired. |
 | updated_at | timestamptz | Row update timestamp. |
 
+### user_preferences
+
+Stores user-level preferences (such as language/locale) for server-side processing like AI enrichment. One row per user, owner-scoped RLS.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| user_id | uuid | Primary key; references `auth.users`. |
+| locale | text | User's preferred locale (e.g. 'en', 'ko'). Defaults to 'en'. |
+| created_at | timestamptz | Creation timestamp. |
+| updated_at | timestamptz | Update timestamp. |
+
 ## Local Queue
 
 The mobile app should maintain a local queue for share intake and offline operation.

@@ -392,6 +392,30 @@ export class StashSupabaseClient {
   }
 
   /**
+   * Upsert the user's preferences (e.g. locale) into `public.user_preferences`.
+   * Keyed on `user_id` which is the primary key.
+   */
+  async upsertUserPreferences(accessToken: string, data: Record<string, unknown>): Promise<void> {
+    await this.request('/rest/v1/user_preferences', {
+      method: 'POST',
+      accessToken,
+      headers: { Prefer: 'resolution=merge-duplicates' },
+      body: data,
+    });
+  }
+
+  /**
+   * Fetch the user's preferences from `public.user_preferences`.
+   */
+  async getUserPreferences(accessToken: string): Promise<{ locale?: string } | null> {
+    const rows = await this.request<Array<{ locale?: string }>>('/rest/v1/user_preferences?select=locale&limit=1', {
+      method: 'GET',
+      accessToken,
+    });
+    return rows[0] ?? null;
+  }
+
+  /**
    * Persist a session to local secure storage without going through the network.
    * Used to write back an in-memory mutation (e.g. a freshly stamped
    * `user_metadata`) so a cold restart restores the updated copy instead of the

@@ -35,6 +35,8 @@ jest.mock('@/supabase/client', () => {
     restoreSession: jest.fn(async () => ({ outcome: 'none' })),
     signInAnonymously: jest.fn(async () => mockAnonSession),
     signOut: jest.fn(async () => {}),
+    getUserPreferences: jest.fn(async () => null),
+    upsertUserPreferences: jest.fn(async () => {}),
   };
   return {
     __client: client,
@@ -50,7 +52,13 @@ jest.mock('@/supabase/run-oauth', () => ({
 import { SupabaseAuthProvider, useSupabaseAuth } from '@/supabase/auth-provider';
 
 const { __client: fakeClient } = jest.requireMock('@/supabase/client') as {
-  __client: { signOut: jest.Mock; signInAnonymously: jest.Mock; restoreSession: jest.Mock };
+  __client: {
+    signOut: jest.Mock;
+    signInAnonymously: jest.Mock;
+    restoreSession: jest.Mock;
+    getUserPreferences: jest.Mock;
+    upsertUserPreferences: jest.Mock;
+  };
 };
 // Same client instance — aliased for readability where we assert on minting.
 const fakeAnonClient = fakeClient;
@@ -268,4 +276,13 @@ test('a save after logout lazily mints an anonymous session', async () => {
   expect(result.current.isSignedIn).toBe(true);
   // Mount bootstrap + this lazy mint = two anonymous creations total.
   expect(fakeAnonClient.signInAnonymously).toHaveBeenCalledTimes(2);
+});
+
+test('reconciles account locale on first connection and exposes awaitLocalePublication', async () => {
+  fakeClient.getUserPreferences.mockResolvedValueOnce({ locale: 'ko' });
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper });
+  await waitFor(() => expect(result.current.status).toBe('anonymous'));
+
+  await expect(result.current.awaitLocalePublication()).resolves.toBeUndefined();
+  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token');
 });

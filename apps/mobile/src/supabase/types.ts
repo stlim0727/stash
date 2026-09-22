@@ -24,6 +24,8 @@ export interface SupabaseAuthUser {
     platform?: string | null;
     /** ISO timestamp of when app_version/platform were last stamped. */
     app_version_updated_at?: string | null;
+    /** User's preferred locale (e.g. 'en', 'ko') stamped from preferences. */
+    locale?: string | null;
   };
   created_at?: string;
 }
