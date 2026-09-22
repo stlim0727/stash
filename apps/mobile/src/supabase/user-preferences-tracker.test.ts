@@ -36,13 +36,14 @@ function fakeWriter() {
   };
 }
 
-test('upserts locale into user_preferences and updates user_metadata', async () => {
+test('upserts locale and preference into user_preferences and updates user_metadata', async () => {
   const client = fakeWriter();
 
   await trackUserPreferences({
     client,
     session: sessionFor('user-1'),
     locale: 'ko',
+    preference: 'ko',
     now: NOW,
   });
 
@@ -51,6 +52,7 @@ test('upserts locale into user_preferences and updates user_metadata', async () 
   assert.deepEqual(client.prefCalls[0].data, {
     user_id: 'user-1',
     locale: 'ko',
+    preference: 'ko',
     updated_at: NOW,
   });
 
@@ -58,17 +60,19 @@ test('upserts locale into user_preferences and updates user_metadata', async () 
   assert.equal(client.metaCalls[0].token, 'token-123');
   assert.deepEqual(client.metaCalls[0].data, {
     locale: 'ko',
+    preference: 'ko',
     locale_updated_at: NOW,
   });
 });
 
-test('skips user_metadata update when locale in user_metadata is already matching', async () => {
+test('skips user_metadata update when locale and preference in user_metadata are already matching', async () => {
   const client = fakeWriter();
 
   await trackUserPreferences({
     client,
-    session: sessionFor('user-1', { locale: 'ko' }),
+    session: sessionFor('user-1', { locale: 'ko', preference: 'ko' }),
     locale: 'ko',
+    preference: 'ko',
     now: NOW,
   });
 
