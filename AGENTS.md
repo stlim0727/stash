@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-09-21 (PR workflow: active monitoring, review resolution, CI and conflict handling).
+Last updated: 2026-09-22 (Collaboration workflow: always start code work in a new git worktree).
 
 ## Successor Agent Orientation
 
@@ -324,6 +324,7 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
 
 ## Collaboration And PR Workflow
 
+- **Always start working on a new worktree when code work is needed.** Before making file modifications for a task, feature, or bugfix, create and switch to an isolated git worktree (e.g., `git worktree add -b <branch> <path> origin/main`) rather than editing directly in the primary workspace root. Keep the main working tree clean.
 - When an agent makes repository changes that are meant to persist or be shared,
   it should open a PR unless there is a clear reason not to. Clear reasons
   include an explicit user request not to publish, missing credentials or PR
