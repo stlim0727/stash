@@ -48,23 +48,52 @@ type PreviewImageLoadEvent = {
   source?: { width: number; height: number };
 };
 
+type BrowserImage = {
+  naturalWidth: number;
+  naturalHeight: number;
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+  src: string;
+};
+
 /**
  * Check if an image decoded with non-zero dimensions.
  *
- * React Native reports dimensions through `nativeEvent.source`, while
- * react-native-web forwards a browser load event without `source`; reaching
- * its `onLoad` callback already means the browser image loaded and decoded.
- * Treating that event as a native event makes every successful desktop load
- * look like a failure because `source` is absent.
+ * react-native-web forwards a browser load event without `source`, so its
+ * dimensions must be verified separately with `verifyWebPreviewImage`.
  */
 export function didPreviewImageLoad(event: PreviewImageLoadEvent | undefined): boolean {
-  if (!event) {
-    return false;
-  }
-  if (event?.source) {
-    return event.source.width > 0 && event.source.height > 0;
-  }
-  return true;
+  return Boolean(event?.source && event.source.width > 0 && event.source.height > 0);
+}
+
+/**
+ * Verify a react-native-web image with a browser Image instance whose decoded
+ * dimensions remain available after the load callback. The event forwarded by
+ * react-native-web has a null target by then, so its dimensions cannot be read
+ * directly. The timeout also catches the observed aborted-load/0x0 case where
+ * neither a usable load nor an error is reported.
+ */
+export function verifyWebPreviewImage(
+  uri: string,
+  createImage: () => BrowserImage = () => new globalThis.Image() as unknown as BrowserImage,
+  timeoutMs = 10_000,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const image = createImage();
+    let settled = false;
+    const finish = (loaded: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      image.onload = null;
+      image.onerror = null;
+      resolve(loaded);
+    };
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    image.onload = () => finish(image.naturalWidth > 0 && image.naturalHeight > 0);
+    image.onerror = () => finish(false);
+    image.src = uri;
+  });
 }
 
 export function subscribePreviewImageFailures(callback: () => void): () => void {

@@ -2331,6 +2331,18 @@ test('falls back to CardPreviewFallback when preview image fails to load in card
 
 test('keeps a successfully loaded preview when web onLoad has no native source dimensions', async () => {
   Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  const originalImage = globalThis.Image;
+  class LoadedBrowserImage {
+    naturalWidth = 1200;
+    naturalHeight = 630;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.());
+    }
+  }
+  Object.defineProperty(globalThis, 'Image', { configurable: true, value: LoadedBrowserImage });
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-000000000045',
@@ -2350,4 +2362,5 @@ test('keeps a successfully loaded preview when web onLoad has no native source d
 
   expect(screen.getByTestId('inbox-card-preview-image')).toBeTruthy();
   expect(screen.queryByTestId('inbox-card-preview-fallback')).toBeNull();
+  Object.defineProperty(globalThis, 'Image', { configurable: true, value: originalImage });
 });

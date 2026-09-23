@@ -9,6 +9,7 @@ import {
   markPreviewImageFailed,
   resetPreviewImageFailuresForTest,
   subscribePreviewImageFailures,
+  verifyWebPreviewImage,
 } from './preview-image-cache.ts';
 
 beforeEach(() => {
@@ -63,11 +64,40 @@ test('clearPreviewImageFailed removes failed URIs and notifies subscribers', () 
   unsubscribe();
 });
 
-test('didPreviewImageLoad accepts a web load event and validates native dimensions', () => {
+test('didPreviewImageLoad validates native dimensions', () => {
   assert.equal(didPreviewImageLoad({ source: { width: 100, height: 100 } }), true);
   assert.equal(didPreviewImageLoad({ source: { width: 0, height: 100 } }), false);
   assert.equal(didPreviewImageLoad({ source: { width: 100, height: 0 } }), false);
   assert.equal(didPreviewImageLoad({ source: { width: 0, height: 0 } }), false);
-  assert.equal(didPreviewImageLoad({}), true);
+  assert.equal(didPreviewImageLoad({}), false);
   assert.equal(didPreviewImageLoad(undefined), false);
+});
+
+test('verifyWebPreviewImage checks decoded browser dimensions', async () => {
+  const makeImage = (width: number, height: number) => () => {
+    const image = {
+      naturalWidth: width,
+      naturalHeight: height,
+      onload: null as (() => void) | null,
+      onerror: null as (() => void) | null,
+      _src: '',
+      get src() {
+        return this._src;
+      },
+      set src(value: string) {
+        this._src = value;
+        queueMicrotask(() => this.onload?.());
+      },
+    };
+    return image;
+  };
+
+  assert.equal(
+    await verifyWebPreviewImage('https://example.com/valid.jpg', makeImage(1200, 630)),
+    true,
+  );
+  assert.equal(
+    await verifyWebPreviewImage('https://example.com/empty.jpg', makeImage(0, 0)),
+    false,
+  );
 });
