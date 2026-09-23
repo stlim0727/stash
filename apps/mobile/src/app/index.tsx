@@ -335,15 +335,17 @@ function CardPreviewFallback({
           />
         </View>
       ) : null}
-      <Text
-        testID={testID}
-        style={[styles.cardFallbackWordmark, { color: foregroundColor }]}
-        numberOfLines={2}
-        adjustsFontSizeToFit
-        minimumFontScale={0.58}
-      >
-        {wordmark.label}
-      </Text>
+      <PostHogMaskView style={styles.cardFallbackWordmarkMask}>
+        <Text
+          testID={testID}
+          style={[styles.cardFallbackWordmark, { color: foregroundColor }]}
+          numberOfLines={2}
+          adjustsFontSizeToFit
+          minimumFontScale={0.58}
+        >
+          {wordmark.label}
+        </Text>
+      </PostHogMaskView>
     </View>
   );
 }
@@ -4035,8 +4037,11 @@ const styles = StyleSheet.create({
     right: -28,
     bottom: -54,
   },
-  cardFallbackWordmark: {
+  cardFallbackWordmarkMask: {
     width: '82%',
+  },
+  cardFallbackWordmark: {
+    width: '100%',
     fontSize: 34,
     lineHeight: 34,
     fontWeight: '900',

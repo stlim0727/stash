@@ -113,6 +113,15 @@ test('preview wordmark falls back to the meaningful domain label', () => {
   );
 });
 
+test('preview wordmark treats a derived hostname site name as a domain fallback', () => {
+  assert.equal(
+    previewWordmark(
+      make({ site_name: 'docs.expo.dev', url: 'https://docs.expo.dev/router/introduction' }),
+    ).label,
+    'EXPO',
+  );
+});
+
 test('preview wordmark accounts for common compound public suffixes', () => {
   assert.equal(previewWordmark(make({ site_name: null, url: 'https://bbc.co.uk/news' })).label, 'BBC');
   assert.equal(

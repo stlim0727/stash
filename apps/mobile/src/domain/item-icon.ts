@@ -103,8 +103,10 @@ export function wordmarkForeground(background: string): '#172033' | '#ffffff' {
  */
 export function previewWordmark(bookmark: Bookmark): PreviewWordmark {
   const host = hostFromUrl(bookmark.url);
+  const siteName = bookmark.site_name?.trim();
+  const humanSiteName = siteName?.replace(/^www\./, '') === host ? null : siteName;
   const source =
-    bookmark.site_name?.trim() ||
+    humanSiteName ||
     (host ? hostKeyword(host) : null) ||
     bookmark.title?.trim() ||
     markdownLabel(bookmark.description ?? '') ||
