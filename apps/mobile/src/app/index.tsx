@@ -127,7 +127,6 @@ import {
   isPreviewImageFailed,
   markPreviewImageFailed,
   usePreviewImageFailuresVersion,
-  verifyWebPreviewImage,
 } from '@/domain/preview-image-cache';
 import { setHeroDiagnosticsSnapshot } from '@/feedback/hero-diagnostics-session';
 
@@ -3147,11 +3146,7 @@ export default function InboxScreen() {
                       style={[styles.compactThumb, { backgroundColor: palette.mutedSurface }]}
                       onError={() => markPreviewImageFailed(thumbUri)}
                       onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                        if (Platform.OS === 'web' && !event.nativeEvent.source) {
-                          void verifyWebPreviewImage(thumbUri).then((loaded) => {
-                            if (!loaded) markPreviewImageFailed(thumbUri);
-                          });
-                        } else if (!didPreviewImageLoad(event.nativeEvent)) {
+                        if (!didPreviewImageLoad(event.nativeEvent)) {
                           markPreviewImageFailed(thumbUri);
                         }
                       }}
@@ -3282,11 +3277,7 @@ export default function InboxScreen() {
                         style={styles.cardPreview}
                         onError={() => markPreviewImageFailed(previewUri)}
                         onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                          if (Platform.OS === 'web' && !event.nativeEvent.source) {
-                            void verifyWebPreviewImage(previewUri).then((loaded) => {
-                              if (!loaded) markPreviewImageFailed(previewUri);
-                            });
-                          } else if (!didPreviewImageLoad(event.nativeEvent)) {
+                          if (!didPreviewImageLoad(event.nativeEvent)) {
                             markPreviewImageFailed(previewUri);
                           }
                         }}

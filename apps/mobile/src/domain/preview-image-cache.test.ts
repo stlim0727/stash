@@ -9,7 +9,6 @@ import {
   markPreviewImageFailed,
   resetPreviewImageFailuresForTest,
   subscribePreviewImageFailures,
-  verifyWebPreviewImage,
 } from './preview-image-cache.ts';
 
 beforeEach(() => {
@@ -71,33 +70,4 @@ test('didPreviewImageLoad validates native dimensions', () => {
   assert.equal(didPreviewImageLoad({ source: { width: 0, height: 0 } }), false);
   assert.equal(didPreviewImageLoad({}), false);
   assert.equal(didPreviewImageLoad(undefined), false);
-});
-
-test('verifyWebPreviewImage checks decoded browser dimensions', async () => {
-  const makeImage = (width: number, height: number) => () => {
-    const image = {
-      naturalWidth: width,
-      naturalHeight: height,
-      onload: null as (() => void) | null,
-      onerror: null as (() => void) | null,
-      _src: '',
-      get src() {
-        return this._src;
-      },
-      set src(value: string) {
-        this._src = value;
-        queueMicrotask(() => this.onload?.());
-      },
-    };
-    return image;
-  };
-
-  assert.equal(
-    await verifyWebPreviewImage('https://example.com/valid.jpg', makeImage(1200, 630)),
-    true,
-  );
-  assert.equal(
-    await verifyWebPreviewImage('https://example.com/empty.jpg', makeImage(0, 0)),
-    false,
-  );
 });

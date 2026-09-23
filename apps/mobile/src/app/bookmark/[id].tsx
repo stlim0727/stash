@@ -64,7 +64,6 @@ import {
   didPreviewImageLoad,
   markPreviewImageFailed,
   useIsPreviewImageFailed,
-  verifyWebPreviewImage,
 } from '@/domain/preview-image-cache';
 import { hasRemoteIdentity, isLocalOnlyBookmark } from '@/sync/sync-bookmarks';
 
@@ -979,11 +978,7 @@ export default function BookmarkDetailScreen({
               resizeMode="cover"
               onError={() => markPreviewImageFailed(previewUri)}
               onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                if (Platform.OS === 'web' && !event.nativeEvent.source) {
-                  void verifyWebPreviewImage(previewUri).then((loaded) => {
-                    if (!loaded) markPreviewImageFailed(previewUri);
-                  });
-                } else if (!didPreviewImageLoad(event.nativeEvent)) {
+                if (!didPreviewImageLoad(event.nativeEvent)) {
                   markPreviewImageFailed(previewUri);
                 }
               }}
@@ -1019,11 +1014,7 @@ export default function BookmarkDetailScreen({
               resizeMode="cover"
               onError={() => markPreviewImageFailed(previewUri)}
               onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                if (Platform.OS === 'web' && !event.nativeEvent.source) {
-                  void verifyWebPreviewImage(previewUri).then((loaded) => {
-                    if (!loaded) markPreviewImageFailed(previewUri);
-                  });
-                } else if (!didPreviewImageLoad(event.nativeEvent)) {
+                if (!didPreviewImageLoad(event.nativeEvent)) {
                   markPreviewImageFailed(previewUri);
                 }
               }}
