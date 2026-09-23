@@ -6,11 +6,13 @@ description: >-
   "per-user bookmark summary", "user status report", "who has how many
   bookmarks", "active users", "how many anonymous vs registered users", or asks
   about per-user / install-base "app version" (e.g. "유저별 앱 버전", "which
-  version is each user on", "version adoption"). Runs a fixed read-only query
+  version is each user on", "version adoption"), or asks about device counts
+  (e.g. "how many devices is keepory installed", "device count", "installed
+  devices", "install base", "device audit"). Runs a fixed read-only query
   and formats a consistent table + insights (concentration, account types,
   empty/abandoned anonymous accounts, pending metadata, collection adoption,
-  app-version distribution/adoption) so the same request always yields the same
-  shape of answer.
+  app-version distribution/adoption, automated test bursts vs organic installs)
+  so the same request always yields the same shape of answer.
 ---
 
 # Per-user bookmark summary (Stash)
@@ -20,6 +22,13 @@ it only ever runs `SELECT`s. Never run DDL/DML from this skill — cleanup of
 anonymous users is a separate, gated concern (see
 `supabase/migrations/20260628000000_anon_user_cleanup.sql`).
 
+## Quick CLI runner (turnkey)
+
+Run `pnpm summary:users` (or `node scripts/user-bookmark-summary.mjs [--devices] [--json]`).
+It automatically reads `SUPABASE_SECRET_KEY` from `.env`/`.env.local`, queries
+Auth Admin, overview views, sync status, and cleanup logs, isolates automated test
+bursts (e.g. Play Store Pre-Launch Report Robo crawls), and prints the complete report.
+
 ## Step 1 — Resolve the project
 
 Use the Supabase MCP. There is a single project; discover its id rather than
@@ -28,8 +37,12 @@ hardcoding:
 1. `mcp__Supabase__list_projects` → take the `id` (currently
    `stzutoejnhzxzhjsjtsi`, `stlim0727's Project`).
 
-If the Supabase MCP server is not connected, say so and stop — this skill needs
-live DB access; do not estimate from code.
+If the Supabase MCP server is not connected, do NOT give up or estimate from code:
+run `pnpm summary:users` directly or query the live Supabase REST and Auth Admin APIs
+using `SUPABASE_SECRET_KEY` from `.env` / `.env.local` (project ref `stzutoejnhzxzhjsjtsi`):
+- `GET https://stzutoejnhzxzhjsjtsi.supabase.co/rest/v1/admin_user_overview` (headers: `apikey: <key>`, `Authorization: Bearer <key>`)
+- `GET https://stzutoejnhzxzhjsjtsi.supabase.co/auth/v1/admin/users?per_page=100` (headers: `apikey: <key>`, `Authorization: Bearer <key>`)
+- `GET https://stzutoejnhzxzhjsjtsi.supabase.co/rest/v1/user_sync_status` (headers: `apikey: <key>`, `Authorization: Bearer <key>`)
 
 ## Step 2 — Run the per-user query (read-only)
 
@@ -121,6 +134,12 @@ inside the result; just report it.
      (fresh-install sessions / logout churn — note that logout no longer mints a
      new anon user since the lazy-logout change, and a daily cron now reaps
      empty idle anon users, so this number should trend down).
+     Query `public.anon_user_cleanup_log` to report cumulative historical installs
+     (reaped + current retained).
+   - **Automated test bursts:** check for tight clusters of anonymous Android
+     accounts created within minutes with 0 bookmarks on build/release days
+     (Google Play Pre-Launch Report Robo crawler / Firebase Test Lab). Exclude
+     or explicitly call out these bursts so they are not mistaken for organic adoption.
    - **Collection adoption:** how many users actually file into collections vs
      leave everything in the inbox.
    - **Pending metadata:** rows stuck at `metadata_status = 'pending'`

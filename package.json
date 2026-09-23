@@ -31,6 +31,7 @@
     "sentry:issue": "node scripts/sentry-issue.mjs",
     "sentry:sync-github-issues": "node scripts/sentry-to-github-issues.mjs",
     "dedupe:supabase": "node --no-warnings --experimental-transform-types scripts/dedupe-bookmarks.mjs",
+    "summary:users": "node scripts/user-bookmark-summary.mjs",
     "test:components": "pnpm --filter mobile test:components",
     "test:apptesting": "firebase apptesting:execute --app \"$FIREBASE_APP_ID\" --test-dir apps/mobile/apptesting --test-devices \"${FIREBASE_TEST_DEVICES:-model=shiba,version=34,locale=en,orientation=portrait}\""
   },
