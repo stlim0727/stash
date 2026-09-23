@@ -66,6 +66,7 @@ import {
   itemIcon,
   monogramIcon,
   previewWordmark,
+  wordmarkForeground,
 } from '@/domain/item-icon';
 import { accessibilityTitle, displayTitle, isTitleDerived, siteLabel } from '@/domain/item-display';
 import { memoBodyFormat, textForDisplay } from '@/domain/text-format';
@@ -306,7 +307,7 @@ function CardPreviewFallback({
   const icon = base.kind === 'favicon' && faviconFailed ? monogramIcon(item) : base;
   const wordmark = previewWordmark(item);
   const accentColor = MONOGRAM_COLORS[wordmark.variant];
-  const foregroundColor = wordmark.variant === 3 ? '#172033' : '#ffffff';
+  const foregroundColor = wordmarkForeground(accentColor);
 
   return (
     <View
