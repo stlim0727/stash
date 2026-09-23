@@ -5,7 +5,7 @@ stay readable: keep durable project facts here, and move deep implementation
 history into docs or PR notes when possible. When editing this file, follow
 `docs/development/maintaining-agents-md.md`.
 
-Last updated: 2026-09-22 (Collaboration workflow: always start code work in a new git worktree).
+Last updated: 2026-09-23 (Worktree workflow; PR workflow 5-minute bot review wait rule; Supabase direct queries and client timeouts).
 
 ## Successor Agent Orientation
 
@@ -289,6 +289,7 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm test:components
+pnpm summary:users
 ```
 
 Command notes:
@@ -304,6 +305,10 @@ Command notes:
 - `pnpm test` runs the mobile Node logic tests plus Supabase function tests.
 - `pnpm test:components` runs the jest-expo React Native component/hook lane and
   accepts a single file path.
+- `pnpm summary:users [--devices] [--json]` runs `scripts/user-bookmark-summary.mjs`
+  against live Supabase (via `SUPABASE_SECRET_KEY` in `.env`/`.env.local`) to
+  report per-user bookmark status, platform adoption, and device install-base
+  (distinguishing automated test bursts from organic users).
 - To run one Node `.test.ts` file:
 
 ```sh
@@ -347,6 +352,7 @@ Delete `apps/mobile/dist/` afterwards; it is gitignored.
   identify their source.
 - If CI is green, all review threads are resolved, no merge conflicts exist, and no new review activity appears for 5 minutes, either ask
   the user to merge or merge directly for small, well-tested, low-risk changes.
+  **Crucial timing trap:** Never merge immediately after CI passes if less than 5 minutes have elapsed since PR creation or last push. Automated reviewers (such as Codex) routinely take 2–4 minutes to run and comment. Merging prematurely results in actionable review catches landing post-merge directly into trunk (as occurred on #796).
 - Do not auto-merge PRs that change Supabase migrations/functions,
   auth/session/sync deletion behavior, Cloudflare deploy config, or release
   workflows. Report status and ask.
@@ -566,6 +572,33 @@ in-app-feedback`) carry **no Sentry breadcrumbs** — `trackBreadcrumb` writes
   same-object bake with nothing new) is a React no-op that won't re-fire an
   effect keyed on that object — key this class of effect on a monotonic token
   bumped alongside the state write instead, not the object itself.
+- **Client timeout vs Edge Function timeout (`StashSupabaseClient.request`)**:
+  A blanket client-side request timeout (e.g. 15s) must not abort operations
+  that call long-running edge functions. Specifically, `ai-enrich`'s Gemini
+  provider waits 15s before catching its timeout and writing an intended
+  heuristic fallback (`supabase/functions/ai-enrich/gemini-provider.ts`). If the
+  client timer also fires at 15s, it aborts ahead of receiving that fallback
+  and triggers unnecessary client failure/retry paths. Keep timeouts
+  configurable or extended for edge function routes.
+- **Promise chain serialization with `Promise.race`**: Constructing a bounded task
+  like `Promise.race([task(), timeout])` starts `task()` immediately. When
+  chaining onto a serialized queue (`promise.then(() => ...)`), invoking `task()`
+  before or outside the `.then()` callback executes network work in parallel
+  rather than sequentially, allowing older in-flight requests to finish after
+  newer ones. Always defer task invocation inside the `.then(() => ...)` callback.
+- **Supabase credentials & direct querying fallback**: `SUPABASE_SECRET_KEY` in
+  `.env` / `.env.local` uses the `sb_secret_...` format (a service-role secret
+  API key), not a Management API PAT (`sbp_...`). When Supabase MCP is not
+  configured, query `https://<ref>.supabase.co/rest/v1/` and `/auth/v1/admin/`
+  directly with `apikey: <key>` and `Authorization: Bearer <key>`. Do not send it
+  to `https://api.supabase.com/v1/` (fails with `401: JWT could not be decoded`).
+- **Google Play Pre-Launch Report bursts in `auth.users`**: Uploading an APK/AAB
+  triggers Google Play Console's automated Robo test crawler across ~10–15
+  devices in 1–2 minutes. Because Keepory is anonymous-first and stamps
+  metadata on launch, this appears as an immediate cluster of anonymous Android
+  users with 0 bookmarks and `app_version` matching the release. Audits of
+  install base or user growth must filter out these bursts to avoid overcounting
+  organic adoption.
 
 ## Future Work
 
