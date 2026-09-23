@@ -340,7 +340,10 @@ export default function ReviewScreen() {
         <Text style={[styles.empty, { color: palette.textSecondary }]}>{t('review.empty')}</Text>
       </View>
     ) : (
-      <ScrollView style={webOverscrollContain} contentContainerStyle={styles.container}>
+      <ScrollView
+        style={[styles.scroll, webOverscrollContain]}
+        contentContainerStyle={[styles.container, { paddingBottom: insets.bottom + 80 }]}
+      >
       <Text style={[styles.sectionLabel, { color: palette.textSecondary }]}>
         {t('review.pendingHeader', { count: items.length })}
       </Text>
@@ -546,6 +549,12 @@ export default function ReviewScreen() {
 
 const styles = StyleSheet.create({
   fullScreen: {
+    flex: 1,
+  },
+  // Keep scrolling inside the modal viewport. Without flex:1 the web
+  // ScrollView grows to its content height, scrolls the document itself, and
+  // can leave the custom header partially above the viewport.
+  scroll: {
     flex: 1,
   },
   // Applied to the PostHogMaskView wrapping cardTitle Text below — its own

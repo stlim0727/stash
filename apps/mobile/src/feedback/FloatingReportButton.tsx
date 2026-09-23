@@ -45,11 +45,10 @@ const SCREENSHOT_CAPTURE_TIMEOUT_MS = 3000;
 // Inbox this button now sits bottom-left at the same offset instead of
 // stacked above it.
 const INBOX_BOTTOM_OFFSET = 20;
-// Every other screen's scroll content only reserves a few px of bottom
-// padding (it never accounted for a floating control at all), so this button
-// still needs real clearance there — unrelated to the "+" FAB, which only
-// exists on Inbox.
-const DEFAULT_BOTTOM_OFFSET = 88;
+// Keep the button on the same bottom axis throughout the app. Screens with
+// scrollable content reserve clearance for it; lifting the button itself by
+// 68px made it collide with whichever row happened to be visible there.
+const DEFAULT_BOTTOM_OFFSET = 20;
 // Persisted (repository meta store) so a user who long-presses this into its
 // minimized nub doesn't have to redo that every app launch.
 const MINIMIZED_PREF_KEY = 'pref.feedback.reportButtonMinimized';
