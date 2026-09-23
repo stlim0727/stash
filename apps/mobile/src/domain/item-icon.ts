@@ -22,6 +22,12 @@ export interface MonogramIcon {
   colorIndex: number;
 }
 
+export interface PreviewWordmark {
+  label: string;
+  /** Stable visual variant so repeated cards from one site feel related. */
+  variant: number;
+}
+
 export type ItemIcon = FaviconIcon | MonogramIcon;
 
 /** Distinct, legible backgrounds for fallback monograms. */
@@ -51,11 +57,65 @@ export function hostFromUrl(url: string | null | undefined): string | null {
 
 function firstLetter(source: string): string {
   for (const ch of source) {
-    if (/[a-z0-9]/i.test(ch)) {
+    if (/[\p{L}\p{N}]/u.test(ch)) {
       return ch.toUpperCase();
     }
   }
   return '#';
+}
+
+const COMMON_SECOND_LEVEL_SUFFIXES = new Set(['ac', 'co', 'com', 'edu', 'gov', 'net', 'org']);
+
+function hostKeyword(host: string): string {
+  const parts = host.split('.');
+  const last = parts.at(-1) ?? '';
+  const secondLast = parts.at(-2) ?? '';
+  const suffixLength =
+    last.length === 2 && COMMON_SECOND_LEVEL_SUFFIXES.has(secondLast) ? 2 : 1;
+  return parts.at(-(suffixLength + 1)) ?? parts.at(-2) ?? parts[0] ?? host;
+}
+
+function relativeLuminance(hex: string): number {
+  const channels = hex
+    .replace('#', '')
+    .match(/.{2}/g)
+    ?.map((channel) => Number.parseInt(channel, 16) / 255) ?? [0, 0, 0];
+  const [red, green, blue] = channels.map((channel) =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4,
+  );
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** Pick whichever of the app's light/dark foregrounds has stronger WCAG contrast. */
+export function wordmarkForeground(background: string): '#172033' | '#ffffff' {
+  const backgroundLuminance = relativeLuminance(background);
+  const darkLuminance = relativeLuminance('#172033');
+  const whiteContrast = 1.05 / (backgroundLuminance + 0.05);
+  const darkContrast =
+    (Math.max(backgroundLuminance, darkLuminance) + 0.05) /
+    (Math.min(backgroundLuminance, darkLuminance) + 0.05);
+  return darkContrast > whiteContrast ? '#172033' : '#ffffff';
+}
+
+/**
+ * Short display copy for a full-card fallback. It deliberately stays local and
+ * deterministic: this is a typographic placeholder, not fabricated site art.
+ */
+export function previewWordmark(bookmark: Bookmark): PreviewWordmark {
+  const host = hostFromUrl(bookmark.url);
+  const siteName = bookmark.site_name?.trim();
+  const humanSiteName = siteName?.replace(/^www\./, '') === host ? null : siteName;
+  const source =
+    humanSiteName ||
+    (host ? hostKeyword(host) : null) ||
+    bookmark.title?.trim() ||
+    markdownLabel(bookmark.description ?? '') ||
+    '#';
+  const label = Array.from(source.replace(/\s+/g, ' ').trim())
+    .slice(0, 28)
+    .join('')
+    .toLocaleUpperCase();
+  return { label, variant: monogramColorIndex(host ?? source) };
 }
 
 /** Deterministic 0..n-1 color slot from a seed so a site keeps its color. */

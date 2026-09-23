@@ -8,6 +8,8 @@ import {
   itemIcon,
   monogramColorIndex,
   monogramIcon,
+  previewWordmark,
+  wordmarkForeground,
 } from './item-icon.ts';
 
 function make(overrides: Partial<Bookmark> = {}): Bookmark {
@@ -80,6 +82,68 @@ test('letter skips leading non-alphanumerics and uppercases', () => {
     (itemIcon(make({ url: null, title: '###', site_name: null })) as { letter: string }).letter,
     '#',
   );
+});
+
+test('monogram supports Korean and other Unicode letters', () => {
+  assert.equal((itemIcon(make({ url: null, site_name: '키노라이츠' })) as { letter: string }).letter, '키');
+});
+
+test('monogram skips invisible and combining characters before the first visible letter', () => {
+  assert.equal(
+    (itemIcon(make({ url: null, site_name: '\u200B\u0301Google' })) as { letter: string }).letter,
+    'G',
+  );
+});
+
+test('preview wordmark prefers the site name and keeps a stable site variant', () => {
+  const a = previewWordmark(
+    make({ site_name: 'Hacker News', url: 'https://news.ycombinator.com/item?id=1' }),
+  );
+  const b = previewWordmark(
+    make({ site_name: 'Hacker News', url: 'https://news.ycombinator.com/item?id=2' }),
+  );
+  assert.equal(a.label, 'HACKER NEWS');
+  assert.equal(a.variant, b.variant);
+});
+
+test('preview wordmark falls back to the meaningful domain label', () => {
+  assert.equal(
+    previewWordmark(make({ site_name: null, url: 'https://news.ycombinator.com/item?id=1' })).label,
+    'YCOMBINATOR',
+  );
+});
+
+test('preview wordmark treats a derived hostname site name as a domain fallback', () => {
+  assert.equal(
+    previewWordmark(
+      make({ site_name: 'docs.expo.dev', url: 'https://docs.expo.dev/router/introduction' }),
+    ).label,
+    'EXPO',
+  );
+});
+
+test('preview wordmark accounts for common compound public suffixes', () => {
+  assert.equal(previewWordmark(make({ site_name: null, url: 'https://bbc.co.uk/news' })).label, 'BBC');
+  assert.equal(
+    previewWordmark(make({ site_name: null, url: 'https://example.com.au/story' })).label,
+    'EXAMPLE',
+  );
+});
+
+test('preview wordmark truncates without splitting a non-BMP code point', () => {
+  const label = previewWordmark(
+    make({ url: null, site_name: `${'a'.repeat(27)}😀after-cutoff` }),
+  ).label;
+  assert.equal(label, `${'A'.repeat(27)}😀`);
+  assert.equal(label.includes('\uFFFD'), false);
+});
+
+test('wordmark foreground chooses the higher-contrast text color', () => {
+  assert.equal(wordmarkForeground('#2bb673'), '#172033');
+  assert.equal(wordmarkForeground('#0ea5e9'), '#172033');
+  assert.equal(wordmarkForeground('#14b8a6'), '#172033');
+  assert.equal(wordmarkForeground('#208aef'), '#172033');
+  assert.equal(wordmarkForeground('#8b5cf6'), '#ffffff');
 });
 
 test('untitled Markdown memo uses its rendered body label for the monogram', () => {
