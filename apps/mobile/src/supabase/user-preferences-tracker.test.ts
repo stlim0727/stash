@@ -110,3 +110,48 @@ test('never throws when upsertUserPreferences fails', async () => {
     }),
   );
 });
+
+test('skips writes when signal is already aborted', async () => {
+  const client = fakeWriter();
+  const controller = new AbortController();
+  controller.abort();
+
+  await trackUserPreferences({
+    client,
+    session: sessionFor('user-1'),
+    locale: 'ko',
+    preference: 'ko',
+    now: NOW,
+    signal: controller.signal,
+  });
+
+  assert.equal(client.prefCalls.length, 0);
+  assert.equal(client.metaCalls.length, 0);
+});
+
+test('forwards signal to writer and skips updateUserMetadata if aborted during upsert', async () => {
+  const prefOptions: any[] = [];
+  const controller = new AbortController();
+
+  const client = {
+    upsertUserPreferences: async (_token: string, _data: any, options?: { signal?: AbortSignal }) => {
+      prefOptions.push(options);
+      controller.abort();
+    },
+    updateUserMetadata: async () => {
+      assert.fail('updateUserMetadata should not be called when signal aborts during upsert');
+    },
+  };
+
+  await trackUserPreferences({
+    client,
+    session: sessionFor('user-1'),
+    locale: 'ko',
+    preference: 'ko',
+    now: NOW,
+    signal: controller.signal,
+  });
+
+  assert.equal(prefOptions.length, 1);
+  assert.equal(prefOptions[0]?.signal, controller.signal);
+});

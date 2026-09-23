@@ -305,6 +305,14 @@ function bulkCreateKey(item: { urlHash: string | null; clientId: string | null }
   return null;
 }
 
+/**
+ * AI enrichment request timeout: The edge function's Gemini provider has a 15s timeout
+ * before falling back to heuristics (supabase/functions/ai-enrich/gemini-provider.ts).
+ * 35s ensures the client does not abort prematurely before the edge function can catch
+ * the timeout and return its heuristic fallback.
+ */
+export const AI_ENRICH_REQUEST_TIMEOUT_MS = 35_000;
+
 export class BookmarkApi {
   constructor(
     private readonly session: SupabaseAuthSession,
@@ -1242,6 +1250,7 @@ export class BookmarkApi {
     const row = await this.client.request<RemoteAIEnrichment>('/functions/v1/ai-enrich', {
       method: 'POST',
       accessToken: this.session.access_token,
+      timeoutMs: AI_ENRICH_REQUEST_TIMEOUT_MS,
       body: {
         bookmark_id: bookmarkId,
         ...(metadata ? { metadata } : {}),
