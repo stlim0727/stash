@@ -3,10 +3,9 @@
 /**
  * Live Supabase User & Device Bookmark Summary
  *
- * Inspects auth.users, admin_user_overview, user_sync_status, and
- * anon_user_cleanup_log from the live Supabase project. Provides both a per-user
- * status summary and an install-base / device audit (separating automated test
- * bursts from organic installs).
+ * Inspects auth.users, user_sync_status, anon_user_cleanup_log, and public.bookmarks
+ * from the live Supabase project. Provides both a per-user status summary and
+ * an install-base / session audit (separating automated test bursts from organic accounts).
  *
  * Usage:
  *   node scripts/user-bookmark-summary.mjs [--devices] [--json]
@@ -21,6 +20,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const DEFAULT_SUPABASE_URL = 'https://stzutoejnhzxzhjsjtsi.supabase.co';
+const DEFAULT_TIMEOUT_MS = 15000;
 
 function readDotEnv(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return {};
@@ -63,18 +63,28 @@ function loadConfig() {
   return { url: url.replace(/\/$/, ''), key };
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchAuthUsers(url, key) {
   let allUsers = [];
   let page = 1;
   while (true) {
-    const res = await fetch(`${url}/auth/v1/admin/users?page=${page}&per_page=100`, {
+    const res = await fetchWithTimeout(`${url}/auth/v1/admin/users?page=${page}&per_page=100`, {
       headers: {
         apikey: key,
         Authorization: `Bearer ${key}`,
       },
     });
     if (!res.ok) {
-      throw new Error(`Failed to fetch auth users: ${res.status} ${await res.text()}`);
+      throw new Error(`Failed to fetch auth users (${res.status}): ${await res.text()}`);
     }
     const data = await res.json();
     if (!data.users || data.users.length === 0) break;
@@ -85,19 +95,48 @@ async function fetchAuthUsers(url, key) {
   return allUsers;
 }
 
-async function fetchRest(url, key, endpoint, extraHeaders = {}) {
-  const res = await fetch(`${url}/rest/v1/${endpoint}`, {
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      ...extraHeaders,
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GET /rest/v1/${endpoint} failed (${res.status}): ${text}`);
+async function fetchAllRestPages(url, key, endpoint, pageSize = 1000) {
+  let allRows = [];
+  let from = 0;
+  const separator = endpoint.includes('?') ? '&' : '?';
+  while (true) {
+    const to = from + pageSize - 1;
+    const res = await fetchWithTimeout(`${url}/rest/v1/${endpoint}${separator}limit=${pageSize}&offset=${from}`, {
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`GET /rest/v1/${endpoint} failed (${res.status}): ${text}`);
+    }
+    const rows = await res.json();
+    if (!Array.isArray(rows) || rows.length === 0) break;
+    allRows = allRows.concat(rows);
+    if (rows.length < pageSize) break;
+    from += pageSize;
   }
-  return res;
+  return allRows;
+}
+
+function safeString(val) {
+  return typeof val === 'string' && val.trim().length > 0 ? val.trim() : null;
+}
+
+function getLatestTimestamp(timestamps) {
+  let latest = null;
+  let maxEpoch = -Infinity;
+  for (const ts of timestamps) {
+    if (typeof ts === 'string' && ts.trim().length > 0) {
+      const epoch = new Date(ts).getTime();
+      if (!Number.isNaN(epoch) && epoch > maxEpoch) {
+        maxEpoch = epoch;
+        latest = ts;
+      }
+    }
+  }
+  return latest;
 }
 
 function daysAgo(dateStr, now) {
@@ -106,33 +145,44 @@ function daysAgo(dateStr, now) {
 }
 
 function detectBursts(users) {
-  // Sort by created_at
-  const sorted = [...users].sort(
-    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+  // Only cluster anonymous Android users with 0 bookmarks and an app_version
+  const candidates = users.filter(
+    (u) =>
+      u.is_anonymous &&
+      u.platform === 'android' &&
+      u.bookmarks === 0 &&
+      u.archived === 0 &&
+      Boolean(u.app_version),
   );
+
+  const byVersion = new Map();
+  for (const u of candidates) {
+    if (!byVersion.has(u.app_version)) byVersion.set(u.app_version, []);
+    byVersion.get(u.app_version).push(u);
+  }
+
   const burstIds = new Set();
   const BURST_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
   const MIN_BURST_COUNT = 5;
 
-  for (let i = 0; i < sorted.length; i++) {
-    const u = sorted[i];
-    if (u.bookmarks > 0 || !u.is_anonymous) continue;
-    const t0 = new Date(u.created_at).getTime();
-    const cluster = [u];
-
-    for (let j = i + 1; j < sorted.length; j++) {
-      const u2 = sorted[j];
-      if (u2.bookmarks > 0 || !u2.is_anonymous) continue;
-      const t1 = new Date(u2.created_at).getTime();
-      if (t1 - t0 <= BURST_WINDOW_MS) {
-        cluster.push(u2);
-      } else {
-        break;
+  for (const cohort of byVersion.values()) {
+    cohort.sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
+    for (let i = 0; i < cohort.length; i++) {
+      const t0 = new Date(cohort[i].created_at).getTime();
+      const cluster = [cohort[i]];
+      for (let j = i + 1; j < cohort.length; j++) {
+        const t1 = new Date(cohort[j].created_at).getTime();
+        if (t1 - t0 <= BURST_WINDOW_MS) {
+          cluster.push(cohort[j]);
+        } else {
+          break;
+        }
       }
-    }
-
-    if (cluster.length >= MIN_BURST_COUNT) {
-      for (const b of cluster) burstIds.add(b.id);
+      if (cluster.length >= MIN_BURST_COUNT) {
+        for (const b of cluster) burstIds.add(b.id);
+      }
     }
   }
   return burstIds;
@@ -151,7 +201,7 @@ Usage:
   node scripts/user-bookmark-summary.mjs [--devices] [--json]
 
 Options:
-  --devices   Focus on install-base / device audit (organic vs automated test bursts)
+  --devices   Focus on install-base / session audit (organic vs automated test bursts)
   --json      Output aggregated raw JSON data
   --help, -h  Show this help message
 `);
@@ -166,20 +216,17 @@ Options:
     process.exit(1);
   }
 
-  // 1. Fetch all datasets concurrently
-  const [authUsers, rOverview, rSync, rCleanup, rBookmarksCount] = await Promise.all([
+  // 1. Fetch all datasets concurrently with bounded timeouts & pagination
+  const [authUsers, rSync, rCleanup, rBookmarks] = await Promise.all([
     fetchAuthUsers(url, key),
-    fetchRest(url, key, 'admin_user_overview?select=*').then((r) => r.json()),
-    fetchRest(url, key, 'user_sync_status?select=*').then((r) => r.json()),
-    fetchRest(url, key, 'anon_user_cleanup_log?select=*').then((r) => r.json()),
-    fetchRest(url, key, 'bookmarks?select=count', {
-      Prefer: 'count=exact',
-      Range: '0-0',
-    }),
+    fetchAllRestPages(url, key, 'user_sync_status'),
+    fetchAllRestPages(url, key, 'anon_user_cleanup_log'),
+    fetchAllRestPages(
+      url,
+      key,
+      'bookmarks?select=id,user_id,collection_id,is_archived,deleted_at,metadata_status,last_saved_at&deleted_at=is.null',
+    ),
   ]);
-
-  const totalBookmarks =
-    rBookmarksCount.headers.get('content-range')?.split('/')[1] || 'unknown';
 
   let totalReaped = 0;
   if (Array.isArray(rCleanup)) {
@@ -188,38 +235,88 @@ Options:
     }
   }
 
+  // 2. Aggregate bookmark metrics per user
+  // Invariant: active bookmarks must exclude both deleted_at != null and is_archived = true.
+  const userBookmarkStats = new Map();
+  let totalActiveBookmarks = 0;
+  let totalArchivedBookmarks = 0;
+
+  for (const b of rBookmarks) {
+    const uid = b.user_id;
+    if (!userBookmarkStats.has(uid)) {
+      userBookmarkStats.set(uid, {
+        active: 0,
+        archived: 0,
+        collections: new Set(),
+        metaPending: 0,
+        lastSaved: null,
+      });
+    }
+    const stat = userBookmarkStats.get(uid);
+    if (b.is_archived) {
+      stat.archived++;
+      totalArchivedBookmarks++;
+    } else {
+      stat.active++;
+      totalActiveBookmarks++;
+    }
+    if (b.collection_id) {
+      stat.collections.add(b.collection_id);
+    }
+    if (b.metadata_status === 'pending') {
+      stat.metaPending++;
+    }
+    if (b.last_saved_at) {
+      stat.lastSaved = getLatestTimestamp([stat.lastSaved, b.last_saved_at]);
+    }
+  }
+
   const syncMap = new Map();
   for (const s of rSync) syncMap.set(s.user_id, s);
 
-  const overviewMap = new Map();
-  for (const o of rOverview) overviewMap.set(o.user_id, o);
-
   const now = new Date();
 
-  // 2. Synthesize per-user record
+  // 3. Synthesize per-user records with safe metadata handling and max-timestamp activity
   const users = authUsers.map((u) => {
     const sync = syncMap.get(u.id);
-    const ov = overviewMap.get(u.id);
-    const meta = u.user_metadata || {};
-    const platform = meta.platform || null;
-    const appVersion = meta.app_version || sync?.app_version || null;
-    const versionSeen = meta.app_version_updated_at ? meta.app_version_updated_at.slice(0, 10) : null;
-    const effectiveLastActive =
-      sync?.last_synced_at || meta.app_version_updated_at || u.last_sign_in_at || u.created_at;
+    const bmStat = userBookmarkStats.get(u.id) || {
+      active: 0,
+      archived: 0,
+      collections: new Set(),
+      metaPending: 0,
+      lastSaved: null,
+    };
+    const meta = typeof u.user_metadata === 'object' && u.user_metadata !== null ? u.user_metadata : {};
+    const platform = safeString(meta.platform);
+    const appVersion = safeString(meta.app_version) || safeString(sync?.app_version);
+    const appVersionUpdatedAt = safeString(meta.app_version_updated_at);
+    const versionSeen = appVersionUpdatedAt ? appVersionUpdatedAt.slice(0, 10) : null;
+
+    const effectiveLastActive = getLatestTimestamp([
+      sync?.last_synced_at,
+      appVersionUpdatedAt,
+      u.last_sign_in_at,
+      u.created_at,
+      bmStat.lastSaved,
+    ]);
 
     return {
       id: u.id,
-      email: u.email || null,
-      is_anonymous: u.is_anonymous,
+      email: safeString(u.email),
+      is_anonymous: Boolean(u.is_anonymous),
       account_type: u.is_anonymous ? 'anonymous' : 'registered',
       platform,
       app_version: appVersion,
       version_seen: versionSeen,
-      bookmarks: ov?.bookmark_count ?? 0,
+      bookmarks: bmStat.active,
+      archived: bmStat.archived,
+      collections_used: bmStat.collections.size,
+      meta_pending: bmStat.metaPending,
+      last_saved: bmStat.lastSaved ? bmStat.lastSaved.slice(0, 10) : null,
       created_at: u.created_at,
       last_active: effectiveLastActive,
       days_inactive: daysAgo(effectiveLastActive, now),
-      last_synced_at: sync?.last_synced_at || null,
+      last_synced_at: safeString(sync?.last_synced_at),
     };
   });
 
@@ -233,8 +330,9 @@ Options:
           timestamp: now.toISOString(),
           total_users: users.length,
           total_reaped_anonymous: totalReaped,
-          lifetime_installs: users.length + totalReaped,
-          total_active_bookmarks: totalBookmarks,
+          cumulative_lifetime_sessions: users.length + totalReaped,
+          total_active_bookmarks: totalActiveBookmarks,
+          total_archived_bookmarks: totalArchivedBookmarks,
           burst_detected_count: burstCount,
           users,
         },
@@ -248,20 +346,20 @@ Options:
   // Formatting output
   const anonUsers = users.filter((u) => u.is_anonymous);
   const regUsers = users.filter((u) => !u.is_anonymous);
-  const emptyAnon = anonUsers.filter((u) => u.bookmarks === 0);
+  const emptyAnon = anonUsers.filter((u) => u.bookmarks === 0 && u.archived === 0);
   const withVersion = users.filter((u) => u.app_version);
 
-  console.log('\n========================================================');
-  console.log('         KEEPORY / STASH SUPABASE SUMMARY REPORT        ');
-  console.log('========================================================\n');
+  console.log('\n========================================================================================');
+  console.log('                        KEEPORY / STASH SUPABASE SUMMARY REPORT                         ');
+  console.log('========================================================================================\n');
 
   console.log('--- HEADLINE TOTALS ---');
-  console.log(`• Total Bookmarks (Active):     ${totalBookmarks}`);
-  console.log(`• Current Retained Users:       ${users.length} (${regUsers.length} registered, ${anonUsers.length} anonymous)`);
+  console.log(`• Active Bookmarks:             ${totalActiveBookmarks} (plus ${totalArchivedBookmarks} archived)`);
+  console.log(`• Current Retained Accounts:    ${users.length} (${regUsers.length} registered, ${anonUsers.length} anonymous)`);
   console.log(`• Empty Anonymous Accounts (0): ${emptyAnon.length}`);
   console.log(`• Version Stamp Coverage:       ${withVersion.length} / ${users.length} users (${Math.round((withVersion.length / users.length) * 100)}%)`);
-  console.log(`• Historically Reaped (Cron):   ${totalReaped} empty/idle anonymous sessions`);
-  console.log(`• Cumulative Lifetime Installs: ${users.length + totalReaped} installs ever connected\n`);
+  console.log(`• Historically Reaped (Cron):   ${totalReaped} empty/idle anonymous accounts`);
+  console.log(`• Cumulative Lifetime Sessions: ${users.length + totalReaped} auth sessions ever created (retained + reaped)\n`);
 
   // Platform & Version breakdown
   const platforms = {};
@@ -270,10 +368,10 @@ Options:
     platforms[p] = (platforms[p] || 0) + 1;
   }
 
-  console.log('--- PLATFORM BREAKDOWN ---');
+  console.log('--- PLATFORM BREAKDOWN (ACCOUNTS / SESSIONS) ---');
   for (const [p, count] of Object.entries(platforms)) {
     const pct = Math.round((count / users.length) * 100);
-    console.log(`• ${p.padEnd(15)}: ${String(count).padStart(3)} users (${pct}%)`);
+    console.log(`• ${p.padEnd(15)}: ${String(count).padStart(3)} sessions (${pct}%)`);
   }
   console.log();
 
@@ -281,19 +379,20 @@ Options:
   const webUsers = users.filter((u) => u.platform === 'web');
   const organicAndroid = androidUsers.filter((u) => !burstIds.has(u.id));
 
-  console.log('--- INSTALL-BASE & DEVICE AUDIT ---');
-  console.log(`• Android Total Devices:        ${androidUsers.length}`);
+  console.log('--- INSTALL-BASE & SESSION AUDIT ---');
+  console.log('  (Anonymous accounts are 1:1 per install session; registered accounts can span multiple devices)');
+  console.log(`• Android Sessions / Installs:  ${androidUsers.length}`);
   if (burstCount > 0) {
-    console.log(`  - Automated Test Bursts:      ${burstCount} devices (Play Store Pre-Launch / Test Lab)`);
-    console.log(`  - Organic Android Installs:   ${organicAndroid.length} devices`);
+    console.log(`  - Automated Test Bursts:      ${burstCount} accounts (Play Store Pre-Launch / Test Lab)`);
+    console.log(`  - Organic Android Installs:   ${organicAndroid.length} accounts`);
   }
-  console.log(`  - With >= 1 saved bookmark:   ${organicAndroid.filter((u) => u.bookmarks > 0).length}`);
+  console.log(`  - With >= 1 active bookmark:  ${organicAndroid.filter((u) => u.bookmarks > 0).length}`);
   console.log(`  - Active in last 24 hours:    ${organicAndroid.filter((u) => u.days_inactive <= 1).length}`);
   console.log(`  - Active in last 7 days:      ${organicAndroid.filter((u) => u.days_inactive <= 7).length}`);
   console.log(`  - Active in last 30 days:     ${organicAndroid.filter((u) => u.days_inactive <= 30).length}`);
   console.log(`  - Inactive > 30 days:         ${organicAndroid.filter((u) => u.days_inactive > 30).length}\n`);
 
-  console.log(`• Web Sessions:                 ${webUsers.length} (${webUsers.filter((u) => u.bookmarks > 0).length} with bookmarks, ${webUsers.filter((u) => u.days_inactive <= 7).length} active in 7d)\n`);
+  console.log(`• Web Sessions:                 ${webUsers.length} (${webUsers.filter((u) => u.bookmarks > 0).length} with active bookmarks, ${webUsers.filter((u) => u.days_inactive <= 7).length} active in 7d)\n`);
 
   const versions = {};
   for (const u of users) {
@@ -303,40 +402,62 @@ Options:
 
   console.log('--- APP VERSION ADOPTION ---');
   for (const [v, count] of Object.entries(versions)) {
-    console.log(`• ${v.padEnd(15)}: ${String(count).padStart(3)} users`);
+    console.log(`• ${v.padEnd(15)}: ${String(count).padStart(3)} accounts`);
   }
   console.log();
 
   if (!devicesOnly) {
-    console.log('--- REGISTERED USERS ---');
-    for (const r of regUsers) {
-      const plat = r.platform || '—';
-      const ver = r.app_version || '—';
-      const date = r.last_active ? r.last_active.slice(0, 10) : '—';
-      console.log(
-        `• ${r.email?.padEnd(25)} | Platform: ${plat.padEnd(8)} | Version: ${ver.padEnd(10)} | Bookmarks: ${String(r.bookmarks).padStart(4)} | Last Active: ${date}`,
-      );
-    }
-    console.log();
+    const regWithBookmarks = regUsers.filter((u) => u.bookmarks > 0 || u.archived > 0);
+    const regZeroBookmarks = regUsers.filter((u) => u.bookmarks === 0 && u.archived === 0);
+    const anonWithBookmarks = anonUsers.filter((u) => u.bookmarks > 0 || u.archived > 0);
 
-    const anonWithBookmarks = anonUsers.filter((u) => u.bookmarks > 0);
-    console.log(`--- ANONYMOUS USERS WITH BOOKMARKS (${anonWithBookmarks.length} users) ---`);
-    for (const a of anonWithBookmarks.slice(0, 15)) {
-      const shortId = `anon-${a.id.slice(0, 8)}`;
-      const plat = a.platform || '—';
-      const ver = a.app_version || '—';
-      const date = a.last_active ? a.last_active.slice(0, 10) : '—';
-      console.log(
-        `• ${shortId.padEnd(25)} | Platform: ${plat.padEnd(8)} | Version: ${ver.padEnd(10)} | Bookmarks: ${String(a.bookmarks).padStart(4)} | Last Active: ${date}`,
-      );
+    console.log('--- USERS WITH BOOKMARKS ---');
+    console.log(
+      'User                       | Type       | Active | Arch | Coll | Pending | Version    | Platform | Last Saved',
+    );
+    console.log(
+      '---------------------------+------------+--------+------+------+---------+------------+----------+-----------',
+    );
+
+    // Render registered users with bookmarks first
+    for (const r of regWithBookmarks) {
+      const email = (r.email || '—').slice(0, 26).padEnd(26);
+      const type = 'registered'.padEnd(10);
+      const active = String(r.bookmarks).padStart(6);
+      const arch = String(r.archived).padStart(4);
+      const coll = String(r.collections_used).padStart(4);
+      const pend = String(r.meta_pending).padStart(7);
+      const ver = (r.app_version || '—').padEnd(10);
+      const plat = (r.platform || '—').padEnd(8);
+      const saved = r.last_saved || '—';
+      console.log(`${email} | ${type} | ${active} | ${arch} | ${coll} | ${pend} | ${ver} | ${plat} | ${saved}`);
     }
-    if (anonWithBookmarks.length > 15) {
-      console.log(`  ... and ${anonWithBookmarks.length - 15} more anonymous users with bookmarks.`);
+
+    // Render anonymous users with bookmarks
+    for (const a of anonWithBookmarks.slice(0, 20)) {
+      const shortId = `(anon) ${a.id.slice(0, 8)}`.padEnd(26);
+      const type = 'anonymous '.padEnd(10);
+      const active = String(a.bookmarks).padStart(6);
+      const arch = String(a.archived).padStart(4);
+      const coll = String(a.collections_used).padStart(4);
+      const pend = String(a.meta_pending).padStart(7);
+      const ver = (a.app_version || '—').padEnd(10);
+      const plat = (a.platform || '—').padEnd(8);
+      const saved = a.last_saved || '—';
+      console.log(`${shortId} | ${type} | ${active} | ${arch} | ${coll} | ${pend} | ${ver} | ${plat} | ${saved}`);
+    }
+
+    if (anonWithBookmarks.length > 20) {
+      console.log(`... and ${anonWithBookmarks.length - 20} more anonymous accounts with bookmarks.`);
+    }
+
+    if (regZeroBookmarks.length > 0) {
+      console.log(`\n(Note: ${regZeroBookmarks.length} registered account(s) with 0 bookmarks omitted from detail table)`);
     }
     console.log();
   }
 
-  console.log('========================================================\n');
+  console.log('========================================================================================\n');
 }
 
 main().catch((err) => {
