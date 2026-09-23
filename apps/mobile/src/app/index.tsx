@@ -3596,7 +3596,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     // Nudge off the very bottom so it lines up with the wordmark's baseline
     // rather than its descender edge.
-    marginBottom: 2,
+    // The PNG has transparent padding around the visible wordmark. Aligning
+    // the Text box to the Image box therefore leaves the count optically low;
+    // lift it to the visible letter baseline instead.
+    marginBottom: 4,
     flexShrink: 1,
   },
   avatar: {
@@ -3811,6 +3814,9 @@ const styles = StyleSheet.create({
     gap: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
+    // Match the view-mode segment's outer height at the default font scale,
+    // while still allowing labeled pills to grow with accessibility text.
+    minHeight: 36,
     paddingVertical: 8,
     paddingHorizontal: 14,
   },
@@ -3832,10 +3838,13 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
     overflow: 'hidden',
+    height: 36,
   },
   viewSegmentButton: {
     width: 36,
-    height: 36,
+    // The parent's hairline border is part of the 36px outer control. Let the
+    // children fill the remaining inner box instead of making it 2px taller.
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -846,7 +846,9 @@ export default function SettingsScreen() {
       style={[styles.scroll, webOverscrollContain]}
       contentContainerStyle={[
         styles.container,
-        { paddingBottom: insets.bottom + 24 },
+        // Clear the global report FAB when the final setting is scrolled into
+        // view instead of letting the floating control cover the row.
+        { paddingBottom: insets.bottom + 80 },
       ]}
     >
       {/* Account — identity, sign in/out only. Sync/metadata/AI status moved
