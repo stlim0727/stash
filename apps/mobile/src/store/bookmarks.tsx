@@ -2878,7 +2878,8 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
         const isRepairable = isRepairableSourceTitle(existing);
         const titleCanBeImproved =
           Boolean(title?.trim()) &&
-          (existing.title == null ||
+          (!title_is_derived ||
+            existing.title == null ||
             existing.title_is_derived === true ||
             isRepairable);
         const updatedTitle = titleCanBeImproved ? title!.trim() : existing.title;
@@ -2888,20 +2889,28 @@ export function BookmarksProvider({ children }: { children: ReactNode }) {
             ? true
             : existing.title_is_derived;
 
+        const notesCanBeImproved = Boolean(notes?.trim());
+        const updatedNotes = notesCanBeImproved ? (notes ?? null) : existing.notes;
+        const updatedNotesFormat = notesCanBeImproved ? notes_format : existing.notes_format;
+        const notesChanged = notesCanBeImproved && updatedNotes !== existing.notes;
+
         const needsMetadataRefresh =
           Boolean(existing.url) &&
           (updatedTitle == null || updatedTitleDerived === true || isRepairable);
 
         const titleChanged = titleCanBeImproved && updatedTitle !== existing.title;
-        const syncsRemotely = titleChanged ? hasSyncedOnce(existing.id) : false;
+        const contentChanged = titleChanged || notesChanged;
+        const syncsRemotely = contentChanged ? hasSyncedOnce(existing.id) : false;
 
         const updated: Bookmark = {
           ...existing,
           title: updatedTitle,
           title_is_derived: updatedTitleDerived,
+          notes: updatedNotes,
+          notes_format: updatedNotesFormat,
           last_saved_at: now,
           last_accessed_at: now,
-          updated_at: titleChanged ? now : existing.updated_at,
+          updated_at: contentChanged ? now : existing.updated_at,
           sync_status: syncsRemotely ? "pending" : existing.sync_status,
           ever_synced: syncsRemotely ? true : existing.ever_synced,
           metadata_status: needsMetadataRefresh ? "pending" : existing.metadata_status,

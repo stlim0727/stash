@@ -46,6 +46,7 @@ export default function AddBookmarkScreen() {
   const [memo, setMemo] = useState('');
   const [format, setFormat] = useState<TextFormat>('plain');
   const [error, setError] = useState<string | null>(null);
+  const titleInputRef = useRef<TextInput | null>(null);
 
   // A capture intent passed via query params — the web counterpart of the
   // native share handler. The desktop bookmarklet, the PWA Web Share Target,
@@ -163,6 +164,7 @@ export default function AddBookmarkScreen() {
           autoCorrect={false}
           autoFocus
           keyboardType="url"
+          returnKeyType="next"
           value={url}
           onChangeText={(value) => {
             setUrl(value);
@@ -170,15 +172,17 @@ export default function AddBookmarkScreen() {
               setError(null);
             }
           }}
-          onSubmitEditing={handleSave}
+          onSubmitEditing={() => titleInputRef.current?.focus()}
         />
         {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
         <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.memoTitleLabel')}</Text>
         <TextInput
+          ref={titleInputRef}
           accessibilityLabel={t('add.memoTitleLabel')}
           style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
           placeholder={t('add.memoTitlePlaceholder')}
           placeholderTextColor={palette.textSecondary}
+          returnKeyType="next"
           value={title}
           onChangeText={(value) => {
             setTitle(value);

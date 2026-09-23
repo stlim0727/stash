@@ -108,6 +108,47 @@ describe('AddBookmarkScreen duplicate UX', () => {
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
     unmount();
   });
+
+  it('advances focus to the title input instead of saving when submitting the URL field', async () => {
+    fakeRepo.__reset([]);
+    const { getByPlaceholderText, unmount } = await renderAddScreen();
+
+    await act(async () => {
+      fireEvent.changeText(getByPlaceholderText('https://'), 'https://example.com/fresh');
+      fireEvent(getByPlaceholderText('https://'), 'submitEditing');
+    });
+
+    expect(mockBack).not.toHaveBeenCalled();
+    expect(fakeRepo.__queue()).toHaveLength(0);
+    unmount();
+  });
+
+  it('updates title and notes when re-saving an already stashed URL with custom title and notes', async () => {
+    fakeRepo.__reset([makeStoredBookmark({
+      id: 'existing-1',
+      url: 'https://example.com/stored',
+      title: 'Original Title',
+      title_is_derived: false,
+    })]);
+    const { findByText, findByLabelText, getByPlaceholderText, unmount } = await renderAddScreen();
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+
+    await act(async () => {
+      fireEvent.changeText(getByPlaceholderText('https://'), 'https://example.com/stored');
+      fireEvent.changeText(await findByLabelText('Title (optional)'), 'Updated Title');
+      fireEvent.changeText(await findByLabelText('Memo'), 'Updated Notes');
+    });
+    await act(async () => {
+      fireEvent.press(await findByText('Save bookmark'));
+    });
+
+    await findByText('Already in Keepory');
+    expect(mockBack).toHaveBeenCalled();
+    const stored = fakeRepo.__bookmarks().find((b) => b.url === 'https://example.com/stored');
+    expect(stored?.title).toBe('Updated Title');
+    expect(stored?.notes).toBe('Updated Notes');
+    unmount();
+  });
 });
 
 describe('AddBookmarkScreen memo formats', () => {
