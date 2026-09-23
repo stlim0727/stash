@@ -22,6 +22,12 @@ export interface MonogramIcon {
   colorIndex: number;
 }
 
+export interface PreviewWordmark {
+  label: string;
+  /** Stable visual variant so repeated cards from one site feel related. */
+  variant: number;
+}
+
 export type ItemIcon = FaviconIcon | MonogramIcon;
 
 /** Distinct, legible backgrounds for fallback monograms. */
@@ -51,11 +57,33 @@ export function hostFromUrl(url: string | null | undefined): string | null {
 
 function firstLetter(source: string): string {
   for (const ch of source) {
-    if (/[a-z0-9]/i.test(ch)) {
+    if (/[^\s\p{P}\p{S}]/u.test(ch)) {
       return ch.toUpperCase();
     }
   }
   return '#';
+}
+
+function hostKeyword(host: string): string {
+  const parts = host.split('.');
+  const withoutSuffix = parts.length > 1 ? parts.slice(0, -1) : parts;
+  return withoutSuffix.findLast((part) => !['www', 'm', 'mobile', 'news'].includes(part)) ?? host;
+}
+
+/**
+ * Short display copy for a full-card fallback. It deliberately stays local and
+ * deterministic: this is a typographic placeholder, not fabricated site art.
+ */
+export function previewWordmark(bookmark: Bookmark): PreviewWordmark {
+  const host = hostFromUrl(bookmark.url);
+  const source =
+    bookmark.site_name?.trim() ||
+    (host ? hostKeyword(host) : null) ||
+    bookmark.title?.trim() ||
+    markdownLabel(bookmark.description ?? '') ||
+    '#';
+  const label = source.replace(/\s+/g, ' ').trim().slice(0, 28).toLocaleUpperCase();
+  return { label, variant: monogramColorIndex(host ?? source) };
 }
 
 /** Deterministic 0..n-1 color slot from a seed so a site keeps its color. */

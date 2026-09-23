@@ -61,7 +61,12 @@ import { collectionMatchKey } from '@/domain/collection-match';
 import { collectionColorKey, type CollectionColorKey } from '@/domain/collection-color';
 import { filterBookmarks, queryHasSearchTokens } from '@/domain/search';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
-import { MONOGRAM_COLORS, itemIcon, monogramIcon } from '@/domain/item-icon';
+import {
+  MONOGRAM_COLORS,
+  itemIcon,
+  monogramIcon,
+  previewWordmark,
+} from '@/domain/item-icon';
 import { accessibilityTitle, displayTitle, isTitleDerived, siteLabel } from '@/domain/item-display';
 import { memoBodyFormat, textForDisplay } from '@/domain/text-format';
 import {
@@ -285,8 +290,8 @@ function ItemIcon({
 
 /**
  * Fallback preview banner for cards without a preview image.
- * Renders a prominent favicon tile if available, falling back to a bold domain monogram,
- * centered on a subtly tinted surface with matching site accent.
+ * Turns site metadata into a deterministic typographic wordmark. This gives an
+ * image-less card some identity without pretending generated art came from the page.
  */
 function CardPreviewFallback({
   item,
@@ -299,23 +304,17 @@ function CardPreviewFallback({
   const [faviconFailed, setFaviconFailed] = useState(false);
   const base = itemIcon(item);
   const icon = base.kind === 'favicon' && faviconFailed ? monogramIcon(item) : base;
-  const monogram = monogramIcon(item);
-  const accentColor = MONOGRAM_COLORS[monogram.colorIndex];
+  const wordmark = previewWordmark(item);
+  const accentColor = MONOGRAM_COLORS[wordmark.variant];
+  const foregroundColor = wordmark.variant === 3 ? '#172033' : '#ffffff';
 
   return (
     <View
       testID="inbox-card-preview-fallback"
-      style={[
-        styles.cardPreviewFallback,
-        { backgroundColor: palette.mutedSurface },
-      ]}
+      style={[styles.cardPreviewFallback, { backgroundColor: accentColor }]}
     >
-      <View
-        style={[
-          StyleSheet.absoluteFill,
-          { backgroundColor: accentColor, opacity: palette.background === '#151b26' ? 0.14 : 0.08 },
-        ]}
-      />
+      <View style={[styles.cardFallbackOrb, styles.cardFallbackOrbTop, { borderColor: foregroundColor }]} />
+      <View style={[styles.cardFallbackOrb, styles.cardFallbackOrbBottom, { borderColor: foregroundColor }]} />
       {icon.kind === 'favicon' ? (
         <View
           style={[
@@ -334,18 +333,16 @@ function CardPreviewFallback({
             onError={() => setFaviconFailed(true)}
           />
         </View>
-      ) : (
-        <View
-          testID={testID}
-          style={[
-            styles.cardFallbackMonogramTile,
-            { backgroundColor: accentColor },
-            palette.shadow.soft,
-          ]}
-        >
-          <Text style={styles.cardFallbackMonogramLetter}>{icon.letter}</Text>
-        </View>
-      )}
+      ) : null}
+      <Text
+        testID={testID}
+        style={[styles.cardFallbackWordmark, { color: foregroundColor }]}
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.58}
+      >
+        {wordmark.label}
+      </Text>
     </View>
   );
 }
@@ -3285,7 +3282,7 @@ export default function InboxScreen() {
                     ) : (
                       <CardPreviewFallback
                         item={item}
-                        testID="inbox-card-monogram"
+                        testID="inbox-card-wordmark"
                       />
                     )}
                   </Pressable>
@@ -3997,35 +3994,52 @@ const styles = StyleSheet.create({
   cardPreviewFallback: {
     width: '100%',
     height: CARD_PREVIEW_HEIGHT,
-    alignItems: 'center',
-    justifyContent: 'center',
+    justifyContent: 'flex-end',
     position: 'relative',
     overflow: 'hidden',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
   },
   cardFallbackFaviconTile: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
+    position: 'absolute',
+    top: 14,
+    left: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   cardFallbackFaviconImage: {
-    width: 34,
-    height: 34,
+    width: 24,
+    height: 24,
   },
-  cardFallbackMonogramTile: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+  cardFallbackOrb: {
+    position: 'absolute',
+    borderWidth: 22,
+    borderRadius: 999,
+    opacity: 0.11,
   },
-  cardFallbackMonogramLetter: {
-    color: '#ffffff',
-    fontSize: 26,
-    fontWeight: '700',
+  cardFallbackOrbTop: {
+    width: 150,
+    height: 150,
+    top: -92,
+    right: 36,
+  },
+  cardFallbackOrbBottom: {
+    width: 110,
+    height: 110,
+    right: -28,
+    bottom: -54,
+  },
+  cardFallbackWordmark: {
+    width: '82%',
+    fontSize: 34,
+    lineHeight: 34,
+    fontWeight: '900',
+    letterSpacing: -1.2,
   },
   previewRibbon: {
     position: 'absolute',

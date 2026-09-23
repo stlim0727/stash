@@ -8,6 +8,7 @@ import {
   itemIcon,
   monogramColorIndex,
   monogramIcon,
+  previewWordmark,
 } from './item-icon.ts';
 
 function make(overrides: Partial<Bookmark> = {}): Bookmark {
@@ -79,6 +80,28 @@ test('letter skips leading non-alphanumerics and uppercases', () => {
   assert.equal(
     (itemIcon(make({ url: null, title: '###', site_name: null })) as { letter: string }).letter,
     '#',
+  );
+});
+
+test('monogram supports Korean and other Unicode letters', () => {
+  assert.equal((itemIcon(make({ url: null, site_name: '키노라이츠' })) as { letter: string }).letter, '키');
+});
+
+test('preview wordmark prefers the site name and keeps a stable site variant', () => {
+  const a = previewWordmark(
+    make({ site_name: 'Hacker News', url: 'https://news.ycombinator.com/item?id=1' }),
+  );
+  const b = previewWordmark(
+    make({ site_name: 'Hacker News', url: 'https://news.ycombinator.com/item?id=2' }),
+  );
+  assert.equal(a.label, 'HACKER NEWS');
+  assert.equal(a.variant, b.variant);
+});
+
+test('preview wordmark falls back to the meaningful domain label', () => {
+  assert.equal(
+    previewWordmark(make({ site_name: null, url: 'https://news.ycombinator.com/item?id=1' })).label,
+    'YCOMBINATOR',
   );
 });
 

@@ -1170,7 +1170,7 @@ test('the sort menu reorders the Inbox by date and name', async () => {
   expect(titles()).toEqual(['apple', 'Zebra']);
 });
 
-test('every card shows an icon — favicon when present, else a domain monogram', async () => {
+test('every image-less card shows a site wordmark', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-000000000031',
@@ -1189,10 +1189,9 @@ test('every card shows an icon — favicon when present, else a domain monogram'
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('No favicon')).toBeTruthy());
 
-  // The favicon-less card falls back to a monogram of its domain (raindrop.io → R).
-  const monograms = screen.getAllByTestId('inbox-card-monogram');
-  expect(monograms).toHaveLength(1);
-  expect(screen.getByText('R')).toBeTruthy();
+  const wordmarks = screen.getAllByTestId('inbox-card-wordmark');
+  expect(wordmarks).toHaveLength(2);
+  expect(screen.getByText('RAINDROP')).toBeTruthy();
 });
 
 test('the view segmented control switches between card and list layouts', async () => {
@@ -1979,7 +1978,7 @@ test('a card without a preview image shows the site label instead of the raw URL
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('The future of work')).toBeTruthy());
 
-  expect(screen.getByText('WIRED')).toBeTruthy();
+  expect(screen.getAllByText('WIRED')).toHaveLength(2);
   expect(screen.queryByText('https://example.com/article/12345')).toBeNull();
 });
 
@@ -2040,9 +2039,9 @@ test('a card without a preview image renders a fallback preview banner with the 
 
   // The card renders the preview container with the fallback banner
   expect(screen.getByTestId('inbox-card-preview')).toBeTruthy();
-  // Shows the domain monogram ("H" for Hacker News)
-  expect(screen.getByTestId('inbox-card-monogram')).toBeTruthy();
-  expect(screen.getByText('H')).toBeTruthy();
+  // Uses the site name as a prominent wordmark instead of a one-letter tile.
+  expect(screen.getByTestId('inbox-card-wordmark')).toBeTruthy();
+  expect(screen.getByText('HACKER NEWS')).toBeTruthy();
   // And the preview ribbon carries the site label
   expect(screen.getByText('Hacker News')).toBeTruthy();
 });
@@ -2140,7 +2139,7 @@ test('a query matching both site_name and a URL-only term keeps both matches vis
   await fireEvent.changeText(screen.getByPlaceholderText('Search titles, tags, collections'), 'wired 98765');
 
   await waitFor(() => expect(screen.getByText('1 result')).toBeTruthy());
-  expect(screen.getByText('WIRED')).toBeTruthy();
+  expect(screen.getAllByText('WIRED')).toHaveLength(2);
   expect(screen.getByText('https://example.com/article/98765')).toBeTruthy();
 });
 
