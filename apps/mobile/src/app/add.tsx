@@ -30,8 +30,6 @@ import { useBookmarks } from '@/store/bookmarks';
 const SHEET_PANEL_MAX_WIDTH = 480;
 const MAX_MEMO_LENGTH = 10_000;
 
-type AddMode = 'link' | 'memo';
-
 export default function AddBookmarkScreen() {
   const palette = usePalette();
   const router = useRouter();
@@ -43,13 +41,10 @@ export default function AddBookmarkScreen() {
   const asSheet = width >= 760;
   const { addBookmark, isLoading } = useBookmarks();
   const { show } = useCaptureToast();
-  const [mode, setMode] = useState<AddMode>('link');
   const [url, setUrl] = useState('');
-  const [note, setNote] = useState('');
-  const [memoTitle, setMemoTitle] = useState('');
-  const [memoBody, setMemoBody] = useState('');
-  const [noteFormat, setNoteFormat] = useState<TextFormat>('plain');
-  const [memoFormat, setMemoFormat] = useState<TextFormat>('plain');
+  const [title, setTitle] = useState('');
+  const [memo, setMemo] = useState('');
+  const [format, setFormat] = useState<TextFormat>('plain');
   const [error, setError] = useState<string | null>(null);
 
   // A capture intent passed via query params — the web counterpart of the
@@ -114,14 +109,28 @@ export default function AddBookmarkScreen() {
   }
 
   function handleSave() {
-    if (mode === 'memo' && !memoBody.trim()) {
-      setError(t('add.memoRequired'));
+    const trimmedUrl = url.trim();
+    const trimmedMemo = memo.trim();
+    const trimmedTitle = title.trim();
+
+    if (!trimmedUrl && !trimmedMemo) {
+      setError(t('add.urlOrMemoRequired'));
       return;
     }
-    const result =
-      mode === 'memo'
-        ? addBookmark({ title: memoTitle, shared_text: memoBody, description_format: memoFormat })
-        : addBookmark({ url, notes: note, notes_format: noteFormat });
+
+    const result = trimmedUrl
+      ? addBookmark({
+          url: trimmedUrl,
+          title: trimmedTitle || undefined,
+          notes: memo,
+          notes_format: format,
+        })
+      : addBookmark({
+          title: trimmedTitle || undefined,
+          shared_text: memo,
+          description_format: format,
+        });
+
     if (result.status === 'invalid') {
       setError(result.error);
       return;
@@ -134,6 +143,8 @@ export default function AddBookmarkScreen() {
     router.back();
   }
 
+  const isMemoOnly = !url.trim() && Boolean(memo.trim());
+
   const content = (
     <ScrollView
       testID="add-scroll"
@@ -142,110 +153,62 @@ export default function AddBookmarkScreen() {
       keyboardShouldPersistTaps="handled"
     >
       <Card elevated={false} style={styles.captureCard}>
-        <View
-          accessibilityRole="tablist"
-          style={[styles.modeSwitch, { backgroundColor: palette.surface, borderColor: palette.border }]}
-        >
-          {(['link', 'memo'] as const).map((value) => {
-            const selected = mode === value;
-            return (
-              <Pressable
-                key={value}
-                accessibilityRole="tab"
-                accessibilityState={{ selected }}
-                accessibilityLabel={t(value === 'link' ? 'add.modeLinkA11y' : 'add.modeMemoA11y')}
-                onPress={() => {
-                  setMode(value);
-                  setError(null);
-                }}
-                style={[
-                  styles.modeButton,
-                  selected && { backgroundColor: palette.accentSoft },
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.modeButtonText,
-                    { color: selected ? palette.accent : palette.textSecondary },
-                  ]}
-                >
-                  {t(value === 'link' ? 'add.modeLink' : 'add.modeMemo')}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        {mode === 'link' ? (
-          <>
-            <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
-              placeholder={t('add.urlPlaceholder')}
-              placeholderTextColor={palette.textSecondary}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoFocus
-              keyboardType="url"
-              value={url}
-              onChangeText={(value) => {
-                setUrl(value);
-                if (error) {
-                  setError(null);
-                }
-              }}
-              onSubmitEditing={handleSave}
-            />
-            {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
-            <MemoEditor
-              label={t('add.noteLabel')}
-              accessibilityLabel={t('add.noteLabel')}
-              placeholder={t('add.notePlaceholder')}
-              value={note}
-              format={noteFormat}
-              alwaysEditing
-              onChange={({ value, format }) => {
-                setNote(value);
-                setNoteFormat(format);
-              }}
-            />
-          </>
-        ) : (
-          <>
-            <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.memoTitleLabel')}</Text>
-            <TextInput
-              accessibilityLabel={t('add.memoTitleLabel')}
-              style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
-              placeholder={t('add.memoTitlePlaceholder')}
-              placeholderTextColor={palette.textSecondary}
-              value={memoTitle}
-              onChangeText={setMemoTitle}
-            />
-            <MemoEditor
-              label={t('add.memoBodyLabel')}
-              accessibilityLabel={t('add.memoBodyLabel')}
-              placeholder={t('add.memoBodyPlaceholder')}
-              autoFocus
-              alwaysEditing
-              maxLength={MAX_MEMO_LENGTH}
-              value={memoBody}
-              format={memoFormat}
-              onChange={({ value, format }) => {
-                setMemoBody(value);
-                setMemoFormat(format);
-                if (error) {
-                  setError(null);
-                }
-              }}
-            />
-            {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
-          </>
-        )}
+        <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.urlLabel')}</Text>
+        <TextInput
+          accessibilityLabel={t('add.urlLabel')}
+          style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
+          placeholder={t('add.urlPlaceholder')}
+          placeholderTextColor={palette.textSecondary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoFocus
+          keyboardType="url"
+          value={url}
+          onChangeText={(value) => {
+            setUrl(value);
+            if (error) {
+              setError(null);
+            }
+          }}
+          onSubmitEditing={handleSave}
+        />
+        {error ? <Text style={[styles.error, { color: palette.danger }]}>{error}</Text> : null}
+        <Text style={[styles.label, { color: palette.textSecondary }]}>{t('add.memoTitleLabel')}</Text>
+        <TextInput
+          accessibilityLabel={t('add.memoTitleLabel')}
+          style={[styles.input, { backgroundColor: palette.card, color: palette.text }]}
+          placeholder={t('add.memoTitlePlaceholder')}
+          placeholderTextColor={palette.textSecondary}
+          value={title}
+          onChangeText={(value) => {
+            setTitle(value);
+            if (error) {
+              setError(null);
+            }
+          }}
+        />
+        <MemoEditor
+          label={t('add.memoBodyLabel')}
+          accessibilityLabel={t('add.memoBodyLabel')}
+          placeholder={t('add.memoBodyPlaceholder')}
+          alwaysEditing
+          maxLength={MAX_MEMO_LENGTH}
+          value={memo}
+          format={format}
+          onChange={({ value, format: nextFormat }) => {
+            setMemo(value);
+            setFormat(nextFormat);
+            if (error) {
+              setError(null);
+            }
+          }}
+        />
       </Card>
       <Button size="lg" onPress={handleSave}>
-        {t(mode === 'memo' ? 'add.saveMemo' : 'add.save')}
+        {t(isMemoOnly ? 'add.saveMemo' : 'add.save')}
       </Button>
       <Text style={[styles.hint, { color: palette.textSecondary }]}>
-        {t(mode === 'memo' ? 'add.memoHint' : 'add.hint')}
+        {t(isMemoOnly ? 'add.memoHint' : 'add.hint')}
       </Text>
     </ScrollView>
   );
@@ -354,25 +317,6 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 18,
     gap: 10,
-  },
-  modeSwitch: {
-    flexDirection: 'row',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 16,
-    padding: 3,
-    gap: 4,
-  },
-  modeButton: {
-    flex: 1,
-    minHeight: 38,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 13,
-    paddingHorizontal: 12,
-  },
-  modeButtonText: {
-    fontSize: 14,
-    fontWeight: '700',
   },
   label: {
     fontSize: 13,

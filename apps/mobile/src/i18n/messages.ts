@@ -300,7 +300,7 @@ export const en = {
   'viewMode.collection': 'Collections',
 
   // Add bookmark.
-  'add.urlLabel': 'URL',
+  'add.urlLabel': 'URL (optional)',
   'add.urlPlaceholder': 'https://',
   'add.modeLink': 'Link',
   'add.modeMemo': 'Memo',
@@ -310,9 +310,10 @@ export const en = {
   'add.notePlaceholder': 'Why are you saving this?',
   'add.memoTitleLabel': 'Title (optional)',
   'add.memoTitlePlaceholder': 'Give this memo a title',
-  'add.memoBodyLabel': 'Content',
+  'add.memoBodyLabel': 'Memo',
   'add.memoBodyPlaceholder': 'Write your memo…',
   'add.memoRequired': 'Write something before saving this memo.',
+  'add.urlOrMemoRequired': 'Enter a web address or write a memo.',
   'add.save': 'Save bookmark',
   'add.saveMemo': 'Save memo',
   'add.hint': 'Saved instantly. Sync happens in the background.',

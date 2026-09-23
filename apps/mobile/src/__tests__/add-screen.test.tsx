@@ -115,8 +115,7 @@ describe('AddBookmarkScreen memo formats', () => {
     const source = '  # literal heading\n*literal*\n';
     fakeRepo.__reset([]);
     const screen = await renderAddScreen();
-    await fireEvent.press(await screen.findByText('Memo'));
-    await fireEvent.changeText(screen.getByLabelText('Content'), source);
+    await fireEvent.changeText(screen.getByLabelText('Memo'), source);
     expect(screen.queryByText('Preview')).toBeNull();
     await fireEvent.press(screen.getByText('Save memo'));
     await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
@@ -130,11 +129,12 @@ describe('AddBookmarkScreen memo formats', () => {
     fakeRepo.__reset([]);
     const screen = await renderAddScreen();
     await fireEvent.changeText(screen.getByPlaceholderText('https://'), 'https://example.com/note-format');
-    await fireEvent.changeText(screen.getByPlaceholderText('Why are you saving this?'), source);
-    await fireEvent.press(screen.getByLabelText('Format for Note (optional)'));
+    await fireEvent.changeText(screen.getByLabelText('Memo'), source);
+    await fireEvent.press(screen.getByLabelText('Format for Memo'));
     await fireEvent.press(screen.getByRole('radio', { name: 'Markdown' }));
     await fireEvent.press(screen.getByText('Save bookmark'));
     await waitFor(() => expect(fakeRepo.__bookmarks()[0]).toMatchObject({
+      url: 'https://example.com/note-format',
       notes: source,
       notes_format: 'markdown',
     }));
@@ -146,10 +146,9 @@ describe('AddBookmarkScreen memo formats', () => {
     const { findByText, findByLabelText, unmount } = await renderAddScreen();
     await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
 
-    fireEvent.press(await findByText('Memo'));
     fireEvent.changeText(await findByLabelText('Title (optional)'), 'Weekly plan');
-    await fireEvent.changeText(await findByLabelText('Content'), markdown);
-    await fireEvent.press(await findByLabelText('Format for Content'));
+    await fireEvent.changeText(await findByLabelText('Memo'), markdown);
+    await fireEvent.press(await findByLabelText('Format for Memo'));
     await fireEvent.press(await findByText('Markdown'));
     await fireEvent.press(await findByText('Preview'));
     await fireEvent.press(await findByText('Write'));
@@ -175,14 +174,35 @@ describe('AddBookmarkScreen memo formats', () => {
     unmount();
   });
 
+  it('saves URL, custom title, and memo together', async () => {
+    fakeRepo.__reset([]);
+    const { findByText, findByLabelText, getByPlaceholderText, unmount } = await renderAddScreen();
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(0));
+
+    fireEvent.changeText(getByPlaceholderText('https://'), 'https://example.com/full');
+    fireEvent.changeText(await findByLabelText('Title (optional)'), 'Custom Title');
+    fireEvent.changeText(await findByLabelText('Memo'), 'My notes on this link');
+    fireEvent.press(await findByText('Save bookmark'));
+
+    await waitFor(() => expect(fakeRepo.__queue()).toHaveLength(1));
+    const saved = fakeRepo.__bookmarks()[0];
+    expect(saved).toMatchObject({
+      url: 'https://example.com/full',
+      title: 'Custom Title',
+      notes: 'My notes on this link',
+      content_type: 'url',
+    });
+    expect(mockBack).toHaveBeenCalled();
+    unmount();
+  });
+
   it('keeps an empty memo open and shows a validation message', async () => {
     fakeRepo.__reset([]);
     const { findByText, unmount } = await renderAddScreen();
 
-    fireEvent.press(await findByText('Memo'));
-    fireEvent.press(await findByText('Save memo'));
+    fireEvent.press(await findByText('Save bookmark'));
 
-    await findByText('Write something before saving this memo.');
+    await findByText('Enter a web address or write a memo.');
     expect(fakeRepo.__queue()).toHaveLength(0);
     expect(mockBack).not.toHaveBeenCalled();
     unmount();
