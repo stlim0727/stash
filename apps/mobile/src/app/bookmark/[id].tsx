@@ -978,7 +978,7 @@ export default function BookmarkDetailScreen({
               resizeMode="cover"
               onError={() => markPreviewImageFailed(previewUri)}
               onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                if (!didPreviewImageLoad(event.nativeEvent)) {
                   markPreviewImageFailed(previewUri);
                 }
               }}
@@ -1014,7 +1014,7 @@ export default function BookmarkDetailScreen({
               resizeMode="cover"
               onError={() => markPreviewImageFailed(previewUri)}
               onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                if (!didPreviewImageLoad(event.nativeEvent)) {
                   markPreviewImageFailed(previewUri);
                 }
               }}

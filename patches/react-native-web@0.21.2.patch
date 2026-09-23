@@ -24,3 +24,41 @@ index dc4ffb98c20a10e3f2c890ffef33e75793d789f2..7ea5f290ec186add6c5dfc178e6e68e4
  var STYLE_SHORT_FORM_EXPANSIONS = {
    borderColor: ['borderTopColor', 'borderRightColor', 'borderBottomColor', 'borderLeftColor'],
    borderBlockColor: ['borderTopColor', 'borderBottomColor'],
+diff --git a/dist/cjs/modules/ImageLoader/index.js b/dist/cjs/modules/ImageLoader/index.js
+index 78cc758..418f140 100644
+--- a/dist/cjs/modules/ImageLoader/index.js
++++ b/dist/cjs/modules/ImageLoader/index.js
+@@ -108,7 +108,13 @@ var ImageLoader = {
+     image.onload = e => {
+       // avoid blocking the main thread
+       var onDecode = () => onLoad({
+-        nativeEvent: e
++        nativeEvent: {
++          source: {
++            width: image.naturalWidth,
++            height: image.naturalHeight,
++            uri
++          }
++        }
+       });
+       if (typeof image.decode === 'function') {
+         // Safari currently throws exceptions when decoding svgs.
+diff --git a/dist/modules/ImageLoader/index.js b/dist/modules/ImageLoader/index.js
+index 9c1ff70..b8ac4da 100644
+--- a/dist/modules/ImageLoader/index.js
++++ b/dist/modules/ImageLoader/index.js
+@@ -105,7 +105,13 @@ var ImageLoader = {
+     image.onload = e => {
+       // avoid blocking the main thread
+       var onDecode = () => onLoad({
+-        nativeEvent: e
++        nativeEvent: {
++          source: {
++            width: image.naturalWidth,
++            height: image.naturalHeight,
++            uri
++          }
++        }
+       });
+       if (typeof image.decode === 'function') {
+         // Safari currently throws exceptions when decoding svgs.

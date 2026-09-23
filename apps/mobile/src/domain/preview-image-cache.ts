@@ -44,14 +44,19 @@ export function clearPreviewImageFailed(uri: string | null | undefined): void {
   notify();
 }
 
+type PreviewImageLoadEvent = {
+  source?: { width: number; height: number };
+};
+
 /**
  * Check if an image decoded with non-zero dimensions.
- * On web and in some error cases, onLoad may fire with a 0x0 source instead of onError.
+ *
+ * Keepory's react-native-web patch makes its ImageLoader match the native
+ * event shape, preserving the original request's decoded dimensions instead
+ * of forwarding a browser event whose target has already been cleared.
  */
-export function didPreviewImageLoad(
-  source: { width: number; height: number } | undefined,
-): boolean {
-  return Boolean(source && source.width > 0 && source.height > 0);
+export function didPreviewImageLoad(event: PreviewImageLoadEvent | undefined): boolean {
+  return Boolean(event?.source && event.source.width > 0 && event.source.height > 0);
 }
 
 export function subscribePreviewImageFailures(callback: () => void): () => void {

@@ -2328,3 +2328,30 @@ test('falls back to CardPreviewFallback when preview image fails to load in card
   });
   expect(screen.queryByTestId('inbox-card-preview-image')).toBeNull();
 });
+
+test('keeps a successfully loaded preview with web loader dimensions', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, get: () => 'web' });
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000045',
+      title: 'Valid web card preview',
+      url: 'https://example.com/valid-post',
+      preview_image_url: 'https://example.com/valid-card.jpg',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Valid web card preview')).toBeTruthy());
+
+  const preview = screen.getByTestId('inbox-card-preview-image');
+  await act(async () => {
+    fireEvent(preview, 'load', {
+      nativeEvent: {
+        source: { width: 1200, height: 630, uri: 'https://example.com/valid-card.jpg' },
+      },
+    });
+  });
+
+  expect(screen.getByTestId('inbox-card-preview-image')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-card-preview-fallback')).toBeNull();
+});

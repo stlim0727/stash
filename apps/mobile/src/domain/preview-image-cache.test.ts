@@ -63,10 +63,11 @@ test('clearPreviewImageFailed removes failed URIs and notifies subscribers', () 
   unsubscribe();
 });
 
-test('didPreviewImageLoad detects non-zero dimensions', () => {
-  assert.equal(didPreviewImageLoad({ width: 100, height: 100 }), true);
-  assert.equal(didPreviewImageLoad({ width: 0, height: 100 }), false);
-  assert.equal(didPreviewImageLoad({ width: 100, height: 0 }), false);
-  assert.equal(didPreviewImageLoad({ width: 0, height: 0 }), false);
+test('didPreviewImageLoad validates native dimensions', () => {
+  assert.equal(didPreviewImageLoad({ source: { width: 100, height: 100 } }), true);
+  assert.equal(didPreviewImageLoad({ source: { width: 0, height: 100 } }), false);
+  assert.equal(didPreviewImageLoad({ source: { width: 100, height: 0 } }), false);
+  assert.equal(didPreviewImageLoad({ source: { width: 0, height: 0 } }), false);
+  assert.equal(didPreviewImageLoad({}), false);
   assert.equal(didPreviewImageLoad(undefined), false);
 });

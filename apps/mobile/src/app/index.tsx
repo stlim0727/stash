@@ -3146,7 +3146,7 @@ export default function InboxScreen() {
                       style={[styles.compactThumb, { backgroundColor: palette.mutedSurface }]}
                       onError={() => markPreviewImageFailed(thumbUri)}
                       onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                        if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                        if (!didPreviewImageLoad(event.nativeEvent)) {
                           markPreviewImageFailed(thumbUri);
                         }
                       }}
@@ -3277,7 +3277,7 @@ export default function InboxScreen() {
                         style={styles.cardPreview}
                         onError={() => markPreviewImageFailed(previewUri)}
                         onLoad={(event: NativeSyntheticEvent<ImageLoadEventData>) => {
-                          if (!didPreviewImageLoad(event.nativeEvent.source)) {
+                          if (!didPreviewImageLoad(event.nativeEvent)) {
                             markPreviewImageFailed(previewUri);
                           }
                         }}
