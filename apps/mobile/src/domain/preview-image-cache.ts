@@ -44,14 +44,27 @@ export function clearPreviewImageFailed(uri: string | null | undefined): void {
   notify();
 }
 
+type PreviewImageLoadEvent = {
+  source?: { width: number; height: number };
+};
+
 /**
  * Check if an image decoded with non-zero dimensions.
- * On web and in some error cases, onLoad may fire with a 0x0 source instead of onError.
+ *
+ * React Native reports dimensions through `nativeEvent.source`, while
+ * react-native-web forwards a browser load event without `source`; reaching
+ * its `onLoad` callback already means the browser image loaded and decoded.
+ * Treating that event as a native event makes every successful desktop load
+ * look like a failure because `source` is absent.
  */
-export function didPreviewImageLoad(
-  source: { width: number; height: number } | undefined,
-): boolean {
-  return Boolean(source && source.width > 0 && source.height > 0);
+export function didPreviewImageLoad(event: PreviewImageLoadEvent | undefined): boolean {
+  if (!event) {
+    return false;
+  }
+  if (event?.source) {
+    return event.source.width > 0 && event.source.height > 0;
+  }
+  return true;
 }
 
 export function subscribePreviewImageFailures(callback: () => void): () => void {
