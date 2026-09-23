@@ -14,12 +14,18 @@ import type {
   SupabaseAuthUser,
 } from '@/supabase/types';
 
-interface RequestOptions {
+export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   accessToken?: string;
   body?: unknown;
   headers?: Record<string, string>;
+  /** Optional timeout in milliseconds. Defaults to DEFAULT_REQUEST_TIMEOUT_MS (15s). Set to 0 to disable. */
+  timeoutMs?: number;
+  /** Optional external AbortSignal to cancel the request. */
+  signal?: AbortSignal;
 }
+
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
 // Cap the best-effort server-side revoke during sign-out. `fetch` has no
 // timeout, so a wedged connection could otherwise hang indefinitely and strand
@@ -192,10 +198,22 @@ export class StashSupabaseClient {
 
   async request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    if (typeof timeout === 'object' && typeof timeout.unref === 'function') {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const timeout =
+      timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    if (timeout && typeof timeout === 'object' && typeof timeout.unref === 'function') {
       timeout.unref();
     }
+
+    const onAbort = () => controller.abort();
+    if (options.signal) {
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        options.signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+
     let response: Response;
     try {
       response = await fetch(`${this.config.url}${path}`, {
@@ -210,7 +228,12 @@ export class StashSupabaseClient {
         signal: controller.signal,
       });
     } finally {
-      clearTimeout(timeout);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (options.signal) {
+        options.signal.removeEventListener('abort', onAbort);
+      }
     }
 
     const payload = await parseResponse(response);
@@ -234,15 +257,46 @@ export class StashSupabaseClient {
    * `pending_ai_enrichment`'s owner-scoped SELECT policy), this is the
    * cheapest way to get an account-wide total without listing ids.
    */
-  async requestCount(path: string, options: { accessToken?: string } = {}): Promise<number> {
-    const response = await fetch(`${this.config.url}${path}`, {
-      method: 'HEAD',
-      headers: {
-        apikey: this.config.anonKey,
-        Authorization: `Bearer ${options.accessToken ?? this.config.anonKey}`,
-        Prefer: 'count=exact',
-      },
-    });
+  async requestCount(
+    path: string,
+    options: { accessToken?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<number> {
+    const controller = new AbortController();
+    const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const timeout =
+      timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    if (timeout && typeof timeout === 'object' && typeof timeout.unref === 'function') {
+      timeout.unref();
+    }
+
+    const onAbort = () => controller.abort();
+    if (options.signal) {
+      if (options.signal.aborted) {
+        controller.abort();
+      } else {
+        options.signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.config.url}${path}`, {
+        method: 'HEAD',
+        headers: {
+          apikey: this.config.anonKey,
+          Authorization: `Bearer ${options.accessToken ?? this.config.anonKey}`,
+          Prefer: 'count=exact',
+        },
+        signal: controller.signal,
+      });
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (options.signal) {
+        options.signal.removeEventListener('abort', onAbort);
+      }
+    }
 
     if (!response.ok) {
       const payload = await parseResponse(response);
@@ -323,11 +377,13 @@ export class StashSupabaseClient {
   async updateUserMetadata(
     accessToken: string,
     data: Record<string, unknown>,
+    options: { signal?: AbortSignal } = {},
   ): Promise<SupabaseAuthUser> {
     return this.request<SupabaseAuthUser>('/auth/v1/user', {
       method: 'PUT',
       accessToken,
       body: { data },
+      signal: options.signal,
     });
   }
 
@@ -406,24 +462,33 @@ export class StashSupabaseClient {
    * Upsert the user's preferences (e.g. locale) into `public.user_preferences`.
    * Keyed on `user_id` which is the primary key.
    */
-  async upsertUserPreferences(accessToken: string, data: Record<string, unknown>): Promise<void> {
+  async upsertUserPreferences(
+    accessToken: string,
+    data: Record<string, unknown>,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<void> {
     await this.request('/rest/v1/user_preferences', {
       method: 'POST',
       accessToken,
       headers: { Prefer: 'resolution=merge-duplicates' },
       body: data,
+      signal: options.signal,
     });
   }
 
   /**
    * Fetch the user's preferences from `public.user_preferences`.
    */
-  async getUserPreferences(accessToken: string): Promise<{ locale?: string; preference?: string } | null> {
+  async getUserPreferences(
+    accessToken: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ locale?: string; preference?: string } | null> {
     const rows = await this.request<Array<{ locale?: string; preference?: string }>>(
       '/rest/v1/user_preferences?select=locale,preference&limit=1',
       {
         method: 'GET',
         accessToken,
+        signal: options.signal,
       },
     );
     return rows[0] ?? null;

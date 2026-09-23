@@ -320,8 +320,10 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
     const seq = ++localeWriteSeq.current;
     const client = createSupabaseClient();
 
-    const task = async () => {
-      if (seq !== localeWriteSeq.current) {
+    const abortController = new AbortController();
+
+    const runBoundedTask = async () => {
+      if (seq !== localeWriteSeq.current || abortController.signal.aborted) {
         return;
       }
       const currentSession = sessionRef.current;
@@ -332,57 +334,74 @@ export function SupabaseAuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // On first connection to this account on this device, check if the account already has
-      // a stored preference on the server (Comment 4 & Comment 2).
-      if (reconciledUserIdRef.current !== currentUserId) {
-        reconciledUserIdRef.current = currentUserId;
-        try {
-          const remote = await client.getUserPreferences(currentSession.access_token);
-          // Revalidate post-request before calling setter! (Comment 1)
-          if (
-            seq !== localeWriteSeq.current ||
-            sessionRef.current?.user.id !== currentUserId ||
-            (statusRef.current !== 'anonymous' && statusRef.current !== 'authenticated') ||
-            preferenceRef.current !== 'system'
-          ) {
-            return;
-          }
-          // Only adopt if remote preference is an explicit supported locale ('en' | 'ko').
-          // Never overwrite local 'system' mode if the remote preference was 'system' or unset! (Comment 2)
-          const remotePref = remote?.preference ?? currentSession.user.user_metadata?.preference;
-          if (remotePref && isSupportedLocale(remotePref)) {
-            await setLocalePreference(remotePref);
-            return;
-          }
-        } catch {
-          // Best effort: proceed with local preference if server check fails
-        }
+      // Bound serialized publication requests with a 5-second timeout so a hanging
+      // network request aborts and never blocks the promise chain indefinitely.
+      const timeout = setTimeout(() => {
+        abortController.abort();
+      }, 5000);
+      if (typeof timeout === 'object' && typeof timeout.unref === 'function') {
+        timeout.unref();
       }
 
-      await trackUserPreferences({
-        client,
-        session: currentSession,
-        locale,
-        preference,
-        now: new Date().toISOString(),
-      });
+      try {
+        // On first connection to this account on this device, check if the account already has
+        // a stored preference on the server (Comment 4 & Comment 2).
+        if (reconciledUserIdRef.current !== currentUserId) {
+          reconciledUserIdRef.current = currentUserId;
+          try {
+            const remote = await client.getUserPreferences(currentSession.access_token, {
+              signal: abortController.signal,
+            });
+            // Revalidate post-request before calling setter! (Comment 1)
+            if (
+              seq !== localeWriteSeq.current ||
+              abortController.signal.aborted ||
+              sessionRef.current?.user.id !== currentUserId ||
+              (statusRef.current !== 'anonymous' && statusRef.current !== 'authenticated') ||
+              preferenceRef.current !== 'system'
+            ) {
+              return;
+            }
+            // Only adopt if remote preference is an explicit supported locale ('en' | 'ko').
+            // Never overwrite local 'system' mode if the remote preference was 'system' or unset! (Comment 2)
+            const remotePref = remote?.preference ?? currentSession.user.user_metadata?.preference;
+            if (remotePref && isSupportedLocale(remotePref)) {
+              await setLocalePreference(remotePref);
+              return;
+            }
+          } catch {
+            // Best effort: proceed with local preference if server check fails
+          }
+        }
+
+        if (seq !== localeWriteSeq.current || abortController.signal.aborted) {
+          return;
+        }
+
+        await trackUserPreferences({
+          client,
+          session: currentSession,
+          locale,
+          preference,
+          now: new Date().toISOString(),
+          signal: abortController.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
     };
 
-    // Bound serialized publication requests with a 5-second timeout so a hanging
-    // network request can never block the promise chain indefinitely (Comment 3).
-    const boundedTask = Promise.race([
-      task(),
-      new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, 5000);
-        if (typeof t === 'object' && typeof t.unref === 'function') {
-          t.unref();
-        }
-      }),
-    ]);
-
+    // Serialize publication tasks: invoking runBoundedTask inside .then ensures
+    // that network requests do not start immediately on effect render, avoiding
+    // race conditions when preferences change quickly.
     localePublicationPromise.current = localePublicationPromise.current
       .catch(() => {})
-      .then(() => boundedTask);
+      .then(runBoundedTask);
+
+    return () => {
+      // Abort in-flight network requests and prevent stale publications from committing.
+      abortController.abort();
+    };
   }, [userId, status, locale, preference, isHydrated, setLocalePreference]);
 
   const awaitLocalePublication = useCallback(async () => {

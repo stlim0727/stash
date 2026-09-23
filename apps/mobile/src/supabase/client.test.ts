@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
 
-import { errorMessageFrom, StashSupabaseClient, SupabaseRequestError } from './client.ts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, errorMessageFrom, StashSupabaseClient, SupabaseRequestError } from './client.ts';
 
 test('errorMessageFrom prefers GoTrue/PostgREST human-readable keys', () => {
   assert.equal(errorMessageFrom({ msg: 'bad login' }, 400), 'bad login');
@@ -305,4 +305,106 @@ test('removeStorageObjects makes no request for an empty path list', async () =>
   }
 
   assert.equal(called, false);
+});
+
+test('DEFAULT_REQUEST_TIMEOUT_MS is 15 seconds', () => {
+  assert.equal(DEFAULT_REQUEST_TIMEOUT_MS, 15_000);
+});
+
+test('request() aborts when timeoutMs expires', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string, init?: RequestInit) => {
+    return new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('This operation was aborted', 'AbortError'));
+      });
+    });
+  }) as typeof fetch;
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    const promise = client.request('/rest/v1/user_preferences', { timeoutMs: 20 });
+    mock.timers.tick(25);
+    await assert.rejects(promise, (err: any) => err.name === 'AbortError');
+  } finally {
+    mock.timers.reset();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('request() respects caller AbortSignal', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string, init?: RequestInit) => {
+    return new Promise((_resolve, reject) => {
+      if (init?.signal?.aborted) {
+        reject(new DOMException('This operation was aborted', 'AbortError'));
+        return;
+      }
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('This operation was aborted', 'AbortError'));
+      });
+    });
+  }) as typeof fetch;
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      client.request('/rest/v1/user_preferences', { signal: controller.signal }),
+      (err: any) => err.name === 'AbortError',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('requestCount() aborts when timeoutMs expires or signal triggers', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_url: string, init?: RequestInit) => {
+    return new Promise((_resolve, reject) => {
+      if (init?.signal?.aborted) {
+        reject(new DOMException('This operation was aborted', 'AbortError'));
+        return;
+      }
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('This operation was aborted', 'AbortError'));
+      });
+    });
+  }) as typeof fetch;
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    const timeoutPromise = client.requestCount('/rest/v1/pending_ai_enrichment', { timeoutMs: 20 });
+    mock.timers.tick(25);
+    await assert.rejects(timeoutPromise, (err: any) => err.name === 'AbortError');
+  } finally {
+    mock.timers.reset();
+  }
+
+  try {
+    const client = new StashSupabaseClient({
+      url: 'https://proj.supabase.co',
+      anonKey: 'anon-key',
+    });
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+      client.requestCount('/rest/v1/pending_ai_enrichment', { signal: controller.signal }),
+      (err: any) => err.name === 'AbortError',
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

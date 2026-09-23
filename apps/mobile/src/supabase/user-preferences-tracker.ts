@@ -11,8 +11,16 @@
 import type { SupabaseAuthSession } from '@/supabase/types';
 
 export interface UserPreferencesWriter {
-  upsertUserPreferences(accessToken: string, data: Record<string, unknown>): Promise<unknown>;
-  updateUserMetadata?(accessToken: string, data: Record<string, unknown>): Promise<unknown>;
+  upsertUserPreferences(
+    accessToken: string,
+    data: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
+  updateUserMetadata?(
+    accessToken: string,
+    data: Record<string, unknown>,
+    options?: { signal?: AbortSignal },
+  ): Promise<unknown>;
 }
 
 export interface TrackUserPreferencesParams {
@@ -21,6 +29,7 @@ export interface TrackUserPreferencesParams {
   locale: string;
   preference?: string;
   now: string;
+  signal?: AbortSignal;
 }
 
 export async function trackUserPreferences({
@@ -29,18 +38,30 @@ export async function trackUserPreferences({
   locale,
   preference,
   now,
+  signal,
 }: TrackUserPreferencesParams): Promise<void> {
+  if (signal?.aborted) {
+    return;
+  }
   const trimmed = typeof locale === 'string' && locale.trim() ? locale.trim() : 'en';
 
   try {
-    await client.upsertUserPreferences(session.access_token, {
-      user_id: session.user.id,
-      locale: trimmed,
-      ...(preference ? { preference } : {}),
-      updated_at: now,
-    });
+    await client.upsertUserPreferences(
+      session.access_token,
+      {
+        user_id: session.user.id,
+        locale: trimmed,
+        ...(preference ? { preference } : {}),
+        updated_at: now,
+      },
+      { signal },
+    );
   } catch {
     // Best-effort: a failed write is retried on the next session start or preference change.
+  }
+
+  if (signal?.aborted) {
+    return;
   }
 
   const metaChanged =
@@ -49,11 +70,15 @@ export async function trackUserPreferences({
 
   if (typeof client.updateUserMetadata === 'function' && metaChanged) {
     try {
-      await client.updateUserMetadata(session.access_token, {
-        locale: trimmed,
-        ...(preference ? { preference } : {}),
-        locale_updated_at: now,
-      });
+      await client.updateUserMetadata(
+        session.access_token,
+        {
+          locale: trimmed,
+          ...(preference ? { preference } : {}),
+          locale_updated_at: now,
+        },
+        { signal },
+      );
     } catch {
       // Best-effort: updating user_metadata is secondary to user_preferences table.
     }

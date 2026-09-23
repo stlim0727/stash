@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react-native';
-import type { ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 
 const mockAnonSession = {
   access_token: 'anon-token',
@@ -90,8 +90,18 @@ function wrapper({ children }: { children: ReactNode }) {
   return <SupabaseAuthProvider>{children}</SupabaseAuthProvider>;
 }
 
+let triggerProviderRerender = () => {};
+function DynamicWrapper({ children }: { children: ReactNode }) {
+  const [, setTick] = useState(0);
+  triggerProviderRerender = () => setTick((c) => c + 1);
+  return <SupabaseAuthProvider>{children}</SupabaseAuthProvider>;
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
+  triggerProviderRerender = () => {};
+  fakeClient.upsertUserPreferences.mockImplementation(async () => {});
+  fakeClient.getUserPreferences.mockImplementation(async () => null);
   mockI18nPreference = 'system';
   mockI18nLocale = 'en';
 });
@@ -306,7 +316,7 @@ test('reconciles account locale on first connection when remote has explicit pre
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
 
   await expect(result.current.awaitLocalePublication()).resolves.toBeUndefined();
-  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token');
+  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token', expect.anything());
   expect(mockSetLocalePreference).toHaveBeenCalledWith('ko');
 });
 
@@ -316,7 +326,7 @@ test('preserves system mode when remote preference is system or unset', async ()
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
 
   await expect(result.current.awaitLocalePublication()).resolves.toBeUndefined();
-  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token');
+  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token', expect.anything());
   expect(mockSetLocalePreference).not.toHaveBeenCalled();
 });
 
@@ -327,6 +337,63 @@ test('does not adopt remote preference if local preference is already an explici
   await waitFor(() => expect(result.current.status).toBe('anonymous'));
 
   await expect(result.current.awaitLocalePublication()).resolves.toBeUndefined();
-  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token');
+  expect(fakeClient.getUserPreferences).toHaveBeenCalledWith('anon-token', expect.anything());
   expect(mockSetLocalePreference).not.toHaveBeenCalled();
+});
+
+test('serializes preference publication tasks so network calls do not run concurrently', async () => {
+  let inFlight = 0;
+  let maxConcurrency = 0;
+  fakeClient.upsertUserPreferences.mockImplementation(async () => {
+    inFlight++;
+    maxConcurrency = Math.max(maxConcurrency, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    inFlight--;
+  });
+
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper: DynamicWrapper });
+  await waitFor(() => expect(result.current?.status).toBe('anonymous'));
+
+  await act(async () => {
+    mockI18nLocale = 'ko';
+    mockI18nPreference = 'ko';
+    triggerProviderRerender();
+  });
+
+  await result.current.awaitLocalePublication();
+  expect(maxConcurrency).toBeLessThanOrEqual(1);
+});
+
+test('aborts in-flight publication request when superseded before completion', async () => {
+  const { result } = await renderHook(() => useSupabaseAuth(), { wrapper: DynamicWrapper });
+  await waitFor(() => expect(result.current?.status).toBe('anonymous'));
+  await result.current.awaitLocalePublication();
+
+  const observedSignals: AbortSignal[] = [];
+  fakeClient.upsertUserPreferences.mockImplementation(
+    async (_token: string, _data: any, options?: { signal?: AbortSignal }) => {
+      if (options?.signal) {
+        observedSignals.push(options.signal);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    },
+  );
+
+  // First change triggers in-flight upsert
+  await act(async () => {
+    mockI18nLocale = 'ko';
+    mockI18nPreference = 'ko';
+    triggerProviderRerender();
+  });
+
+  // Second change arrives while first is still in-flight
+  await act(async () => {
+    mockI18nLocale = 'en';
+    mockI18nPreference = 'system';
+    triggerProviderRerender();
+  });
+
+  await result.current.awaitLocalePublication();
+  expect(observedSignals.length).toBeGreaterThanOrEqual(1);
+  expect(observedSignals[0].aborted).toBe(true);
 });
