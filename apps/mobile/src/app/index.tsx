@@ -3814,10 +3814,10 @@ const styles = StyleSheet.create({
     gap: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 999,
-    // Match the view-mode segment's outer height so every control in this row
-    // shares one visual centre line.
-    height: 36,
-    paddingVertical: 0,
+    // Match the view-mode segment's outer height at the default font scale,
+    // while still allowing labeled pills to grow with accessibility text.
+    minHeight: 36,
+    paddingVertical: 8,
     paddingHorizontal: 14,
   },
   sortPillFlexible: {
