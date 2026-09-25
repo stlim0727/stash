@@ -498,3 +498,128 @@ test('Escape key on web exits selection mode', async () => {
     Object.defineProperty(Platform, 'OS', { configurable: true, get: () => originalOS });
   }
 });
+
+test('supports selecting all items narrowed by search and preserving search query', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'React Native in Action',
+      url: 'https://reactnative.dev',
+      url_hash: 'https://reactnative.dev',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000002',
+      title: 'React Architecture Guide',
+      url: 'https://react.dev',
+      url_hash: 'https://react.dev',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000003',
+      title: 'Vue Composition Guide',
+      url: 'https://vuejs.org',
+      url_hash: 'https://vuejs.org',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('React Native in Action')).toBeTruthy());
+  expect(screen.getByText('Vue Composition Guide')).toBeTruthy();
+
+  // Open search and query 'React'
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  const searchInput = screen.getByTestId('inbox-search-input');
+  await fireEvent.changeText(searchInput, 'React');
+  await fireEvent(searchInput, 'blur');
+
+  // Wait for filtered results: 2 results visible, Vue guide filtered out
+  await waitFor(() => expect(screen.getByText('2 results')).toBeTruthy());
+  expect(screen.getByText('React Native in Action')).toBeTruthy();
+  expect(screen.getByText('React Architecture Guide')).toBeTruthy();
+  expect(screen.queryByText('Vue Composition Guide')).toBeNull();
+
+  // Enter selection mode via the search filter bar select toggle
+  const filterSelectToggle = screen.getByTestId('inbox-filter-select-toggle');
+  await fireEvent.press(filterSelectToggle);
+
+  // BulkActionBar is visible with 0 selected, and search input is non-editable during selection
+  await waitFor(() => {
+    expect(screen.getByText('0 selected')).toBeTruthy();
+    expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
+  });
+  expect(screen.getByTestId('inbox-search-input').props.editable).toBe(false);
+
+  // Press Select all: should only select the 2 visible search results, NOT the 3rd Vue item
+  const selectAllBtn = screen.getByTestId('inbox-selection-select-all');
+  expect(within(selectAllBtn).getByText('Select all')).toBeTruthy();
+  await fireEvent.press(selectAllBtn);
+
+  expect(screen.getByText('2 selected')).toBeTruthy();
+  expect(within(selectAllBtn).getByText('Deselect all')).toBeTruthy();
+
+  // Tap Deselect all: should deselect the 2 items
+  await fireEvent.press(selectAllBtn);
+  expect(screen.getByText('0 selected')).toBeTruthy();
+  expect(within(selectAllBtn).getByText('Select all')).toBeTruthy();
+
+  // Re-select all 2 items
+  await fireEvent.press(selectAllBtn);
+  expect(screen.getByText('2 selected')).toBeTruthy();
+
+  // Exit selection mode: search query 'React' should still be preserved
+  await fireEvent.press(screen.getByTestId('inbox-selection-close'));
+  await waitFor(() => {
+    expect(screen.queryByTestId('inbox-bulk-action-bar')).toBeNull();
+  });
+
+  // Search input is still present and editable, with filtered results still displayed
+  const restoredSearchInput = screen.getByTestId('inbox-search-input');
+  expect(restoredSearchInput.props.editable).toBe(true);
+  expect(screen.getByText('React Native in Action')).toBeTruthy();
+  expect(screen.getByText('React Architecture Guide')).toBeTruthy();
+  expect(screen.queryByText('Vue Composition Guide')).toBeNull();
+});
+
+test('entering selection mode from single bookmark menu during search preserves search filter', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000001',
+      title: 'React Native in Action',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000002',
+      title: 'React Architecture Guide',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000003',
+      title: 'Vue Composition Guide',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('React Native in Action')).toBeTruthy());
+
+  // Search 'React'
+  await fireEvent.press(screen.getByTestId('inbox-search-open'));
+  const searchInput = screen.getByTestId('inbox-search-input');
+  await fireEvent.changeText(searchInput, 'React');
+  await fireEvent(searchInput, 'blur');
+  await waitFor(() => expect(screen.getByText('2 results')).toBeTruthy());
+
+  // Long-press first card to select it via menu
+  await fireEvent(screen.getByText('React Native in Action'), 'longPress');
+  expect(screen.getByText('Select items…')).toBeTruthy();
+  await fireEvent.press(screen.getByText('Select items…'));
+
+  // Entered selection mode with 1 selected
+  await waitFor(() => {
+    expect(screen.getByText('1 selected')).toBeTruthy();
+    expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
+  });
+
+  // Vue guide is still filtered out
+  expect(screen.queryByText('Vue Composition Guide')).toBeNull();
+
+  // Select all selects the remaining matching result (total 2)
+  await fireEvent.press(screen.getByTestId('inbox-selection-select-all'));
+  expect(screen.getByText('2 selected')).toBeTruthy();
+});
