@@ -181,6 +181,8 @@ export const en = {
   'inbox.emptyHintWebStep': 'Tap + to paste a link and save.',
   'inbox.emptyHintWebNote': 'Sharing from other apps works in the Keepory Android app, not on the web yet.',
   'inbox.emptyHintWebGetAndroid': 'Get the Android app',
+  'inbox.emptyTutorialButton': 'How Keepory works',
+  'inbox.emptyTutorialA11y': 'Open introductory feature tutorial',
   // Anonymous-account nudge banner (shown after the 2nd save, dismissible
   // forever) — see AnonymousNudgeBanner.
   'inbox.anonymousNudgeBody':
@@ -340,6 +342,9 @@ export const en = {
   'settings.section.library': 'Library',
   'settings.section.preferences': 'Preferences',
   'settings.section.data': 'Your data',
+  'settings.section.help': 'Help & Guide',
+  'settings.tutorial.label': 'Feature guide',
+  'settings.tutorial.value': 'How Keepory works',
   'settings.section.advanced': 'Advanced',
   'settings.section.browser': 'Save from your browser',
   'settings.bookmarklet.button': '⊕ Save to Keepory',
@@ -880,6 +885,43 @@ export const en = {
   'tagField.addAllA11y': 'Add all suggestions',
   'tagField.dismissAll': 'Dismiss all',
   'tagField.dismissAllA11y': 'Dismiss all suggestions',
+
+  // Feature Tutorial Modal
+  'tutorial.title': 'How Keepory Works',
+  'tutorial.closeA11y': 'Close tutorial',
+  'tutorial.stepIndicator': 'Step {current} of {total}',
+  'tutorial.skip': 'Skip',
+  'tutorial.back': 'Back',
+  'tutorial.next': 'Next',
+  'tutorial.getStarted': 'Get Started',
+  'tutorial.step1.badge': 'Instant Capture',
+  'tutorial.step1.title': 'Capture without leaving your flow',
+  'tutorial.step1.body':
+    'Found an interesting article, video, or post? Tap Share in any app and choose Keepory. It saves in milliseconds without interrupting what you’re doing.',
+  'tutorial.step1.point1': '1-tap OS Share Sheet integration',
+  'tutorial.step1.point2': 'Save quick memos even without a link',
+  'tutorial.step1.point3': 'Instant local-first storage, works offline',
+  'tutorial.step2.badge': 'Smart Inbox',
+  'tutorial.step2.title': 'Browse your way, find in milliseconds',
+  'tutorial.step2.body':
+    'Switch between visual Cards and dense Lists. Tap Open ↗ to jump straight to the source, or tap the card for notes. Instant search finds matches as you type.',
+  'tutorial.step2.point1': 'Card & List layouts with quick previews',
+  'tutorial.step2.point2': 'Direct “Open ↗” to browser without extra taps',
+  'tutorial.step2.point3': 'Instant search across titles, tags, and domains',
+  'tutorial.step3.badge': 'AI Triage',
+  'tutorial.step3.title': 'Save now, organize with AI later',
+  'tutorial.step3.body':
+    'No need to type tags or file folders upfront. Keepory automatically suggests tags, collections, and summaries. Approve them in batch whenever you want.',
+  'tutorial.step3.point1': 'Automatic tag, collection, and summary suggestions',
+  'tutorial.step3.point2': 'Non-destructive: suggestions wait for your approval',
+  'tutorial.step3.point3': '1-tap batch triage in the dedicated Review queue',
+  'tutorial.step4.badge': 'Knowledge Graph',
+  'tutorial.step4.title': 'Watch your knowledge connect',
+  'tutorial.step4.body':
+    'Your bookmarks aren’t trapped in static folders. Tap the Graph icon to explore how your ideas, topics, and saved articles interlink through shared tags.',
+  'tutorial.step4.point1': 'Interactive visual map of bookmarks and tags',
+  'tutorial.step4.point2': 'Bipartite and Co-occurrence cluster modes',
+  'tutorial.step4.point3': 'Pan, zoom, and uncover serendipitous links',
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof en;

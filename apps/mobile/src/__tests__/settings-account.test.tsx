@@ -139,3 +139,25 @@ test('not configured: cloud processing is local-only and no sign-in buttons are 
   expect(screen.queryByLabelText('Sign in with Apple')).toBeNull();
   expect(screen.queryByText('Sign out')).toBeNull();
 });
+
+test('renders Help & Guide section with tutorial row and opens tutorial modal', async () => {
+  const screen = await renderSettings();
+
+  expect(screen.getByText('Help & Guide')).toBeTruthy();
+  expect(screen.getByText('Feature guide')).toBeTruthy();
+  expect(screen.getByText('How Keepory works')).toBeTruthy();
+
+  const tutorialRow = screen.getByTestId('settings-tutorial-row');
+  await act(async () => {
+    fireEvent.press(tutorialRow);
+  });
+
+  expect(screen.getByTestId('tutorial-modal')).toBeTruthy();
+  expect(screen.getByTestId('tutorial-slide-0')).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('tutorial-close-button'));
+  });
+
+  expect(screen.queryByTestId('tutorial-slide-0')).toBeNull();
+});
