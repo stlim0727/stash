@@ -116,6 +116,7 @@ import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
 import { CreateCollectionDialog } from '@/ui/CreateCollectionDialog';
+import { TutorialModal } from '@/ui/TutorialModal';
 import { HighlightedText } from '@/ui/HighlightedText';
 import { overlayLayer } from '@/ui/layering';
 import { useCaptureToast } from '@/ui/capture-toast';
@@ -2094,6 +2095,7 @@ export default function InboxScreen() {
   const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
   const [newFolderBusy, setNewFolderBusy] = useState(false);
   const [newFolderError, setNewFolderError] = useState<string | null>(null);
+  const [tutorialOpen, setTutorialOpen] = useState(false);
   const onNewFolderTilePress = useCallback(() => {
     setNewFolderError(null);
     setNewFolderDialogOpen(true);
@@ -2928,6 +2930,17 @@ export default function InboxScreen() {
                   </Button>
                 </>
               )}
+              <Button
+                variant="secondary"
+                size="sm"
+                icon="bulb-outline"
+                style={styles.emptyTutorialButton}
+                onPress={() => setTutorialOpen(true)}
+                testID="inbox-empty-tutorial-button"
+                accessibilityLabel={t('inbox.emptyTutorialA11y')}
+              >
+                {t('inbox.emptyTutorialButton')}
+              </Button>
             </View>
           )
         }
@@ -3516,6 +3529,10 @@ export default function InboxScreen() {
         onCreate={handleCreateFolder}
         onClose={closeNewFolderDialog}
       />
+      <TutorialModal
+        visible={tutorialOpen}
+        onClose={() => setTutorialOpen(false)}
+      />
     </InboxRootSurface>
   );
 }
@@ -3705,6 +3722,9 @@ const styles = StyleSheet.create({
     maxWidth: 280,
   },
   emptyPlatformPill: {
+    marginTop: 14,
+  },
+  emptyTutorialButton: {
     marginTop: 14,
   },
   errorBanner: {

@@ -63,6 +63,7 @@ import type { MessageKey } from "@/i18n/messages";
 import { getPreference, setPreference } from "@/storage/preferences";
 import { getPullDiagnostics } from "@/sync/pull-diagnostics";
 import { ResetLibraryDialog } from "@/ui/ResetLibraryDialog";
+import { TutorialModal } from "@/ui/TutorialModal";
 import { deliverExport, saveExportToDevice } from "@/share/export-data";
 import { pickImportFile } from "@/share/import-data";
 import { useBookmarks } from "@/store/bookmarks";
@@ -240,6 +241,7 @@ export default function SettingsScreen() {
   const [authBusy, setAuthBusy] = useState<OAuthProvider | "signout" | null>(
     null,
   );
+  const [tutorialOpen, setTutorialOpen] = useState(false);
   const handleSignIn = async (provider: OAuthProvider) => {
     setAuthBusy(provider);
     try {
@@ -1269,6 +1271,20 @@ export default function SettingsScreen() {
         />
       </Group>
 
+      {/* Help & Guide — introductory feature tutorial and app walkthrough */}
+      <Group styles={styles} title={t("settings.section.help")}>
+        <Row
+          styles={styles}
+          palette={palette}
+          icon="help-circle-outline"
+          label={t("settings.tutorial.label")}
+          value={t("settings.tutorial.value")}
+          last
+          testID="settings-tutorial-row"
+          onPress={() => setTutorialOpen(true)}
+        />
+      </Group>
+
       {/* Advanced — developer mode toggle, and the diagnostics it reveals. */}
       <Group styles={styles} title={t("settings.section.advanced")}>
         <Row
@@ -1636,6 +1652,11 @@ export default function SettingsScreen() {
         error={resetError}
         onConfirm={() => void runReset()}
         onClose={() => setResetDialogOpen(false)}
+      />
+
+      <TutorialModal
+        visible={tutorialOpen}
+        onClose={() => setTutorialOpen(false)}
       />
 
       <ActionSheet

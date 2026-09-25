@@ -121,6 +121,28 @@ test('web empty state points at paste-a-link instead of the (unavailable) share 
   expect(screen.queryByText('Also on the web at keepory.app')).toBeNull();
 });
 
+test('empty inbox displays tutorial button and opens tutorial modal when pressed', async () => {
+  const screen = await renderInbox();
+
+  await waitFor(() => expect(screen.getByTestId('inbox-empty-onboarding')).toBeTruthy());
+  const tutorialButton = screen.getByTestId('inbox-empty-tutorial-button');
+  expect(tutorialButton).toBeTruthy();
+  expect(screen.getByText('How Keepory works')).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(tutorialButton);
+  });
+
+  expect(screen.getByTestId('tutorial-modal')).toBeTruthy();
+  expect(screen.getByTestId('tutorial-slide-0')).toBeTruthy();
+
+  await act(async () => {
+    fireEvent.press(screen.getByTestId('tutorial-close-button'));
+  });
+
+  expect(screen.queryByTestId('tutorial-slide-0')).toBeNull();
+});
+
 test('the anonymous nudge does not show for a signed-in (authenticated) user, even with 2+ bookmarks', async () => {
   mockAuth.status = 'authenticated';
   fakeRepo.__reset(twoBookmarks());
