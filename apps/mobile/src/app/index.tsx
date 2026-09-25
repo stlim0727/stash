@@ -115,6 +115,7 @@ import { metadataStatusLabel, syncStatusLabel, videoUnavailableLabel } from '@/i
 import { useBookmarks } from '@/store/bookmarks';
 import { useSupabaseAuth } from '@/supabase/auth-provider';
 import { ActionSheet, type SheetAction } from '@/ui/ActionSheet';
+import { BulkActionBar } from '@/ui/BulkActionBar';
 import { CreateCollectionDialog } from '@/ui/CreateCollectionDialog';
 import { TutorialModal } from '@/ui/TutorialModal';
 import { HighlightedText } from '@/ui/HighlightedText';
@@ -611,12 +612,14 @@ export default function InboxScreen() {
     getReviewedSummary,
     unseenSuggestionIds,
     collections,
+    isResettingLibrary,
     trashBookmark,
     restoreBookmark,
     deleteBookmark,
     assignCollection,
     markBookmarkAccessed,
     createCollection,
+    refreshBookmarkPreview,
   } = useBookmarks();
   const syncQueueEntryByBookmarkId = useMemo(
     () => new Map(queue.map((entry) => [entry.local_id, entry] as const)),
@@ -1061,6 +1064,14 @@ export default function InboxScreen() {
   // the top-level actions or the "move to collection" picker. Null item = closed.
   const [menuItem, setMenuItem] = useState<Bookmark | null>(null);
   const [menuMode, setMenuMode] = useState<'main' | 'move'>('main');
+
+  // Multi-select state: whether selection mode is active, the set of selected
+  // bookmark IDs, and bulk action progression state.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkRefreshing, setBulkRefreshing] = useState(false);
+  const [bulkMoveSheetOpen, setBulkMoveSheetOpen] = useState(false);
+  const [bulkMoveFolderCreateTarget, setBulkMoveFolderCreateTarget] = useState<string[] | null>(null);
 
   // Collapsing header: the top cluster (hero + search + controls + browse
   // shelf) slides up out of view as the list scrolls down and slides back on
@@ -1559,6 +1570,174 @@ export default function InboxScreen() {
       setInlineDetailId(null);
     }
   }, [getBookmark, inlineDetailId, visible]);
+
+  const exitSelectionMode = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+    setBulkMoveFolderCreateTarget(null);
+  }, []);
+
+  const enterSelectionMode = useCallback(
+    (initialId?: string) => {
+      if (searchOpen) {
+        closeSearch();
+      }
+      setSelectionMode(true);
+      setSelectedIds(initialId ? new Set([initialId]) : new Set());
+    },
+    [searchOpen, closeSearch],
+  );
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
+  const allVisibleSelected = useMemo(
+    () => visible.length > 0 && visible.every((b) => selectedIds.has(b.id)),
+    [visible, selectedIds],
+  );
+
+  const toggleSelectAll = useCallback(() => {
+    if (allVisibleSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(visible.map((b) => b.id)));
+    }
+  }, [allVisibleSelected, visible]);
+
+  useEffect(() => {
+    if (isResettingLibrary) {
+      exitSelectionMode();
+    }
+  }, [isResettingLibrary, exitSelectionMode]);
+
+  useEffect(() => {
+    if (
+      Platform.OS !== 'web' ||
+      !selectionMode ||
+      typeof window === 'undefined' ||
+      typeof window.addEventListener !== 'function'
+    ) {
+      return;
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        exitSelectionMode();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectionMode, exitSelectionMode]);
+
+  const handleBulkRefresh = useCallback(async () => {
+    if (selectedIds.size === 0 || bulkRefreshing) {
+      return;
+    }
+    const selectedItems = visible.filter((b) => selectedIds.has(b.id));
+    const urlItems = selectedItems.filter((b) => Boolean(b.url));
+    if (urlItems.length === 0) {
+      showToast(t('toast.noPreviewsToRefresh'));
+      exitSelectionMode();
+      return;
+    }
+    setBulkRefreshing(true);
+    try {
+      let refreshedCount = 0;
+      const results = await Promise.allSettled(
+        urlItems.map((b) => refreshBookmarkPreview(b.id)),
+      );
+      for (const res of results) {
+        if (res.status === 'fulfilled' && res.value === null) {
+          refreshedCount++;
+        }
+      }
+      showToast(
+        t('toast.previewRefreshedCount', {
+          count: refreshedCount > 0 ? refreshedCount : urlItems.length,
+        }),
+      );
+    } finally {
+      setBulkRefreshing(false);
+      exitSelectionMode();
+    }
+  }, [selectedIds, bulkRefreshing, visible, showToast, t, exitSelectionMode, refreshBookmarkPreview]);
+
+  const handleBulkDelete = useCallback(() => {
+    if (selectedIds.size === 0) {
+      return;
+    }
+    const idsToTrash = Array.from(selectedIds);
+    const count = idsToTrash.length;
+
+    const performDelete = () => {
+      for (const id of idsToTrash) {
+        trashBookmark(id);
+      }
+      exitSelectionMode();
+      showToast(t('toast.trashedCount', { count }), {
+        label: t('common.undo'),
+        onPress: () => {
+          for (const id of idsToTrash) {
+            restoreBookmark(id);
+          }
+        },
+      });
+    };
+
+    if (Platform.OS === 'web') {
+      if (typeof confirm === 'undefined' || confirm(t('inbox.bulkDeleteConfirm', { count }))) {
+        performDelete();
+      }
+      return;
+    }
+
+    Alert.alert(
+      t('inbox.bulkDeleteTitle'),
+      t('inbox.bulkDeleteConfirm', { count }),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('common.delete'), style: 'destructive', onPress: performDelete },
+      ],
+    );
+  }, [selectedIds, trashBookmark, restoreBookmark, exitSelectionMode, showToast, t]);
+
+  const handleOpenBulkMove = useCallback(() => {
+    if (selectedIds.size === 0) {
+      return;
+    }
+    setBulkMoveSheetOpen(true);
+  }, [selectedIds]);
+
+  const handleBulkMoveToCollection = useCallback(
+    (collectionId: string | null) => {
+      const idsToMove = Array.from(selectedIds);
+      for (const id of idsToMove) {
+        assignCollection(id, collectionId);
+      }
+      setBulkMoveSheetOpen(false);
+      exitSelectionMode();
+      if (collectionId === null) {
+        showToast(t('toast.movedToInbox', { count: idsToMove.length }));
+      } else {
+        const col = collections.find((c) => c.id === collectionId);
+        showToast(
+          t('toast.movedToCollection', {
+            count: idsToMove.length,
+            name: col?.name ?? '',
+          }),
+        );
+      }
+    },
+    [selectedIds, assignCollection, exitSelectionMode, showToast, collections, t],
+  );
   // In a multi-column card grid, pad rows with lightweight placeholders so real
   // cards keep their column width (flex: 1). When an inline detail is open on
   // web, finish the clicked card row, then insert a synthetic full-width detail
@@ -1711,7 +1890,8 @@ export default function InboxScreen() {
     (chips.length > 0 || pendingReviewCount > 0) &&
     !searchFocused &&
     !slimSearchHeader &&
-    !searchOpen;
+    !searchOpen &&
+    !selectionMode;
   // On a brand-new (empty) library the search/sort/view controls are just cold
   // chrome over a "nothing here yet" screen — fold them away so the first run
   // is all about the first save. Keyed on the unfiltered library, not the
@@ -1907,6 +2087,10 @@ export default function InboxScreen() {
         return;
       }
       const onBack = () => {
+        if (selectionMode) {
+          exitSelectionMode();
+          return true;
+        }
         // Peel the search UI first (closeSearch also clears any live query), then
         // the facet — same most-recently-added-layer-first model as before, with
         // searchOpen now standing in for the old raw-query check.
@@ -1922,7 +2106,7 @@ export default function InboxScreen() {
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBack);
       return () => subscription.remove();
-    }, [searchOpen, filter.kind, closeSearch]),
+    }, [selectionMode, exitSelectionMode, searchOpen, filter.kind, closeSearch]),
   );
 
   const closeMenu = useCallback(() => {
@@ -2016,6 +2200,15 @@ export default function InboxScreen() {
       });
     }
     actions.push({
+      key: 'select',
+      label: t('inbox.selectAction'),
+      icon: 'checkbox-outline',
+      onPress: () => {
+        closeMenu();
+        enterSelectionMode(item.id);
+      },
+    });
+    actions.push({
       key: 'move',
       label: t('inbox.moveToCollectionAction'),
       icon: 'folder-outline',
@@ -2038,7 +2231,7 @@ export default function InboxScreen() {
       },
     });
     return actions;
-  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, restoreBookmark, showToast, markBookmarkAccessed, closeMenu, t]);
+  }, [menuItem, menuMode, collections, assignCollection, trashBookmark, restoreBookmark, showToast, markBookmarkAccessed, closeMenu, enterSelectionMode, t]);
 
   const menuTitle =
     menuMode === 'move'
@@ -2106,6 +2299,7 @@ export default function InboxScreen() {
     }
     setNewFolderDialogOpen(false);
     setNewFolderError(null);
+    setBulkMoveFolderCreateTarget(null);
   }, [newFolderBusy]);
   const handleCreateFolder = useCallback(
     async (name: string) => {
@@ -2114,6 +2308,19 @@ export default function InboxScreen() {
       const result = await createCollection(name);
       setNewFolderBusy(false);
       if (result.collection) {
+        if (bulkMoveFolderCreateTarget && bulkMoveFolderCreateTarget.length > 0) {
+          for (const id of bulkMoveFolderCreateTarget) {
+            assignCollection(id, result.collection.id);
+          }
+          showToast(
+            t('toast.movedToCollection', {
+              count: bulkMoveFolderCreateTarget.length,
+              name: result.collection.name,
+            }),
+          );
+          setBulkMoveFolderCreateTarget(null);
+          exitSelectionMode();
+        }
         // No filter/navigation change — the new (empty) collection just shows
         // up as its own tile in the grid already on screen (folderTiles is
         // derived from the live `collections` list, so this re-render alone
@@ -2123,7 +2330,7 @@ export default function InboxScreen() {
       }
       setNewFolderError(result.error ?? t('detail.errorCreateCollection'));
     },
-    [createCollection, t],
+    [createCollection, bulkMoveFolderCreateTarget, assignCollection, showToast, exitSelectionMode, t],
   );
 
   // Open the dedicated tag-browse route, carrying the current facet as its scope
@@ -2210,7 +2417,50 @@ export default function InboxScreen() {
               stacked tagline + count lines and the "설정" caption were pure
               vertical chrome that pushed the first card down ~40% of the
               screen, so they're folded away here to reclaim that space. */}
-          <View style={styles.heroTitleBlock}>
+          {selectionMode ? (
+            <View style={styles.selectionHeroRow}>
+              <Pressable
+                testID="inbox-selection-close"
+                accessibilityRole="button"
+                accessibilityLabel={t('inbox.cancelSelectionA11y')}
+                hitSlop={8}
+                onPress={exitSelectionMode}
+                style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}
+              >
+                <Ionicons name="close" size={20} color={palette.text} />
+              </Pressable>
+              <Text
+                testID="inbox-selection-count"
+                style={[styles.selectionCountText, { color: palette.text }]}
+                numberOfLines={1}
+              >
+                {t('inbox.selectedCount', { count: selectedIds.size })}
+              </Text>
+              <View style={{ flex: 1 }} />
+              <Pressable
+                testID="inbox-selection-select-all"
+                accessibilityRole="button"
+                accessibilityLabel={allVisibleSelected ? t('inbox.deselectAll') : t('inbox.selectAll')}
+                hitSlop={8}
+                onPress={toggleSelectAll}
+                style={[
+                  styles.sortPill,
+                  { backgroundColor: palette.surface, borderColor: palette.border },
+                ]}
+              >
+                <Ionicons
+                  name={allVisibleSelected ? 'checkbox' : 'checkbox-outline'}
+                  size={16}
+                  color={palette.accent}
+                />
+                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
+                  {allVisibleSelected ? t('inbox.deselectAll') : t('inbox.selectAll')}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <>
+              <View style={styles.heroTitleBlock}>
             {/* The brand wordmark is a pre-rendered image (the Keepory duckling
                 lockup) rather than bundled fonts — a few KB of PNG instead of
                 multi-MB font files. Every locale uses the same lockup; a
@@ -2313,6 +2563,8 @@ export default function InboxScreen() {
               </View>
             </Pressable>
           </View>
+        </>
+      )}
         </View>
         {/* Everything below the hero — error/session banners, search, sort/
             filter pills, browse shelf — is what actually collapses (see the
@@ -2468,7 +2720,7 @@ export default function InboxScreen() {
             query={debouncedQuery}
           />
         ) : null}
-        {showControls && !showSuggestions && !slimSearchHeader && !searchOpen ? (
+        {showControls && !showSuggestions && !slimSearchHeader && !searchOpen && !selectionMode ? (
         <View style={[styles.sortRow, { maxWidth: contentMaxWidth }]}>
           {/* No "Browse" caption: the Sort pill, Tags pill, and view segment are
               self-evident controls, and the caption's width was forcing the
@@ -2520,6 +2772,25 @@ export default function InboxScreen() {
               {showPillLabels ? (
                 <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
                   {t('nav.graph')}
+                </Text>
+              ) : null}
+            </Pressable>
+          ) : null}
+          {inbox.length > 0 && viewMode !== 'folder' ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t('inbox.selectA11y')}
+              testID="inbox-select-toggle"
+              onPress={() => enterSelectionMode()}
+              style={[
+                styles.sortPill,
+                { backgroundColor: palette.surface, borderColor: palette.border },
+              ]}
+            >
+              <Ionicons name="checkbox-outline" size={15} color={palette.textSecondary} />
+              {showPillLabels ? (
+                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
+                  {t('inbox.select')}
                 </Text>
               ) : null}
             </Pressable>
@@ -2775,7 +3046,7 @@ export default function InboxScreen() {
           viewMode !== 'card' ? styles.listModeList : null,
           // Start the list below the floating header (and the pinned filter bar
           // when active), and clear the Add button so it never covers the last row.
-          { paddingTop: listPaddingTop, paddingBottom: insets.bottom + 96 },
+          { paddingTop: listPaddingTop, paddingBottom: insets.bottom + (selectionMode ? 120 : 96) },
         ]}
         ListHeaderComponent={
           <>
@@ -3117,6 +3388,11 @@ export default function InboxScreen() {
             searching && item.url && searchTerms.some(termHiddenByLabel),
           );
 
+          const isSelected = selectedIds.has(item.id);
+          const handleItemPress = selectionMode ? () => toggleSelect(item.id) : openDetail;
+          const handleItemLongPress = selectionMode ? () => toggleSelect(item.id) : () => setMenuItem(item);
+          const handleLinkPress = selectionMode ? () => toggleSelect(item.id) : openLink;
+
           // List density view mode: compact row layout featuring thumbnail image
           // with quick-open badge, title/url/tags in middle, and overflow menu.
           if (viewMode === 'list') {
@@ -3125,24 +3401,47 @@ export default function InboxScreen() {
             const compactMeta = metaParts.join('  ·  ');
             return (
               <Pressable
+                testID={`inbox-list-row-${item.id}`}
                 style={({ pressed }) => [
                   styles.listRow,
                   styles.compactRow,
                   {
-                    backgroundColor: palette.surfaceElevated,
-                    borderColor: palette.border,
+                    backgroundColor: isSelected ? palette.accentSoft : palette.surfaceElevated,
+                    borderColor: isSelected ? palette.accent : palette.border,
+                    borderWidth: isSelected ? 1.5 : 1,
                     opacity: pressed ? 0.78 : 1,
                   },
                 ]}
-                onPress={openDetail}
-                onLongPress={() => setMenuItem(item)}
+                onPress={handleItemPress}
+                onLongPress={handleItemLongPress}
                 accessible={false}
               >
+                {selectionMode ? (
+                  <Pressable
+                    testID={`inbox-select-checkbox-${item.id}`}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: isSelected }}
+                    accessibilityLabel={
+                      isSelected
+                        ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })
+                        : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })
+                    }
+                    onPress={() => toggleSelect(item.id)}
+                    hitSlop={8}
+                    style={styles.selectionCheckWrap}
+                  >
+                    <Ionicons
+                      name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                      size={22}
+                      color={isSelected ? palette.accent : palette.textSecondary}
+                    />
+                  </Pressable>
+                ) : null}
                 <Pressable
-                  accessibilityRole={item.url ? 'link' : 'button'}
+                  accessibilityRole={selectionMode ? 'button' : item.url ? 'link' : 'button'}
                   accessibilityLabel={item.url ? t('common.openLink') : (accessibilityTitle(item) ?? t('common.untitled'))}
-                  onPress={item.url ? openLink : openDetail}
-                  onLongPress={() => setMenuItem(item)}
+                  onPress={selectionMode ? () => toggleSelect(item.id) : item.url ? openLink : openDetail}
+                  onLongPress={handleItemLongPress}
                   hitSlop={6}
                   style={({ pressed }) => [
                     styles.compactThumbWrap,
@@ -3175,12 +3474,12 @@ export default function InboxScreen() {
                 </Pressable>
                 <Pressable
                   style={styles.listText}
-                  accessibilityRole="button"
-                  accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
-                  accessibilityHint={t('inbox.openBookmarkHint')}
-                  accessibilityState={{ busy: isOpening }}
-                  onPress={openDetail}
-                  onLongPress={() => setMenuItem(item)}
+                  accessibilityRole={selectionMode ? 'checkbox' : 'button'}
+                  accessibilityLabel={selectionMode ? (isSelected ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') }) : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })) : (accessibilityTitle(item) ?? t('common.untitled'))}
+                  accessibilityHint={selectionMode ? undefined : t('inbox.openBookmarkHint')}
+                  accessibilityState={selectionMode ? { checked: isSelected } : { busy: isOpening }}
+                  onPress={handleItemPress}
+                  onLongPress={handleItemLongPress}
                 >
                   <HighlightedText
                     testID="inbox-list-title"
@@ -3241,15 +3540,17 @@ export default function InboxScreen() {
                     </Text>
                   </View>
                 ) : null}
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={t('inbox.moreActions')}
-                  hitSlop={8}
-                  style={styles.moreButton}
-                  onPress={() => setMenuItem(item)}
-                >
-                  <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
-                </Pressable>
+                {!selectionMode ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t('inbox.moreActions')}
+                    hitSlop={8}
+                    style={styles.moreButton}
+                    onPress={() => setMenuItem(item)}
+                  >
+                    <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                  </Pressable>
+                ) : null}
                 {isOpening ? (
                   <View
                     testID="inbox-bookmark-opening"
@@ -3266,18 +3567,55 @@ export default function InboxScreen() {
           const rawPreviewUri = item.local_image_uri ?? item.preview_image_url ?? null;
           const previewUri = isPreviewImageFailed(rawPreviewUri) ? null : rawPreviewUri;
           const cardElement = (
-            <Card style={[styles.card, isOpening ? { borderColor: palette.accent } : null]}>
+            <Card
+              testID={`inbox-card-${item.id}`}
+              style={[
+                styles.card,
+                isOpening ? { borderColor: palette.accent } : null,
+                isSelected
+                  ? {
+                      borderColor: palette.accent,
+                      borderWidth: 2,
+                      backgroundColor: palette.accentSoft,
+                    }
+                  : null,
+              ]}
+            >
               <View
                 // Container for card layout
                 accessible={false}
               >
                 <View style={styles.cardPreviewContainer}>
+                  {selectionMode ? (
+                    <Pressable
+                      testID={`inbox-select-checkbox-${item.id}`}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: isSelected }}
+                      accessibilityLabel={
+                        isSelected
+                          ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })
+                          : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })
+                      }
+                      onPress={() => toggleSelect(item.id)}
+                      hitSlop={8}
+                      style={[
+                        styles.cardSelectionIndicator,
+                        isSelected
+                          ? { backgroundColor: palette.accent, borderColor: palette.accent }
+                          : { backgroundColor: 'rgba(0,0,0,0.4)', borderColor: '#ffffff' },
+                      ]}
+                    >
+                      {isSelected ? (
+                        <Ionicons name="checkmark" size={14} color="#ffffff" />
+                      ) : null}
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     testID="inbox-card-preview"
                     accessible={false}
                     tabIndex={-1}
-                    onPress={openDetail}
-                    onLongPress={() => setMenuItem(item)}
+                    onPress={handleItemPress}
+                    onLongPress={handleItemLongPress}
                     style={({ pressed }) => [
                       StyleSheet.absoluteFill,
                       { opacity: pressed ? 0.82 : 1 },
@@ -3304,10 +3642,10 @@ export default function InboxScreen() {
                   </Pressable>
                   {item.url ? (
                     <Pressable
-                      accessibilityRole="link"
-                      accessibilityLabel={t('common.openLink')}
-                      onPress={openLink}
-                      onLongPress={() => setMenuItem(item)}
+                      accessibilityRole={selectionMode ? 'button' : 'link'}
+                      accessibilityLabel={selectionMode ? (isSelected ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') }) : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })) : t('common.openLink')}
+                      onPress={handleLinkPress}
+                      onLongPress={handleItemLongPress}
                       hitSlop={6}
                       style={({ pressed }) => [
                         styles.previewRibbon,
@@ -3336,8 +3674,8 @@ export default function InboxScreen() {
                       <Pressable
                         accessible={false}
                         tabIndex={-1}
-                        onPress={item.url ? openLink : openDetail}
-                        onLongPress={() => setMenuItem(item)}
+                        onPress={selectionMode ? () => toggleSelect(item.id) : (item.url ? openLink : openDetail)}
+                        onLongPress={handleItemLongPress}
                         hitSlop={6}
                       >
                         <ItemIcon item={item} testID="inbox-card-monogram" />
@@ -3348,12 +3686,12 @@ export default function InboxScreen() {
                       focusable; the whole card remains tappable visually. */}
                   <Pressable
                     style={styles.cardTitlePressable}
-                    accessibilityRole="button"
-                    accessibilityLabel={accessibilityTitle(item) ?? t('common.untitled')}
-                    accessibilityHint={t('inbox.openBookmarkHint')}
-                    accessibilityState={{ busy: isOpening }}
-                    onPress={openDetail}
-                    onLongPress={() => setMenuItem(item)}
+                    accessibilityRole={selectionMode ? 'checkbox' : 'button'}
+                    accessibilityLabel={selectionMode ? (isSelected ? t('inbox.deselectItemA11y', { title: displayTitle(item) ?? t('common.untitled') }) : t('inbox.selectItemA11y', { title: displayTitle(item) ?? t('common.untitled') })) : (accessibilityTitle(item) ?? t('common.untitled'))}
+                    accessibilityHint={selectionMode ? undefined : t('inbox.openBookmarkHint')}
+                    accessibilityState={selectionMode ? { checked: isSelected } : { busy: isOpening }}
+                    onPress={handleItemPress}
+                    onLongPress={handleItemLongPress}
                   >
                     <HighlightedText
                       testID="inbox-card-title"
@@ -3382,15 +3720,17 @@ export default function InboxScreen() {
                   ) : null}
                   {/* Always-present overflow: the discoverable way into
                       move/share/trash, not a long-press a user must guess. */}
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={t('inbox.moreActions')}
-                    hitSlop={8}
-                    style={[styles.moreButton, styles.cardMoreButton]}
-                    onPress={() => setMenuItem(item)}
-                  >
-                    <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
-                  </Pressable>
+                  {!selectionMode ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={t('inbox.moreActions')}
+                      hitSlop={8}
+                      style={[styles.moreButton, styles.cardMoreButton]}
+                      onPress={() => setMenuItem(item)}
+                    >
+                      <Ionicons name="ellipsis-horizontal" size={18} color={palette.textSecondary} />
+                    </Pressable>
+                  ) : null}
                 </View>
                 {memoPreview ? (
                   <HighlightedText
@@ -3472,17 +3812,59 @@ export default function InboxScreen() {
           return columns > 1 ? <View style={{ flex: 1 }}>{cardElement}</View> : cardElement;
         }}
       />
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={t('inbox.addBookmark')}
-        onPress={() => router.push('/add')}
-        style={({ pressed }) => [
-          styles.fab,
-          { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
+      {!selectionMode ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={t('inbox.addBookmark')}
+          onPress={() => router.push('/add')}
+          style={({ pressed }) => [
+            styles.fab,
+            { backgroundColor: palette.accent, bottom: insets.bottom + 20, opacity: pressed ? 0.9 : 1 },
+          ]}
+        >
+          <Ionicons name="add" size={34} color="#ffffff" />
+        </Pressable>
+      ) : (
+        <BulkActionBar
+          selectedCount={selectedIds.size}
+          isRefreshing={bulkRefreshing}
+          onRefresh={handleBulkRefresh}
+          onMove={handleOpenBulkMove}
+          onDelete={handleBulkDelete}
+          maxWidth={contentMaxWidth}
+          bottomInset={insets.bottom}
+        />
+      )}
+      <ActionSheet
+        visible={bulkMoveSheetOpen}
+        title={t('inbox.bulkMoveTitle', { count: selectedIds.size })}
+        actions={[
+          {
+            key: 'inbox',
+            label: t('inbox.inboxNoCollection'),
+            icon: 'file-tray-outline',
+            onPress: () => handleBulkMoveToCollection(null),
+          },
+          ...collections.map((col) => ({
+            key: col.id,
+            label: col.name,
+            icon: 'folder-outline' as const,
+            onPress: () => handleBulkMoveToCollection(col.id),
+          })),
+          {
+            key: 'new-folder',
+            label: t('inbox.newCollection'),
+            icon: 'add-outline' as const,
+            onPress: () => {
+              setBulkMoveSheetOpen(false);
+              setBulkMoveFolderCreateTarget(Array.from(selectedIds));
+              setNewFolderError(null);
+              setNewFolderDialogOpen(true);
+            },
+          },
         ]}
-      >
-        <Ionicons name="add" size={34} color="#ffffff" />
-      </Pressable>
+        onClose={() => setBulkMoveSheetOpen(false)}
+      />
       <ActionSheet
         visible={menuItem !== null}
         title={menuTitle}
@@ -4237,5 +4619,33 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
+  },
+  selectionHeroRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    minHeight: 40,
+    gap: 12,
+  },
+  selectionCountText: {
+    fontSize: 17,
+    fontWeight: WEB_BOLD_WEIGHT,
+  },
+  selectionCheckWrap: {
+    marginRight: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cardSelectionIndicator: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...overlayLayer(3),
   },
 });

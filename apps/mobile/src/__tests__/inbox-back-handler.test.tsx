@@ -169,6 +169,34 @@ test('hardware back closes a live search before exiting', async () => {
   expect(screen.queryByPlaceholderText('Search titles, tags, collections')).toBeNull();
 });
 
+test('hardware back exits selection mode before clearing search or exiting', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-00000000000a',
+      title: 'Local-first software',
+    }),
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-00000000000b',
+      title: 'Raindrop review',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
+
+  // Enter selection mode via the select toggle button.
+  const selectToggle = screen.getByTestId('inbox-select-toggle');
+  await fireEvent.press(selectToggle);
+  expect(screen.getByText('0 selected')).toBeTruthy();
+
+  // Hardware back should exit selection mode and consume the press.
+  expect(await pressBack()).toBe(true);
+  expect(screen.queryByText('0 selected')).toBeNull();
+
+  // Next back is handed to OS.
+  expect(await pressBack()).toBe(false);
+});
+
 test('hardware back is left to the OS when the Inbox is not narrowed', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
