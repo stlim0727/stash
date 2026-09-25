@@ -127,6 +127,32 @@ export const ko: Catalog = {
     '북마크는 이 기기에만 저장되어 있어요. 로그인하면 백업하고 다른 기기에서도 볼 수 있어요.',
   'inbox.anonymousNudgeDismissA11y': '닫기',
   'inbox.moreActions': '더보기',
+  'inbox.select': '선택',
+  'inbox.selectA11y': '북마크 선택',
+  'inbox.selectAction': '여러 항목 선택…',
+  'inbox.selectedCount': {
+    other: '{count}개 선택됨',
+  },
+  'inbox.selectAll': '전체 선택',
+  'inbox.deselectAll': '선택 해제',
+  'inbox.cancelSelection': '취소',
+  'inbox.cancelSelectionA11y': '선택 모드 종료',
+  'inbox.bulkToolbarA11y': '일괄 작업',
+  'inbox.bulkDelete': '삭제',
+  'inbox.bulkDeleteA11y': '선택한 북마크를 휴지통으로 이동',
+  'inbox.bulkDeleteTitle': '휴지통으로 이동',
+  'inbox.bulkDeleteConfirm': {
+    other: '북마크 {count}개를 휴지통으로 이동할까요?',
+  },
+  'inbox.bulkMove': '이동',
+  'inbox.bulkMoveA11y': '선택한 북마크를 폴더로 이동',
+  'inbox.bulkMoveTitle': {
+    other: '북마크 {count}개 이동',
+  },
+  'inbox.bulkRefresh': '새로고침',
+  'inbox.bulkRefreshA11y': '선택한 북마크의 미리보기 새로고침',
+  'inbox.selectItemA11y': '{title} 선택',
+  'inbox.deselectItemA11y': '{title} 선택 해제',
   'inbox.moveToCollectionAction': '컬렉션으로 이동…',
   'inbox.moveToCollectionTitle': '컬렉션으로 이동',
   'inbox.inboxNoCollection': '미분류',
@@ -222,6 +248,19 @@ export const ko: Catalog = {
   'toast.aiEnrichmentBurst': { other: '북마크 {count}개 AI 제안 확인 완료' },
   'toast.linkCopied': '링크가 복사됨',
   'toast.memoCopied': '메모가 복사됨',
+  'toast.trashedCount': {
+    other: '북마크 {count}개를 휴지통으로 이동했습니다',
+  },
+  'toast.movedToCollection': {
+    other: '북마크 {count}개를 {name} 컬렉션으로 이동했습니다',
+  },
+  'toast.movedToInbox': {
+    other: '북마크 {count}개를 받은 편지함으로 이동했습니다',
+  },
+  'toast.previewRefreshedCount': {
+    other: '미리보기 {count}개를 새로고침했습니다',
+  },
+  'toast.noPreviewsToRefresh': '미리보기를 새로고침할 URL이 없습니다',
 
   'settings.section.account': '계정',
   'settings.section.activity': '활동 상태',
