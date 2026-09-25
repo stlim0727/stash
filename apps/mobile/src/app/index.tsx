@@ -655,6 +655,15 @@ export default function InboxScreen() {
   // debounced copy so an O(C) collection lookup per bookmark doesn't re-run on
   // every keystroke and the match count doesn't flicker mid-type.
   const debouncedQuery = useDebouncedValue(query, 140);
+  // A query is only a search when it produces at least one real search token. A
+  // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
+  // zero tokens, so `filterBookmarks` returns everything — treating that as a
+  // search would mislabel the full library as "Matches (all)". Gate the searching
+  // flag on real tokens so such a query falls back to the normal Inbox (recent/
+  // facet section + the focus-empty suggestion shelf). `searchTerms`, the site
+  // chip / matched-tag reason UI, the empty-search recovery, and the section
+  // label all key off this one flag, so they stay consistent.
+  const searching = queryHasSearchTokens(debouncedQuery);
   // Latest query for listeners that must not re-subscribe on each keystroke
   // (keyboardDidHide below reads this to decide whether an empty search folds
   // away without re-registering the listener every keystroke).
@@ -1579,13 +1588,16 @@ export default function InboxScreen() {
 
   const enterSelectionMode = useCallback(
     (initialId?: string) => {
-      if (searchOpen) {
+      clearBlurHide();
+      setSearchFocused(false);
+      searchRef.current?.blur();
+      if (searchOpen && !searching) {
         closeSearch();
       }
       setSelectionMode(true);
       setSelectedIds(initialId ? new Set([initialId]) : new Set());
     },
-    [searchOpen, closeSearch],
+    [searchOpen, searching, closeSearch, clearBlurHide],
   );
 
   const toggleSelect = useCallback((id: string) => {
@@ -1606,10 +1618,25 @@ export default function InboxScreen() {
   );
 
   const toggleSelectAll = useCallback(() => {
+    if (visible.length === 0) {
+      return;
+    }
     if (allVisibleSelected) {
-      setSelectedIds(new Set());
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const b of visible) {
+          next.delete(b.id);
+        }
+        return next;
+      });
     } else {
-      setSelectedIds(new Set(visible.map((b) => b.id)));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const b of visible) {
+          next.add(b.id);
+        }
+        return next;
+      });
     }
   }, [allVisibleSelected, visible]);
 
@@ -1641,7 +1668,7 @@ export default function InboxScreen() {
     if (selectedIds.size === 0 || bulkRefreshing) {
       return;
     }
-    const selectedItems = visible.filter((b) => selectedIds.has(b.id));
+    const selectedItems = inbox.filter((b) => selectedIds.has(b.id));
     const urlItems = selectedItems.filter((b) => Boolean(b.url));
     if (urlItems.length === 0) {
       showToast(t('toast.noPreviewsToRefresh'));
@@ -1668,7 +1695,7 @@ export default function InboxScreen() {
       setBulkRefreshing(false);
       exitSelectionMode();
     }
-  }, [selectedIds, bulkRefreshing, visible, showToast, t, exitSelectionMode, refreshBookmarkPreview]);
+  }, [selectedIds, bulkRefreshing, inbox, showToast, t, exitSelectionMode, refreshBookmarkPreview]);
 
   const handleBulkDelete = useCallback(() => {
     if (selectedIds.size === 0) {
@@ -1799,15 +1826,6 @@ export default function InboxScreen() {
     );
     return [...withInlineDetail, ...placeholders];
   }, [visible, columns, inlineDetailId, getBookmark]);
-  // A query is only a search when it produces at least one real search token. A
-  // query that is purely punctuation/symbols ("...", "-", "!!!") normalizes to
-  // zero tokens, so `filterBookmarks` returns everything — treating that as a
-  // search would mislabel the full library as "Matches (all)". Gate the searching
-  // flag on real tokens so such a query falls back to the normal Inbox (recent/
-  // facet section + the focus-empty suggestion shelf). `searchTerms`, the site
-  // chip / matched-tag reason UI, the empty-search recovery, and the section
-  // label all key off this one flag, so they stay consistent.
-  const searching = queryHasSearchTokens(debouncedQuery);
   // Normalized terms of the settled query, used to surface WHY each result
   // matched (site-name chip, promoting a matched tag) when searching.
   const searchTerms = useMemo(
@@ -2441,11 +2459,13 @@ export default function InboxScreen() {
                 testID="inbox-selection-select-all"
                 accessibilityRole="button"
                 accessibilityLabel={allVisibleSelected ? t('inbox.deselectAll') : t('inbox.selectAll')}
+                disabled={visible.length === 0}
                 hitSlop={8}
                 onPress={toggleSelectAll}
                 style={[
                   styles.sortPill,
                   { backgroundColor: palette.surface, borderColor: palette.border },
+                  visible.length === 0 ? { opacity: 0.5 } : null,
                 ]}
               >
                 <Ionicons
@@ -2659,6 +2679,7 @@ export default function InboxScreen() {
             <TextInput
               ref={searchRef}
               testID="inbox-search-input"
+              editable={!selectionMode}
               style={[styles.searchInput, { backgroundColor: palette.card, color: palette.text }]}
               placeholder={searchPlaceholder}
               placeholderTextColor={palette.textSecondary}
@@ -2696,7 +2717,7 @@ export default function InboxScreen() {
                   // the top thin). A live query keeps the field up so the user
                   // can read results / refine with the keyboard down (the
                   // existing slimSearchHeader "results, keyboard down" state).
-                  if (query.length === 0) {
+                  if (query.length === 0 && !selectionMode) {
                     trackBreadcrumb('search', 'auto-close on empty blur');
                     setSearchOpen(false);
                     restoreHeaderCollapseOnSearchClose();
@@ -2964,6 +2985,21 @@ export default function InboxScreen() {
                 </Text>
               </PostHogMaskView>
             </View>
+            {!selectionMode && visible.length > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t('inbox.selectA11y')}
+                testID="inbox-filter-select-toggle"
+                hitSlop={8}
+                onPress={() => enterSelectionMode()}
+                style={({ pressed }) => [
+                  styles.filterBarAction,
+                  { borderColor: palette.accent, opacity: pressed ? 0.6 : 1, marginRight: 6 },
+                ]}
+              >
+                <Ionicons name="checkbox-outline" size={16} color={palette.accentText} />
+              </Pressable>
+            ) : null}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={scope.a11y}
