@@ -299,9 +299,11 @@ function ItemIcon({
 function CardPreviewFallback({
   item,
   testID,
+  hideFavicon,
 }: {
   item: Bookmark;
   testID?: string;
+  hideFavicon?: boolean;
 }) {
   const palette = usePalette();
   const [faviconFailed, setFaviconFailed] = useState(false);
@@ -318,7 +320,7 @@ function CardPreviewFallback({
     >
       <View style={[styles.cardFallbackOrb, styles.cardFallbackOrbTop, { borderColor: foregroundColor }]} />
       <View style={[styles.cardFallbackOrb, styles.cardFallbackOrbBottom, { borderColor: foregroundColor }]} />
-      {icon.kind === 'favicon' ? (
+      {icon.kind === 'favicon' && !hideFavicon ? (
         <View
           style={[
             styles.cardFallbackFaviconTile,
@@ -3685,6 +3687,7 @@ export default function InboxScreen() {
                       <CardPreviewFallback
                         item={item}
                         testID="inbox-card-wordmark"
+                        hideFavicon={selectionMode}
                       />
                     )}
                   </Pressable>
@@ -4707,8 +4710,8 @@ const styles = StyleSheet.create({
   },
   cardSelectionIndicator: {
     position: 'absolute',
-    top: 8,
-    right: 8,
+    top: 10,
+    left: 10,
     width: 26,
     height: 26,
     borderRadius: 13,
