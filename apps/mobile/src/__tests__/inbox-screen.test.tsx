@@ -2367,3 +2367,28 @@ test('keeps a successfully loaded preview with web loader dimensions', async () 
   expect(screen.getByTestId('inbox-card-preview-image')).toBeTruthy();
   expect(screen.queryByTestId('inbox-card-preview-fallback')).toBeNull();
 });
+
+test('hero row keeps search open action bounded and unshrinkable within viewport (STASH-6Y)', async () => {
+  fakeRepo.__reset([
+    makeStoredBookmark({
+      id: '7e64cf1e-0000-4000-8000-000000000099',
+      title: 'Bookmark item',
+      url: 'https://example.com/item',
+    }),
+  ]);
+
+  const screen = await renderInbox();
+  await waitFor(() => expect(screen.getByTestId('inbox-search-open')).toBeTruthy());
+
+  const searchBtn = screen.getByTestId('inbox-search-open');
+  expect(searchBtn).toBeTruthy();
+
+  const headerSurface = screen.getByTestId('inbox-header-surface');
+  const headerStyle = StyleSheet.flatten(headerSurface.props.style);
+  expect(headerStyle.width).toBe('100%');
+  expect(headerStyle.maxWidth).toBe('100%');
+
+  const wordmark = screen.getByTestId('inbox-hero-wordmark');
+  const wordmarkStyle = StyleSheet.flatten(wordmark.props.style);
+  expect(wordmarkStyle.flexShrink).toBe(0);
+});

@@ -2429,7 +2429,12 @@ export default function InboxScreen() {
           onLayout={(event) => setHeroHeight(event.nativeEvent.layout.height)}
           style={[
             styles.hero,
-            { maxWidth: contentMaxWidth, paddingTop: insets.top + 6, position: 'relative', zIndex: 2 },
+            {
+              maxWidth: Math.min(winWidth, contentMaxWidth),
+              paddingTop: insets.top + 6,
+              position: 'relative',
+              zIndex: 2,
+            },
           ]}
         >
           {/* Compact single-row hero: the brand wordmark with the saved-count
@@ -2636,7 +2641,7 @@ export default function InboxScreen() {
                     transition: 'transform 200ms ease-out',
                   },
                 ] as unknown as StyleProp<ViewStyle>)
-              : undefined
+              : styles.collapsibleHeaderNative
           }
         >
         {loadError ? (
@@ -3950,8 +3955,14 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
+    width: '100%',
+    maxWidth: '100%',
     // Float above the list for paint AND touch — see overlayLayer (STASH-7).
     ...overlayLayer(10),
+  },
+  collapsibleHeaderNative: {
+    width: '100%',
+    maxWidth: '100%',
   },
   list: {
     padding: LIST_PADDING,
@@ -3973,10 +3984,12 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
     width: '100%',
+    maxWidth: '100%',
     alignSelf: 'center',
   },
   heroTitleBlock: {
     flex: 1,
+    minWidth: 0,
     // Wordmark and saved-count share one row, bottoms aligned so the count
     // reads as sitting on the wordmark's baseline.
     flexDirection: 'row',
@@ -4032,6 +4045,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexShrink: 0,
   },
   sectionLabel: {
     fontSize: 13,
