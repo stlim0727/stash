@@ -184,14 +184,13 @@ test('hardware back exits selection mode before clearing search or exiting', asy
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Local-first software')).toBeTruthy());
 
-  // Enter selection mode via the select toggle button.
-  const selectToggle = screen.getByTestId('inbox-select-toggle');
-  await fireEvent.press(selectToggle);
-  expect(screen.getByText('0 selected')).toBeTruthy();
+  // Enter selection mode via long-pressing a bookmark card.
+  await fireEvent(screen.getByText('Local-first software'), 'longPress');
+  expect(screen.getByText('1 selected')).toBeTruthy();
 
   // Hardware back should exit selection mode and consume the press.
   expect(await pressBack()).toBe(true);
-  expect(screen.queryByText('0 selected')).toBeNull();
+  expect(screen.queryByText('1 selected')).toBeNull();
 
   // Next back is handed to OS.
   expect(await pressBack()).toBe(false);

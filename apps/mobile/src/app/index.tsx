@@ -2809,25 +2809,6 @@ export default function InboxScreen() {
               ) : null}
             </Pressable>
           ) : null}
-          {inbox.length > 0 && viewMode !== 'folder' ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t('inbox.selectA11y')}
-              testID="inbox-select-toggle"
-              onPress={() => enterSelectionMode()}
-              style={[
-                styles.sortPill,
-                { backgroundColor: palette.surface, borderColor: palette.border },
-              ]}
-            >
-              <Ionicons name="checkbox-outline" size={15} color={palette.textSecondary} />
-              {showPillLabels ? (
-                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
-                  {t('inbox.select')}
-                </Text>
-              ) : null}
-            </Pressable>
-          ) : null}
           <View style={[styles.viewSegment, { backgroundColor: palette.surface, borderColor: palette.border }]}>
             {VIEW_MODES.map((mode) => {
               // Folder View has nothing to show without a real Collection to
@@ -2997,21 +2978,6 @@ export default function InboxScreen() {
                 </Text>
               </PostHogMaskView>
             </View>
-            {!selectionMode && visible.length > 0 ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t('inbox.selectA11y')}
-                testID="inbox-filter-select-toggle"
-                hitSlop={8}
-                onPress={() => enterSelectionMode()}
-                style={({ pressed }) => [
-                  styles.filterBarAction,
-                  { borderColor: palette.accent, opacity: pressed ? 0.6 : 1, marginRight: 6 },
-                ]}
-              >
-                <Ionicons name="checkbox-outline" size={16} color={palette.accentText} />
-              </Pressable>
-            ) : null}
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={scope.a11y}

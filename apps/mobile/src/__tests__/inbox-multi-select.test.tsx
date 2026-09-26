@@ -138,7 +138,7 @@ beforeEach(() => {
   mockEnrichmentCalls = [];
 });
 
-test('enters selection mode via the select toggle pill and shows BulkActionBar', async () => {
+test('enters selection mode via long-press on a bookmark and shows BulkActionBar', async () => {
   fakeRepo.__reset([
     makeStoredBookmark({
       id: '7e64cf1e-0000-4000-8000-000000000001',
@@ -153,19 +153,23 @@ test('enters selection mode via the select toggle pill and shows BulkActionBar',
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
 
-  // FAB is initially visible
+  // FAB is initially visible; no dedicated selection toggle button in toolbar
   expect(screen.getByLabelText('Add bookmark')).toBeTruthy();
+  expect(screen.queryByTestId('inbox-select-toggle')).toBeNull();
 
-  // Enter selection mode
-  const selectToggle = screen.getByTestId('inbox-select-toggle');
-  await fireEvent.press(selectToggle);
+  // Enter selection mode via long press on bookmark
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
 
   // FAB is hidden, BulkActionBar and selection header are visible
   await waitFor(() => {
     expect(screen.queryByLabelText('Add bookmark')).toBeNull();
-    expect(screen.getByText('0 selected')).toBeTruthy();
+    expect(screen.getByText('1 selected')).toBeTruthy();
     expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
   });
+
+  // Deselect the item to verify 0 selected state
+  await fireEvent.press(screen.getByText('First bookmark'));
+  expect(screen.getByText('0 selected')).toBeTruthy();
 
   // Bulk actions should be disabled with 0 selected
   const refreshBtn = screen.getByTestId('inbox-bulk-refresh');
@@ -201,12 +205,8 @@ test('toggles selection on cards, select all, and deselect all', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
 
-  // Enter selection mode
-  await fireEvent.press(screen.getByTestId('inbox-select-toggle'));
-  expect(screen.getByText('0 selected')).toBeTruthy();
-
-  // Tap first card checkbox to select
-  await fireEvent.press(screen.getByTestId('inbox-select-checkbox-7e64cf1e-0000-4000-8000-000000000001'));
+  // Enter selection mode via long press on first bookmark
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
   expect(screen.getByText('1 selected')).toBeTruthy();
 
   // Bulk action buttons are now enabled
@@ -314,10 +314,9 @@ test('bulk delete prompts confirmation, moves selected items to trash, and provi
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
 
-  // Enter selection mode and select first two items
-  await fireEvent.press(screen.getByTestId('inbox-select-toggle'));
-  await fireEvent.press(screen.getByTestId('inbox-select-checkbox-7e64cf1e-0000-4000-8000-000000000001'));
-  await fireEvent.press(screen.getByTestId('inbox-select-checkbox-7e64cf1e-0000-4000-8000-000000000002'));
+  // Enter selection mode via long press on first bookmark and select second item
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
+  await fireEvent.press(screen.getByText('Second bookmark'));
   expect(screen.getByText('2 selected')).toBeTruthy();
 
   // Spy on Alert.alert so the destructive button's onPress is triggered
@@ -379,8 +378,8 @@ test('bulk move to collection moves all selected bookmarks', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
 
-  // Enter selection mode and select both
-  await fireEvent.press(screen.getByTestId('inbox-select-toggle'));
+  // Enter selection mode via long-press and select both
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
   await fireEvent.press(screen.getByTestId('inbox-selection-select-all'));
   expect(screen.getByText('2 selected')).toBeTruthy();
 
@@ -421,8 +420,8 @@ test('bulk move with New Collection dialog creates collection and assigns select
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
 
-  // Enter selection mode and select both
-  await fireEvent.press(screen.getByTestId('inbox-select-toggle'));
+  // Enter selection mode via long press and select both
+  await fireEvent(screen.getByText('First bookmark'), 'longPress');
   await fireEvent.press(screen.getByTestId('inbox-selection-select-all'));
   expect(screen.getByText('2 selected')).toBeTruthy();
 
@@ -478,8 +477,8 @@ test('bulk refresh triggers preview refresh on selected URL items and shows feed
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('URL Bookmark 1')).toBeTruthy());
 
-  // Select all 3 items
-  await fireEvent.press(screen.getByTestId('inbox-select-toggle'));
+  // Enter selection mode via long press and select all 3 items
+  await fireEvent(screen.getByText('URL Bookmark 1'), 'longPress');
   await fireEvent.press(screen.getByTestId('inbox-selection-select-all'));
   expect(screen.getByText('3 selected')).toBeTruthy();
 
@@ -520,8 +519,8 @@ test('Escape key on web exits selection mode', async () => {
     const screen = await renderInbox();
     await waitFor(() => expect(screen.getByText('First bookmark')).toBeTruthy());
 
-    await fireEvent.press(screen.getByTestId('inbox-select-toggle'));
-    expect(screen.getByText('0 selected')).toBeTruthy();
+    await fireEvent(screen.getByText('First bookmark'), 'longPress');
+    expect(screen.getByText('1 selected')).toBeTruthy();
 
     expect(keyHandler).toBeTruthy();
     await act(async () => {
@@ -576,13 +575,15 @@ test('supports selecting all items narrowed by search and preserving search quer
   expect(screen.getByText('React Architecture Guide')).toBeTruthy();
   expect(screen.queryByText('Vue Composition Guide')).toBeNull();
 
-  // Enter selection mode via the search filter bar select toggle
-  const filterSelectToggle = screen.getByTestId('inbox-filter-select-toggle');
-  await fireEvent.press(filterSelectToggle);
+  // Verify no select toggle button in the filter bar
+  expect(screen.queryByTestId('inbox-filter-select-toggle')).toBeNull();
 
-  // BulkActionBar is visible with 0 selected, and search input is non-editable during selection
+  // Enter selection mode via long press on first search match
+  await fireEvent(screen.getByText('React Native in Action'), 'longPress');
+
+  // BulkActionBar is visible with 1 selected, and search input is non-editable during selection
   await waitFor(() => {
-    expect(screen.getByText('0 selected')).toBeTruthy();
+    expect(screen.getByText('1 selected')).toBeTruthy();
     expect(screen.getByTestId('inbox-bulk-action-bar')).toBeTruthy();
   });
   expect(screen.getByTestId('inbox-search-input').props.editable).toBe(false);
@@ -716,8 +717,8 @@ test('places selection mark at top-left of bookmark in card view', async () => {
   const screen = await renderInbox();
   await waitFor(() => expect(screen.getByText('Top Left Selection Card')).toBeTruthy());
 
-  // Enter selection mode via select pill
-  await fireEvent.press(screen.getByTestId('inbox-select-toggle'));
+  // Enter selection mode via long press on card
+  await fireEvent(screen.getByText('Top Left Selection Card'), 'longPress');
 
   const checkbox = screen.getByTestId('inbox-select-checkbox-7e64cf1e-0000-4000-8000-000000000001');
   expect(checkbox).toBeTruthy();

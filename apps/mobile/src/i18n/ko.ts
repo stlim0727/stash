@@ -127,8 +127,6 @@ export const ko: Catalog = {
     '북마크는 이 기기에만 저장되어 있어요. 로그인하면 백업하고 다른 기기에서도 볼 수 있어요.',
   'inbox.anonymousNudgeDismissA11y': '닫기',
   'inbox.moreActions': '더보기',
-  'inbox.select': '선택',
-  'inbox.selectA11y': '북마크 선택',
   'inbox.selectAction': '여러 항목 선택…',
   'inbox.selectedCount': {
     other: '{count}개 선택됨',
