@@ -2438,43 +2438,53 @@ export default function InboxScreen() {
           {selectionMode ? (
             <View style={styles.selectionHeroRow}>
               <Pressable
-                testID="inbox-selection-close"
-                accessibilityRole="button"
-                accessibilityLabel={t('inbox.cancelSelectionA11y')}
-                hitSlop={8}
-                onPress={exitSelectionMode}
-                style={[styles.avatar, { backgroundColor: palette.surface, borderColor: palette.border }]}
-              >
-                <Ionicons name="close" size={20} color={palette.text} />
-              </Pressable>
-              <Text
-                testID="inbox-selection-count"
-                style={[styles.selectionCountText, { color: palette.text }]}
-                numberOfLines={1}
-              >
-                {t('inbox.selectedCount', { count: selectedIds.size })}
-              </Text>
-              <View style={{ flex: 1 }} />
-              <Pressable
                 testID="inbox-selection-select-all"
                 accessibilityRole="button"
                 accessibilityLabel={allVisibleSelected ? t('inbox.deselectAll') : t('inbox.selectAll')}
                 disabled={visible.length === 0}
                 hitSlop={8}
                 onPress={toggleSelectAll}
-                style={[
-                  styles.sortPill,
-                  { backgroundColor: palette.surface, borderColor: palette.border },
-                  visible.length === 0 ? { opacity: 0.5 } : null,
+                style={({ pressed }) => [
+                  styles.selectionSelectAllButton,
+                  visible.length === 0 ? { opacity: 0.4 } : pressed ? { opacity: 0.7 } : null,
                 ]}
               >
                 <Ionicons
-                  name={allVisibleSelected ? 'checkbox' : 'checkbox-outline'}
-                  size={16}
-                  color={palette.accent}
+                  name={allVisibleSelected ? 'checkmark-circle' : 'ellipse-outline'}
+                  size={22}
+                  color={allVisibleSelected ? palette.accent : palette.textSecondary}
                 />
-                <Text style={[styles.sortPillLabel, { color: palette.text }]} numberOfLines={1}>
+                <Text
+                  style={[
+                    styles.selectionSelectAllLabel,
+                    { color: allVisibleSelected ? palette.accent : palette.text },
+                  ]}
+                  numberOfLines={1}
+                >
                   {allVisibleSelected ? t('inbox.deselectAll') : t('inbox.selectAll')}
+                </Text>
+              </Pressable>
+              <Text
+                testID="inbox-selection-count"
+                style={[styles.selectionCountText, { color: palette.textSecondary }]}
+                numberOfLines={1}
+              >
+                {t('inbox.selectedCount', { count: selectedIds.size })}
+              </Text>
+              <View style={{ flex: 1 }} />
+              <Pressable
+                testID="inbox-selection-close"
+                accessibilityRole="button"
+                accessibilityLabel={t('inbox.cancelSelectionA11y')}
+                hitSlop={8}
+                onPress={exitSelectionMode}
+                style={({ pressed }) => [
+                  styles.selectionCancelButton,
+                  { opacity: pressed ? 0.7 : 1 },
+                ]}
+              >
+                <Text style={[styles.selectionCancelLabel, { color: palette.text }]}>
+                  {t('common.cancel')}
                 </Text>
               </Pressable>
             </View>
@@ -4663,11 +4673,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
     minHeight: 40,
-    gap: 12,
+    gap: 8,
+  },
+  selectionSelectAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  selectionSelectAllLabel: {
+    fontSize: 15,
+    fontWeight: '600',
   },
   selectionCountText: {
-    fontSize: 17,
-    fontWeight: WEB_BOLD_WEIGHT,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  selectionCancelButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectionCancelLabel: {
+    fontSize: 15,
+    fontWeight: '600',
   },
   selectionCheckWrap: {
     marginRight: 10,
